@@ -2,3 +2,6 @@
 
 ==============================================================================*/
 
+#include "numerous_llm/plugins/base_plugin.h"
+
+namespace numerous_llm {} // namespace numerous_llm

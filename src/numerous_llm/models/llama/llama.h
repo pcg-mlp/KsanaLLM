@@ -3,8 +3,17 @@
 ==============================================================================*/
 #pragma once
 
+#include "numerous_llm/utils/status.h"
+
 namespace numerous_llm {
 
-class Llama {};
+class Llama {
+public:
+  // The prefill stage.
+  Status ContextDecode();
+
+  // The decode stage.
+  Status Decode();
+};
 
 } // namespace numerous_llm

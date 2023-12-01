@@ -3,8 +3,19 @@
 ==============================================================================*/
 #pragma once
 
+#include <string>
+
+#include "numerous_llm/utils/environment.h"
+
 namespace numerous_llm {
 
-class ModelInstance {};
+class ModelInstance {
+public:
+  // Load model with specified model config.
+  void Load(const ModelConfig &model_config);
+
+  // The instance name.
+  std::string name;
+};
 
 } // namespace numerous_llm

@@ -23,17 +23,44 @@ struct ModelConfig {
   std::string path;
 };
 
+struct RequestBatchingConfig {};
+
+struct ContextCachingConfig {};
+
+struct BatchSchedulerConfig {};
+
+struct LoraCoordinatorConfig {};
+
+struct AllocatorConfig {};
+
+struct BlockManagerConfig {
+  // The config of allocator for cpu/gpu/npu.
+  AllocatorConfig allocator_config;
+};
+
 // The config of batch manager.
-struct BatchManagerConfig {};
+struct BatchManagerConfig {
+  // The config of request batching.
+  RequestBatchingConfig request_batching_config;
+
+  // The config of context cache.
+  ContextCachingConfig context_caching_config;
+
+  // The config of batch schedule.
+  BatchSchedulerConfig batch_scheduler_config;
+
+  // The config of multi lora.
+  LoraCoordinatorConfig lora_coordinator_config;
+
+  // The config of block manager
+  BlockManagerConfig block_manager_config;
+};
 
 // The config of endpoint.
 struct EndpointConfig {};
 
 class Environment {
 public:
-  Environment();
-  ~Environment();
-
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
 
@@ -44,7 +71,17 @@ public:
   Status GetBatchManagerConfig(BatchManagerConfig &batch_manager_config);
 
   // Get the config of endpoint.
-  Status GetEndpointConfig(const EndpointConfig &endpoint_config);
+  Status GetEndpointConfig(EndpointConfig &endpoint_config);
+
+private:
+  // The model list that should be loaded.
+  std::vector<ModelConfig> model_configs_;
+
+  // The config of batch manager.
+  BatchManagerConfig batch_manager_config_;
+
+  // The config of endpoint.
+  EndpointConfig endpoint_config_;
 };
 
 } // namespace numerous_llm

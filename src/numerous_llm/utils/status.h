@@ -7,7 +7,7 @@
 #include <memory>
 #include <string>
 
-#include "numerous_llm/util/ret_code.h"
+#include "numerous_llm/utils/ret_code.h"
 
 namespace numerous_llm {
 

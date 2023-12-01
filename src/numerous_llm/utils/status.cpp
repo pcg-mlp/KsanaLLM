@@ -2,7 +2,7 @@
 
 ==============================================================================*/
 
-#include "numerous_llm/util/status.h"
+#include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
 

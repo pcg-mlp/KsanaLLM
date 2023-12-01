@@ -2,3 +2,14 @@
 
 ==============================================================================*/
 
+#include "numerous_llm/runtime/llm_runtime.h"
+#include "numerous_llm/utils/logger.h"
+
+namespace numerous_llm {
+
+Status LlmRuntime::Step(std::vector<InferRequest> &reqs) {
+  NLLM_LOG_INFO << "llm runtime step invoked." << std::endl;
+  return Status();
+}
+
+} // namespace numerous_llm
