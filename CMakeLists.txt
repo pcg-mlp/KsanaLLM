@@ -6,16 +6,14 @@ project(numerous_llm LANGUAGES CXX CUDA)
 
 option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 
-find_package(CUDA 10.2 REQUIRED)
-find_package(Git QUIET)
+find_package(CUDA 11.3 REQUIRED)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+
 find_package(CUDNN)
 find_package(NCCL)
 
-# fetch 3rdparty
-if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
-    # TODO(karlluo): add needed 3rdparty project
-endif()
+set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
+# include(LLM_kernels)
 
 # set compiler flags
 set(CXX_STD "17" CACHE STRING "C++ standard")
