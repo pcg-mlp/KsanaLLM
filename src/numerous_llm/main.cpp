@@ -16,12 +16,20 @@ static std::shared_ptr<InferenceServer> server = nullptr;
 
 void SignalHandler(int signum) {
   if (server) {
+    // Skip dup signals.
+    signal(SIGINT, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+
     server->StopServer();
     server = nullptr;
   }
 }
 
 int main(int argc, char **argv) {
+  // Initialize logger.
+  InitLoguru();
+
   // Install signal handler.
   signal(SIGINT, SignalHandler);
   signal(SIGQUIT, SignalHandler);
@@ -39,15 +47,13 @@ int main(int argc, char **argv) {
   server = std::make_shared<InferenceServer>();
   status = server->Initialize(env);
   if (!status.OK()) {
-    NLLM_LOG_ERROR << "Init inference server error: " << status.ToString()
-                   << std::endl;
+    NLLM_LOG_ERROR << "Init inference server error: " << status.ToString() << std::endl;
     return 1;
   }
 
   status = server->StartServer();
   if (!status.OK()) {
-    NLLM_LOG_ERROR << "Start inference server error: " << status.ToString()
-                   << std::endl;
+    NLLM_LOG_ERROR << "Start inference server error: " << status.ToString() << std::endl;
     return 1;
   }
 

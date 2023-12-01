@@ -10,3 +10,7 @@ message(STATUS "utils_SRCS: ${utils_SRCS}")
 
 add_library(utils STATIC ${utils_SRCS})
 
+add_dependencies(utils fmt)
+
+
+

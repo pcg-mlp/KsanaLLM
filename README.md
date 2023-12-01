@@ -15,6 +15,6 @@ make
 
 The default output binary
 ```
-build/src/numerous_llm/numerous_llm
+build/bin/numerous_llm
 ```
 

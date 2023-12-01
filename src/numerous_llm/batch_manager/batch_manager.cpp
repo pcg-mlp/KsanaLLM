@@ -13,21 +13,15 @@ BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config) {
 }
 
 Status BatchManager::Initialize() {
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config);
 
-  batch_scheduler_ = std::make_shared<BatchScheduler>(
-      batch_manager_config_.batch_scheduler_config);
+  context_caching_ = std::make_shared<ContextCaching>(batch_manager_config_.context_caching_config);
 
-  context_caching_ = std::make_shared<ContextCaching>(
-      batch_manager_config_.context_caching_config);
+  block_manager_ = std::make_shared<BlockManager>(batch_manager_config_.block_manager_config);
 
-  block_manager_ = std::make_shared<BlockManager>(
-      batch_manager_config_.block_manager_config);
+  lora_coordinator_ = std::make_shared<LoraCoordinator>(batch_manager_config_.lora_coordinator_config);
 
-  lora_coordinator_ = std::make_shared<LoraCoordinator>(
-      batch_manager_config_.lora_coordinator_config);
-
-  request_batching_ = std::make_shared<RequestBatching>(
-      batch_manager_config_.request_batching_config);
+  request_batching_ = std::make_shared<RequestBatching>(batch_manager_config_.request_batching_config);
 
   llm_runtime_ = std::make_shared<LlmRuntime>();
 
@@ -36,21 +30,18 @@ Status BatchManager::Initialize() {
   return Status();
 }
 
-Status BatchManager::RegisterModelInstance(
-    const std::shared_ptr<ModelInstance> &model_instance) {
+Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
   model_instances_[model_instance->name] = model_instance;
   return Status();
 }
 
-Status
-BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
-                      const std::vector<SamplingConfig> &sampling_configs) {
+Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
+                             const std::vector<SamplingConfig> &sampling_configs) {
   NLLM_LOG_INFO << "batch manager enqueue." << std::endl;
 
   // Split into multiple prompt
   if (tensor_maps.size() != sampling_configs.size()) {
-    return Status(RET_INVALID_ARGUMENT,
-                  "Size of tensor_maps and sampling_configs should be equal.");
+    return Status(RET_INVALID_ARGUMENT, "Size of tensor_maps and sampling_configs should be equal.");
   }
 
   for (size_t i = 0; i < tensor_maps.size(); ++i) {
@@ -67,9 +58,7 @@ BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
   return Status();
 }
 
-Status BatchManager::WaitDone(int req_id, std::vector<TensorMap> &tensor_maps) {
-  return Status();
-}
+Status BatchManager::WaitDone(int req_id, std::vector<TensorMap> &tensor_maps) { return Status(); }
 
 Status BatchManager::WaitAllDone() { return Status(); }
 
@@ -81,8 +70,7 @@ Status BatchManager::Process() {
       continue;
     }
 
-    NLLM_LOG_INFO << "batch scheduler result:" << scheduled_reqs.size()
-                  << std::endl;
+    NLLM_LOG_INFO << "batch scheduler result:" << scheduled_reqs.size();
 
     llm_runtime_->Step(scheduled_reqs);
     llm_sampler_->Sampling(scheduled_reqs);
@@ -92,18 +80,24 @@ Status BatchManager::Process() {
 }
 
 Status BatchManager::Start() {
-  batch_manager_thread_ = std::unique_ptr<std::thread>(
-      new std::thread(&BatchManager::Process, this));
+  batch_manager_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::Process, this));
 
   return Status();
 }
 
 Status BatchManager::Stop() {
+  NLLM_LOG_INFO << "Stop batch manager.";
+
   terminated_ = true;
+
+  batch_scheduler_->StopChannel();
+
   if (batch_manager_thread_ && batch_manager_thread_->joinable()) {
     batch_manager_thread_->join();
   }
+
+  NLLM_LOG_INFO << "batch manager stopped.";
   return Status();
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

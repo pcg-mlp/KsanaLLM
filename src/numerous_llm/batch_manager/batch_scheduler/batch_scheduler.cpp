@@ -6,12 +6,23 @@
 
 #include <utility>
 
+#include "numerous_llm/utils/logger.h"
 #include "src/numerous_llm/utils/channel.h"
 
 namespace numerous_llm {
 
-BatchScheduler::BatchScheduler(
-    const BatchSchedulerConfig &batch_scheduler_config) {}
+BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config) {}
+
+BatchScheduler::~BatchScheduler() {}
+
+Status BatchScheduler::StopChannel() {
+  waiting_queue_.Close();
+  running_queue_.Close();
+  swapped_queue_.Close();
+  finish_queue_.Close();
+
+  return Status();
+}
 
 Status BatchScheduler::AddInferRequest(const InferRequest &infer_request) {
   InferRequest infer_requestl_inner = infer_request;
@@ -29,4 +40,4 @@ Status BatchScheduler::Schedule(std::vector<InferRequest> &scheduled_reqs) {
   return Status();
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

@@ -17,12 +17,16 @@ namespace numerous_llm {
 class BatchScheduler {
 public:
   explicit BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config);
+  ~BatchScheduler();
 
   // Get the next infer reqs that ready to run.
   Status Schedule(std::vector<InferRequest> &scheduled_reqs);
 
   // Add infer request to waiting list.
   Status AddInferRequest(const InferRequest &infer_request);
+
+  // Stop channel
+  Status StopChannel();
 
 private:
   // The scheduler priority.

@@ -88,7 +88,11 @@ Status InferenceServer::StartServer() {
 
 Status InferenceServer::StopServer() {
   NLLM_LOG_INFO << "Recive stop signal, ready to quit." << std::endl;
-  terminated_ = false;
+  if (terminated_) {
+    return Status();
+  }
+
+  terminated_ = true;
 
   // Wait all request done.
   NLLM_LOG_INFO << "Waiting all running request." << std::endl;
