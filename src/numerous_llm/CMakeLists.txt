@@ -20,6 +20,7 @@ add_subdirectory(utils)
 
 add_executable(numerous_llm main.cpp)
 target_link_libraries(numerous_llm PUBLIC 
+    -lpthread
     kernels
     layers
     models
