@@ -10,6 +10,7 @@
 #include "numerous_llm/runtime/infer_request.h"
 
 #include "numerous_llm/utils/environment.h"
+#include "numerous_llm/utils/channel.h"
 
 namespace numerous_llm {
 
@@ -31,10 +32,10 @@ private:
   std::shared_ptr<BaseGranularity> granularity_;
 
   // The three queue of current scheduler.
-  std::vector<InferRequest> waiting_queue_;
-  std::vector<InferRequest> running_queue_;
-  std::vector<InferRequest> swapped_queue_;
-  std::vector<InferRequest> finish_queue_;
+  Channel<InferRequest> waiting_queue_;
+  Channel<InferRequest> running_queue_;
+  Channel<InferRequest> swapped_queue_;
+  Channel<InferRequest> finish_queue_;
 };
 
 } // namespace numerous_llm
