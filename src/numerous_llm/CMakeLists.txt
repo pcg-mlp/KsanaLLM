@@ -7,11 +7,12 @@ set(THIRD_PARTY_PATH "${CMAKE_BINARY_DIR}/third_party")
 
 include(external/fmt)
 include(external/loguru)
+include(external/gflags)
 
 include_directories(
-		${PROJECT_SOURCE_DIR}/src
-		${THIRD_PARTY_PATH}/install/loguru
-		${THIRD_PARTY_PATH}/download/fmt/include
+  ${PROJECT_SOURCE_DIR}/src
+  ${THIRD_PARTY_PATH}/install/loguru
+  ${THIRD_PARTY_PATH}/download/fmt/include
 )
 
 add_subdirectory(batch_manager)
@@ -29,18 +30,19 @@ add_subdirectory(utils)
 
 add_executable(numerous_llm main.cpp)
 target_link_libraries(numerous_llm PUBLIC 
-    -lpthread -ldl
-    kernels
-    layers
-    models
-    plugins
-    service
-    torch_op
-    utils
-    batch_manager 
-    block_manager
-    runtime
-    endpoints 
-    samplers
-    loguru
+  -lpthread -ldl
+  kernels
+  layers
+  models
+  plugins
+  service
+  torch_op
+  utils
+  batch_manager 
+  block_manager
+  runtime
+  endpoints 
+  samplers
+  loguru
+  gflags
 )

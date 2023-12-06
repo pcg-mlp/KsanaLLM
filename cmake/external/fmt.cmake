@@ -1,3 +1,7 @@
+# Copyright 2023 Tencent Inc.  All rights reserved.
+#
+# ==============================================================================
+
 include(FetchContent)
 include(ExternalProject)
 

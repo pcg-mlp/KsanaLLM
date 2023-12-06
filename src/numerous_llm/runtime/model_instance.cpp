@@ -7,15 +7,15 @@
 
 namespace numerous_llm {
 
-void ModelInstance::Load(const ModelConfig &model_config) {
+void ModelInstance::Load(const ModelConfig& model_config) {
   NLLM_LOG_INFO << "Start to load model " << model_config.name << std::endl;
 }
 
-void ModelInstance::Forward(const InferRequest& infer_req) {
-  NLLM_LOG_INFO << "Forward req " << infer_req.req_id << std::endl;
+void ModelInstance::Forward(const TensorMap& input_tensor_map, const SamplingConfig& sampling_config,
+                            TensorMap& output_tensor_map) {
   // do infer ever layers
 
   // take result to output tensor map
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

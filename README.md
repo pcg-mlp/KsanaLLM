@@ -2,7 +2,7 @@
 
 Start docker container with following image:
 ```
-mirrors.tencent.com/todacc/venus-numerous-llm:0.1.1
+mirrors.tencent.com/todacc/venus-numerous-llm:0.1.5
 ```
 
 ## Compile
