@@ -3,25 +3,8 @@
 ==============================================================================*/
 #pragma once
 
-#include <assert.h>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
-#include <fstream>
-#include <iostream>
-#include <map>
-#include <mutex>
-#include <sstream>
-#include <stdexcept>
 #include <string>
-#include <sys/stat.h>
-#include <sys/syscall.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <unordered_map>
-#include <vector>
 
 #define LOGURU_USE_FMTLIB 1
 #define LOGURU_WITH_STREAMS 1
@@ -34,11 +17,7 @@ enum Level { DEBUG = 0, INFO = 1, WARNING = 2, ERROR = 3, FATAL = 4 };
 
 // Log name to level.
 static std::unordered_map<Level, std::string> log_level_to_name = {
-    {DEBUG, "DEBUG"},
-    {INFO, "INFO"},
-    {WARNING, "WARNING"},
-    {ERROR, "ERROR"},
-    {FATAL, "FATAL"}};
+    {DEBUG, "DEBUG"}, {INFO, "INFO"}, {WARNING, "WARNING"}, {ERROR, "ERROR"}, {FATAL, "FATAL"}};
 
 // Get log level from environment, this function called only once.
 static Level GetLogLevel() {
@@ -46,12 +25,8 @@ static Level GetLogLevel() {
   const char *env_log_level = std::getenv("NLLM_LOG_LEVEL");
   std::string log_level_str = env_log_level ? env_log_level : default_log_level;
 
-  std::unordered_map<std::string, Level> log_name_to_level = {};
-      // {"DEBUG" : DEBUG},
-      // {"INFO" : INFO},
-      // {"WARNING" : WARNING},
-      // {"ERROR" : ERROR},
-      // {"FATAL" : FATAL}};
+  std::unordered_map<std::string, Level> log_name_to_level = {
+      {"DEBUG", DEBUG}, {"INFO", INFO}, {"WARNING", WARNING}, {"ERROR", ERROR}, {"FATAL", FATAL}};
 
   Level level = Level::INFO;
   if (log_name_to_level.find(log_level_str) != log_name_to_level.end()) {
@@ -69,9 +44,7 @@ static std::string GetLogFile() {
 }
 
 // Get name from log level.
-static std::string GetLevelName(const Level level) {
-  return log_level_to_name[level];
-}
+static std::string GetLevelName(const Level level) { return log_level_to_name[level]; }
 
 // Init logrun instance.
 inline void InitLoguru() {
@@ -93,7 +66,7 @@ inline void InitLoguru() {
   loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
 }
 
-#define NO_CC_IF if // For CodeCC compatibility.
+#define NO_CC_IF if  // For CodeCC compatibility.
 
 #define NLLM_LOG_DEBUG LOG_S(1)
 #define NLLM_LOG_INFO LOG_S(INFO)
@@ -101,4 +74,4 @@ inline void InitLoguru() {
 #define NLLM_LOG_ERROR LOG_S(ERROR)
 #define NLLM_LOG_FATAL LOG_S(FATAL)
 
-} // namespace numerous_llm
+}  // namespace numerous_llm
