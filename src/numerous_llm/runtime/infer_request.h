@@ -21,7 +21,7 @@ public:
   // The req id of the user's request.
   int req_id;
 
-  // /The unique id of this request.
+  // The unique id of this request.
   int infer_id;
 
   // The name of model instance.

@@ -16,6 +16,9 @@ public:
 
   // The instance name.
   std::string name;
+
+  // forward
+  void Forward(const InferRequest& infer_req);
 };
 
 } // namespace numerous_llm

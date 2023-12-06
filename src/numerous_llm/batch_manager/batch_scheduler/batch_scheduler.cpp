@@ -33,9 +33,11 @@ Status BatchScheduler::AddInferRequest(const InferRequest &infer_request) {
 Status BatchScheduler::Schedule(std::vector<InferRequest> &scheduled_reqs) {
   // Fetch one
 
-  // TODO(karlluo): strategy for schedule how many request
+  // TODO(karlluo): strategy for schedule how many request, for demo we just fetch one and infer it.
   InferRequest infer_req;
   waiting_queue_.Read(&infer_req);
+
+  scheduled_reqs.push_back(infer_req);
 
   return Status();
 }
