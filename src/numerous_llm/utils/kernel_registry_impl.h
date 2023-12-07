@@ -1,7 +1,7 @@
 /* Copyright 2023 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "src/numerous_llm/utils/kernel_registrar.h"
+#include "src/numerous_llm/utils/kernel_registry.h"
 
 // Register all the kernels here:
 //

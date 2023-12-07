@@ -8,7 +8,7 @@ namespace numerous_llm {
 
 BlockAllocator::BlockAllocator(const AllocatorConfig &allocator_config) {}
 
-Status BlockAllocator::Allocate(PhysicalBlock &block) {
+Status BlockAllocator::Allocate(MemoryBlock &block) {
   if (free_blocks_.empty()) {
     return Status(RET_OUT_OF_MEMORY, "Out of memory, no free blocks available.");
   }
@@ -19,9 +19,9 @@ Status BlockAllocator::Allocate(PhysicalBlock &block) {
   return Status();
 }
 
-Status BlockAllocator::Free(PhysicalBlock &block) {
+Status BlockAllocator::Free(MemoryBlock &block) {
   if (block.ref_count == 0) {
-    return Status(RET_SEGMENT_FAULT, "Double free error, block id " + block.block_index);
+    return Status(RET_SEGMENT_FAULT, "Double free error, block id " + block.block_id);
   }
 
   block.ref_count -= 1;

@@ -3,62 +3,38 @@
 ==============================================================================*/
 #pragma once
 
-#include <cstddef>
-#include <string>
-#include <vector>
-
 namespace numerous_llm {
 
-// Some basic fields of memory block.
-class BaseBlock {
- public:
-  // block index, zero based.
-  int block_index;
+// The memory device.
+enum MemoryDevice {
+  // CPU
+  MEMORY_CPU,
 
-  // block size, in number of tokens.
+  // CPU with pinned memory.
+  MEMORY_CPU_PINNED,
+
+  // NVIDIA GPU
+  MEMORY_GPU,
+
+  // HUAWEI Ascend
+  MEMORY_ASCEND
+};
+
+// The memory block information.
+struct MemoryBlock {
+  // block id, unique in global.
+  int block_id;
+
+  // block size, in bytes.
   int block_size;
-};
 
-// A block that stores a contiguous chunk of tokens from left to right.
-// Logical blocks are used to represent the states of the corresponding
-// physical blocks in the KV cache.
-class KvCacheBlock : public BaseBlock {
- public:
-  // The token ids this block contains.
-  std::vector<int> token_ids;
-
-  // The generated token numbers.
-  size_t token_num = 0;
-
-  // Whether current block is empty.
-  bool IsEmpty();
-
-  // Whether current block is full.
-  bool IsFull();
-
-  // Get the avail slot number.
-  size_t GetEmptySlotNum();
-
-  // The last token id.
-  int GetLastTokenId();
-
-  // Get the token id list.
-  std::vector<int> GetTokenIds();
-};
-
-// A block that store a chunk of model's lora weights.
-class LoraWeightBlock : public BaseBlock {};
-
-// The physical memory block information.
-class PhysicalBlock : public BaseBlock {
- public:
   // The reference count of current block.
   int ref_count = 0;
 
   // /The device of this block, CPU or GPU or NPU.
-  std::string device;
+  MemoryDevice device;
 
-  // The address of this block.
+  // The physical address of this block.
   void *address = nullptr;
 };
 

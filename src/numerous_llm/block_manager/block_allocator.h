@@ -17,13 +17,13 @@ class BlockAllocator {
   BlockAllocator(const AllocatorConfig &allocator_config);
 
   // Aalloc a block from allocator.
-  Status Allocate(PhysicalBlock &block);
+  Status Allocate(MemoryBlock &block);
 
   // Free a block to allocator.
-  Status Free(PhysicalBlock &block);
+  Status Free(MemoryBlock &block);
 
  private:
-  std::vector<PhysicalBlock> free_blocks_;
+  std::vector<MemoryBlock> free_blocks_;
 };
 
 }  // namespace numerous_llm
