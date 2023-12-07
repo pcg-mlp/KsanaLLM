@@ -8,6 +8,7 @@ set(THIRD_PARTY_PATH "${CMAKE_BINARY_DIR}/third_party")
 include(external/fmt)
 include(external/loguru)
 include(external/gflags)
+include(external/httplib)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src

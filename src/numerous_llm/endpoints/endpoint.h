@@ -30,6 +30,11 @@ public:
 
 private:
   std::atomic<bool> terminated_;
+
+  httplib::Server http_server_;
+  std::thread     http_server_thread_;
+
+  EndpointConfig endpoint_config_;
 };
 
 } // namespace numerous_llm

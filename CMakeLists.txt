@@ -1,6 +1,7 @@
 # Copyright 2023 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
+
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 project(numerous_llm LANGUAGES CXX CUDA)
 

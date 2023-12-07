@@ -49,6 +49,7 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     infer_req.req_id = req_id;
     infer_req.input_tensor_map = tensor_maps[i];
     infer_req.sampling_config = sampling_configs[i];
+    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req.model_name << std::endl;
     infer_req.model_instance = model_instances_[infer_req.model_name];
 
     batch_scheduler_->AddInferRequest(infer_req);

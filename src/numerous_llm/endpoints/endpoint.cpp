@@ -11,15 +11,23 @@
 
 namespace numerous_llm {
 
-Endpoint::Endpoint(const EndpointConfig &endpoint_config) {}
+Endpoint::Endpoint(const EndpointConfig &endpoint_config) : endpoint_config_(endpoint_config) {}
 
 Status Endpoint::Listen() {
-  NLLM_LOG_INFO << "Listen on port 8080." << std::endl;
+  NLLM_LOG_INFO << "Listen on port " << endpoint_config_.port;
+
+  http_server_thread_ = std::thread([&]() {
+    http_server_.listen(endpoint_config_.host, endpoint_config_.port);
+  });
+  http_server_thread_.detach();
+
   return Status();
 }
 
 Status Endpoint::Close() {
   NLLM_LOG_INFO << "Close endpoint." << std::endl;
+  http_server_.stop();
+  http_server_thread_.join();
   terminated_ = true;
   return Status();
 }
@@ -58,4 +66,4 @@ Status Endpoint::Send(const Response &rsp) {
   return Status();
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

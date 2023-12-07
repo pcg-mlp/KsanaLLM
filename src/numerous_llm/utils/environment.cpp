@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <iostream>
 
 #include "fmt/core.h"
 #include "gflags/gflags.h"
@@ -14,6 +15,8 @@
 #include "numerous_llm/utils/logger.h"
 
 DEFINE_string(model_config, "./config.ini", "Get the model config file path");
+DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
+DEFINE_int32(port, 8080, "HTTP service port, default is 8080");
 
 namespace numerous_llm {
 
@@ -43,6 +46,9 @@ Status Environment::ParseOptions(int argc, char **argv) {
 
   NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path)
                 << std::endl;
+
+  endpoint_config_.host = FLAGS_host;
+  endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
 
   return Status();
 }

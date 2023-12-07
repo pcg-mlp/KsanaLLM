@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "numerous_llm/utils/status.h"
+#include "httplib.h"
 
 namespace numerous_llm {
 
@@ -57,7 +58,13 @@ struct BatchManagerConfig {
 };
 
 // The config of endpoint.
-struct EndpointConfig {};
+struct EndpointConfig {
+  // HTTP service hostname, default is localhost
+  std::string host;
+
+  // HTTP service port, default is 8080
+  uint32_t port;
+};
 
 class Environment {
 public:

@@ -2,6 +2,8 @@
 
 ==============================================================================*/
 
+#include <iostream>
+
 #include "numerous_llm/service/inference_server.h"
 #include "numerous_llm/endpoints/endpoint.h"
 #include "numerous_llm/utils/logger.h"
@@ -58,9 +60,12 @@ Status InferenceServer::HandleRequest(const Request &req, Response &rsp) {
 }
 
 Status InferenceServer::StartHandler() {
+
   while (!terminated_) {
     Request req;
+
     Status status = endpoint_->Accept(req);
+
     if (status.GetCode() == RET_TERMINATED) {
       break;
     }
@@ -71,6 +76,7 @@ Status InferenceServer::StartHandler() {
 
     endpoint_->Send(rsp);
   }
+
   return Status();
 }
 
@@ -83,6 +89,7 @@ Status InferenceServer::StartServer() {
 
   // Start service handler.
   StartHandler();
+
   return Status();
 }
 
