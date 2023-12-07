@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "numerous_llm/runtime/llm_runtime.h"
+#include "numerous_llm/runtime/worker.h"
 #include "numerous_llm/utils/logger.h"
 
 namespace numerous_llm {
