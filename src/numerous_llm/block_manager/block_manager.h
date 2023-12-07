@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "numerous_llm/block_manager/memory_block.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/status.h"
 
@@ -21,7 +22,7 @@ class BlockManager {
 
   Status SwapIn(std::vector<int>& blocks);
 
-  Satatus SwapOut(std::vector<int>& blocks);
+  Status SwapOut(std::vector<int>& blocks);
 
   // Get free block number in specific device.
   size_t GetFreeBlockNumber(MemoryDevice device);

@@ -2,4 +2,9 @@
 
 ==============================================================================*/
 
-class BaseModel {};
+class BaseModel {
+  // Disable a default constructor
+  BaseModel() = delete;
+
+  virtual ~BaseModel();
+};

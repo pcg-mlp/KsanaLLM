@@ -3,12 +3,16 @@
 ==============================================================================*/
 #pragma once
 
+#include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
 
-class Llama {
+class Llama : public BaseModel {
  public:
+  explicit Llama();
+  ~Llama() = default;
+
   // The prefill stage.
   Status ContextDecode();
 
