@@ -13,10 +13,11 @@ namespace numerous_llm {
 
 Endpoint::Endpoint(const EndpointConfig &endpoint_config) : endpoint_config_(endpoint_config) {}
 
-Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue) {
+Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue, Channel<std::pair<Status, Response>>& response_queue) {
   NLLM_LOG_INFO << "Listen on port " << endpoint_config_.port;
 
   // define generate
+  // TODO(karlluo): should also support stream mode
   http_server_.Post("/generate", [&](const httplib::Request &req, httplib::Response &res) {
     if (req.has_param("tokens")) {
       Request infer_req;
@@ -35,9 +36,13 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue) {
       // tokens[0] shape is [3]
       // tokens[1] shape is [5]
       // TODO(karlluo): Convert token to tensor
+      Status req_prepare_status = Accept(infer_req);
+      requests_queue.Write(std::make_pair<Status, Request>(std::move(req_prepare_status), std::move(infer_req)));
 
-      Status status = Accept(infer_req);
-      requests_queue.Write(std::make_pair<Status, Request>(std::move(status), std::move(infer_req)));
+      // Get inference result
+      std::pair<Status, Response> rsp_pair;
+      response_queue.Read(&rsp_pair);
+      Status rsp_prepare_status = Send(rsp_pair.second);
     }
   });
 

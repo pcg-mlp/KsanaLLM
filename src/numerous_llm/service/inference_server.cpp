@@ -72,9 +72,8 @@ Status InferenceServer::StartHandler() {
 
     // TODO: should not block.
     Response rsp;
-    HandleRequest(req, rsp);
-
-    endpoint_->Send(rsp);
+    Status infer_status = HandleRequest(req, rsp);
+    response_queue_.Write(std::make_pair<Status, Response>(std::move(infer_status), std::move(rsp)));
   }
 
   return Status();
@@ -85,7 +84,7 @@ Status InferenceServer::StartServer() {
   batch_manager_->Start();
 
   // Start endpoint.
-  endpoint_->Listen(requests_queue_);
+  endpoint_->Listen(requests_queue_, response_queue_);
 
   // Start service handler.
   StartHandler();

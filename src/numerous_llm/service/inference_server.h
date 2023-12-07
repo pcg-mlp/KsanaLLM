@@ -49,6 +49,7 @@ class InferenceServer {
 
   // channel for endpoint and inference server
   Channel<std::pair<Status, Request>> requests_queue_;
+  Channel<std::pair<Status, Response>> response_queue_;
 };
 
 }  // namespace numerous_llm
