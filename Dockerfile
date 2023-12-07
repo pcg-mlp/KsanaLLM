@@ -22,9 +22,16 @@ RUN yum update -y \
     && yum install -y centos-release-scl devtoolset-11 
 
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.0-rc5/cmake-3.28.0-rc5-linux-x86_64.sh \
-	&& bash cmake-3.28.0-rc5-linux-x86_64.sh --prefix=/usr --skip-license
+	&& bash cmake-3.28.0-rc5-linux-x86_64.sh --prefix=/usr --skip-license \
+    && git clone https://github.com/NVIDIA/nccl.git \
+    && cd nccl \
+    && git checkout v2.19.4-1 \
+    && make --silent -j32 \
+    && make install \
+    && cd - \
+    && rm -rf nccl
 
-ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/lib64/:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:/usr/local/cuda/extras/CUPTI/lib64/:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib/stubs/:/usr/lib/nccl/:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/lib64/:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:/usr/local/cuda/extras/CUPTI/lib64/:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib/stubs/:/usr/lib/nccl/:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:$PATH
 
 RUN source ~/.bashrc \

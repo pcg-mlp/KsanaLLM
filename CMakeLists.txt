@@ -10,8 +10,8 @@ option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 find_package(CUDA 11.3 REQUIRED)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
-find_package(CUDNN)
-find_package(NCCL)
+find_package(CUDNN REQUIRED)
+find_package(NCCL REQUIRED)
 
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
 # include(LLM_kernels)

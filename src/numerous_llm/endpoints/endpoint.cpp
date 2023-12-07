@@ -13,7 +13,8 @@ namespace numerous_llm {
 
 Endpoint::Endpoint(const EndpointConfig &endpoint_config) : endpoint_config_(endpoint_config) {}
 
-Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue, Channel<std::pair<Status, Response>>& response_queue) {
+Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue,
+                        Channel<std::pair<Status, Response>> &response_queue) {
   NLLM_LOG_INFO << "Listen on port " << endpoint_config_.port;
 
   // define generate
