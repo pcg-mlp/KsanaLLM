@@ -6,7 +6,6 @@
 
 namespace numerous_llm {
 
-LoraCoordinator::LoraCoordinator(
-    const LoraCoordinatorConfig &lora_coordinator_config) {}
+LoraCoordinator::LoraCoordinator(const LoraCoordinatorConfig &lora_coordinator_config) {}
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

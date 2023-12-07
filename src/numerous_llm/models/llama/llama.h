@@ -8,7 +8,7 @@
 namespace numerous_llm {
 
 class Llama {
-public:
+ public:
   // The prefill stage.
   Status ContextDecode();
 
@@ -16,4 +16,4 @@ public:
   Status Decode();
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

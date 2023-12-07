@@ -4,11 +4,11 @@
 #pragma once
 
 class DynamicBatching {
-public:
+ public:
   DynamicBatching();
   ~DynamicBatching();
 
-private:
+ private:
   // The maxinum batch size that can be batched.
   unsigned int max_batch_size_;
 

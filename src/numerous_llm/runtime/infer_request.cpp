@@ -22,4 +22,4 @@ InferRequest::InferRequest() {
   infer_id = index_counter;
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

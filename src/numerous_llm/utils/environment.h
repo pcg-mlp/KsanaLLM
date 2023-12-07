@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "numerous_llm/utils/status.h"
 #include "httplib.h"
+#include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
 
@@ -67,7 +67,7 @@ struct EndpointConfig {
 };
 
 class Environment {
-public:
+ public:
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
 
@@ -80,7 +80,7 @@ public:
   // Get the config of endpoint.
   Status GetEndpointConfig(EndpointConfig &endpoint_config);
 
-private:
+ private:
   // The model list that should be loaded.
   std::vector<ModelConfig> model_configs_;
 
@@ -91,4 +91,4 @@ private:
   EndpointConfig endpoint_config_;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

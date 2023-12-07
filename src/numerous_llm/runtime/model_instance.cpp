@@ -8,7 +8,7 @@
 namespace numerous_llm {
 
 void ModelInstance::Load(const ModelConfig& model_config) {
-  NLLM_LOG_INFO << "Start to load model " << model_config.name << std::endl;
+  NLLM_LOG_INFO << "Start to load model " << model_config.name;
 }
 
 void ModelInstance::Forward(const TensorMap& input_tensor_map, const SamplingConfig& sampling_config,

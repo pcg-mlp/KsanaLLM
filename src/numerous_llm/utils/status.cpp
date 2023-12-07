@@ -16,8 +16,7 @@ Status::Status(RetCode code, const std::string &message) {
   state_->message = message;
 }
 
-Status::Status(const Status &status)
-    : Status(status.GetCode(), status.GetMessage()) {}
+Status::Status(const Status &status) : Status(status.GetCode(), status.GetMessage()) {}
 
 const std::string &Status::GetEmptyString() {
   static std::string *empty = new std::string();
@@ -34,4 +33,4 @@ std::string Status::ToString() const {
   return std::string(tmp) + state_->message;
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

@@ -5,8 +5,8 @@
 #include "numerous_llm/utils/environment.h"
 
 #include <fstream>
-#include <stdexcept>
 #include <iostream>
+#include <stdexcept>
 
 #include "fmt/core.h"
 #include "gflags/gflags.h"
@@ -44,8 +44,10 @@ Status Environment::ParseOptions(int argc, char **argv) {
   model_config.path = FLAGS_model_config;
   model_configs_.push_back(model_config);
 
-  NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path)
-                << std::endl;
+  NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
+
+  endpoint_config_.host = FLAGS_host;
+  endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
 
   endpoint_config_.host = FLAGS_host;
   endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);

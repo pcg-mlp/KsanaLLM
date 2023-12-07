@@ -7,5 +7,4 @@ namespace numerous_llm {
 
 class BaseGranularity {};
 
-} // namespace numerous_llm
-
+}  // namespace numerous_llm

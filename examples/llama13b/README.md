@@ -42,6 +42,14 @@ mv llama13b-fastertransformer-model /model/llama-ft/13B/2-gpu
 
 ```bash
 # after compile following ${GIT_ROOT_PATH}/README.md, server can be launch with following command line
-${GIT_ROOT_PATH}/build/bin/numerous_llm --model_config ${GIT_ROOT_PATH}/examples/llama13b/llama_13b_bs16_in512_out256.ini
+${GIT_ROOT_PATH}/build/bin/numerous_llm --model_config=${GIT_ROOT_PATH}/examples/llama13b/llama_13b_bs16_in512_out256.ini --host=0.0.0.0 --port=8080
 ```
 
+## 4. Prepare Client Tokenizor
+
+```bash
+pip install requests
+sudo yum install git-lfs -y
+git lfs clone https://huggingface.co/huggyllama/llama-13b
+python llama13b_simple_client.py
+```

@@ -5,9 +5,8 @@
 namespace numerous_llm {
 
 class JustPlaceholder {
-
-public:
+ public:
   void Hello();
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

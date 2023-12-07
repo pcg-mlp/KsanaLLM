@@ -7,5 +7,4 @@ namespace numerous_llm {
 
 class BasePriority {};
 
-} // namespace numerous_llm
-
+}  // namespace numerous_llm

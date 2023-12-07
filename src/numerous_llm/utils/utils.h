@@ -24,4 +24,4 @@ namespace numerous_llm {
 // like python "for i in range(begin, end)"
 #define FOR_RANGE(type, i, begin, end) for (type i = begin; i < end; ++i)
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

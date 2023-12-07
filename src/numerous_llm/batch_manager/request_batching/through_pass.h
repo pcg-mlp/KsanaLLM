@@ -7,4 +7,4 @@ namespace numerous_llm {
 
 class ThroughPass {};
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

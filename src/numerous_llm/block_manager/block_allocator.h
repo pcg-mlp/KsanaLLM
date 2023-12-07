@@ -13,7 +13,7 @@ namespace numerous_llm {
 // when requested. When a block is free, its reference count is decremented. If
 // the reference count becomes zero, the block is addes back to the free list.
 class BlockAllocator {
-public:
+ public:
   BlockAllocator(const AllocatorConfig &allocator_config);
 
   // Aalloc a block from allocator.
@@ -22,8 +22,8 @@ public:
   // Free a block to allocator.
   Status Free(PhysicalBlock &block);
 
-private:
+ private:
   std::vector<PhysicalBlock> free_blocks_;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

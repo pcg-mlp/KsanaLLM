@@ -8,8 +8,8 @@
 namespace numerous_llm {
 
 class ContextCaching {
-public:
+ public:
   ContextCaching(const ContextCachingConfig &context_caching_config);
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

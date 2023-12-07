@@ -11,9 +11,9 @@
 namespace numerous_llm {
 
 class LlmRuntime {
-public:
+ public:
   // Execute one req in parallel.
   Status Step(std::vector<InferRequest> &reqs);
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

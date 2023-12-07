@@ -24,12 +24,11 @@
 namespace numerous_llm {
 
 class BatchManager {
-public:
+ public:
   BatchManager(const BatchManagerConfig &batch_manager_config);
 
   // Register a model instance to current batch manager.
-  Status
-  RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
+  Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
 
   // Enqueue a request to waiting queue.
   Status Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
@@ -50,11 +49,11 @@ public:
   // Stop the batch manager.
   Status Stop();
 
-private:
+ private:
   // Initialize the batch manager.
   Status Initialize();
 
-private:
+ private:
   BatchManagerConfig batch_manager_config_;
 
   // The batch scheduler.
@@ -79,8 +78,7 @@ private:
   std::atomic<bool> terminated_ = false;
 
   // The model name to model instance.
-  std::unordered_map<std::string, std::shared_ptr<ModelInstance>>
-      model_instances_;
+  std::unordered_map<std::string, std::shared_ptr<ModelInstance>> model_instances_;
 
   // The runtime instance.
   std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
@@ -89,4 +87,4 @@ private:
   std::shared_ptr<Sampler> llm_sampler_ = nullptr;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

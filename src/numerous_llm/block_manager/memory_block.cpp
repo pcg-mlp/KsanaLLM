@@ -21,4 +21,4 @@ int KvCacheBlock::GetLastTokenId() {
 
 std::vector<int> KvCacheBlock::GetTokenIds() { return token_ids; }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

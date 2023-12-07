@@ -10,4 +10,4 @@ Status Llama::ContextDecode() { return Status(); }
 
 Status Llama::Decode() { return Status(); }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

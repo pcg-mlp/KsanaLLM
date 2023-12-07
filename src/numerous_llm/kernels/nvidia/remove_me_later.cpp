@@ -8,8 +8,6 @@
 
 namespace numerous_llm {
 
-void JustPlaceholder::Hello() {
-  std::cout << "Please remove me later." << std::endl;
-}
+void JustPlaceholder::Hello() { std::cout << "Please remove me later." << std::endl; }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

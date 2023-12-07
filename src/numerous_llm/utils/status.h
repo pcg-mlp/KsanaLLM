@@ -13,7 +13,7 @@ namespace numerous_llm {
 
 // Denote success or failure of a call in numerous_llm.
 class Status {
-public:
+ public:
   // Create a success status.
   Status() {}
 
@@ -25,16 +25,14 @@ public:
   // Return true if the status indicates success.
   bool OK() const { return (state_ == nullptr); }
 
-  const std::string &GetMessage() const {
-    return OK() ? GetEmptyString() : state_->message;
-  }
+  const std::string &GetMessage() const { return OK() ? GetEmptyString() : state_->message; }
 
   RetCode GetCode() const { return OK() ? RetCode::RET_SUCCESS : state_->code; }
 
   // Return a string representation of this status, return `OK` for success.
   std::string ToString() const;
 
-private:
+ private:
   // Return this static object for better performance.
   static const std::string &GetEmptyString();
 
@@ -48,4 +46,4 @@ private:
   std::shared_ptr<State> state_ = nullptr;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

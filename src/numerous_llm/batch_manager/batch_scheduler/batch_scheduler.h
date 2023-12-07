@@ -9,13 +9,13 @@
 #include "numerous_llm/batch_manager/batch_scheduler/strategy/base_strategy.h"
 #include "numerous_llm/runtime/infer_request.h"
 
-#include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/channel.h"
+#include "numerous_llm/utils/environment.h"
 
 namespace numerous_llm {
 
 class BatchScheduler {
-public:
+ public:
   explicit BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config);
   ~BatchScheduler();
 
@@ -28,7 +28,7 @@ public:
   // Stop channel
   Status StopChannel();
 
-private:
+ private:
   // The scheduler priority.
   std::shared_ptr<BasePriority> priority_;
 
@@ -42,4 +42,4 @@ private:
   Channel<InferRequest> finish_queue_;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

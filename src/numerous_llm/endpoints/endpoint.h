@@ -9,15 +9,16 @@
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
 #include "numerous_llm/utils/status.h"
+#include "src/numerous_llm/utils/channel.h"
 
 namespace numerous_llm {
 
 class Endpoint : public BaseEndpoint {
-public:
+ public:
   explicit Endpoint(const EndpointConfig &endpoint_config);
 
   // Listen at specific socket.
-  Status Listen();
+  Status Listen(Channel<std::pair<Status, Request>> &requests_queue);
 
   // Close the listening socket.
   Status Close();
@@ -28,13 +29,13 @@ public:
   // Send rsp to client.
   Status Send(const Response &rsp);
 
-private:
-  std::atomic<bool> terminated_;
+ private:
+  std::atomic<bool> terminated_{false};
 
   httplib::Server http_server_;
-  std::thread     http_server_thread_;
+  std::thread http_server_thread_;
 
   EndpointConfig endpoint_config_;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

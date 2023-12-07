@@ -8,9 +8,8 @@
 namespace numerous_llm {
 
 class LoraCoordinator {
-public:
-  explicit LoraCoordinator(
-      const LoraCoordinatorConfig &lora_coordinator_config);
+ public:
+  explicit LoraCoordinator(const LoraCoordinatorConfig &lora_coordinator_config);
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

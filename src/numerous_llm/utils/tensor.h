@@ -12,7 +12,7 @@ namespace numerous_llm {
 class Tensor {};
 
 class TensorMap {
-public:
+ public:
   TensorMap() = default;
   TensorMap(const std::unordered_map<std::string, Tensor> &tensor_map);
   TensorMap(const std::vector<Tensor> &tensor_map);
@@ -21,8 +21,8 @@ public:
 
   void insert(const std::string &key, const Tensor &value);
 
-private:
+ private:
   std::unordered_map<std::string, Tensor> tensor_map_;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

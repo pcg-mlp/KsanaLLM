@@ -12,7 +12,7 @@ namespace numerous_llm {
 class SamplingConfig {};
 
 class Request {
-public:
+ public:
   // The unique id of a request.
   int req_id;
 
@@ -24,7 +24,7 @@ public:
 };
 
 class Response {
-public:
+ public:
   // The unique id of a request.
   int req_id;
 
@@ -32,4 +32,4 @@ public:
   std::vector<TensorMap> tensor_maps;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

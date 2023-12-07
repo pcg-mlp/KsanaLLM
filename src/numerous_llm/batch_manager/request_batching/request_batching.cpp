@@ -6,7 +6,6 @@
 
 namespace numerous_llm {
 
-RequestBatching::RequestBatching(
-    const RequestBatchingConfig &request_batching_config) {}
+RequestBatching::RequestBatching(const RequestBatchingConfig &request_batching_config) {}
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

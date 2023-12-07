@@ -11,7 +11,7 @@ namespace numerous_llm {
 
 // Some basic fields of memory block.
 class BaseBlock {
-public:
+ public:
   // block index, zero based.
   int block_index;
 
@@ -23,7 +23,7 @@ public:
 // Logical blocks are used to represent the states of the corresponding
 // physical blocks in the KV cache.
 class KvCacheBlock : public BaseBlock {
-public:
+ public:
   // The token ids this block contains.
   std::vector<int> token_ids;
 
@@ -51,7 +51,7 @@ class LoraWeightBlock : public BaseBlock {};
 
 // The physical memory block information.
 class PhysicalBlock : public BaseBlock {
-public:
+ public:
   // The reference count of current block.
   int ref_count = 0;
 
@@ -62,4 +62,4 @@ public:
   void *address = nullptr;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

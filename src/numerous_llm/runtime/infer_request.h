@@ -15,7 +15,7 @@ namespace numerous_llm {
 
 // The infer request, it is the unit of batch manager's scheduler.
 class InferRequest {
-public:
+ public:
   InferRequest();
 
   // The req id of the user's request.
@@ -43,4 +43,4 @@ public:
   TensorMap output_tensor_map;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

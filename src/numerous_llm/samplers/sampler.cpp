@@ -12,4 +12,4 @@ Status Sampler::Sampling(std::vector<InferRequest> &reqs) {
   return Status();
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

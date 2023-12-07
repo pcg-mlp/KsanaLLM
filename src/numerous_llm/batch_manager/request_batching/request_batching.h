@@ -8,8 +8,8 @@
 namespace numerous_llm {
 
 class RequestBatching {
-public:
+ public:
   RequestBatching(const RequestBatchingConfig &request_batching_config);
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

@@ -8,8 +8,8 @@
 namespace numerous_llm {
 
 class BlockManager {
-public:
+ public:
   BlockManager(const BlockManagerConfig &block_manager_config);
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

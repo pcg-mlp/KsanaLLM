@@ -37,7 +37,7 @@ Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> 
 
 Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
                              const std::vector<SamplingConfig> &sampling_configs) {
-  NLLM_LOG_INFO << "batch manager enqueue." << std::endl;
+  NLLM_LOG_INFO << "batch manager enqueue.";
 
   // Split into multiple prompt
   if (tensor_maps.size() != sampling_configs.size()) {
@@ -49,11 +49,11 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     infer_req.req_id = req_id;
     infer_req.input_tensor_map = tensor_maps[i];
     infer_req.sampling_config = sampling_configs[i];
-    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req.model_name << std::endl;
+    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req.model_name;
     infer_req.model_instance = model_instances_[infer_req.model_name];
 
     batch_scheduler_->AddInferRequest(infer_req);
-    NLLM_LOG_INFO << "batch schdule add request." << std::endl;
+    NLLM_LOG_INFO << "batch schdule add request.";
   }
 
   return Status();

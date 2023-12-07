@@ -7,8 +7,8 @@
 
 namespace numerous_llm {
 
-Status LlmRuntime::Step(std::vector<InferRequest> &reqs) {
-  NLLM_LOG_INFO << "llm runtime step invoked." << std::endl;
+Status LlmRuntime::Step(std::vector<InferRequest>& reqs) {
+  NLLM_LOG_INFO << "llm runtime step invoked.";
 
   for (InferRequest& req : reqs) {
     // this forward will execute on differ thread and its own GPU
@@ -18,4 +18,4 @@ Status LlmRuntime::Step(std::vector<InferRequest> &reqs) {
   return Status();
 }
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

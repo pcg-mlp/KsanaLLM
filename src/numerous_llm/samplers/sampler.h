@@ -8,8 +8,8 @@
 namespace numerous_llm {
 
 class Sampler {
-public:
+ public:
   Status Sampling(std::vector<InferRequest> &reqs);
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

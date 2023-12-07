@@ -17,7 +17,7 @@
 namespace numerous_llm {
 
 class InferenceServer {
-public:
+ public:
   // Start the rpc service.
   Status StartServer();
 
@@ -34,7 +34,7 @@ public:
   // load weights & register model instance & start rpc port.
   Status Initialize(std::shared_ptr<Environment> env);
 
-private:
+ private:
   // The endpoint of this service.
   std::shared_ptr<Endpoint> endpoint_ = nullptr;
 
@@ -46,6 +46,9 @@ private:
 
   // Whether the handle loop terminated.
   std::atomic<bool> terminated_ = false;
+
+  // channel for endpoint and inference server
+  Channel<std::pair<Status, Request>> requests_queue_;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

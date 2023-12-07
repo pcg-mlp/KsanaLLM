@@ -26,4 +26,4 @@ enum RetCode {
   RET_UNKNOWN = 255,
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

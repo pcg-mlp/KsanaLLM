@@ -8,4 +8,4 @@ namespace numerous_llm {
 
 BlockManager::BlockManager(const BlockManagerConfig &block_manager_config) {}
 
-} // namespace numerous_llm
+}  // namespace numerous_llm

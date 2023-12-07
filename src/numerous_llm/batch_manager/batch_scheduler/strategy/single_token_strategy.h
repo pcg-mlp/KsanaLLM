@@ -6,9 +6,9 @@
 namespace numerous_llm {
 
 class SingleToken {
-public:
+ public:
   // Whether enable dynamic splitfuse
   bool dynamic_split_fuse = false;
 };
 
-} // namespace numerous_llm
+}  // namespace numerous_llm
