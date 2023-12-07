@@ -14,6 +14,17 @@ class BlockManager {
 
   // Get block pointer.
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
+
+  Status Allocate(size_t block_size, size_t block_num, std::vector<int>& blocks);
+
+  Status Free(std::vector<int>& blocks);
+
+  Status SwapIn(std::vector<int>& blocks);
+
+  Satatus SwapOut(std::vector<int>& blocks);
+
+  // Get free block number in specific device.
+  size_t GetFreeBlockNumber(MemoryDevice device);
 };
 
 }  // namespace numerous_llm
