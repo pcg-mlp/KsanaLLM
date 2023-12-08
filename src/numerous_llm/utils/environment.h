@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "httplib.h"
+
 #include "numerous_llm/utils/status.h"
+#include "numerous_llm/utils/tensor.h"
 
 namespace numerous_llm {
 
@@ -22,6 +24,27 @@ struct ModelConfig {
 
   // The dir path.
   std::string path;
+
+  // Type of weight
+  DataType weight_data_type;
+
+  // TODO(karlluo): Quant mode
+
+  // Device Type
+  MemoryDevice memory_device;
+
+  size_t head_num;
+  uint32_t size_per_head;
+  uint32_t inter_size;
+  uint32_t num_layer;
+  uint32_t rotary_embedding;
+  float layernorm_eps;
+  uint32_t vocab_size;
+  int start_id;
+  int end_id;
+
+  // others attributes
+  std::unordered_map<std::string, std::string> model_attributes;
 };
 
 struct RequestBatchingConfig {};
@@ -80,6 +103,10 @@ class Environment {
   // Get the config of endpoint.
   Status GetEndpointConfig(EndpointConfig &endpoint_config);
 
+  int GetTensorParallelSize() { return tensor_parallel_size_; }
+
+  int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
+
  private:
   // The model list that should be loaded.
   std::vector<ModelConfig> model_configs_;
@@ -89,6 +116,9 @@ class Environment {
 
   // The config of endpoint.
   EndpointConfig endpoint_config_;
+
+  int tensor_parallel_size_{0};
+  int pipeline_parallel_size_{0};
 };
 
 }  // namespace numerous_llm

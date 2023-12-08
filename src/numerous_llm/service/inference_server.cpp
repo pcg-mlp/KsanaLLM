@@ -15,6 +15,8 @@ Status InferenceServer::Initialize(std::shared_ptr<Environment> env) {
     return Status(RET_INVALID_ARGUMENT, "The Environment is nullptr.");
   }
 
+  context_.reset(new Context(env->GetTensorParallelSize(), env->GetPipeLineParallelSize()));
+
   BatchManagerConfig batch_manager_config;
   Status status = env->GetBatchManagerConfig(batch_manager_config);
   if (!status.OK()) {
@@ -31,7 +33,7 @@ Status InferenceServer::Initialize(std::shared_ptr<Environment> env) {
   NLLM_LOG_INFO << "Get model instance size: " << model_configs.size();
 
   for (const ModelConfig &model_config : model_configs) {
-    std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>();
+    std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(context_);
     model_instance->Load(model_config);
 
     // Register model instance.

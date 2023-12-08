@@ -5,13 +5,14 @@
 
 #include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/utils/status.h"
+#include "numerous_llm/utils/utils.h"
 
 namespace numerous_llm {
 
 class Llama : public BaseModel {
  public:
-  explicit Llama();
-  ~Llama() = default;
+  Llama() {}
+  ~Llama() {}
 
   // The prefill stage.
   Status ContextDecode();

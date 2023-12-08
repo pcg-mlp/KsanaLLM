@@ -2,4 +2,10 @@
 
 ==============================================================================*/
 
-namespace numerous_llm {}  // namespace numerous_llm
+#include "numerous_llm/runtime/worker.h"
+
+namespace numerous_llm {
+
+Status Worker::Execute(Context& ctx) { return Status(); }
+
+}  // namespace numerous_llm

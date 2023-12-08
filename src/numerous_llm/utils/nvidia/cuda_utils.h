@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/ret_code.h"
 
 namespace numerous_llm {
 
@@ -26,5 +27,7 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
 }
 
 #define CUDA_CHECK(val) CheckCUDAError((val), #val, __FILE__, __LINE__)
+
+int GetDeviceNumber();
 
 }  // namespace numerous_llm

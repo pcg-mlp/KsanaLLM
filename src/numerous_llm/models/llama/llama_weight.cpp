@@ -4,4 +4,10 @@
 
 #include "numerous_llm/models/llama/llama_weight.h"
 
-namespace numerous_llm {}  // namespace numerous_llm
+namespace numerous_llm {
+
+LlamaWeight::LlamaWeight(const ModelConfig& model_config) {}
+
+LlamaWeight::~LlamaWeight() {}
+
+}  // namespace numerous_llm

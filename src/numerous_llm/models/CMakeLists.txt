@@ -4,7 +4,8 @@
 cmake_minimum_required(VERSION 3.8)
 
 file(GLOB_RECURSE models_SRCS
-		 ${PROJECT_SOURCE_DIR}/src/numerous_llm/models/*.cpp)
+		 ${PROJECT_SOURCE_DIR}/src/numerous_llm/models/base/*.cpp
+     ${PROJECT_SOURCE_DIR}/src/numerous_llm/models/llama/*.cpp)
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "models_SRCS: ${models_SRCS}")
 

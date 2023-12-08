@@ -9,6 +9,7 @@
 
 #include "numerous_llm/batch_manager/batch_manager.h"
 #include "numerous_llm/endpoints/endpoint.h"
+#include "numerous_llm/runtime/context.h"
 #include "numerous_llm/runtime/model_instance.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
@@ -37,6 +38,9 @@ class InferenceServer {
  private:
   // The endpoint of this service.
   std::shared_ptr<Endpoint> endpoint_ = nullptr;
+
+  // Global context for inference
+  std::shared_ptr<Context> context_ = nullptr;
 
   // The batch manager for the whole inference.
   std::shared_ptr<BatchManager> batch_manager_ = nullptr;

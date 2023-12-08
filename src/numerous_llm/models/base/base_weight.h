@@ -4,22 +4,16 @@
 #pragma once
 
 #include "numerous_llm/utils/environment.h"
-#include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
 
-class BaseModel {
+class BaseWeight {
  public:
   // Disable a default constructor
-  BaseModel() {}
+  BaseWeight();
+  explicit BaseWeight(const ModelConfig& model_config);
 
-  virtual ~BaseModel() {}
-
-  // The prefill stage.
-  virtual Status ContextDecode() = 0;
-
-  // The decode stage.
-  virtual Status Decode() = 0;
+  virtual ~BaseWeight() = 0;
 };
 
 }  // namespace numerous_llm
