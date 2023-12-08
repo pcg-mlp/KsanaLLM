@@ -8,6 +8,7 @@
 #include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/models/llama/llama.h"
 #include "numerous_llm/runtime/context.h"
+#include "numerous_llm/runtime/worker.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
 #include "numerous_llm/utils/tensor.h"
@@ -29,6 +30,11 @@ class ModelInstance {
 
  private:
   std::shared_ptr<Context> context_{nullptr};
+
+  std::vector<std::unique_ptr<Worker>> workers_;
+
+  int tensor_parallel_size_{0};
+  int pipeline_parallel_size_{0};
 };
 
 }  // namespace numerous_llm

@@ -4,7 +4,7 @@
 #include <thread>
 
 #include "test.h"
-#include "src/numerous_llm/utils/channel.h"
+#include "numerous_llm/utils/channel.h"
 
 namespace numerous_llm {
 

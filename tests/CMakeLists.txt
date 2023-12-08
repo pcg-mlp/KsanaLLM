@@ -11,7 +11,8 @@ FetchContent_MakeAvailable(googletest)
 
 # set test target
 file(GLOB_RECURSE NUMEROUS_LLM_UNITTEST_SRCS *.cu
-                                             *.cc)
+                                             *.cc
+                                             *.cpp)
 add_executable(numerous_llm_unittests ${NUMEROUS_LLM_UNITTEST_SRCS})
 set_property(TARGET numerous_llm_unittests PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET numerous_llm_unittests PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

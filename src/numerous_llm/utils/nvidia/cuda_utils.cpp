@@ -3,11 +3,13 @@
 ==============================================================================*/
 #include "src/numerous_llm/utils/nvidia/cuda_utils.h"
 
+#include <iostream>
+
 namespace numerous_llm {
 
 int GetDeviceNumber() {
   int device = 0;
-  CUDA_CHECK(cudaGetDevice(&device));
+  CUDA_CHECK(cudaGetDeviceCount(&device));
   return device;
 }
 

@@ -17,6 +17,10 @@ class Context {
   Context(const int tensor_parallel_size, const int pipeline_parallel_size);
   ~Context();
 
+  int GetTensorParallelSize() { return tensor_parallel_size_; }
+
+  int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
+
  private:
   int device_num_{0};
   int tensor_parallel_size_{0};

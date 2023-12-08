@@ -75,6 +75,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # set include headers
 set(COMMON_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/src
   ${CUDA_PATH}/include
 )
 

@@ -5,6 +5,8 @@
 
 #include <iostream>
 
+#include "test.h"
+
 void Fun(int i) { std::cout << i << std::endl; }
 void Fun2(int i, float j) { std::cout << i + j << std::endl; }
 
@@ -25,13 +27,11 @@ void Fun2(int i, float j) { std::cout << i + j << std::endl; }
 //
 void kernel_func(int seq_num, int seq_len[], void *block_ptr[], int block_num[], int block_len) {}
 
-int main() {
+TEST(KernelRegistryTest, CommonTest) {
   REGISTER_NVIDIA_KERNEL(a, Fun);
   REGISTER_NVIDIA_KERNEL(b, Fun2);
 
   int i = 1;
   EXECUTE_NVIDIA_KERNEL(a, i);
   EXECUTE_NVIDIA_KERNEL(b, 1, 0.5);
-
-  return 0;
 }

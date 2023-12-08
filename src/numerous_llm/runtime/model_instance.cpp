@@ -18,6 +18,10 @@ void ModelInstance::Load(const ModelConfig& model_config) {
   std::transform(unified_model_name.begin(), unified_model_name.end(), unified_model_name.begin(),
                  [](unsigned char c) { return std::tolower(c); });
 
+  tensor_parallel_size_ = context_->GetTensorParallelSize();
+  pipeline_parallel_size_ = context_->GetPipeLineParallelSize();
+
+  workers_.resize(tensor_parallel_size_ * pipeline_parallel_size_);
   if (unified_model_name.find("llama") != std::string::npos) {
     NLLM_LOG_INFO << "Start to init LLaMA model instance";
   } else {
@@ -28,6 +32,14 @@ void ModelInstance::Load(const ModelConfig& model_config) {
 }
 
 void ModelInstance::Forward(const TensorMap& input_tensor_map, const SamplingConfig& sampling_config,
-                            TensorMap& output_tensor_map) {}
+                            TensorMap& output_tensor_map) {
+
+  for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
+    // copy inputs to device
+    
+    // worker forward
+    workers_[worker_id];
+  }
+}
 
 }  // namespace numerous_llm
