@@ -8,7 +8,6 @@
 #include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/models/llama/llama.h"
 #include "numerous_llm/runtime/context.h"
-#include "numerous_llm/runtime/worker.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
 #include "numerous_llm/utils/tensor.h"

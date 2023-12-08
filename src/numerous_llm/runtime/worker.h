@@ -9,7 +9,6 @@
 
 #include "numerous_llm/runtime/context.h"
 #include "numerous_llm/runtime/infer_request.h"
-#include "numerous_llm/runtime/model_instance.h"
 #include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {

@@ -1,6 +1,7 @@
 build
 deps
 core.*
+.cache
 *.pyc
 *_wrap.cxx
 *_pywrap.py
