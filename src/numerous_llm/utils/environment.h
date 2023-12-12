@@ -9,8 +9,9 @@
 
 #include "httplib.h"
 
+#include "numerous_llm/block_manager/memory_block.h"
+#include "numerous_llm/utils/dtypes.h"
 #include "numerous_llm/utils/status.h"
-#include "numerous_llm/utils/tensor.h"
 
 namespace numerous_llm {
 
@@ -51,7 +52,16 @@ struct RequestBatchingConfig {};
 
 struct ContextCachingConfig {};
 
-struct BatchSchedulerConfig {};
+struct BatchSchedulerConfig {
+  // Max waiting time in millisecond.
+  size_t timeout_in_ms;
+
+  // The max queue len of waiting request.
+  size_t max_waiting_queue_len;
+
+  // The max token number for one scheduler step.
+  size_t max_token_number;
+};
 
 struct LoraCoordinatorConfig {};
 
@@ -75,9 +85,6 @@ struct BatchManagerConfig {
 
   // The config of multi lora.
   LoraCoordinatorConfig lora_coordinator_config;
-
-  // The config of block manager
-  BlockManagerConfig block_manager_config;
 };
 
 // The config of endpoint.
@@ -100,6 +107,9 @@ class Environment {
   // Get the config of a batch manager.
   Status GetBatchManagerConfig(BatchManagerConfig &batch_manager_config);
 
+  // Get the config of block manager.
+  Status GetBlockManagerConfig(BlockManagerConfig &block_manager_config);
+
   // Get the config of endpoint.
   Status GetEndpointConfig(EndpointConfig &endpoint_config);
 
@@ -113,6 +123,9 @@ class Environment {
 
   // The config of batch manager.
   BatchManagerConfig batch_manager_config_;
+
+  // The config of block manager.
+  BlockManagerConfig block_manager_config_;
 
   // The config of endpoint.
   EndpointConfig endpoint_config_;

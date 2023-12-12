@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -61,6 +62,12 @@ inline std::string Array2Str(T* arr, size_t size) {
   }
   ss << ")";
   return ss.str();
+}
+
+// Get current time in milliseconds.
+inline uint64_t GetCurrentTimeInMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+      .count();
 }
 
 }  // namespace numerous_llm

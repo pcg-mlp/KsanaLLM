@@ -2,4 +2,6 @@
 
 ==============================================================================*/
 
+#include "numerous_llm/utils/memory_utils.h"
+
 namespace numerous_llm {}  // namespace numerous_llm

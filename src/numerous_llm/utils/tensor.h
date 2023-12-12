@@ -7,9 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include <cuda_fp16.h>
-
 #include "numerous_llm/block_manager/memory_block.h"
+#include "numerous_llm/utils/dtypes.h"
 #include "numerous_llm/utils/logger.h"
 #include "numerous_llm/utils/memory_utils.h"
 #include "numerous_llm/utils/string_utils.h"
@@ -17,62 +16,6 @@
 // This Tenosr class is modified from NVIDIA's FasterTransformer.
 
 namespace numerous_llm {
-
-// All the available data types.
-enum DataType {
-  TYPE_INVALID,
-  TYPE_BOOL,
-  TYPE_UINT8,
-  TYPE_UINT16,
-  TYPE_UINT32,
-  TYPE_UINT64,
-  TYPE_INT8,
-  TYPE_INT16,
-  TYPE_INT32,
-  TYPE_INT64,
-  TYPE_FP16,
-  TYPE_FP32,
-  TYPE_FP64,
-  TYPE_BYTES,
-  TYPE_BF16,
-  TYPE_FP8_E4M3,
-  TYPE_STR,
-  TYPE_VOID,
-};
-
-template <typename T>
-DataType GetTensorType() {
-  if (std::is_same<T, float>::value || std::is_same<T, const float>::value) {
-    return TYPE_FP32;
-  } else if (std::is_same<T, half>::value || std::is_same<T, const half>::value) {
-    return TYPE_FP16;
-  }
-#ifdef ENABLE_BF16
-  else if (std::is_same<T, __nv_bfloat16>::value || std::is_same<T, const __nv_bfloat16>::value) {
-    return TYPE_BF16;
-  }
-#endif
-#ifdef ENABLE_FP8
-  else if (std::is_same<T, __nv_fp8_e4m3>::value || std::is_same<T, const __nv_fp8_e4m3>::value) {
-    return TYPE_FP8_E4M3;
-  }
-#endif
-  else if (std::is_same<T, int>::value || std::is_same<T, const int>::value) {
-    return TYPE_INT32;
-  } else if (std::is_same<T, int8_t>::value || std::is_same<T, const int8_t>::value) {
-    return TYPE_INT8;
-  } else if (std::is_same<T, uint>::value || std::is_same<T, const uint>::value) {
-    return TYPE_UINT32;
-  } else if (std::is_same<T, unsigned long long int>::value || std::is_same<T, const unsigned long long int>::value) {
-    return TYPE_UINT64;
-  } else if (std::is_same<T, bool>::value || std::is_same<T, const bool>::value) {
-    return TYPE_BOOL;
-  } else if (std::is_same<T, char>::value || std::is_same<T, const char>::value) {
-    return TYPE_BYTES;
-  } else {
-    return TYPE_INVALID;
-  }
-}
 
 // The storage type, contigous or segmented.
 enum StorageType { STORAGE_CONTIGUOUS, STORAGE_SEGMENTED };

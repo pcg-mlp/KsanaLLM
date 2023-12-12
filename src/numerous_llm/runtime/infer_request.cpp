@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <limits>
+#include "numerous_llm/utils/status.h"
 
 static std::atomic index_counter = 0;
 
@@ -21,5 +22,23 @@ InferRequest::InferRequest() {
 
   infer_id = index_counter;
 }
+
+size_t InferRequest::GetStepTokenNumber() { return 0; }
+
+size_t InferRequest::GetStepBlockNumber() { return 0; }
+
+size_t InferRequest::GetTotalBlockNumber() { return 0; }
+
+Status InferRequest::SwapInAsync() { return Status(); }
+
+Status InferRequest::SwapOutAsync() { return Status(); }
+
+bool InferRequest::CheckLoraEnable() { return false; }
+
+size_t InferRequest::GetLoraBlockNumber() { return 0; }
+
+Status InferRequest::SwapInLoraAsync() { return Status(); }
+
+Status InferRequest::SwapOutLoraAsync() { return Status(); }
 
 }  // namespace numerous_llm

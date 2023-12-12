@@ -13,6 +13,7 @@
 
 #include "3rdparty/ini_reader.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/status.h"
 
 DEFINE_string(model_config, "./config.ini", "Get the model config file path");
 DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
@@ -97,6 +98,11 @@ Status Environment::GetModelList(std::vector<ModelConfig> &model_configs) {
 
 Status Environment::GetBatchManagerConfig(BatchManagerConfig &batch_manager_config) {
   batch_manager_config = batch_manager_config_;
+  return Status();
+}
+
+Status Environment::GetBlockManagerConfig(BlockManagerConfig &block_manager_config) {
+  block_manager_config = block_manager_config_;
   return Status();
 }
 

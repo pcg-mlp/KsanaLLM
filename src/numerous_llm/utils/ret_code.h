@@ -20,7 +20,13 @@ enum RetCode {
   RET_OUT_OF_MEMORY = 3,
 
   // The service is terminated.
-  RET_TERMINATED = 3,
+  RET_TERMINATED = 4,
+
+  // The sequence len exceed the capacity.
+  RET_EXCEED_CAPACITY = 5,
+
+  // handle timeout.
+  RET_TIMEOUT = 6,
 
   // something not in above values.
   RET_UNKNOWN = 255,

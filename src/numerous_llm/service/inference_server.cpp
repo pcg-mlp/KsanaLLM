@@ -6,11 +6,14 @@
 
 #include "numerous_llm/endpoints/endpoint.h"
 #include "numerous_llm/service/inference_server.h"
+#include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/singleton.h"
 
 namespace numerous_llm {
 
-Status InferenceServer::Initialize(std::shared_ptr<Environment> env) {
+Status InferenceServer::Initialize() {
+  Environment *env = Singleton<Environment>::GetInstance();
   if (!env) {
     return Status(RET_INVALID_ARGUMENT, "The Environment is nullptr.");
   }

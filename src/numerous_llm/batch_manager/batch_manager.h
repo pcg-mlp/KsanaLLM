@@ -62,9 +62,6 @@ class BatchManager {
   // Used to cache kv cache of prefix part of input.
   std::shared_ptr<ContextCaching> context_caching_ = nullptr;
 
-  // Manage the cpu&gpu memory block.
-  std::shared_ptr<BlockManager> block_manager_ = nullptr;
-
   // Batching the requests.
   std::shared_ptr<RequestBatching> request_batching_ = nullptr;
 

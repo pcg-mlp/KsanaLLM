@@ -3,7 +3,11 @@
 ==============================================================================*/
 
 #include "numerous_llm/batch_manager/batch_manager.h"
+#include "numerous_llm/runtime/infer_request.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/waiter.h"
+
+#include <memory>
 
 namespace numerous_llm {
 
@@ -16,8 +20,6 @@ Status BatchManager::Initialize() {
   batch_scheduler_ = std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config);
 
   context_caching_ = std::make_shared<ContextCaching>(batch_manager_config_.context_caching_config);
-
-  block_manager_ = std::make_shared<BlockManager>(batch_manager_config_.block_manager_config);
 
   lora_coordinator_ = std::make_shared<LoraCoordinator>(batch_manager_config_.lora_coordinator_config);
 
@@ -44,17 +46,21 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     return Status(RET_INVALID_ARGUMENT, "Size of tensor_maps and sampling_configs should be equal.");
   }
 
+  std::shared_ptr<Waiter> waiter = std::make_shared<Waiter>(tensor_maps.size());
   for (size_t i = 0; i < tensor_maps.size(); ++i) {
-    InferRequest infer_req;
-    infer_req.req_id = req_id;
-    infer_req.input_tensor_map = tensor_maps[i];
-    infer_req.sampling_config = sampling_configs[i];
-    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req.model_name;
-    infer_req.model_instance = model_instances_[infer_req.model_name];
+    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>();
+    infer_req->req_id = req_id;
+    infer_req->input_tensor_map = tensor_maps[i];
+    infer_req->sampling_config = sampling_configs[i];
+    infer_req->waiter = waiter;
+    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req->model_name;
+    infer_req->model_instance = model_instances_[infer_req->model_name];
 
     batch_scheduler_->AddInferRequest(infer_req);
     NLLM_LOG_INFO << "batch schdule add request.";
   }
+
+  waiter->Wait();
 
   return Status();
 }
@@ -65,8 +71,8 @@ Status BatchManager::WaitAllDone() { return Status(); }
 
 Status BatchManager::Process() {
   while (!terminated_) {
-    std::vector<InferRequest> scheduled_reqs;
-    batch_scheduler_->Schedule(scheduled_reqs);
+    std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
+    scheduled_reqs = batch_scheduler_->Schedule();
     if (scheduled_reqs.empty()) {
       continue;
     }
@@ -90,8 +96,6 @@ Status BatchManager::Stop() {
   NLLM_LOG_INFO << "Stop batch manager.";
 
   terminated_ = true;
-
-  batch_scheduler_->StopChannel();
 
   if (batch_manager_thread_ && batch_manager_thread_->joinable()) {
     batch_manager_thread_->join();

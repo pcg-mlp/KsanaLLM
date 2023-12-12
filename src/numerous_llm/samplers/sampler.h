@@ -9,7 +9,7 @@ namespace numerous_llm {
 
 class Sampler {
  public:
-  Status Sampling(std::vector<InferRequest> &reqs);
+  Status Sampling(std::vector<std::shared_ptr<InferRequest>> &reqs);
 };
 
 }  // namespace numerous_llm

@@ -7,7 +7,7 @@
 
 namespace numerous_llm {
 
-Status Sampler::Sampling(std::vector<InferRequest> &reqs) {
+Status Sampler::Sampling(std::vector<std::shared_ptr<InferRequest>> &reqs) {
   NLLM_LOG_INFO << "llm sampler invoked." << std::endl;
   return Status();
 }

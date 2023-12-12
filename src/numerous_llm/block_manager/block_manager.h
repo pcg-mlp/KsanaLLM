@@ -11,7 +11,7 @@ namespace numerous_llm {
 
 class BlockManager {
  public:
-  BlockManager(const BlockManagerConfig& block_manager_config);
+  BlockManager();
 
   // Get block pointer.
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);

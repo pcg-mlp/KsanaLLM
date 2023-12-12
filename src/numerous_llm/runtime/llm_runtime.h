@@ -13,7 +13,7 @@ namespace numerous_llm {
 class LlmRuntime {
  public:
   // Execute one req in parallel.
-  Status Step(std::vector<InferRequest> &reqs);
+  Status Step(std::vector<std::shared_ptr<InferRequest>> &reqs);
 };
 
 }  // namespace numerous_llm

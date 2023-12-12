@@ -19,6 +19,8 @@ namespace numerous_llm {
 
 class InferenceServer {
  public:
+  InferenceServer() { Initialize(); }
+
   // Start the rpc service.
   Status StartServer();
 
@@ -33,7 +35,7 @@ class InferenceServer {
 
   // Initialize inference server:
   // load weights & register model instance & start rpc port.
-  Status Initialize(std::shared_ptr<Environment> env);
+  Status Initialize();
 
  private:
   // The endpoint of this service.
