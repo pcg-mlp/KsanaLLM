@@ -6,8 +6,6 @@
 
 namespace numerous_llm {
 
-BaseWeight::BaseWeight() {};
-BaseWeight::BaseWeight(const ModelConfig& model_config) {};
-BaseWeight::~BaseWeight() {}
+BaseWeight::BaseWeight(const ModelConfig& model_config){};
 
 }  // namespace numerous_llm

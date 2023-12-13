@@ -30,6 +30,7 @@ void SignalHandler(int signum) {
 int main(int argc, char** argv) {
   // Initialize logger.
   InitLoguru();
+  NLLM_LOG_INFO << "Log level: " << GetLevelName(GetLogLevel());
 
   // Install signal handler.
   signal(SIGINT, SignalHandler);

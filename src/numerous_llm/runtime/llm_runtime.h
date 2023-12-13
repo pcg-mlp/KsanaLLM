@@ -12,8 +12,13 @@ namespace numerous_llm {
 
 class LlmRuntime {
  public:
+  LlmRuntime() {}
+
   // Execute one req in parallel.
   Status Step(std::vector<std::shared_ptr<InferRequest>> &reqs);
+
+ private:
+  std::unordered_map<std::string, std::unordered_map<InferStage, std::pair<TensorMap, TensorMap>>> grouped_reqs_map_;
 };
 
 }  // namespace numerous_llm

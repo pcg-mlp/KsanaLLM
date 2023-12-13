@@ -65,13 +65,9 @@ Status Endpoint::Close() {
 }
 
 Status Endpoint::Accept(Request &req) {
-  static int count = 0;
-
   if (terminated_) {
     return Status(RET_TERMINATED);
   }
-
-  ++count;
   NLLM_LOG_INFO << "Accept a req.";
 
   SamplingConfig sampling_config;

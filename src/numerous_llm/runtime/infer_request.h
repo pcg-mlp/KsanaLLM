@@ -6,6 +6,7 @@
 #include <atomic>
 #include <string>
 
+#include "numerous_llm/runtime/infer_stage.h"
 #include "numerous_llm/runtime/model_instance.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
@@ -14,14 +15,6 @@
 #include "numerous_llm/utils/waiter.h"
 
 namespace numerous_llm {
-
-enum InferStage {
-  // The context decode stage.
-  STAGE_CONTEXT,
-
-  // The decode stage.
-  STATE_DECODE,
-};
 
 // The infer request, it is the unit of batch manager's scheduler.
 class InferRequest {

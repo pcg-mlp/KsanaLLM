@@ -9,11 +9,9 @@ namespace numerous_llm {
 
 class BaseWeight {
  public:
-  // Disable a default constructor
-  BaseWeight();
+  BaseWeight(){};
   explicit BaseWeight(const ModelConfig& model_config);
-
-  virtual ~BaseWeight() = 0;
+  ~BaseWeight(){};
 };
 
 }  // namespace numerous_llm

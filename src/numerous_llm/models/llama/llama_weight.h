@@ -11,8 +11,9 @@ namespace numerous_llm {
 
 class LlamaWeight : public BaseWeight {
  public:
-  explicit LlamaWeight(const ModelConfig& model_config);
-  ~LlamaWeight();
+  LlamaWeight() {}
+  ~LlamaWeight() {}
+  explicit LlamaWeight(const ModelConfig& model_config) {}
 };
 
 }  // namespace numerous_llm

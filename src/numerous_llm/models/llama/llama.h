@@ -4,6 +4,7 @@
 #pragma once
 
 #include "numerous_llm/models/base/base_model.h"
+#include "numerous_llm/models/llama/llama_weight.h"
 #include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/utils.h"
 
@@ -15,10 +16,12 @@ class Llama : public BaseModel {
   ~Llama() {}
 
   // The prefill stage.
-  Status ContextDecode();
+  Status ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
+                       const std::vector<TensorMap*>& input_tensor_maps, std::vector<TensorMap*>& output_tensor_maps);
 
   // The decode stage.
-  Status Decode();
+  Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
+                const std::vector<TensorMap*>& input_tensor_maps, std::vector<TensorMap*>& output_tensor_maps);
 };
 
 }  // namespace numerous_llm

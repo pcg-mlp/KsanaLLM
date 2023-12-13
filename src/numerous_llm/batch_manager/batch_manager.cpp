@@ -53,6 +53,7 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     infer_req->input_tensor_map = tensor_maps[i];
     infer_req->sampling_config = sampling_configs[i];
     infer_req->waiter = waiter;
+    infer_req->model_name = "llama";
     NLLM_LOG_INFO << "infer_req.model_name: " << infer_req->model_name;
     infer_req->model_instance = model_instances_[infer_req->model_name];
 
@@ -60,7 +61,7 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     NLLM_LOG_INFO << "batch schdule add request.";
   }
 
-  waiter->Wait();
+  // waiter->Wait();
 
   return Status();
 }
