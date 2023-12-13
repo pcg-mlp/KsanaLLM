@@ -29,7 +29,14 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.0-rc5/cmake-3.
     && make --silent -j32 \
     && make install \
     && cd - \
-    && rm -rf nccl
+    && rm -rf nccl \
+    && git clone https://github.com/jemalloc/jemalloc.git \
+    && cd jemalloc \
+    && git checkout 5.3.0 \
+    && bash autogen.sh \
+    && ./configure \
+    && make install -j \
+    && rm -rf jemalloc
 
 ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/lib64/:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:/usr/local/cuda/extras/CUPTI/lib64/:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib/stubs/:/usr/lib/nccl/:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:$PATH
