@@ -28,6 +28,12 @@ enum RetCode {
   // handle timeout.
   RET_TIMEOUT = 6,
 
+  // block manager allocate fail
+  RET_ALLOCATE_FAIL = 7,
+
+  // block manager free fail
+  RET_FREE_FAIL = 8,
+
   // something not in above values.
   RET_UNKNOWN = 255,
 };

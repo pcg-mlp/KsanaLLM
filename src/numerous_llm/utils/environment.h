@@ -65,11 +65,17 @@ struct BatchSchedulerConfig {
 
 struct LoraCoordinatorConfig {};
 
-struct AllocatorConfig {};
+struct AllocatorConfig {
+  int64_t blocks_num;
+  int64_t block_size;
+  MemoryDevice device;
+
+};
 
 struct BlockManagerConfig {
   // The config of allocator for cpu/gpu/npu.
-  AllocatorConfig allocator_config;
+  AllocatorConfig cpu_allocator_config;
+  AllocatorConfig gpu_allocator_config;
 };
 
 // The config of batch manager.

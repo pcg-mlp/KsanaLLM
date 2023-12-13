@@ -15,7 +15,7 @@ namespace numerous_llm {
 template <typename T>
 std::vector<T*> GetBlockPtrs(const std::vector<int>& blocks) {
   std::vector<void*> addrs;
-  Singleton<BlockManager>::GetInstance()->GetBlockPtrs(blocks, addrs);
+  Singleton<BlockManager>::GetInstance()->GetGpuBlockPtrs(blocks, addrs);
   return addrs;
 }
 

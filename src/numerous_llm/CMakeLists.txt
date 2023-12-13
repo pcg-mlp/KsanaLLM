@@ -12,6 +12,7 @@ include(external/httplib)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src
+	${PROJECT_SOURCE_DIR}/tests
   ${THIRD_PARTY_PATH}/install/loguru
   ${THIRD_PARTY_PATH}/download/fmt/include
 )
@@ -29,9 +30,8 @@ add_subdirectory(service)
 add_subdirectory(torch_op)
 add_subdirectory(utils)
 
-add_executable(numerous_llm main.cpp)
-target_link_libraries(numerous_llm PUBLIC 
-  -lpthread -ldl
+add_library(numerous_llm_libs INTERFACE)
+target_link_libraries(numerous_llm_libs INTERFACE 
   kernels
   layers
   models
@@ -46,4 +46,9 @@ target_link_libraries(numerous_llm PUBLIC
   samplers
   loguru
   gflags
+)
+
+add_executable(numerous_llm main.cpp)
+target_link_libraries(numerous_llm PUBLIC 
+  -lpthread -ldl numerous_llm_libs
 )

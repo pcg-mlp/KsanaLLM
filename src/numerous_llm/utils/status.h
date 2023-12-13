@@ -46,4 +46,13 @@ class Status {
   std::shared_ptr<State> state_ = nullptr;
 };
 
+
+#define STATUS_CHECK_RETURN(status) \
+  { \
+    if (!status.OK()) { \
+      NLLM_LOG_ERROR << status.GetMessage(); \
+      return status; \
+    } \
+  }
+
 }  // namespace numerous_llm
