@@ -5,16 +5,17 @@
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 project(numerous_llm LANGUAGES CXX CUDA)
 
-option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
-
-find_package(CUDA 11.3 REQUIRED)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
+# dedicate for Nvidia GPU
+option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
+find_package(CUDA 11.3 REQUIRED)
 find_package(CUDNN REQUIRED)
 find_package(NCCL REQUIRED)
+execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
-# include(LLM_kernels)
+include(LLM_kernels)
 
 # set compiler flags
 set(CXX_STD "17" CACHE STRING "C++ standard")

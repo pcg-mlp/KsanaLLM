@@ -3,13 +3,14 @@
 # ==============================================================================
 
 include(ExternalProject)
-ExternalProject_Add(googletest
+ExternalProject_Add(LLM_kernels
   GIT_REPOSITORY    https://git.woa.com/Numerous/LLM/LLM_kernels.git
   GIT_TAG           master
-  SOURCE_DIR        "${CMAKE_BINARY_DIR}/llm-kernels-src"
-  BINARY_DIR        "${CMAKE_BINARY_DIR}/llm-kernels-build"
-  CONFIGURE_COMMAND "cmake -B ./build"
-  BUILD_COMMAND     "cd build && make -j"
-  INSTALL_COMMAND   "make install"
-  TEST_COMMAND      ""
+  SOURCE_DIR        "${PROJECT_SOURCE_DIR}/3rdparty/LLM_kernels"
+  BINARY_DIR        "${PROJECT_SOURCE_DIR}/3rdparty/LLM_kernels"
+  CMAKE_ARGS        -DSM=${SM}
+)
+
+link_directories(
+  ${PROJECT_SOURCE_DIR}/3rdparty/LLM_kernels/lib
 )

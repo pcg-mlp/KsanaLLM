@@ -46,6 +46,8 @@ target_link_libraries(numerous_llm_libs INTERFACE
   samplers
   loguru
   gflags
+  # kernels
+  llm_kernels_nvidia_kernel_embedding
 )
 
 add_executable(numerous_llm main.cpp)
