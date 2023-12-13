@@ -7,7 +7,13 @@
 
 namespace numerous_llm {
 
-BlockAllocator::BlockAllocator(const AllocatorConfig& allocator_config) {
+std::mutex BlockAllocator::mutex_;
+std::mutex BlockAllocator::contiguous_memory_mutex_;
+std::unordered_map<long int, MemoryBlock> BlockAllocator::free_map_;
+std::unordered_map<long int, MemoryBlock> BlockAllocator::used_map_;
+std::unordered_map<long int, MemoryBlock> BlockAllocator::used_contiguous_memory_map_;
+
+BlockAllocator::BlockAllocator(const AllocatorConfig &allocator_config)  {
   allocator_config_ = allocator_config;
   // 定义一个 void 指针，用于存储内存分配的结果
   void* memory;
@@ -27,27 +33,28 @@ BlockAllocator::BlockAllocator(const AllocatorConfig& allocator_config) {
         break;
     }
     int64_t block_id = Singleton<UniqueIDGenerator>::GetInstance()->GetUniqueID();
-    free_map_.insert({block_id, {block_id, allocator_config_.block_size, 1, allocator_config_.device, memory}});
+    BlockAllocator::free_map_.insert({block_id, {block_id, allocator_config_.block_size, 1 , allocator_config_.device, memory}});
   }
 }
 
 BlockAllocator::~BlockAllocator() {
-  switch (allocator_config_.device) {
+  //TODO: 存在重复析构问题
+  switch (allocator_config_.device){
     case MEMORY_CPU_PINNED:
-      for (auto& block_pair : free_map_) {
-        CUDA_CHECK(cudaFreeHost(block_pair.second.address));
+      for (auto& block_pair : BlockAllocator::free_map_) {
+          CUDA_CHECK(cudaFreeHost(block_pair.second.address));
       }
-      for (auto& block_pair : used_map_) {
-        CUDA_CHECK(cudaFreeHost(block_pair.second.address));
+      for (auto& block_pair : BlockAllocator::used_map_) {
+          CUDA_CHECK(cudaFreeHost(block_pair.second.address));
       }
       break;
 
     case MEMORY_GPU:
-      for (auto& block_pair : free_map_) {
-        CUDA_CHECK(cudaFree(block_pair.second.address));
+      for (auto& block_pair : BlockAllocator::free_map_) {
+          CUDA_CHECK(cudaFree(block_pair.second.address));
       }
-      for (auto& block_pair : used_map_) {
-        CUDA_CHECK(cudaFree(block_pair.second.address));
+      for (auto& block_pair : BlockAllocator::used_map_) {
+          CUDA_CHECK(cudaFree(block_pair.second.address));
       }
       break;
 
@@ -61,17 +68,17 @@ Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<
   addrs.clear();
   for (auto block_id : blocks) {
     {
-      std::unique_lock<std::mutex> lock(mutex_);
-      auto it = used_map_.find(block_id);
-      if (it != used_map_.end()) {
+      std::unique_lock<std::mutex> lock(BlockAllocator::mutex_);
+      auto it = BlockAllocator::used_map_.find(block_id);
+      if (it != BlockAllocator::used_map_.end()) {
         addrs.push_back(it->second.address);
         continue;
       }
     }
     {
-      std::unique_lock<std::mutex> lock(contiguous_memory_mutex_);
-      auto it = used_contiguous_memory_map_.find(block_id);
-      if (it != used_contiguous_memory_map_.end()) {
+      std::unique_lock<std::mutex> lock(BlockAllocator::contiguous_memory_mutex_);
+      auto it = BlockAllocator::used_contiguous_memory_map_.find(block_id);
+      if (it != BlockAllocator::used_contiguous_memory_map_.end()) {
         addrs.push_back(it->second.address);
         continue;
       }
@@ -82,34 +89,34 @@ Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<
 }
 
 Status BlockAllocator::Allocate(int64_t block_num, std::vector<int>& blocks) {
-  std::unique_lock<std::mutex> lock(mutex_);
-  if (block_num > free_map_.size()) {
+  std::unique_lock<std::mutex> lock(BlockAllocator::mutex_);
+  if (block_num > BlockAllocator::free_map_.size()) {
     return Status(RET_ALLOCATE_FAIL);
   }
   blocks.clear();
-  auto it = free_map_.begin();
+  auto it = BlockAllocator::free_map_.begin();
   while (block_num--) {
-    if (it != free_map_.end()) {
+    if(it != BlockAllocator::free_map_.end()) {
       it->second.ref_count++;
-      used_map_.insert(*it);
+      BlockAllocator::used_map_.insert(*it);
       blocks.push_back(it->first);
-      it = free_map_.erase(it);
+      it = BlockAllocator::free_map_.erase(it);
     }
   }
   return Status();
 }
 
 Status BlockAllocator::Free(std::vector<int>& blocks) {
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(BlockAllocator::mutex_);
   for (auto block_id : blocks) {
-    auto it = used_map_.find(block_id);
-    if (it != used_map_.end()) {
+    auto it = BlockAllocator::used_map_.find(block_id);
+    if (it != BlockAllocator::used_map_.end()) {
       if (--it->second.ref_count == 1) {
-        free_map_.insert(*it);
-        used_map_.erase(it);
+        BlockAllocator::free_map_.insert(*it);
+        BlockAllocator::used_map_.erase(it);
       }
     } else {
-      return Status(RET_FREE_FAIL, fmt::format("Double free error, block id {}", block_id));
+      return Status(RET_FREE_FAIL, fmt::format("Double free error, block id {}" , block_id));
     }
   }
   return Status();
@@ -117,23 +124,23 @@ Status BlockAllocator::Free(std::vector<int>& blocks) {
 
 // 分配指定大小的设备存储空间
 Status BlockAllocator::AllocateContiguous(int64_t size, int& block_id) {
-  std::unique_lock<std::mutex> lock(contiguous_memory_mutex_);
+  std::unique_lock<std::mutex> lock(BlockAllocator::contiguous_memory_mutex_);
   // 定义一个 void 指针，用于存储内存分配的结果
   void* memory;
   CUDA_CHECK(cudaMalloc(&memory, size));
   block_id = Singleton<UniqueIDGenerator>::GetInstance()->GetUniqueID();
-  used_contiguous_memory_map_.insert({block_id, {block_id, size, 1, MEMORY_GPU, memory}});
+  BlockAllocator::used_contiguous_memory_map_.insert({block_id, {block_id, size, 1, MEMORY_GPU, memory}});
   return Status();
 }
 
 // 释放连续设备存储
 Status BlockAllocator::FreeContiguous(int block_id) {
-  std::unique_lock<std::mutex> lock(contiguous_memory_mutex_);
-  auto it = used_contiguous_memory_map_.find(block_id);
-  if (it != used_contiguous_memory_map_.end()) {
+  std::unique_lock<std::mutex> lock(BlockAllocator::contiguous_memory_mutex_);
+  auto it = BlockAllocator::used_contiguous_memory_map_.find(block_id);
+  if (it != BlockAllocator::used_contiguous_memory_map_.end()) {
     if (--it->second.ref_count == 0) {
       CUDA_CHECK(cudaFree(it->second.address));
-      used_contiguous_memory_map_.erase(it);
+      BlockAllocator::used_contiguous_memory_map_.erase(it);
       Singleton<UniqueIDGenerator>::GetInstance()->RecycleID(block_id);
     }
   } else {

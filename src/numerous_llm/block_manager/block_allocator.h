@@ -37,16 +37,16 @@ class BlockAllocator {
   Status FreeContiguous(int block_id);
 
   // 根据给定的block_ids，获取对应的内存指针，存储在addrs中
-  Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
+  static Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
 
   int64_t GetFreeBlockNumber() { return free_map_.size(); }
 
  private:
-  std::mutex mutex_;
-  std::mutex contiguous_memory_mutex_;
-  std::unordered_map<int64_t, MemoryBlock> free_map_;
-  std::unordered_map<int64_t, MemoryBlock> used_map_;
-  std::unordered_map<int64_t, MemoryBlock> used_contiguous_memory_map_;
+  static std::mutex mutex_;
+  static std::mutex contiguous_memory_mutex_;
+  static std::unordered_map<int64_t, MemoryBlock> free_map_;
+  static std::unordered_map<int64_t, MemoryBlock> used_map_;
+  static std::unordered_map<int64_t, MemoryBlock> used_contiguous_memory_map_;
   int block_num_;
   AllocatorConfig allocator_config_;
 };

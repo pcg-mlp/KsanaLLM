@@ -4,6 +4,7 @@
 #pragma once
 
 #include "numerous_llm/utils/environment.h"
+#include "numerous_llm/utils/tensor.h"
 
 namespace numerous_llm {
 
@@ -12,6 +13,10 @@ class BaseWeight {
   BaseWeight(){};
   explicit BaseWeight(const ModelConfig& model_config);
   ~BaseWeight(){};
+
+  // 查表,返回 weights_map_[weight_name]
+  virtual Tensor GetModelWeights(std::string& weight_name) = 0;
+
 };
 
 }  // namespace numerous_llm
