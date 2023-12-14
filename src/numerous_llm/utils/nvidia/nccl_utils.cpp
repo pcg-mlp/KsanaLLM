@@ -21,20 +21,4 @@ ncclUniqueId GenerateNCCLUniqueID() {
   return nccl_uid;
 }
 
-ncclResult_t InitNCCLParam(NCCLParam& param, const int world_size, const int rank_id, const ncclUniqueId nccl_uid) {
-  ncclResult_t status = ncclSuccess;
-  if (world_size == 1) {
-    param.world_size = 1;
-    param.rank = 0;
-    return status;
-  }
-
-  status = ncclCommInitRank(&(param.nccl_comm), world_size, nccl_uid, rank_id);
-  param.rank = rank_id;
-  param.nccl_uid = nccl_uid;
-  param.world_size = world_size;
-
-  return status;
-}
-
 }  // namespace numerous_llm

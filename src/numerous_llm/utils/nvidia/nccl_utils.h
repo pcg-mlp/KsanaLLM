@@ -67,6 +67,4 @@ ncclResult_t DestroyNCCLParam(NCCLParam& param);
 
 ncclUniqueId GenerateNCCLUniqueID();
 
-ncclResult_t InitNCCLParam(NCCLParam& param, const int world_size, const int rank_id, const ncclUniqueId nccl_uid);
-
 }  // namespace numerous_llm

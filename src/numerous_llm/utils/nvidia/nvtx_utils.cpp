@@ -1,7 +1,7 @@
 /* Copyright 2023 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "numerous_llm/utils/nvtx_utils.h"
+#include "numerous_llm/utils/nvidia/nvtx_utils.h"
 
 #include <nvToolsExt.h>
 #include "loguru.hpp"

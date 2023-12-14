@@ -7,6 +7,8 @@ project(numerous_llm LANGUAGES CXX CUDA)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
+option(WITH_TESTING "Enable testing" OFF)
+
 # dedicate for Nvidia GPU
 option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 find_package(CUDA 11.3 REQUIRED)
@@ -15,6 +17,7 @@ find_package(NCCL REQUIRED)
 execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
+include(base)
 include(LLM_kernels)
 
 # set compiler flags
@@ -95,8 +98,22 @@ link_directories(
   ${COMMON_LIB_DIRS}
 )
 
+if (WITH_TESTING)
+  enable_testing()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG release-1.12.1
+  )
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+endif()
+
 add_subdirectory(3rdparty)
 add_subdirectory(benchmarks)
 add_subdirectory(examples)
 add_subdirectory(src)
+# for integration test
 add_subdirectory(tests)

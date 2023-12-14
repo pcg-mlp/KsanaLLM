@@ -10,11 +10,8 @@ message(STATUS "block_manager_SRCS: ${block_manager_SRCS}")
 
 add_library(block_manager STATIC ${block_manager_SRCS})
 
-
+# for test
 file(GLOB_RECURSE block_manager_test_SRCS
 		 ${PROJECT_SOURCE_DIR}/src/numerous_llm/block_manager/*test.cpp)
 message(STATUS "block_manager_test_SRCS: ${block_manager_test_SRCS}")
-
-add_library(block_manager_test STATIC ${block_manager_test_SRCS})
-
-target_link_libraries(block_manager_test PUBLIC gtest gmock)
+cc_test(block_manager_test SRCS ${block_manager_test_SRCS} DEPS block_manager)
