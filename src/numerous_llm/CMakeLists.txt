@@ -48,6 +48,7 @@ target_link_libraries(numerous_llm_libs INTERFACE
   gflags
   # kernels
   llm_kernels_nvidia_kernel_embedding
+  llm_kernels_nvidia_kernel_paged_attention
 )
 
 add_executable(numerous_llm main.cpp)

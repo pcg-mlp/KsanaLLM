@@ -58,7 +58,7 @@ struct Tensor {
   template <typename T>
   inline T* GetPtr() const {
     NLLM_CHECK_WITH_INFO(!blocks.empty(), "No available blocks");
-    return GetPtrs<T>()[0];
+    return static_cast<T*>(GetPtrs<void>()[0]);
   }
 };
 
