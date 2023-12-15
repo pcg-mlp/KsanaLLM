@@ -15,7 +15,6 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
 
 Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   NLLM_LOG_INFO << "llm runtime step invoked.";
-  return Status();
 
   // need group 3 things:
   // 1. model type(iden by model name)
@@ -41,7 +40,7 @@ Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
     // model_stage_tensor_map_it instance of {std::string, std::unordered_map<InferStage,
     // std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>>}
     NLLM_LOG_INFO << "llm runtime infer model: " << model_stage_tensor_map_it.first;
-    std::shared_ptr<ModelInstance> model_instance_ptr{nullptr};
+    ModelInstance* model_instance_ptr{nullptr};
     for (auto& stage_tensor_map_it : model_stage_tensor_map_it.second) {
       // stage_tensor_map_it instance of {InferStage, std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>}
       if (stage_tensor_map_it.second.empty()) {
@@ -50,7 +49,7 @@ Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
       NLLM_LOG_INFO << "llm runtime infer model: " << model_stage_tensor_map_it.first
                     << " with stage: " << stage_tensor_map_it.first;
       if (model_instance_ptr == nullptr) {
-        model_instance_ptr.reset(std::get<0>(stage_tensor_map_it.second[0]));
+        model_instance_ptr = std::get<0>(stage_tensor_map_it.second[0]);
       }
 
       std::vector<TensorMap*> input_tensor_maps(stage_tensor_map_it.second.size(), nullptr);

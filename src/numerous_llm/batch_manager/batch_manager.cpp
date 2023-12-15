@@ -58,6 +58,7 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     infer_req->waiter = waiter;
     infer_req->model_name = "llama";
     infer_req->model_instance = model_instances_[infer_req->model_name];
+    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
 
     // Tensor &input_ids = infer_req->input_tensor_map.Get("input_ids");
     // infer_req->tokens.resize(input_ids.GetElementNumber());

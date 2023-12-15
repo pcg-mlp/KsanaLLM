@@ -21,6 +21,22 @@ class Context {
 
   int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
+  std::vector<cudaStream_t>& GetComputeStreams() { return compute_streams_; }
+
+  std::vector<cudaStream_t>& GetH2DStreams() { return h2d_streams_; }
+
+  std::vector<cudaStream_t>& GetD2HStreams() { return d2h_streams_; }
+
+  std::vector<cudaStream_t>& GetNCCLStreams() { return nccl_streams_; }
+
+  ncclUniqueId& GetNCCLUniqueID() { return nccl_uid_; }
+
+  std::vector<NCCLParam>& GetNCCLParam() { return nccl_params_; }
+
+  std::vector<cublasHandle_t>& GetCublasHandles() { return cublas_handles_; }
+
+  std::vector<cublasLtHandle_t>& GetCublasLtHandles() { return cublaslt_handles_; }
+
  private:
   int device_num_{0};
   int tensor_parallel_size_{0};
