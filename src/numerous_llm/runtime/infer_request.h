@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "numerous_llm/runtime/infer_stage.h"
 #include "numerous_llm/runtime/model_instance.h"
@@ -20,11 +21,16 @@ namespace numerous_llm {
 class InferRequest {
  public:
   InferRequest();
+  ~InferRequest();
 
   // Get the next token number for next step.
-  // For all waiting queue's reqs(context decoding stage), it is input token number.
+  // For all waiting queue's reqs(context decoding stage), it is 1 + input token number.
   // For all otheqr queue's reqs(decoding stage), it is always 1.
   size_t GetStepTokenNumber();
+
+  // Get the total token number.
+  // that is, the current tokens and the next token.
+  size_t GetTotalTokenNumber();
 
   // Get the next wanted block number for next step.
   // It is determited by next token number.
@@ -46,6 +52,9 @@ class InferRequest {
   // Swap in/out request's lora weights.
   Status SwapInLoraAsync();
   Status SwapOutLoraAsync();
+
+  // Allocate blocks for next step.
+  Status AllocateStepBlocks();
 
  public:
   // The req id of the user's request.
@@ -80,6 +89,13 @@ class InferRequest {
 
   // The waiter used to nofity caller client.
   std::shared_ptr<Waiter> waiter;
+
+  // The kv cache blocks this request used, the index is used as device_id.
+  // The key and value are stored in same blocks.
+  std::vector<std::vector<int>> kv_cache_blocks;
+
+  // The tokens this infer request produced.
+  std::vector<int> tokens;
 };
 
 }  // namespace numerous_llm

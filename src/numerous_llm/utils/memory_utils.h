@@ -3,9 +3,10 @@
 ==============================================================================*/
 #pragma once
 
+#include <algorithm>
 #include <memory>
-#include <vector>
 #include <queue>
+#include <vector>
 
 #include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/utils/singleton.h"
@@ -17,7 +18,10 @@ template <typename T>
 std::vector<T*> GetBlockPtrs(const std::vector<int>& blocks) {
   std::vector<void*> addrs;
   Singleton<BlockManager>::GetInstance()->GetBlockPtrs(blocks, addrs);
-  return addrs;
+
+  std::vector<T*> results;
+  std::transform(addrs.begin(), addrs.end(), results.begin(), [](void* p) { return reinterpret_cast<T*>(p); });
+  return results;
 }
 
 // 定义一个唯一ID生成器类

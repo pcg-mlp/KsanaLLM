@@ -54,13 +54,13 @@ struct ContextCachingConfig {};
 
 struct BatchSchedulerConfig {
   // Max waiting time in millisecond.
-  size_t timeout_in_ms;
+  size_t timeout_in_ms = 60000;
 
   // The max queue len of waiting request.
-  size_t max_waiting_queue_len;
+  size_t max_waiting_queue_len = 100;
 
   // The max token number for one scheduler step.
-  size_t max_token_number;
+  size_t max_token_number = 4096;
 };
 
 struct LoraCoordinatorConfig {};
@@ -69,7 +69,6 @@ struct AllocatorConfig {
   int64_t blocks_num;
   int64_t block_size;
   MemoryDevice device;
-
 };
 
 struct BlockManagerConfig {

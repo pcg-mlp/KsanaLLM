@@ -70,7 +70,7 @@ else()
 endif()
 
 # TODO(karlluo): ABI detect by torch
-set(CMAKE_CXX_FLAGS "-std=c++17 -ggdb -O2 -g -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=1 -Wno-unknown-pragmas")
+set(CMAKE_CXX_FLAGS "-std=c++17 -ggdb -O0 -g -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=1 -Wno-unknown-pragmas")
 
 # set cmake output path
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

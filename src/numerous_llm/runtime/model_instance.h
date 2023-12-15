@@ -28,6 +28,13 @@ class ModelInstance {
   void Forward(const InferStage stage, const std::vector<TensorMap*>& input_tensor_maps,
                std::vector<TensorMap*>& output_tensor_maps);
 
+  // Get the kv cache size per token needed, its size is:
+  //   (num_layer / pipeline_para) * beam_width * (head_num / tensor_para) * size_per_head;
+  int GetTokenCacheSize() {
+    // TODO: Set it from model config.
+    return 4096; 
+  }
+
  private:
   std::shared_ptr<Context> context_{nullptr};
 

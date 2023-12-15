@@ -6,7 +6,12 @@
 
 #include <atomic>
 #include <limits>
+#include "numerous_llm/block_manager/block_manager.h"
+#include "numerous_llm/runtime/infer_stage.h"
+#include "numerous_llm/utils/singleton.h"
 #include "numerous_llm/utils/status.h"
+#include "numerous_llm/utils/string_utils.h"
+#include "numerous_llm/utils/tensor.h"
 
 static std::atomic index_counter = 0;
 
@@ -14,31 +19,76 @@ namespace numerous_llm {
 
 InferRequest::InferRequest() {
   constexpr int max = std::numeric_limits<int>::max();
-
   ++index_counter;
   if (index_counter == max) {
     index_counter = 1;
   }
-
   infer_id = index_counter;
+
+  timestamp_in_ms = GetCurrentTimeInMs();
 }
 
-size_t InferRequest::GetStepTokenNumber() { return 0; }
+InferRequest::~InferRequest() {
+  for (auto& blocks : kv_cache_blocks) {
+    // Singleton<BlockManager>::GetInstance()->FreeBlocks(blocks);
+  }
+}
 
-size_t InferRequest::GetStepBlockNumber() { return 0; }
+size_t InferRequest::GetStepTokenNumber() {
+  size_t step_token_num = 1;
+  if (infer_stage == STAGE_CONTEXT) {
+    step_token_num += tokens.size();
+  }
+  return step_token_num;
+}
 
-size_t InferRequest::GetTotalBlockNumber() { return 0; }
+size_t InferRequest::GetTotalTokenNumber() { return tokens.size() + 1; }
 
-Status InferRequest::SwapInAsync() { return Status(); }
+size_t InferRequest::GetStepBlockNumber() {
+  // size_t block_size = Singleton<BlockManager>::GetInstance()->GetBlockSize();
+  // return ((model_instance->GetTokenCacheSize() * GetTotalTokenNumber() - 1)) / block_size + 1;
+  return 0;
+}
 
-Status InferRequest::SwapOutAsync() { return Status(); }
+size_t InferRequest::GetTotalBlockNumber() {
+  // size_t block_size = Singleton<BlockManager>::GetInstance()->GetBlockSize();
+  // return ((model_instance->GetTokenCacheSize() * GetStepTokenNumber() - 1)) / block_size + 1;
+  return 0;
+}
 
-bool InferRequest::CheckLoraEnable() { return false; }
+Status InferRequest::SwapInAsync() {
+  // Singleton<BlockManager>::GetInstance()->SwapIn(kv_cache_blocks[0], NULL);
+  return Status();
+}
 
-size_t InferRequest::GetLoraBlockNumber() { return 0; }
+Status InferRequest::SwapOutAsync() {
+  // Singleton<BlockManager>::GetInstance()->SwapOut(kv_cache_blocks[0], NULL);
+  return Status();
+}
 
-Status InferRequest::SwapInLoraAsync() { return Status(); }
+bool InferRequest::CheckLoraEnable() {
+  // TODO
+  return false;
+}
 
-Status InferRequest::SwapOutLoraAsync() { return Status(); }
+size_t InferRequest::GetLoraBlockNumber() {
+  // TODO
+  return 0;
+}
+
+Status InferRequest::SwapInLoraAsync() {
+  // TODO
+  return Status();
+}
+
+Status InferRequest::SwapOutLoraAsync() {
+  // TODO
+  return Status();
+}
+
+Status InferRequest::AllocateStepBlocks() {
+  // TODO
+  return Status();
+}
 
 }  // namespace numerous_llm

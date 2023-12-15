@@ -15,6 +15,7 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
 
 Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   NLLM_LOG_INFO << "llm runtime step invoked.";
+  return Status();
 
   // need group 3 things:
   // 1. model type(iden by model name)

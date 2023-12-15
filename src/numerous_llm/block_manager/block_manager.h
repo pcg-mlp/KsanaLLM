@@ -85,6 +85,12 @@ public:
     return device_id_;
   }
 
+  // Get the size in bytes for one block.
+  size_t GetBlockSize() const {
+    // TODO
+    return 65536;
+  }
+
 private:
   std::mutex swap_mutex_;
   BlockAllocator device_allocator;

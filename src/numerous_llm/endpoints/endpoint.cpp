@@ -22,7 +22,6 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue,
   http_server_.Post("/generate", [&](const httplib::Request &req, httplib::Response &res) {
     if (req.has_param("tokens")) {
       Request infer_req;
-      std::vector<std::vector<int>> tokens;
       uint32_t batch_size = static_cast<uint32_t>(req.get_param_value_count("tokens_len"));
       for (size_t t_l_id = 0; t_l_id < batch_size; ++t_l_id) {
         int input_tokens_length = std::stoi(req.get_param_value("tokens_len", t_l_id));
@@ -30,7 +29,7 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue,
         for (int v_id = 0; v_id < input_tokens_length; ++v_id) {
           tokens_vec[v_id] = std::stoi(req.get_param_value("tokens", v_id));
         }
-        tokens.emplace_back(std::move(tokens_vec));
+        infer_req.tokens.emplace_back(std::move(tokens_vec));
       }
       // At this moment the shape of tokens is [batch_size, each prompt's tokens number] for example:
       // examples/llama13b/llama13b_simple_client.py requests 2 tokens list [[1,2,3],[4,5,6,7,8]],
@@ -73,14 +72,12 @@ Status Endpoint::Accept(Request &req) {
   SamplingConfig sampling_config;
   std::vector<SamplingConfig> sampling_configs;
   sampling_configs.push_back(sampling_config);
+  req.sampling_configs = sampling_configs;
 
   TensorMap tensor_map;
   std::vector<TensorMap> tensor_maps;
   tensor_maps.push_back(tensor_map);
-
-  req.req_id = 1;
   req.tensor_maps = tensor_maps;
-  req.sampling_configs = sampling_configs;
 
   return Status();
 }

@@ -7,7 +7,10 @@
 #include "numerous_llm/utils/logger.h"
 #include "numerous_llm/utils/waiter.h"
 
+#include <chrono>
+#include <cstring>
 #include <memory>
+#include <thread>
 
 namespace numerous_llm {
 
@@ -54,8 +57,12 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     infer_req->sampling_config = sampling_configs[i];
     infer_req->waiter = waiter;
     infer_req->model_name = "llama";
-    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req->model_name;
     infer_req->model_instance = model_instances_[infer_req->model_name];
+
+    // Tensor &input_ids = infer_req->input_tensor_map.Get("input_ids");
+    // infer_req->tokens.resize(input_ids.GetElementNumber());
+    // memcpy(infer_req->tokens.data(), input_ids.GetPtr<int>(), input_ids.GetTotalBytes());
+    NLLM_LOG_INFO << "infer_req.model_name: " << infer_req->model_name;
 
     batch_scheduler_->AddInferRequest(infer_req);
     NLLM_LOG_INFO << "batch schdule add request.";
@@ -66,7 +73,10 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
   return Status();
 }
 
-Status BatchManager::WaitDone(int req_id, std::vector<TensorMap> &tensor_maps) { return Status(); }
+Status BatchManager::WaitDone(int req_id, std::vector<TensorMap> &tensor_maps) {
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+  return Status();
+}
 
 Status BatchManager::WaitAllDone() { return Status(); }
 
