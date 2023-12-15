@@ -15,7 +15,7 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
 
   device_num_ = GetDeviceNumber();
 
-  if (device_num_ > tensor_parallel_size_ * pipeline_parallel_size_) {
+  if (device_num_ < tensor_parallel_size_ * pipeline_parallel_size_) {
     throw std::runtime_error(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
                                          tensor_parallel_size_, device_num_));
   }
@@ -44,6 +44,17 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
     cudaStream_t nccl_stream;
     CUDA_CHECK(cudaStreamCreate(&nccl_stream));
     nccl_streams_.emplace_back(std::move(nccl_stream));
+
+    NLLM_LOG_INFO << "Init nvidia cublas/cublasLt on device " << worker_id;
+    cublasHandle_t cublas_handle;
+    cublasLtHandle_t cublaslt_handle;
+    CUDA_CHECK(cublasCreate(&cublas_handle));
+    CUDA_CHECK(cublasLtCreate(&cublaslt_handle));
+    cublas_handles_.emplace_back(cublas_handle);
+    cublaslt_handles_.emplace_back(cublaslt_handle);
+
+    // binding compute stream to cublas
+    CUDA_CHECK(cublasSetStream(cublas_handles_[worker_id], compute_streams_[worker_id]));
   }
 
   nccl_uid_ = GenerateNCCLUniqueID();
@@ -58,6 +69,9 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
                                 /*commId=*/nccl_uid_, /*rank=*/worker_id));
   }
   NCCL_CHECK(ncclGroupEnd());
+
+  // reset device id
+  CUDA_CHECK(cudaSetDevice(defalt_device_num_));
 }
 
 Context::~Context() {
@@ -68,6 +82,9 @@ Context::~Context() {
     CUDA_CHECK(cudaStreamDestroy(h2d_streams_[worker_id]));
     CUDA_CHECK(cudaStreamDestroy(d2h_streams_[worker_id]));
     CUDA_CHECK(cudaStreamDestroy(nccl_streams_[worker_id]));
+
+    CUDA_CHECK(cublasDestroy(cublas_handles_[worker_id]));
+    CUDA_CHECK(cublasLtDestroy(cublaslt_handles_[worker_id]));
 
     NCCL_CHECK(DestroyNCCLParam(nccl_params_[worker_id]));
   }

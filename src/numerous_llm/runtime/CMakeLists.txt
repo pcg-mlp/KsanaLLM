@@ -11,5 +11,6 @@ message(STATUS "runtime_SRCS: ${runtime_SRCS}")
 add_library(runtime STATIC ${runtime_SRCS})
 add_dependencies(runtime utils fmt gflags)
 target_link_libraries(runtime PUBLIC 
-  -lpthread -ldl gflags ${NCCL_LIBRARIES} -lcudart models utils
+  -lpthread -ldl gflags ${NCCL_LIBRARIES} -lcublas -lcublasLt -lcudart
+  models utils 
 )
