@@ -5,6 +5,7 @@
 
 #include "numerous_llm/block_manager/block_manager.h"
 #include "test.h"
+#include "numerous_llm/utils/singleton.h"
 
 using namespace numerous_llm;
 // 定义一个 BlockManagerTest 类，继承自 testing::Test
@@ -17,9 +18,9 @@ class BlockManagerTest : public testing::Test {
         block_manager_config.cpu_allocator_config.blocks_num = 2;
         block_manager_config.cpu_allocator_config.block_size = 1024;
         block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
-        block_manager_config.gpu_allocator_config.blocks_num = 2;
-        block_manager_config.gpu_allocator_config.block_size = 1024;
-        block_manager_config.gpu_allocator_config.device = MEMORY_GPU;
+        block_manager_config.device_allocator_config.blocks_num = 2;
+        block_manager_config.device_allocator_config.block_size = 1024;
+        block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
         // 使用配置创建一个 BlockManager 对象
         block_manager = new BlockManager(block_manager_config);
@@ -42,7 +43,7 @@ TEST_F(BlockManagerTest, AllocateAndFree) {
     std::vector<int> blocks;
 
     // 尝试分配 2 个内存块
-    Status status = block_manager->AllocateGpuBlocks(2, blocks);
+    Status status = block_manager->AllocateBlocks(2, blocks);
 
     // 检查分配是否成功
     EXPECT_TRUE(status.OK());
@@ -51,7 +52,7 @@ TEST_F(BlockManagerTest, AllocateAndFree) {
     EXPECT_EQ(blocks.size(), 2);
 
     // 尝试释放分配的内存块
-    status = block_manager->FreeGpuBlocks(blocks);
+    status = block_manager->FreeBlocks(blocks);
 
     // 检查释放是否成功
     EXPECT_TRUE(status.OK());
@@ -60,33 +61,54 @@ TEST_F(BlockManagerTest, AllocateAndFree) {
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
 }
 
+// 测试 BlockManager 类的 AllocateAndFreeContiguousMemory 方法
 TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
-    void* memory;
+  int block_id;
+  int64_t size = 1024;
 
-    Status status = block_manager->Allocate(memory, 200);
+  // 分配指定大小的设备存储空间
+  Status status = block_manager->AllocateContiguous(size, block_id);
 
-    // 检查分配是否成功
-    EXPECT_TRUE(status.OK());
+  // 分配成功的情况下，状态应该是 OK
+  EXPECT_TRUE(status.OK());
+  // 分配成功后，block_id 应该大于 0
+  EXPECT_GT(block_id, 0);
 
-    // 尝试释放分配的内存块
-    status = block_manager->Free(memory);
+  // 获取分配的设备存储空间指针
+  std::vector<void*> addrs;
+  status = block_manager->GetBlockPtrs({block_id}, addrs);
+  // 未释放的情况下，状态应该是 OK
+  EXPECT_TRUE(status.OK());
+  EXPECT_NE(addrs[0], nullptr);
 
-    // 检查释放是否成功
-    EXPECT_TRUE(status.OK());
-    status = block_manager->Free(memory);
-    EXPECT_FALSE(status.OK());
+  // 释放分配的设备存储空间
+  status = block_manager->FreeContiguous(block_id);
+
+  // 释放成功的情况下，状态应该是 OK
+  EXPECT_TRUE(status.OK());
+
+  // 获取分配的设备存储空间指针
+  status = block_manager->GetBlockPtrs({block_id}, addrs);
+  // 释放的情况下，状态应该不是 OK
+  EXPECT_FALSE(status.OK());
+
+  // 再次尝试释放已释放的设备存储空间
+  status = block_manager->FreeContiguous(block_id);
+
+  // 再次尝试释放已释放的设备存储空间时，状态应该不是 OK
+  EXPECT_FALSE(status.OK());
 }
 
-TEST_F(BlockManagerTest, SwapGpuToCpuAndSwapCpuToGpu) {
+TEST_F(BlockManagerTest, SwapInAndSwapOut) {
     // 分配两个 block
     std::vector<int> blocks;
-    Status status = block_manager->AllocateGpuBlocks(2, blocks);
+    Status status = block_manager->AllocateBlocks(2, blocks);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(blocks.size(), 2);
 
     // 获取 block 的指针
     std::vector<void*> addrs;
-    block_manager->GetGpuBlockPtrs(blocks, addrs);
+    block_manager->GetBlockPtrs(blocks, addrs);
 
     // 将数据从 CPU 复制到 block 中
     std::string string_a = "string_a";
@@ -95,7 +117,7 @@ TEST_F(BlockManagerTest, SwapGpuToCpuAndSwapCpuToGpu) {
     cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
     // 将 block 从 CPU 交换到 GPU
-    status = block_manager->SwapGpuToCpu(blocks, nullptr);
+    status = block_manager->SwapIn(blocks, nullptr);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 0);
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
@@ -107,13 +129,13 @@ TEST_F(BlockManagerTest, SwapGpuToCpuAndSwapCpuToGpu) {
     cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
     // 将 block 从 GPU 交换回 CPU
-    status = block_manager->SwapCpuToGpu(blocks, nullptr);
+    status = block_manager->SwapOut(blocks, nullptr);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
 
     // 获取 block 的指针
-    block_manager->GetGpuBlockPtrs(blocks, addrs);
+    block_manager->GetBlockPtrs(blocks, addrs);
 
     // 将 block 中的数据从 GPU 复制回 CPU
     cudaMemcpy(string_a.data(), addrs[0], string_a.size(), cudaMemcpyDeviceToHost);
@@ -134,7 +156,7 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
     std::vector<int> blocks;
 
     // 尝试分配 2 个内存块
-    Status status = block_manager->AllocateGpuBlocks(2, blocks);
+    Status status = block_manager->AllocateBlocks(2, blocks);
 
     // 检查分配是否成功
     EXPECT_TRUE(status.OK());
@@ -145,4 +167,30 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
     // 检查分配后的空闲内存块数量是否正确
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
     EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+}
+
+// 测试 DeviceSelect 类的 Execute 方法
+TEST(DeviceSelectTest, Execute) {
+    // 测试 Execute 方法
+    // 获取设备 0 上的 BlockManager 的空闲块数量
+    int result = DEVICE_EXECUTE(0, BlockManager, GetFreeBlockNumber, MEMORY_CPU_PINNED);
+    // 默认情况下每个 BlockManager 有 0 个空闲块
+    EXPECT_EQ(result, 0);
+
+    // 获取设备 0 上的 BlockManager 的设备 ID
+    int device_id_0 = DEVICE_EXECUTE(0, BlockManager, GetDeviceId);
+    // 设备 ID 应该等于 0
+    EXPECT_EQ(device_id_0, 0);
+
+    // 获取设备 1 上的 BlockManager 的设备 ID
+    int device_id_1 = DEVICE_EXECUTE(1, BlockManager, GetDeviceId);
+    // 设备 ID 应该等于 1
+    EXPECT_EQ(device_id_1, 1);
+
+    // 创建一个整数向量，用于存储分配的内存块
+    std::vector<int> blocks;
+    // 尝试在设备 0 上的 BlockManager 上分配 1 个 设备存储块
+    Status status = DEVICE_EXECUTE(0, BlockManager, AllocateBlocks, 1, blocks);
+    // 分配失败的情况下，状态应该不是 OK
+    EXPECT_FALSE(status.OK());
 }

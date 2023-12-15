@@ -75,7 +75,7 @@ struct AllocatorConfig {
 struct BlockManagerConfig {
   // The config of allocator for cpu/gpu/npu.
   AllocatorConfig cpu_allocator_config;
-  AllocatorConfig gpu_allocator_config;
+  AllocatorConfig device_allocator_config;
 };
 
 // The config of batch manager.

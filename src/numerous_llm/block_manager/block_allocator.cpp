@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "numerous_llm/block_manager/block_allocator.h"
+#include "numerous_llm/utils/memory_utils.h"
 
 namespace numerous_llm {
 
@@ -25,7 +26,8 @@ BlockAllocator::BlockAllocator(const AllocatorConfig &allocator_config) {
         default:
           break;
     }
-    free_map_.insert({i, {i, allocator_config_.block_size, 1 , allocator_config_.device, memory}});
+    int64_t block_id = Singleton<UniqueIDGenerator>::GetInstance()->GetUniqueID();
+    free_map_.insert({block_id, {block_id, allocator_config_.block_size, 1 , allocator_config_.device, memory}});
   }
 }
 
@@ -58,12 +60,23 @@ BlockAllocator::~BlockAllocator() {
 Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
   addrs.clear();
   for (auto block_id : blocks) {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
       auto it = used_map_.find(block_id);
-      if(it != used_map_.end()) {
-          addrs.push_back(it->second.address);
-      } else {
-          return Status(RET_SEGMENT_FAULT);
+      if (it != used_map_.end()) {
+        addrs.push_back(it->second.address);
+        continue;
       }
+    }
+    {
+      std::unique_lock<std::mutex> lock(contiguous_memory_mutex_);
+      auto it = used_contiguous_memory_map_.find(block_id);
+      if (it != used_contiguous_memory_map_.end()) {
+        addrs.push_back(it->second.address);
+        continue;
+      }
+    }
+    return Status(RET_SEGMENT_FAULT);
   }
   return Status();
 }
@@ -99,6 +112,34 @@ Status BlockAllocator::Free(std::vector<int>& blocks) {
           return Status(RET_FREE_FAIL, fmt::format("Double free error, block id {}" , block_id));
       }
   }
+  return Status();
+}
+
+// 分配指定大小的设备存储空间
+Status BlockAllocator::AllocateContiguous(int64_t size, int& block_id) {
+  std::unique_lock<std::mutex> lock(contiguous_memory_mutex_);
+  // 定义一个 void 指针，用于存储内存分配的结果
+  void* memory;
+  CUDA_CHECK(cudaMalloc(&memory, size));
+  block_id = Singleton<UniqueIDGenerator>::GetInstance()->GetUniqueID();
+  used_contiguous_memory_map_.insert({block_id, {block_id, size, 1, MEMORY_GPU, memory}});
+  return Status();
+}
+
+// 释放连续设备存储
+Status BlockAllocator::FreeContiguous(int block_id) {
+  std::unique_lock<std::mutex> lock(contiguous_memory_mutex_);
+  auto it = used_contiguous_memory_map_.find(block_id);
+  if (it != used_contiguous_memory_map_.end()) {
+    if (--it->second.ref_count == 0) {
+      CUDA_CHECK(cudaFree(it->second.address));
+      used_contiguous_memory_map_.erase(it);
+      Singleton<UniqueIDGenerator>::GetInstance()->RecycleID(block_id);
+    }
+  } else {
+    return Status(RET_FREE_FAIL, fmt::format("Double free error, block id {}", block_id));
+  }
+
   return Status();
 }
 
