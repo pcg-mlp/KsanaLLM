@@ -2,15 +2,15 @@
 #
 # ==============================================================================
 
-include(ExternalProject)
-ExternalProject_Add(LLM_kernels
-  GIT_REPOSITORY    https://git.woa.com/Numerous/LLM/LLM_kernels.git
-  GIT_TAG           master
-  SOURCE_DIR        "${PROJECT_SOURCE_DIR}/3rdparty/LLM_kernels"
-  BINARY_DIR        "${PROJECT_SOURCE_DIR}/3rdparty/LLM_kernels"
-  CMAKE_ARGS        -DSM=${SM}
-)
+# prepare cutlass
+message(STATUS "Running submodule update to fetch LLM_kernels")
+execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/LLM_kernels
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                RESULT_VARIABLE GIT_SUBMOD_RESULT)
+if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+  message(FATAL_ERROR "git submodule update --init 3rdparty/LLM_kernels failed with ${GIT_SUBMOD_RESULT}, please checkout LLM_kernels submodule")
+endif()
 
-link_directories(
-  ${PROJECT_SOURCE_DIR}/3rdparty/LLM_kernels/lib
-)
+if (NOT TARGET embedding)
+  add_subdirectory(3rdparty/LLM_kernels)
+endif()

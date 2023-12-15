@@ -14,6 +14,7 @@ option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 find_package(CUDA 11.3 REQUIRED)
 find_package(CUDNN REQUIRED)
 find_package(NCCL REQUIRED)
+find_package(Git QUIET)
 execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)

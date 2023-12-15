@@ -1,0 +1,4 @@
+[submodule "3rdparty/LLM_kernels"]
+	path = 3rdparty/LLM_kernels
+	url = https://git.woa.com/Numerous/LLM/LLM_kernels.git
+    branch = master
