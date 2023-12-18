@@ -6,8 +6,8 @@
 #include <cuda_runtime.h>
 
 #include "numerous_llm/block_manager/memory_block.h"
-#include "numerous_llm/utils/nvidia/cuda_utils.h"
 #include "numerous_llm/utils/environment.h"
+#include "numerous_llm/utils/nvidia/cuda_utils.h"
 #include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
@@ -17,7 +17,7 @@ namespace numerous_llm {
 // the reference count becomes zero, the block is addes back to the free list.
 class BlockAllocator {
  public:
-  explicit BlockAllocator(const AllocatorConfig &allocator_config);
+  explicit BlockAllocator(const AllocatorConfig& allocator_config);
   ~BlockAllocator();
   // Aalloc a block from allocator.
   Status Allocate(int64_t block_num, std::vector<int>& blocks);
@@ -39,9 +39,8 @@ class BlockAllocator {
   // 根据给定的block_ids，获取对应的内存指针，存储在addrs中
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
 
-  int64_t GetFreeBlockNumber() {
-    return free_map_.size();
-  }
+  int64_t GetFreeBlockNumber() { return free_map_.size(); }
+
  private:
   std::mutex mutex_;
   std::mutex contiguous_memory_mutex_;

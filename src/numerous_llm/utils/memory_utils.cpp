@@ -46,7 +46,7 @@ void UniqueIDGenerator::RecycleID(int64_t id) {
 
     // 加入回收ID队列
     recycled_ids.push(id);
-  }else {
+  } else {
     // 如果ID不存在于活动ID集合中，则抛出异常
     throw std::runtime_error("ID not found in active IDs set.");
   }

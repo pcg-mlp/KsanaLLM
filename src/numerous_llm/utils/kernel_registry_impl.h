@@ -16,5 +16,5 @@
 //
 
 namespace numerous_llm {
-  REGISTER_NVIDIA_KERNEL(LookupFusedEmbedding, LookupFusedEmbedding<half>);
+REGISTER_NVIDIA_KERNEL(LookupFusedEmbedding, LookupFusedEmbedding<half>);
 }  // namespace numerous_llm

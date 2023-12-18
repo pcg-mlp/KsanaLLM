@@ -3,8 +3,8 @@
 #include <numeric>
 #include <thread>
 
-#include "test.h"
 #include "numerous_llm/utils/channel.h"
+#include "test.h"
 
 namespace numerous_llm {
 

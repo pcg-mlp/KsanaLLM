@@ -9,6 +9,7 @@ list(FILTER block_manager_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "block_manager_SRCS: ${block_manager_SRCS}")
 
 add_library(block_manager STATIC ${block_manager_SRCS})
+target_link_libraries(block_manager PUBLIC utils) 
 
 # for test
 file(GLOB_RECURSE block_manager_test_SRCS

@@ -46,7 +46,15 @@ bool BatchScheduler::CheckWaitingQueueFull() {
   return waiting_queue_.size() >= batch_schedule_config_.max_waiting_queue_len;
 }
 
-bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) { return true; }
+bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
+  if (req->infer_stage == InferStage::STATE_DECODE) {
+    // TODO(karlluo): do more check
+    if (req->output_tensor_map.GetSize() > 0) {
+      return true;
+    }
+  }
+  return false;
+}
 
 void BatchScheduler::ResetSchedule() { schedule_time_in_ms_ = GetCurrentTimeInMs(); }
 
@@ -72,6 +80,10 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
       running_queue_.erase(it);
       req->waiter->Notify();
       continue;
+    }
+
+    if (req->infer_stage == InferStage::STAGE_CONTEXT) {
+      req->infer_stage = InferStage::STATE_DECODE;
     }
 
     // Check total token number and block number.

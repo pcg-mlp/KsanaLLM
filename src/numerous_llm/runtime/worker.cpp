@@ -12,9 +12,11 @@ Status Worker::Execute(Context& ctx, const InferStage stage, const int worker_id
 
   switch (stage) {
     case InferStage::STAGE_CONTEXT:
+      NLLM_LOG_INFO << "ContextDecode infer on work_id: " << worker_id;
       base_model_ptr_->ContextDecode(base_weight_ptr_, input_tensor_maps, output_tensor_maps);
       break;
     case InferStage::STATE_DECODE:
+      NLLM_LOG_INFO << "Decode infer on work_id: " << worker_id;
       base_model_ptr_->Decode(base_weight_ptr_, input_tensor_maps, output_tensor_maps);
       break;
     default:

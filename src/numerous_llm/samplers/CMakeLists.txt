@@ -9,4 +9,4 @@ list(FILTER samplers_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "samplers_SRCS: ${samplers_SRCS}")
 
 add_library(samplers STATIC ${samplers_SRCS})
-
+target_link_libraries(samplers PUBLIC block_manager utils) 

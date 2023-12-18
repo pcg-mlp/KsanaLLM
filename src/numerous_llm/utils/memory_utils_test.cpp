@@ -5,8 +5,8 @@
 #include <thread>
 #include <vector>
 
-#include "test.h"
 #include "numerous_llm/utils/memory_utils.h"
+#include "test.h"
 
 namespace numerous_llm {
 

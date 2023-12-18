@@ -36,6 +36,7 @@ Status BatchManager::Initialize() {
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
+  NLLM_LOG_INFO << "register model instance " << model_instance->name << " : " << model_instance.get();
   model_instances_[model_instance->name] = model_instance;
   return Status();
 }
@@ -69,7 +70,8 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
     NLLM_LOG_INFO << "batch schdule add request.";
   }
 
-  // waiter->Wait();
+  waiter->Wait();
+  NLLM_LOG_INFO << "batch schdule finish request.";
 
   return Status();
 }

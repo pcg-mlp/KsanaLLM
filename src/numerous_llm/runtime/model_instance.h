@@ -32,13 +32,13 @@ class ModelInstance {
   //   (num_layer / pipeline_para) * beam_width * (head_num / tensor_para) * size_per_head;
   int GetTokenCacheSize() {
     // TODO: Set it from model config.
-    return 4096; 
+    return 4096;
   }
 
  private:
   std::shared_ptr<Context> context_{nullptr};
 
-  std::vector<std::unique_ptr<Worker>> workers_;
+  std::vector<std::shared_ptr<Worker>> workers_;
 
   int tensor_parallel_size_{0};
   int pipeline_parallel_size_{0};

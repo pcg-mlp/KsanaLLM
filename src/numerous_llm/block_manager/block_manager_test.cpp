@@ -2,63 +2,62 @@
 
 ==============================================================================*/
 
-
 #include "numerous_llm/block_manager/block_manager.h"
-#include "test.h"
 #include "numerous_llm/utils/singleton.h"
+#include "test.h"
 
 using namespace numerous_llm;
 // 定义一个 BlockManagerTest 类，继承自 testing::Test
 class BlockManagerTest : public testing::Test {
  protected:
-    // 在每个测试用例执行之前调用的函数
-    void SetUp() override {
-        // 创建一个 BlockManagerConfig 对象，用于配置 BlockManager
-        BlockManagerConfig block_manager_config;
-        block_manager_config.cpu_allocator_config.blocks_num = 2;
-        block_manager_config.cpu_allocator_config.block_size = 1024;
-        block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
-        block_manager_config.device_allocator_config.blocks_num = 2;
-        block_manager_config.device_allocator_config.block_size = 1024;
-        block_manager_config.device_allocator_config.device = MEMORY_GPU;
+  // 在每个测试用例执行之前调用的函数
+  void SetUp() override {
+    // 创建一个 BlockManagerConfig 对象，用于配置 BlockManager
+    BlockManagerConfig block_manager_config;
+    block_manager_config.cpu_allocator_config.blocks_num = 2;
+    block_manager_config.cpu_allocator_config.block_size = 1024;
+    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.device_allocator_config.blocks_num = 2;
+    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
-        // 使用配置创建一个 BlockManager 对象
-        block_manager = new BlockManager(block_manager_config);
-    }
+    // 使用配置创建一个 BlockManager 对象
+    block_manager = new BlockManager(block_manager_config);
+  }
 
-    // 在每个测试用例执行之后调用的函数
-    void TearDown() override {
-        // 删除 BlockManager 对象
-        delete block_manager;
-    }
+  // 在每个测试用例执行之后调用的函数
+  void TearDown() override {
+    // 删除 BlockManager 对象
+    delete block_manager;
+  }
 
  protected:
-    // 定义一个 BlockManager 指针，用于在测试用例中使用
-    BlockManager* block_manager;
+  // 定义一个 BlockManager 指针，用于在测试用例中使用
+  BlockManager* block_manager;
 };
 
 // 定义一个测试用例，继承自 BlockManagerTest
 TEST_F(BlockManagerTest, AllocateAndFree) {
-    // 创建一个整数向量，用于存储分配的内存块
-    std::vector<int> blocks;
+  // 创建一个整数向量，用于存储分配的内存块
+  std::vector<int> blocks;
 
-    // 尝试分配 2 个内存块
-    Status status = block_manager->AllocateBlocks(2, blocks);
+  // 尝试分配 2 个内存块
+  Status status = block_manager->AllocateBlocks(2, blocks);
 
-    // 检查分配是否成功
-    EXPECT_TRUE(status.OK());
+  // 检查分配是否成功
+  EXPECT_TRUE(status.OK());
 
-    // 检查分配的内存块数量是否正确
-    EXPECT_EQ(blocks.size(), 2);
+  // 检查分配的内存块数量是否正确
+  EXPECT_EQ(blocks.size(), 2);
 
-    // 尝试释放分配的内存块
-    status = block_manager->FreeBlocks(blocks);
+  // 尝试释放分配的内存块
+  status = block_manager->FreeBlocks(blocks);
 
-    // 检查释放是否成功
-    EXPECT_TRUE(status.OK());
+  // 检查释放是否成功
+  EXPECT_TRUE(status.OK());
 
-    // 检查释放后的空闲内存块数量是否正确
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
+  // 检查释放后的空闲内存块数量是否正确
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
 }
 
 // 测试 BlockManager 类的 AllocateAndFreeContiguousMemory 方法
@@ -100,97 +99,97 @@ TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
 }
 
 TEST_F(BlockManagerTest, SwapInAndSwapOut) {
-    // 分配两个 block
-    std::vector<int> blocks;
-    Status status = block_manager->AllocateBlocks(2, blocks);
-    EXPECT_TRUE(status.OK());
-    EXPECT_EQ(blocks.size(), 2);
+  // 分配两个 block
+  std::vector<int> blocks;
+  Status status = block_manager->AllocateBlocks(2, blocks);
+  EXPECT_TRUE(status.OK());
+  EXPECT_EQ(blocks.size(), 2);
 
-    // 获取 block 的指针
-    std::vector<void*> addrs;
-    block_manager->GetBlockPtrs(blocks, addrs);
+  // 获取 block 的指针
+  std::vector<void*> addrs;
+  block_manager->GetBlockPtrs(blocks, addrs);
 
-    // 将数据从 CPU 复制到 block 中
-    std::string string_a = "string_a";
-    std::string string_b = "string_b";
-    cudaMemcpy(addrs[0], string_a.data(), string_a.size(), cudaMemcpyHostToDevice);
-    cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
+  // 将数据从 CPU 复制到 block 中
+  std::string string_a = "string_a";
+  std::string string_b = "string_b";
+  cudaMemcpy(addrs[0], string_a.data(), string_a.size(), cudaMemcpyHostToDevice);
+  cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
-    // 将 block 从 CPU 交换到 GPU
-    status = block_manager->SwapIn(blocks, nullptr);
-    EXPECT_TRUE(status.OK());
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 0);
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+  // 将 block 从 CPU 交换到 GPU
+  status = block_manager->SwapIn(blocks, nullptr);
+  EXPECT_TRUE(status.OK());
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 0);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
 
-    // 修改 block 中的数据
-    string_a = "string_x";
-    string_b = "string_x";
-    cudaMemcpy(addrs[0], string_a.data(), string_a.size(), cudaMemcpyHostToDevice);
-    cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
+  // 修改 block 中的数据
+  string_a = "string_x";
+  string_b = "string_x";
+  cudaMemcpy(addrs[0], string_a.data(), string_a.size(), cudaMemcpyHostToDevice);
+  cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
-    // 将 block 从 GPU 交换回 CPU
-    status = block_manager->SwapOut(blocks, nullptr);
-    EXPECT_TRUE(status.OK());
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+  // 将 block 从 GPU 交换回 CPU
+  status = block_manager->SwapOut(blocks, nullptr);
+  EXPECT_TRUE(status.OK());
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
 
-    // 获取 block 的指针
-    block_manager->GetBlockPtrs(blocks, addrs);
+  // 获取 block 的指针
+  block_manager->GetBlockPtrs(blocks, addrs);
 
-    // 将 block 中的数据从 GPU 复制回 CPU
-    cudaMemcpy(string_a.data(), addrs[0], string_a.size(), cudaMemcpyDeviceToHost);
-    cudaMemcpy(string_b.data(), addrs[1], string_b.size(), cudaMemcpyDeviceToHost);
+  // 将 block 中的数据从 GPU 复制回 CPU
+  cudaMemcpy(string_a.data(), addrs[0], string_a.size(), cudaMemcpyDeviceToHost);
+  cudaMemcpy(string_b.data(), addrs[1], string_b.size(), cudaMemcpyDeviceToHost);
 
-    // 检查数据是否正确
-    EXPECT_EQ(string_a, "string_a");
-    EXPECT_EQ(string_b, "string_b");
+  // 检查数据是否正确
+  EXPECT_EQ(string_a, "string_a");
+  EXPECT_EQ(string_b, "string_b");
 }
 
 // 定义一个测试用例，继承自 BlockManagerTest
 TEST_F(BlockManagerTest, GetFreeBlockNumber) {
-    // 检查 CPU 和 GPU 的空闲内存块数量是否正确
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
+  // 检查 CPU 和 GPU 的空闲内存块数量是否正确
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
 
-    // 创建一个整数向量，用于存储分配的内存块
-    std::vector<int> blocks;
+  // 创建一个整数向量，用于存储分配的内存块
+  std::vector<int> blocks;
 
-    // 尝试分配 2 个内存块
-    Status status = block_manager->AllocateBlocks(2, blocks);
+  // 尝试分配 2 个内存块
+  Status status = block_manager->AllocateBlocks(2, blocks);
 
-    // 检查分配是否成功
-    EXPECT_TRUE(status.OK());
+  // 检查分配是否成功
+  EXPECT_TRUE(status.OK());
 
-    // 检查分配的内存块数量是否正确
-    EXPECT_EQ(blocks.size(), 2);
+  // 检查分配的内存块数量是否正确
+  EXPECT_EQ(blocks.size(), 2);
 
-    // 检查分配后的空闲内存块数量是否正确
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
-    EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+  // 检查分配后的空闲内存块数量是否正确
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
 }
 
 // 测试 DeviceSelect 类的 Execute 方法
 TEST(DeviceSelectTest, Execute) {
-    // 测试 Execute 方法
-    // 获取设备 0 上的 BlockManager 的空闲块数量
-    int result = DEVICE_EXECUTE(0, BlockManager, GetFreeBlockNumber, MEMORY_CPU_PINNED);
-    // 默认情况下每个 BlockManager 有 0 个空闲块
-    EXPECT_EQ(result, 0);
+  // 测试 Execute 方法
+  // 获取设备 0 上的 BlockManager 的空闲块数量
+  int result = DEVICE_EXECUTE(0, BlockManager, GetFreeBlockNumber, MEMORY_CPU_PINNED);
+  // 默认情况下每个 BlockManager 有 0 个空闲块
+  EXPECT_EQ(result, 0);
 
-    // 获取设备 0 上的 BlockManager 的设备 ID
-    int device_id_0 = DEVICE_EXECUTE(0, BlockManager, GetDeviceId);
-    // 设备 ID 应该等于 0
-    EXPECT_EQ(device_id_0, 0);
+  // 获取设备 0 上的 BlockManager 的设备 ID
+  int device_id_0 = DEVICE_EXECUTE(0, BlockManager, GetDeviceId);
+  // 设备 ID 应该等于 0
+  EXPECT_EQ(device_id_0, 0);
 
-    // 获取设备 1 上的 BlockManager 的设备 ID
-    int device_id_1 = DEVICE_EXECUTE(1, BlockManager, GetDeviceId);
-    // 设备 ID 应该等于 1
-    EXPECT_EQ(device_id_1, 1);
+  // 获取设备 1 上的 BlockManager 的设备 ID
+  int device_id_1 = DEVICE_EXECUTE(1, BlockManager, GetDeviceId);
+  // 设备 ID 应该等于 1
+  EXPECT_EQ(device_id_1, 1);
 
-    // 创建一个整数向量，用于存储分配的内存块
-    std::vector<int> blocks;
-    // 尝试在设备 0 上的 BlockManager 上分配 1 个 设备存储块
-    Status status = DEVICE_EXECUTE(0, BlockManager, AllocateBlocks, 1, blocks);
-    // 分配失败的情况下，状态应该不是 OK
-    EXPECT_FALSE(status.OK());
+  // 创建一个整数向量，用于存储分配的内存块
+  std::vector<int> blocks;
+  // 尝试在设备 0 上的 BlockManager 上分配 1 个 设备存储块
+  Status status = DEVICE_EXECUTE(0, BlockManager, AllocateBlocks, 1, blocks);
+  // 分配失败的情况下，状态应该不是 OK
+  EXPECT_FALSE(status.OK());
 }

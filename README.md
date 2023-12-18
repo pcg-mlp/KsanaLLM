@@ -24,3 +24,16 @@ make -j
 # open another terminal or session
 cat ./log/numerous_llm.log
 ```
+
+## Code format command line
+
+please format your code before submit a merge request
+
+```bash
+# prepare clang-format
+# pip install clang-format
+# prefer clang-format 17.0.5
+cd ${GIT_PROJECT_ROOT_DIR}
+clang-for
+clang-format -i ${CODE_YOUR_EDIT}
+```
