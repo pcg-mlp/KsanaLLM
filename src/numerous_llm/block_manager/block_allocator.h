@@ -11,7 +11,6 @@
 #include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
-
 // The block allocator maintains a list of free blocks, and allocate a block
 // when requested. When a block is free, its reference count is decremented. If
 // the reference count becomes zero, the block is addes back to the free list.
@@ -44,7 +43,7 @@ class BlockAllocator {
  private:
   static std::mutex mutex_;
   static std::mutex contiguous_memory_mutex_;
-  static std::unordered_map<int64_t, MemoryBlock> free_map_;
+  std::unordered_map<int64_t, MemoryBlock> free_map_;
   static std::unordered_map<int64_t, MemoryBlock> used_map_;
   static std::unordered_map<int64_t, MemoryBlock> used_contiguous_memory_map_;
   int block_num_;

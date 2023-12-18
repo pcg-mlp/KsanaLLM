@@ -9,7 +9,6 @@ namespace numerous_llm {
 
 std::mutex BlockAllocator::mutex_;
 std::mutex BlockAllocator::contiguous_memory_mutex_;
-std::unordered_map<long int, MemoryBlock> BlockAllocator::free_map_;
 std::unordered_map<long int, MemoryBlock> BlockAllocator::used_map_;
 std::unordered_map<long int, MemoryBlock> BlockAllocator::used_contiguous_memory_map_;
 
@@ -33,31 +32,31 @@ BlockAllocator::BlockAllocator(const AllocatorConfig &allocator_config)  {
         break;
     }
     int64_t block_id = Singleton<UniqueIDGenerator>::GetInstance()->GetUniqueID();
-    BlockAllocator::free_map_.insert({block_id, {block_id, allocator_config_.block_size, 1 , allocator_config_.device, memory}});
+    free_map_.insert({block_id, {block_id, allocator_config_.block_size, 1 , allocator_config_.device, memory}});
   }
 }
 
 BlockAllocator::~BlockAllocator() {
-  //TODO: 存在重复析构问题
+  // TODO: 这两个 map 都是 static 变量,会在 BlockAllocator 析构函数调用前被析构,即 size 始终为 0
+  if (BlockAllocator::used_contiguous_memory_map_.size() > 0 || BlockAllocator::used_map_.size() > 0) {
+    printf("[ERROR] used memory map exists block id left: contiguous_map_: %d, used_map_: %d\n",
+      BlockAllocator::used_contiguous_memory_map_.size(), BlockAllocator::used_map_.size());
+    throw std::runtime_error("used memory map exists block id left.");
+  }
   switch (allocator_config_.device){
     case MEMORY_CPU_PINNED:
-      for (auto& block_pair : BlockAllocator::free_map_) {
-          CUDA_CHECK(cudaFreeHost(block_pair.second.address));
-      }
-      for (auto& block_pair : BlockAllocator::used_map_) {
-          CUDA_CHECK(cudaFreeHost(block_pair.second.address));
+      for (auto& block_pair : free_map_) {
+        CUDA_CHECK(cudaFreeHost(block_pair.second.address));
       }
       break;
 
-    case MEMORY_GPU:
-      for (auto& block_pair : BlockAllocator::free_map_) {
-          CUDA_CHECK(cudaFree(block_pair.second.address));
+    case MEMORY_GPU: {
+      for (auto& block_pair : free_map_) {
+        CUDA_CHECK(cudaFree(block_pair.second.address));
       }
-      for (auto& block_pair : BlockAllocator::used_map_) {
-          CUDA_CHECK(cudaFree(block_pair.second.address));
-      }
+      free_map_.clear();
       break;
-
+    }
     default:
       break;
   }
@@ -90,17 +89,17 @@ Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<
 
 Status BlockAllocator::Allocate(int64_t block_num, std::vector<int>& blocks) {
   std::unique_lock<std::mutex> lock(BlockAllocator::mutex_);
-  if (block_num > BlockAllocator::free_map_.size()) {
+  if (block_num > free_map_.size()) {
     return Status(RET_ALLOCATE_FAIL);
   }
   blocks.clear();
-  auto it = BlockAllocator::free_map_.begin();
+  auto it = free_map_.begin();
   while (block_num--) {
-    if(it != BlockAllocator::free_map_.end()) {
+    if(it != free_map_.end()) {
       it->second.ref_count++;
       BlockAllocator::used_map_.insert(*it);
       blocks.push_back(it->first);
-      it = BlockAllocator::free_map_.erase(it);
+      it = free_map_.erase(it);
     }
   }
   return Status();
@@ -112,7 +111,7 @@ Status BlockAllocator::Free(std::vector<int>& blocks) {
     auto it = BlockAllocator::used_map_.find(block_id);
     if (it != BlockAllocator::used_map_.end()) {
       if (--it->second.ref_count == 1) {
-        BlockAllocator::free_map_.insert(*it);
+        free_map_.insert(*it);
         BlockAllocator::used_map_.erase(it);
       }
     } else {

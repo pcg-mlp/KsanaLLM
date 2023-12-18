@@ -6,6 +6,7 @@
 #include "numerous_llm/models/llama/llama_weight.h"
 #include "test.h"
 #include <thread>
+#include <filesystem>
 
 using namespace numerous_llm;
 // 定义一个 LlamaWeightTest 类,继承自 testing::Test
@@ -42,6 +43,12 @@ size_t get_hash_code(short* data, size_t data_size) {
 }
 
 TEST_F(LlamaWeightTest, GetModelWeightsTest) {
+  // 当环境中不包含该路径时,不做测试
+  std::filesystem::path ft_path(model_config.path);
+  if (!std::filesystem::exists(ft_path)) {
+    GTEST_SKIP() << "Skipping the test because the path " << model_config.path << " does not exists.";
+  }
+
   LlamaWeight llama_weight(model_config);
   // 正确的 weight 名称
   std::string weight_name = "lm_head";

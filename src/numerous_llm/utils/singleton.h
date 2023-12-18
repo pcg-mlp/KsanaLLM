@@ -15,11 +15,11 @@ class Singleton {
  public:
   // Get singleton instance, with constructor arguments
   template <typename... Args>
-  static T* GetInstance(Args&&... args) {
+  static std::shared_ptr<T> GetInstance(Args&&... args) {
     if (!singleton_instance_) {
       std::lock_guard<std::mutex> lock(singleton_mutex_);
       if (!singleton_instance_) {
-        singleton_instance_ = new T(std::forward<Args>(args)...);
+        singleton_instance_ = std::make_shared<T>(std::forward<Args>(args)...);
       }
     }
     return singleton_instance_;
@@ -29,15 +29,14 @@ class Singleton {
   Singleton();
   Singleton(const Singleton&) = delete;
   Singleton& operator=(const Singleton&) = delete;
-  ~Singleton();
 
  private:
-  static T* singleton_instance_;
+  static std::shared_ptr<T> singleton_instance_;
   static std::mutex singleton_mutex_;
 };
 
 template <typename T>
-T* Singleton<T>::singleton_instance_ = nullptr;
+std::shared_ptr<T> Singleton<T>::singleton_instance_ = nullptr;
 
 template <typename T>
 std::mutex Singleton<T>::singleton_mutex_;
