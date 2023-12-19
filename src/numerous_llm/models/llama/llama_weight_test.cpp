@@ -21,7 +21,6 @@ class LlamaWeightTest : public testing::Test {
     model_config.num_layer = 40;
     model_config.rotary_embedding = 128;
     model_config.vocab_size = 32000;
-    model_config.rank = 0;
     model_config.tensor_para_size = 2;
   }
 
@@ -38,7 +37,7 @@ size_t get_hash_code(short* data, size_t data_size) {
     hash_value ^= (hash_value % mod) + delta + (hash_value << 6) + (hash_value >>  2);
   }
   hash_value %= mod;
-  printf("Hash Result = %d\n", hash_value);
+  NLLM_LOG_DEBUG << fmt::format("Hash Result = {}", hash_value) << std::endl;
   return hash_value;
 }
 
@@ -49,7 +48,7 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
     GTEST_SKIP() << "Skipping the test because the path " << model_config.path << " does not exists.";
   }
 
-  LlamaWeight llama_weight(model_config);
+  LlamaWeight llama_weight(model_config, 0);
   // 正确的 weight 名称
   std::string weight_name = "lm_head";
   Tensor lm_head = llama_weight.GetModelWeights(weight_name);
@@ -65,7 +64,6 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
   EXPECT_EQ(get_hash_code(cpu_tensor, data_size), 256631325);
 
   /*
-  printf("本地结果\n");
   std::vector<short> local_tensor(data_size);
   std::ifstream file("/model/llama-ft/13B/2-gpu/model.lm_head.weight.bin", std::ios::binary);
   file.read(reinterpret_cast<char*>(local_tensor.data()), data_size * sizeof(short));

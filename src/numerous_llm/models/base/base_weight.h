@@ -11,7 +11,7 @@ namespace numerous_llm {
 class BaseWeight {
  public:
   BaseWeight(){};
-  explicit BaseWeight(const ModelConfig& model_config);
+  explicit BaseWeight(const ModelConfig& model_config, int rank);
   ~BaseWeight(){};
 
   // 查表,返回 weights_map_[weight_name]

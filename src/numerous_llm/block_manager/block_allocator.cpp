@@ -39,8 +39,8 @@ BlockAllocator::BlockAllocator(const AllocatorConfig &allocator_config)  {
 BlockAllocator::~BlockAllocator() {
   // TODO: 这两个 map 都是 static 变量,会在 BlockAllocator 析构函数调用前被析构,即 size 始终为 0
   if (BlockAllocator::used_contiguous_memory_map_.size() > 0 || BlockAllocator::used_map_.size() > 0) {
-    printf("[ERROR] used memory map exists block id left: contiguous_map_: %d, used_map_: %d\n",
-      BlockAllocator::used_contiguous_memory_map_.size(), BlockAllocator::used_map_.size());
+    NLLM_LOG_ERROR << fmt::format("used memory map exists block id left: contiguous_map_: {}, used_map_: {}",
+      BlockAllocator::used_contiguous_memory_map_.size(), BlockAllocator::used_map_.size()) << std::endl;
     throw std::runtime_error("used memory map exists block id left.");
   }
   switch (allocator_config_.device){

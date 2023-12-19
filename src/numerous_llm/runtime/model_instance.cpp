@@ -25,7 +25,7 @@ void ModelInstance::Load(const ModelConfig& model_config) {
     name = "llama";
     NLLM_LOG_INFO << "Start to init LLaMA model instance";
     BaseModel* llama_model = new Llama();
-    BaseWeight* llama_weight = new LlamaWeight(model_config);
+    BaseWeight* llama_weight = new LlamaWeight(model_config, 0);
     for (int worker_id = 0; worker_id < workers_.size(); ++worker_id) {
       // model and weight should load on different device
       workers_[worker_id].reset(new Worker(llama_model, llama_weight));
