@@ -29,6 +29,7 @@ enum DataType {
   TYPE_BF16,
   TYPE_FP8_E4M3,
   TYPE_STR,
+  TYPE_POINTER,
   TYPE_VOID,
 };
 
@@ -61,6 +62,8 @@ DataType GetTensorType() {
     return TYPE_BOOL;
   } else if (std::is_same<T, char>::value || std::is_same<T, const char>::value) {
     return TYPE_BYTES;
+  } else if (std::is_pointer<T>::value){
+    return TYPE_POINTER;
   } else {
     return TYPE_INVALID;
   }

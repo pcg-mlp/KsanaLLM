@@ -16,7 +16,7 @@ class LlamaWeight : public BaseWeight {
   ~LlamaWeight();
   explicit LlamaWeight(const ModelConfig& model_config, int rank);
 
-  Tensor GetModelWeights(std::string& weight_name);
+  Tensor GetModelWeights(const std::string& weight_name);
 
  private:
   Status LoadWeightFromBin(Tensor tensor, std::string binfile);

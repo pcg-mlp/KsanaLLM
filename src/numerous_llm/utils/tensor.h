@@ -23,10 +23,10 @@ namespace numerous_llm {
 enum StorageType { STORAGE_CONTIGUOUS, STORAGE_SEGMENTED };
 
 struct Tensor {
-  const MemoryDevice device;
-  const StorageType storage;
-  const DataType dtype;
-  const std::vector<size_t> shape;
+  MemoryDevice device;
+  StorageType storage;
+  DataType dtype;
+  std::vector<size_t> shape;
 
   // Use block id instead of physical address, so that the blockmanager could do defragmentation easily.
   // Get the real physical address through blockmanager.

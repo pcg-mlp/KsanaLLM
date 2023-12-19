@@ -37,7 +37,7 @@ std::string Tensor::ToString() const {
       {TYPE_UINT64, "UINT64"}, {TYPE_INT8, "INT8"},   {TYPE_INT16, "INT16"},     {TYPE_INT32, "INT32"},
       {TYPE_INT64, "INT64"},   {TYPE_BF16, "BF16"},   {TYPE_FP16, "FP16"},       {TYPE_FP32, "FP32"},
       {TYPE_FP64, "FP64"},     {TYPE_BYTES, "BYTES"}, {TYPE_INVALID, "INVALID"}, {TYPE_FP8_E4M3, "E4M3"},
-      {TYPE_VOID, "VOID"},
+      {TYPE_VOID, "VOID"},     {TYPE_POINTER, "POINTER"},
   };
   return FormatStr("Tensor[where=%s, dtype=%s, shape=%s, blocks=%s]", memtype_str.c_str(),
                    type_to_string.at(dtype).c_str(), Vector2Str(shape).c_str(), Vector2Str(blocks).c_str());
@@ -62,7 +62,8 @@ size_t Tensor::GetTypeSize(DataType dtype) {
 #endif
                                                              {TYPE_FP16, sizeof(half)},
                                                              {TYPE_FP32, sizeof(float)},
-                                                             {TYPE_FP64, sizeof(double)}};
+                                                             {TYPE_FP64, sizeof(double)},
+                                                             {TYPE_POINTER, sizeof(void*)}};
   return type_map.at(dtype);
 }
 

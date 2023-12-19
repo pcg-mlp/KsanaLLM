@@ -11,6 +11,8 @@ class AttentionLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, cudaStream_t stream) override;
 
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
+
  protected:
   int max_position_embeddings_;
 };

@@ -158,7 +158,7 @@ std::string LlamaWeight<T>::GetBinfileName(std::string weight_name) {
 }
 
 template <typename T>
-Tensor LlamaWeight<T>::GetModelWeights(std::string& weight_name) {
+Tensor LlamaWeight<T>::GetModelWeights(const std::string& weight_name) {
   if (!weights_map_.count(weight_name)) {
     NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
     return Tensor();

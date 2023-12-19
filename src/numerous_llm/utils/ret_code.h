@@ -34,6 +34,9 @@ enum RetCode {
   // block manager free fail
   RET_FREE_FAIL = 8,
 
+  // undefined reference
+  RET_UNDEFINED_REFERENCE = 9,
+
   // something not in above values.
   RET_UNKNOWN = 255,
 };
