@@ -11,7 +11,6 @@
 #include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
-
 // The block allocator maintains a list of free blocks, and allocate a block
 // when requested. When a block is free, its reference count is decremented. If
 // the reference count becomes zero, the block is addes back to the free list.
@@ -37,16 +36,19 @@ class BlockAllocator {
   Status FreeContiguous(int block_id);
 
   // 根据给定的block_ids，获取对应的内存指针，存储在addrs中
-  Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
+  static Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
 
   int64_t GetFreeBlockNumber() { return free_map_.size(); }
 
  private:
-  std::mutex mutex_;
-  std::mutex contiguous_memory_mutex_;
+  // 使用静态成员变量, 管理全部 MmemoryBlock 数据块, 实现不区分卡查询 block_ids 对应地址信息功能
+  // TODO(zakwang): 需要重新整理内部数据结构及结构间关系;
+  //                需要解决类析构时静态成员变量先于类实例被析构, 所引发的内存泄露问题
+  static std::mutex mutex_;
+  static std::mutex contiguous_memory_mutex_;
   std::unordered_map<int64_t, MemoryBlock> free_map_;
-  std::unordered_map<int64_t, MemoryBlock> used_map_;
-  std::unordered_map<int64_t, MemoryBlock> used_contiguous_memory_map_;
+  static std::unordered_map<int64_t, MemoryBlock> used_map_;
+  static std::unordered_map<int64_t, MemoryBlock> used_contiguous_memory_map_;
   int block_num_;
   AllocatorConfig allocator_config_;
 };

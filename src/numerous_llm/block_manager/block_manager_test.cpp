@@ -143,6 +143,8 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   // 检查数据是否正确
   EXPECT_EQ(string_a, "string_a");
   EXPECT_EQ(string_b, "string_b");
+
+  EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
 
 // 定义一个测试用例，继承自 BlockManagerTest
@@ -166,6 +168,8 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   // 检查分配后的空闲内存块数量是否正确
   EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
   EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+
+  EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
 
 // 测试 DeviceSelect 类的 Execute 方法

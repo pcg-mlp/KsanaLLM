@@ -18,8 +18,7 @@ template <typename T>
 std::vector<T*> GetBlockPtrs(const std::vector<int>& blocks) {
   std::vector<void*> addrs;
   Singleton<BlockManager>::GetInstance()->GetBlockPtrs(blocks, addrs);
-
-  std::vector<T*> results;
+  std::vector<T*> results(addrs.size());
   std::transform(addrs.begin(), addrs.end(), results.begin(), [](void* p) { return reinterpret_cast<T*>(p); });
   return results;
 }
