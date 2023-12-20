@@ -53,7 +53,7 @@ class BlockManager {
   // 释放设备存储块
   // 参数：blocks - 要释放的设备存储块 ID 列表
   // 返回值：Status 对象，表示操作的成功或失败
-  Status FreeBlocks(std::vector<int>& blocks);
+  Status FreeBlocks(const std::vector<int>& blocks);
 
   // 释放连续设备存储
   // 参数：block_id - 设备存储块 ID

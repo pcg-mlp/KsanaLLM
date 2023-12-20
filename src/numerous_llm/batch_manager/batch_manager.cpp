@@ -5,6 +5,7 @@
 #include "numerous_llm/batch_manager/batch_manager.h"
 #include "numerous_llm/runtime/infer_request.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/tensor.h"
 #include "numerous_llm/utils/waiter.h"
 
 #include <chrono>
@@ -14,8 +15,10 @@
 
 namespace numerous_llm {
 
-BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config) {
+BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> contex) {
   batch_manager_config_ = batch_manager_config;
+  contex_ = contex;
+
   Initialize();
 }
 
@@ -28,9 +31,7 @@ Status BatchManager::Initialize() {
 
   request_batching_ = std::make_shared<RequestBatching>(batch_manager_config_.request_batching_config);
 
-  llm_runtime_ = std::make_shared<LlmRuntime>();
-
-  llm_sampler_ = std::make_shared<Sampler>();
+  llm_runtime_ = std::make_shared<LlmRuntime>(contex_);
 
   return Status();
 }
@@ -41,29 +42,27 @@ Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> 
   return Status();
 }
 
-Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
+Status BatchManager::Enqueue(int req_id, const std::vector<std::vector<int>> &tokens,
                              const std::vector<SamplingConfig> &sampling_configs) {
-  NLLM_LOG_INFO << "batch manager enqueue.";
+  NLLM_LOG_INFO << "batch manager enqueue, batch_size:" << tokens.size();
 
   // Split into multiple prompt
-  if (tensor_maps.size() != sampling_configs.size()) {
-    return Status(RET_INVALID_ARGUMENT, "Size of tensor_maps and sampling_configs should be equal.");
+  if (tokens.size() != sampling_configs.size()) {
+    return Status(RET_INVALID_ARGUMENT, "Size of tokens and sampling_configs should be equal.");
   }
 
-  std::shared_ptr<Waiter> waiter = std::make_shared<Waiter>(tensor_maps.size());
-  for (size_t i = 0; i < tensor_maps.size(); ++i) {
+  std::shared_ptr<Waiter> waiter = std::make_shared<Waiter>(tokens.size());
+  for (size_t i = 0; i < tokens.size(); ++i) {
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>();
     infer_req->req_id = req_id;
-    infer_req->input_tensor_map = tensor_maps[i];
+    infer_req->input_tokens = tokens[i];
+    infer_req->output_tokens = tokens[i];
     infer_req->sampling_config = sampling_configs[i];
     infer_req->waiter = waiter;
     infer_req->model_name = "llama";
     infer_req->model_instance = model_instances_[infer_req->model_name];
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
 
-    // Tensor &input_ids = infer_req->input_tensor_map.Get("input_ids");
-    // infer_req->tokens.resize(input_ids.GetElementNumber());
-    // memcpy(infer_req->tokens.data(), input_ids.GetPtr<int>(), input_ids.GetTotalBytes());
     NLLM_LOG_INFO << "infer_req.model_name: " << infer_req->model_name;
 
     batch_scheduler_->AddInferRequest(infer_req);
@@ -76,7 +75,7 @@ Status BatchManager::Enqueue(int req_id, const std::vector<TensorMap> &tensor_ma
   return Status();
 }
 
-Status BatchManager::WaitDone(int req_id, std::vector<TensorMap> &tensor_maps) {
+Status BatchManager::WaitDone(int req_id, std::vector<std::vector<int>> &tokens) {
   std::this_thread::sleep_for(std::chrono::seconds(3));
   return Status();
 }
@@ -92,9 +91,7 @@ Status BatchManager::Process() {
     }
 
     NLLM_LOG_INFO << "batch scheduler result:" << scheduled_reqs.size();
-
     llm_runtime_->Step(scheduled_reqs);
-    llm_sampler_->Sampling(scheduled_reqs);
   }
 
   return Status();

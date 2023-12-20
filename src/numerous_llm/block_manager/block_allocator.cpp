@@ -105,7 +105,7 @@ Status BlockAllocator::Allocate(int64_t block_num, std::vector<int>& blocks) {
   return Status();
 }
 
-Status BlockAllocator::Free(std::vector<int>& blocks) {
+Status BlockAllocator::Free(const std::vector<int>& blocks) {
   std::unique_lock<std::mutex> lock(BlockAllocator::mutex_);
   for (auto block_id : blocks) {
     auto it = BlockAllocator::used_map_.find(block_id);

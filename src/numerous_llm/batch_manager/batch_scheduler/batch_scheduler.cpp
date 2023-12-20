@@ -38,8 +38,7 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
 }
 
 bool BatchScheduler::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
-  // return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_schedule_config_.timeout_in_ms;
-  return false;
+  return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_schedule_config_.timeout_in_ms;
 }
 
 bool BatchScheduler::CheckWaitingQueueFull() {
@@ -49,7 +48,7 @@ bool BatchScheduler::CheckWaitingQueueFull() {
 bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
   if (req->infer_stage == InferStage::STATE_DECODE) {
     // TODO(karlluo): do more check
-    if (req->output_tensor_map.GetSize() > 0) {
+    if (req->output_tokens.size() > req->input_tokens.size()) {
       return true;
     }
   }
@@ -63,6 +62,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
   for (auto it = running_queue_.begin(); it != running_queue_.end();) {
     NLLM_LOG_INFO << "Try req in running_queue_";
     auto req = *it;
+    req->ResetInferStage();
 
     // Check if finished.
     if (CheckRequestFinish(req)) {
@@ -183,6 +183,8 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
 }
 
 std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
+  ResetSchedule();
+
   std::lock_guard<std::mutex> guard(queue_mutex_);
 
   // TODO(yancyliu): Get from block manager.

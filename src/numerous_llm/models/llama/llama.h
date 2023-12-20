@@ -15,13 +15,14 @@ class Llama : public BaseModel {
   Llama() {}
   ~Llama() {}
 
+  float* GetLogitsPtr();
+
   // The prefill stage.
   Status ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                       const std::vector<TensorMap*>& input_tensor_maps, std::vector<TensorMap*>& output_tensor_maps);
+                       std::vector<ForwardRequest>& forward_reqs);
 
   // The decode stage.
-  Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                const std::vector<TensorMap*>& input_tensor_maps, std::vector<TensorMap*>& output_tensor_maps);
+  Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 };
 
 }  // namespace numerous_llm

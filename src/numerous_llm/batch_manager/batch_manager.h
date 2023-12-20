@@ -13,6 +13,7 @@
 #include "numerous_llm/batch_manager/lora_coordinator/lora_coordinator.h"
 #include "numerous_llm/batch_manager/request_batching/request_batching.h"
 #include "numerous_llm/block_manager/block_manager.h"
+#include "numerous_llm/runtime/context.h"
 #include "numerous_llm/runtime/llm_runtime.h"
 #include "numerous_llm/runtime/model_instance.h"
 #include "numerous_llm/samplers/sampler.h"
@@ -25,17 +26,17 @@ namespace numerous_llm {
 
 class BatchManager {
  public:
-  BatchManager(const BatchManagerConfig &batch_manager_config);
+  BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> contex);
 
   // Register a model instance to current batch manager.
   Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
 
   // Enqueue a request to waiting queue.
-  Status Enqueue(int req_id, const std::vector<TensorMap> &tensor_maps,
+  Status Enqueue(int req_id, const std::vector<std::vector<int>> &tokens,
                  const std::vector<SamplingConfig> &sampling_configs);
 
   // Wait request done and return output tensor maps.
-  Status WaitDone(int req_id, std::vector<TensorMap> &tensor_maps);
+  Status WaitDone(int req_id, std::vector<std::vector<int>> &tokens);
 
   // Wait all requests done.
   Status WaitAllDone();
@@ -54,7 +55,11 @@ class BatchManager {
   Status Initialize();
 
  private:
+  // The config for whole batch manager.
   BatchManagerConfig batch_manager_config_;
+
+  // The global context.
+  std::shared_ptr<Context> contex_;
 
   // The batch scheduler.
   std::shared_ptr<BatchScheduler> batch_scheduler_ = nullptr;
@@ -79,9 +84,6 @@ class BatchManager {
 
   // The runtime instance.
   std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
-
-  // The sampler instance.
-  std::shared_ptr<Sampler> llm_sampler_ = nullptr;
 };
 
 }  // namespace numerous_llm

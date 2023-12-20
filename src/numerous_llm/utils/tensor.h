@@ -7,10 +7,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/block_manager/memory_block.h"
 #include "numerous_llm/utils/dtypes.h"
 #include "numerous_llm/utils/logger.h"
 #include "numerous_llm/utils/memory_utils.h"
+#include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/string_utils.h"
 
 // This Tenosr class is modified from NVIDIA's FasterTransformer.
@@ -138,5 +140,28 @@ class TensorMap {
   // Check whether a tensor is valid.
   inline bool IsValid(const Tensor& tensor) { return tensor.GetElementNumber() > 0 && !tensor.blocks.empty(); }
 };
+
+inline Tensor CreateTensor(int device_id, const MemoryDevice device, const DataType dtype,
+                           const std::vector<size_t> shape) {
+  // Create a empty tensor without memory.
+  Tensor tensor(device, StorageType::STORAGE_CONTIGUOUS, dtype, shape, {});
+
+  // Allocate memory for it.
+  int block_id;
+  Status status = DEVICE_EXECUTE(device_id, BlockManager, AllocateContiguous, tensor.GetTotalBytes(), block_id);
+  if (!status.OK()) {
+    throw std::runtime_error("Allocate tensor error:" + status.GetMessage());
+  }
+
+  tensor.blocks = {block_id};
+  return tensor;
+}
+
+inline void DestroyTensor(int device_id, Tensor& tensor) {
+  Status status = DEVICE_EXECUTE(device_id, BlockManager, FreeBlocks, tensor.GetBlockIds());
+  if (!status.OK()) {
+    throw std::runtime_error("Free tensor error:" + status.GetMessage());
+  }
+}
 
 }  // namespace numerous_llm

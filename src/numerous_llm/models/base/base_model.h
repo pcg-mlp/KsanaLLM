@@ -4,6 +4,7 @@
 #pragma once
 
 #include "numerous_llm/models/base/base_weight.h"
+#include "numerous_llm/runtime/forward_request.h"
 #include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/tensor.h"
 
@@ -16,15 +17,16 @@ class BaseModel {
 
   virtual ~BaseModel() {}
 
+  // The output logits pointer on device, used by sampler to avoid memory copy.
+  virtual float* GetLogitsPtr() = 0;
+
   // The prefill stage.
   virtual Status ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                               const std::vector<TensorMap*>& input_tensor_maps,
-                               std::vector<TensorMap*>& output_tensor_maps) = 0;
+                               std::vector<ForwardRequest>& forward_reqs) = 0;
 
   // The decode stage.
   virtual Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                        const std::vector<TensorMap*>& input_tensor_maps,
-                        std::vector<TensorMap*>& output_tensor_maps) = 0;
+                        std::vector<ForwardRequest>& forward_reqs) = 0;
 };
 
 }  // namespace numerous_llm

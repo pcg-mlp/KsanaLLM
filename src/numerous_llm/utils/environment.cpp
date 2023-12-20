@@ -39,17 +39,18 @@ DataType GetModelDataType(const INIReader &ini_reader) {
   }
 }
 
-void PrepareModeAttirbutes(const INIReader &ini_reader, ModelConfig model_config) {
-  const size_t head_num = ini_reader.GetInteger(model_config.name, "head_num");
-  const size_t kv_head_num = ini_reader.GetInteger(model_config.name, "num_key_value_heads", head_num);
-  const size_t size_per_head = ini_reader.GetInteger(model_config.name, "size_per_head");
-  const size_t vocab_size = ini_reader.GetInteger(model_config.name, "vocab_size");
-  const size_t decoder_layers = ini_reader.GetInteger(model_config.name, "num_layer");
-  const size_t rotary_embedding_dim = ini_reader.GetInteger(model_config.name, "rotary_embedding");
-  const float rope_theta = ini_reader.GetFloat(model_config.name, "rope_theta", 10000.0f);
-  const float layernorm_eps = ini_reader.GetFloat(model_config.name, "layernorm_eps");
-  const int start_id = ini_reader.GetInteger(model_config.name, "start_id");
-  const int end_id = ini_reader.GetInteger(model_config.name, "end_id");
+void PrepareModeAttirbutes(const INIReader &ini_reader, ModelConfig &model_config) {
+  model_config.head_num = ini_reader.GetInteger(model_config.name, "head_num");
+  model_config.num_key_value_heads =
+      ini_reader.GetInteger(model_config.name, "num_key_value_heads", model_config.head_num);
+  model_config.size_per_head = ini_reader.GetInteger(model_config.name, "size_per_head");
+  model_config.vocab_size = ini_reader.GetInteger(model_config.name, "vocab_size");
+  model_config.num_layer = ini_reader.GetInteger(model_config.name, "num_layer");
+  model_config.rotary_embedding = ini_reader.GetInteger(model_config.name, "rotary_embedding");
+  model_config.rope_theta = ini_reader.GetFloat(model_config.name, "rope_theta", 10000.0f);
+  model_config.layernorm_eps = ini_reader.GetFloat(model_config.name, "layernorm_eps");
+  model_config.start_id = ini_reader.GetInteger(model_config.name, "start_id");
+  model_config.end_id = ini_reader.GetInteger(model_config.name, "end_id");
 }
 
 Status Environment::ParseOptions(int argc, char **argv) {
@@ -75,8 +76,9 @@ Status Environment::ParseOptions(int argc, char **argv) {
 
   ModelConfig model_config;
   model_config.name = ini_reader.Get("ft_instance_hyperparameter", "model_name");
-  model_config.path = FLAGS_model_config;
+  model_config.path = ini_reader.Get("ft_instance_hyperparameter", "model_dir");
   model_config.weight_data_type = GetModelDataType(ini_reader);
+  model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(ini_reader, model_config);
   model_configs_.push_back(model_config);
 

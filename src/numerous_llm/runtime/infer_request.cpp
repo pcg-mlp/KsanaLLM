@@ -34,15 +34,27 @@ InferRequest::~InferRequest() {
   }
 }
 
+std::vector<float*> InferRequest::GetLogitsPtr() { return model_instance->GetLogitsPtr(); }
+
+std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() { return {{nullptr}}; }
+
+size_t InferRequest::GetBlockSize() const { return 4096; }
+
+void InferRequest::ResetInferStage() {
+  if (input_tokens.size() < output_tokens.size()) {
+    infer_stage = InferStage::STATE_DECODE;
+  }
+}
+
 size_t InferRequest::GetStepTokenNumber() {
   size_t step_token_num = 1;
   if (infer_stage == STAGE_CONTEXT) {
-    step_token_num += tokens.size();
+    step_token_num += input_tokens.size();
   }
   return step_token_num;
 }
 
-size_t InferRequest::GetTotalTokenNumber() { return tokens.size() + 1; }
+size_t InferRequest::GetTotalTokenNumber() { return input_tokens.size() + output_tokens.size() + 1; }
 
 size_t InferRequest::GetStepBlockNumber() {
   // size_t block_size = Singleton<BlockManager>::GetInstance()->GetBlockSize();

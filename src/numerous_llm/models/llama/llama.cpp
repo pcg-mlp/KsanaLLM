@@ -7,15 +7,16 @@
 
 namespace numerous_llm {
 
+float* Llama::GetLogitsPtr() { return nullptr; }
+
 Status Llama::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                            const std::vector<TensorMap*>& input_tensor_maps,
-                            std::vector<TensorMap*>& output_tensor_maps) {
+                            std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama context decode stage inference";
   return Status();
 }
 
 Status Llama::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                     const std::vector<TensorMap*>& input_tensor_maps, std::vector<TensorMap*>& output_tensor_maps) {
+                     std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama decode stage inference";
   return Status();
 }

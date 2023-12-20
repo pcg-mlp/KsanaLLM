@@ -46,7 +46,7 @@ Status BlockManager::AllocateContiguous(int64_t size, int& block_id) {
 }
 
 // 释放给定的blocks，将它们从used_device_block_map_移动到free_device_block_map_
-Status BlockManager::FreeBlocks(std::vector<int>& blocks) { return device_allocator.Free(blocks); }
+Status BlockManager::FreeBlocks(const std::vector<int>& blocks) { return device_allocator.Free(blocks); }
 
 // 释放连续设备存储
 Status BlockManager::FreeContiguous(int block_id) { return device_allocator.FreeContiguous(block_id); }

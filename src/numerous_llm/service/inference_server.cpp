@@ -25,7 +25,7 @@ Status InferenceServer::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
   }
-  batch_manager_ = std::make_shared<BatchManager>(batch_manager_config);
+  batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
   // Load model instances.
   std::vector<ModelConfig> model_configs;
@@ -36,8 +36,8 @@ Status InferenceServer::Initialize() {
   NLLM_LOG_INFO << "Get model instance size: " << model_configs.size();
 
   for (const ModelConfig &model_config : model_configs) {
-    std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(context_);
-    model_instance->Load(model_config);
+    std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(model_config, context_);
+    model_instance->Load();
 
     // Register model instance.
     model_instances_.push_back(model_instance);
@@ -55,8 +55,8 @@ Status InferenceServer::Initialize() {
 }
 
 Status InferenceServer::HandleRequest(const Request &req, Response &rsp) {
-  batch_manager_->Enqueue(req.req_id, req.tensor_maps, req.sampling_configs);
-  return batch_manager_->WaitDone(rsp.req_id, rsp.tensor_maps);
+  batch_manager_->Enqueue(req.req_id, req.tokens, req.sampling_configs);
+  return batch_manager_->WaitDone(rsp.req_id, rsp.tokens);
 }
 
 Status InferenceServer::StartHandler() {

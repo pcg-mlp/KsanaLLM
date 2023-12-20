@@ -40,10 +40,12 @@ struct ModelConfig {
   uint32_t inter_size;
   uint32_t num_layer;
   uint32_t rotary_embedding;
+  float rope_theta;
   float layernorm_eps;
   uint32_t vocab_size;
   int start_id;
   int end_id;
+  size_t num_key_value_heads;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

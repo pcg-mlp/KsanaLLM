@@ -23,9 +23,6 @@ class Request {
   // The tokens of this request.
   std::vector<std::vector<int>> tokens;
 
-  // The tensors of this request, on cpu.
-  std::vector<TensorMap> tensor_maps;
-
   // The config of sampling.
   std::vector<SamplingConfig> sampling_configs;
 
@@ -36,11 +33,11 @@ class Request {
 
 class Response {
  public:
-  // The unique id of a request.
+  // The unique id of a request, same as its request.
   int64_t req_id;
 
-  // The tensors of this request, on cpu.
-  std::vector<TensorMap> tensor_maps;
+  // The tokens of this response.
+  std::vector<std::vector<int>> tokens;
 };
 
 }  // namespace numerous_llm

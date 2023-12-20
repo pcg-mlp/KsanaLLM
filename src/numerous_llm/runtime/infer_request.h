@@ -23,6 +23,18 @@ class InferRequest {
   InferRequest();
   ~InferRequest();
 
+  // Get logits ptr on every device, that is, output of forward and input of sampling.
+  std::vector<float*> GetLogitsPtr();
+
+  // Get addr ptr of blocks.
+  std::vector<std::vector<void*>> GetBlockPtrs();
+
+  // Get the block size.
+  size_t GetBlockSize() const;
+
+  // Reset the infer stage.
+  void ResetInferStage();
+
   // Get the next token number for next step.
   // For all waiting queue's reqs(context decoding stage), it is 1 + input token number.
   // For all otheqr queue's reqs(decoding stage), it is always 1.
@@ -94,8 +106,14 @@ class InferRequest {
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;
 
-  // The tokens this infer request produced.
-  std::vector<int> tokens;
+  // The input tokens.
+  std::vector<int> input_tokens;
+
+  // The output tokens, always contain input tokens on the left.
+  std::vector<int> output_tokens;
+
+  // The offset for model forward's logits output.
+  size_t logits_offset;
 };
 
 }  // namespace numerous_llm

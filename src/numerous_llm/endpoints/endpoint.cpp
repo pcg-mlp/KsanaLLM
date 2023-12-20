@@ -69,15 +69,8 @@ Status Endpoint::Accept(Request &req) {
   }
   NLLM_LOG_INFO << "Accept a req.";
 
-  SamplingConfig sampling_config;
-  std::vector<SamplingConfig> sampling_configs;
-  sampling_configs.push_back(sampling_config);
+  std::vector<SamplingConfig> sampling_configs(req.tokens.size());
   req.sampling_configs = sampling_configs;
-
-  TensorMap tensor_map;
-  std::vector<TensorMap> tensor_maps;
-  tensor_maps.push_back(tensor_map);
-  req.tensor_maps = tensor_maps;
 
   return Status();
 }

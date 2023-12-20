@@ -3,8 +3,15 @@
 ==============================================================================*/
 
 #include "numerous_llm/runtime/llm_runtime.h"
-#include "numerous_llm/runtime/worker.h"
+#include <unordered_map>
+#include <vector>
+
+#include "numerous_llm/runtime/forward_request.h"
+#include "numerous_llm/runtime/infer_stage.h"
+#include "numerous_llm/runtime/model_instance.h"
+#include "numerous_llm/runtime/sampling_request.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
 
@@ -13,59 +20,97 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
   return m.emplace(key, std::forward<T>(default_value)).first->second;
 }
 
-Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
-  NLLM_LOG_INFO << "llm runtime step invoked.";
+LlmRuntime::LlmRuntime(std::shared_ptr<Context> context) : context_(context) {
+  worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize());
 
-  // need group 3 things:
-  // 1. model type(iden by model name)
-  // 2. infer request stage
-  std::unordered_map<std::string,
-                     std::unordered_map<InferStage, std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>>>
-      grouped_reqs_map;
+  sampler_ = std::make_shared<Sampler>();
+}
 
+void LlmRuntime::BuildForwardRequests(
+    std::vector<std::shared_ptr<InferRequest>>& reqs,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
-    std::unordered_map<InferStage, std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>>&
-        model_stage_tensor_map = GetMapValue(
-            grouped_reqs_map, req_ptr->model_name,
-            std::unordered_map<InferStage, std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>>());
-    std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>& tensor_map_pair_vec =
-        GetMapValue(model_stage_tensor_map, req_ptr->infer_stage,
-                    std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>());
-    tensor_map_pair_vec.emplace_back(std::make_tuple<ModelInstance*, TensorMap*, TensorMap*>(
-        req_ptr->model_instance.get(), &(req_ptr->input_tensor_map), &(req_ptr->output_tensor_map)));
+    ModelInstance* key = req_ptr->model_instance.get();
+    InferStage stage = req_ptr->infer_stage;
+    if (grouped_reqs.find(key) == grouped_reqs.end()) {
+      grouped_reqs[key] = {};
+    }
+
+    if (grouped_reqs[key].find(stage) == grouped_reqs[key].end()) {
+      grouped_reqs[key][stage] = {};
+    }
+
+    ForwardRequest forward_req;
+    forward_req.infer_stage = req_ptr->infer_stage;
+    forward_req.block_size = 4096;
+    forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
+    forward_req.logits_buf = req_ptr->GetLogitsPtr();
+    forward_req.logits_offset = req_ptr->logits_offset;
+    forward_req.output_tokens = &(req_ptr->output_tokens);
+    grouped_reqs[key][stage].push_back(forward_req);
   }
+}
 
-  // infer async
-  for (auto& model_stage_tensor_map_it : grouped_reqs_map) {
-    // model_stage_tensor_map_it instance of {std::string, std::unordered_map<InferStage,
-    // std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>>}
-    NLLM_LOG_INFO << "llm runtime infer model: " << model_stage_tensor_map_it.first;
-    ModelInstance* model_instance_ptr{nullptr};
-    for (auto& stage_tensor_map_it : model_stage_tensor_map_it.second) {
-      // stage_tensor_map_it instance of {InferStage, std::vector<std::tuple<ModelInstance*, TensorMap*, TensorMap*>>}
-      if (stage_tensor_map_it.second.empty()) {
-        continue;
-      }
-      NLLM_LOG_INFO << "llm runtime infer model: " << model_stage_tensor_map_it.first
-                    << " with stage: " << stage_tensor_map_it.first;
-      if (model_instance_ptr == nullptr) {
-        model_instance_ptr = std::get<0>(stage_tensor_map_it.second[0]);
-      }
+Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+  std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
+  BuildForwardRequests(reqs, grouped_reqs);
 
-      std::vector<TensorMap*> input_tensor_maps(stage_tensor_map_it.second.size(), nullptr);
-      std::vector<TensorMap*> output_tensor_maps(stage_tensor_map_it.second.size(), nullptr);
-
-      for (size_t req_tensor_map_idx = 0; req_tensor_map_idx < stage_tensor_map_it.second.size();
-           ++req_tensor_map_idx) {
-        input_tensor_maps[req_tensor_map_idx] = std::get<1>(stage_tensor_map_it.second[req_tensor_map_idx]);
-        output_tensor_maps[req_tensor_map_idx] = std::get<2>(stage_tensor_map_it.second[req_tensor_map_idx]);
-      }
-
-      model_instance_ptr->Forward(stage_tensor_map_it.first, input_tensor_maps, output_tensor_maps);
+  std::vector<std::vector<std::future<Status>>> results;
+  for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
+    for (auto& [stage, vec_req] : stage_vec_reqs) {
+      results.push_back(model_inst->ForwardAsync(worker_group_, stage, vec_req));
     }
   }
 
-  return Status();
+  // Wait all instances donw and check status.
+  Status result_status = Status();
+  for (auto& inst_results : results) {
+    for (auto& worker_result : inst_results) {
+      Status status = worker_result.get();
+      if (!status.OK()) {
+        result_status = status;
+      }
+    }
+  }
+  return result_status;
+}
+
+void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>& reqs,
+                                      std::vector<SamplingRequest>& sampling_reqs) {
+  for (std::shared_ptr<InferRequest> req_ptr : reqs) {
+    SamplingRequest sampling_req;
+    sampling_req.output_tokens = &(req_ptr->output_tokens);
+    sampling_req.logits_offset = req_ptr->logits_offset;
+    sampling_req.logits_buf = req_ptr->GetLogitsPtr();
+    sampling_req.sampling_config = &(req_ptr->sampling_config);
+    sampling_reqs.push_back(sampling_req);
+  }
+}
+
+Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+  std::vector<SamplingRequest> sampling_reqs;
+  BuildSamplingRequest(reqs, sampling_reqs);
+
+  std::vector<std::future<Status>> results;
+  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    results.push_back(worker_group_->GetWorker(worker_id)->SamplingAsync(sampler_, sampling_reqs));
+  }
+
+  // Wait all instances donw and check status.
+  Status result_status = Status();
+  for (auto& result : results) {
+    Status status = result.get();
+    if (!status.OK()) {
+      result_status = status;
+    }
+  }
+  return result_status;
+}
+
+Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+  NLLM_LOG_INFO << "llm runtime step invoked.";
+  Forward(reqs);
+  return Sampling(reqs);
 }
 
 }  // namespace numerous_llm

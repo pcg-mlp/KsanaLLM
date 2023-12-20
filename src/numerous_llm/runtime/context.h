@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#include "numerous_llm/block_manager/memory_block.h"
 #include "numerous_llm/utils/nvidia/cuda_utils.h"
 #include "numerous_llm/utils/nvidia/nccl_utils.h"
 #include "numerous_llm/utils/ret_code.h"
@@ -37,7 +38,13 @@ class Context {
 
   std::vector<cublasLtHandle_t>& GetCublasLtHandles() { return cublaslt_handles_; }
 
- private:
+  // Get the device type.
+  MemoryDevice GetDevice() {
+    // Support GPU only for now.
+    return MemoryDevice::MEMORY_GPU;
+  }
+
+  // private:
   int device_num_{0};
   int tensor_parallel_size_{0};
   int pipeline_parallel_size_{0};

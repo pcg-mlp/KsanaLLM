@@ -22,7 +22,7 @@ class BlockAllocator {
   Status Allocate(int64_t block_num, std::vector<int>& blocks);
 
   // Free a block to allocator.
-  Status Free(std::vector<int>& blocks);
+  Status Free(const std::vector<int>& blocks);
 
   // 分配指定大小的设备存储空间
   // 参数：size - 要分配的设备存储空间大小
