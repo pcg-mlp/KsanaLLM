@@ -33,7 +33,7 @@ LlamaWeight::LlamaWeight(const ModelConfig& model_config, int rank) {
   rank_ = rank;
 
   if (!LoadLlamaWeightsMap(model_config).OK()) {
-    NLLM_LOG_ERROR << fmt::format("Load model config file error.") << std::endl;
+    NLLM_LOG_ERROR << fmt::format("Load model config file error.");
     exit(-1);
   }
 }
@@ -70,7 +70,7 @@ Status LlamaWeight::LoadLlamaWeightsMap(const ModelConfig& model_config) {
 
 Status LlamaWeight::LoadWeightFromBin(Tensor tensor, std::string binfile) {
   if (tensor.shape.size() > 2) {
-    NLLM_LOG_ERROR << fmt::format("shape should have less than two dims") << std::endl;
+    NLLM_LOG_ERROR << fmt::format("shape should have less than two dims");
     return Status(RET_INVALID_ARGUMENT, "[ERROR] shape should have less than two dims \n");
   }
 
@@ -78,20 +78,20 @@ Status LlamaWeight::LoadWeightFromBin(Tensor tensor, std::string binfile) {
   size_t dim1 = tensor.shape.size() > 1 ? tensor.shape[1] : 1;
   size_t size = dim0 * dim1;
   if (size == 0) {
-    NLLM_LOG_ERROR << fmt::format("shape is zero, skip loading weight from  file {}", binfile) << std::endl;
+    NLLM_LOG_ERROR << fmt::format("shape is zero, skip loading weight from  file {}", binfile);
     return Status(RET_INVALID_ARGUMENT, "shape is zero, skip loading weight from file " + binfile);
   }
 
   std::ifstream in(binfile, std::ios::in | std::ios::binary);
   if (!in.is_open()) {
-    NLLM_LOG_ERROR << fmt::format("file {} cannot be opened, loading model fails!", binfile) << std::endl;
+    NLLM_LOG_ERROR << fmt::format("file {} cannot be opened, loading model fails!", binfile);
     return Status(RET_INVALID_ARGUMENT, "file " + binfile + " cannot be opened, loading model fails!");
   }
   in.seekg(0, in.beg);
 
   size_t loaded_data_size = tensor.GetTotalBytes();
   if (loaded_data_size == 0) {
-    NLLM_LOG_ERROR << fmt::format("tensor total bytes = 0") << std::endl;
+    NLLM_LOG_ERROR << fmt::format("tensor total bytes = 0");
     return Status(RET_INVALID_ARGUMENT, "[ERROR] tensor " + binfile + " total bytes = 0\n");
   }
 
@@ -101,7 +101,7 @@ Status LlamaWeight::LoadWeightFromBin(Tensor tensor, std::string binfile) {
   size_t in_get_size = in.gcount();
   if (in_get_size != loaded_data_size) {
     NLLM_LOG_ERROR << fmt::format("file {} only has {}, but request {}, loading model fails!",
-      binfile, in_get_size, loaded_data_size) << std::endl;
+      binfile, in_get_size, loaded_data_size);
     return Status(RET_INVALID_ARGUMENT, "file " + binfile + " only has " + std::to_string(in_get_size) + ", but "
                 + "request " + std::to_string(loaded_data_size) + ", loading model fails!");
   }
@@ -154,7 +154,7 @@ std::string LlamaWeight::GetBinfileName(std::string weight_name) {
 
 Tensor LlamaWeight::GetModelWeights(std::string& weight_name) {
   if (!weights_map_.count(weight_name)) {
-    NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name) << std::endl;
+    NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
     return Tensor();
   }
   return weights_map_[weight_name];

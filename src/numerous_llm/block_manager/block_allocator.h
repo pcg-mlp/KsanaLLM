@@ -41,8 +41,9 @@ class BlockAllocator {
   int64_t GetFreeBlockNumber() { return free_map_.size(); }
 
  private:
-  // used_map_ 与 used_contiguous_memory_map_ 定义为静态成员变量, 否则 tensor.GetPtr() 获取数据时, 需要区分卡
-  // 才能查到正确的 block_ids 对应地址信息
+  // 使用静态成员变量, 管理全部 MmemoryBlock 数据块, 实现不区分卡查询 block_ids 对应地址信息功能
+  // TODO(zakwang): 需要重新整理内部数据结构及结构间关系;
+  //                需要解决类析构时静态成员变量先于类实例被析构, 所引发的内存泄露问题
   static std::mutex mutex_;
   static std::mutex contiguous_memory_mutex_;
   std::unordered_map<int64_t, MemoryBlock> free_map_;
