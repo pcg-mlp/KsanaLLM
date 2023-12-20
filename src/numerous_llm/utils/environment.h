@@ -33,6 +33,7 @@ struct ModelConfig {
 
   // Device Type
   MemoryDevice memory_device;
+  int tensor_para_size;
 
   size_t head_num;
   uint32_t size_per_head;

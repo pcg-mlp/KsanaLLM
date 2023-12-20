@@ -108,6 +108,8 @@ class DeviceSelect {
     }
   }
 
+  ~DeviceSelect() = default;
+
   // 执行函数，根据设备 ID 执行给定的函数和参数。
   template <typename Func, typename... Args>
   decltype(auto) Execute(int device_id, Func&& func, Args&&... args) {

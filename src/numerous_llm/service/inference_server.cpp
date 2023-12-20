@@ -13,7 +13,7 @@
 namespace numerous_llm {
 
 Status InferenceServer::Initialize() {
-  Environment *env = Singleton<Environment>::GetInstance();
+  std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
   if (!env) {
     return Status(RET_INVALID_ARGUMENT, "The Environment is nullptr.");
   }

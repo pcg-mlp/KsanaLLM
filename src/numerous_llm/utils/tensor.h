@@ -58,7 +58,9 @@ struct Tensor {
   template <typename T>
   inline T* GetPtr() const {
     NLLM_CHECK_WITH_INFO(!blocks.empty(), "No available blocks");
-    return GetPtrs<T>()[0];
+    std::vector<T*> blocks_addr = GetPtrs<T>();
+    NLLM_CHECK_WITH_INFO(!blocks_addr.empty(), "No available blocks");
+    return blocks_addr[0];
   }
 };
 

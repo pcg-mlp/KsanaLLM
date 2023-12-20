@@ -18,9 +18,11 @@ namespace numerous_llm {
 // The worker executed on every device.
 class Worker {
  public:
-  Worker(BaseModel* base_model, BaseWeight* base_weight) {
-    base_model_ptr_.reset(base_model);
-    base_weight_ptr_.reset(base_weight);
+  Worker(std::shared_ptr<BaseModel> base_model, std::shared_ptr<BaseWeight> base_weight) {
+    base_model_ptr_.reset();
+    base_model_ptr_ = base_model;
+    base_weight_ptr_.reset();
+    base_weight_ptr_ = base_weight;
   }
   ~Worker() {}
   // Execute model inference.
