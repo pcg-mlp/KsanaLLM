@@ -9,4 +9,4 @@ list(FILTER kernels_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "kernels_SRCS: ${kernels_SRCS}")
 
 add_library(kernels STATIC ${kernels_SRCS})
-target_link_libraries(kernels PUBLIC -lcudart)
+target_link_libraries(kernels PUBLIC -lcudart utils block_manager llm_kernels_nvidia_kernel_paged_attention)

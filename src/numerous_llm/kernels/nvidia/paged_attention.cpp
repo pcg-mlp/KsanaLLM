@@ -2,7 +2,7 @@
 
 ==============================================================================*/
 
-#include "paged_attention.h"
+#include "numerous_llm/kernels/nvidia/paged_attention.h"
 
 #include <optional>
 
@@ -42,10 +42,10 @@ void copy_cache_ptrs(std::vector<Tensor>& cache, int* cache_offsets, void** cach
 template <typename T>
 void run_paged_attention(
     Tensor& out,                       // [num_seqs, num_heads, head_size]
-    Tensor& query,                     // [num_seqs, num_heads, head_size]
+    const Tensor& query,                     // [num_seqs, num_heads, head_size]
     std::vector<Tensor>& key_cache,    // num_seqs,[seq_blocks,num_kv_heads,head_size/x,block_size,x],x=16/sizeof(T)
     std::vector<Tensor>& value_cache,  // num_seqs,[seq_blocks, num_kv_heads, head_size, block_size]
-    Tensor& context_lens,              // [num_seqs]
+    const Tensor& context_lens,              // [num_seqs]
     int max_context_len, cudaStream_t stream,
     void** key_cache_ptrs,    // num_seqs,[seq_blocks]
     void** value_cache_ptrs,  // num_seqs,[seq_blocks]
@@ -58,8 +58,8 @@ void run_paged_attention(
   int block_size = value_cache.at(0).shape[3];
 
   T* out_ptr = out.GetPtr<T>();
-  T* query_ptr = query.GetPtr<T>();
-  int* context_lens_ptr = context_lens.GetPtr<int>();
+  const T* query_ptr = query.GetPtr<T>();
+  const int* context_lens_ptr = context_lens.GetPtr<int>();
   const float* alibi_slopes_ptr =
       reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value().GetPtr<T>() : nullptr);
 
@@ -74,10 +74,10 @@ void run_paged_attention(
 
 void paged_attention(
     Tensor& out,                       // [num_seqs, num_heads, head_size]
-    Tensor& query,                     // [num_seqs, num_heads, head_size]
+    const Tensor& query,                     // [num_seqs, num_heads, head_size]
     std::vector<Tensor>& key_cache,    // num_seqs,[seq_blocks,num_kv_heads,head_size/x,block_size,x],x=16/sizeof(T)
     std::vector<Tensor>& value_cache,  // num_seqs,[seq_blocks, num_kv_heads, head_size, block_size]
-    Tensor& context_lens,              // [num_seqs]
+    const Tensor& context_lens,              // [num_seqs]
     int max_context_len, cudaStream_t stream, void* workspace, size_t work_size,
     const std::optional<Tensor>& alibi_slopes) {
   // get gpu buffers of key_cache_ptrs, value_cache_ptrs and cache_offsets_ptr from workspace
