@@ -37,6 +37,8 @@ class InferenceServer {
   // load weights & register model instance & start rpc port.
   Status Initialize();
 
+  void PrepareRespone(Status infer_status, Response &rsp);
+
  private:
   // The endpoint of this service.
   std::shared_ptr<Endpoint> endpoint_ = nullptr;
@@ -55,7 +57,9 @@ class InferenceServer {
 
   // channel for endpoint and inference server
   Channel<std::pair<Status, Request>> requests_queue_;
-  Channel<std::pair<Status, Response>> response_queue_;
+
+  std::mutex response_container_mutex_;
+  std::unordered_map<int64_t, std::pair<Status, Response>> response_container_;
 };
 
 }  // namespace numerous_llm

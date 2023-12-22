@@ -64,6 +64,11 @@ Status InferenceServer::HandleRequest(const Request &req, Response &rsp) {
   return handle_req_status;
 }
 
+void InferenceServer::PrepareRespone(Status infer_status, Response &rsp) {
+  std::lock_guard<std::mutex> guard(response_container_mutex_);
+  response_container_[rsp.req_id] = std::make_pair<Status, Response>(std::move(infer_status), std::move(rsp));
+}
+
 Status InferenceServer::StartHandler() {
   NLLM_LOG_INFO << "Start handler";
 
@@ -84,7 +89,8 @@ Status InferenceServer::StartHandler() {
     rsp.tokens.resize(req.tokens.size());
     rsp.req_id = req.req_id;
     Status infer_status = HandleRequest(req, rsp);
-    response_queue_.Write(std::make_pair<Status, Response>(std::move(infer_status), std::move(rsp)));
+    PrepareRespone(infer_status, rsp);
+    req.waiter->Notify();
   }
 
   return Status();
@@ -95,7 +101,7 @@ Status InferenceServer::StartServer() {
   batch_manager_->Start();
 
   // Start endpoint.
-  endpoint_->Listen(requests_queue_, response_queue_);
+  endpoint_->Listen(requests_queue_, response_container_mutex_, response_container_);
 
   // Start service handler.
   StartHandler();

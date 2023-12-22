@@ -18,8 +18,8 @@ class Endpoint : public BaseEndpoint {
   explicit Endpoint(const EndpointConfig &endpoint_config);
 
   // Listen at specific socket.
-  Status Listen(Channel<std::pair<Status, Request>> &requests_queue,
-                Channel<std::pair<Status, Response>> &response_queue);
+  Status Listen(Channel<std::pair<Status, Request>> &requests_queue, std::mutex &response_container_mutex,
+                std::unordered_map<int64_t, std::pair<Status, Response>> &response_container);
 
   // Close the listening socket.
   Status Close();

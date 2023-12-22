@@ -7,16 +7,17 @@
 #include <chrono>
 #include <thread>
 
-#include "numerous_llm/utils/logger.h"
-
 #include "nlohmann/json.hpp"
+
+#include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/waiter.h"
 
 namespace numerous_llm {
 
 Endpoint::Endpoint(const EndpointConfig &endpoint_config) : endpoint_config_(endpoint_config) {}
 
-Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue,
-                        Channel<std::pair<Status, Response>> &response_queue) {
+Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue, std::mutex &response_container_mutex,
+                        std::unordered_map<int64_t, std::pair<Status, Response>> &response_container) {
   NLLM_LOG_INFO << "Listen on port " << endpoint_config_.port;
 
   // define generate
@@ -24,6 +25,7 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue,
   http_server_.Post("/generate", [&](const httplib::Request &req, httplib::Response &res) {
     if (req.has_param("tokens")) {
       Request infer_req;
+      int64_t req_id = infer_req.req_id;
       uint32_t batch_size = static_cast<uint32_t>(req.get_param_value_count("tokens_len"));
       uint32_t offset = 0;
       for (size_t t_l_id = 0; t_l_id < batch_size; ++t_l_id) {
@@ -40,11 +42,19 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue,
       // tokens[0] shape is [3]
       // tokens[1] shape is [5]
       Status req_prepare_status = Accept(infer_req);
+      std::shared_ptr<Waiter> waiter = infer_req.waiter;
       requests_queue.Write(std::make_pair<Status, Request>(std::move(req_prepare_status), std::move(infer_req)));
 
       // Get inference result
       std::pair<Status, Response> rsp_pair;
-      response_queue.Read(&rsp_pair);
+      waiter->Wait();
+
+      {
+        std::lock_guard<std::mutex> guard(response_container_mutex);
+        rsp_pair = std::move(response_container[req_id]);
+        response_container.erase(req_id);
+      }
+
       Status rsp_prepare_status = Send(rsp_pair.first, rsp_pair.second, res);
     }
   });
@@ -74,6 +84,7 @@ Status Endpoint::Accept(Request &req) {
 
   std::vector<SamplingConfig> sampling_configs(req.tokens.size());
   req.sampling_configs = sampling_configs;
+  req.waiter = std::make_shared<Waiter>(1ul);
 
   return Status();
 }

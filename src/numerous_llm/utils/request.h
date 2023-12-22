@@ -8,6 +8,7 @@
 
 #include "numerous_llm/utils/id_generator.h"
 #include "numerous_llm/utils/tensor.h"
+#include "numerous_llm/utils/waiter.h"
 
 namespace numerous_llm {
 
@@ -25,6 +26,8 @@ class Request {
 
   // The config of sampling.
   std::vector<SamplingConfig> sampling_configs;
+
+  std::shared_ptr<Waiter> waiter;
 
  private:
   // The id generator
