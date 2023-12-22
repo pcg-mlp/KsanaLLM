@@ -9,6 +9,7 @@ include(external/fmt)
 include(external/loguru)
 include(external/gflags)
 include(external/httplib)
+include(external/nlohmann_json)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src

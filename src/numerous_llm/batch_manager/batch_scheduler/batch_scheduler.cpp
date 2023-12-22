@@ -23,7 +23,7 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_confi
 BatchScheduler::~BatchScheduler() {}
 
 Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_request) {
-  NLLM_LOG_INFO << "Add infer req.";
+  NLLM_LOG_INFO << "batch scheduler add infer request.";
   if (CheckWaitingQueueFull()) {
     infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
 
@@ -48,7 +48,8 @@ bool BatchScheduler::CheckWaitingQueueFull() {
 bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
   if (req->infer_stage == InferStage::STATE_DECODE) {
     // TODO(karlluo): do more check
-    if (req->output_tokens.size() > req->input_tokens.size()) {
+    if (req->output_tokens.size() > req->input_tokens.size() &&
+        ((req->output_tokens.back()) == req->model_instance->GetModelConfig().end_id)) {
       return true;
     }
   }
@@ -60,7 +61,7 @@ void BatchScheduler::ResetSchedule() { schedule_time_in_ms_ = GetCurrentTimeInMs
 void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
                                      size_t max_free_block_num) {
   for (auto it = running_queue_.begin(); it != running_queue_.end();) {
-    NLLM_LOG_INFO << "Try req in running_queue_";
+    NLLM_LOG_INFO << "try req in running_queue_";
     auto req = *it;
     req->ResetInferStage();
 
@@ -83,6 +84,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     }
 
     if (req->infer_stage == InferStage::STAGE_CONTEXT) {
+      NLLM_LOG_INFO << "change from context decode to decode";
       req->infer_stage = InferStage::STATE_DECODE;
     }
 

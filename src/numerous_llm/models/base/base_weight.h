@@ -16,7 +16,6 @@ class BaseWeight {
 
   // 查表,返回 weights_map_[weight_name]
   virtual Tensor GetModelWeights(std::string& weight_name) = 0;
-
 };
 
 }  // namespace numerous_llm

@@ -49,6 +49,8 @@ class ModelInstance {
   // Get the base ptr of model's logits buf.
   std::vector<float*> GetLogitsPtr();
 
+  const ModelConfig& GetModelConfig() { return model_config_; }
+
  private:
   // Create the object and return a shared pointer.
   template <template <class> class ClassT, class BaseT>

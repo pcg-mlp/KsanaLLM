@@ -10,3 +10,4 @@ message(STATUS "endpoints_SRCS: ${endpoints_SRCS}")
 
 add_library(endpoints STATIC ${endpoints_SRCS})
 
+target_link_libraries(endpoints PUBLIC nlohmann_json::nlohmann_json)

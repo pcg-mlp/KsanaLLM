@@ -2,12 +2,12 @@
  *
  * ==============================================================================*/
 
-#include <cstdlib>
 #include "numerous_llm/models/llama/llama_weight.h"
-#include "test.h"
-#include <thread>
-#include <random>
+#include <cstdlib>
 #include <filesystem>
+#include <random>
+#include <thread>
+#include "test.h"
 
 using namespace numerous_llm;
 // 定义一个 LlamaWeightTest 类,继承自 testing::Test
@@ -34,7 +34,7 @@ size_t get_hash_code(short* data, size_t data_size) {
   size_t hash_value = 0;
   size_t mod = 1e9 + 7;
   for (int i = 0; i < data_size; ++i) {
-    hash_value ^= (hash_value % mod) + delta + (hash_value << 6) + (hash_value >>  2);
+    hash_value ^= (hash_value % mod) + delta + (hash_value << 6) + (hash_value >> 2);
   }
   hash_value %= mod;
   NLLM_LOG_INFO << fmt::format("Hash Result = {}", hash_value);
@@ -81,21 +81,23 @@ void create_model(ModelConfig& model_config) {
     write_data_to_file(saved_dir, "model.layers." + std::to_string(layer) + ".post_attention_layernorm.weight.bin",
                        get_random_data(hidden_units));
     for (int rank = 0; rank < tensor_para_size; ++rank) {
-      write_data_to_file(saved_dir, "model.layers." + std::to_string(layer) + ".attention.dense.weight."
-                         + std::to_string(rank) + ".bin",
-                         get_random_data(hidden_units / tensor_para_size * hidden_units));
-      write_data_to_file(saved_dir, "model.layers." + std::to_string(layer)
-                         + ".attention.query_key_value.weight." + std::to_string(rank) + ".bin",
+      write_data_to_file(
+          saved_dir,
+          "model.layers." + std::to_string(layer) + ".attention.dense.weight." + std::to_string(rank) + ".bin",
+          get_random_data(hidden_units / tensor_para_size * hidden_units));
+      write_data_to_file(saved_dir,
+                         "model.layers." + std::to_string(layer) + ".attention.query_key_value.weight." +
+                             std::to_string(rank) + ".bin",
                          get_random_data(3 * hidden_units / tensor_para_size * hidden_units));
-      write_data_to_file(saved_dir, "model.layers." + std::to_string(layer) + ".mlp.gate_proj.weight."
-                         + std::to_string(rank) + ".bin",
-                         get_random_data(inter_size / tensor_para_size * hidden_units));
-      write_data_to_file(saved_dir, "model.layers." + std::to_string(layer) + ".mlp.up_proj.weight."
-                         + std::to_string(rank) + ".bin",
-                         get_random_data(inter_size / tensor_para_size * hidden_units));
-      write_data_to_file(saved_dir, "model.layers." + std::to_string(layer) + ".mlp.down_proj.weight."
-                         + std::to_string(rank) + ".bin",
-                         get_random_data(inter_size / tensor_para_size * hidden_units));
+      write_data_to_file(
+          saved_dir, "model.layers." + std::to_string(layer) + ".mlp.gate_proj.weight." + std::to_string(rank) + ".bin",
+          get_random_data(inter_size / tensor_para_size * hidden_units));
+      write_data_to_file(
+          saved_dir, "model.layers." + std::to_string(layer) + ".mlp.up_proj.weight." + std::to_string(rank) + ".bin",
+          get_random_data(inter_size / tensor_para_size * hidden_units));
+      write_data_to_file(
+          saved_dir, "model.layers." + std::to_string(layer) + ".mlp.down_proj.weight." + std::to_string(rank) + ".bin",
+          get_random_data(inter_size / tensor_para_size * hidden_units));
     }
   }
 }

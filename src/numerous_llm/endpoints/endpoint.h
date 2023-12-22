@@ -28,7 +28,7 @@ class Endpoint : public BaseEndpoint {
   Status Accept(Request &req);
 
   // Send rsp to client.
-  Status Send(const Response &rsp);
+  Status Send(const Status infer_status, const Response &rsp, httplib::Response &res);
 
  private:
   std::atomic<bool> terminated_{false};

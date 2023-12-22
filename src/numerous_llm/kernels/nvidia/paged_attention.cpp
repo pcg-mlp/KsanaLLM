@@ -42,10 +42,10 @@ void copy_cache_ptrs(std::vector<Tensor>& cache, int* cache_offsets, void** cach
 template <typename T>
 void run_paged_attention(
     Tensor& out,                       // [num_seqs, num_heads, head_size]
-    const Tensor& query,                     // [num_seqs, num_heads, head_size]
+    const Tensor& query,               // [num_seqs, num_heads, head_size]
     std::vector<Tensor>& key_cache,    // num_seqs,[seq_blocks,num_kv_heads,head_size/x,block_size,x],x=16/sizeof(T)
     std::vector<Tensor>& value_cache,  // num_seqs,[seq_blocks, num_kv_heads, head_size, block_size]
-    const Tensor& context_lens,              // [num_seqs]
+    const Tensor& context_lens,        // [num_seqs]
     int max_context_len, cudaStream_t stream,
     void** key_cache_ptrs,    // num_seqs,[seq_blocks]
     void** value_cache_ptrs,  // num_seqs,[seq_blocks]
@@ -74,10 +74,10 @@ void run_paged_attention(
 
 void paged_attention(
     Tensor& out,                       // [num_seqs, num_heads, head_size]
-    const Tensor& query,                     // [num_seqs, num_heads, head_size]
+    const Tensor& query,               // [num_seqs, num_heads, head_size]
     std::vector<Tensor>& key_cache,    // num_seqs,[seq_blocks,num_kv_heads,head_size/x,block_size,x],x=16/sizeof(T)
     std::vector<Tensor>& value_cache,  // num_seqs,[seq_blocks, num_kv_heads, head_size, block_size]
-    const Tensor& context_lens,              // [num_seqs]
+    const Tensor& context_lens,        // [num_seqs]
     int max_context_len, cudaStream_t stream, void* workspace, size_t work_size,
     const std::optional<Tensor>& alibi_slopes) {
   // get gpu buffers of key_cache_ptrs, value_cache_ptrs and cache_offsets_ptr from workspace

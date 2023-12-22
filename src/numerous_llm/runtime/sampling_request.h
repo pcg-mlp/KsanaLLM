@@ -21,6 +21,9 @@ struct SamplingRequest {
 
   // The output token will be appended here.
   std::vector<int>* output_tokens;
+
+  // Model config
+  const ModelConfig* model_config;
 };
 
 }  // namespace numerous_llm

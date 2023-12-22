@@ -66,7 +66,7 @@ Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
     }
   }
 
-  // Wait all instances donw and check status.
+  // Wait all instances done and check status.
   Status result_status = Status();
   for (auto& inst_results : results) {
     for (auto& worker_result : inst_results) {
@@ -87,6 +87,7 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
     sampling_req.logits_offset = req_ptr->logits_offset;
     sampling_req.logits_buf = req_ptr->GetLogitsPtr();
     sampling_req.sampling_config = &(req_ptr->sampling_config);
+    sampling_req.model_config = &(req_ptr->model_instance->GetModelConfig());
     sampling_reqs.push_back(sampling_req);
   }
 }
@@ -100,7 +101,7 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
     results.push_back(worker_group_->GetWorker(worker_id)->SamplingAsync(samplers_[worker_id], sampling_reqs));
   }
 
-  // Wait all instances donw and check status.
+  // Wait all instances done and check status.
   Status result_status = Status();
   for (auto& result : results) {
     Status status = result.get();

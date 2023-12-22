@@ -55,8 +55,13 @@ Status InferenceServer::Initialize() {
 }
 
 Status InferenceServer::HandleRequest(const Request &req, Response &rsp) {
-  batch_manager_->Enqueue(req.req_id, req.tokens, req.sampling_configs);
-  return batch_manager_->WaitDone(rsp.req_id, rsp.tokens);
+  NLLM_LOG_INFO << "Handle request id " << req.req_id << ", batch size " << req.tokens.size();
+  Status handle_req_status = batch_manager_->Enqueue(req.req_id, req.tokens, req.sampling_configs);
+  if (!handle_req_status.OK()) {
+    return handle_req_status;
+  }
+  handle_req_status = batch_manager_->WaitDone(rsp.req_id, rsp.tokens);
+  return handle_req_status;
 }
 
 Status InferenceServer::StartHandler() {
@@ -75,8 +80,9 @@ Status InferenceServer::StartHandler() {
       break;
     }
 
-    // TODO: should not block.
     Response rsp;
+    rsp.tokens.resize(req.tokens.size());
+    rsp.req_id = req.req_id;
     Status infer_status = HandleRequest(req, rsp);
     response_queue_.Write(std::make_pair<Status, Response>(std::move(infer_status), std::move(rsp)));
   }

@@ -41,7 +41,9 @@ std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() { return {{nullptr}
 size_t InferRequest::GetBlockSize() const { return 4096; }
 
 void InferRequest::ResetInferStage() {
+  NLLM_LOG_INFO << "input tokens number " << input_tokens.size();
   if (input_tokens.size() < output_tokens.size()) {
+    NLLM_LOG_INFO << "change from context decode to decode";
     infer_stage = InferStage::STATE_DECODE;
   }
 }
