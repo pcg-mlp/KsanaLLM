@@ -9,6 +9,7 @@
 
 namespace numerous_llm {
 
+template <typename T>
 class LlamaWeight : public BaseWeight {
  public:
   LlamaWeight() {}

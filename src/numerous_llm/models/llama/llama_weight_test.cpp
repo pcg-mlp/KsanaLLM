@@ -110,7 +110,7 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
     create_model(model_config);
   }
 
-  LlamaWeight llama_weight(model_config, 0);
+  LlamaWeight<float> llama_weight(model_config, 0);
   // 正确的 weight 名称
   std::string weight_name = "lm_head";
   Tensor lm_head = llama_weight.GetModelWeights(weight_name);

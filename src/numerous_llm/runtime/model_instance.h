@@ -50,6 +50,34 @@ class ModelInstance {
   std::vector<float*> GetLogitsPtr();
 
  private:
+  // Create the object and return a shared pointer.
+  template <template <class> class ClassT, class BaseT>
+  std::shared_ptr<BaseT> CreatetModelObject(int rank) {
+    std::shared_ptr<BaseT> model_obj = nullptr;
+    switch (model_config_.weight_data_type) {
+      case DataType::TYPE_FP16:
+        model_obj = std::make_shared<ClassT<half>>(model_config_, rank);
+        break;
+      case DataType::TYPE_FP32:
+        model_obj = std::make_shared<ClassT<float>>(model_config_, rank);
+        break;
+      default:
+        throw std::runtime_error("Unsupported Tensor type.");
+    };
+    return model_obj;
+  }
+
+  template <template <class> class ClassT>
+  std::shared_ptr<BaseModel> CreateModel(int rank) {
+    return CreatetModelObject<ClassT, BaseModel>(rank);
+  }
+
+  template <template <class> class ClassT>
+  std::shared_ptr<BaseWeight> CreateModelWeight(int rank) {
+    return CreatetModelObject<ClassT, BaseWeight>(rank);
+  }
+
+ private:
   // The model config.
   ModelConfig model_config_;
 

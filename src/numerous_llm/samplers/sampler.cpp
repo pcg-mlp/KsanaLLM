@@ -10,11 +10,12 @@ namespace numerous_llm {
 Status Sampler::Sampling(std::vector<SamplingRequest> &sampling_reqs) {
   NLLM_LOG_INFO << "llm sampler invoked.";
 
-  for (auto &req : sampling_reqs) {
-    // TODO(karlluo): just a fake result for scheduler output result
-    req.output_tokens->push_back(1);
+  if (rank_ == 0) {
+    for (auto &req : sampling_reqs) {
+      // TODO(karlluo): just a fake result for scheduler output result
+      req.output_tokens->push_back(1);
+    }
   }
-
   return Status();
 }
 

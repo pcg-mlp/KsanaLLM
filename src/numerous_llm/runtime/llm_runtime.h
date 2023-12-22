@@ -45,8 +45,8 @@ class LlmRuntime {
   // The worker group for this runtime, do we need several worker_group?
   std::shared_ptr<WorkerGroup> worker_group_ = nullptr;
 
-  // The sampler instance.
-  std::shared_ptr<Sampler> sampler_ = nullptr;
+  // The sampler instance on every device.
+  std::vector<std::shared_ptr<Sampler>> samplers_;
 };
 
 }  // namespace numerous_llm

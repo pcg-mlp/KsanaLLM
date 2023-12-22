@@ -17,18 +17,19 @@ namespace numerous_llm {
  * mlp.down_proj +  rank r  + layer x : model.layers.x.mlp.down_proj.weight.r.bin
  * norm                               : model.final_layernorm.weight
  * lm_head                            : model.lm_head.weight
-*/
-std::pair<const char*, const char*> LlamaWeight::binfile_map_[] = {
-  {"gather_embedding", "model.wte.weight.bin"},
-  {"lm_head", "model.lm_head.weight.bin"},
-  {"norm", "model.final_layernorm.weight.bin"}
-};
+ */
+template <typename T>
+std::pair<const char*, const char*> LlamaWeight<T>::binfile_map_[] = {{"gather_embedding", "model.wte.weight.bin"},
+                                                                      {"lm_head", "model.lm_head.weight.bin"},
+                                                                      {"norm", "model.final_layernorm.weight.bin"}};
 
-LlamaWeight::~LlamaWeight() {
+template <typename T>
+LlamaWeight<T>::~LlamaWeight() {
   // TODO: 引用计数
 }
 
-LlamaWeight::LlamaWeight(const ModelConfig& model_config, int rank) {
+template <typename T>
+LlamaWeight<T>::LlamaWeight(const ModelConfig& model_config, int rank) {
   model_path_ = model_config.path;
   rank_ = rank;
 
@@ -38,7 +39,8 @@ LlamaWeight::LlamaWeight(const ModelConfig& model_config, int rank) {
   }
 }
 
-Status LlamaWeight::LoadLlamaWeightsMap(const ModelConfig& model_config) {
+template <typename T>
+Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   DataType weight_data_type = model_config.weight_data_type;
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
@@ -48,27 +50,28 @@ Status LlamaWeight::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   int rotary_embedding = model_config.rotary_embedding;
   int vocab_size = model_config.vocab_size;
   int tensor_para_size = model_config.tensor_para_size;
-  AddWeightTensor("gather_embedding", {vocab_size,  hidden_units}, weight_data_type);
+  // abort();
+  AddWeightTensor("gather_embedding", {vocab_size, hidden_units}, weight_data_type);
   AddWeightTensor("norm", {hidden_units}, weight_data_type);
-  AddWeightTensor("lm_head", {vocab_size,  hidden_units}, weight_data_type);
+  AddWeightTensor("lm_head", {vocab_size, hidden_units}, weight_data_type);
   for (int l = 0; l < num_layer; ++l) {
     AddWeightTensor(ConcatLayerName("input_layernorm", l), {hidden_units}, weight_data_type);
     AddWeightTensor(ConcatLayerName("post_attention_layernorm", l), {hidden_units}, weight_data_type);
-    AddWeightTensor(ConcatLayerName("attention.dense", l),
-                    {hidden_units / tensor_para_size, hidden_units}, weight_data_type);
+    AddWeightTensor(ConcatLayerName("attention.dense", l), {hidden_units / tensor_para_size, hidden_units},
+                    weight_data_type);
     AddWeightTensor(ConcatLayerName("attention.query_key_value", l),
                     {hidden_units, 3 * hidden_units / tensor_para_size}, weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.down_proj", l),
-                    {inter_size / tensor_para_size, hidden_units}, weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.gate_proj", l),
-                    {hidden_units, inter_size / tensor_para_size}, weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.up_proj", l),
-                    {hidden_units, inter_size / tensor_para_size}, weight_data_type);
+    AddWeightTensor(ConcatLayerName("mlp.down_proj", l), {inter_size / tensor_para_size, hidden_units},
+                    weight_data_type);
+    AddWeightTensor(ConcatLayerName("mlp.gate_proj", l), {hidden_units, inter_size / tensor_para_size},
+                    weight_data_type);
+    AddWeightTensor(ConcatLayerName("mlp.up_proj", l), {hidden_units, inter_size / tensor_para_size}, weight_data_type);
   }
   return Status();
 }
 
-Status LlamaWeight::LoadWeightFromBin(Tensor tensor, std::string binfile) {
+template <typename T>
+Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile) {
   if (tensor.shape.size() > 2) {
     NLLM_LOG_ERROR << fmt::format("shape should have less than two dims");
     return Status(RET_INVALID_ARGUMENT, "[ERROR] shape should have less than two dims \n");
@@ -100,17 +103,18 @@ Status LlamaWeight::LoadWeightFromBin(Tensor tensor, std::string binfile) {
 
   size_t in_get_size = in.gcount();
   if (in_get_size != loaded_data_size) {
-    NLLM_LOG_ERROR << fmt::format("file {} only has {}, but request {}, loading model fails!",
-      binfile, in_get_size, loaded_data_size);
-    return Status(RET_INVALID_ARGUMENT, "file " + binfile + " only has " + std::to_string(in_get_size) + ", but "
-                + "request " + std::to_string(loaded_data_size) + ", loading model fails!");
+    NLLM_LOG_ERROR << fmt::format("file {} only has {}, but request {}, loading model fails!", binfile, in_get_size,
+                                  loaded_data_size);
+    return Status(RET_INVALID_ARGUMENT, "file " + binfile + " only has " + std::to_string(in_get_size) + ", but " +
+                                            "request " + std::to_string(loaded_data_size) + ", loading model fails!");
   }
   void* tensor_ptr = tensor.GetPtr<void>();
   cudaMemcpy(tensor_ptr, host_array.data(), loaded_data_size, cudaMemcpyHostToDevice);
   return Status();
 }
 
-Status LlamaWeight::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
+template <typename T>
+Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
   size_t length = Tensor::GetTypeSize(dtype);
   for (auto& dim : shapes) {
     length *= dim;
@@ -126,15 +130,17 @@ Status LlamaWeight::AddWeightTensor(std::string weight_name, std::vector<size_t>
   return Status();
 }
 
-std::string LlamaWeight::ConcatLayerName(std::string layer_flag, int& layer_index) {
+template <typename T>
+std::string LlamaWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index) {
   std::string layer_name = std::to_string(layer_index) + "." + layer_flag;
   return layer_name;
 }
 
-std::string LlamaWeight::GetBinfileName(std::string weight_name) {
+template <typename T>
+std::string LlamaWeight<T>::GetBinfileName(std::string weight_name) {
   std::string binfile_name = model_path_ + "/";
   bool match_weight_name = false;
-  for  (const auto& pair : binfile_map_) {
+  for (const auto& pair : binfile_map_) {
     if (std::strcmp(pair.first, weight_name.c_str()) == 0) {
       match_weight_name = true;
       binfile_name += pair.second;
@@ -145,19 +151,23 @@ std::string LlamaWeight::GetBinfileName(std::string weight_name) {
     binfile_name += "model.layers." + weight_name + ".weight";
     std::string weight_flag = weight_name.substr(weight_name.find_last_of('.') + 1);
     if (weight_flag != "input_layernorm" && weight_flag != "post_attention_layernorm") {
-      binfile_name +=  "." + std::to_string(rank_);
+      binfile_name += "." + std::to_string(rank_);
     }
     binfile_name += ".bin";
   }
   return binfile_name;
 }
 
-Tensor LlamaWeight::GetModelWeights(std::string& weight_name) {
+template <typename T>
+Tensor LlamaWeight<T>::GetModelWeights(std::string& weight_name) {
   if (!weights_map_.count(weight_name)) {
     NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
     return Tensor();
   }
   return weights_map_[weight_name];
 }
+
+template class LlamaWeight<float>;
+template class LlamaWeight<half>;
 
 }  // namespace numerous_llm

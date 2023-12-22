@@ -7,18 +7,26 @@
 
 namespace numerous_llm {
 
-float* Llama::GetLogitsPtr() { return nullptr; }
+template <typename T>
+float* Llama<T>::GetLogitsPtr() {
+  return nullptr;
+}
 
-Status Llama::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                            std::vector<ForwardRequest>& forward_reqs) {
+template <typename T>
+Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
+                               std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama context decode stage inference";
   return Status();
 }
 
-Status Llama::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                     std::vector<ForwardRequest>& forward_reqs) {
+template <typename T>
+Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
+                        std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama decode stage inference";
   return Status();
 }
+
+template class Llama<float>;
+template class Llama<half>;
 
 }  // namespace numerous_llm

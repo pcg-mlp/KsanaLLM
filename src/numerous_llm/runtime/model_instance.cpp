@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "numerous_llm/runtime/worker.h"
+#include "numerous_llm/utils/dtypes.h"
 #include "numerous_llm/utils/logger.h"
 #include "numerous_llm/utils/nvidia/cuda_utils.h"
 #include "numerous_llm/utils/status.h"
@@ -29,10 +30,10 @@ void ModelInstance::Load() {
 
     // Load model and weights on every device.
     for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      models_.push_back(std::make_shared<Llama>());
-      // TODO: Fix it later.
-      weights_.push_back(std::make_shared<LlamaWeight>());
-      // weights_.push_back(std::make_shared<LlamaWeight>(model_config_, worker_id));
+      models_.push_back(CreateModel<Llama>(worker_id));
+      // Fix LlamaWeight later
+      weights_.push_back(std::make_shared<LlamaWeight<float>>());
+      // weights_.push_back(CreateModelWeight<LlamaWeight>(worker_id));
     }
   } else {
     throw std::runtime_error(

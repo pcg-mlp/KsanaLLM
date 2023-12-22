@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "numerous_llm/runtime/llm_runtime.h"
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "numerous_llm/runtime/infer_stage.h"
 #include "numerous_llm/runtime/model_instance.h"
 #include "numerous_llm/runtime/sampling_request.h"
+#include "numerous_llm/samplers/sampler.h"
 #include "numerous_llm/utils/logger.h"
 #include "numerous_llm/utils/status.h"
 
@@ -23,7 +25,9 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
 LlmRuntime::LlmRuntime(std::shared_ptr<Context> context) : context_(context) {
   worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize());
 
-  sampler_ = std::make_shared<Sampler>();
+  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    samplers_.push_back(std::make_shared<Sampler>(worker_id));
+  }
 }
 
 void LlmRuntime::BuildForwardRequests(
@@ -93,7 +97,7 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
 
   std::vector<std::future<Status>> results;
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(worker_group_->GetWorker(worker_id)->SamplingAsync(sampler_, sampling_reqs));
+    results.push_back(worker_group_->GetWorker(worker_id)->SamplingAsync(samplers_[worker_id], sampling_reqs));
   }
 
   // Wait all instances donw and check status.
