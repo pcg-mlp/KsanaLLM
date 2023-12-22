@@ -50,7 +50,6 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   int rotary_embedding = model_config.rotary_embedding;
   int vocab_size = model_config.vocab_size;
   int tensor_para_size = model_config.tensor_para_size;
-  // abort();
   AddWeightTensor("gather_embedding", {vocab_size, hidden_units}, weight_data_type);
   AddWeightTensor("norm", {hidden_units}, weight_data_type);
   AddWeightTensor("lm_head", {vocab_size, hidden_units}, weight_data_type);
@@ -108,7 +107,7 @@ Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile) {
     return Status(RET_INVALID_ARGUMENT, "file " + binfile + " only has " + std::to_string(in_get_size) + ", but " +
                                             "request " + std::to_string(loaded_data_size) + ", loading model fails!");
   }
-  void* tensor_ptr = tensor.GetPtr<void>();
+  T* tensor_ptr = tensor.GetPtr<T>();
   cudaMemcpy(tensor_ptr, host_array.data(), loaded_data_size, cudaMemcpyHostToDevice);
   return Status();
 }
