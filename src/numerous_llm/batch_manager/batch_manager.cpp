@@ -15,15 +15,15 @@
 
 namespace numerous_llm {
 
-BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> contex) {
+BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> context) {
   batch_manager_config_ = batch_manager_config;
-  contex_ = contex;
+  context_ = context;
 
   Initialize();
 }
 
 Status BatchManager::Initialize() {
-  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config);
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_);
 
   context_caching_ = std::make_shared<ContextCaching>(batch_manager_config_.context_caching_config);
 
@@ -31,7 +31,7 @@ Status BatchManager::Initialize() {
 
   request_batching_ = std::make_shared<RequestBatching>(batch_manager_config_.request_batching_config);
 
-  llm_runtime_ = std::make_shared<LlmRuntime>(contex_);
+  llm_runtime_ = std::make_shared<LlmRuntime>(context_);
 
   return Status();
 }
@@ -88,11 +88,15 @@ Status BatchManager::Enqueue(int64_t req_id, const std::vector<std::vector<int>>
     infer_req->sampling_config = sampling_configs[i];
     infer_req->waiter = waiter;
 
+    infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
+    infer_req->block_size = GetBlockManager()->GetBlockSize();
+
     // TODO(karlluo): pass it from config or request
     infer_req->model_name = "llama";
 
     infer_req->model_instance = model_instances_[infer_req->model_name];
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+    infer_req->step = 0;
     SetReqsWithInferReqId(infer_req->req_id, static_cast<size_t>(i), infer_req);
 
     enqueue_status = batch_scheduler_->AddInferRequest(infer_req);

@@ -26,7 +26,7 @@ namespace numerous_llm {
 
 class BatchManager {
  public:
-  BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> contex);
+  BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> context);
 
   // Register a model instance to current batch manager.
   Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
@@ -68,7 +68,7 @@ class BatchManager {
   BatchManagerConfig batch_manager_config_;
 
   // The global context.
-  std::shared_ptr<Context> contex_;
+  std::shared_ptr<Context> context_;
 
   // The batch scheduler.
   std::shared_ptr<BatchScheduler> batch_scheduler_ = nullptr;

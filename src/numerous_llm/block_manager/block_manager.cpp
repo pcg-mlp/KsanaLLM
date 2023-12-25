@@ -20,9 +20,9 @@ BlockManagerConfig DeviceBlockManager::GetBlockManagerConfig() {
 
 // 构造函数，根据给定的 BlockManagerConfig 配置 DeviceBlockManager
 DeviceBlockManager::DeviceBlockManager(const BlockManagerConfig& block_manager_config, int device_id)
-    : device_id_(device_id),
-      device_allocator(block_manager_config.device_allocator_config),
-      cpu_allocator(block_manager_config.cpu_allocator_config) {
+    : device_allocator(block_manager_config.device_allocator_config),
+      cpu_allocator(block_manager_config.cpu_allocator_config),
+      device_id_(device_id) {
   block_size_ = block_manager_config.device_allocator_config.block_size;
   NLLM_LOG_INFO << "DeviceBlockManager Init Success";
 }

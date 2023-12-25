@@ -87,6 +87,9 @@ class InferRequest {
   // context decode or decode stage.
   InferStage infer_stage;
 
+  // The decode step, 1 for context decode, and then 2, 3, 4...
+  int step;
+
   // The final status of this request.
   Status finish_status;
 
@@ -105,6 +108,9 @@ class InferRequest {
   // The kv cache blocks this request used, the index is used as device_id.
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;
+
+  // The block size for every kv cache block.
+  size_t block_size;
 
   // The input tokens.
   std::vector<int> input_tokens;

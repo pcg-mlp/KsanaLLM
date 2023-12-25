@@ -4,21 +4,25 @@
 
 #include "numerous_llm/batch_manager/batch_scheduler/batch_scheduler.h"
 
+#include <memory>
 #include <utility>
 #include <vector>
 
 #include "numerous_llm/block_manager/block_manager.h"
+#include "numerous_llm/block_manager/memory_block.h"
+#include "numerous_llm/runtime/context.h"
 #include "numerous_llm/runtime/infer_request.h"
 #include "numerous_llm/utils/channel.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/memory_utils.h"
 #include "numerous_llm/utils/ret_code.h"
 #include "numerous_llm/utils/singleton.h"
 #include "numerous_llm/utils/string_utils.h"
 
 namespace numerous_llm {
 
-BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config)
-    : batch_schedule_config_(batch_scheduler_config) {}
+BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context)
+    : batch_schedule_config_(batch_scheduler_config), context_(context) {}
 
 BatchScheduler::~BatchScheduler() {}
 
@@ -47,9 +51,9 @@ bool BatchScheduler::CheckWaitingQueueFull() {
 
 bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
   if (req->infer_stage == InferStage::STATE_DECODE) {
-    // TODO(karlluo): do more check
     if (req->output_tokens.size() > req->input_tokens.size() &&
-        ((req->output_tokens.back()) == req->model_instance->GetModelConfig().end_id)) {
+        ((req->output_tokens.back()) == req->model_instance->GetModelConfig().end_id ||
+         req->output_tokens.size() >= req->model_instance->GetMaxTokenNum())) {
       return true;
     }
   }
@@ -109,9 +113,12 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
       continue;
     }
 
-    // std::vector<int> blocks;
-    // Singleton<BlockManager>::GetInstance()->Allocate(4096, block_num_wanted, blocks);
-    // req->blocks.insert(req->blocks.end(), blocks.begin(), blocks.end());
+    for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+      std::vector<int> blocks;
+      GetBlockManager()->SetDeviceId(i);
+      GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+      req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+    }
 
     // continue running.
     ++it;
@@ -189,11 +196,9 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
 
   std::lock_guard<std::mutex> guard(queue_mutex_);
 
-  // TODO(yancyliu): Get from block manager.
-  size_t max_free_block_num = 1024;
-
   size_t total_token_num = 0;
   size_t total_block_num = 0;
+  size_t max_free_block_num = GetBlockManager()->GetFreeBlockNumber(MemoryDevice::MEMORY_GPU);
 
   bool schedule_step_finish = false;
   ScheduleRunning(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);

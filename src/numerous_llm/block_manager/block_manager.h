@@ -90,12 +90,6 @@ class DeviceBlockManager {
     return device_id;
   }
 
-  // Get the size in bytes for one block.
-  size_t GetBlockSize() const {
-    // TODO
-    return 65536;
-  }
-
  private:
   std::mutex swap_mutex_;
   BlockAllocator device_allocator;
@@ -158,6 +152,12 @@ class BlockManager {
   int64_t GetFreeBlockNumber(MemoryDevice device = MemoryDevice::MEMORY_GPU) {
     return GetDeviceBlockManager()->GetFreeBlockNumber(device);
   }
+
+  // Get the size in bytes for one block.
+  size_t GetBlockSize() const { return block_manager_config_.device_allocator_config.block_size; }
+
+  // get the token number for one block.
+  size_t GetBlockTokenNum() const { return block_manager_config_.device_allocator_config.block_token_num; }
 
  private:
   // Get device block manager on current selected device.

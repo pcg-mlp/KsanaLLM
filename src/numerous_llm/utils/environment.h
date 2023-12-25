@@ -29,6 +29,9 @@ struct ModelConfig {
   // Type of weight
   DataType weight_data_type;
 
+  // The max number of (input + output tokens)
+  size_t max_token_num;
+
   // TODO(karlluo): Quant mode
 
   // Device Type
@@ -69,8 +72,15 @@ struct BatchSchedulerConfig {
 struct LoraCoordinatorConfig {};
 
 struct AllocatorConfig {
+  // The preallocated blocks.
   int64_t blocks_num;
+
+  // The block size, in bytes.
   int64_t block_size;
+
+  // The max token number of one block.
+  size_t block_token_num;
+
   MemoryDevice device;
 };
 
@@ -126,6 +136,10 @@ class Environment {
   int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
  private:
+  // Calculate block size via model configs.
+  void InitializeBlockManagerConfig();
+
+ private:
   // The model list that should be loaded.
   std::vector<ModelConfig> model_configs_;
 
@@ -140,6 +154,9 @@ class Environment {
 
   int tensor_parallel_size_{0};
   int pipeline_parallel_size_{0};
+
+  // The max token number of one block.
+  size_t block_token_num_ = 64;
 };
 
 }  // namespace numerous_llm

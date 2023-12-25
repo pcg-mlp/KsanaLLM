@@ -51,6 +51,8 @@ class ModelInstance {
 
   const ModelConfig& GetModelConfig() { return model_config_; }
 
+  size_t GetMaxTokenNum() { return model_config_.max_token_num; }
+
  private:
   // Create the object and return a shared pointer.
   template <template <class> class ClassT, class BaseT>

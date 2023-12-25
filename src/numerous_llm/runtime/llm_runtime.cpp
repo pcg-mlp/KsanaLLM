@@ -34,7 +34,11 @@ LlmRuntime::LlmRuntime(std::shared_ptr<Context> context) : context_(context) {
 void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
-  for (std::shared_ptr<InferRequest> req_ptr : reqs) {
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    std::shared_ptr<InferRequest>& req_ptr = reqs[i];
+
+    req_ptr->step += 1;
+    req_ptr->logits_offset = i;
     ModelInstance* key = req_ptr->model_instance.get();
     InferStage stage = req_ptr->infer_stage;
     if (grouped_reqs.find(key) == grouped_reqs.end()) {
@@ -47,7 +51,8 @@ void LlmRuntime::BuildForwardRequests(
 
     ForwardRequest forward_req;
     forward_req.infer_stage = req_ptr->infer_stage;
-    forward_req.block_size = 4096;
+    forward_req.step = req_ptr->step;
+    forward_req.block_size = req_ptr->block_size;
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
     forward_req.logits_offset = req_ptr->logits_offset;

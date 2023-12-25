@@ -15,6 +15,9 @@ struct ForwardRequest {
   // The infer stage, context decode or decode.
   InferStage infer_stage;
 
+  // The decode step, 1 for context decode, and then 2, 3, 4...
+  int step;
+
   // The input tokens.
   std::vector<int>* output_tokens;
 

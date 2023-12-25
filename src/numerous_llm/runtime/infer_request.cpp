@@ -8,6 +8,7 @@
 #include <limits>
 #include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/runtime/infer_stage.h"
+#include "numerous_llm/utils/memory_utils.h"
 #include "numerous_llm/utils/singleton.h"
 #include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/string_utils.h"
@@ -29,8 +30,10 @@ InferRequest::InferRequest() {
 }
 
 InferRequest::~InferRequest() {
-  for (auto& blocks : kv_cache_blocks) {
-    // Singleton<BlockManager>::GetInstance()->FreeBlocks(blocks);
+  // Free memory on every device.
+  for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
+    GetBlockManager()->SetDeviceId(i);
+    GetBlockManager()->FreeBlocks(kv_cache_blocks[i]);
   }
 }
 
@@ -51,32 +54,39 @@ void InferRequest::ResetInferStage() {
 size_t InferRequest::GetStepTokenNumber() {
   size_t step_token_num = 1;
   if (infer_stage == STAGE_CONTEXT) {
-    step_token_num += input_tokens.size();
+    step_token_num += output_tokens.size();
   }
   return step_token_num;
 }
 
-size_t InferRequest::GetTotalTokenNumber() { return input_tokens.size() + output_tokens.size() + 1; }
+size_t InferRequest::GetTotalTokenNumber() { return output_tokens.size() + 1; }
 
 size_t InferRequest::GetStepBlockNumber() {
-  // size_t block_size = Singleton<BlockManager>::GetInstance()->GetBlockSize();
-  // return ((model_instance->GetTokenCacheSize() * GetTotalTokenNumber() - 1)) / block_size + 1;
-  return 0;
+  size_t block_token_num = GetBlockManager()->GetBlockTokenNum();
+  size_t last_token_num = GetTotalTokenNumber() - GetStepTokenNumber();
+  return GetTotalBlockNumber() - ((block_token_num + last_token_num - 1) / block_token_num);
 }
 
 size_t InferRequest::GetTotalBlockNumber() {
-  // size_t block_size = Singleton<BlockManager>::GetInstance()->GetBlockSize();
-  // return ((model_instance->GetTokenCacheSize() * GetStepTokenNumber() - 1)) / block_size + 1;
-  return 0;
+  size_t block_token_num = GetBlockManager()->GetBlockTokenNum();
+  return (block_token_num + GetTotalTokenNumber() - 1) / block_token_num;
 }
 
 Status InferRequest::SwapInAsync() {
-  // Singleton<BlockManager>::GetInstance()->SwapIn(kv_cache_blocks[0], NULL);
+  for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
+    GetBlockManager()->SetDeviceId(i);
+    GetBlockManager()->SwapIn(kv_cache_blocks[0]);
+  }
+
   return Status();
 }
 
 Status InferRequest::SwapOutAsync() {
-  // Singleton<BlockManager>::GetInstance()->SwapOut(kv_cache_blocks[0], NULL);
+  for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
+    GetBlockManager()->SetDeviceId(i);
+    GetBlockManager()->SwapOut(kv_cache_blocks[0]);
+  }
+
   return Status();
 }
 

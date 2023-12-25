@@ -81,6 +81,10 @@ Status Environment::ParseOptions(int argc, char **argv) {
   model_config.weight_data_type = GetModelDataType(ini_reader);
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(ini_reader, model_config);
+
+  // TODO: Get from config.
+  model_config.max_token_num = 1024;
+
   model_configs_.push_back(model_config);
 
   NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
@@ -91,7 +95,30 @@ Status Environment::ParseOptions(int argc, char **argv) {
   endpoint_config_.host = FLAGS_host;
   endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
 
+  InitializeBlockManagerConfig();
+
   return Status();
+}
+
+void Environment::InitializeBlockManagerConfig() {
+  NLLM_CHECK_WITH_INFO(model_configs_.size() > 0, "No model configed.");
+  const ModelConfig &model_config = model_configs_.front();
+
+  block_manager_config_.cpu_allocator_config.block_token_num = block_token_num_;
+  block_manager_config_.device_allocator_config.block_token_num = block_token_num_;
+
+  size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *
+                      (model_config.head_num / GetTensorParallelSize()) * model_config.size_per_head;
+
+  block_manager_config_.cpu_allocator_config.block_size = token_size * block_token_num_;
+  block_manager_config_.device_allocator_config.block_size = token_size * block_token_num_;
+
+  block_manager_config_.cpu_allocator_config.device = MemoryDevice::MEMORY_CPU;
+  block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_GPU;
+
+  // TODO(yancyliu): should calculated through device memory useage.
+  block_manager_config_.cpu_allocator_config.blocks_num = 128;
+  block_manager_config_.device_allocator_config.blocks_num = 128;
 }
 
 Status Environment::GetModelList(std::vector<ModelConfig> &model_configs) {

@@ -8,6 +8,7 @@
 
 #include "numerous_llm/batch_manager/batch_scheduler/priority/base_priority.h"
 #include "numerous_llm/batch_manager/batch_scheduler/strategy/base_strategy.h"
+#include "numerous_llm/runtime/context.h"
 #include "numerous_llm/runtime/infer_request.h"
 #include "numerous_llm/utils/environment.h"
 
@@ -15,7 +16,7 @@ namespace numerous_llm {
 
 class BatchScheduler {
  public:
-  explicit BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config);
+  BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context);
   ~BatchScheduler();
 
   // Get the next infer reqs that ready to run.
@@ -52,6 +53,8 @@ class BatchScheduler {
 
   // The current timestamp for current schedule loop.
   unsigned long schedule_time_in_ms_;
+
+  std::shared_ptr<Context> context_;
 
   // To guard queue.
   std::mutex queue_mutex_;
