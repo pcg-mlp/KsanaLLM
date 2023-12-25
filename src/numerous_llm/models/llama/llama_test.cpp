@@ -20,10 +20,29 @@ class LlamaTest : public testing::Test {
     model_config.vocab_size = 32;
     model_config.tensor_para_size = 2;
     model_config.layernorm_eps = 0.000987;
+
+    BlockManagerConfig block_manager_config;
+    block_manager_config.cpu_allocator_config.blocks_num = 2;
+    block_manager_config.cpu_allocator_config.block_size = 1024;
+    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.device_allocator_config.blocks_num = 2;
+    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.device = MEMORY_GPU;
+
+    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+
+    // 使用配置创建一个 BlockManager 对象
+    block_manager = new BlockManager(block_manager_config, context);
+    SetBlockManager(block_manager);
+  }
+
+  void TearDown() override {
+    delete block_manager;
   }
 
  protected:
   ModelConfig model_config;
+  BlockManager* block_manager = nullptr;
 };
 
 TEST_F(LlamaTest, ContextDecodeTest) {

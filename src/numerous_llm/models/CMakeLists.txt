@@ -19,4 +19,4 @@ file(GLOB_RECURSE models_test_SRCS
      ${PROJECT_SOURCE_DIR}/src/numerous_llm/models/base/*test.cpp
      ${PROJECT_SOURCE_DIR}/src/numerous_llm/models/llama/*test.cpp)
 message(STATUS "models_test_SRCS: ${models_test_SRCS}")
-cc_test(models_test SRCS ${models_test_SRCS} DEPS models)
+cc_test(models_test SRCS ${models_test_SRCS} DEPS models runtime)

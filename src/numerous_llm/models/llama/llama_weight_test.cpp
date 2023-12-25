@@ -4,6 +4,13 @@
 
 #include "numerous_llm/models/llama/llama_weight.h"
 #include "numerous_llm/models/llama/create_test_model.h"
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <random>
+#include <thread>
+#include "numerous_llm/block_manager/block_manager.h"
+#include "numerous_llm/utils/memory_utils.h"
 #include "test.h"
 #include <thread>
 
@@ -20,10 +27,29 @@ class LlamaWeightTest : public testing::Test {
     model_config.num_layer = 2;
     model_config.vocab_size = 32;
     model_config.tensor_para_size = 2;
+
+    BlockManagerConfig block_manager_config;
+    block_manager_config.cpu_allocator_config.blocks_num = 2;
+    block_manager_config.cpu_allocator_config.block_size = 1024;
+    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.device_allocator_config.blocks_num = 2;
+    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.device = MEMORY_GPU;
+
+    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+
+    // 使用配置创建一个 BlockManager 对象
+    block_manager = new BlockManager(block_manager_config, context);
+    SetBlockManager(block_manager);
+  }
+
+  void TearDown() override {
+    delete block_manager;
   }
 
  protected:
   ModelConfig model_config;
+  BlockManager* block_manager = nullptr;
 };
 
 // 计算数据 hash 值

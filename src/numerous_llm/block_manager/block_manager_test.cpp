@@ -3,6 +3,8 @@
 ==============================================================================*/
 
 #include "numerous_llm/block_manager/block_manager.h"
+#include <memory>
+#include "numerous_llm/utils/memory_utils.h"
 #include "numerous_llm/utils/singleton.h"
 #include "test.h"
 
@@ -21,8 +23,10 @@ class BlockManagerTest : public testing::Test {
     block_manager_config.device_allocator_config.block_size = 1024;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
+    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+
     // 使用配置创建一个 BlockManager 对象
-    block_manager = new BlockManager(block_manager_config);
+    block_manager = new BlockManager(block_manager_config, context);
   }
 
   // 在每个测试用例执行之后调用的函数
@@ -116,7 +120,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
   // 将 block 从 CPU 交换到 GPU
-  status = block_manager->SwapIn(blocks, nullptr);
+  status = block_manager->SwapIn(blocks);
   EXPECT_TRUE(status.OK());
   EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 0);
   EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
@@ -128,7 +132,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
   // 将 block 从 GPU 交换回 CPU
-  status = block_manager->SwapOut(blocks, nullptr);
+  status = block_manager->SwapOut(blocks);
   EXPECT_TRUE(status.OK());
   EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
   EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
@@ -172,28 +176,3 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
 
-// 测试 DeviceSelect 类的 Execute 方法
-TEST(DeviceSelectTest, Execute) {
-  // 测试 Execute 方法
-  // 获取设备 0 上的 BlockManager 的空闲块数量
-  int result = DEVICE_EXECUTE(0, BlockManager, GetFreeBlockNumber, MEMORY_CPU_PINNED);
-  // 默认情况下每个 BlockManager 有 0 个空闲块
-  EXPECT_EQ(result, 0);
-
-  // 获取设备 0 上的 BlockManager 的设备 ID
-  int device_id_0 = DEVICE_EXECUTE(0, BlockManager, GetDeviceId);
-  // 设备 ID 应该等于 0
-  EXPECT_EQ(device_id_0, 0);
-
-  // 获取设备 1 上的 BlockManager 的设备 ID
-  int device_id_1 = DEVICE_EXECUTE(1, BlockManager, GetDeviceId);
-  // 设备 ID 应该等于 1
-  EXPECT_EQ(device_id_1, 1);
-
-  // 创建一个整数向量，用于存储分配的内存块
-  std::vector<int> blocks;
-  // 尝试在设备 0 上的 BlockManager 上分配 1 个 设备存储块
-  Status status = DEVICE_EXECUTE(0, BlockManager, AllocateBlocks, 1, blocks);
-  // 分配失败的情况下，状态应该不是 OK
-  EXPECT_FALSE(status.OK());
-}

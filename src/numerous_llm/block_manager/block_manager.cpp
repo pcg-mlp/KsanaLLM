@@ -8,50 +8,51 @@
 
 namespace numerous_llm {
 
-// 构造函数，根据device id, Singleton Instance的 BlockManagerConfig 配置 BlockManager
-BlockManager::BlockManager(int device_id) : BlockManager(GetBlockManagerConfig(), device_id) {}
+// 构造函数，根据device id, Singleton Instance的 BlockManagerConfig 配置 DeviceBlockManager
+DeviceBlockManager::DeviceBlockManager(int device_id) : DeviceBlockManager(GetBlockManagerConfig(), device_id) {}
 
 // 获取配置
-BlockManagerConfig BlockManager::GetBlockManagerConfig() {
+BlockManagerConfig DeviceBlockManager::GetBlockManagerConfig() {
   BlockManagerConfig block_manager_config;
   Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
   return block_manager_config;
 }
 
-// 构造函数，根据给定的 BlockManagerConfig 配置 BlockManager
-BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, int device_id)
+// 构造函数，根据给定的 BlockManagerConfig 配置 DeviceBlockManager
+DeviceBlockManager::DeviceBlockManager(const BlockManagerConfig& block_manager_config, int device_id)
     : device_id_(device_id),
       device_allocator(block_manager_config.device_allocator_config),
       cpu_allocator(block_manager_config.cpu_allocator_config) {
   block_size_ = block_manager_config.device_allocator_config.block_size;
-  NLLM_LOG_INFO << "BlockManager Init Success";
+  NLLM_LOG_INFO << "DeviceBlockManager Init Success";
 }
 
-// 析构函数，释放BlockManager分配的所有内存
-BlockManager::~BlockManager() {}
+// 析构函数，释放DeviceBlockManager分配的所有内存
+DeviceBlockManager::~DeviceBlockManager() {
+}
 
 // 根据给定的block_ids，获取对应的内存指针，存储在addrs中
-Status BlockManager::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
+Status DeviceBlockManager::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
   return device_allocator.GetBlockPtrs(blocks, addrs);
 }
 
 // 分配block_num个块，将分配成功的块的id存储在blocks中
-Status BlockManager::AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
+Status DeviceBlockManager::AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
   return device_allocator.Allocate(block_num, blocks);
 }
 
 // 分配指定大小的设备存储空间
-Status BlockManager::AllocateContiguous(int64_t size, int& block_id) {
+Status DeviceBlockManager::AllocateContiguous(int64_t size, int& block_id) {
   return device_allocator.AllocateContiguous(size, block_id);
 }
 
 // 释放给定的blocks，将它们从used_device_block_map_移动到free_device_block_map_
-Status BlockManager::FreeBlocks(const std::vector<int>& blocks) { return device_allocator.Free(blocks); }
+Status DeviceBlockManager::FreeBlocks(const std::vector<int>& blocks) { return device_allocator.Free(blocks); }
 
 // 释放连续设备存储
-Status BlockManager::FreeContiguous(int block_id) { return device_allocator.FreeContiguous(block_id); }
+Status DeviceBlockManager::FreeContiguous(int block_id) { return device_allocator.FreeContiguous(block_id); }
 
-Status BlockManager::SwapIn(std::vector<int>& device_blocks, cudaStream_t stream) {
+Status DeviceBlockManager::SwapIn(std::vector<int>& device_blocks, cudaStream_t stream) {
   std::unique_lock<std::mutex> lock(swap_mutex_);
   std::vector<void*> device_addrs;
   STATUS_CHECK_RETURN(GetBlockPtrs(device_blocks, device_addrs));
@@ -66,7 +67,7 @@ Status BlockManager::SwapIn(std::vector<int>& device_blocks, cudaStream_t stream
   return Status();
 }
 
-Status BlockManager::SwapOut(std::vector<int>& device_blocks, cudaStream_t stream) {
+Status DeviceBlockManager::SwapOut(std::vector<int>& device_blocks, cudaStream_t stream) {
   std::unique_lock<std::mutex> lock(swap_mutex_);
   std::vector<void*> device_addrs;
   STATUS_CHECK_RETURN(GetBlockPtrs(device_blocks, device_addrs));
@@ -90,7 +91,7 @@ Status BlockManager::SwapOut(std::vector<int>& device_blocks, cudaStream_t strea
 // 函数：获取指定设备类型的空闲内存块数量
 // 参数：device - 设备类型
 // 返回值：空闲内存块数量
-int64_t BlockManager::GetFreeBlockNumber(MemoryDevice device) {
+int64_t DeviceBlockManager::GetFreeBlockNumber(MemoryDevice device) {
   switch (device) {
     case MEMORY_CPU_PINNED:
       return cpu_allocator.GetFreeBlockNumber();

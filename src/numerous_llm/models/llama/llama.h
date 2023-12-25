@@ -15,6 +15,7 @@
 #include "numerous_llm/layers/matmul_layer.h"
 #include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/utils/status.h"
+#include "numerous_llm/utils/tensor.h"
 #include "numerous_llm/utils/utils.h"
 
 namespace numerous_llm {
@@ -23,7 +24,7 @@ template <typename T>
 class Llama : public BaseModel {
  public:
   Llama(const ModelConfig& model_config, const int rank);
-  ~Llama() {}
+  ~Llama();
 
   float* GetLogitsPtr();
 
@@ -36,6 +37,7 @@ class Llama : public BaseModel {
                 std::vector<ForwardRequest>& forward_reqs);
  protected:
   Status CreateTensor(Tensor& tensor, size_t length);
+  Status DestroyTensor(Tensor& tensor);
 
   std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;

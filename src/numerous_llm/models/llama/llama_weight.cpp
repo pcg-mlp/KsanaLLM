@@ -3,6 +3,8 @@
 ==============================================================================*/
 
 #include "numerous_llm/models/llama/llama_weight.h"
+#include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/memory_utils.h"
 
 namespace numerous_llm {
 
@@ -25,7 +27,12 @@ std::pair<const char*, const char*> LlamaWeight<T>::binfile_map_[] = {{"gather_e
 
 template <typename T>
 LlamaWeight<T>::~LlamaWeight() {
-  // TODO: 引用计数
+  GetBlockManager()->SetDeviceId(rank_);
+  for (auto& [key, tensor] : weights_map_) {
+    const std::vector<int>& block_ids = tensor.GetBlockIds();
+    NLLM_CHECK_WITH_INFO(block_ids.size() == 1, "Contiguous must have only one block.");
+    GetBlockManager()->FreeContiguous(block_ids.front());
+  }
 }
 
 template <typename T>
@@ -121,7 +128,8 @@ Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size
 
   std::string binfile_name = GetBinfileName(weight_name);
   int block_id;
-  STATUS_CHECK_RETURN(DEVICE_EXECUTE(rank_, BlockManager, AllocateContiguous, length, block_id));
+  GetBlockManager()->SetDeviceId(rank_);
+  GetBlockManager()->AllocateContiguous(length, block_id);
 
   weights_map_.emplace(weight_name, Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, dtype, shapes, {block_id}));
 

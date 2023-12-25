@@ -69,7 +69,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     if (CheckRequestFinish(req)) {
       req->finish_status = Status(RET_SUCCESS);
       finish_queue_.push_back(req);
-      running_queue_.erase(it);
+      it = running_queue_.erase(it);
       req->waiter->Notify();
       continue;
     }
@@ -78,7 +78,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     if (CheckRequestTimeout(req)) {
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       finish_queue_.push_back(req);
-      running_queue_.erase(it);
+      it = running_queue_.erase(it);
       req->waiter->Notify();
       continue;
     }
@@ -96,7 +96,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num) {
       req->SwapOutAsync();
       swapped_queue_.push_back(req);
-      running_queue_.erase(it);
+      it = running_queue_.erase(it);
       schedule_step_finish = true;
       continue;
     }
@@ -105,7 +105,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     if (schedule_step_finish) {
       req->SwapOutAsync();
       swapped_queue_.push_back(req);
-      running_queue_.erase(it);
+      it = running_queue_.erase(it);
       continue;
     }
 
@@ -128,7 +128,7 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
     if (CheckRequestTimeout(req)) {
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       finish_queue_.push_back(req);
-      swapped_queue_.erase(it);
+      it = swapped_queue_.erase(it);
       req->waiter->Notify();
       continue;
     }
@@ -142,7 +142,7 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
       req->SwapInAsync();
 
       running_queue_.push_back(req);
-      swapped_queue_.erase(it);
+      it = swapped_queue_.erase(it);
       continue;
     }
 
@@ -163,7 +163,7 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
       NLLM_LOG_INFO << "waiting_queue_ timeout.";
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       finish_queue_.push_back(req);
-      waiting_queue_.erase(it);
+      it = waiting_queue_.erase(it);
       req->waiter->Notify();
       continue;
     }
@@ -173,7 +173,7 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
     if (total_token_num <= batch_schedule_config_.max_token_number && total_block_num <= max_free_block_num) {
       NLLM_LOG_INFO << "waiting_queue_ ready to run.";
       running_queue_.push_back(req);
-      waiting_queue_.erase(it);
+      it = waiting_queue_.erase(it);
       continue;
     }
 

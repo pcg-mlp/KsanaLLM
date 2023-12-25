@@ -4,16 +4,36 @@
 
 #include "numerous_llm/models/llama/llama.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/memory_utils.h"
 
 namespace numerous_llm {
 
 template <typename T>
 Status Llama<T>::CreateTensor(Tensor& tensor, size_t length) {
   int block_id;
-  DEVICE_EXECUTE(rank_, BlockManager, AllocateContiguous, length, block_id);
-  tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, weight_data_type_,
-                  std::vector<size_t>{length}, std::vector<int>{block_id});
+  GetBlockManager()->SetDeviceId(rank_);
+  GetBlockManager()->AllocateContiguous(length, block_id);
+  tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, weight_data_type_, std::vector<size_t>{length},
+                  std::vector<int>{block_id});
   return Status();
+}
+
+template <typename T>
+Status Llama<T>::DestroyTensor(Tensor& tensor) {
+  GetBlockManager()->SetDeviceId(rank_);
+  const std::vector<int>& block_ids = tensor.GetBlockIds();
+  NLLM_CHECK_WITH_INFO(block_ids.size() == 1, "Contiguous must have only one block.");
+  return GetBlockManager()->FreeContiguous(block_ids.front());
+}
+
+template <typename T>
+Llama<T>::~Llama() {
+  GetBlockManager()->SetDeviceId(rank_);
+
+  DestroyTensor(tmp_tensor_0);
+  DestroyTensor(tmp_tensor_1);
+  DestroyTensor(tmp_tensor_2);
+  DestroyTensor(kv_cache_buffer_);
 }
 
 template <typename T>
@@ -29,7 +49,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank) {
   // 1: KV 一块空间
   // 2: 运行时中间空间
   // 3: 矩阵计算需要一块空间
-  
+
   // input_ids: [max_b, max_s]
   // TODO: 数据从 model_config 获取
   int max_b = 4;
@@ -63,11 +83,13 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank) {
 }
 
 template <typename T>
-float* Llama<T>::GetLogitsPtr() { return nullptr; }
+float* Llama<T>::GetLogitsPtr() {
+  return nullptr;
+}
 
 template <typename T>
 Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                            std::vector<ForwardRequest>& forward_reqs) {                            
+                               std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama context decode stage inference";
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -91,7 +113,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     size_t length = req_input->size();
     cudaMemcpy(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int), cudaMemcpyHostToDevice);
     input_offset += length;
-  }  
+  }
 
   // 生成 kv list
   Tensor kv_list;
@@ -120,12 +142,12 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
     std::vector<Tensor>& input_layernorm_input = output_0;
     std::vector<Tensor>& input_layernorm_output = output_1;
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward({input_layernorm_input[0], kv_list, input_layernorm_weight},
-                                                  input_layernorm_output));
+    STATUS_CHECK_RETURN(
+        layernorm_layer_->Forward({input_layernorm_input[0], kv_list, input_layernorm_weight}, input_layernorm_output));
 
     // Attn proj MatMul
     Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
-    std::vector<Tensor>&  attn_proj_output = output_2;
+    std::vector<Tensor>& attn_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
 
     // MMHA Flash Attention
@@ -135,7 +157,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
 
     // Attn o_proj MatMul
     Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
-    std::vector<Tensor>&  attn_o_proj_output = output_2;
+    std::vector<Tensor>& attn_o_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({flash_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
 
     // Attn NcclAllReduceSum
@@ -144,22 +166,21 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
 
     // Attn Add
     std::vector<Tensor>& attn_add_output = output_2;
-    STATUS_CHECK_RETURN(add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]},
-                                            attn_add_output));
+    STATUS_CHECK_RETURN(
+        add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]}, attn_add_output));
 
     // post_attention_layernorm
-    Tensor post_layernorm_weight = base_weight->GetModelWeights(std::to_string(layer_num)
-                                                                + ".post_attention_layernorm");
+    Tensor post_layernorm_weight =
+        base_weight->GetModelWeights(std::to_string(layer_num) + ".post_attention_layernorm");
     std::vector<Tensor>& post_layernorm_output = output_0;
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight},
-                                                  post_layernorm_output));
+    STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
 
     // Mlp gate_proj MatMul +  up_proj MatMul + SiluMul
     Tensor gate_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.gate_proj");
     Tensor up_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.up_proj");
     std::vector<Tensor>& silu_mul_output = output_1;
-    STATUS_CHECK_RETURN(silu_mul_layer_->Forward({post_layernorm_output[0], gate_proj_weight, up_proj_weight},
-                                                 silu_mul_output));
+    STATUS_CHECK_RETURN(
+        silu_mul_layer_->Forward({post_layernorm_output[0], gate_proj_weight, up_proj_weight}, silu_mul_output));
 
     // Mlp down_proj MatMul
     Tensor down_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.down_proj");
@@ -172,15 +193,14 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
 
     // Mlp Add
     std::vector<Tensor>& mlp_add_output = output_0;
-    STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]},
-                                            mlp_add_output));
+    STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
   }
   // final norm
   Tensor final_layernorm_weight = base_weight->GetModelWeights("norm");
   std::vector<Tensor>& final_layernorm_input = output_0;
   std::vector<Tensor>& final_layernorm_output = output_1;
-  STATUS_CHECK_RETURN(layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight},
-                                                final_layernorm_output));
+  STATUS_CHECK_RETURN(
+      layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
 
   // lm_head
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head");
@@ -197,6 +217,9 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     logits_offset += req.output_tokens->size();
     req.logits_offset = logits_offset - 1;
   }
+
+  DestroyTensor(input_ids);
+  DestroyTensor(kv_list);
 
   return Status();
 }
@@ -227,7 +250,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     size_t length = req_input->size();
     cudaMemcpy(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int), cudaMemcpyHostToDevice);
     input_offset += length;
-  }  
+  }
 
   // 生成 kv list
   Tensor kv_list;
@@ -256,12 +279,12 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
     std::vector<Tensor>& input_layernorm_input = output_0;
     std::vector<Tensor>& input_layernorm_output = output_1;
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward({input_layernorm_input[0], kv_list, input_layernorm_weight},
-                                                  input_layernorm_output));
+    STATUS_CHECK_RETURN(
+        layernorm_layer_->Forward({input_layernorm_input[0], kv_list, input_layernorm_weight}, input_layernorm_output));
 
     // Attn proj MatMul
     Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
-    std::vector<Tensor>&  attn_proj_output = output_2;
+    std::vector<Tensor>& attn_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
 
     // MMHA Paged Attention
@@ -271,7 +294,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
 
     // Attn o_proj MatMul
     Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
-    std::vector<Tensor>&  attn_o_proj_output = output_2;
+    std::vector<Tensor>& attn_o_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({paged_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
 
     // Attn NcclAllReduceSum
@@ -280,22 +303,21 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
 
     // Attn Add
     std::vector<Tensor>& attn_add_output = output_2;
-    STATUS_CHECK_RETURN(add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]},
-                                            attn_add_output));
+    STATUS_CHECK_RETURN(
+        add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]}, attn_add_output));
 
     // post_attention_layernorm
-    Tensor post_layernorm_weight = base_weight->GetModelWeights(std::to_string(layer_num)
-                                                                + ".post_attention_layernorm");
+    Tensor post_layernorm_weight =
+        base_weight->GetModelWeights(std::to_string(layer_num) + ".post_attention_layernorm");
     std::vector<Tensor>& post_layernorm_output = output_0;
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight},
-                                                  post_layernorm_output));
+    STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
 
     // Mlp gate_proj MatMul +  up_proj MatMul + SiluMul
     Tensor gate_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.gate_proj");
     Tensor up_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.up_proj");
     std::vector<Tensor>& silu_mul_output = output_1;
-    STATUS_CHECK_RETURN(silu_mul_layer_->Forward({post_layernorm_output[0], gate_proj_weight, up_proj_weight},
-                                                 silu_mul_output));
+    STATUS_CHECK_RETURN(
+        silu_mul_layer_->Forward({post_layernorm_output[0], gate_proj_weight, up_proj_weight}, silu_mul_output));
 
     // Mlp down_proj MatMul
     Tensor down_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.down_proj");
@@ -308,15 +330,14 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
 
     // Mlp Add
     std::vector<Tensor>& mlp_add_output = output_0;
-    STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]},
-                                            mlp_add_output));
+    STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
   }
   // final norm
   Tensor final_layernorm_weight = base_weight->GetModelWeights("norm");
   std::vector<Tensor>& final_layernorm_input = output_0;
   std::vector<Tensor>& final_layernorm_output = output_1;
-  STATUS_CHECK_RETURN(layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight},
-                                                final_layernorm_output));
+  STATUS_CHECK_RETURN(
+      layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
 
   // lm_head
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head");
@@ -333,6 +354,9 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     logits_offset += req.output_tokens->size();
     req.logits_offset = logits_offset - 1;
   }
+
+  DestroyTensor(input_ids);
+  DestroyTensor(kv_list);
 
   return Status();
 }

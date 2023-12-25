@@ -3,8 +3,16 @@
 ==============================================================================*/
 
 #include "numerous_llm/utils/memory_utils.h"
+#include <memory>
 
 namespace numerous_llm {
+
+static BlockManager* g_block_manager = nullptr;
+
+void SetBlockManager(BlockManager* block_manager) { g_block_manager = block_manager; }
+
+BlockManager* GetBlockManager() { return g_block_manager; }
+
 // 构造函数，初始化唯一ID生成器
 UniqueIDGenerator::UniqueIDGenerator() : current_id(0) {}
 

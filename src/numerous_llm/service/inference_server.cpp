@@ -3,14 +3,25 @@
 ==============================================================================*/
 
 #include <iostream>
+#include <memory>
 
+#include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/endpoints/endpoint.h"
 #include "numerous_llm/service/inference_server.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/memory_utils.h"
 #include "numerous_llm/utils/singleton.h"
+#include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
+
+InferenceServer::~InferenceServer() {
+  if (block_manager_) {
+    delete block_manager_;
+    block_manager_ = nullptr;
+  }
+}
 
 Status InferenceServer::Initialize() {
   std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
@@ -20,8 +31,17 @@ Status InferenceServer::Initialize() {
 
   context_.reset(new Context(env->GetTensorParallelSize(), env->GetPipeLineParallelSize()));
 
+  // Initialize global block manager.
+  BlockManagerConfig block_manager_config;
+  Status status = env->GetBlockManagerConfig(block_manager_config);
+  if (!status.OK()) {
+    return Status(RET_INVALID_ARGUMENT, "Get block manager config error:" + status.ToString());
+  }
+  block_manager_ = new BlockManager(block_manager_config, context_);
+  SetBlockManager(block_manager_);
+
   BatchManagerConfig batch_manager_config;
-  Status status = env->GetBatchManagerConfig(batch_manager_config);
+  status = env->GetBatchManagerConfig(batch_manager_config);
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
   }

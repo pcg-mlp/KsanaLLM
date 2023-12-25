@@ -141,27 +141,4 @@ class TensorMap {
   inline bool IsValid(const Tensor& tensor) { return tensor.GetElementNumber() > 0 && !tensor.blocks.empty(); }
 };
 
-inline Tensor CreateTensor(int device_id, const MemoryDevice device, const DataType dtype,
-                           const std::vector<size_t> shape) {
-  // Create a empty tensor without memory.
-  Tensor tensor(device, StorageType::STORAGE_CONTIGUOUS, dtype, shape, {});
-
-  // Allocate memory for it.
-  int block_id;
-  Status status = DEVICE_EXECUTE(device_id, BlockManager, AllocateContiguous, tensor.GetTotalBytes(), block_id);
-  if (!status.OK()) {
-    throw std::runtime_error("Allocate tensor error:" + status.GetMessage());
-  }
-
-  tensor.blocks = {block_id};
-  return tensor;
-}
-
-inline void DestroyTensor(int device_id, Tensor& tensor) {
-  Status status = DEVICE_EXECUTE(device_id, BlockManager, FreeBlocks, tensor.GetBlockIds());
-  if (!status.OK()) {
-    throw std::runtime_error("Free tensor error:" + status.GetMessage());
-  }
-}
-
 }  // namespace numerous_llm

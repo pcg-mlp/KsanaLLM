@@ -4,30 +4,35 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
+#include "3rdparty/LLM_kernels/csrc/kernels/nvidia/paged_attention/dtype_float16.cuh"
 #include "numerous_llm/block_manager/block_allocator.h"
 #include "numerous_llm/block_manager/memory_block.h"
+#include "numerous_llm/runtime/context.h"
 #include "numerous_llm/utils/environment.h"
+#include "numerous_llm/utils/logger.h"
 #include "numerous_llm/utils/nvidia/cuda_utils.h"
 #include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
-// 类：BlockManager
+
+// 类：DeviceBlockManager
 // 用于管理设备存储、内存块的分配、回收、迁移等操作
-class BlockManager {
+class DeviceBlockManager {
  public:
   // 构造函数
 
-  explicit BlockManager(int device_id = 0);
+  explicit DeviceBlockManager(int device_id = 0);
 
   // 构造函数
-  // 参数：block_manager_config - BlockManager 的配置信息
-  explicit BlockManager(const BlockManagerConfig& block_manager_config, int device_id = 0);
+  // 参数：block_manager_config - DeviceBlockManager 的配置信息
+  explicit DeviceBlockManager(const BlockManagerConfig& block_manager_config, int device_id = 0);
 
   // 析构函数
-  ~BlockManager();
+  ~DeviceBlockManager();
 
   // 获取配置
   BlockManagerConfig GetBlockManagerConfig();
@@ -79,7 +84,11 @@ class BlockManager {
 
   // 获取设备id
   // 返回值：device id
-  int GetDeviceId() { return device_id_; }
+  int GetDeviceId() {
+    int device_id;
+    CUDA_CHECK(cudaGetDevice(&device_id));
+    return device_id;
+  }
 
   // Get the size in bytes for one block.
   size_t GetBlockSize() const {
@@ -96,40 +105,77 @@ class BlockManager {
   int device_id_;
 };
 
-// 定义一个模板类 DeviceSelect，用于根据设备 ID 选择并执行特定操作。
-template <typename T>
-class DeviceSelect {
+// The block manager used to manager multiple devices.
+class BlockManager {
  public:
-  // 构造函数，初始化device_ptr_vec_
-  DeviceSelect() {
-    int device_number = GetDeviceNumber();
-    for (int i = 0; i < device_number; i++) {
-      device_ptr_vec_.push_back(std::make_shared<T>(i));
+  BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context)
+      : block_manager_config_(block_manager_config), context_(context) {
+    for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      dev_block_managers_.push_back(std::make_shared<DeviceBlockManager>(block_manager_config, worker_id));
     }
   }
 
-  ~DeviceSelect() = default;
+  ~BlockManager() { }
 
-  // 执行函数，根据设备 ID 执行给定的函数和参数。
-  template <typename Func, typename... Args>
-  decltype(auto) Execute(int device_id, Func&& func, Args&&... args) {
-    // 检查设备 ID 是否有效。
-    if (device_id < 0 || device_id >= device_ptr_vec_.size()) {
-      throw std::out_of_range("Invalid device_id.");
-    }
-    // 多卡的通用操作在这里执行
-    CUDA_CHECK(cudaSetDevice(device_id));
-    // 获取设备对应的实例，并执行给定的函数和参数。
-    auto& ins = *device_ptr_vec_[device_id].get();
-    return (ins.*func)(std::forward<Args>(args)...);
+  // This function maybe called concurrently from different threads.
+  // DO NOT store the device id in variable.
+  void SetDeviceId(int device_id) { CUDA_CHECK(cudaSetDevice(device_id)); }
+
+  // This function maybe called concurrently from different threads.
+  int GetDeviceId() {
+    int device_id;
+    CUDA_CHECK(cudaGetDevice(&device_id));
+    return device_id;
+  }
+
+  Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
+    return GetDeviceBlockManager()->GetBlockPtrs(blocks, addrs);
+  }
+
+  Status AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
+    return GetDeviceBlockManager()->AllocateBlocks(block_num, blocks);
+  }
+
+  Status AllocateContiguous(int64_t size, int& block_id) {
+    return GetDeviceBlockManager()->AllocateContiguous(size, block_id);
+  }
+
+  Status FreeBlocks(const std::vector<int>& blocks) { return GetDeviceBlockManager()->FreeBlocks(blocks); }
+
+  Status FreeContiguous(int block_id) { return GetDeviceBlockManager()->FreeContiguous(block_id); }
+
+  Status SwapIn(std::vector<int>& device_blocks) {
+    int device_id = GetDeviceId();
+    return GetDeviceBlockManager(device_id)->SwapIn(device_blocks, context_->h2d_streams_[device_id]);
+  }
+
+  Status SwapOut(std::vector<int>& device_blocks) {
+    int device_id = GetDeviceId();
+    return GetDeviceBlockManager(device_id)->SwapOut(device_blocks, context_->d2h_streams_[device_id]);
+  }
+
+  // Get free block number for current selected device.
+  int64_t GetFreeBlockNumber(MemoryDevice device = MemoryDevice::MEMORY_GPU) {
+    return GetDeviceBlockManager()->GetFreeBlockNumber(device);
   }
 
  private:
-  // 用于存储设备实例。
-  std::vector<std::shared_ptr<T>> device_ptr_vec_;
-};
+  // Get device block manager on current selected device.
+  std::shared_ptr<DeviceBlockManager> GetDeviceBlockManager() {
+    int device_id = GetDeviceId();
+    return dev_block_managers_[device_id];
+  }
 
-#define DEVICE_EXECUTE(device_id, class, func, ...) \
-  Singleton<DeviceSelect<class>>::GetInstance()->Execute(device_id, &class ::func, ##__VA_ARGS__)
+  std::shared_ptr<DeviceBlockManager> GetDeviceBlockManager(int device_id) { return dev_block_managers_[device_id]; }
+
+ private:
+  // Every deivce has its own manager.
+  std::vector<std::shared_ptr<DeviceBlockManager>> dev_block_managers_;
+
+  BlockManagerConfig block_manager_config_;
+
+  // The global context.
+  std::shared_ptr<Context> context_ = nullptr;
+};
 
 }  // namespace numerous_llm

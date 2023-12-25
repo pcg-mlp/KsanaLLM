@@ -20,6 +20,8 @@ namespace numerous_llm {
 class InferenceServer {
  public:
   InferenceServer() { Initialize(); }
+  
+  ~InferenceServer();
 
   // Start the rpc service.
   Status StartServer();
@@ -45,6 +47,9 @@ class InferenceServer {
 
   // Global context for inference
   std::shared_ptr<Context> context_ = nullptr;
+
+  // The global block manager.
+  BlockManager* block_manager_ = nullptr;
 
   // The batch manager for the whole inference.
   std::shared_ptr<BatchManager> batch_manager_ = nullptr;
