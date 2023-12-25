@@ -58,10 +58,10 @@ class ModelInstance {
     std::shared_ptr<BaseT> model_obj = nullptr;
     switch (model_config_.weight_data_type) {
       case DataType::TYPE_FP16:
-        model_obj = std::make_shared<ClassT<half>>(model_config_, rank);
+        model_obj = std::make_shared<ClassT<half>>(model_config_, rank, context_);
         break;
       case DataType::TYPE_FP32:
-        model_obj = std::make_shared<ClassT<float>>(model_config_, rank);
+        model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);
         break;
       default:
         throw std::runtime_error("Unsupported Tensor type.");

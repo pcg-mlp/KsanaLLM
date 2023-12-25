@@ -49,14 +49,14 @@ std::future<Status> Worker::SamplingAsync(std::shared_ptr<Sampler> sampler,
   return threadpool_->Submit([=, &sampling_reqs]() -> Status { return Sampling(sampler, sampling_reqs); });
 }
 
-WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pipeline_parallel_size)
+WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pipeline_parallel_size, std::shared_ptr<Context> context)
     : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
   threadpool_ = std::make_shared<ThreadPool>(tensor_parallel_size_ * pipeline_parallel_size_);
   threadpool_->Start();
 
   workers_.resize(tensor_parallel_size_ * pipeline_parallel_size_);
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
-    workers_[worker_id].reset(new Worker(worker_id, threadpool_));
+    workers_[worker_id].reset(new Worker(worker_id, threadpool_, context));
   }
 }
 

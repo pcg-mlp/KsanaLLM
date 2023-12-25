@@ -115,7 +115,7 @@ class BlockManager {
     }
   }
 
-  ~BlockManager() { }
+  ~BlockManager() {}
 
   // This function maybe called concurrently from different threads.
   // DO NOT store the device id in variable.

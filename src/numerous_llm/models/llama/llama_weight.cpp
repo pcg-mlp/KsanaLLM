@@ -36,7 +36,8 @@ LlamaWeight<T>::~LlamaWeight() {
 }
 
 template <typename T>
-LlamaWeight<T>::LlamaWeight(const ModelConfig& model_config, int rank) {
+LlamaWeight<T>::LlamaWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
+    : context_(context) {
   model_path_ = model_config.path;
   rank_ = rank;
 

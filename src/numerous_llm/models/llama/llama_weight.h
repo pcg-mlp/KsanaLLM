@@ -14,7 +14,7 @@ class LlamaWeight : public BaseWeight {
  public:
   LlamaWeight() {}
   ~LlamaWeight();
-  explicit LlamaWeight(const ModelConfig& model_config, int rank);
+  explicit LlamaWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
   Tensor GetModelWeights(const std::string& weight_name);
 
@@ -35,6 +35,8 @@ class LlamaWeight : public BaseWeight {
 
   std::string model_path_ = "";
   int rank_ = 0;
+
+  std::shared_ptr<Context> context_{nullptr};
 };
 
 }  // namespace numerous_llm

@@ -40,6 +40,11 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
     CUDA_CHECK(cudaStreamCreate(&d2h_stream));
     d2h_streams_.emplace_back(std::move(d2h_stream));
 
+    NLLM_LOG_INFO << "Init nvidia d2d_stream on device " << worker_id;
+    cudaStream_t d2d_stream;
+    CUDA_CHECK(cudaStreamCreate(&d2d_stream));
+    d2d_streams_.emplace_back(std::move(d2d_stream));
+
     NLLM_LOG_INFO << "Init nvidia nccl_stream on device " << worker_id;
     cudaStream_t nccl_stream;
     CUDA_CHECK(cudaStreamCreate(&nccl_stream));
@@ -81,6 +86,7 @@ Context::~Context() {
     CUDA_CHECK(cudaStreamDestroy(compute_streams_[worker_id]));
     CUDA_CHECK(cudaStreamDestroy(h2d_streams_[worker_id]));
     CUDA_CHECK(cudaStreamDestroy(d2h_streams_[worker_id]));
+    CUDA_CHECK(cudaStreamDestroy(d2d_streams_[worker_id]));
     CUDA_CHECK(cudaStreamDestroy(nccl_streams_[worker_id]));
 
     CUDA_CHECK(cublasDestroy(cublas_handles_[worker_id]));
@@ -92,6 +98,7 @@ Context::~Context() {
   compute_streams_.clear();
   h2d_streams_.clear();
   d2h_streams_.clear();
+  d2d_streams_.clear();
   nccl_streams_.clear();
   nccl_params_.clear();
 }

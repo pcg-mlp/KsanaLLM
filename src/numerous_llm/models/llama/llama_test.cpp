@@ -29,20 +29,20 @@ class LlamaTest : public testing::Test {
     block_manager_config.device_allocator_config.block_size = 1024;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
-    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(2, 1);
 
     // 使用配置创建一个 BlockManager 对象
-    block_manager = new BlockManager(block_manager_config, context);
+    block_manager = new BlockManager(block_manager_config, context_);
     SetBlockManager(block_manager);
   }
 
-  void TearDown() override {
-    delete block_manager;
-  }
+  void TearDown() override { delete block_manager; }
 
  protected:
   ModelConfig model_config;
   BlockManager* block_manager = nullptr;
+
+  std::shared_ptr<Context> context_{nullptr};
 };
 
 TEST_F(LlamaTest, ContextDecodeTest) {
@@ -55,6 +55,6 @@ TEST_F(LlamaTest, ContextDecodeTest) {
     create_model(model_config);
   }
 
-  std::shared_ptr<LlamaWeight<half>> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0);
-  std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0);
+  std::shared_ptr<LlamaWeight<half>> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
+  std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
 }

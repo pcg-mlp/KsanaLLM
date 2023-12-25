@@ -28,8 +28,7 @@ DeviceBlockManager::DeviceBlockManager(const BlockManagerConfig& block_manager_c
 }
 
 // 析构函数，释放DeviceBlockManager分配的所有内存
-DeviceBlockManager::~DeviceBlockManager() {
-}
+DeviceBlockManager::~DeviceBlockManager() {}
 
 // 根据给定的block_ids，获取对应的内存指针，存储在addrs中
 Status DeviceBlockManager::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {

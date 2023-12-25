@@ -175,4 +175,3 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
 
   EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
-

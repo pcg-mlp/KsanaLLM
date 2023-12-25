@@ -28,6 +28,8 @@ class Context {
 
   std::vector<cudaStream_t>& GetD2HStreams() { return d2h_streams_; }
 
+  std::vector<cudaStream_t>& GetD2DStreams() { return d2d_streams_; }
+
   std::vector<cudaStream_t>& GetNCCLStreams() { return nccl_streams_; }
 
   ncclUniqueId& GetNCCLUniqueID() { return nccl_uid_; }
@@ -54,6 +56,7 @@ class Context {
   std::vector<cudaStream_t> compute_streams_;
   std::vector<cudaStream_t> h2d_streams_;
   std::vector<cudaStream_t> d2h_streams_;
+  std::vector<cudaStream_t> d2d_streams_;
   std::vector<cudaStream_t> nccl_streams_;
   // nccl comms
   ncclUniqueId nccl_uid_;

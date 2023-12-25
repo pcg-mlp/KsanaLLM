@@ -3,17 +3,17 @@
 ==============================================================================*/
 #pragma once
 
+#include "numerous_llm/layers/add_layer.h"
+#include "numerous_llm/layers/base_layer.h"
+#include "numerous_llm/layers/emb_lookup_layer.h"
+#include "numerous_llm/layers/flash_attention_layer.h"
+#include "numerous_llm/layers/layernorm_layer.h"
+#include "numerous_llm/layers/matmul_layer.h"
+#include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
+#include "numerous_llm/layers/paged_attention_layer.h"
+#include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/models/llama/llama_weight.h"
-#include "numerous_llm/layers/base_layer.h"
-#include "numerous_llm/layers/add_layer.h"
-#include "numerous_llm/layers/flash_attention_layer.h"
-#include "numerous_llm/layers/paged_attention_layer.h"
-#include "numerous_llm/layers/emb_lookup_layer.h"
-#include "numerous_llm/layers/layernorm_layer.h"
-#include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
-#include "numerous_llm/layers/matmul_layer.h"
-#include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/tensor.h"
 #include "numerous_llm/utils/utils.h"
@@ -23,7 +23,7 @@ namespace numerous_llm {
 template <typename T>
 class Llama : public BaseModel {
  public:
-  Llama(const ModelConfig& model_config, const int rank);
+  Llama(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
   ~Llama();
 
   float* GetLogitsPtr();
@@ -33,8 +33,8 @@ class Llama : public BaseModel {
                        std::vector<ForwardRequest>& forward_reqs);
 
   // The decode stage.
-  Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
-                std::vector<ForwardRequest>& forward_reqs);
+  Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+
  protected:
   Status CreateTensor(Tensor& tensor, size_t length);
   Status DestroyTensor(Tensor& tensor);
@@ -57,6 +57,8 @@ class Llama : public BaseModel {
 
   Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
   Tensor kv_cache_buffer_;
+
+  std::shared_ptr<Context> context_{nullptr};
 };
 
 }  // namespace numerous_llm

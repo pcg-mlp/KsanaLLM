@@ -62,7 +62,7 @@ DataType GetTensorType() {
     return TYPE_BOOL;
   } else if (std::is_same<T, char>::value || std::is_same<T, const char>::value) {
     return TYPE_BYTES;
-  } else if (std::is_pointer<T>::value){
+  } else if (std::is_pointer<T>::value) {
     return TYPE_POINTER;
   } else {
     return TYPE_INVALID;

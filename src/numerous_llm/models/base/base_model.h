@@ -4,6 +4,7 @@
 #pragma once
 
 #include "numerous_llm/models/base/base_weight.h"
+#include "numerous_llm/runtime/context.h"
 #include "numerous_llm/runtime/forward_request.h"
 #include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/tensor.h"

@@ -3,16 +3,15 @@
  * ==============================================================================*/
 
 #include "numerous_llm/models/llama/llama_weight.h"
-#include "numerous_llm/models/llama/create_test_model.h"
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <random>
 #include <thread>
 #include "numerous_llm/block_manager/block_manager.h"
+#include "numerous_llm/models/llama/create_test_model.h"
 #include "numerous_llm/utils/memory_utils.h"
 #include "test.h"
-#include <thread>
 
 using namespace numerous_llm;
 // 定义一个 LlamaWeightTest 类,继承自 testing::Test
@@ -36,20 +35,20 @@ class LlamaWeightTest : public testing::Test {
     block_manager_config.device_allocator_config.block_size = 1024;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
-    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(2, 1);
 
     // 使用配置创建一个 BlockManager 对象
-    block_manager = new BlockManager(block_manager_config, context);
+    block_manager = new BlockManager(block_manager_config, context_);
     SetBlockManager(block_manager);
   }
 
-  void TearDown() override {
-    delete block_manager;
-  }
+  void TearDown() override { delete block_manager; }
 
  protected:
   ModelConfig model_config;
   BlockManager* block_manager = nullptr;
+
+  std::shared_ptr<Context> context_{nullptr};
 };
 
 // 计算数据 hash 值
@@ -75,7 +74,7 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
     create_model(model_config);
   }
 
-  LlamaWeight<half> llama_weight(model_config, 0);
+  LlamaWeight<half> llama_weight(model_config, 0, context_);
   // 正确的 weight 名称
   std::string weight_name = "lm_head";
   Tensor lm_head = llama_weight.GetModelWeights(weight_name);

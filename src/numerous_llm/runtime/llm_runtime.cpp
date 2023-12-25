@@ -23,7 +23,8 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
 }
 
 LlmRuntime::LlmRuntime(std::shared_ptr<Context> context) : context_(context) {
-  worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize());
+  worker_group_ =
+      std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize(), context_);
 
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     samplers_.push_back(std::make_shared<Sampler>(worker_id));

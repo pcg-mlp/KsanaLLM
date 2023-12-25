@@ -37,7 +37,7 @@ Llama<T>::~Llama() {
 }
 
 template <typename T>
-Llama<T>::Llama(const ModelConfig& model_config, const int rank) {
+Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) : context_(context) {
   // 解析 Model Config
   num_layer_ = model_config.num_layer;
   rank_ = rank;
@@ -111,9 +111,13 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   for (int idx = 0; idx < batch_size; ++idx) {
     auto req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
-    cudaMemcpy(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int), cudaMemcpyHostToDevice);
+    // TODO(karlluo): need implement
+    // CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
+    // cudaMemcpyHostToDevice, context->GetH2DStreams()[rank_]));
     input_offset += length;
   }
+
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetH2DStreams()[rank_]));
 
   // 生成 kv list
   Tensor kv_list;
@@ -123,11 +127,11 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   std::vector<void*> cpu_kv_list(num_layer_ * batch_size);
   for (size_t layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      cpu_kv_list[layer_idx * batch_size + idx] = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx];
+      // cpu_kv_list[layer_idx * batch_size + idx] = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx];
     }
   }
   void* kv_list_ptr = kv_list.GetPtr<void>();
-  cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice);
+  // cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice);
 
   // embedding
   Tensor embedding_weight = base_weight->GetModelWeights("gather_embedding");
@@ -210,8 +214,10 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   // Copy to logits buf
   float* output_logits_buf = forward_reqs[0].logits_buf[rank_];
   size_t logits_offset = 0;
-  cudaMemcpy(output_logits_buf, lm_head_output[0].GetPtr<void>(), lm_head_output[0].GetTotalBytes(),
-             cudaMemcpyDeviceToDevice);
+  // TODO(karlluo): need implement
+  // CUDA_CHECK(cudaMemcpyAsync(output_logits_buf, lm_head_output[0].GetPtr<void>(), lm_head_output[0].GetTotalBytes(),
+  //            cudaMemcpyDeviceToDevice, context_->GetD2DStreams()[rank_]));
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetD2DStreams()[rank_]));
   for (int idx = 0; idx < batch_size; ++idx) {
     ForwardRequest req = forward_reqs[idx];
     logits_offset += req.output_tokens->size();
@@ -248,9 +254,12 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   for (int idx = 0; idx < batch_size; ++idx) {
     auto req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
-    cudaMemcpy(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int), cudaMemcpyHostToDevice);
+    // TODO(karlluo): need implement
+    // CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
+    // cudaMemcpyHostToDevice, context_->GetH2DStreams()[rank_]));
     input_offset += length;
   }
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetH2DStreams()[rank_]));
 
   // 生成 kv list
   Tensor kv_list;
@@ -260,11 +269,11 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   std::vector<void*> cpu_kv_list(num_layer_ * batch_size);
   for (size_t layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      cpu_kv_list[layer_idx * batch_size + idx] = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx];
+      // cpu_kv_list[layer_idx * batch_size + idx] = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx];
     }
   }
   void* kv_list_ptr = kv_list.GetPtr<void>();
-  cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice);
+  // cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice);
 
   // embedding
   Tensor embedding_weight = base_weight->GetModelWeights("gather_embedding");
@@ -347,8 +356,10 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   // Copy to logits buf
   float* output_logits_buf = forward_reqs[0].logits_buf[rank_];
   size_t logits_offset = 0;
-  cudaMemcpy(output_logits_buf, lm_head_output[0].GetPtr<void>(), lm_head_output[0].GetTotalBytes(),
-             cudaMemcpyDeviceToDevice);
+  // TODO(karlluo): need implement
+  // CUDA_CHECK(cudaMemcpyAsync(output_logits_buf, lm_head_output[0].GetPtr<void>(), lm_head_output[0].GetTotalBytes(),
+  //            cudaMemcpyDeviceToDevice, context_->GetD2DStreams()[rank_]));
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetD2DStreams()[rank_]));
   for (int idx = 0; idx < batch_size; ++idx) {
     ForwardRequest req = forward_reqs[idx];
     logits_offset += req.output_tokens->size();
