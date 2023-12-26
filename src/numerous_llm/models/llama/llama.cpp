@@ -60,6 +60,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CreateTensor(tmp_tensor_2, max_b * max_s * hidden_units * dtype_size);
   CreateTensor(kv_cache_buffer_, num_layer_ * max_b * max_s * 2 * hidden_units * dtype_size);
 
+  // 初始化层结构 TODO: 从哪里获得 context stream
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   layernorm_layer_ = std::make_shared<LayernormLayer>();
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
@@ -95,17 +96,16 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
-  std::vector<float> cpu_logits(vocab_size_, 0);
-  float* fake_gpu_logits;
-  cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
+  std::vector<float>cpu_logits(vocab_size_, 0);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
+  float* logits_ptr = tmp_tensor_0.GetPtr<float>();
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    cudaMemcpy(fake_gpu_logits + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
+    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
                cudaMemcpyHostToDevice);
   }
   for (size_t idx = 0; idx < batch_size; ++idx) {
     auto& req = forward_reqs[idx];
-    req.logits_buf[rank_] = fake_gpu_logits;
+    req.logits_buf[rank_] = logits_ptr;
     req.logits_offset = idx;
   }
   return Status();
@@ -254,17 +254,16 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
-  std::vector<float> cpu_logits(vocab_size_, 0);
-  float* fake_gpu_logits;
-  cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
+  std::vector<float>cpu_logits(vocab_size_, 0);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
+  float* logits_ptr = tmp_tensor_0.GetPtr<float>();
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    cudaMemcpy(fake_gpu_logits + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
+    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
                cudaMemcpyHostToDevice);
   }
   for (size_t idx = 0; idx < batch_size; ++idx) {
     auto& req = forward_reqs[idx];
-    req.logits_buf[rank_] = fake_gpu_logits;
+    req.logits_buf[rank_] = logits_ptr;
     req.logits_offset = idx;
   }
   return Status();

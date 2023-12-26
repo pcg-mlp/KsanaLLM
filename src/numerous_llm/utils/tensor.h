@@ -64,6 +64,10 @@ struct Tensor {
     NLLM_CHECK_WITH_INFO(!blocks_addr.empty(), "No available blocks");
     return blocks_addr[0];
   }
+
+  void SaveToFile(const std::string& file_path);
+
+  std::string GetNumpyType() const;
 };
 
 // A container used to store multiple named tensors.

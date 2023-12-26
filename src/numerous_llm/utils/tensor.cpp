@@ -43,6 +43,24 @@ std::string Tensor::ToString() const {
                    type_to_string.at(dtype).c_str(), Vector2Str(shape).c_str(), Vector2Str(blocks).c_str());
 }
 
+std::string Tensor::GetNumpyType() const {
+  static const std::unordered_map<DataType, std::string> type_map{{TYPE_INVALID, "x"},
+                                                                  {TYPE_BOOL, "?"},
+                                                                  {TYPE_BYTES, "b"},
+                                                                  {TYPE_UINT8, "u1"},
+                                                                  {TYPE_UINT16, "u2"},
+                                                                  {TYPE_UINT32, "u4"},
+                                                                  {TYPE_UINT64, "u8"},
+                                                                  {TYPE_INT8, "i1"},
+                                                                  {TYPE_INT16, "i2"},
+                                                                  {TYPE_INT32, "i4"},
+                                                                  {TYPE_INT64, "i8"},
+                                                                  {TYPE_FP16, "f2"},
+                                                                  {TYPE_FP32, "f4"},
+                                                                  {TYPE_FP64, "f8"}};
+  return type_map.count(dtype) ? type_map.at(dtype) : "x";
+}
+
 size_t Tensor::GetTypeSize(DataType dtype) {
   static const std::unordered_map<DataType, size_t> type_map{{TYPE_BOOL, sizeof(bool)},
                                                              {TYPE_BYTES, sizeof(char)},
@@ -65,6 +83,50 @@ size_t Tensor::GetTypeSize(DataType dtype) {
                                                              {TYPE_FP64, sizeof(double)},
                                                              {TYPE_POINTER, sizeof(void*)}};
   return type_map.at(dtype);
+}
+
+void Tensor::SaveToFile(const std::string& file_path) {
+  NLLM_LOG_INFO << fmt::format("Save Tensor {} To File {}", ToString(), file_path);
+  void* cpu_data = malloc(GetTotalBytes());
+  void* tensor_data_ptr = GetPtr<void>();
+  auto memcpy_type = device == MEMORY_GPU ? cudaMemcpyDeviceToHost : cudaMemcpyHostToHost;
+  cudaDeviceSynchronize();
+  size_t total_size = GetTotalBytes();
+  cudaMemcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
+
+  std::ofstream file(file_path, std::ios::binary);
+  if (!file.is_open()) {
+    NLLM_LOG_ERROR << fmt::format("Could not open file {}", file_path);
+    return;
+  }
+  // Header of numpy file
+  file << "\x93NUMPY";
+  uint8_t major_version = 1;
+  uint8_t minor_version = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), sizeof(uint8_t));
+  file.write(reinterpret_cast<const char*>(&minor_version), sizeof(uint8_t));
+  std::stringstream header_stream;
+  header_stream << "{'descr': '" << GetNumpyType() << "', 'fortran_order': False, 'shape': (";
+  for (size_t i = 0; i < shape.size(); ++i) {
+    header_stream << shape[i];
+    if  (shape.size() == 1 || i  < shape.size() - 1) {
+      header_stream << ",";
+    }
+  }
+  header_stream << ")}";
+  int base_length = 6 + 4 + header_stream.str().size();
+  int pad_length  = 16 * ((base_length + 1 + 15) / 16);
+  for (int i = 0; i < pad_length - base_length; ++i) {
+    header_stream << ((i == pad_length - base_length - 1) ? "\n" : "\x20");
+  }
+  std::string header = header_stream.str();
+  const uint16_t header_len = header.size();
+  file.write(reinterpret_cast<const char*>(&header_len), sizeof(uint16_t));
+  file << header;
+
+  // Tensor Data
+  file.write(reinterpret_cast<const char*>(cpu_data), total_size);
+  file.close();
 }
 
 TensorMap::TensorMap(const std::unordered_map<std::string, Tensor>& tensor_map) {
