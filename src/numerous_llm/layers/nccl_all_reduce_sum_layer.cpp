@@ -5,11 +5,15 @@
 #include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
 
 namespace numerous_llm {
-// kernel host代码代补充
-void nccl_all_reduce_sum(const Tensor& input, Tensor output, cudaStream_t stream) {}
 
 Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  nccl_all_reduce_sum(input_tensors[0], output_tensors[0], stream_);
+  NCCL_CHECK(ncclGroupStart());
+  NCCL_CHECK(ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
+                           output_tensors[0].GetPtr<void>(), input_tensors[0].GetElementNumber() * sizeof(half),
+                           ncclHalf, ncclSum, context_->GetNCCLParam()[rank_].nccl_comm,
+                           context_->GetNCCLStreams()[rank_]));
+  NCCL_CHECK(ncclGroupEnd());
+
   return Status();
 }
 }  // namespace numerous_llm

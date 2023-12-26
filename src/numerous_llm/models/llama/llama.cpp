@@ -59,26 +59,26 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CreateTensor(tmp_tensor_1, max_b * max_s * hidden_units * dtype_size);
   CreateTensor(tmp_tensor_2, max_b * max_s * hidden_units * dtype_size);
   CreateTensor(kv_cache_buffer_, num_layer_ * max_b * max_s * 2 * hidden_units * dtype_size);
-  // 初始化层结构 TODO: 从哪里获得 context stream
+
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   layernorm_layer_ = std::make_shared<LayernormLayer>();
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   add_layer_ = std::make_shared<AddLayer>();
   silu_mul_layer_ = std::make_shared<SiluMulLayer>();
   matmul_layer_ = std::make_shared<MatMulLayer>();
-  emb_lookup_layer_->Init({}, nullptr);
-  layernorm_layer_->Init({layernorm_eps_}, nullptr);
-  nccl_all_reduce_sum_layer_->Init({}, nullptr);
-  add_layer_->Init({}, nullptr);
-  silu_mul_layer_->Init({}, nullptr);
-  matmul_layer_->Init({}, nullptr);
+  emb_lookup_layer_->Init({}, context_, rank_);
+  layernorm_layer_->Init({layernorm_eps_}, context_, rank_);
+  nccl_all_reduce_sum_layer_->Init({}, context_, rank_);
+  add_layer_->Init({}, context_, rank_);
+  silu_mul_layer_->Init({}, context_, rank_);
+  matmul_layer_->Init({}, context_, rank_);
   flash_attention_layer_.resize(num_layer_);
   paged_attention_layer_.resize(num_layer_);
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layer_[idx]->Init({idx, 2048}, nullptr);
-    paged_attention_layer_[idx]->Init({idx, 2048}, nullptr);
+    flash_attention_layer_[idx]->Init({idx, 2048}, context_, rank_);
+    paged_attention_layer_[idx]->Init({idx, 2048}, context_, rank_);
   }
 }
 
@@ -95,7 +95,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
-  std::vector<float>cpu_logits(vocab_size_, 0);
+  std::vector<float> cpu_logits(vocab_size_, 0);
   float* fake_gpu_logits;
   cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
@@ -109,7 +109,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     req.logits_offset = idx;
   }
   return Status();
-
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
   std::vector<Tensor> output_0{tmp_tensor_0};
@@ -255,7 +254,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
-  std::vector<float>cpu_logits(vocab_size_, 0);
+  std::vector<float> cpu_logits(vocab_size_, 0);
   float* fake_gpu_logits;
   cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5

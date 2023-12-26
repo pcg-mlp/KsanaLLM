@@ -9,7 +9,7 @@ namespace numerous_llm {
 void activation(const Tensor& input, Tensor output, cudaStream_t stream) {}
 
 Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  activation(input_tensors[0], output_tensors[0], stream_);
+  activation(input_tensors[0], output_tensors[0], context_->GetComputeStreams()[rank_]);
   return Status();
 }
 }  // namespace numerous_llm

@@ -17,10 +17,11 @@ Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   if (input_tensors.size() > 3) {
     LookupEmbedding(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
                     input_tensors[3].GetPtr<void>(), output_tensors[0].GetPtr<void>(), vocab_size, hidden_units, bs,
-                    step, vocab_id, stream_);
+                    step, vocab_id, context_->GetComputeStreams()[rank_]);
   } else {
     LookupEmbedding(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-                    nullptr, output_tensors[0].GetPtr<void>(), vocab_size, hidden_units, bs, step, vocab_id, stream_);
+                    nullptr, output_tensors[0].GetPtr<void>(), vocab_size, hidden_units, bs, step, vocab_id,
+                    context_->GetComputeStreams()[rank_]);
   }
   return Status();
 }

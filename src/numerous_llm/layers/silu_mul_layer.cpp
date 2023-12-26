@@ -9,7 +9,7 @@ namespace numerous_llm {
 void silu_mul(const Tensor& input_a, const Tensor& input_b, Tensor output, cudaStream_t stream) {}
 
 Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  silu_mul(input_tensors[0], input_tensors[1], output_tensors[0], stream_);
+  silu_mul(input_tensors[0], input_tensors[1], output_tensors[0], context_->GetComputeStreams()[rank_]);
   return Status();
 }
 }  // namespace numerous_llm

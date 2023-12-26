@@ -5,8 +5,8 @@
 #include "numerous_llm/layers/attention_layer.h"
 
 namespace numerous_llm {
-Status AttentionLayer::Init(const std::vector<std::any>& parameters, cudaStream_t stream) {
-  stream_ = stream;
+Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, context, rank);
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
   max_position_embeddings_ = std::any_cast<const int>(parameters[parameter_index++]);

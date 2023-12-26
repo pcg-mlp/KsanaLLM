@@ -15,7 +15,8 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   int cache_len = (output_tensors.size() - 1) / 2;
   std::vector<Tensor> key_cache(output_tensors.begin() + 1, output_tensors.begin() + 1 + cache_len);
   std::vector<Tensor> value_cache(output_tensors.begin() + 1 + cache_len, output_tensors.begin() + 1 + cache_len * 2);
-  flash_attention(layer_index_, input_tensors[0], out, key_cache, value_cache, max_position_embeddings_, stream_);
+  flash_attention(layer_index_, input_tensors[0], out, key_cache, value_cache, max_position_embeddings_,
+                  context_->GetComputeStreams()[rank_]);
   return Status();
 }
 

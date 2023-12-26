@@ -9,7 +9,7 @@ namespace numerous_llm {
 void add(const Tensor& input_a, const Tensor& input_b, Tensor output, cudaStream_t stream) {}
 
 Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  add(input_tensors[0], input_tensors[1], output_tensors[0], stream_);
+  add(input_tensors[0], input_tensors[1], output_tensors[0], context_->GetComputeStreams()[rank_]);
   return Status();
 }
 }  // namespace numerous_llm
