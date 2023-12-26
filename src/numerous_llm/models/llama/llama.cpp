@@ -92,12 +92,29 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
                                std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama context decode stage inference";
 
+  size_t batch_size = forward_reqs.size();
+
+  // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
+  std::vector<float>cpu_logits(vocab_size_, 0);
+  float* fake_gpu_logits;
+  cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
+  cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
+  for (size_t idx = 0; idx < batch_size; ++idx) {
+    cudaMemcpy(fake_gpu_logits + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
+               cudaMemcpyHostToDevice);
+  }
+  for (size_t idx = 0; idx < batch_size; ++idx) {
+    auto& req = forward_reqs[idx];
+    req.logits_buf[rank_] = fake_gpu_logits;
+    req.logits_offset = idx;
+  }
+  return Status();
+
+
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
   std::vector<Tensor> output_0{tmp_tensor_0};
   std::vector<Tensor> output_1{tmp_tensor_1};
   std::vector<Tensor> output_2{tmp_tensor_2};
-
-  size_t batch_size = forward_reqs.size();
 
   // 解析外部 CPU 输入,拷贝到 GPU Tensor 中
   size_t total_seq_len = 0;
@@ -235,12 +252,28 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama decode stage inference";
 
+  size_t batch_size = forward_reqs.size();
+
+  // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
+  std::vector<float>cpu_logits(vocab_size_, 0);
+  float* fake_gpu_logits;
+  cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
+  cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
+  for (size_t idx = 0; idx < batch_size; ++idx) {
+    cudaMemcpy(fake_gpu_logits + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
+               cudaMemcpyHostToDevice);
+  }
+  for (size_t idx = 0; idx < batch_size; ++idx) {
+    auto& req = forward_reqs[idx];
+    req.logits_buf[rank_] = fake_gpu_logits;
+    req.logits_offset = idx;
+  }
+  return Status();
+
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
   std::vector<Tensor> output_0{tmp_tensor_0};
   std::vector<Tensor> output_1{tmp_tensor_1};
   std::vector<Tensor> output_2{tmp_tensor_2};
-
-  size_t batch_size = forward_reqs.size();
 
   // 解析外部 CPU 输入,拷贝到 GPU Tensor 中
   size_t total_seq_len = 0;
