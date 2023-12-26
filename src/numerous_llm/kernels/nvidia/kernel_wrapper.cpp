@@ -4,7 +4,10 @@
 
 #include "numerous_llm/kernels/nvidia/kernel_wrapper.h"
 #include "csrc/kernels/nvidia/embedding/embedding.h"
+#include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
+
+#include "numerous_llm/utils/nvidia/cuda_utils.h"
 
 #include <iostream>
 
@@ -25,6 +28,13 @@ void InvokeLayerNorm(const void* input, const void* weight, const float layernor
   half* beta = nullptr;
   llm_kernels::nvidia::invokeLayerNorm<half>(reinterpret_cast<half*>(output), reinterpret_cast<const half*>(input),
                                              reinterpret_cast<const half*>(weight), beta, layernorm_eps, m, n, stream);
+}
+
+void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
+                  const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream) {
+  CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k,
+                                                   b_ptr, n, CUDA_R_16F, a_ptr, k, CUDA_R_16F, c_ptr, n, CUDA_R_16F,
+                                                   CUDA_R_32F, stream));
 }
 
 }  // namespace numerous_llm
