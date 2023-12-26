@@ -16,4 +16,7 @@ void InvokeLayerNorm(const void* input, const void* weight, const float layernor
 void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
                   const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream);
 
+void InvokeAddBiasResidual(const void* input, const void* bias, const int m, const int n, void* output,
+                           cudaStream_t stream);
+
 }  // namespace numerous_llm
