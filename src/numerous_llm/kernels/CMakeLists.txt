@@ -12,4 +12,4 @@ add_library(kernels STATIC ${kernels_SRCS})
 target_link_libraries(kernels PUBLIC -lcudart utils block_manager 
 	llm_kernels_nvidia_kernel_paged_attention llm_kernels_nvidia_kernel_embedding
 	llm_kernels_nvidia_kernel_layernorm llm_kernels_nvidia_kernel_gemm_wrapper
-	llm_kernels_nvidia_kernel_add)
+	llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_activation)

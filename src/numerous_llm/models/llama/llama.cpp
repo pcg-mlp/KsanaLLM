@@ -96,12 +96,11 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
-  std::vector<float>cpu_logits(vocab_size_, 0);
+  std::vector<float> cpu_logits(vocab_size_, 0);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
   float* logits_ptr = tmp_tensor_0.GetPtr<float>();
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
-               cudaMemcpyHostToDevice);
+    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float), cudaMemcpyHostToDevice);
   }
   for (size_t idx = 0; idx < batch_size; ++idx) {
     auto& req = forward_reqs[idx];
@@ -254,12 +253,11 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
-  std::vector<float>cpu_logits(vocab_size_, 0);
+  std::vector<float> cpu_logits(vocab_size_, 0);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
   float* logits_ptr = tmp_tensor_0.GetPtr<float>();
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
-               cudaMemcpyHostToDevice);
+    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float), cudaMemcpyHostToDevice);
   }
   for (size_t idx = 0; idx < batch_size; ++idx) {
     auto& req = forward_reqs[idx];

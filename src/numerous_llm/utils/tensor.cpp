@@ -44,20 +44,10 @@ std::string Tensor::ToString() const {
 }
 
 std::string Tensor::GetNumpyType() const {
-  static const std::unordered_map<DataType, std::string> type_map{{TYPE_INVALID, "x"},
-                                                                  {TYPE_BOOL, "?"},
-                                                                  {TYPE_BYTES, "b"},
-                                                                  {TYPE_UINT8, "u1"},
-                                                                  {TYPE_UINT16, "u2"},
-                                                                  {TYPE_UINT32, "u4"},
-                                                                  {TYPE_UINT64, "u8"},
-                                                                  {TYPE_INT8, "i1"},
-                                                                  {TYPE_INT16, "i2"},
-                                                                  {TYPE_INT32, "i4"},
-                                                                  {TYPE_INT64, "i8"},
-                                                                  {TYPE_FP16, "f2"},
-                                                                  {TYPE_FP32, "f4"},
-                                                                  {TYPE_FP64, "f8"}};
+  static const std::unordered_map<DataType, std::string> type_map{
+      {TYPE_INVALID, "x"}, {TYPE_BOOL, "?"},    {TYPE_BYTES, "b"}, {TYPE_UINT8, "u1"}, {TYPE_UINT16, "u2"},
+      {TYPE_UINT32, "u4"}, {TYPE_UINT64, "u8"}, {TYPE_INT8, "i1"}, {TYPE_INT16, "i2"}, {TYPE_INT32, "i4"},
+      {TYPE_INT64, "i8"},  {TYPE_FP16, "f2"},   {TYPE_FP32, "f4"}, {TYPE_FP64, "f8"}};
   return type_map.count(dtype) ? type_map.at(dtype) : "x";
 }
 
@@ -109,13 +99,13 @@ void Tensor::SaveToFile(const std::string& file_path) {
   header_stream << "{'descr': '" << GetNumpyType() << "', 'fortran_order': False, 'shape': (";
   for (size_t i = 0; i < shape.size(); ++i) {
     header_stream << shape[i];
-    if  (shape.size() == 1 || i  < shape.size() - 1) {
+    if (shape.size() == 1 || i < shape.size() - 1) {
       header_stream << ",";
     }
   }
   header_stream << ")}";
   int base_length = 6 + 4 + header_stream.str().size();
-  int pad_length  = 16 * ((base_length + 1 + 15) / 16);
+  int pad_length = 16 * ((base_length + 1 + 15) / 16);
   for (int i = 0; i < pad_length - base_length; ++i) {
     header_stream << ((i == pad_length - base_length - 1) ? "\n" : "\x20");
   }
