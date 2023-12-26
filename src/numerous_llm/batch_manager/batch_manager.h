@@ -32,7 +32,7 @@ class BatchManager {
   Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
 
   // Enqueue a request to waiting queue.
-  Status Enqueue(int64_t req_id, const std::vector<std::vector<int>> &tokens,
+  Status Enqueue(int64_t req_id, const std::string &model_name, const std::vector<std::vector<int>> &tokens,
                  const std::vector<SamplingConfig> &sampling_configs);
 
   // Wait request done and return output tensor maps.

@@ -21,6 +21,9 @@ class Request {
   // The unique id of a request.
   int64_t req_id;
 
+  // The requested model name.
+  std::string model_name;
+
   // The tokens of this request.
   std::vector<std::vector<int>> tokens;
 

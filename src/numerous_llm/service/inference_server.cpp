@@ -76,7 +76,7 @@ Status InferenceServer::Initialize() {
 
 Status InferenceServer::HandleRequest(const Request &req, Response &rsp) {
   NLLM_LOG_INFO << "Handle request id " << req.req_id << ", batch size " << req.tokens.size();
-  Status handle_req_status = batch_manager_->Enqueue(req.req_id, req.tokens, req.sampling_configs);
+  Status handle_req_status = batch_manager_->Enqueue(req.req_id, req.model_name, req.tokens, req.sampling_configs);
   if (!handle_req_status.OK()) {
     return handle_req_status;
   }

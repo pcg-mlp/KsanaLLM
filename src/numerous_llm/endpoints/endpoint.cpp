@@ -5,6 +5,7 @@
 #include "numerous_llm/endpoints/endpoint.h"
 
 #include <chrono>
+#include <string>
 #include <thread>
 
 #include "nlohmann/json.hpp"
@@ -26,6 +27,7 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue, std
     if (req.has_param("tokens")) {
       Request infer_req;
       int64_t req_id = infer_req.req_id;
+      infer_req.model_name = req.get_param_value("model_name");
       uint32_t batch_size = static_cast<uint32_t>(req.get_param_value_count("tokens_len"));
       uint32_t offset = 0;
       for (size_t t_l_id = 0; t_l_id < batch_size; ++t_l_id) {

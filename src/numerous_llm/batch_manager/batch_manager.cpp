@@ -67,7 +67,7 @@ Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> 
   return Status();
 }
 
-Status BatchManager::Enqueue(int64_t req_id, const std::vector<std::vector<int>> &tokens,
+Status BatchManager::Enqueue(int64_t req_id, const std::string &model_name, const std::vector<std::vector<int>> &tokens,
                              const std::vector<SamplingConfig> &sampling_configs) {
   NLLM_LOG_INFO << "batch manager enqueue req id " << req_id << ", batch_size " << tokens.size();
 
@@ -91,10 +91,8 @@ Status BatchManager::Enqueue(int64_t req_id, const std::vector<std::vector<int>>
     infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
     infer_req->block_size = GetBlockManager()->GetBlockSize();
 
-    // TODO(karlluo): pass it from config or request
-    infer_req->model_name = "llama";
-
-    infer_req->model_instance = model_instances_[infer_req->model_name];
+    infer_req->model_name = model_name;
+    infer_req->model_instance = model_instances_[model_name];
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
     infer_req->step = 0;
     SetReqsWithInferReqId(infer_req->req_id, static_cast<size_t>(i), infer_req);
