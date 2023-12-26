@@ -7,20 +7,19 @@
 
 namespace numerous_llm {
 Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, cudaStream_t stream) {
-  stream_ = stream;
-  rotary_embedding_layer_.Init(parameters, stream);
+  AttentionLayer::Init(parameters, stream);
+  rotary_embedding_layer_.Init({max_position_embeddings_}, stream);
   return Status();
 }
 
+// input_tensors = {query, kv_list, context_lens, workerspace}
 Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  return Status();
-
-  // TODO: fixed invoke error
+  const Tensor& query = input_tensors[0];
+  const Tensor& context_lens = input_tensors[1];
   Tensor& out = output_tensors[0];
-  int cache_len = (output_tensors.size() - 1) / 2;
-  std::vector<Tensor> key_cache(output_tensors.begin() + 1, output_tensors.begin() + 1 + cache_len);
-  std::vector<Tensor> value_cache(output_tensors.begin() + 1 + cache_len, output_tensors.begin() + 1 + cache_len * 2);
-  paged_attention(out, input_tensors[0], key_cache, value_cache, input_tensors[1], 0, stream_, nullptr, 0, {});
+  Tensor& kv_list = output_tensors[1];
+  Tensor& workspace = output_tensors[2];
+  paged_attention(layer_index_, out, query, kv_list, block_size_, context_lens, 0, stream_, workspace, {});
   std::vector<Tensor> rotary_embedding_layer_input_and_output = {out};
   rotary_embedding_layer_.Forward(rotary_embedding_layer_input_and_output, rotary_embedding_layer_input_and_output);
   return Status();

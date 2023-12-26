@@ -14,7 +14,9 @@ class AttentionLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
  protected:
+  int layer_index_;
   int max_position_embeddings_;
+  int block_size_;
 };
 
 }  // namespace numerous_llm

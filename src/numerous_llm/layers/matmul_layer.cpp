@@ -10,6 +10,7 @@ void matmul(const Tensor& input_a, const Tensor& input_b, Tensor output, cudaStr
 
 Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   matmul(input_tensors[0], input_tensors[1], output_tensors[0], stream_);
+  
   return Status();
 }
 }  // namespace numerous_llm

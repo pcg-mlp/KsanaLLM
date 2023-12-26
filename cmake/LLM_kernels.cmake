@@ -13,4 +13,5 @@ endif()
 
 if (NOT TARGET embedding)
   add_subdirectory(3rdparty/LLM_kernels)
+  include_directories(3rdparty/LLM_kernels)
 endif()

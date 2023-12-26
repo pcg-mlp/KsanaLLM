@@ -19,13 +19,13 @@ namespace numerous_llm {
 
 TEST(AttentionLayerTest, AttentionLayer) {
   FlashAttentionLayer flash_attention_layer;
-  EXPECT_TRUE(flash_attention_layer.Init({int(2048)}, nullptr).OK());
+  EXPECT_TRUE(flash_attention_layer.Init({int(1),int(2048)}, nullptr).OK());
   std::vector<Tensor> input_tensors(2);
   std::vector<Tensor> output_tensors(3);
   EXPECT_TRUE(flash_attention_layer.Forward(input_tensors, output_tensors).OK());
 
   PagedAttentionLayer attention_layer;
-  EXPECT_TRUE(attention_layer.Init({int(2048)}, nullptr).OK());
+  EXPECT_TRUE(attention_layer.Init({int(1), int(2048)}, nullptr).OK());
 }
 
 }  // namespace numerous_llm

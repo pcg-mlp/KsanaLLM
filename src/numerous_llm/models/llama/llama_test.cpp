@@ -56,5 +56,5 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   }
 
   std::shared_ptr<LlamaWeight<half>> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
-  std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
+  //std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
 }
