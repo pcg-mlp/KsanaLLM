@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "numerous_llm/layers/layernorm_layer.h"
+#include "numerous_llm/kernels/nvidia/kernel_wrapper.h"
 
 namespace numerous_llm {
 // kernel host代码代补充
@@ -17,7 +18,8 @@ Status LayernormLayer::Init(const std::vector<std::any>& parameters, cudaStream_
 }
 
 Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  layernorm(input_tensors[0], input_tensors[1], output_tensors[0], stream_);
+  InvokeLayerNorm(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), rms_norm_eps_,
+                  input_tensors[0].shape[0], input_tensors[0].shape[1], output_tensors[0].GetPtr<void>(), stream_);
   return Status();
 }
 }  // namespace numerous_llm

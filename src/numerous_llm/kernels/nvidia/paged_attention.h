@@ -22,16 +22,14 @@ void paged_attention(
 
 void paged_attention(
     const int layer_index,
-    Tensor& out,                       // [num_seqs, num_heads, head_size]
-    const Tensor& query,                     // [num_seqs, num_heads, head_size]
-    // kv_list [layer_num, num_seqs] k [num_seqs,seq_blocks,num_kv_heads,head_size/x,block_size,x],x=16/sizeof(T) v [num_seqs,seq_blocks, num_kv_heads, head_size, block_size]
-    Tensor& kv_list,
-    const int64_t block_size,
-    const Tensor& context_lens,              // [num_seqs]
-    int max_context_len, cudaStream_t stream, Tensor workspace,
-    const std::optional<Tensor>& alibi_slopes){
-        //.GetPtr(), input_tensors[2].GetTotalBytes()
-    }
-
+    Tensor& out,          // [num_seqs, num_heads, head_size]
+    const Tensor& query,  // [num_seqs, num_heads, head_size]
+    // kv_list [layer_num, num_seqs] k [num_seqs,seq_blocks,num_kv_heads,head_size/x,block_size,x],x=16/sizeof(T) v
+    // [num_seqs,seq_blocks, num_kv_heads, head_size, block_size]
+    Tensor& kv_list, const int64_t block_size,
+    const Tensor& context_lens,  // [num_seqs]
+    int max_context_len, cudaStream_t stream, Tensor workspace, const std::optional<Tensor>& alibi_slopes) {
+  //.GetPtr(), input_tensors[2].GetTotalBytes()
+}
 
 }  // namespace numerous_llm
