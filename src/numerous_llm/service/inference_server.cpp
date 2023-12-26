@@ -95,8 +95,10 @@ Status InferenceServer::StartHandler() {
   while (!terminated_) {
     Request req;
     std::pair<Status, Request> req_pair;
-
     requests_queue_.Read(&req_pair);
+    if (terminated_) {
+      break;
+    }
 
     Status status = req_pair.first;
     req = req_pair.second;
@@ -136,6 +138,7 @@ Status InferenceServer::StopServer() {
   }
 
   terminated_ = true;
+  requests_queue_.Close();
 
   // Wait all request done.
   NLLM_LOG_INFO << "Waiting all running request.";
@@ -151,6 +154,10 @@ Status InferenceServer::StopServer() {
   // Stop the batch manger.
   NLLM_LOG_INFO << "Stop batch manager.";
   batch_manager_->Stop();
+
+  // Force exit here to avoid crash.
+  _exit(0);
+
   return Status();
 }
 

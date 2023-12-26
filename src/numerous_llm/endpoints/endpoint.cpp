@@ -73,7 +73,6 @@ Status Endpoint::Listen(Channel<std::pair<Status, Request>> &requests_queue, std
 Status Endpoint::Close() {
   NLLM_LOG_INFO << "Close endpoint.";
   http_server_.stop();
-  http_server_thread_.join();
   terminated_ = true;
   return Status();
 }
