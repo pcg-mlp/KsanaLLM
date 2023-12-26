@@ -77,8 +77,8 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layer_[idx]->Init({2048}, nullptr);
-    paged_attention_layer_[idx]->Init({2048}, nullptr);
+    flash_attention_layer_[idx]->Init({idx, 2048}, nullptr);
+    paged_attention_layer_[idx]->Init({idx, 2048}, nullptr);
   }
 }
 
