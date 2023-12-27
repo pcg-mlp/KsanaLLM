@@ -4,7 +4,7 @@
 
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 project(numerous_llm LANGUAGES CXX CUDA)
-
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
 option(WITH_TESTING "Enable testing" OFF)
@@ -20,6 +20,7 @@ execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_proper
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
 include(base)
 include(LLM_kernels)
+include(FlashAttention)
 
 # set compiler flags
 set(CXX_STD "17" CACHE STRING "C++ standard")
@@ -70,7 +71,7 @@ else()
 endif()
 
 # TODO(karlluo): ABI detect by torch
-set(CMAKE_CXX_FLAGS "-std=c++17 -ggdb -O0 -g3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=1 -Wno-unknown-pragmas")
+set(CMAKE_CXX_FLAGS "-std=c++17 -ggdb -O0 -g3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=0 -Wno-unknown-pragmas")
 
 # set cmake output path
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -111,6 +112,49 @@ if (WITH_TESTING)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(googletest)
 endif()
+
+# include torch
+set(CMAKE_CXX_STANDARD 17)
+set(PYTHON_PATH "python" CACHE STRING "Python path")
+execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch; print(torch.__version__,end='');"
+	  RESULT_VARIABLE _PYTHON_SUCCESS
+	  OUTPUT_VARIABLE TORCH_VERSION)
+if (TORCH_VERSION VERSION_LESS "1.5.0")
+message(FATAL_ERROR "PyTorch >= 1.5.0 is needed for TorchScript mode.")
+endif()
+execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import os; import torch;
+print(os.path.dirname(torch.__file__),end='');"
+	  RESULT_VARIABLE _PYTHON_SUCCESS
+	  OUTPUT_VARIABLE TORCH_DIR)
+if (NOT _PYTHON_SUCCESS MATCHES 0)
+message(FATAL_ERROR "Torch config Error.")
+endif()
+list(APPEND CMAKE_PREFIX_PATH ${TORCH_DIR})
+find_package(Torch REQUIRED)
+execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; from distutils import sysconfig;
+print(sysconfig.get_python_inc());"
+	  RESULT_VARIABLE _PYTHON_SUCCESS
+	  OUTPUT_VARIABLE PY_INCLUDE_DIR)
+if (NOT _PYTHON_SUCCESS MATCHES 0)
+message(FATAL_ERROR "Python config Error.")
+endif()
+execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch;
+print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
+	  RESULT_VARIABLE _PYTHON_SUCCESS
+	  OUTPUT_VARIABLE USE_CXX11_ABI)
+message(STATUS "FlashAttention PY_INCLUDE_DIR ${PY_INCLUDE_DIR}")
+include_directories(${PY_INCLUDE_DIR})
+include_directories(${TORCH_DIR}/include/torch/csrc/api/include/)
+include_directories(${TORCH_DIR}/include/)
+
+find_package(PythonLibs REQUIRED)
+include_directories(${PYTHON_INCLUDE_DIRS})
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+message(STATUS "find Python3_LIBRARIES ${Python3_LIBRARIES}")
+
+
+message(STATUS "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS}")
 
 add_subdirectory(3rdparty)
 add_subdirectory(benchmarks)

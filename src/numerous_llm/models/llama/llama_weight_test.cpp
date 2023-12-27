@@ -25,7 +25,7 @@ class LlamaWeightTest : public testing::Test {
     model_config.inter_size = 14;
     model_config.num_layer = 2;
     model_config.vocab_size = 32;
-    model_config.tensor_para_size = 2;
+    model_config.tensor_para_size = 1;
 
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;

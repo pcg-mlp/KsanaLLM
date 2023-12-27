@@ -4,6 +4,7 @@
 
 include(FetchContent)
 include(ExternalProject)
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 
 set(FMT_DOWNLOAD_DIR ${THIRD_PARTY_PATH}/download/fmt)
 set(FMT_INSTALL_DIR ${THIRD_PARTY_PATH}/install/fmt)
@@ -22,7 +23,7 @@ if (NOT TARGET fmt)
         CMAKE_ARGS
             -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-            -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1"
+            -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
             -DCMAKE_INSTALL_PREFIX=${FMT_INSTALL_DIR}
             -DFMT_TEST=OFF
     )

@@ -59,6 +59,8 @@ class Llama : public BaseModel {
   Tensor kv_cache_buffer_;
 
   std::shared_ptr<Context> context_{nullptr};
+
+  std::string saved_dir = "/model/llama-ft/7B/nllm/";
 };
 
 }  // namespace numerous_llm

@@ -9,11 +9,12 @@
 namespace numerous_llm {
 
 template <typename T>
-Status Llama<T>::CreateTensor(Tensor& tensor, size_t length) {
+Status Llama<T>::CreateTensor(Tensor& tensor, size_t total_bytes) {
   int block_id;
   GetBlockManager()->SetDeviceId(rank_);
-  GetBlockManager()->AllocateContiguous(length, block_id);
-  tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, weight_data_type_, std::vector<size_t>{length},
+  GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+  // 此处的 shape 是默认生成的, 2  = sizeof(fp16)
+  tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, weight_data_type_, std::vector<size_t>{total_bytes / 2},
                   std::vector<int>{block_id});
   return Status();
 }
@@ -54,13 +55,12 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   // TODO: 数据从 model_config 获取
   int max_b = 4;
   int max_s = 1024;
-  size_t dtype_size = 2;
+  size_t dtype_size = 1;
   CreateTensor(tmp_tensor_0, max_b * max_s * hidden_units * dtype_size);
   CreateTensor(tmp_tensor_1, max_b * max_s * hidden_units * dtype_size);
   CreateTensor(tmp_tensor_2, max_b * max_s * hidden_units * dtype_size);
   CreateTensor(kv_cache_buffer_, num_layer_ * max_b * max_s * 2 * hidden_units * dtype_size);
 
-  // 初始化层结构 TODO: 从哪里获得 context stream
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   layernorm_layer_ = std::make_shared<LayernormLayer>();
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
@@ -94,45 +94,70 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   NLLM_LOG_INFO << "llama context decode stage inference";
 
   size_t batch_size = forward_reqs.size();
-
+NLLM_LOG_INFO << "debug 1";
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
   std::vector<float> cpu_logits(vocab_size_, 0);
+  float* fake_gpu_logits;
+NLLM_LOG_INFO << "debug 2";
+  CUDA_CHECK(cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_));
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
+NLLM_LOG_INFO << "debug 3";
   float* logits_ptr = tmp_tensor_0.GetPtr<float>();
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float), cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(logits_ptr + idx * vocab_size_, cpu_logits.data(), vocab_size_ * sizeof(float),
+               cudaMemcpyHostToDevice));
+NLLM_LOG_INFO << "debug 4";
   }
   for (size_t idx = 0; idx < batch_size; ++idx) {
     auto& req = forward_reqs[idx];
+NLLM_LOG_INFO << "debug 5";
     req.logits_buf[rank_] = logits_ptr;
+NLLM_LOG_INFO << "debug 6";
     req.logits_offset = idx;
   }
+NLLM_LOG_INFO << "debug 8";
   return Status();
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
   std::vector<Tensor> output_0{tmp_tensor_0};
   std::vector<Tensor> output_1{tmp_tensor_1};
   std::vector<Tensor> output_2{tmp_tensor_2};
-
   // 解析外部 CPU 输入,拷贝到 GPU Tensor 中
   size_t total_seq_len = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
   }
+
+  // input ids tensor
+  // TODO(zezhao): input_ids 复用tmp空间
   Tensor input_ids;
   CreateTensor(input_ids, total_seq_len * sizeof(int));
+  input_ids.shape = {total_seq_len};
+  input_ids.dtype = TYPE_INT32;
   void* input_ids_ptr = input_ids.GetPtr<void>();
   size_t input_offset = 0;
+  std::vector<size_t> input_offset_list(batch_size + 1, 0ul);
   for (int idx = 0; idx < batch_size; ++idx) {
-    auto req_input = forward_reqs[idx].output_tokens;
+    std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
     // TODO(karlluo): need implement
     // CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
     // cudaMemcpyHostToDevice, context->GetH2DStreams()[rank_]));
+    CUDA_CHECK(cudaMemcpy(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
+                          cudaMemcpyHostToDevice));
     input_offset += length;
+    input_offset_list[idx + 1] = input_offset;
   }
-
   CUDA_CHECK(cudaStreamSynchronize(context_->GetH2DStreams()[rank_]));
+
+  // input offset tensor
+  Tensor input_offset_tensor;
+  CreateTensor(input_offset_tensor, input_offset_list.size() * sizeof(size_t));
+  input_offset_tensor.shape = {batch_size + 1};
+  input_offset_tensor.dtype = TYPE_UINT64;
+  void* input_offset_ptr = input_offset_tensor.GetPtr<void>();
+  cudaMemcpy(input_offset_ptr, input_offset_list.data(), input_offset_list.size() * sizeof(size_t),
+             cudaMemcpyHostToDevice);
 
   // 生成 kv list
   Tensor kv_list;
@@ -147,11 +172,13 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   }
   void* kv_list_ptr = kv_list.GetPtr<void>();
   // cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice);
-
   // embedding
   Tensor embedding_weight = base_weight->GetModelWeights("gather_embedding");
   std::vector<Tensor>& emb_lookup_output = output_0;
-  STATUS_CHECK_RETURN(emb_lookup_layer_->Forward({input_ids, embedding_weight}, emb_lookup_output));
+  
+  STATUS_CHECK_RETURN(emb_lookup_layer_->Forward({input_ids, input_offset_tensor, embedding_weight},
+                                                 emb_lookup_output));
+  emb_lookup_output[0].SaveToFile(saved_dir + "emb_lookup_output.npy");
 
   // LlamaDecoder
   for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
@@ -162,12 +189,32 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     std::vector<Tensor>& input_layernorm_input = output_0;
     std::vector<Tensor>& input_layernorm_output = output_1;
     STATUS_CHECK_RETURN(
-        layernorm_layer_->Forward({input_layernorm_input[0], kv_list, input_layernorm_weight}, input_layernorm_output));
+        layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
+
+    input_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".input_layernorm.npy");
 
     // Attn proj MatMul
-    Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
+    Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
     std::vector<Tensor>& attn_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
+
+    attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj.npy");
+
+
+    // rotary_embedding
+    Tensor rotary_embedding_shape;
+    //rotary_embedding_shape.shape = {max_s};
+    // rotary embedding 原地修改, 因此输出和输入指向同一块空间
+    std::vector<Tensor>& rotary_embedding_output = output_1;
+    //STATUS_CHECK_RETURN(rotary_embedding_layer_->Forward({input_layernorm_output[0], },
+    //                                                     rotary_embedding_output);
+
+
+DestroyTensor(input_ids);
+DestroyTensor(input_offset_tensor);
+DestroyTensor(kv_list);
+return Status();
+
 
     // MMHA Flash Attention
     std::vector<Tensor>& flash_attention_output = output_1;
@@ -175,7 +222,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
                                                                    flash_attention_output));
 
     // Attn o_proj MatMul
-    Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
+    Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
     std::vector<Tensor>& attn_o_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({flash_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
 
@@ -249,11 +296,13 @@ template <typename T>
 Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama decode stage inference";
-
+/*
   size_t batch_size = forward_reqs.size();
 
   // TODO: 为调通 generate 流程,临时使用的伪推理逻辑
   std::vector<float> cpu_logits(vocab_size_, 0);
+  float* fake_gpu_logits;
+  cudaMalloc(&fake_gpu_logits, batch_size * vocab_size_);
   cpu_logits[5] = 1;  // greedy 应返回 next_token = 5
   float* logits_ptr = tmp_tensor_0.GetPtr<float>();
   for (size_t idx = 0; idx < batch_size; ++idx) {
@@ -318,7 +367,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     std::vector<Tensor>& input_layernorm_input = output_0;
     std::vector<Tensor>& input_layernorm_output = output_1;
     STATUS_CHECK_RETURN(
-        layernorm_layer_->Forward({input_layernorm_input[0], kv_list, input_layernorm_weight}, input_layernorm_output));
+        layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
 
     // Attn proj MatMul
     Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
@@ -397,7 +446,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
 
   DestroyTensor(input_ids);
   DestroyTensor(kv_list);
-
+*/
   return Status();
 }
 

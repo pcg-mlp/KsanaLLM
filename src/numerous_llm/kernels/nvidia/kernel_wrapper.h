@@ -25,4 +25,6 @@ void InvokeSiluActivation(const void* input, const void* bias, const int m, cons
 void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,
                        void* output, cudaStream_t& stream);
 
+void AttenVarlen(void* q, void* k, void* v, void* out, void* seqlen, int total_tokens, int max_tokens, int batch,
+                 int num_heads, int head_size, bool is_causal, int rank, cudaStream_t stream);
 }  // namespace numerous_llm

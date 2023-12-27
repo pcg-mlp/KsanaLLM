@@ -76,13 +76,21 @@ size_t Tensor::GetTypeSize(DataType dtype) {
 }
 
 void Tensor::SaveToFile(const std::string& file_path) {
-  NLLM_LOG_INFO << fmt::format("Save Tensor {} To File {}", ToString(), file_path);
-  void* cpu_data = malloc(GetTotalBytes());
+  cudaDeviceSynchronize();
+  NLLM_LOG_INFO << fmt::format("Save {} To File {}", ToString(), file_path);
+  size_t total_size = GetTotalBytes();
+  void* cpu_data = malloc(total_size);
   void* tensor_data_ptr = GetPtr<void>();
   auto memcpy_type = device == MEMORY_GPU ? cudaMemcpyDeviceToHost : cudaMemcpyHostToHost;
-  cudaDeviceSynchronize();
-  size_t total_size = GetTotalBytes();
-  cudaMemcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
+  printf("addr = %p, type = %d, size = %d\n", tensor_data_ptr, memcpy_type == cudaMemcpyDeviceToHost, total_size);
+
+  cudaError_t ret = cudaMemcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
+  if (ret  !=  cudaSuccess) {
+    std::cerr << "CUDA error: " << cudaGetErrorString(ret) << std::endl;
+    exit(1);
+  }
+  printf("第一个值  %d\n", ((char*)cpu_data)[0]);
+  printf("第二个值  %d\n", ((char*)cpu_data)[1]);
 
   std::ofstream file(file_path, std::ios::binary);
   if (!file.is_open()) {
@@ -103,6 +111,7 @@ void Tensor::SaveToFile(const std::string& file_path) {
       header_stream << ",";
     }
   }
+    //header_stream << "1600,";
   header_stream << ")}";
   int base_length = 6 + 4 + header_stream.str().size();
   int pad_length = 16 * ((base_length + 1 + 15) / 16);

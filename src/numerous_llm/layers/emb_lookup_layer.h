@@ -4,7 +4,7 @@
 #pragma once
 
 #include "numerous_llm/layers/base_layer.h"
-
+#include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 namespace numerous_llm {
 
 class EmbLookupLayer : public BaseLayer {

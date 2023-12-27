@@ -11,6 +11,7 @@ message(STATUS "kernels_SRCS: ${kernels_SRCS}")
 add_library(kernels STATIC ${kernels_SRCS})
 target_link_libraries(kernels PUBLIC -lcudart utils block_manager 
 	llm_kernels_nvidia_kernel_paged_attention llm_kernels_nvidia_kernel_embedding
+        flash_attn_kernels ${Python3_LIBRARIES}
 	llm_kernels_nvidia_kernel_layernorm llm_kernels_nvidia_kernel_gemm_wrapper
 	llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_activation
 	llm_kernels_nvidia_kernel_assemble_last_token)

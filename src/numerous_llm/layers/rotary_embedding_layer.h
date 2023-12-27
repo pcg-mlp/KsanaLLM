@@ -15,6 +15,8 @@ class RotaryEmbeddingLayer : public BaseLayer {
 
  protected:
   int max_position_embeddings_;
+  int cos_sin_cache_block_id_;
+  // RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
 };
 
 }  // namespace numerous_llm
