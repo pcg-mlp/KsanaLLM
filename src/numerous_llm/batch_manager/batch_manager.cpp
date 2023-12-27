@@ -33,6 +33,8 @@ Status BatchManager::Initialize() {
 
   llm_runtime_ = std::make_shared<LlmRuntime>(context_);
 
+  queue_waiter_ = std::make_shared<Waiter>(1);
+
   return Status();
 }
 
@@ -68,17 +70,11 @@ Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> 
 }
 
 Status BatchManager::Enqueue(int64_t req_id, const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                             const std::vector<SamplingConfig> &sampling_configs) {
+                             const std::vector<SamplingConfig> &sampling_configs, std::shared_ptr<Waiter> waiter) {
   NLLM_LOG_INFO << "batch manager enqueue req id " << req_id << ", batch_size " << tokens.size();
 
   Status enqueue_status = Status(RetCode::RET_SUCCESS);
 
-  // Split into multiple prompt
-  if (tokens.size() != sampling_configs.size()) {
-    return Status(RET_INVALID_ARGUMENT, "Size of tokens and sampling_configs should be equal.");
-  }
-
-  std::shared_ptr<Waiter> waiter = std::make_shared<Waiter>(tokens.size());
   InitReqsWithInferReqId(req_id, tokens.size());
   for (size_t i = 0; i < tokens.size(); ++i) {
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>();
@@ -106,18 +102,22 @@ Status BatchManager::Enqueue(int64_t req_id, const std::string &model_name, cons
                      << infer_req->input_tokens.size() << " tokens failed, message: " << enqueue_status.ToString();
     }
   }
-
+  
+  queue_waiter_->Notify();
   return Status();
 }
 
-Status BatchManager::WaitDone(int64_t req_id, std::vector<std::vector<int>> &tokens) {
-  NLLM_LOG_INFO << "waiting req_id " << req_id << " finish.";
+Status BatchManager::FetchResult(int64_t req_id, std::vector<std::vector<int>> &tokens) {
+  NLLM_LOG_INFO << "Fetch req_id " << req_id << " result.";
   auto &infer_reqs_list = GetReqsWithInferReqId(req_id);
   tokens.resize(infer_reqs_list.size());
   Status infer_status = Status(RET_SUCCESS);
   for (size_t infer_req_idx = 0; infer_req_idx < infer_reqs_list.size(); ++infer_req_idx) {
-    infer_reqs_list[infer_req_idx]->waiter->Wait();
     tokens[infer_req_idx] = infer_reqs_list[infer_req_idx]->output_tokens;
+    if (!infer_reqs_list[infer_req_idx]->finish_status.OK()) {
+      // TODO(yancyliu): Summary all failed status.
+      infer_status = infer_reqs_list[infer_req_idx]->finish_status;
+    }
   }
   EraseReqsWithInferReqId(req_id);
   return infer_status;
@@ -130,6 +130,8 @@ Status BatchManager::Process() {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
     scheduled_reqs = batch_scheduler_->Schedule();
     if (scheduled_reqs.empty()) {
+      queue_waiter_->Wait();
+      queue_waiter_->Reset(1);
       continue;
     }
 

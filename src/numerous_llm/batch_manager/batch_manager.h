@@ -33,10 +33,10 @@ class BatchManager {
 
   // Enqueue a request to waiting queue.
   Status Enqueue(int64_t req_id, const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                 const std::vector<SamplingConfig> &sampling_configs);
+                 const std::vector<SamplingConfig> &sampling_configs, std::shared_ptr<Waiter> waiter);
 
-  // Wait request done and return output tensor maps.
-  Status WaitDone(int64_t req_id, std::vector<std::vector<int>> &tokens);
+  // Fetch the inference result.
+  Status FetchResult(int64_t req_id, std::vector<std::vector<int>> &tokens);
 
   // Wait all requests done.
   Status WaitAllDone();
@@ -99,6 +99,9 @@ class BatchManager {
 
   // To guard result maintainer.
   std::mutex infer_reqs_maintainer_mutex_;
+
+  // A waiter used to notify scheduler.
+  std::shared_ptr<Waiter> queue_waiter_;
 };
 
 }  // namespace numerous_llm

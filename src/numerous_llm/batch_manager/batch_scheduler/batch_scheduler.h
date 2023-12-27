@@ -69,7 +69,6 @@ class BatchScheduler {
   std::vector<std::shared_ptr<InferRequest>> waiting_queue_;
   std::vector<std::shared_ptr<InferRequest>> running_queue_;
   std::vector<std::shared_ptr<InferRequest>> swapped_queue_;
-  std::vector<std::shared_ptr<InferRequest>> finish_queue_;
 };
 
 }  // namespace numerous_llm

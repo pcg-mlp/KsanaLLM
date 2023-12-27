@@ -5,6 +5,7 @@
 
 #include <atomic>
 
+#include "numerous_llm/batch_manager/batch_manager.h"
 #include "numerous_llm/endpoints/base/base_endpoint.h"
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
@@ -15,11 +16,10 @@ namespace numerous_llm {
 
 class Endpoint : public BaseEndpoint {
  public:
-  explicit Endpoint(const EndpointConfig &endpoint_config);
+  explicit Endpoint(const EndpointConfig &endpoint_config, std::shared_ptr<BatchManager> batch_manager);
 
   // Listen at specific socket.
-  Status Listen(Channel<std::pair<Status, Request>> &requests_queue, std::mutex &response_container_mutex,
-                std::unordered_map<int64_t, std::pair<Status, Response>> &response_container);
+  Status Listen(Channel<std::pair<Status, Request>> &requests_queue);
 
   // Close the listening socket.
   Status Close();
@@ -37,6 +37,8 @@ class Endpoint : public BaseEndpoint {
   std::thread http_server_thread_;
 
   EndpointConfig endpoint_config_;
+
+  std::shared_ptr<BatchManager> batch_manager_;
 };
 
 }  // namespace numerous_llm

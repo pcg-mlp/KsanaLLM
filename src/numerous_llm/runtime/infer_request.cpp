@@ -30,6 +30,7 @@ InferRequest::InferRequest() {
 }
 
 InferRequest::~InferRequest() {
+  NLLM_LOG_INFO << "req " << infer_id << " destroyed, free block.";
   // Free memory on every device.
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);

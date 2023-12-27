@@ -14,6 +14,7 @@
 #include "numerous_llm/utils/environment.h"
 #include "numerous_llm/utils/request.h"
 #include "numerous_llm/utils/status.h"
+#include "numerous_llm/utils/waiter.h"
 
 namespace numerous_llm {
 
@@ -33,13 +34,11 @@ class InferenceServer {
   Status StartHandler();
 
   // Handle one request.
-  Status HandleRequest(const Request &req, Response &rsp);
+  Status HandleRequest(const Request &req);
 
   // Initialize inference server:
   // load weights & register model instance & start rpc port.
   Status Initialize();
-
-  void PrepareRespone(Status infer_status, Response &rsp);
 
  private:
   // The endpoint of this service.
@@ -62,9 +61,6 @@ class InferenceServer {
 
   // channel for endpoint and inference server
   Channel<std::pair<Status, Request>> requests_queue_;
-
-  std::mutex response_container_mutex_;
-  std::unordered_map<int64_t, std::pair<Status, Response>> response_container_;
 };
 
 }  // namespace numerous_llm

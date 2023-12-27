@@ -96,14 +96,8 @@ class InferRequest {
   // The final status of this request.
   Status finish_status;
 
-  // The input tensor map.
-  TensorMap input_tensor_map;
-
   // The sampling config of this request.
   SamplingConfig sampling_config;
-
-  // The output tensor map.
-  TensorMap output_tensor_map;
 
   // The waiter used to nofity caller client.
   std::shared_ptr<Waiter> waiter;
