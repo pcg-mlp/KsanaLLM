@@ -77,6 +77,9 @@ class DeviceBlockManager {
   // 返回值：Status 对象，表示操作的成功或失败
   Status SwapOut(std::vector<int>& device_blocks, cudaStream_t stream);
 
+  // Drop the swapped blocks.
+  Status DropSwapped(std::vector<int>& device_blocks);
+
   // 获取指定设备类型的空闲块数量
   // 参数：device - 设备类型
   // 返回值：空闲块数量
@@ -146,6 +149,11 @@ class BlockManager {
   Status SwapOut(std::vector<int>& device_blocks) {
     int device_id = GetDeviceId();
     return GetDeviceBlockManager(device_id)->SwapOut(device_blocks, context_->d2h_streams_[device_id]);
+  }
+
+  Status DropSwapped(std::vector<int>& device_blocks) {
+    int device_id = GetDeviceId();
+    return GetDeviceBlockManager(device_id)->DropSwapped(device_blocks);
   }
 
   // Get free block number for current selected device.

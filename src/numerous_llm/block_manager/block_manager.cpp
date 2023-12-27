@@ -87,6 +87,11 @@ Status DeviceBlockManager::SwapOut(std::vector<int>& device_blocks, cudaStream_t
   return Status();
 }
 
+Status DeviceBlockManager::DropSwapped(std::vector<int>& device_blocks) {
+  // TODO(zakwang):
+  return Status();
+}
+
 // 函数：获取指定设备类型的空闲内存块数量
 // 参数：device - 设备类型
 // 返回值：空闲内存块数量

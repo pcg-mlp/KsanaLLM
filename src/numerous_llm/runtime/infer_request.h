@@ -55,6 +55,9 @@ class InferRequest {
   Status SwapInAsync();
   Status SwapOutAsync();
 
+  // Drop this swapped request.
+  Status DropSwappedAsync();
+
   // Check whether the model instance enable lora.
   bool CheckLoraEnable();
 
@@ -119,7 +122,7 @@ class InferRequest {
   std::vector<int> output_tokens;
 
   // The offset for model forward's logits output.
-  size_t logits_offset;
+  size_t logits_offset = 0;
 };
 
 }  // namespace numerous_llm

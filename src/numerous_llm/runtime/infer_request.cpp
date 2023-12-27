@@ -90,6 +90,16 @@ Status InferRequest::SwapOutAsync() {
   return Status();
 }
 
+Status InferRequest::DropSwappedAsync() {
+  for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
+    GetBlockManager()->SetDeviceId(i);
+    GetBlockManager()->DropSwapped(kv_cache_blocks[0]);
+  }
+
+  return Status();
+}
+
+
 bool InferRequest::CheckLoraEnable() {
   // TODO
   return false;

@@ -92,6 +92,14 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
       req->infer_stage = InferStage::STATE_DECODE;
     }
 
+    // Swap left running reqs if schedule step finished.
+    if (schedule_step_finish) {
+      req->SwapOutAsync();
+      swapped_queue_.push_back(req);
+      it = running_queue_.erase(it);
+      continue;
+    }
+
     // Check total token number and block number.
     total_token_num += req->GetStepTokenNumber();
     size_t block_num_wanted = req->GetStepBlockNumber();
@@ -105,22 +113,15 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
       continue;
     }
 
-    // Swap left running reqs.
-    if (schedule_step_finish) {
-      req->SwapOutAsync();
-      swapped_queue_.push_back(req);
-      it = running_queue_.erase(it);
-      continue;
+    // Allocate blocks and continue running.
+    if (block_num_wanted > 0) {
+      for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+        std::vector<int> blocks;
+        GetBlockManager()->SetDeviceId(i);
+        GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+        req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+      }
     }
-
-    for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
-      std::vector<int> blocks;
-      GetBlockManager()->SetDeviceId(i);
-      GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
-      req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
-    }
-
-    // continue running.
     ++it;
   }
 }
@@ -133,6 +134,9 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
 
     // Check timeout, no finished req in swapped queue.
     if (CheckRequestTimeout(req)) {
+      // Drop the swapped blocks.
+      req->DropSwappedAsync();
+
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       finish_queue_.push_back(req);
       it = swapped_queue_.erase(it);
@@ -140,22 +144,39 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
       continue;
     }
 
-    // All the bocks must be swapped in for swapped reqs.
-    total_token_num += req->GetStepTokenNumber();
-    size_t block_num_wanted = req->GetStepBlockNumber();
-    total_block_num += block_num_wanted;
-
-    if (total_token_num <= batch_schedule_config_.max_token_number && total_block_num <= max_free_block_num) {
-      req->SwapInAsync();
-
-      running_queue_.push_back(req);
-      it = swapped_queue_.erase(it);
+    // Stay swapped and step to next.
+    if (schedule_step_finish) {
+      ++it;
       continue;
     }
 
-    // stay swapped.
-    schedule_step_finish = true;
-    ++it;
+    // All the bocks must be swapped in for swapped reqs.
+    // For swapped req, all blocks should be swapped in, and then allocate new block if necessary.
+    total_token_num += req->GetStepTokenNumber();
+    total_block_num += req->GetTotalBlockNumber();
+
+    if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num) {
+      // stay swapped.
+      NLLM_LOG_INFO << "swapped req " << req->infer_id << " stay waiting.";
+      schedule_step_finish = true;
+      ++it;
+      continue;
+    }
+
+    size_t block_num_wanted = req->GetStepBlockNumber();
+
+    req->SwapInAsync();
+    if (block_num_wanted > 0) {
+      for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+        std::vector<int> blocks;
+        GetBlockManager()->SetDeviceId(i);
+        GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+        req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+      }
+    }
+
+    running_queue_.push_back(req);
+    it = swapped_queue_.erase(it);
   }
 }
 
@@ -175,19 +196,36 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
       continue;
     }
 
-    total_token_num += req->GetStepTokenNumber();
-    total_block_num += req->GetTotalBlockNumber();
-    if (total_token_num <= batch_schedule_config_.max_token_number && total_block_num <= max_free_block_num) {
-      NLLM_LOG_INFO << "waiting_queue_ ready to run.";
-      running_queue_.push_back(req);
-      it = waiting_queue_.erase(it);
+    // Stay waiting and step to next.
+    if (schedule_step_finish) {
+      ++it;
       continue;
     }
 
-    // stay waiting.
-    NLLM_LOG_INFO << "waiting_queue_ stay waiting.";
-    schedule_step_finish = true;
-    break;
+    total_token_num += req->GetStepTokenNumber();
+    size_t block_num_wanted = req->GetTotalBlockNumber();
+    total_block_num += block_num_wanted;
+
+    if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num) {
+      // stay waiting.
+      NLLM_LOG_INFO << "waiting_queue_ stay waiting.";
+      schedule_step_finish = true;
+      ++it;
+      continue;
+    }
+
+    if (block_num_wanted > 0) {
+      for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+        std::vector<int> blocks;
+        GetBlockManager()->SetDeviceId(i);
+        GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+        req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+      }
+    }
+
+    NLLM_LOG_INFO << "waiting_queue_ ready to run.";
+    running_queue_.push_back(req);
+    it = waiting_queue_.erase(it);
   }
 }
 
