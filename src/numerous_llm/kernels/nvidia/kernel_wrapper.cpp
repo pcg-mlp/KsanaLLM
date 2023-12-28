@@ -5,6 +5,7 @@
 #include "numerous_llm/kernels/nvidia/kernel_wrapper.h"
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
+#include "csrc/kernels/nvidia/assemble_last_token/assemble_last_token.h"
 #include "csrc/kernels/nvidia/embedding/embedding.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
@@ -14,8 +15,6 @@
 #include <iostream>
 
 namespace numerous_llm {
-
-// kernel host代码代补充
 
 void LookupEmbedding(const void* ids, const void* offset, const void* emb, const void* pos, void* output,
                      int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream) {
@@ -62,6 +61,13 @@ void InvokeSiluActivation(const void* input, const void* bias, const int m, cons
   llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, half, half>(
       reinterpret_cast<half*>(output), reinterpret_cast<const half*>(bias), gated_weights, gated_bias, ia3_tasks,
       ia3_weights, m, n, int8_mode, activation_in, activation_out, padding_offset, seq_len, stream);
+}
+
+void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,
+                       void* output, cudaStream_t& stream) {
+  llm_kernels::nvidia::AssembleLastToken<half>(reinterpret_cast<const half*>(input),
+                                               reinterpret_cast<const size_t*>(offset), batch_size, hidden_units_num,
+                                               reinterpret_cast<half*>(output), stream);
 }
 
 }  // namespace numerous_llm

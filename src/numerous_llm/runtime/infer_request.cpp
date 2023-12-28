@@ -100,7 +100,6 @@ Status InferRequest::DropSwappedAsync() {
   return Status();
 }
 
-
 bool InferRequest::CheckLoraEnable() {
   // TODO
   return false;

@@ -22,4 +22,7 @@ void InvokeAddBiasResidual(const void* input, const void* bias, const int m, con
 void InvokeSiluActivation(const void* input, const void* bias, const int m, const int n, void* output,
                           cudaStream_t stream);
 
+void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,
+                       void* output, cudaStream_t& stream);
+
 }  // namespace numerous_llm

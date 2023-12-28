@@ -102,7 +102,7 @@ Status BatchManager::Enqueue(int64_t req_id, const std::string &model_name, cons
                      << infer_req->input_tokens.size() << " tokens failed, message: " << enqueue_status.ToString();
     }
   }
-  
+
   queue_waiter_->Notify();
   return Status();
 }
