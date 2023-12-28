@@ -124,8 +124,12 @@ NLLM_LOG_INFO << "debug 8";
   std::vector<Tensor> output_2{tmp_tensor_2};
   // 解析外部 CPU 输入,拷贝到 GPU Tensor 中
   size_t total_seq_len = 0;
+  size_t total_block_num = 0;
+  std::vector<int> kv_cache_offset_list(1, 0);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
+    total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+    kv_cache_offset_list.push_back(total_block_num);
   }
 
   // input ids tensor
@@ -161,14 +165,31 @@ NLLM_LOG_INFO << "debug 8";
 
   // 生成 kv list
   Tensor kv_list;
-  CreateTensor(kv_list, num_layer_ * total_seq_len * sizeof(void*));
-  kv_list.shape = {num_layer_, batch_size};
+  CreateTensor(kv_list, num_layer_ * total_block_num * 2 * sizeof(void*));
+  kv_list.shape = {num_layer_, total_block_num * 2};
   kv_list.dtype = TYPE_POINTER;
-  std::vector<void*> cpu_kv_list(num_layer_ * batch_size);
+  std::vector<void*> cpu_kv_list(num_layer_ * total_block_num * 2);
   for (size_t layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
+    int kv_list_index = 0;
+    // 处理k
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      // cpu_kv_list[layer_idx * batch_size + idx] = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx];
+      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+      for (size_t block_idx = 0; block_idx < block_num; block_idx++){
+        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx * block_num + block_idx];
+        kv_list_index++;
+      }
     }
+    // 处理v
+    for (size_t idx = 0; idx < batch_size; ++idx) {
+      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+      for (size_t block_idx = 0; block_idx < block_num; block_idx++){
+        void * k = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx * block_num + block_idx];
+        size_t block_size = forward_reqs[idx].block_size; //字节数
+        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = reinterpret_cast<void *>(reinterpret_cast<char *>(k) + (block_size/2));
+        kv_list_index++;
+      }
+    }
+
   }
   void* kv_list_ptr = kv_list.GetPtr<void>();
   // cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice);

@@ -63,6 +63,15 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   std::vector<int> input_ids = {233, 1681};
   forward.output_tokens = &input_ids;
   forward.logits_buf.resize(1);
+  forward.block_size = 8 * 2 * 2;
+  // TODO 需要替换为实际的block
+  std::vector<char> blocks_buffer(model_config.num_layer * forward.block_size);
+  std::vector<void*> kv_cache_ptrs;
+  for (int i = 0; i< model_config.num_layer; i++) {
+    kv_cache_ptrs.push_back(reinterpret_cast<void *>(blocks_buffer.data() + i * forward.block_size));
+        NLLM_LOG_ERROR << "kv_cache_ptrs "<< kv_cache_ptrs[i];
+  }
+  forward.kv_cache_ptrs.push_back(kv_cache_ptrs);
   std::vector<ForwardRequest> forward_reqs = {forward};
   llama->ContextDecode(llama_weight, forward_reqs);
 }

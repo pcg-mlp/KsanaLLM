@@ -80,7 +80,7 @@ void AttenVarlen(void* q, void* k, void* v, void* out, void* seqlen, int total_t
   c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
 
   auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt32);
-  torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, options);
+  torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
 
   flash_attn::mha_varlen_fwd(q_tensor, k_tensor, v_tensor, out_tensor, seqlen_tensor, seqlen_tensor, max_tokens,
                              max_tokens, 0.f, 1.0 / sqrt(num_heads), false, is_causal, -1, -1, false, c10::nullopt);
