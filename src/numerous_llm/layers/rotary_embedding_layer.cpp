@@ -40,9 +40,10 @@ Status RotaryEmbeddingLayer::Init(const std::vector<std::any>& parameters, std::
   GetBlockManager()->SetDeviceId(rank);
   GetBlockManager()->AllocateContiguous(total_bytes, cos_sin_cache_block_id_);
 
-  //rotary_embedding_cuda_.SetConfig(GetBlockPtrs<half>(cos_sin_cache_block_id)[0], rotary_dim, max_position_embeddings,
-  //                                 base, head_size, num_heads, num_kv_heads, is_neox,
-  //                                 context_->GetComputeStreams()[rank]);
+  // rotary_embedding_cuda_.SetConfig(GetBlockPtrs<half>(cos_sin_cache_block_id)[0], rotary_dim,
+  // max_position_embeddings,
+  //                                  base, head_size, num_heads, num_kv_heads, is_neox,
+  //                                  context_->GetComputeStreams()[rank]);
   return Status();
 }
 

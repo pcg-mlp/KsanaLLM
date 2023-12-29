@@ -3,32 +3,28 @@
 ==============================================================================*/
 
 #include "numerous_llm/kernels/nvidia/kernel_wrapper.h"
+
+#include <fstream>
+#include <iostream>
+
+#include "flash_api.h"
+
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
 #include "csrc/kernels/nvidia/assemble_last_token/assemble_last_token.h"
 #include "csrc/kernels/nvidia/embedding/embedding.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
-#include "flash_api.h"
 
 #include "numerous_llm/utils/nvidia/cuda_utils.h"
-#include <fstream>
-#include <iostream>
 
 namespace numerous_llm {
 
 void LookupEmbedding(const void* ids, const void* offset, const void* emb, const void* pos, void* output,
                      int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream) {
   llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<half>(
-      reinterpret_cast<half*>(output),
-      reinterpret_cast<const half*>(emb),
-      reinterpret_cast<const half*>(pos), {},
-      reinterpret_cast<const int32_t*>(ids),
-      step,
-      reinterpret_cast<const size_t*>(offset),
-      bs,
-      hidden_size,
-      vocab_size,
+      reinterpret_cast<half*>(output), reinterpret_cast<const half*>(emb), reinterpret_cast<const half*>(pos), {},
+      reinterpret_cast<const int32_t*>(ids), step, reinterpret_cast<const size_t*>(offset), bs, hidden_size, vocab_size,
       vocab_id, stream);
 }
 

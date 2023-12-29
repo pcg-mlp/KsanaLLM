@@ -36,8 +36,10 @@ class Llama : public BaseModel {
   Status Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
  protected:
-  Status CreateTensor(Tensor& tensor, size_t length);
+  Status CreateTensor(Tensor& tensor, size_t total_bytes, DataType data_type);
   Status DestroyTensor(Tensor& tensor);
+
+  ModelConfig model_config_;
 
   std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;
@@ -55,7 +57,8 @@ class Llama : public BaseModel {
   float layernorm_eps_;
   DataType weight_data_type_;
 
-  Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
+  // Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
+  std::vector<Tensor> runtime_buffers_;
   Tensor kv_cache_buffer_;
 
   std::shared_ptr<Context> context_{nullptr};

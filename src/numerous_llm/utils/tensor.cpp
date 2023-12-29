@@ -85,7 +85,7 @@ void Tensor::SaveToFile(const std::string& file_path) {
   printf("addr = %p, type = %d, size = %d\n", tensor_data_ptr, memcpy_type == cudaMemcpyDeviceToHost, total_size);
 
   cudaError_t ret = cudaMemcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
-  if (ret  !=  cudaSuccess) {
+  if (ret != cudaSuccess) {
     std::cerr << "CUDA error: " << cudaGetErrorString(ret) << std::endl;
     exit(1);
   }
@@ -111,7 +111,7 @@ void Tensor::SaveToFile(const std::string& file_path) {
       header_stream << ",";
     }
   }
-    //header_stream << "1600,";
+  // header_stream << "1600,";
   header_stream << ")}";
   int base_length = 6 + 4 + header_stream.str().size();
   int pad_length = 16 * ((base_length + 1 + 15) / 16);

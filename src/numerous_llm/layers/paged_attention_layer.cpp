@@ -5,7 +5,6 @@
 #include "numerous_llm/layers/paged_attention_layer.h"
 #include "numerous_llm/kernels/nvidia/kernel_wrapper.h"
 
-
 namespace numerous_llm {
 Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   AttentionLayer::Init(parameters, context, rank);
@@ -22,7 +21,7 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  return Status(); 
+  return Status();
   // TODO: rotary_embedding_layer 未完成
   // PagedAttention部分
   const Tensor& query = input_tensors[0];
@@ -40,18 +39,16 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   int total_blocks = output_tensors[1].shape[1] / 2;
   void** key_cache_ptrs = reinterpret_cast<void**>(layer_index_ * total_blocks * 2);
   void** value_cache_ptrs = reinterpret_cast<void**>(layer_index_ * total_blocks * 2 + total_blocks);
-  int max_tokens; //TODO
-  int num_seqs; //TODO
-  int num_heads; //TODO
-  int head_size; //TODO
-  int num_kv_heads; //TODO
-  int block_size; //TODO  这里不字节数，是存储的token个数
-  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(),key_cache_ptrs, value_cache_ptrs, context_lens.GetPtr<void>(), max_tokens, context_->GetComputeStreams()[rank_], cache_offset.GetPtr<void>(), 
-     num_seqs,
-     num_heads,
-     head_size,
-     num_kv_heads,
-     block_size, workspace.GetPtr<void>(), workspace.GetTotalBytes() , {} );
+  int max_tokens;    // TODO
+  int num_seqs;      // TODO
+  int num_heads;     // TODO
+  int head_size;     // TODO
+  int num_kv_heads;  // TODO
+  int block_size;    // TODO  这里不字节数，是存储的token个数
+  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), key_cache_ptrs, value_cache_ptrs,
+                            context_lens.GetPtr<void>(), max_tokens, context_->GetComputeStreams()[rank_],
+                            cache_offset.GetPtr<void>(), num_seqs, num_heads, head_size, num_kv_heads, block_size,
+                            workspace.GetPtr<void>(), workspace.GetTotalBytes(), {});
   return Status();
 }
 

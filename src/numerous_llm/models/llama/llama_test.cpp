@@ -3,9 +3,9 @@
  * ==============================================================================*/
 
 #include "numerous_llm/models/llama/llama.h"
+#include "flash_api.h"
 #include "numerous_llm/models/llama/create_test_model.h"
 #include "test.h"
-#include "flash_api.h"
 
 using namespace numerous_llm;
 // 定义一个 LlamaTest 类,继承自 testing::Test
@@ -17,10 +17,12 @@ class LlamaTest : public testing::Test {
     model_config.head_num = 32;
     model_config.size_per_head = 128;
     model_config.inter_size = 11008;
-    model_config.num_layer = 32;
+    model_config.num_layer = 10;
     model_config.vocab_size = 32000;
     model_config.tensor_para_size = 1;
     model_config.layernorm_eps = 1e-6;
+    model_config.default_batch_size = 4;
+    model_config.max_token_num = 2048;
 
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;
@@ -41,13 +43,15 @@ class LlamaTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
-  BlockManager* block_manager = nullptr;
+  BlockManager *block_manager = nullptr;
 
   std::shared_ptr<Context> context_{nullptr};
 };
 
 TEST_F(LlamaTest, ContextDecodeTest) {
   // 当环境中不包含该路径时, 下载该模型
+  int device_id = 0;
+  CUDA_CHECK(cudaSetDevice(device_id));
   std::filesystem::path ft_path(model_config.path);
   if (!std::filesystem::exists(ft_path)) {
     NLLM_LOG_WARNING << fmt::format("The given model path {} does not exist. Generating a test model",
@@ -66,10 +70,9 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   forward.block_size = 8 * 2 * 2;
   // TODO 需要替换为实际的block
   std::vector<char> blocks_buffer(model_config.num_layer * forward.block_size);
-  std::vector<void*> kv_cache_ptrs;
-  for (int i = 0; i< model_config.num_layer; i++) {
+  std::vector<void *> kv_cache_ptrs;
+  for (int i = 0; i < model_config.num_layer; i++) {
     kv_cache_ptrs.push_back(reinterpret_cast<void *>(blocks_buffer.data() + i * forward.block_size));
-        NLLM_LOG_ERROR << "kv_cache_ptrs "<< kv_cache_ptrs[i];
   }
   forward.kv_cache_ptrs.push_back(kv_cache_ptrs);
   std::vector<ForwardRequest> forward_reqs = {forward};
@@ -77,48 +80,48 @@ TEST_F(LlamaTest, ContextDecodeTest) {
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {
-    int device_id = 0;
-    CUDA_CHECK(cudaSetDevice(device_id));
-    // 设定张量的大小
-    const int64_t size = 10;
+  int device_id = 0;
+  CUDA_CHECK(cudaSetDevice(device_id));
+  // 设定张量的大小
+  const int64_t size = 10;
 
-    // 在GPU上分配内存
-    float *a_ptr, *b_ptr, *c_ptr;
-    CUDA_CHECK(cudaMalloc(&a_ptr, size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&b_ptr, size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&c_ptr, size * sizeof(float)));
+  // 在GPU上分配内存
+  float *a_ptr, *b_ptr, *c_ptr;
+  CUDA_CHECK(cudaMalloc(&a_ptr, size * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&b_ptr, size * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&c_ptr, size * sizeof(float)));
 
-    // 创建并初始化输入数据
-    std::vector<float> a_host(size, 1.0), b_host(size, 2.0);
+  // 创建并初始化输入数据
+  std::vector<float> a_host(size, 1.0), b_host(size, 2.0);
 
-    // 将数据复制到GPU
-    CUDA_CHECK(cudaMemcpy(a_ptr, a_host.data(), size * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(b_ptr, b_host.data(), size * sizeof(float), cudaMemcpyHostToDevice));
+  // 将数据复制到GPU
+  CUDA_CHECK(cudaMemcpy(a_ptr, a_host.data(), size * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(b_ptr, b_host.data(), size * sizeof(float), cudaMemcpyHostToDevice));
 
-    // 创建torch::Tensor，它们共享GPU内存
-    auto options = torch::TensorOptions().device(torch::kCUDA, device_id).dtype(torch::kFloat32);
-    torch::Tensor a = torch::from_blob(a_ptr, {size}, options);
-    torch::Tensor b = torch::from_blob(b_ptr, {size}, options);
-    torch::Tensor c = torch::from_blob(c_ptr, {size}, options);
+  // 创建torch::Tensor，它们共享GPU内存
+  auto options = torch::TensorOptions().device(torch::kCUDA, device_id).dtype(torch::kFloat32);
+  torch::Tensor a = torch::from_blob(a_ptr, {size}, options);
+  torch::Tensor b = torch::from_blob(b_ptr, {size}, options);
+  torch::Tensor c = torch::from_blob(c_ptr, {size}, options);
 
-    // 计算a + b = c
-    c.copy_(a.add_(b));    
-    std::ostringstream oss;
-    // 传输到cpu打印
-    oss << c.to(torch::kCPU);
-    EXPECT_EQ('3', oss.str()[1]);  
+  // 计算a + b = c
+  c.copy_(a.add_(b));
+  std::ostringstream oss;
+  // 传输到cpu打印
+  oss << c.to(torch::kCPU);
+  EXPECT_EQ('3', oss.str()[1]);
 
-    // 将结果复制回CPU以进行验证
-    std::vector<float> c_host(size);
-    CUDA_CHECK(cudaMemcpy(c_host.data(), c_ptr, size * sizeof(float), cudaMemcpyDeviceToHost));
+  // 将结果复制回CPU以进行验证
+  std::vector<float> c_host(size);
+  CUDA_CHECK(cudaMemcpy(c_host.data(), c_ptr, size * sizeof(float), cudaMemcpyDeviceToHost));
 
-    // 验证结果
-    for (int i = 0; i < size; ++i) {
-      EXPECT_EQ(c_host[i], 3.0);     
-    }
+  // 验证结果
+  for (int i = 0; i < size; ++i) {
+    EXPECT_EQ(c_host[i], 3.0);
+  }
 
-    // 清理GPU内存
-    cudaFree(a_ptr);
-    cudaFree(b_ptr);
-    cudaFree(c_ptr);
+  // 清理GPU内存
+  cudaFree(a_ptr);
+  cudaFree(b_ptr);
+  cudaFree(c_ptr);
 }

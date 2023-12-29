@@ -49,6 +49,7 @@ struct ModelConfig {
   int start_id;
   int end_id;
   size_t num_key_value_heads;
+  int default_batch_size;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

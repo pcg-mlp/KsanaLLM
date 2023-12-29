@@ -52,6 +52,7 @@ void PrepareModeAttirbutes(const INIReader &ini_reader, ModelConfig &model_confi
   model_config.layernorm_eps = ini_reader.GetFloat(model_config.name, "layernorm_eps");
   model_config.start_id = ini_reader.GetInteger(model_config.name, "start_id");
   model_config.end_id = ini_reader.GetInteger(model_config.name, "end_id");
+  model_config.default_batch_size = ini_reader.GetInteger("request", "request_batch_size", 4);
 }
 
 Status Environment::ParseOptions(int argc, char **argv) {

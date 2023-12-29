@@ -22,6 +22,10 @@ class Context {
 
   int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
+  std::vector<cudaMemPool_t>& GetMemoryPools() { return memory_pool_; }
+
+  std::vector<cudaStream_t>& GetMemoryManageStreams() { return memory_manage_streams_; }
+
   std::vector<cudaStream_t>& GetComputeStreams() { return compute_streams_; }
 
   std::vector<cudaStream_t>& GetH2DStreams() { return h2d_streams_; }
@@ -51,8 +55,14 @@ class Context {
   int tensor_parallel_size_{0};
   int pipeline_parallel_size_{0};
   const int defalt_device_num_{0};
+  int driver_version_;
+
+  // Nvidia GPU memory pool
+  std::vector<cudaMemPoolProps> memory_pool_props_;
+  std::vector<cudaMemPool_t> memory_pool_;
 
   // cuda streams
+  std::vector<cudaStream_t> memory_manage_streams_;
   std::vector<cudaStream_t> compute_streams_;
   std::vector<cudaStream_t> h2d_streams_;
   std::vector<cudaStream_t> d2h_streams_;
@@ -64,6 +74,19 @@ class Context {
   // cublas handles
   std::vector<cublasHandle_t> cublas_handles_;
   std::vector<cublasLtHandle_t> cublaslt_handles_;
+
+ private:
+  // init gpu memory pool
+  void InitGpuMemoryPool(const int worker_id);
+
+  // init cuda streams
+  void InitCudaStreams(const int worker_id);
+
+  // init cublas handle
+  void InitCublasHandle(const int worker_id);
+
+  // init nccl handle
+  void InitNcclParam();
 };
 
 }  // namespace numerous_llm
