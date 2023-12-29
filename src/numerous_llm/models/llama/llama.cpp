@@ -86,6 +86,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   vocab_size_ = model_config.vocab_size;
   float layernorm_eps_ = model_config.layernorm_eps;
   int hidden_units = model_config.size_per_head * model_config.head_num;
+  hidden_units_ = static_cast<size_t>(hidden_units);
   // 1: KV 一块空间
   // 2: 运行时中间空间
   // 3: 矩阵计算需要一块空间
@@ -99,7 +100,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   runtime_buffers_.reserve(DEFAULT_RUNTIME_BUFFER_NUM);
   for (int runtime_buffer_idx = 0; runtime_buffer_idx < DEFAULT_RUNTIME_BUFFER_NUM; ++runtime_buffer_idx) {
     Tensor tmp_tensor;
-    CreateTensor(tmp_tensor, max_b * max_s * hidden_units * dtype_size, GetTensorType<float>());
+    CreateTensor(tmp_tensor, max_b * max_s * hidden_units * dtype_size * 2, GetTensorType<float>());
     runtime_buffers_.emplace_back(std::move(tmp_tensor));
   }
   CreateTensor(kv_cache_buffer_, num_layer_ * max_b * max_s * 2 * hidden_units * dtype_size, GetTensorType<float>());
@@ -170,7 +171,55 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   void* input_offset_ptr = runtime_buffers_[1].GetPtr<void>();
   CUDA_CHECK(cudaMemcpyAsync(input_offset_ptr, input_offset_list.data(), input_offset_list.size() * sizeof(size_t),
                              cudaMemcpyHostToDevice, context_->GetH2DStreams()[rank_]));
+
+  // overlap tensor create and data copy time
+  Tensor input_ids;
+  input_ids.shape = {total_input_token_num};
+  input_ids.dtype = TYPE_INT32;
+  input_ids.blocks = runtime_buffers_[0].blocks;
+  Tensor input_offset_tensor;
+  input_offset_tensor.shape = {batch_size + 1};
+  input_offset_tensor.dtype = TYPE_UINT64;
+  input_offset_tensor.blocks = runtime_buffers_[1].blocks;
+
   CUDA_CHECK(cudaStreamSynchronize(context_->GetH2DStreams()[rank_]));
+
+  // Embedding forward
+  Tensor embedding_weight = base_weight->GetModelWeights("gather_embedding");
+  Tensor embedding_output;
+  embedding_output.shape = {total_input_token_num, hidden_units_};
+  embedding_output.dtype = GetTensorType<T>();
+  embedding_output.blocks = runtime_buffers_[2].blocks;
+  std::vector<Tensor> embedding_outputs = {embedding_output};
+  STATUS_CHECK_RETURN(
+      emb_lookup_layer_->Forward({input_ids, input_offset_tensor, embedding_weight}, embedding_outputs));
+  // runtime_buffers 0, 1 can be reused, 2 in used
+
+  // LlamaDecoder forward
+  for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
+    // input layernorm
+    Tensor input_layernorm_weight = base_weight->GetModelWeights(fmt::format("{}.input_layernorm", layer_num));
+    // resue input ids buffer
+    Tensor layernorm_output;
+    layernorm_output.shape = {total_input_token_num, hidden_units_};
+    layernorm_output.dtype = GetTensorType<T>();
+    layernorm_output.blocks = runtime_buffers_[0].blocks;
+    std::vector<Tensor> layernorm_outputs = {layernorm_output};
+    STATUS_CHECK_RETURN(layernorm_layer_->Forward({embedding_output, input_layernorm_weight}, layernorm_outputs));
+    // runtime_buffers 1, 2 can be reused, 0 in used
+
+    // attn project matmul
+    Tensor attn_proj_weight = base_weight->GetModelWeights(fmt::format("{}.attention.query_key_value", layer_num));
+    Tensor attn_proj_output;
+    attn_proj_output.shape = {total_input_token_num, attn_proj_weight.shape[1]};
+    attn_proj_output.dtype = GetTensorType<T>();
+    attn_proj_output.blocks = runtime_buffers_[1].blocks;
+    std::vector<Tensor> attn_proj_outputs = {attn_proj_output};
+    STATUS_CHECK_RETURN(matmul_layer_->Forward({layernorm_output, attn_proj_weight}, attn_proj_outputs));
+    // runtime_buffers 0, 2 can be reused, 1 in used
+  }
+
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
 
   return Status();
 }
