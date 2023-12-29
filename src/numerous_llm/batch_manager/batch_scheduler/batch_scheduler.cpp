@@ -246,7 +246,7 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
 
   size_t total_token_num = 0;
   size_t total_block_num = 0;
-  size_t max_free_block_num = GetBlockManager()->GetFreeBlockNumber(MemoryDevice::MEMORY_GPU);
+  size_t max_free_block_num = GetBlockManager()->GetFreeBlockNumber();
 
   bool schedule_step_finish = false;
   ScheduleRunning(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);

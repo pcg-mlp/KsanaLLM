@@ -3,109 +3,148 @@
 ==============================================================================*/
 
 #include "numerous_llm/block_manager/block_manager.h"
+
+#include <memory>
+#include <string>
+
+#include "ATen/core/interned_strings.h"
+#include "numerous_llm/block_manager/host_allocator.h"
+#include "numerous_llm/block_manager/nvidia_allocator.h"
 #include "numerous_llm/utils/logger.h"
-#include "numerous_llm/utils/singleton.h"
+#include "numerous_llm/utils/status.h"
 
 namespace numerous_llm {
 
-// 构造函数，根据device id, Singleton Instance的 BlockManagerConfig 配置 DeviceBlockManager
-DeviceBlockManager::DeviceBlockManager(int device_id) : DeviceBlockManager(GetBlockManagerConfig(), device_id) {}
+BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context)
+    : block_manager_config_(block_manager_config), context_(context) {
+  // Create host allocator
+  host_allocator_ = std::make_shared<HostAllocator>(block_manager_config.cpu_allocator_config, context);
 
-// 获取配置
-BlockManagerConfig DeviceBlockManager::GetBlockManagerConfig() {
-  BlockManagerConfig block_manager_config;
-  Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-  return block_manager_config;
+  // Create device allocator for every device.
+  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    std::shared_ptr<NvidiaDeviceAllocator> device_allocator =
+        std::make_shared<NvidiaDeviceAllocator>(block_manager_config.device_allocator_config, context, worker_id);
+    device_allocators_.push_back(device_allocator);
+  }
 }
 
-// 构造函数，根据给定的 BlockManagerConfig 配置 DeviceBlockManager
-DeviceBlockManager::DeviceBlockManager(const BlockManagerConfig& block_manager_config, int device_id)
-    : device_allocator(block_manager_config.device_allocator_config),
-      cpu_allocator(block_manager_config.cpu_allocator_config),
-      device_id_(device_id) {
-  block_size_ = block_manager_config.device_allocator_config.block_size;
-  NLLM_LOG_INFO << "DeviceBlockManager Init Success";
+void BlockManager::SetDeviceId(int device_id) { CUDA_CHECK(cudaSetDevice(device_id)); }
+
+int BlockManager::GetDeviceId() {
+  int device_id;
+  CUDA_CHECK(cudaGetDevice(&device_id));
+  return device_id;
 }
 
-// 析构函数，释放DeviceBlockManager分配的所有内存
-DeviceBlockManager::~DeviceBlockManager() {}
-
-// 根据给定的block_ids，获取对应的内存指针，存储在addrs中
-Status DeviceBlockManager::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-  return device_allocator.GetBlockPtrs(blocks, addrs);
+std::shared_ptr<DeviceAllocator>& BlockManager::GetDeviceAllocator() {
+  int device_id = GetDeviceId();
+  NLLM_CHECK_WITH_INFO(device_id < device_allocators_.size(), "Invalid device id " + std::to_string(device_id));
+  return device_allocators_[device_id];
 }
 
-// 分配block_num个块，将分配成功的块的id存储在blocks中
-Status DeviceBlockManager::AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
-  return device_allocator.Allocate(block_num, blocks);
+std::shared_ptr<HostAllocator>& BlockManager::GetHostAllocator() { return host_allocator_; }
+
+Status BlockManager::AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
+  return GetDeviceAllocator()->AllocateBlocks(block_num, blocks);
 }
 
-// 分配指定大小的设备存储空间
-Status DeviceBlockManager::AllocateContiguous(int64_t size, int& block_id) {
-  return device_allocator.AllocateContiguous(size, block_id);
+Status BlockManager::AllocateContiguous(int64_t size, int& block_id) {
+  return GetDeviceAllocator()->AllocateContiguous(size, block_id);
 }
 
-// 释放给定的blocks，将它们从used_device_block_map_移动到free_device_block_map_
-Status DeviceBlockManager::FreeBlocks(const std::vector<int>& blocks) { return device_allocator.Free(blocks); }
+Status BlockManager::FreeBlocks(const std::vector<int>& blocks) { return GetDeviceAllocator()->FreeBlocks(blocks); }
 
-// 释放连续设备存储
-Status DeviceBlockManager::FreeContiguous(int block_id) { return device_allocator.FreeContiguous(block_id); }
+Status BlockManager::FreeContiguous(int block_id) { return GetDeviceAllocator()->FreeContiguous(block_id); }
 
-Status DeviceBlockManager::SwapIn(std::vector<int>& device_blocks, cudaStream_t stream) {
-  std::unique_lock<std::mutex> lock(swap_mutex_);
+Status BlockManager::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
+  return GetDeviceAllocator()->GetBlockPtrs(blocks, addrs);
+}
+
+Status BlockManager::GetContiguousPtr(int block_id, void*& addr) {
+  return GetDeviceAllocator()->GetContiguousPtr(block_id, addr);
+}
+
+int BlockManager::GetFreeBlockNumber() { return GetDeviceAllocator()->GetFreeBlockNumber(); }
+
+int BlockManager::GetUsedBlockNumber() { return GetDeviceAllocator()->GetUsedBlockNumber(); }
+
+Status BlockManager::AllocateHostBlocks(int64_t block_num, std::vector<int>& blocks) {
+  return GetHostAllocator()->AllocateBlocks(block_num, blocks);
+}
+
+Status BlockManager::AllocateHostContiguous(int64_t size, int& block_id) {
+  return GetHostAllocator()->AllocateContiguous(size, block_id);
+}
+
+Status BlockManager::FreeHostBlocks(const std::vector<int>& blocks) { return GetHostAllocator()->FreeBlocks(blocks); }
+
+Status BlockManager::FreeHostContiguous(int block_id) { return GetHostAllocator()->FreeContiguous(block_id); }
+
+Status BlockManager::GetHostBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
+  return GetHostAllocator()->GetBlockPtrs(blocks, addrs);
+}
+
+Status BlockManager::GetHostContiguousPtr(int block_id, void*& addr) {
+  return GetHostAllocator()->GetContiguousPtr(block_id, addr);
+}
+
+int BlockManager::GetHostFreeBlockNumber() { return GetHostAllocator()->GetFreeBlockNumber(); }
+
+int BlockManager::GetHostUsedBlockNumber() { return GetHostAllocator()->GetUsedBlockNumber(); }
+
+Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks) {
+  // Allocate memory on host.
+  STATUS_CHECK_RETURN(host_allocator_->AllocateBlocks(device_blocks.size(), host_blocks));
+
+  // Get host and device address.
+  std::vector<void*> host_addrs;
+  STATUS_CHECK_RETURN(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
+
+  int device_id = GetDeviceId();
+  int block_size = block_manager_config_.device_allocator_config.block_size;
+
+  std::vector<void*> device_addrs;
+  STATUS_CHECK_RETURN(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
+
+  // Copy from device to host.
+  for (size_t i = 0; i < device_blocks.size(); i++) {
+    CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost,
+                               context_->d2h_streams_[device_id]));
+  }
+
+  // Free device blocks.
+  device_allocators_[device_id]->FreeBlocks(device_blocks);
+  return Status();
+}
+
+Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) {
+  int device_id = GetDeviceId();
+  int block_size = block_manager_config_.device_allocator_config.block_size;
+
+  // Allocate memory on device.
+  STATUS_CHECK_RETURN(device_allocators_[device_id]->AllocateBlocks(host_blocks.size(), device_blocks));
+
   std::vector<void*> device_addrs;
   STATUS_CHECK_RETURN(GetBlockPtrs(device_blocks, device_addrs));
-  std::vector<int> cpu_blocks;
-  std::vector<void*> cpu_addrs;
-  STATUS_CHECK_RETURN(cpu_allocator.Allocate(device_blocks.size(), cpu_blocks));
-  STATUS_CHECK_RETURN(cpu_allocator.GetBlockPtrs(cpu_blocks, cpu_addrs));
-  for (int i = 0; i < device_blocks.size(); i++) {
-    swap_map_[device_blocks[i]] = cpu_blocks[i];
-    CUDA_CHECK(cudaMemcpyAsync(cpu_addrs[i], device_addrs[i], block_size_, cudaMemcpyDeviceToHost, stream));
+
+  std::vector<void*> host_addrs;
+  STATUS_CHECK_RETURN(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
+
+  // Copy from host to device.
+  for (size_t i = 0; i < host_blocks.size(); i++) {
+    CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice,
+                               context_->h2d_streams_[device_id]));
   }
+
+  // Free host blocks.
+  host_allocator_->FreeBlocks(host_blocks);
   return Status();
 }
 
-Status DeviceBlockManager::SwapOut(std::vector<int>& device_blocks, cudaStream_t stream) {
-  std::unique_lock<std::mutex> lock(swap_mutex_);
-  std::vector<void*> device_addrs;
-  STATUS_CHECK_RETURN(GetBlockPtrs(device_blocks, device_addrs));
-  std::vector<int> cpu_blocks(1);
-  std::vector<void*> cpu_addrs(1);
-  for (int i = 0; i < device_blocks.size(); i++) {
-    auto it = swap_map_.find(device_blocks[i]);
-    if (it != swap_map_.end()) {
-      cpu_blocks[0] = it->second;
-      STATUS_CHECK_RETURN(cpu_allocator.GetBlockPtrs(cpu_blocks, cpu_addrs));
-      CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], cpu_addrs[0], block_size_, cudaMemcpyHostToDevice, stream));
-      STATUS_CHECK_RETURN(cpu_allocator.Free(cpu_blocks));
-      swap_map_.erase(it);
-    } else {
-      return Status(RET_SEGMENT_FAULT);
-    }
-  }
-  return Status();
-}
+Status BlockManager::SwapDrop(const std::vector<int>& host_blocks) { return host_allocator_->FreeBlocks(host_blocks); }
 
-Status DeviceBlockManager::DropSwapped(std::vector<int>& device_blocks) {
-  // TODO(zakwang):
-  return Status();
-}
+size_t BlockManager::GetBlockSize() const { return block_manager_config_.device_allocator_config.block_size; }
 
-// 函数：获取指定设备类型的空闲内存块数量
-// 参数：device - 设备类型
-// 返回值：空闲内存块数量
-int64_t DeviceBlockManager::GetFreeBlockNumber(MemoryDevice device) {
-  switch (device) {
-    case MEMORY_CPU_PINNED:
-      return cpu_allocator.GetFreeBlockNumber();
-
-    case MEMORY_GPU:
-      return device_allocator.GetFreeBlockNumber();
-
-    default:
-      return 0;
-  }
-}
+size_t BlockManager::GetBlockTokenNum() const { return block_manager_config_.device_allocator_config.block_token_num; }
 
 }  // namespace numerous_llm

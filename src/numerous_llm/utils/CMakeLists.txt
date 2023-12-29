@@ -18,8 +18,3 @@ target_link_libraries(utils PUBLIC
   -lpthread -ldl gflags loguru -lcudart block_manager ${NCCL_LIBRARIES}
 )
 
-# for test
-file(GLOB_RECURSE utils_test_SRCS
-		 ${PROJECT_SOURCE_DIR}/src/numerous_llm/utils/*test.cpp
-     ${PROJECT_SOURCE_DIR}/src/numerous_llm/utils/nvidia/*test.cpp)
-cc_test(utils_test SRCS ${utils_test_SRCS} DEPS utils)

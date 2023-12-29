@@ -52,17 +52,19 @@ struct Tensor {
   template <typename T>
   inline std::vector<T*> GetPtrs() const {
     if (GetTensorType<T>() != dtype) {
-      NLLM_LOG_DEBUG << "GetPtr and dtype not matched.";
+      NLLM_LOG_DEBUG << "GetPtrs and dtype not matched.";
     }
+    NLLM_CHECK_WITH_INFO(!blocks.empty(), "No available blocks");
     return GetBlockPtrs<T>(blocks);
   }
 
   template <typename T>
   inline T* GetPtr() const {
+    if (GetTensorType<T>() != dtype) {
+      NLLM_LOG_DEBUG << "GetPtr and dtype not matched.";
+    }
     NLLM_CHECK_WITH_INFO(!blocks.empty(), "No available blocks");
-    std::vector<T*> blocks_addr = GetPtrs<T>();
-    NLLM_CHECK_WITH_INFO(!blocks_addr.empty(), "No available blocks");
-    return blocks_addr[0];
+    return GetContiguousPtr<T>(blocks.front());
   }
 
   void SaveToFile(const std::string& file_path);
@@ -125,7 +127,7 @@ class TensorMap {
   }
 
   template <typename T>
-  inline std::vector<T*> GetPtr(const std::string& key) const {
+  inline T* GetPtr(const std::string& key) const {
     NLLM_CHECK_WITH_INFO(IsExist(key), FormatStr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
                                                  key.c_str(), Vector2Str(GetKeys()).c_str()));
     return tensor_map_.at(key).GetPtr<T>();

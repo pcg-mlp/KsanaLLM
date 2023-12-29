@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <limits>
+#include <vector>
 #include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/runtime/infer_stage.h"
 #include "numerous_llm/utils/memory_utils.h"
@@ -75,8 +76,10 @@ size_t InferRequest::GetTotalBlockNumber() {
 
 Status InferRequest::SwapInAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
+    std::vector<int> device_blocks;
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->SwapIn(kv_cache_blocks[0]);
+    GetBlockManager()->SwapIn(kv_cache_blocks[i], device_blocks);
+    kv_cache_blocks[i].swap(device_blocks);
   }
 
   return Status();
@@ -84,8 +87,10 @@ Status InferRequest::SwapInAsync() {
 
 Status InferRequest::SwapOutAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
+    std::vector<int> host_blocks;
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->SwapOut(kv_cache_blocks[0]);
+    GetBlockManager()->SwapOut(kv_cache_blocks[i], host_blocks);
+    kv_cache_blocks[i].swap(host_blocks);
   }
 
   return Status();
@@ -94,7 +99,7 @@ Status InferRequest::SwapOutAsync() {
 Status InferRequest::DropSwappedAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->DropSwapped(kv_cache_blocks[0]);
+    GetBlockManager()->SwapDrop(kv_cache_blocks[i]);
   }
 
   return Status();

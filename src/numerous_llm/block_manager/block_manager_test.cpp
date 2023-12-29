@@ -61,7 +61,7 @@ TEST_F(BlockManagerTest, AllocateAndFree) {
   EXPECT_TRUE(status.OK());
 
   // 检查释放后的空闲内存块数量是否正确
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
 }
 
 // 测试 BlockManager 类的 AllocateAndFreeContiguousMemory 方法
@@ -78,11 +78,11 @@ TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
   EXPECT_GT(block_id, 0);
 
   // 获取分配的设备存储空间指针
-  std::vector<void*> addrs;
-  status = block_manager->GetBlockPtrs({block_id}, addrs);
+  void* addr;
+  status = block_manager->GetContiguousPtr(block_id, addr);
   // 未释放的情况下，状态应该是 OK
   EXPECT_TRUE(status.OK());
-  EXPECT_NE(addrs[0], nullptr);
+  EXPECT_NE(addr, nullptr);
 
   // 释放分配的设备存储空间
   status = block_manager->FreeContiguous(block_id);
@@ -91,7 +91,7 @@ TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
   EXPECT_TRUE(status.OK());
 
   // 获取分配的设备存储空间指针
-  status = block_manager->GetBlockPtrs({block_id}, addrs);
+  status = block_manager->GetContiguousPtr(block_id, addr);
   // 释放的情况下，状态应该不是 OK
   EXPECT_FALSE(status.OK());
 
@@ -103,7 +103,7 @@ TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
 }
 
 TEST_F(BlockManagerTest, SwapInAndSwapOut) {
-  // 分配两个 block
+  // 在 device 上分配两个 block
   std::vector<int> blocks;
   Status status = block_manager->AllocateBlocks(2, blocks);
   EXPECT_TRUE(status.OK());
@@ -113,17 +113,18 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   std::vector<void*> addrs;
   block_manager->GetBlockPtrs(blocks, addrs);
 
-  // 将数据从 CPU 复制到 block 中
+  // 将数据从 host 复制到 block 中
   std::string string_a = "string_a";
   std::string string_b = "string_b";
   cudaMemcpy(addrs[0], string_a.data(), string_a.size(), cudaMemcpyHostToDevice);
   cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
-  // 将 block 从 CPU 交换到 GPU
-  status = block_manager->SwapIn(blocks);
+  // 将 block 从 device 交换到 host
+  std::vector<int> host_blocks;
+  status = block_manager->SwapOut(blocks, host_blocks);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 0);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 0);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
 
   // 修改 block 中的数据
   string_a = "string_x";
@@ -131,14 +132,15 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   cudaMemcpy(addrs[0], string_a.data(), string_a.size(), cudaMemcpyHostToDevice);
   cudaMemcpy(addrs[1], string_b.data(), string_b.size(), cudaMemcpyHostToDevice);
 
-  // 将 block 从 GPU 交换回 CPU
-  status = block_manager->SwapOut(blocks);
+  // 将 block 从 host 交换回 device
+  std::vector<int> device_blocks;
+  status = block_manager->SwapIn(host_blocks, device_blocks);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 0);
 
   // 获取 block 的指针
-  block_manager->GetBlockPtrs(blocks, addrs);
+  block_manager->GetBlockPtrs(device_blocks, addrs);
 
   // 将 block 中的数据从 GPU 复制回 CPU
   cudaMemcpy(string_a.data(), addrs[0], string_a.size(), cudaMemcpyDeviceToHost);
@@ -148,14 +150,14 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   EXPECT_EQ(string_a, "string_a");
   EXPECT_EQ(string_b, "string_b");
 
-  EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
+  EXPECT_TRUE(block_manager->FreeBlocks(device_blocks).OK());
 }
 
 // 定义一个测试用例，继承自 BlockManagerTest
 TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   // 检查 CPU 和 GPU 的空闲内存块数量是否正确
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 2);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
 
   // 创建一个整数向量，用于存储分配的内存块
   std::vector<int> blocks;
@@ -170,8 +172,8 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   EXPECT_EQ(blocks.size(), 2);
 
   // 检查分配后的空闲内存块数量是否正确
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_CPU_PINNED), 2);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(MEMORY_GPU), 0);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 0);
 
   EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
