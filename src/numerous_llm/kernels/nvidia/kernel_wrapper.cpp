@@ -69,7 +69,7 @@ void InvokeSiluActivation(const void* input, const void* bias, const int m, cons
 
 void AttenVarlen(void* q, void* k, void* v, void* out, void* seqlen, int total_tokens, int max_tokens, int batch,
                  int num_heads, int head_size, bool is_causal, int rank, cudaStream_t stream) {
-  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
+  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
   torch::Tensor q_tensor = torch::from_blob(q, {total_tokens, num_heads, head_size}, options);
   torch::Tensor k_tensor = torch::from_blob(k, {total_tokens, num_heads, head_size}, options);
   torch::Tensor v_tensor = torch::from_blob(v, {total_tokens, num_heads, head_size}, options);

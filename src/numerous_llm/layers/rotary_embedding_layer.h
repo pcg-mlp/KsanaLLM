@@ -5,6 +5,8 @@
 
 #include "numerous_llm/layers/base_layer.h"
 
+#include "3rdparty/LLM_kernels/csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+
 namespace numerous_llm {
 
 class RotaryEmbeddingLayer : public BaseLayer {
@@ -16,7 +18,8 @@ class RotaryEmbeddingLayer : public BaseLayer {
  protected:
   int max_position_embeddings_;
   int cos_sin_cache_block_id_;
-  // RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
+  llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
+  half* cos_sin_cache_ptr_;
 };
 
 }  // namespace numerous_llm

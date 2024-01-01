@@ -10,6 +10,8 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
   max_position_embeddings_ = std::any_cast<const int>(parameters[parameter_index++]);
+  num_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
+  head_size_ = std::any_cast<const int>(parameters[parameter_index++]);
   BlockManagerConfig block_manager_config;
   Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
   block_size_ = block_manager_config.device_allocator_config.block_size;
