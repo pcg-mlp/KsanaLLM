@@ -13,19 +13,19 @@ Status RotaryEmbeddingLayer::Init(const std::vector<std::any>& parameters, std::
   int max_position_embeddings = std::any_cast<const int>(parameters[parameter_index++]);
   NLLM_LOG_INFO << fmt::format("max_position_embeddings {}", max_position_embeddings);
 
-  uint32_t rotary_dim = std::any_cast<const uint32_t>(parameters[parameter_index++]);
+  uint32_t rotary_dim = std::any_cast<const int>(parameters[parameter_index++]);
   NLLM_LOG_INFO << fmt::format("rotary_dim {}", rotary_dim);
 
   float base = std::any_cast<const float>(parameters[parameter_index++]);
   NLLM_LOG_INFO << fmt::format("base {}", base);
 
-  uint32_t head_size = std::any_cast<const uint32_t>(parameters[parameter_index++]);
+  uint32_t head_size = std::any_cast<const int>(parameters[parameter_index++]);
   NLLM_LOG_INFO << fmt::format("head_size {}", head_size);
 
-  size_t num_heads = std::any_cast<const size_t>(parameters[parameter_index++]);
+  size_t num_heads = std::any_cast<const int>(parameters[parameter_index++]);
   NLLM_LOG_INFO << fmt::format("num_heads {}", num_heads);
 
-  size_t num_kv_heads = std::any_cast<const size_t>(parameters[parameter_index++]);
+  size_t num_kv_heads = std::any_cast<const int>(parameters[parameter_index++]);
   NLLM_LOG_INFO << fmt::format("num_kv_heads {}", num_kv_heads);
 
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);
@@ -42,15 +42,21 @@ Status RotaryEmbeddingLayer::Init(const std::vector<std::any>& parameters, std::
                                    base, head_size, num_heads, num_kv_heads, is_neox,
                                    context_->GetMemoryManageStreams()[rank_]);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[rank_]));
-
   return Status();
 }
 
 Status RotaryEmbeddingLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  rotary_embedding_cuda_.SetInput(static_cast<int64_t*>(input_tensors[0].GetPtr<void>()),
-                                  static_cast<half*>(input_tensors[1].GetPtr<void>()),
-                                  static_cast<half*>(input_tensors[2].GetPtr<void>()), input_tensors[0].shape[0],
-                                  context_->GetComputeStreams()[rank_]);
+  size_t qkv_size = input_tensors[0].GetTotalBytes();
+  NLLM_LOG_INFO << fmt::format("qkv bytes size = {}", qkv_size);
+  void* qkv_ptr = input_tensors[0].GetPtr<void>();
+
+  void* q_ptr = qkv_ptr;
+  void* k_ptr = qkv_ptr + qkv_size / 3;
+
+  int num_tokens = input_tensors[2].shape[0];
+
+  rotary_embedding_cuda_.SetInput(input_tensors[1].GetPtr<int64_t>(), static_cast<half*>(q_ptr),
+                                  static_cast<half*>(k_ptr), num_tokens, context_->GetComputeStreams()[rank_]);
   rotary_embedding_cuda_.Forward();
   return Status();
 }
