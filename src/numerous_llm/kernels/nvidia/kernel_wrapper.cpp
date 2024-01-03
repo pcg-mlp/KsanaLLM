@@ -71,15 +71,26 @@ void AttenVarlen(void* q, void* k, void* v, void* out, void* seqlen, int total_t
                  int num_heads, int head_size, bool is_causal, int rank, cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
   torch::Tensor q_tensor = torch::from_blob(q, {total_tokens, num_heads, head_size}, options);
+  torch::Tensor qkv_tensor = torch::from_blob(q, {total_tokens, num_heads * head_size * 3}, options);
+  auto tt = qkv_tensor.chunk(3, -1);   
+
   torch::Tensor k_tensor = torch::from_blob(k, {total_tokens, num_heads, head_size}, options);
   torch::Tensor v_tensor = torch::from_blob(v, {total_tokens, num_heads, head_size}, options);
   c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
-
-  auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt32);
+  auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
   torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
-
-  flash_attn::mha_varlen_fwd(q_tensor, k_tensor, v_tensor, out_tensor, seqlen_tensor, seqlen_tensor, max_tokens,
-                             max_tokens, 0.f, 1.0 / sqrt(num_heads), false, is_causal, -1, -1, false, c10::nullopt);
+  //std::cout << "batch " << batch << std::endl; 
+  //std::cout << "seqlen " << seqlen << std::endl; 
+  //std::cout << "q_tensor.to(torch::kCPU) " << torch::reshape(tt[0], {total_tokens, num_heads, head_size}).to(torch::kCPU) << std::endl; 
+  //std::cout << "k_tensor.to(torch::kCPU) " << torch::reshape(tt[1], {total_tokens, num_heads, head_size}).to(torch::kCPU) << std::endl; 
+  //std::cout << "v_tensor.to(torch::kCPU) " << torch::reshape(tt[2], {total_tokens, num_heads, head_size}).to(torch::kCPU) << std::endl; 
+  //std::cout << "seqlen_tensor.to(torch::kCPU) " << seqlen_tensor.to(torch::kCPU) << std::endl; 
+  //std::cout << "max_tokens " << max_tokens << std::endl; 
+  //std::cout << "1.0 / sqrt(head_size) " << 1.0 / sqrt(head_size) << std::endl; 
+  //std::cout << "is_causal " << is_causal << std::endl; 
+  flash_attn::mha_varlen_fwd(torch::reshape(tt[0], {total_tokens, num_heads, head_size}), torch::reshape(tt[1], {total_tokens, num_heads, head_size}), torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor, seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens,
+                             max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+  //std::cout << "out_tensor.to(torch::kCPU) " << out_tensor.value().to(torch::kCPU) << std::endl; 
 }
 
 void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,

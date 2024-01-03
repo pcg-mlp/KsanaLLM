@@ -210,7 +210,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
 
     // MMHA Flash Attention
     std::vector<Tensor>& flash_attention_output = output_1;
-    STATUS_CHECK_RETURN(flash_attention_layer_[layer_num]->Forward({rotary_embedding_output[0], kv_list,
+    STATUS_CHECK_RETURN(flash_attention_layer_[layer_num]->Forward({rotary_embedding_output[0], input_offset_tensor, kv_list,
                                                                    kv_cache_buffer_}, flash_attention_output));
     flash_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA.npy");
     NLLM_LOG_INFO << "MMHA Flash Attention";

@@ -8,8 +8,8 @@
 namespace numerous_llm {
 
 Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int max_tokens = input_tensors[1].shape[1];
-  int batch_size = input_tensors[1].shape[0];
+  int max_tokens = input_tensors[1].shape[0];
+  int batch_size = 1;
   int total_tokens = input_tensors[0].shape[0];
 
   size_t qkv_size = input_tensors[0].GetTotalBytes();
