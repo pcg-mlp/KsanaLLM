@@ -224,6 +224,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     // Attn NcclAllReduceSum
     std::vector<Tensor>& attn_all_reduce_sum_output = output_1;
     STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
+    attn_o_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".attn_all_reduce_sum.npy");
 
     // Attn Add
     std::vector<Tensor>& attn_add_output = output_2;
