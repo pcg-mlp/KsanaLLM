@@ -9,7 +9,7 @@ list(FILTER layers_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "layers_SRCS: ${layers_SRCS}")
 
 add_library(layers STATIC ${layers_SRCS})
-target_link_libraries(layers PUBLIC kernels llm_kernels_nvidia_kernel_rotary_embedding) 
+target_link_libraries(layers PUBLIC kernels)
 
 # for test
 file(GLOB_RECURSE layers_test_SRCS

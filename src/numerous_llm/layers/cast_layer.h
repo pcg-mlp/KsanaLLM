@@ -3,11 +3,11 @@
 ==============================================================================*/
 #pragma once
 
-#include "numerous_llm/layers/attention_layer.h"
+#include "numerous_llm/layers/base_layer.h"
 
 namespace numerous_llm {
 
-class PagedAttentionLayer : public AttentionLayer {
+class CastLayer : public BaseLayer {
  public:
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 };

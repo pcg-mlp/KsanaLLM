@@ -18,6 +18,7 @@ class AttentionLayer : public BaseLayer {
   int max_position_embeddings_;
   int block_size_;
   int num_heads_;
+  int num_kv_heads_;
   int head_size_;
   bool is_causal_{true};
 };

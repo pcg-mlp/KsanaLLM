@@ -13,7 +13,8 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
                            ncclHalf, ncclSum, context_->GetNCCLParam()[rank_].nccl_comm,
                            context_->GetNCCLStreams()[rank_]));
   NCCL_CHECK(ncclGroupEnd());
-
+  output_tensors[0].shape = input_tensors[0].shape;
+  output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
 }  // namespace numerous_llm

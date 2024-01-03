@@ -80,7 +80,7 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
   Tensor lm_head = llama_weight.GetModelWeights(weight_name);
   EXPECT_EQ(lm_head.device, MEMORY_GPU);
   EXPECT_EQ(lm_head.storage, STORAGE_CONTIGUOUS);
-  EXPECT_EQ(lm_head.shape, std::vector<size_t>({32, 16}));
+  EXPECT_EQ(lm_head.shape, std::vector<size_t>({16, 32}));
 
   // 比较数据一致性
   //     llama_weight_hash: 使用 GetModelWeights 获取到的 BlockManager 中数据校验值

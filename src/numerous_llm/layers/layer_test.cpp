@@ -7,6 +7,7 @@
 #include "numerous_llm/layers/attention_layer.h"
 #include "numerous_llm/layers/emb_lookup_layer.h"
 #include "numerous_llm/layers/flash_attention_layer.h"
+#include "numerous_llm/layers/paged_attention_layer.h"
 #include "numerous_llm/layers/layernorm_layer.h"
 #include "numerous_llm/layers/matmul_layer.h"
 #include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
@@ -64,8 +65,9 @@ TEST_F(LayerTest, AttentionLayerTest) {
   std::shared_ptr<Context> context = std::make_shared<Context>(1, 1);
   FlashAttentionLayer flash_attention_layer;
   int head_num = 32;
+  int kv_head_num = 32;
   int size_per_head = 128;
-  EXPECT_TRUE(flash_attention_layer.Init({int(0), int(2048), head_num, size_per_head}, context, 0).OK());
+  EXPECT_TRUE(flash_attention_layer.Init({int(0), int(2048), head_num, kv_head_num, size_per_head}, context, 0).OK());
   Tensor q, k, v, input_len;
   std::vector<size_t> input_shape = {3, 4096};
   CreateHalfDataTypeTensor(q, input_shape, GetTensorType<half>());
@@ -79,8 +81,8 @@ TEST_F(LayerTest, AttentionLayerTest) {
 
   PagedAttentionLayer attention_layer;
   EXPECT_TRUE(
-      attention_layer.Init({int(1), int(2048), static_cast<int>(head_num), static_cast<int>(size_per_head)}, context, 0)
-          .OK());
+      attention_layer.Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num,
+                            static_cast<int>(size_per_head)}, context, 0).OK());
 }
 
 }  // namespace numerous_llm

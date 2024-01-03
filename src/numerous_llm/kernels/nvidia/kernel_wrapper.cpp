@@ -15,6 +15,7 @@
 #include "csrc/kernels/nvidia/embedding/embedding.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
+#include "csrc/kernels/nvidia/cast/cast.h"
 
 #include "numerous_llm/utils/nvidia/cuda_utils.h"
 
@@ -101,6 +102,11 @@ void AssembleLastToken(const void* input, const void* offset, const int batch_si
   llm_kernels::nvidia::AssembleLastToken<half>(reinterpret_cast<const half*>(input),
                                                reinterpret_cast<const size_t*>(offset), batch_size, hidden_units_num,
                                                reinterpret_cast<half*>(output), stream);
+}
+
+void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream) {
+  llm_kernels::nvidia::HalfToFloat(reinterpret_cast<const half*>(input), data_size,
+                                   reinterpret_cast<float*>(output), stream);
 }
 
 }  // namespace numerous_llm

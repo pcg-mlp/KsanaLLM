@@ -6,7 +6,7 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <optional>
-#include "3rdparty/LLM_kernels/csrc/kernels/nvidia/paged_attention/paged_attention.h"
+#include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 
 namespace numerous_llm {
 
@@ -44,14 +44,17 @@ void run_paged_attention(void* out,                     // [num_seqs, num_heads,
   const float* alibi_slopes_ptr =
       reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
 
-  llm_kernels::nvidia::PagedAttentionCuda<T> op;
+  llm_kernels::nvidia::PagedAttentionCuda<uint16_t> op;
   op.SetConfig(num_kv_heads, num_heads, head_size, block_size);
 
-  op.SetInput(reinterpret_cast<T*>(out), reinterpret_cast<const T*>(query), reinterpret_cast<T**>(key_cache_ptrs),
-              reinterpret_cast<T**>(value_cache_ptrs), reinterpret_cast<const int*>(cache_offsets_ptr),
+  op.SetInput(reinterpret_cast<uint16_t*>(out), reinterpret_cast<const uint16_t*>(query),
+              reinterpret_cast<uint16_t**>(key_cache_ptrs), reinterpret_cast<uint16_t**>(value_cache_ptrs),
+              reinterpret_cast<const int*>(cache_offsets_ptr),
               reinterpret_cast<const int*>(context_lens_ptr), max_context_len, num_seqs, stream, workspace, work_size,
               alibi_slopes_ptr);
   op.Forward();
 }
+
+void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream);
 
 }  // namespace numerous_llm

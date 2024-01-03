@@ -50,6 +50,7 @@ struct ModelConfig {
   int end_id;
   size_t num_key_value_heads;
   int default_batch_size;
+  int max_position_embeddings;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

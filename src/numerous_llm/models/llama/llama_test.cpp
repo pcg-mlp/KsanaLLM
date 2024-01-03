@@ -22,17 +22,18 @@ class LlamaTest : public testing::Test {
     model_config.tensor_para_size = 1;
     model_config.layernorm_eps = 1e-6;
     model_config.default_batch_size = 4;
-    model_config.max_token_num = 2048;
+    model_config.max_token_num = 1024;
     model_config.rotary_embedding = 128;
-    model_config.rope_theta = 10000.0f;
+    model_config.max_position_embeddings = 2048;
+    model_config.rope_theta = 1000.0f;
     model_config.num_key_value_heads = model_config.head_num;
 
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_size = 1024;
+    block_manager_config.cpu_allocator_config.block_size = 64;
     block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
-    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.block_size = 64;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
     context_ = std::make_shared<Context>(1, 1);
@@ -80,6 +81,7 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   forward.kv_cache_ptrs.push_back(kv_cache_ptrs);
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
+  EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

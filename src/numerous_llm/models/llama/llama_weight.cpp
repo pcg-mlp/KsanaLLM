@@ -60,7 +60,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   int tensor_para_size = model_config.tensor_para_size;
   AddWeightTensor("gather_embedding", {vocab_size, hidden_units}, weight_data_type);
   AddWeightTensor("norm", {hidden_units}, weight_data_type);
-  AddWeightTensor("lm_head", {vocab_size, hidden_units}, weight_data_type);
+  AddWeightTensor("lm_head", {hidden_units, vocab_size}, weight_data_type);
   for (int l = 0; l < num_layer; ++l) {
     AddWeightTensor(ConcatLayerName("input_layernorm", l), {hidden_units}, weight_data_type);
     AddWeightTensor(ConcatLayerName("post_attention_layernorm", l), {hidden_units}, weight_data_type);

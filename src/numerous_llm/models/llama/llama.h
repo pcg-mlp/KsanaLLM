@@ -14,6 +14,7 @@
 #include "numerous_llm/layers/rotary_embedding_layer.h"
 #include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/layers/assemble_last_token_layer.h"
+#include "numerous_llm/layers/cast_layer.h"
 #include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/models/llama/llama_weight.h"
 #include "numerous_llm/utils/status.h"
@@ -51,6 +52,7 @@ class Llama : public BaseModel {
   std::shared_ptr<SiluMulLayer> silu_mul_layer_;
   std::shared_ptr<MatMulLayer> matmul_layer_;
   std::shared_ptr<AssembleLastTokenLayer> assemble_last_token_layer_;
+  std::shared_ptr<CastLayer> cast_layer_;
   int num_layer_;
   int rank_;
   int max_seq_len_;

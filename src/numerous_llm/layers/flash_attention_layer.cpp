@@ -12,6 +12,9 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   int batch_size = 1;
   int total_tokens = input_tensors[0].shape[0];
 
+  NLLM_LOG_INFO << fmt::format("max_tokens = {}, batch_size = {}, total_tokens = {}",
+                               max_tokens, batch_size, total_tokens);
+
   size_t qkv_size = input_tensors[0].GetTotalBytes();
   NLLM_LOG_INFO << fmt::format("qkv bytes size = {}", qkv_size);
   void* qkv_ptr = input_tensors[0].GetPtr<void>();
@@ -22,6 +25,9 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
 
   AttenVarlen(q_ptr, k_ptr, v_ptr, output_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), total_tokens,
               max_tokens, batch_size, num_heads_, head_size_, is_causal_, rank_, context_->GetComputeStreams()[rank_]);
+  output_tensors[0].shape[0] = input_tensors[0].shape[0];
+  output_tensors[0].shape[1] = input_tensors[0].shape[1] / 3;
+  output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
 
