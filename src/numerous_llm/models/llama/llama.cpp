@@ -82,7 +82,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   layernorm_layer_->Init({layernorm_eps_}, context_, rank_);
   nccl_all_reduce_sum_layer_->Init({}, context_, rank_);
   add_layer_->Init({}, context_, rank_);
-  // silu_mul_layer_->Init({}, context_, rank_);
+  silu_mul_layer_->Init({}, context_, rank_);
   matmul_layer_->Init({}, context_, rank_);
   assemble_last_token_layer_->Init({}, context_, rank_);
   // max_position_embeddings  = ?

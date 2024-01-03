@@ -53,21 +53,20 @@ void InvokeAddBiasResidual(const void* input_a, const void* input_b, const int m
                                                    nullptr, m, n, stream);
 }
 
-void InvokeSiluActivation(const void* input, const void* bias, const int m, const int n, void* output,
+void InvokeSiluActivation(const void* input, const void* gated_weights, const int m, const int n, void* output,
                           cudaStream_t stream) {
   const int* ia3_tasks = nullptr;
+  const half* bias = nullptr;
   const half* ia3_weights = nullptr;
-  const half* gated_weights = nullptr;
   const half* gated_bias = nullptr;
   const int int8_mode = 0;
   const int* padding_offset = nullptr;
   const int seq_len = 0;
   const float* activation_in = nullptr;
   const float* activation_out = nullptr;
-
   CUDA_CHECK(cudaMemcpyAsync(output, input, sizeof(half) * m * n, cudaMemcpyDeviceToDevice, stream));
   llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, half, half>(
-      reinterpret_cast<half*>(output), reinterpret_cast<const half*>(bias), gated_weights, gated_bias, ia3_tasks,
+      reinterpret_cast<half*>(output), bias, reinterpret_cast<const half*>(gated_weights), gated_bias, ia3_tasks,
       ia3_weights, m, n, int8_mode, activation_in, activation_out, padding_offset, seq_len, stream);
 }
 

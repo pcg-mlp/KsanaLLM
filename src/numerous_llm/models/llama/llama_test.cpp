@@ -17,7 +17,7 @@ class LlamaTest : public testing::Test {
     model_config.head_num = 32;
     model_config.size_per_head = 128;
     model_config.inter_size = 11008;
-    model_config.num_layer = 10;
+    model_config.num_layer = 32;
     model_config.vocab_size = 32000;
     model_config.tensor_para_size = 1;
     model_config.layernorm_eps = 1e-6;
