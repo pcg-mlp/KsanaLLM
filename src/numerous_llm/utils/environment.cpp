@@ -55,17 +55,15 @@ void PrepareModeAttirbutes(const INIReader &ini_reader, ModelConfig &model_confi
   model_config.default_batch_size = ini_reader.GetInteger("request", "request_batch_size", 4);
 }
 
-Status Environment::ParseOptions(int argc, char **argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
-  if (!IsFileExists(FLAGS_model_config)) {
-    NLLM_LOG_ERROR << fmt::format("Model config file: {} is not exists.", FLAGS_model_config) << std::endl;
+Status Environment::ParseConfig(const std::string &config_file) {
+  if (!IsFileExists(config_file)) {
+    NLLM_LOG_ERROR << fmt::format("Model config file: {} is not exists.", config_file) << std::endl;
     return Status(RetCode::RET_SEGMENT_FAULT);
   }
 
-  INIReader ini_reader = INIReader(FLAGS_model_config);
+  INIReader ini_reader = INIReader(config_file);
   if (ini_reader.ParseError() < 0) {
-    NLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", FLAGS_model_config) << std::endl;
+    NLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file) << std::endl;
     return Status(RetCode::RET_SEGMENT_FAULT);
   }
 
@@ -90,13 +88,26 @@ Status Environment::ParseOptions(int argc, char **argv) {
 
   NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
 
-  endpoint_config_.host = FLAGS_host;
-  endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
-
-  endpoint_config_.host = FLAGS_host;
-  endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
-
   InitializeBlockManagerConfig();
+
+  return Status();
+}
+
+Status Environment::ParseOptions(int argc, char **argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+
+  endpoint_config_.host = FLAGS_host;
+  endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
+
+  endpoint_config_.host = FLAGS_host;
+  endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);
+
+  Status status = ParseConfig(FLAGS_model_config);
+  if (!status.OK()) {
+    NLLM_LOG_ERROR << fmt::format("Parse config file {} error: {}", FLAGS_model_config, status.GetMessage())
+                   << std::endl;
+    return status;
+  }
 
   return Status();
 }

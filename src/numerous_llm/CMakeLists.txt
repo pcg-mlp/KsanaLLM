@@ -9,12 +9,14 @@ include(external/fmt)
 include(external/loguru)
 include(external/gflags)
 include(external/httplib)
+include(external/pybind11)
 include(external/nlohmann_json)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src
 	${PROJECT_SOURCE_DIR}/tests
   ${THIRD_PARTY_PATH}/install/loguru
+  ${THIRD_PARTY_PATH}/pybind11/include
   ${THIRD_PARTY_PATH}/download/fmt/include
 )
 
@@ -28,7 +30,6 @@ add_subdirectory(plugins)
 add_subdirectory(runtime)
 add_subdirectory(samplers)
 add_subdirectory(service)
-add_subdirectory(torch_op)
 add_subdirectory(utils)
 
 add_library(numerous_llm_libs INTERFACE)
@@ -38,7 +39,6 @@ target_link_libraries(numerous_llm_libs INTERFACE
   models
   plugins
   service
-  torch_op
   utils
   batch_manager 
   block_manager
@@ -55,3 +55,6 @@ add_executable(numerous_llm main.cpp)
 target_link_libraries(numerous_llm PUBLIC 
   -lpthread -ldl numerous_llm_libs
 )
+
+add_subdirectory(torch_op)
+

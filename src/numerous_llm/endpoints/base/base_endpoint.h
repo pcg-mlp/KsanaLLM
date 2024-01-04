@@ -3,8 +3,50 @@
 ==============================================================================*/
 #pragma once
 
+#include <functional>
+#include <utility>
+
+#include "numerous_llm/batch_manager/batch_manager.h"
+#include "numerous_llm/utils/channel.h"
+#include "numerous_llm/utils/request.h"
+#include "numerous_llm/utils/status.h"
+
 namespace numerous_llm {
 
-class BaseEndpoint {};
+// The base class of all endpoints.
+class BaseEndpoint {
+ public:
+  BaseEndpoint(const EndpointConfig &endpoint_config,
+               std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+               Channel<std::pair<Status, Request>> &request_queue);
+
+  virtual ~BaseEndpoint() {}
+
+ protected:
+  // The channel used to pass request from endpoint.
+  Channel<std::pair<Status, Request>> &request_queue_;
+
+  // The function used to fetch result.
+  std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func_;
+
+  // The endpoint config.
+  EndpointConfig endpoint_config_;
+};
+
+// The base class of rpc endpoints, such as http/trpc.
+class RpcEndpoint : public BaseEndpoint {
+ public:
+  RpcEndpoint(const EndpointConfig &endpoint_config,
+              std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+              Channel<std::pair<Status, Request>> &request_queue);
+
+  virtual ~RpcEndpoint() override {}
+
+  // Listen at specific socket.
+  virtual Status Start() = 0;
+
+  // Close the listening socket.
+  virtual Status Stop() = 0;
+};
 
 }  // namespace numerous_llm

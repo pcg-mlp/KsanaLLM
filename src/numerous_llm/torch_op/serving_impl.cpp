@@ -1,22 +1,15 @@
-/* Copyright 2023 Tencent Inc.  All rights reserved.
+/* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
 
-#include "numerous_llm/service/inference_server.h"
-
-#include <iostream>
-#include <memory>
-#include <stdexcept>
+#include "numerous_llm/torch_op/serving_impl.h"
 
 #include "numerous_llm/endpoints/endpoint_factory.h"
 #include "numerous_llm/utils/logger.h"
-#include "numerous_llm/utils/singleton.h"
-#include "numerous_llm/utils/status.h"
-#include "numerous_llm/utils/waiter.h"
 
 namespace numerous_llm {
 
-InferenceServer::InferenceServer() {
+ServingImpl::ServingImpl() {
   inference_engine_ = std::make_shared<InferenceEngine>(request_queue_);
 
   std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
@@ -30,40 +23,32 @@ InferenceServer::InferenceServer() {
     throw std::runtime_error("Get endpoint config error:" + status.ToString());
   }
 
-  // Create rpc endpoint.
-  endpoint_config.type = EndpointType::ENDPOINT_HTTP;
-  endpoint_ = EndpointFactory::CreateRpcEndpoint(
+  // Create local endpoint.
+  endpoint_config.type = EndpointType::ENDPOINT_LOCAL;
+  endpoint_ = EndpointFactory::CreateLocalEndpoint(
       endpoint_config,
       [&](int64_t req_id, std::vector<std::vector<int>> &tokens) -> Status {
         return inference_engine_->FetchResult(req_id, tokens);
       },
       request_queue_);
-
-  waiter_ = std::make_shared<Waiter>(1);
 }
 
-Status InferenceServer::WaitUntilStop() {
-  waiter_->Wait();
-  return Status();
+Status ServingImpl::Handle(const std::string &model_name, const std::vector<std::vector<int>> &tokens,
+                           const std::vector<SamplingConfig> &sampling_configs,
+                           std::vector<std::vector<int>> &output_tokens) {
+  return endpoint_->Handle(model_name, tokens, sampling_configs, output_tokens);
 }
 
-Status InferenceServer::Start() {
+Status ServingImpl::Start() {
   inference_engine_->Start();
-  endpoint_->Start();
-
-  WaitUntilStop();
   return Status();
 }
 
-Status InferenceServer::Stop() {
+Status ServingImpl::Stop() {
   NLLM_LOG_INFO << "Recive stop signal, ready to quit.";
 
   request_queue_.Close();
-
-  endpoint_->Stop();
   inference_engine_->Stop();
-
-  waiter_->Notify();
 
   // Force exit here.
   NLLM_LOG_INFO << "Exit now.";
@@ -72,4 +57,4 @@ Status InferenceServer::Stop() {
   return Status();
 }
 
-}  // namespace numerous_llm.
+}  // namespace numerous_llm

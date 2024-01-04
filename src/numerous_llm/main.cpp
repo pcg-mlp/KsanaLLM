@@ -22,7 +22,7 @@ void SignalHandler(int signum) {
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
 
-    server->StopServer();
+    server->Stop();
     server = nullptr;
   }
 }
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
 
   // Initialize inference server
   server = std::make_shared<InferenceServer>();
-  status = server->StartServer();
+  status = server->Start();
   if (!status.OK()) {
     NLLM_LOG_ERROR << "Start inference server error: " << status.ToString() << std::endl;
     return 1;

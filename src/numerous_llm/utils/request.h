@@ -12,7 +12,12 @@
 
 namespace numerous_llm {
 
-class SamplingConfig {};
+struct SamplingConfig {
+  int beam_width;
+  int topk;
+  float topp;
+  float temperature;
+};
 
 class Request {
  public:

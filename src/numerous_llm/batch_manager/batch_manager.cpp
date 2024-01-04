@@ -153,6 +153,9 @@ Status BatchManager::Stop() {
 
   terminated_ = true;
 
+  // Break process loop.
+  queue_waiter_->Notify();
+
   if (batch_manager_thread_ && batch_manager_thread_->joinable()) {
     batch_manager_thread_->join();
   }

@@ -7,6 +7,8 @@ project(numerous_llm LANGUAGES CXX CUDA)
 add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 option(WITH_TESTING "Enable testing" OFF)
 
 # dedicate for Nvidia GPU
@@ -152,7 +154,6 @@ include_directories(${PYTHON_INCLUDE_DIRS})
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 message(STATUS "find Python3_LIBRARIES ${Python3_LIBRARIES}")
-
 
 message(STATUS "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS}")
 

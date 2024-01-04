@@ -107,8 +107,14 @@ struct BatchManagerConfig {
   LoraCoordinatorConfig lora_coordinator_config;
 };
 
+// The endpoint type.
+enum EndpointType { ENDPOINT_LOCAL, ENDPOINT_HTTP, ENDPOINT_TRPC };
+
 // The config of endpoint.
 struct EndpointConfig {
+  // The endpoint type.
+  EndpointType type = EndpointType::ENDPOINT_LOCAL;
+
   // HTTP service hostname, default is localhost
   std::string host;
 
@@ -118,6 +124,9 @@ struct EndpointConfig {
 
 class Environment {
  public:
+  // Parse environment from config file.
+  Status ParseConfig(const std::string& config_file);
+
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
 
