@@ -71,30 +71,32 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
       ia3_weights, m, n, int8_mode, activation_in, activation_out, padding_offset, seq_len, stream);
 }
 
-void AttenVarlen(void* q, void* k, void* v, void* out, void* seqlen, int total_tokens, int max_tokens, int batch,
-                 int num_heads, int head_size, bool is_causal, int rank, cudaStream_t stream) {
+void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
+                 llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, int total_tokens,
+                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank,
+                 cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
-  torch::Tensor q_tensor = torch::from_blob(q, {total_tokens, num_heads, head_size}, options);
-  torch::Tensor qkv_tensor = torch::from_blob(q, {total_tokens, num_heads * head_size * 3}, options);
-  auto tt = qkv_tensor.chunk(3, -1);   
+  torch::Tensor qkv_tensor = torch::from_blob(qkv_ptr, {total_tokens, num_heads * head_size * 3}, options);
+  auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
 
-  torch::Tensor k_tensor = torch::from_blob(k, {total_tokens, num_heads, head_size}, options);
-  torch::Tensor v_tensor = torch::from_blob(v, {total_tokens, num_heads, head_size}, options);
   c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
   auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
   torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
-  //std::cout << "batch " << batch << std::endl; 
-  //std::cout << "seqlen " << seqlen << std::endl; 
-  //std::cout << "q_tensor.to(torch::kCPU) " << torch::reshape(tt[0], {total_tokens, num_heads, head_size}).to(torch::kCPU) << std::endl; 
-  //std::cout << "k_tensor.to(torch::kCPU) " << torch::reshape(tt[1], {total_tokens, num_heads, head_size}).to(torch::kCPU) << std::endl; 
-  //std::cout << "v_tensor.to(torch::kCPU) " << torch::reshape(tt[2], {total_tokens, num_heads, head_size}).to(torch::kCPU) << std::endl; 
-  //std::cout << "seqlen_tensor.to(torch::kCPU) " << seqlen_tensor.to(torch::kCPU) << std::endl; 
-  //std::cout << "max_tokens " << max_tokens << std::endl; 
-  //std::cout << "1.0 / sqrt(head_size) " << 1.0 / sqrt(head_size) << std::endl; 
-  //std::cout << "is_causal " << is_causal << std::endl; 
-  flash_attn::mha_varlen_fwd(torch::reshape(tt[0], {total_tokens, num_heads, head_size}), torch::reshape(tt[1], {total_tokens, num_heads, head_size}), torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor, seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens,
+
+  // rotary embedding
+  // TODO: 临时实现: 使用 contiguous() 将离散的 q, k 迁移到连续空间
+  torch::Tensor q_tensor = tt[0].contiguous();
+  torch::Tensor k_tensor = tt[1].contiguous();
+  rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                  reinterpret_cast<half*>(q_tensor.data_ptr()),
+                                  reinterpret_cast<half*>(k_tensor.data_ptr()),
+                                  max_tokens,
+                                  stream);
+  rotary_embedding_cuda.Forward();
+
+  // flash attention
+  flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}), torch::reshape(k_tensor, {total_tokens, num_heads, head_size}), torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor, seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens,
                              max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
-  //std::cout << "out_tensor.to(torch::kCPU) " << out_tensor.value().to(torch::kCPU) << std::endl; 
 }
 
 void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,

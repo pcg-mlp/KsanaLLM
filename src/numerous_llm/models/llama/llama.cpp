@@ -75,7 +75,6 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   layernorm_layer_ = std::make_shared<LayernormLayer>();
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   add_layer_ = std::make_shared<AddLayer>();
-  rotary_embedding_layer_ = std::make_shared<RotaryEmbeddingLayer>();
   silu_mul_layer_ = std::make_shared<SiluMulLayer>();
   matmul_layer_ = std::make_shared<MatMulLayer>();
   assemble_last_token_layer_ = std::make_shared<AssembleLastTokenLayer>();
@@ -89,16 +88,16 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   matmul_layer_->Init({}, context_, rank_);
   assemble_last_token_layer_->Init({}, context_, rank_);
   cast_layer_->Init({}, context_, rank_);
-  rotary_embedding_layer_->Init({max_position_embeddings, rotary_embedding, rope_theta, size_per_head, head_num,
-                                num_key_value_heads, true}, context_, rank_);
   flash_attention_layer_.resize(num_layer_);
   paged_attention_layer_.resize(num_layer_);
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head},
+    flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
+                                       rotary_embedding, rope_theta, /*is_neox*/true},
                                       context_, rank_);
-    paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head},
+    paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
+                                       rotary_embedding, rope_theta, /*is_neox*/true},
                                       context_, rank_);
   }
 }
@@ -251,17 +250,11 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj.npy");
     NLLM_LOG_INFO << "attn proj";
 
-    // rotary embedding 原地修改, 因此输出和输入指向同一块空间
-    std::vector<Tensor>& rotary_embedding_output = output_2;
-    STATUS_CHECK_RETURN(rotary_embedding_layer_->Forward({attn_proj_output[0], rotary_embedding_pos,
-                                                         forward_shape}, rotary_embedding_output));
-    rotary_embedding_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.rotary_embedding.npy");
-    NLLM_LOG_INFO << "rotary embedding";
-
     // MMHA Flash Attention
     std::vector<Tensor>& flash_attention_output = output_1;
-    STATUS_CHECK_RETURN(flash_attention_layer_[layer_num]->Forward({rotary_embedding_output[0], input_offset_uint64_tensor, kv_list,
-                                                                   kv_cache_buffer_}, flash_attention_output));
+    STATUS_CHECK_RETURN(flash_attention_layer_[layer_num]->Forward({attn_proj_output[0], input_offset_uint64_tensor, kv_list,
+                                                                   kv_cache_buffer_, rotary_embedding_pos,
+                                                                   forward_shape}, flash_attention_output));
     flash_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA.npy");
     NLLM_LOG_INFO << "MMHA Flash Attention";
 
@@ -327,6 +320,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   std::vector<Tensor>& final_layernorm_output = output_1;
   STATUS_CHECK_RETURN(
       layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
+  final_layernorm_input[0].SaveToFile(saved_dir + "final_norm.input.npy");
   final_layernorm_output[0].SaveToFile(saved_dir + "final_norm.npy");
 
   // assemble last token
@@ -390,27 +384,24 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   // create input ids tensor
   // TODO(zezhao): input_ids 复用tmp空间
   Tensor input_ids;
-  CreateTensor(input_ids, total_seq_len * sizeof(int));
-  input_ids.shape = {total_seq_len};
+  CreateTensor(input_ids, batch_size * sizeof(int));
+  input_ids.shape = {batch_size};
   input_ids.dtype = TYPE_INT32;
   void* input_ids_ptr = input_ids.GetPtr<void>();
+  std::vector<int> input_ids_cpu(batch_size);
   size_t input_offset = 0;
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
   std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
-  int max_tokens = 0;
+  int max_tokens = 1;
   for (int idx = 0; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
-    // TODO(karlluo): need implement
-    // CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
-    // cudaMemcpyHostToDevice, context->GetH2DStreams()[rank_]));
-    CUDA_CHECK(cudaMemcpy(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
-                          cudaMemcpyHostToDevice));
+    input_ids_cpu[idx] = req_input->at(length - 1);
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
-    max_tokens = std::max(max_tokens, static_cast<int>(length));
   }
+  CUDA_CHECK(cudaMemcpy(input_ids_ptr, input_ids_cpu.data(), batch_size * sizeof(int), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaStreamSynchronize(context_->GetH2DStreams()[rank_]));
 
   // create input offset tensor int32 and uint64
@@ -462,16 +453,13 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
 
   // create rotary embedding pos tensor
   Tensor rotary_embedding_pos;
-  CreateTensor(rotary_embedding_pos, sizeof(int64_t) * total_seq_len);
-  std::vector<int64_t> cpu_rotary_pos(total_seq_len);
-  int cpu_rotary_pos_idx = 0;
+  CreateTensor(rotary_embedding_pos, sizeof(int64_t) * batch_size);
+  std::vector<int64_t> cpu_rotary_pos(batch_size);
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    for (size_t pos = 0; pos < forward_reqs[idx].output_tokens->size(); ++pos) {
-      cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
-    }
+    cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size();
   }
   void* rotary_embedding_pos_ptr = rotary_embedding_pos.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpy(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
+  CUDA_CHECK(cudaMemcpy(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * batch_size,
                         cudaMemcpyHostToDevice));
 
   // create forward shape tensor
@@ -510,13 +498,6 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj.npy");
     NLLM_LOG_INFO << "attn proj";
 
-    // rotary embedding 原地修改, 因此输出和输入指向同一块空间
-    std::vector<Tensor>& rotary_embedding_output = output_2;
-    STATUS_CHECK_RETURN(rotary_embedding_layer_->Forward({attn_proj_output[0], rotary_embedding_pos,
-                                                         forward_shape}, rotary_embedding_output));
-    rotary_embedding_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.rotary_embedding.npy");
-    NLLM_LOG_INFO << "rotary embedding";
-
     // MMHA Paged Attention
     std::vector<Tensor>& paged_attention_output = output_1;
     paged_attention_output.push_back(kv_list);
@@ -529,7 +510,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
     CUDA_CHECK(cudaMemcpy(kv_cache_offset_ptr, kv_cache_offset_list.data(),
                           kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice));
-    STATUS_CHECK_RETURN(paged_attention_layer_[layer_num]->Forward({rotary_embedding_output[0], input_offset_uint64_tensor,
+    STATUS_CHECK_RETURN(paged_attention_layer_[layer_num]->Forward({attn_proj_output[0], input_offset_uint64_tensor,
                                                                     kv_cache_offset_tensor, forward_shape},
                                                                    paged_attention_output));
     DestroyTensor(kv_cache_offset_tensor);
@@ -603,6 +584,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   std::vector<Tensor>& assemble_last_token_output = output_2;
   STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward({final_layernorm_output[0], input_offset_uint64_tensor},
                       assemble_last_token_output));
+
   assemble_last_token_output[0].SaveToFile(saved_dir + "assemble_last_token.npy");
 
   // lm_head
@@ -612,17 +594,18 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
   lm_head_output[0].SaveToFile(saved_dir + "lm_head.npy");
 
+   // Cast to float
+  std::vector<Tensor>& logits_float = output_1;
+  logits_float[0].dtype = TYPE_FP32;
+  STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
+  logits_float[0].SaveToFile(saved_dir + "logits_float.npy");
+
   // Copy to logits buf
-  float* output_logits_buf = forward_reqs[0].logits_buf[rank_];
-  size_t logits_offset = 0;
-  // TODO(karlluo): need implement
-  // CUDA_CHECK(cudaMemcpyAsync(output_logits_buf, lm_head_output[0].GetPtr<void>(), lm_head_output[0].GetTotalBytes(),
-  //            cudaMemcpyDeviceToDevice, context_->GetD2DStreams()[rank_]));
-  CUDA_CHECK(cudaStreamSynchronize(context_->GetD2DStreams()[rank_]));
+  float* logits_ptr = logits_float[0].GetPtr<float>();
   for (int idx = 0; idx < batch_size; ++idx) {
-    ForwardRequest req = forward_reqs[idx];
-    logits_offset += req.output_tokens->size();
-    req.logits_offset = logits_offset - 1;
+    ForwardRequest& req = forward_reqs[idx];
+    req.logits_buf[rank_] = logits_ptr;
+    req.logits_offset = idx;
   }
 
   DestroyTensor(input_ids);

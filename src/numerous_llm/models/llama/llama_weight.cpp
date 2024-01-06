@@ -60,7 +60,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   int tensor_para_size = model_config.tensor_para_size;
   AddWeightTensor("gather_embedding", {vocab_size, hidden_units}, weight_data_type);
   AddWeightTensor("norm", {hidden_units}, weight_data_type);
-  AddWeightTensor("lm_head", {hidden_units, vocab_size}, weight_data_type);
+  AddWeightTensor("lm_head", {hidden_units, vocab_size}, weight_data_type, /*transpose*/ true);
   for (int l = 0; l < num_layer; ++l) {
     AddWeightTensor(ConcatLayerName("input_layernorm", l), {hidden_units}, weight_data_type);
     AddWeightTensor(ConcatLayerName("post_attention_layernorm", l), {hidden_units}, weight_data_type);
@@ -78,7 +78,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
 }
 
 template <typename T>
-Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile) {
+Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile, bool transpose) {
   if (tensor.shape.size() > 2) {
     NLLM_LOG_ERROR << fmt::format("shape should have less than two dims");
     return Status(RET_INVALID_ARGUMENT, "[ERROR] shape should have less than two dims \n");
@@ -116,12 +116,25 @@ Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile) {
                                             "request " + std::to_string(loaded_data_size) + ", loading model fails!");
   }
   T* tensor_ptr = tensor.GetPtr<T>();
+ 
+  if (transpose) {
+    std::vector<char> host_array_transpose = host_array;
+    for (int i = 0; i < dim0; i++) {
+      for (int j = 0; j < dim1; j++) {
+        size_t dtype_size  = loaded_data_size / size;
+        memcpy(host_array.data() + (i * dim1 + j) * dtype_size,
+               host_array_transpose.data() + (j * dim0 + i) * dtype_size, dtype_size);
+      }
+    }
+  }
+  
   cudaMemcpy(tensor_ptr, host_array.data(), loaded_data_size, cudaMemcpyHostToDevice);
   return Status();
 }
 
 template <typename T>
-Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
+Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype,
+                                       bool transpose) {
   size_t length = Tensor::GetTypeSize(dtype);
   for (auto& dim : shapes) {
     length *= dim;
@@ -134,7 +147,7 @@ Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size
 
   weights_map_.emplace(weight_name, Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, dtype, shapes, {block_id}));
 
-  STATUS_CHECK_RETURN(LoadWeightFromBin(weights_map_[weight_name], binfile_name));
+  STATUS_CHECK_RETURN(LoadWeightFromBin(weights_map_[weight_name], binfile_name, transpose));
   return Status();
 }
 

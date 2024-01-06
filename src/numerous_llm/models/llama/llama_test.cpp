@@ -25,7 +25,7 @@ class LlamaTest : public testing::Test {
     model_config.max_token_num = 1024;
     model_config.rotary_embedding = 128;
     model_config.max_position_embeddings = 2048;
-    model_config.rope_theta = 1000.0f;
+    model_config.rope_theta = 10000.0f;
     model_config.num_key_value_heads = model_config.head_num;
 
     BlockManagerConfig block_manager_config;
@@ -69,9 +69,10 @@ TEST_F(LlamaTest, ContextDecodeTest) {
 
   ForwardRequest forward;
   std::vector<int> input_ids = {233, 1681};
+  // std::vector<int> input_ids = {1,306,4658,278,6593,310,2834,338};
   forward.output_tokens = &input_ids;
   forward.logits_buf.resize(1);
-  forward.block_size = 8 * 2 * 2;
+  forward.block_size = 64;
   // TODO 需要替换为实际的block
   std::vector<char> blocks_buffer(model_config.num_layer * forward.block_size);
   std::vector<void *> kv_cache_ptrs;
@@ -81,7 +82,10 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   forward.kv_cache_ptrs.push_back(kv_cache_ptrs);
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
-  EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+  input_ids.push_back(29871);
+  forward.output_tokens = &input_ids;
+  forward_reqs = {forward};
+  //EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

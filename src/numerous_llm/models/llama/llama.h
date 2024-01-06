@@ -11,7 +11,6 @@
 #include "numerous_llm/layers/matmul_layer.h"
 #include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "numerous_llm/layers/paged_attention_layer.h"
-#include "numerous_llm/layers/rotary_embedding_layer.h"
 #include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/layers/assemble_last_token_layer.h"
 #include "numerous_llm/layers/cast_layer.h"
@@ -44,7 +43,6 @@ class Llama : public BaseModel {
 
   std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;
-  std::shared_ptr<RotaryEmbeddingLayer> rotary_embedding_layer_;
   std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layer_;
   std::vector<std::shared_ptr<PagedAttentionLayer>> paged_attention_layer_;
   std::shared_ptr<NcclAllReduceSumLayer> nccl_all_reduce_sum_layer_;

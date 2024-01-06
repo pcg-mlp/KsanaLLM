@@ -4,6 +4,7 @@
 #pragma once
 
 #include "numerous_llm/layers/base_layer.h"
+#include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 
 namespace numerous_llm {
 
@@ -21,6 +22,9 @@ class AttentionLayer : public BaseLayer {
   int num_kv_heads_;
   int head_size_;
   bool is_causal_{true};
+  int cos_sin_cache_block_id_;
+  llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
+  half* cos_sin_cache_ptr_;
 };
 
 }  // namespace numerous_llm

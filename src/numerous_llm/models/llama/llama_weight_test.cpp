@@ -18,24 +18,24 @@ using namespace numerous_llm;
 class LlamaWeightTest : public testing::Test {
  protected:
   void SetUp() override {
-    model_config.path = "/model2/llama-ft/13B/2-gpu/";
+    model_config.path = "/model/llama-ft/7B/1-gpu/";
     model_config.weight_data_type = TYPE_FP16;
-    model_config.head_num = 4;
-    model_config.size_per_head = 4;
-    model_config.inter_size = 14;
-    model_config.num_layer = 2;
-    model_config.vocab_size = 32;
+    model_config.head_num = 32;
+    model_config.size_per_head = 128;
+    model_config.inter_size = 11008;
+    model_config.num_layer = 32;
+    model_config.vocab_size = 32000;
     model_config.tensor_para_size = 1;
 
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_size = 1024;
+    block_manager_config.cpu_allocator_config.block_size = 64;
     block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
-    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.block_size = 64;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
-    context_ = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(1, 1);
 
     // 使用配置创建一个 BlockManager 对象
     block_manager = new BlockManager(block_manager_config, context_);
@@ -80,7 +80,7 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
   Tensor lm_head = llama_weight.GetModelWeights(weight_name);
   EXPECT_EQ(lm_head.device, MEMORY_GPU);
   EXPECT_EQ(lm_head.storage, STORAGE_CONTIGUOUS);
-  EXPECT_EQ(lm_head.shape, std::vector<size_t>({16, 32}));
+  EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
 
   // 比较数据一致性
   //     llama_weight_hash: 使用 GetModelWeights 获取到的 BlockManager 中数据校验值

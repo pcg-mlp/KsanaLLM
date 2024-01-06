@@ -7,6 +7,7 @@
 #include <cuda_runtime.h>
 #include <optional>
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
+#include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 
 namespace numerous_llm {
 
@@ -28,8 +29,11 @@ void InvokeSiluActivation(const void* input, const void* bias, const int m, cons
 void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,
                        void* output, cudaStream_t& stream);
 
-void AttenVarlen(void* q, void* k, void* v, void* out, void* seqlen, int total_tokens, int max_tokens, int batch,
-                 int num_heads, int head_size, bool is_causal, int rank, cudaStream_t stream);
+void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
+                 llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, int total_tokens,
+                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank,
+                 cudaStream_t stream);
+
 
 template <typename T>
 void run_paged_attention(void* out,                     // [num_seqs, num_heads, head_size]

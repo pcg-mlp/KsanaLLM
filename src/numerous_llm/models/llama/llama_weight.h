@@ -19,7 +19,7 @@ class LlamaWeight : public BaseWeight {
   Tensor GetModelWeights(const std::string& weight_name);
 
  private:
-  Status LoadWeightFromBin(Tensor tensor, std::string binfile);
+  Status LoadWeightFromBin(Tensor tensor, std::string binfile, bool transpose = false);
 
   Status LoadLlamaWeightsMap(const ModelConfig& model_config);
 
@@ -27,7 +27,7 @@ class LlamaWeight : public BaseWeight {
 
   std::string GetBinfileName(std::string weight_name);
 
-  Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
+  Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype, bool transpose = false);
 
   std::unordered_map<std::string, Tensor> weights_map_;
 

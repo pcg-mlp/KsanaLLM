@@ -12,7 +12,6 @@
 #include "numerous_llm/layers/matmul_layer.h"
 #include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "numerous_llm/layers/paged_attention_layer.h"
-#include "numerous_llm/layers/rotary_embedding_layer.h"
 #include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/utils/dtypes.h"
 #include "test.h"
@@ -46,11 +45,11 @@ class LayerTest : public testing::Test {
     delete block_manager;
   }
 
-  Status CreateHalfDataTypeTensor(Tensor& tensor, const std::vector<size_t>& shape, const DataType data_type) {
+  Status CreateHalfDataTypeTensor(Tensor& tensor, const std::vector<size_t>& shape, const DataType data_type, size_t dtype_size = 2) {
     int idx;
     GetBlockManager()->SetDeviceId(0);
     size_t total_bytes =
-        std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) * sizeof(half);
+        std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) * dtype_size;
     GetBlockManager()->AllocateContiguous(total_bytes, idx);
     tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, data_type, shape, std::vector<int>{idx});
     return Status();
@@ -67,22 +66,34 @@ TEST_F(LayerTest, AttentionLayerTest) {
   int head_num = 32;
   int kv_head_num = 32;
   int size_per_head = 128;
-  EXPECT_TRUE(flash_attention_layer.Init({int(0), int(2048), head_num, kv_head_num, size_per_head}, context, 0).OK());
-  Tensor q, k, v, input_len;
-  std::vector<size_t> input_shape = {3, 4096};
-  CreateHalfDataTypeTensor(q, input_shape, GetTensorType<half>());
-  CreateHalfDataTypeTensor(k, input_shape, GetTensorType<half>());
-  CreateHalfDataTypeTensor(v, input_shape, GetTensorType<half>());
-  CreateHalfDataTypeTensor(input_len, {1}, GetTensorType<int32_t>());
+  int rotary_embedding = 128;
+  float rope_theta = 10000.0f;
+  bool is_neox = true;
+  EXPECT_TRUE(flash_attention_layer.Init({int(0), int(2048), head_num, kv_head_num, size_per_head, rotary_embedding,
+                                          rope_theta, is_neox}, context, 0).OK());
+
+  Tensor qkv, input_len, pos, forward_shape;
+  std::vector<size_t> input_shape = {2, 12288};
+  CreateHalfDataTypeTensor(qkv, input_shape, GetTensorType<half>());
+  CreateHalfDataTypeTensor(input_len, {1}, GetTensorType<int32_t>(), sizeof(int));
+  CreateHalfDataTypeTensor(pos, {2}, GetTensorType<uint64_t>(), /*dtype_size*/sizeof(uint64_t));
+  forward_shape.shape = {1, 2};
+  void* pos_ptr = pos.GetPtr<void>();
+  std::vector<uint64_t> pos_cpu({0, 2});
+  CUDA_CHECK(cudaMemcpy(pos_ptr, pos_cpu.data(), 2 * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  void* input_len_ptr = input_len.GetPtr<void>();
+  std::vector<int> input_len_cpu({2});
+  CUDA_CHECK(cudaMemcpy(input_len_ptr, input_len_cpu.data(), sizeof(int), cudaMemcpyHostToDevice));
   Tensor output_tensor;
   CreateHalfDataTypeTensor(output_tensor, input_shape, GetTensorType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
-  EXPECT_TRUE(flash_attention_layer.Forward({q, k, v, input_len}, output_tensors).OK());
+  EXPECT_TRUE(flash_attention_layer.Forward({qkv, input_len, /*kv_list*/ Tensor(), /*kv_cache_buffer*/ Tensor(), pos,
+                                             forward_shape}, output_tensors).OK());
 
   PagedAttentionLayer attention_layer;
   EXPECT_TRUE(
       attention_layer.Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num,
-                            static_cast<int>(size_per_head)}, context, 0).OK());
+                            static_cast<int>(size_per_head), rotary_embedding, rope_theta, is_neox}, context, 0).OK());
 }
 
 }  // namespace numerous_llm
