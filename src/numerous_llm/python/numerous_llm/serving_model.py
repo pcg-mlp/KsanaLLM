@@ -40,8 +40,8 @@ class ServingModel(object):
     def generate(
         self,
         model_name: str = None,
-        inputs: list[List[int]] = None,
-        generation_configs: list[GenerationConfig] = None,
+        inputs: list[int] = None,
+        generation_config: GenerationConfig = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
@@ -52,15 +52,12 @@ class ServingModel(object):
     ) -> list[List[int]]:
         """The model generate interface, invoked by venus.
         """
-        sampling_configs = []
-        for generation_config in generation_configs:
-            sampling_config = libtorch_serving.SamplingConfig()
-            sampling_config.beam_width = generation_config.num_beams
-            sampling_config.topk = generation_config.top_k
-            sampling_config.topp = generation_config.top_p
-            sampling_config.temperature = generation_config.temperature
-            sampling_configs.append(sampling_config)
+        sampling_config = libtorch_serving.SamplingConfig()
+        sampling_config.beam_width = generation_config.num_beams
+        sampling_config.topk = generation_config.top_k
+        sampling_config.topp = generation_config.top_p
+        sampling_config.temperature = generation_config.temperature
 
         status, outputs = self._serving.generate(
-            model_name, inputs, sampling_configs)
+            model_name, inputs, sampling_config)
         return outputs

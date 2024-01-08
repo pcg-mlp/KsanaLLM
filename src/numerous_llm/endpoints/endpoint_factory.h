@@ -18,13 +18,13 @@ namespace numerous_llm {
 class EndpointFactory {
  public:
   // Create a rpc endpoint instance via the input config.
-  static std::shared_ptr<RpcEndpoint> CreateRpcEndpoint(
-      const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
-      Channel<std::pair<Status, Request>> &request_queue);
+  static std::shared_ptr<RpcEndpoint> CreateRpcEndpoint(const EndpointConfig &endpoint_config,
+                                                        std::function<Status(int64_t, std::vector<int> &)> fetch_func,
+                                                        Channel<std::pair<Status, Request>> &request_queue);
 
   // Create a local endpoint instance via the input config.
   static std::shared_ptr<LocalEndpoint> CreateLocalEndpoint(
-      const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+      const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
       Channel<std::pair<Status, Request>> &request_queue);
 };
 

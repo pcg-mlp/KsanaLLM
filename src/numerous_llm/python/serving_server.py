@@ -29,37 +29,25 @@ def generate():
     json_request = json.loads(http_body)
 
     model_name = json_request["model_name"]
-    prompt_texts = json_request["prompts"]
-    sampling_configs = json_request["sampling_configs"]
+    prompt_text = json_request["prompt"]
+    sampling_config = json_request["sampling_config"]
 
-    generate_input_tokens = []
-    for prompt_text in prompt_texts:
-        input_token = tokenizer.encode(prompt_text, add_special_tokens=True)
-        generate_input_tokens.append(input_token)
-
-    generate_sampling_configs = []
-    for sampling_config in sampling_configs:
-        generation_config = GenerationConfig(
-            num_beams=1,
-            top_k=sampling_config["topk"],
-            top_p=sampling_config["topp"],
-            temperature=sampling_config["temperature"])
-        generate_sampling_configs.append(generation_config)
+    input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+    generation_config = GenerationConfig(
+        num_beams=1,
+        top_k=sampling_config["topk"],
+        top_p=sampling_config["topp"],
+        temperature=sampling_config["temperature"])
 
     try:
-        outputs = model.generate(
-            model_name=model_name,
-            inputs=generate_input_tokens,
-            generation_configs=generate_sampling_configs)
+        output_tokens = model.generate(model_name=model_name,
+                                       inputs=input_tokens,
+                                       generation_config=generation_config)
     except Exception as e:
         return make_response(jsonify({"texts": str(e)}), 500)
 
-    output_texts = []
-    for output in outputs:
-        output_text = tokenizer.decode(output)
-        output_texts.append(output_text)
-
-    return make_response(jsonify({"texts": output_texts}), 200)
+    output_text = tokenizer.decode(output_tokens)
+    return make_response(jsonify({"texts": output_text}), 200)
 
 
 # Use multithread to support parallelism.

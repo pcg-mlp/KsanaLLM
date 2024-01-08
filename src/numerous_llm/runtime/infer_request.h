@@ -75,9 +75,6 @@ class InferRequest {
   // The req id of the user's request.
   int64_t req_id;
 
-  // The unique id of this request.
-  int infer_id;
-
   // The name of model instance.
   std::string model_name;
 

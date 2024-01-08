@@ -9,8 +9,7 @@ namespace numerous_llm {
 
 class TrpcEndpoint : public RpcEndpoint {
  public:
-  TrpcEndpoint(const EndpointConfig &endpoint_config,
-               std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+  TrpcEndpoint(const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
                Channel<std::pair<Status, Request>> &request_queue);
 
   virtual ~TrpcEndpoint() override {}

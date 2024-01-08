@@ -30,8 +30,8 @@ for i in range(len(text_list)):
     prompt = text_list[i]
 
     data = {"model_name": "llama",
-            "prompts": [prompt],
-            "sampling_configs": [{"temperature": 1.0, "topk": 1, "topp": 0.0}],
+            "prompt": prompt,
+            "sampling_config": {"temperature": 1.0, "topk": 1, "topp": 0.0},
             }
 
     proc = multiprocessing.Process(

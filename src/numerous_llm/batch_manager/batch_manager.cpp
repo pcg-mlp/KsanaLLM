@@ -69,56 +69,53 @@ Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> 
   return Status();
 }
 
-Status BatchManager::Enqueue(int64_t req_id, const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                             const std::vector<SamplingConfig> &sampling_configs, std::shared_ptr<Waiter> waiter) {
-  NLLM_LOG_INFO << "batch manager enqueue req id " << req_id << ", batch_size " << tokens.size();
+Status BatchManager::Enqueue(int64_t req_id, const std::string &model_name, const std::vector<int> &input_tokens,
+                             const SamplingConfig &sampling_config, std::shared_ptr<Waiter> waiter) {
+  NLLM_LOG_INFO << "batch manager enqueue req id " << req_id;
 
   Status enqueue_status = Status(RetCode::RET_SUCCESS);
 
-  InitReqsWithInferReqId(req_id, tokens.size());
-  for (size_t i = 0; i < tokens.size(); ++i) {
-    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>();
-    infer_req->req_id = req_id;
-    infer_req->input_tokens = tokens[i];
-    infer_req->output_tokens = infer_req->input_tokens;
-    infer_req->sampling_config = sampling_configs[i];
-    infer_req->waiter = waiter;
+  InitReqsWithInferReqId(req_id, 1);
 
-    infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
-    infer_req->block_size = GetBlockManager()->GetBlockSize();
+  std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>();
+  infer_req->req_id = req_id;
+  infer_req->input_tokens = input_tokens;
+  infer_req->output_tokens = infer_req->input_tokens;
+  infer_req->sampling_config = sampling_config;
+  infer_req->waiter = waiter;
 
-    infer_req->model_name = model_name;
-    infer_req->model_instance = model_instances_[model_name];
-    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
-    infer_req->step = 0;
-    SetReqsWithInferReqId(infer_req->req_id, static_cast<size_t>(i), infer_req);
+  infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
+  infer_req->block_size = GetBlockManager()->GetBlockSize();
 
-    enqueue_status = batch_scheduler_->AddInferRequest(infer_req);
-    if (enqueue_status.OK()) {
-      NLLM_LOG_INFO << "batch schdule add req id " << req_id << " batch id " << i << " and "
-                    << infer_req->input_tokens.size() << " tokens";
-    } else {
-      NLLM_LOG_ERROR << "batch schdule add req id " << req_id << " batch id " << i << " and "
-                     << infer_req->input_tokens.size() << " tokens failed, message: " << enqueue_status.ToString();
-    }
+  infer_req->model_name = model_name;
+  infer_req->model_instance = model_instances_[model_name];
+  infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+  infer_req->step = 0;
+  SetReqsWithInferReqId(infer_req->req_id, static_cast<size_t>(0), infer_req);
+
+  enqueue_status = batch_scheduler_->AddInferRequest(infer_req);
+  if (enqueue_status.OK()) {
+    NLLM_LOG_INFO << "batch schdule add req id " << req_id << " and " << infer_req->input_tokens.size() << " tokens";
+  } else {
+    NLLM_LOG_ERROR << "batch schdule add req id " << req_id << " and " << infer_req->input_tokens.size()
+                   << " tokens failed, message: " << enqueue_status.ToString();
   }
 
   queue_waiter_->Notify();
   return Status();
 }
 
-Status BatchManager::FetchResult(int64_t req_id, std::vector<std::vector<int>> &tokens) {
+Status BatchManager::FetchResult(int64_t req_id, std::vector<int> &output_tokens) {
   NLLM_LOG_INFO << "Fetch req_id " << req_id << " result.";
   auto &infer_reqs_list = GetReqsWithInferReqId(req_id);
-  tokens.resize(infer_reqs_list.size());
   Status infer_status = Status(RET_SUCCESS);
-  for (size_t infer_req_idx = 0; infer_req_idx < infer_reqs_list.size(); ++infer_req_idx) {
-    tokens[infer_req_idx] = infer_reqs_list[infer_req_idx]->output_tokens;
-    if (!infer_reqs_list[infer_req_idx]->finish_status.OK()) {
-      // TODO(yancyliu): Summary all failed status.
-      infer_status = infer_reqs_list[infer_req_idx]->finish_status;
-    }
+
+  output_tokens = infer_reqs_list[0]->output_tokens;
+  if (!infer_reqs_list[0]->finish_status.OK()) {
+    // TODO(yancyliu): Summary all failed status.
+    infer_status = infer_reqs_list[0]->finish_status;
   }
+
   EraseReqsWithInferReqId(req_id);
   return infer_status;
 }

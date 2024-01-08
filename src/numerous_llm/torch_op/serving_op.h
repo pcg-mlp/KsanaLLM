@@ -22,8 +22,8 @@ class ServingOp : public torch::jit::CustomClassHolder {
   void InitServing(const std::string &mode_dir);
 
   // Generate a response.
-  Status Generate(const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                  const std::vector<SamplingConfig> &sampling_configs, std::vector<std::vector<int>> &output_tokens);
+  Status Generate(const std::string &model_name, const std::vector<int> &input_tokens,
+                  const SamplingConfig &sampling_config, std::vector<int> &output_tokens);
 
  private:
   // The inference implement.

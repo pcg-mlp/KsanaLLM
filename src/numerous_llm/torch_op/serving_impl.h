@@ -24,8 +24,8 @@ class ServingImpl {
   Status Stop();
 
   // Handle serving request.
-  Status Handle(const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                const std::vector<SamplingConfig> &sampling_configs, std::vector<std::vector<int>> &output_tokens);
+  Status Handle(const std::string &model_name, const std::vector<int> &input_tokens,
+                const SamplingConfig &sampling_config, std::vector<int> &output_tokens);
 
  private:
   // The inference engine.

@@ -62,14 +62,14 @@ Status InferenceEngine::Initialize() {
   return Status();
 }
 
-Status InferenceEngine::FetchResult(int64_t req_id, std::vector<std::vector<int>> &tokens) {
-  return batch_manager_->FetchResult(req_id, tokens);
+Status InferenceEngine::FetchResult(int64_t req_id, std::vector<int> &output_tokens) {
+  return batch_manager_->FetchResult(req_id, output_tokens);
 }
 
 Status InferenceEngine::HandleRequest(const Request &req) {
-  NLLM_LOG_INFO << "Handle request id " << req.req_id << ", batch size " << req.tokens.size();
+  NLLM_LOG_INFO << "Handle request id " << req.req_id;
   Status handle_req_status =
-      batch_manager_->Enqueue(req.req_id, req.model_name, req.tokens, req.sampling_configs, req.waiter);
+      batch_manager_->Enqueue(req.req_id, req.model_name, req.input_tokens, req.sampling_config, req.waiter);
   if (!handle_req_status.OK()) {
     return handle_req_status;
   }

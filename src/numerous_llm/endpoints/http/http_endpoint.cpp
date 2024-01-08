@@ -11,7 +11,7 @@
 namespace numerous_llm {
 
 HttpEndpoint::HttpEndpoint(const EndpointConfig &endpoint_config,
-                           std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+                           std::function<Status(int64_t, std::vector<int> &)> fetch_func,
                            Channel<std::pair<Status, Request>> &request_queue)
     : RpcEndpoint(endpoint_config, fetch_func, request_queue) {}
 
@@ -21,9 +21,9 @@ Status HttpEndpoint::Accept(Request &req) {
   }
   NLLM_LOG_INFO << "Accept a req.";
 
-  std::vector<SamplingConfig> sampling_configs(req.tokens.size());
-  req.sampling_configs = sampling_configs;
-  req.waiter = std::make_shared<Waiter>(req.tokens.size());
+  SamplingConfig sampling_config;
+  req.sampling_config = sampling_config;
+  req.waiter = std::make_shared<Waiter>(1);
 
   return Status();
 }
@@ -32,12 +32,8 @@ Status HttpEndpoint::Send(const Status infer_status, const Response &rsp, httpli
   nlohmann::json_abi_v3_11_2::json result_json;
 
   if (infer_status.OK()) {
-    result_json["tokens"] = rsp.tokens;
-    std::vector<size_t> token_lens;
-    for (const auto &tokens : rsp.tokens) {
-      token_lens.push_back(tokens.size());
-    }
-    result_json["tokens_len"] = token_lens;
+    result_json["output_tokens"] = rsp.output_tokens;
+    result_json["tokens_len"] = rsp.output_tokens.size();
     http_rsp.set_content(result_json.dump(), "text/plain");
   } else {
     http_rsp.status = httplib::StatusCode::InternalServerError_500;
@@ -47,27 +43,17 @@ Status HttpEndpoint::Send(const Status infer_status, const Response &rsp, httpli
 }
 
 Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Response &http_rsp) {
-  if (http_req.has_param("tokens")) {
+  if (http_req.has_param("input_tokens")) {
     Request req;
     req.model_name = http_req.get_param_value("model_name");
-    uint32_t batch_size = static_cast<uint32_t>(http_req.get_param_value_count("tokens_len"));
-    uint32_t offset = 0;
-    for (size_t t_l_id = 0; t_l_id < batch_size; ++t_l_id) {
-      int input_tokens_length = std::stoi(http_req.get_param_value("tokens_len", t_l_id));
-      std::vector<int> tokens_vec(input_tokens_length);
-      for (int v_id = 0; v_id < input_tokens_length; ++v_id) {
-        tokens_vec[v_id] = std::stoi(http_req.get_param_value("tokens", v_id + offset));
-      }
-      offset += input_tokens_length;
-      req.tokens.emplace_back(std::move(tokens_vec));
+
+    int input_tokens_length = std::stoi(http_req.get_param_value("tokens_len", 0));
+    std::vector<int> tokens_vec(input_tokens_length);
+    for (int v_id = 0; v_id < input_tokens_length; ++v_id) {
+      tokens_vec[v_id] = std::stoi(http_req.get_param_value("input_tokens", v_id));
     }
+    req.input_tokens = tokens_vec;
 
-    // TODO(yancyliu): Make sure size of tokens and sampling_configs are equal.
-
-    // At this moment the shape of tokens is [batch_size, each prompt's tokens number] for example:
-    // examples/llama13b/llama13b_simple_client.py requests 2 tokens list [[1,2,3],[4,5,6,7,8]],
-    // tokens[0] shape is [3]
-    // tokens[1] shape is [5]
     Status req_prepare_status = Accept(req);
     std::shared_ptr<Waiter> waiter = req.waiter;
     request_queue_.Write(std::make_pair<Status, Request>(std::move(req_prepare_status), std::move(req)));
@@ -76,7 +62,7 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
     Response rsp;
     rsp.req_id = req.req_id;
     waiter->Wait();
-    Status infer_status = fetch_func_(req.req_id, rsp.tokens);
+    Status infer_status = fetch_func_(req.req_id, rsp.output_tokens);
     Send(infer_status, rsp, http_rsp);
 
     return Status();

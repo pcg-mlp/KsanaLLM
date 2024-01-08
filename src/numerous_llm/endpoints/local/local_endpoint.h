@@ -13,16 +13,14 @@ namespace numerous_llm {
 
 class LocalEndpoint : public BaseEndpoint {
  public:
-  LocalEndpoint(const EndpointConfig &endpoint_config,
-                std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+  LocalEndpoint(const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
                 Channel<std::pair<Status, Request>> &request_queue);
 
   virtual ~LocalEndpoint() override {}
 
   // Handle a request.
-  virtual Status Handle(const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                        const std::vector<SamplingConfig> &sampling_configs,
-                        std::vector<std::vector<int>> &output_tokens);
+  virtual Status Handle(const std::string &model_name, const std::vector<int> &input_tokens,
+                        const SamplingConfig &sampling_config, std::vector<int> &output_tokens);
 };
 
 }  // namespace numerous_llm

@@ -11,7 +11,7 @@ namespace numerous_llm {
 class HttpEndpoint : public RpcEndpoint {
  public:
   HttpEndpoint(const EndpointConfig &endpoint_config,
-               std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+               std::function<Status(int64_t, std::vector<int> &)> fetch_func,
                Channel<std::pair<Status, Request>> &request_queue);
 
   virtual ~HttpEndpoint() override {}

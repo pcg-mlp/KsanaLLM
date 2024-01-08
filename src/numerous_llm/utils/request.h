@@ -30,10 +30,10 @@ class Request {
   std::string model_name;
 
   // The tokens of this request.
-  std::vector<std::vector<int>> tokens;
+  std::vector<int> input_tokens;
 
   // The config of sampling.
-  std::vector<SamplingConfig> sampling_configs;
+  SamplingConfig sampling_config;
 
   std::shared_ptr<Waiter> waiter;
 
@@ -48,7 +48,7 @@ class Response {
   int64_t req_id;
 
   // The tokens of this response.
-  std::vector<std::vector<int>> tokens;
+  std::vector<int> output_tokens;
 };
 
 }  // namespace numerous_llm

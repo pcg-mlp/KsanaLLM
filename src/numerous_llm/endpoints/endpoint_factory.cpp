@@ -20,7 +20,7 @@
 namespace numerous_llm {
 
 std::shared_ptr<RpcEndpoint> EndpointFactory::CreateRpcEndpoint(
-    const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+    const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
     Channel<std::pair<Status, Request>> &request_queue) {
   switch (endpoint_config.type) {
     case EndpointType::ENDPOINT_HTTP:
@@ -35,7 +35,7 @@ std::shared_ptr<RpcEndpoint> EndpointFactory::CreateRpcEndpoint(
 }
 
 std::shared_ptr<LocalEndpoint> EndpointFactory::CreateLocalEndpoint(
-    const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+    const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
     Channel<std::pair<Status, Request>> &request_queue) {
   switch (endpoint_config.type) {
     case EndpointType::ENDPOINT_LOCAL:

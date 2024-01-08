@@ -32,11 +32,11 @@ class BatchManager {
   Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
 
   // Enqueue a request to waiting queue.
-  Status Enqueue(int64_t req_id, const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                 const std::vector<SamplingConfig> &sampling_configs, std::shared_ptr<Waiter> waiter);
+  Status Enqueue(int64_t req_id, const std::string &model_name, const std::vector<int> &input_tokens,
+                 const SamplingConfig &sampling_config, std::shared_ptr<Waiter> waiter);
 
   // Fetch the inference result.
-  Status FetchResult(int64_t req_id, std::vector<std::vector<int>> &tokens);
+  Status FetchResult(int64_t req_id, std::vector<int> &output_tokens);
 
   // Wait all requests done.
   Status WaitAllDone();

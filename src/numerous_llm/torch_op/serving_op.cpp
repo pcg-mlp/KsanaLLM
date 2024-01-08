@@ -34,11 +34,10 @@ void ServingOp::InitServing(const std::string &model_dir) {
   NLLM_LOG_INFO << "ServingOp::InitServing finished.";
 }
 
-Status ServingOp::Generate(const std::string &model_name, const std::vector<std::vector<int>> &tokens,
-                           const std::vector<SamplingConfig> &sampling_configs,
-                           std::vector<std::vector<int>> &output_tokens) {
+Status ServingOp::Generate(const std::string &model_name, const std::vector<int> &input_tokens,
+                           const SamplingConfig &sampling_config, std::vector<int> &output_tokens) {
   NLLM_LOG_INFO << "ServingOp::Generate invoked.";
-  return serving_impl_->Handle(model_name, tokens, sampling_configs, output_tokens);
+  return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens);
 }
 
 }  // namespace numerous_llm
@@ -67,10 +66,9 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def("init_serving", &numerous_llm::ServingOp::InitServing)
       .def("generate",
            [](std::shared_ptr<numerous_llm::ServingOp> &self, const std::string &model_name,
-              const std::vector<std::vector<int>> &tokens,
-              const std::vector<numerous_llm::SamplingConfig> &sampling_configs) {
-             std::vector<std::vector<int>> output_tokens;
-             numerous_llm::Status status = self->Generate(model_name, tokens, sampling_configs, output_tokens);
+              const std::vector<int> &input_tokens, const numerous_llm::SamplingConfig &sampling_config) {
+             std::vector<int> output_tokens;
+             numerous_llm::Status status = self->Generate(model_name, input_tokens, sampling_config, output_tokens);
              return std::make_tuple(status, output_tokens);
            }
 

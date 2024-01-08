@@ -15,23 +15,12 @@
 #include "numerous_llm/utils/string_utils.h"
 #include "numerous_llm/utils/tensor.h"
 
-static std::atomic index_counter = 0;
-
 namespace numerous_llm {
 
-InferRequest::InferRequest() {
-  constexpr int max = std::numeric_limits<int>::max();
-  ++index_counter;
-  if (index_counter == max) {
-    index_counter = 1;
-  }
-  infer_id = index_counter;
-
-  timestamp_in_ms = GetCurrentTimeInMs();
-}
+InferRequest::InferRequest() { timestamp_in_ms = GetCurrentTimeInMs(); }
 
 InferRequest::~InferRequest() {
-  NLLM_LOG_INFO << "req " << infer_id << " destroyed, free block.";
+  NLLM_LOG_INFO << "req " << req_id << " destroyed, free block.";
   // Free memory on every device.
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);

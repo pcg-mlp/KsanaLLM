@@ -7,7 +7,7 @@
 namespace numerous_llm {
 
 TrpcEndpoint::TrpcEndpoint(const EndpointConfig &endpoint_config,
-                           std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+                           std::function<Status(int64_t, std::vector<int> &)> fetch_func,
                            Channel<std::pair<Status, Request>> &request_queue)
     : RpcEndpoint(endpoint_config, fetch_func, request_queue) {}
 

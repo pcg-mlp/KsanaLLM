@@ -17,7 +17,7 @@ class InferenceEngine {
   ~InferenceEngine();
 
   // Fetch result of specified request.
-  Status FetchResult(int64_t req_id, std::vector<std::vector<int>> &tokens);
+  Status FetchResult(int64_t req_id, std::vector<int> &output_tokens);
 
   // Start the rpc service.
   Status Start();

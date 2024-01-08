@@ -16,8 +16,7 @@ namespace numerous_llm {
 // The base class of all endpoints.
 class BaseEndpoint {
  public:
-  BaseEndpoint(const EndpointConfig &endpoint_config,
-               std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+  BaseEndpoint(const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
                Channel<std::pair<Status, Request>> &request_queue);
 
   virtual ~BaseEndpoint() {}
@@ -27,7 +26,7 @@ class BaseEndpoint {
   Channel<std::pair<Status, Request>> &request_queue_;
 
   // The function used to fetch result.
-  std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func_;
+  std::function<Status(int64_t, std::vector<int> &)> fetch_func_;
 
   // The endpoint config.
   EndpointConfig endpoint_config_;
@@ -36,8 +35,7 @@ class BaseEndpoint {
 // The base class of rpc endpoints, such as http/trpc.
 class RpcEndpoint : public BaseEndpoint {
  public:
-  RpcEndpoint(const EndpointConfig &endpoint_config,
-              std::function<Status(int64_t, std::vector<std::vector<int>> &)> fetch_func,
+  RpcEndpoint(const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
               Channel<std::pair<Status, Request>> &request_queue);
 
   virtual ~RpcEndpoint() override {}
