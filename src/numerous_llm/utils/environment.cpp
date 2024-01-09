@@ -84,7 +84,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   // TODO: Get from config.
   model_config.max_token_num = 1024;
 
-  model_configs_.push_back(model_config);
+  model_configs_[model_config.name] = model_config;
 
   NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
 
@@ -114,7 +114,7 @@ Status Environment::ParseOptions(int argc, char **argv) {
 
 void Environment::InitializeBlockManagerConfig() {
   NLLM_CHECK_WITH_INFO(model_configs_.size() > 0, "No model configed.");
-  const ModelConfig &model_config = model_configs_.front();
+  const ModelConfig &model_config = model_configs_.begin()->second;
 
   block_manager_config_.cpu_allocator_config.block_token_num = block_token_num_;
   block_manager_config_.device_allocator_config.block_token_num = block_token_num_;
@@ -133,8 +133,18 @@ void Environment::InitializeBlockManagerConfig() {
   block_manager_config_.device_allocator_config.blocks_num = 128;
 }
 
-Status Environment::GetModelList(std::vector<ModelConfig> &model_configs) {
+Status Environment::GetModelConfigs(std::unordered_map<std::string, ModelConfig> &model_configs) {
   model_configs = model_configs_;
+  return Status();
+}
+
+Status Environment::GetModelConfig(const std::string &model_name, ModelConfig &model_config) {
+  auto it = model_configs_.find(model_name);
+  if (it == model_configs_.end()) {
+    return Status(RET_INVALID_ARGUMENT, "No model found.");
+  }
+
+  model_config = it->second;
   return Status();
 }
 

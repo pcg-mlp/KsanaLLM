@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,14 +21,20 @@ namespace numerous_llm {
 // The infer request, it is the unit of batch manager's scheduler.
 class InferRequest {
  public:
-  InferRequest();
+  InferRequest(std::shared_ptr<Request> &request);
   ~InferRequest();
 
+  // Notify after request finished.
+  void Notify();
+
+  // Notify after step finished.
+  void NotifyStep();
+
   // Get logits ptr on every device, that is, output of forward and input of sampling.
-  std::vector<float*> GetLogitsPtr();
+  std::vector<float *> GetLogitsPtr();
 
   // Get addr ptr of blocks.
-  std::vector<std::vector<void*>> GetBlockPtrs();
+  std::vector<std::vector<void *>> GetBlockPtrs();
 
   // Get the block size.
   size_t GetBlockSize() const;
@@ -73,10 +80,31 @@ class InferRequest {
 
  public:
   // The req id of the user's request.
-  int64_t req_id;
+  int64_t &req_id;
 
   // The name of model instance.
-  std::string model_name;
+  std::string &model_name;
+
+  // The input tokens.
+  std::vector<int> &input_tokens;
+
+  // The output tokens, always contain input tokens on the left.
+  std::vector<int> &output_tokens;
+
+  // The sampling config of this request.
+  SamplingConfig &sampling_config;
+
+  // The waiter used to notify when request finished.
+  std::shared_ptr<Waiter> &waiter;
+
+  // The waiter used to notify when step finished.
+  std::shared_ptr<Waiter> &step_waiter;
+
+  // Whether the request is finished.
+  bool &finished;
+
+  // The final status of this request.
+  Status &finish_status;
 
   // The model instance pointer.
   std::shared_ptr<ModelInstance> model_instance;
@@ -90,27 +118,12 @@ class InferRequest {
   // The decode step, 1 for context decode, and then 2, 3, 4...
   int step;
 
-  // The final status of this request.
-  Status finish_status;
-
-  // The sampling config of this request.
-  SamplingConfig sampling_config;
-
-  // The waiter used to nofity caller client.
-  std::shared_ptr<Waiter> waiter;
-
   // The kv cache blocks this request used, the index is used as device_id.
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;
 
   // The block size for every kv cache block.
   size_t block_size;
-
-  // The input tokens.
-  std::vector<int> input_tokens;
-
-  // The output tokens, always contain input tokens on the left.
-  std::vector<int> output_tokens;
 
   // The offset for model forward's logits output.
   size_t logits_offset = 0;

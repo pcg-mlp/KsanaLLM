@@ -40,9 +40,21 @@ def generate():
         temperature=sampling_config["temperature"])
 
     try:
-        output_tokens = model.generate(model_name=model_name,
-                                       inputs=input_tokens,
-                                       generation_config=generation_config)
+        enable_streaming = True
+        if enable_streaming:
+            streaming_iter = model.generate(model_name=model_name,
+                                            inputs=input_tokens,
+                                            generation_config=generation_config,
+                                            streamer=True)
+            output_tokens = []
+            for output_token in streaming_iter:
+                print("Get step token:", output_token)
+                output_tokens.append(output_token)
+
+        else:
+            output_tokens = model.generate(model_name=model_name,
+                                           inputs=input_tokens,
+                                           generation_config=generation_config)
     except Exception as e:
         return make_response(jsonify({"texts": str(e)}), 500)
 

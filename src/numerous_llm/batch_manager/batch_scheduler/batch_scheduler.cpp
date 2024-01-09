@@ -30,8 +30,9 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
   NLLM_LOG_INFO << "batch scheduler add infer request.";
   if (CheckWaitingQueueFull()) {
     infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
+    infer_request->finished = true;
+    infer_request->Notify();
 
-    infer_request->waiter->Notify();
     return infer_request->finish_status;
   }
 
@@ -74,7 +75,8 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
       NLLM_LOG_INFO << "req " << req->req_id << " finished.";
       req->finish_status = Status(RET_SUCCESS);
       it = running_queue_.erase(it);
-      req->waiter->Notify();
+      req->finished = true;
+      req->Notify();
       continue;
     }
 
@@ -83,9 +85,13 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
       NLLM_LOG_INFO << "req " << req->req_id << " timeout in running.";
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       it = running_queue_.erase(it);
-      req->waiter->Notify();
+      req->finished = true;
+      req->Notify();
       continue;
     }
+
+    // Notify streaming iterator if needed.
+    req->NotifyStep();
 
     if (req->infer_stage == InferStage::STAGE_CONTEXT) {
       NLLM_LOG_INFO << "req " << req->req_id << " change from context decode to decode";
@@ -144,7 +150,8 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
 
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       it = swapped_queue_.erase(it);
-      req->waiter->Notify();
+      req->finished = true;
+      req->Notify();
       continue;
     }
 
@@ -197,7 +204,8 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
       NLLM_LOG_INFO << "req " << req->req_id << " timeout in waiting.";
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       it = waiting_queue_.erase(it);
-      req->waiter->Notify();
+      req->finished = true;
+      req->Notify();
       continue;
     }
 

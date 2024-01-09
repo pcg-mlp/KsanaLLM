@@ -13,11 +13,8 @@ namespace numerous_llm {
 // The serving engine define.
 class InferenceEngine {
  public:
-  InferenceEngine(Channel<std::pair<Status, Request>> &request_queue);
+  InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
   ~InferenceEngine();
-
-  // Fetch result of specified request.
-  Status FetchResult(int64_t req_id, std::vector<int> &output_tokens);
 
   // Start the rpc service.
   Status Start();
@@ -29,7 +26,7 @@ class InferenceEngine {
   Status StartHandler();
 
   // Handle one request.
-  Status HandleRequest(const Request &req);
+  Status HandleRequest(std::shared_ptr<Request> &req);
 
  private:
   // Initialize inference engine:
@@ -41,7 +38,7 @@ class InferenceEngine {
 
  private:
   // The channel used to pass request from endpoint.
-  Channel<std::pair<Status, Request>> &request_queue_;
+  Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue_;
 
   // Global context for inference
   std::shared_ptr<Context> context_ = nullptr;

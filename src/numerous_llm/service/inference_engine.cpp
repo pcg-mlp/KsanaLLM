@@ -7,7 +7,8 @@
 
 namespace numerous_llm {
 
-InferenceEngine::InferenceEngine(Channel<std::pair<Status, Request>> &request_queue) : request_queue_(request_queue) {
+InferenceEngine::InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
+    : request_queue_(request_queue) {
   Initialize();
 }
 
@@ -43,14 +44,14 @@ Status InferenceEngine::Initialize() {
   batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
   // Load model instances.
-  std::vector<ModelConfig> model_configs;
-  status = env->GetModelList(model_configs);
+  std::unordered_map<std::string, ModelConfig> model_configs;
+  status = env->GetModelConfigs(model_configs);
   if (!status.OK()) {
-    return Status(RET_INVALID_ARGUMENT, "Get model list error:" + status.ToString());
+    return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
   }
   NLLM_LOG_INFO << "Get model instance size: " << model_configs.size();
 
-  for (const ModelConfig &model_config : model_configs) {
+  for (auto &[model_name, model_config] : model_configs) {
     std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(model_config, context_);
     model_instance->Load();
 
@@ -62,14 +63,9 @@ Status InferenceEngine::Initialize() {
   return Status();
 }
 
-Status InferenceEngine::FetchResult(int64_t req_id, std::vector<int> &output_tokens) {
-  return batch_manager_->FetchResult(req_id, output_tokens);
-}
-
-Status InferenceEngine::HandleRequest(const Request &req) {
-  NLLM_LOG_INFO << "Handle request id " << req.req_id;
-  Status handle_req_status =
-      batch_manager_->Enqueue(req.req_id, req.model_name, req.input_tokens, req.sampling_config, req.waiter);
+Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
+  NLLM_LOG_INFO << "Handle request id " << req->req_id;
+  Status handle_req_status = batch_manager_->Enqueue(req);
   if (!handle_req_status.OK()) {
     return handle_req_status;
   }
@@ -80,21 +76,21 @@ Status InferenceEngine::HandleLoop() {
   NLLM_LOG_INFO << "Start handler";
 
   while (!terminated_) {
-    Request req;
-    std::pair<Status, Request> req_pair;
+    std::pair<Status, std::shared_ptr<Request>> req_pair;
     request_queue_.Read(&req_pair);
     if (terminated_) {
       break;
     }
 
     Status status = req_pair.first;
-    req = req_pair.second;
-
     if (status.GetCode() == RET_TERMINATED) {
       break;
     }
 
-    HandleRequest(req);
+    std::shared_ptr<Request> req = req_pair.second;
+    if (req) {
+      HandleRequest(req);
+    }
   }
 
   return Status();

@@ -37,6 +37,9 @@ enum RetCode {
   // undefined reference
   RET_UNDEFINED_REFERENCE = 9,
 
+  // iteratioin stopped.
+  RET_STOP_ITERATION = 10,
+
   // something not in above values.
   RET_UNKNOWN = 255,
 };

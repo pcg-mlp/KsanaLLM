@@ -6,6 +6,7 @@
 #include <torch/script.h>
 
 #include "numerous_llm/endpoints/local/local_endpoint.h"
+#include "numerous_llm/endpoints/streaming/streaming_iterator.h"
 #include "numerous_llm/service/inference_engine.h"
 #include "numerous_llm/utils/channel.h"
 
@@ -27,6 +28,10 @@ class ServingImpl {
   Status Handle(const std::string &model_name, const std::vector<int> &input_tokens,
                 const SamplingConfig &sampling_config, std::vector<int> &output_tokens);
 
+  // Handle serving request, in streaming mode.
+  Status HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
+                         const SamplingConfig &sampling_config, std::shared_ptr<StreamingIterator> &streaming_iterator);
+
  private:
   // The inference engine.
   std::shared_ptr<InferenceEngine> inference_engine_ = nullptr;
@@ -35,7 +40,7 @@ class ServingImpl {
   std::shared_ptr<LocalEndpoint> endpoint_ = nullptr;
 
   // channel for endpoint and inference server
-  Channel<std::pair<Status, Request>> request_queue_;
+  Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue_;
 };
 
 }  // namespace numerous_llm

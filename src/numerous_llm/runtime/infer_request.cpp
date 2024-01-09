@@ -10,6 +10,7 @@
 #include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/runtime/infer_stage.h"
 #include "numerous_llm/utils/memory_utils.h"
+#include "numerous_llm/utils/request.h"
 #include "numerous_llm/utils/singleton.h"
 #include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/string_utils.h"
@@ -17,7 +18,18 @@
 
 namespace numerous_llm {
 
-InferRequest::InferRequest() { timestamp_in_ms = GetCurrentTimeInMs(); }
+InferRequest::InferRequest(std::shared_ptr<Request>& request)
+    : req_id(request->req_id),
+      model_name(request->model_name),
+      input_tokens(request->input_tokens),
+      output_tokens(request->output_tokens),
+      sampling_config(request->sampling_config),
+      waiter(request->waiter),
+      step_waiter(request->step_waiter),
+      finished(request->finished),
+      finish_status(request->finish_status) {
+  timestamp_in_ms = GetCurrentTimeInMs();
+}
 
 InferRequest::~InferRequest() {
   NLLM_LOG_INFO << "req " << req_id << " destroyed, free block.";
@@ -25,6 +37,21 @@ InferRequest::~InferRequest() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);
     GetBlockManager()->FreeBlocks(kv_cache_blocks[i]);
+  }
+}
+
+void InferRequest::Notify() {
+  if (waiter) {
+    waiter->Notify();
+  }
+  if (step_waiter) {
+    step_waiter->Notify();
+  }
+}
+
+void InferRequest::NotifyStep() {
+  if (step_waiter) {
+    step_waiter->Notify();
   }
 }
 

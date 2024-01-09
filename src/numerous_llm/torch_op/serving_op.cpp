@@ -7,6 +7,7 @@
 #include <string>
 
 #include "numerous_llm/endpoints/endpoint_factory.h"
+#include "numerous_llm/endpoints/streaming/streaming_iterator.h"
 #include "numerous_llm/utils/logger.h"
 
 #include "numerous_llm/utils/request.h"
@@ -40,11 +41,18 @@ Status ServingOp::Generate(const std::string &model_name, const std::vector<int>
   return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens);
 }
 
+Status ServingOp::GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
+                                    const SamplingConfig &sampling_config,
+                                    std::shared_ptr<StreamingIterator> &streaming_iterator) {
+  NLLM_LOG_INFO << "ServingOp::GenerateStreaming invoked.";
+  return serving_impl_->HandleStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
+}
+
 }  // namespace numerous_llm
 
 PYBIND11_MODULE(libtorch_serving, m) {
   // Export `Status` to python.
-  pybind11::class_<numerous_llm::Status>(m, "Status")
+  pybind11::class_<numerous_llm::Status, std::shared_ptr<numerous_llm::Status>>(m, "Status")
       .def(pybind11::init())
       .def(pybind11::init<numerous_llm::RetCode, const std::string &>())
       .def("OK", &numerous_llm::Status::OK)
@@ -52,13 +60,29 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def("GetCode", &numerous_llm::Status::GetCode)
       .def("ToString", &numerous_llm::Status::ToString);
 
+  // Export `RetCode` to python, only export the values used in python.
+  pybind11::enum_<numerous_llm::RetCode>(m, "RetCode", pybind11::arithmetic())
+      .value("RET_SUCCESS", numerous_llm::RetCode::RET_SUCCESS)
+      .value("RET_STOP_ITERATION", numerous_llm::RetCode::RET_STOP_ITERATION)
+      .export_values();
+
   // Export `SamplingConfig` to python.
-  pybind11::class_<numerous_llm::SamplingConfig>(m, "SamplingConfig")
+  pybind11::class_<numerous_llm::SamplingConfig, std::shared_ptr<numerous_llm::SamplingConfig>>(m, "SamplingConfig")
       .def(pybind11::init<>())
       .def_readwrite("beam_width", &numerous_llm::SamplingConfig::beam_width)
       .def_readwrite("topk", &numerous_llm::SamplingConfig::topk)
       .def_readwrite("topp", &numerous_llm::SamplingConfig::topp)
       .def_readwrite("temperature", &numerous_llm::SamplingConfig::temperature);
+
+  // Export `StreamingIterator` to python.
+  pybind11::class_<numerous_llm::StreamingIterator, std::shared_ptr<numerous_llm::StreamingIterator>>(
+      m, "StreamingIterator")
+      .def(pybind11::init<>())
+      .def("GetNext", [](std::shared_ptr<numerous_llm::StreamingIterator> &self) {
+        int token_id;
+        numerous_llm::Status status = self->GetNext(token_id);
+        return std::make_tuple(status, token_id);
+      });
 
   // Export `ServingOp` to python.
   pybind11::class_<numerous_llm::ServingOp, std::shared_ptr<numerous_llm::ServingOp>>(m, "Serving")
@@ -70,7 +94,13 @@ PYBIND11_MODULE(libtorch_serving, m) {
              std::vector<int> output_tokens;
              numerous_llm::Status status = self->Generate(model_name, input_tokens, sampling_config, output_tokens);
              return std::make_tuple(status, output_tokens);
-           }
-
-      );
+           })
+      .def("generate_streaming",
+           [](std::shared_ptr<numerous_llm::ServingOp> &self, const std::string &model_name,
+              const std::vector<int> &input_tokens, const numerous_llm::SamplingConfig &sampling_config) {
+             std::shared_ptr<numerous_llm::StreamingIterator> streaming_iterator;
+             numerous_llm::Status status =
+                 self->GenerateStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
+             return std::make_tuple(status, streaming_iterator);
+           });
 }

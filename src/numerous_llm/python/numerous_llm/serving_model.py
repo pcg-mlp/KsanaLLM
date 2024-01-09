@@ -20,6 +20,30 @@ from transformers.generation.stopping_criteria import StoppingCriteriaList
 import libtorch_serving
 
 
+class PyStreamingIterator(object):
+    """The streaming iterator.
+    """
+
+    def __init__(self, serving_iterator: libtorch_serving.StreamingIterator):
+        self._serving_iterator = serving_iterator
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        status, token_id = self._serving_iterator.GetNext()
+        if status.OK():
+            return token_id
+        elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
+            raise StopIteration(
+                "Iterator finished, ret code {}, message {}.".format(
+                    status.GetCode(), status.GetMessage()))
+        else:
+            raise RuntimeError(
+                "Iterator error, ret code {}, message {}.".format(
+                    status.GetCode(), status.GetMessage()))
+
+
 class ServingModel(object):
     """The LLM serving model instance.
     """
@@ -58,6 +82,11 @@ class ServingModel(object):
         sampling_config.topp = generation_config.top_p
         sampling_config.temperature = generation_config.temperature
 
-        status, outputs = self._serving.generate(
-            model_name, inputs, sampling_config)
-        return outputs
+        if streamer is None:
+            status, outputs = self._serving.generate(
+                model_name, inputs, sampling_config)
+            return outputs
+        else:
+            status, streaming_iterator = self._serving.generate_streaming(
+                model_name, inputs, sampling_config)
+            return PyStreamingIterator(streaming_iterator)

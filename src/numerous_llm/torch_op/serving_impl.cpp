@@ -25,17 +25,18 @@ ServingImpl::ServingImpl() {
 
   // Create local endpoint.
   endpoint_config.type = EndpointType::ENDPOINT_LOCAL;
-  endpoint_ = EndpointFactory::CreateLocalEndpoint(
-      endpoint_config,
-      [&](int64_t req_id, std::vector<int> &output_tokens) -> Status {
-        return inference_engine_->FetchResult(req_id, output_tokens);
-      },
-      request_queue_);
+  endpoint_ = EndpointFactory::CreateLocalEndpoint(endpoint_config, request_queue_);
 }
 
 Status ServingImpl::Handle(const std::string &model_name, const std::vector<int> &input_tokens,
                            const SamplingConfig &sampling_config, std::vector<int> &output_tokens) {
   return endpoint_->Handle(model_name, input_tokens, sampling_config, output_tokens);
+}
+
+Status ServingImpl::HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
+                                    const SamplingConfig &sampling_config,
+                                    std::shared_ptr<StreamingIterator> &streaming_iterator) {
+  return endpoint_->HandleStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
 }
 
 Status ServingImpl::Start() {

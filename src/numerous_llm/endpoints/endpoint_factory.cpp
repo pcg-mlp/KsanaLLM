@@ -20,13 +20,12 @@
 namespace numerous_llm {
 
 std::shared_ptr<RpcEndpoint> EndpointFactory::CreateRpcEndpoint(
-    const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
-    Channel<std::pair<Status, Request>> &request_queue) {
+    const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue) {
   switch (endpoint_config.type) {
     case EndpointType::ENDPOINT_HTTP:
-      return std::make_shared<HttpEndpoint>(endpoint_config, fetch_func, request_queue);
+      return std::make_shared<HttpEndpoint>(endpoint_config, request_queue);
     case EndpointType::ENDPOINT_TRPC:
-      return std::make_shared<TrpcEndpoint>(endpoint_config, fetch_func, request_queue);
+      return std::make_shared<TrpcEndpoint>(endpoint_config, request_queue);
     default:
       NLLM_LOG_ERROR << "Rpc endpoint type " << endpoint_config.type << " is not supported.";
       break;
@@ -35,11 +34,10 @@ std::shared_ptr<RpcEndpoint> EndpointFactory::CreateRpcEndpoint(
 }
 
 std::shared_ptr<LocalEndpoint> EndpointFactory::CreateLocalEndpoint(
-    const EndpointConfig &endpoint_config, std::function<Status(int64_t, std::vector<int> &)> fetch_func,
-    Channel<std::pair<Status, Request>> &request_queue) {
+    const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue) {
   switch (endpoint_config.type) {
     case EndpointType::ENDPOINT_LOCAL:
-      return std::make_shared<LocalEndpoint>(endpoint_config, fetch_func, request_queue);
+      return std::make_shared<LocalEndpoint>(endpoint_config, request_queue);
     default:
       NLLM_LOG_ERROR << "Local endpoint type " << endpoint_config.type << " is not supported.";
       break;

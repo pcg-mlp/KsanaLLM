@@ -11,8 +11,7 @@ namespace numerous_llm {
 class HttpEndpoint : public RpcEndpoint {
  public:
   HttpEndpoint(const EndpointConfig &endpoint_config,
-               std::function<Status(int64_t, std::vector<int> &)> fetch_func,
-               Channel<std::pair<Status, Request>> &request_queue);
+               Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
 
   virtual ~HttpEndpoint() override {}
 
@@ -24,10 +23,10 @@ class HttpEndpoint : public RpcEndpoint {
 
  private:
   // Wait until a request arrived.
-  Status Accept(Request &req);
+  Status Accept(std::shared_ptr<Request> &req);
 
   // Send rsp to client.
-  Status Send(const Status infer_status, const Response &rsp, httplib::Response &http_rsp);
+  Status Send(const Status infer_status, const std::shared_ptr<Request> &req, httplib::Response &http_rsp);
 
   // Handle the http request.
   Status HandleRequest(const httplib::Request &http_req, httplib::Response &http_rsp);

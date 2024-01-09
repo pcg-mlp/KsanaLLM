@@ -32,12 +32,7 @@ InferenceServer::InferenceServer() {
 
   // Create rpc endpoint.
   endpoint_config.type = EndpointType::ENDPOINT_HTTP;
-  endpoint_ = EndpointFactory::CreateRpcEndpoint(
-      endpoint_config,
-      [&](int64_t req_id, std::vector<int> &output_tokens) -> Status {
-        return inference_engine_->FetchResult(req_id, output_tokens);
-      },
-      request_queue_);
+  endpoint_ = EndpointFactory::CreateRpcEndpoint(endpoint_config, request_queue_);
 
   waiter_ = std::make_shared<Waiter>(1);
 }

@@ -32,11 +32,7 @@ class BatchManager {
   Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
 
   // Enqueue a request to waiting queue.
-  Status Enqueue(int64_t req_id, const std::string &model_name, const std::vector<int> &input_tokens,
-                 const SamplingConfig &sampling_config, std::shared_ptr<Waiter> waiter);
-
-  // Fetch the inference result.
-  Status FetchResult(int64_t req_id, std::vector<int> &output_tokens);
+  Status Enqueue(std::shared_ptr<Request> &request);
 
   // Wait all requests done.
   Status WaitAllDone();
@@ -53,15 +49,6 @@ class BatchManager {
  private:
   // Initialize the batch manager.
   Status Initialize();
-
-  void InitReqsWithInferReqId(const int64_t req_id, const size_t batch_size);
-
-  void SetReqsWithInferReqId(const int64_t req_id, const size_t batch_id, std::shared_ptr<InferRequest> infer_req);
-
-  // Get reqs by infer req id
-  std::vector<std::shared_ptr<InferRequest>> &GetReqsWithInferReqId(const int64_t req_id);
-
-  void EraseReqsWithInferReqId(const int64_t req_id);
 
  private:
   // The config for whole batch manager.
@@ -93,9 +80,6 @@ class BatchManager {
 
   // The runtime instance.
   std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
-
-  // The request id result maintainer.
-  std::unordered_map<int64_t, std::vector<std::shared_ptr<InferRequest>>> infer_reqs_maintainer_;
 
   // To guard result maintainer.
   std::mutex infer_reqs_maintainer_mutex_;

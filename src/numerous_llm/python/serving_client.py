@@ -17,7 +17,7 @@ def post_request(data, queue=None):
 
 
 def show_response(data, result):
-    print("result:", result["texts"])
+    print("result:", result)
 
 
 text_list = ["您好!"]

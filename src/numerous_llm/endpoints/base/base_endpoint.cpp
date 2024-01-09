@@ -7,13 +7,11 @@
 namespace numerous_llm {
 
 BaseEndpoint::BaseEndpoint(const EndpointConfig &endpoint_config,
-                           std::function<Status(int64_t, std::vector<int> &)> fetch_func,
-                           Channel<std::pair<Status, Request>> &request_queue)
-    : request_queue_(request_queue), fetch_func_(fetch_func), endpoint_config_(endpoint_config) {}
+                           Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
+    : request_queue_(request_queue), endpoint_config_(endpoint_config) {}
 
 RpcEndpoint::RpcEndpoint(const EndpointConfig &endpoint_config,
-                         std::function<Status(int64_t, std::vector<int> &)> fetch_func,
-                         Channel<std::pair<Status, Request>> &request_queue)
-    : BaseEndpoint(endpoint_config, fetch_func, request_queue) {}
+                         Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
+    : BaseEndpoint(endpoint_config, request_queue) {}
 
 }  // namespace numerous_llm

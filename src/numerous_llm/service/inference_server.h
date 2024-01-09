@@ -40,7 +40,7 @@ class InferenceServer {
   std::shared_ptr<RpcEndpoint> endpoint_ = nullptr;
 
   // channel for endpoint and inference server
-  Channel<std::pair<Status, Request>> request_queue_;
+  Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue_;
 
   // Use to gracefully stopped.
   std::shared_ptr<Waiter> waiter_ = nullptr;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "httplib.h"
@@ -125,13 +126,16 @@ struct EndpointConfig {
 class Environment {
  public:
   // Parse environment from config file.
-  Status ParseConfig(const std::string& config_file);
+  Status ParseConfig(const std::string &config_file);
 
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
 
-  // Get the model list from env.
-  Status GetModelList(std::vector<ModelConfig> &model_configs);
+  // Get the model configs from env.
+  Status GetModelConfigs(std::unordered_map<std::string, ModelConfig> &model_configs);
+
+  // Get the model config by name.
+  Status GetModelConfig(const std::string& model_name, ModelConfig& model_config);
 
   // Get the config of a batch manager.
   Status GetBatchManagerConfig(BatchManagerConfig &batch_manager_config);
@@ -152,7 +156,7 @@ class Environment {
 
  private:
   // The model list that should be loaded.
-  std::vector<ModelConfig> model_configs_;
+  std::unordered_map<std::string, ModelConfig> model_configs_;
 
   // The config of batch manager.
   BatchManagerConfig batch_manager_config_;

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "numerous_llm/utils/id_generator.h"
+#include "numerous_llm/utils/status.h"
 #include "numerous_llm/utils/tensor.h"
 #include "numerous_llm/utils/waiter.h"
 
@@ -32,23 +33,27 @@ class Request {
   // The tokens of this request.
   std::vector<int> input_tokens;
 
+  // The output tokens of this request.
+  std::vector<int> output_tokens;
+
   // The config of sampling.
   SamplingConfig sampling_config;
 
-  std::shared_ptr<Waiter> waiter;
+  // The waiter notified when request finished.
+  std::shared_ptr<Waiter> waiter = nullptr;
+
+  // The waiter notified when step finished.
+  std::shared_ptr<Waiter> step_waiter = nullptr;
+
+  // Whether the request is finished.
+  bool finished = false;
+
+  // The finish statu of this request.
+  Status finish_status;
 
  private:
   // The id generator
   static IdGenerator id_generator_;
-};
-
-class Response {
- public:
-  // The unique id of a request, same as its request.
-  int64_t req_id;
-
-  // The tokens of this response.
-  std::vector<int> output_tokens;
 };
 
 }  // namespace numerous_llm
