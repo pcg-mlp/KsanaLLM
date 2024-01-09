@@ -22,6 +22,9 @@ struct SamplingRequest {
   // The output token will be appended here.
   std::vector<int>* output_tokens;
 
+  // The mutex used to protect output_tokens.
+  std::mutex* output_mutex;
+
   // Model config
   const ModelConfig* model_config;
 };

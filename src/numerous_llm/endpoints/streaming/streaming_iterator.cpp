@@ -10,18 +10,39 @@
 namespace numerous_llm {
 
 Status StreamingIterator::GetNext(int& token_id) {
-  if (request_->finished) {
-    // failure, no token generated.
-    if (!request_->finish_status.OK()) {
-      return request_->finish_status;
+  while (true) {
+    if (request_->finished) {
+      // failure, no token generated.
+      if (!request_->finish_status.OK()) {
+        return request_->finish_status;
+      }
+
+      // Make sure the last token is fetched.
+      if (!last_token_fetched_) {
+        last_token_fetched_ = true;
+        std::unique_lock<std::mutex> lock(request_->output_mutex);
+        if (cur_index_ < request_->output_tokens.size()) {
+          token_id = request_->output_tokens[cur_index_++];
+          return Status();
+        }
+      }
+
+      return Status(RET_STOP_ITERATION);
     }
 
-    return Status(RET_STOP_ITERATION);
-  }
+    // Have more token that not fetched.
+    {
+      std::unique_lock<std::mutex> lock(request_->output_mutex);
+      if (cur_index_ < request_->output_tokens.size()) {
+        token_id = request_->output_tokens[cur_index_++];
+        return Status();
+      }
+    }
 
-  request_->step_waiter->Wait();
-  token_id = request_->output_tokens.back();
-  request_->step_waiter->Reset(1);
+    // Waiting util next token generated.
+    request_->step_waiter->Wait();
+    request_->step_waiter->Reset(1);
+  }
 
   return Status();
 }

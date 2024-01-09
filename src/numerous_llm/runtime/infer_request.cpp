@@ -27,7 +27,8 @@ InferRequest::InferRequest(std::shared_ptr<Request>& request)
       waiter(request->waiter),
       step_waiter(request->step_waiter),
       finished(request->finished),
-      finish_status(request->finish_status) {
+      finish_status(request->finish_status),
+      output_mutex(request->output_mutex) {
   timestamp_in_ms = GetCurrentTimeInMs();
 }
 

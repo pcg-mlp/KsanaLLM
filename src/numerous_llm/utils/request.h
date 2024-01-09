@@ -51,6 +51,9 @@ class Request {
   // The finish statu of this request.
   Status finish_status;
 
+  // Protect parallel access for output token.
+  std::mutex output_mutex;
+
  private:
   // The id generator
   static IdGenerator id_generator_;
