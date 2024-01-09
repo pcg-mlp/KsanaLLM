@@ -40,7 +40,7 @@ std::future<Status> Worker::ForwardAsync(std::shared_ptr<BaseModel> model, std::
 Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs) {
   CUDA_CHECK(cudaSetDevice(rank_));
 
-  sampler->Sampling(sampling_reqs);
+  sampler->Sampling(sampling_reqs, context_->GetComputeStreams()[rank_]);
   return Status();
 }
 
