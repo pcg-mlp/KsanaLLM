@@ -13,6 +13,7 @@ message(STATUS "models_SRCS: ${models_SRCS}")
 add_library(models STATIC ${models_SRCS})
 target_link_libraries(models PUBLIC block_manager)
 target_link_libraries(models PUBLIC layers)
+target_link_libraries(models PUBLIC samplers)
 
 # for test
 file(GLOB_RECURSE models_test_SRCS

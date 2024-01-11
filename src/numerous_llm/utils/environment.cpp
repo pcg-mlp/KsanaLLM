@@ -52,6 +52,7 @@ void PrepareModeAttirbutes(const INIReader &ini_reader, ModelConfig &model_confi
   model_config.layernorm_eps = ini_reader.GetFloat(model_config.name, "layernorm_eps");
   model_config.start_id = ini_reader.GetInteger(model_config.name, "start_id");
   model_config.end_id = ini_reader.GetInteger(model_config.name, "end_id");
+  model_config.max_position_embeddings = ini_reader.GetInteger(model_config.name, "max_position_embeddings");
   model_config.default_batch_size = ini_reader.GetInteger("request", "request_batch_size", 4);
 }
 
@@ -82,7 +83,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   PrepareModeAttirbutes(ini_reader, model_config);
 
   // TODO: Get from config.
-  model_config.max_token_num = 1024;
+  model_config.max_token_num = 32;
 
   model_configs_[model_config.name] = model_config;
 
@@ -122,10 +123,10 @@ void Environment::InitializeBlockManagerConfig() {
   size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *
                       (model_config.head_num / GetTensorParallelSize()) * model_config.size_per_head;
 
-  block_manager_config_.cpu_allocator_config.block_size = token_size * block_token_num_;
-  block_manager_config_.device_allocator_config.block_size = token_size * block_token_num_;
+  block_manager_config_.cpu_allocator_config.block_size = token_size * block_token_num_ * 2;
+  block_manager_config_.device_allocator_config.block_size = token_size * block_token_num_ * 2 * sizeof(half);
 
-  block_manager_config_.cpu_allocator_config.device = MemoryDevice::MEMORY_CPU;
+  block_manager_config_.cpu_allocator_config.device = MemoryDevice::MEMORY_CPU_PINNED;
   block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_GPU;
 
   // TODO(yancyliu): should calculated through device memory useage.

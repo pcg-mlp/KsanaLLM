@@ -171,7 +171,7 @@ class Environment {
   int pipeline_parallel_size_{0};
 
   // The max token number of one block.
-  size_t block_token_num_ = 64;
+  size_t block_token_num_ = 16;
 };
 
 }  // namespace numerous_llm

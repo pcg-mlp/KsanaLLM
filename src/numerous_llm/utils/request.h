@@ -14,10 +14,10 @@
 namespace numerous_llm {
 
 struct SamplingConfig {
-  int beam_width;
-  int topk;
-  float topp;
-  float temperature;
+  int beam_width = 1;
+  int topk = 1;
+  float topp = 0.0f;
+  float temperature = 0.0f;
 };
 
 class Request {

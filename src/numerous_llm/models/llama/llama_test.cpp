@@ -2,47 +2,34 @@
  *
  * ==============================================================================*/
 
-#include "numerous_llm/models/llama/llama.h"
-#include "flash_api.h"
-#include "numerous_llm/models/llama/create_test_model.h"
+#include <filesystem>
 #include "test.h"
+#include "flash_api.h"
+#include "numerous_llm/models/llama/llama.h"
+#include "numerous_llm/models/llama/create_test_model.h"
+#include "numerous_llm/samplers/sampler.h"
 
 using namespace numerous_llm;
 // 定义一个 LlamaTest 类,继承自 testing::Test
 class LlamaTest : public testing::Test {
  protected:
   void SetUp() override {
-    model_config.path = "/model/llama-ft/7B/1-gpu/";
-    model_config.weight_data_type = TYPE_FP16;
-    model_config.head_num = 32;
-    model_config.size_per_head = 128;
-    model_config.inter_size = 11008;
-    model_config.num_layer = 32;
-    model_config.vocab_size = 32000;
-    model_config.tensor_para_size = 1;
-    model_config.layernorm_eps = 1e-6;
-    model_config.default_batch_size = 4;
-    model_config.max_token_num = 1024;
-    model_config.rotary_embedding = 128;
-    model_config.max_position_embeddings = 2048;
-    model_config.rope_theta = 10000.0f;
-    model_config.num_key_value_heads = model_config.head_num;
-
-    BlockManagerConfig block_manager_config;
-    block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_token_num = 16;
-    block_manager_config.cpu_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer;
-    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
-    block_manager_config.device_allocator_config.blocks_num = 2;
-    block_manager_config.device_allocator_config.block_token_num = 16;
-    block_manager_config.device_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer * sizeof(half);
-    NLLM_LOG_WARNING << fmt::format("block_size {}",
-                                    block_manager_config.device_allocator_config.block_size);
-    block_manager_config.device_allocator_config.device = MEMORY_GPU;
-
     context_ = std::make_shared<Context>(1, 1);
 
-    // 使用配置创建一个 BlockManager 对象
+    // 解析 config.ini,初始化 ModelConfig 以及 BlockManager
+    std::filesystem::path current_path = __FILE__;
+    std::filesystem::path parent_path = current_path.parent_path();
+    std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/config.ini";
+    std::string config_path = std::filesystem::absolute(config_path_relate).string();
+
+    Singleton<Environment>::GetInstance()->ParseConfig(config_path);
+    Singleton<Environment>::GetInstance()->GetModelConfig("llama", model_config);
+
+    BlockManagerConfig block_manager_config;
+    Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
+    NLLM_LOG_WARNING << fmt::format("block_size {}",
+                                    block_manager_config.device_allocator_config.block_size);
+
     block_manager = new BlockManager(block_manager_config, context_);
     SetBlockManager(block_manager);
   }
@@ -71,6 +58,7 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
   std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
 
+  // ContextDecode
   ForwardRequest forward;
   std::vector<int> input_ids = {233, 1681};
   // std::vector<int> input_ids = {1,306,4658,278,6593,310,2834,338};
@@ -85,14 +73,35 @@ TEST_F(LlamaTest, ContextDecodeTest) {
                                     forward.kv_cache_ptrs[0][0], forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
-  input_ids.push_back(29871);
-  forward.output_tokens = &input_ids;
-  forward_reqs = {forward};
+
+  // Sampling
+  SamplingRequest sample_req;
+  sample_req.logits_offset = forward_reqs[0].logits_offset;
+  sample_req.output_tokens = forward_reqs[0].output_tokens;
+  sample_req.logits_buf = forward_reqs[0].logits_buf;
+  sample_req.model_config = &model_config;
+  SamplingConfig sample_config;
+  sample_config.beam_width = 1;
+  sample_config.topk = 1;
+  sample_config.topp = 0;
+  sample_config.temperature = 0;
+  sample_req.sampling_config = &sample_config;
+
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(device_id);
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+  EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
+
+  // Decode
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  input_ids.push_back(29896);
-  forward.output_tokens = &input_ids;
-  forward_reqs = {forward};
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+  EXPECT_EQ(29896, (*forward_reqs[0].output_tokens)[3]);
+
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+  EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
+
+  
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

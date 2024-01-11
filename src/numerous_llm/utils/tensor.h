@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <filesystem>
 
 #include "numerous_llm/block_manager/block_manager.h"
 #include "numerous_llm/block_manager/memory_block.h"

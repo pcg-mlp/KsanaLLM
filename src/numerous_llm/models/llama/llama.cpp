@@ -66,9 +66,10 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   int max_b = model_config.default_batch_size;
   max_seq_len_ = model_config.max_token_num;
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
-  CreateTensor(tmp_tensor_0, max_b * max_seq_len_ * hidden_units * dtype_size);
-  CreateTensor(tmp_tensor_1, max_b * max_seq_len_ * hidden_units * dtype_size);
-  CreateTensor(tmp_tensor_2, max_b * max_seq_len_ * hidden_units * dtype_size);
+  size_t tmp_tensor_size = max_b * std::max((int)vocab_size_ * sizeof(float), max_seq_len_ * hidden_units * 3 * dtype_size);
+  CreateTensor(tmp_tensor_0, max_b * max_seq_len_ * hidden_units * dtype_size * 3);
+  CreateTensor(tmp_tensor_1, tmp_tensor_size);
+  CreateTensor(tmp_tensor_2, max_b * max_seq_len_ * hidden_units * dtype_size * 3);
   CreateTensor(up_matmul_tensor, max_b * max_seq_len_ * inter_size * dtype_size);
   CreateTensor(kv_cache_buffer_, num_layer_ * max_b * max_seq_len_ * 2 * hidden_units * dtype_size);
 
@@ -106,7 +107,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
 
 template <typename T>
 float* Llama<T>::GetLogitsPtr() {
-  return nullptr;
+  return tmp_tensor_1.GetPtr<float>();;
 }
 
 template <typename T>
@@ -381,7 +382,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
   NLLM_LOG_INFO << "llama decode stage inference";
 
-  saved_dir  = "/model/llama-ft/7B/nllm_decode/";
+  saved_dir  = "/model/llama-ft/7B/nllm_decode1/";
   
   size_t batch_size = forward_reqs.size();
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果

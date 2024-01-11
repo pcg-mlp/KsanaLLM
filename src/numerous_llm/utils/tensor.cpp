@@ -82,15 +82,20 @@ void Tensor::SaveToFile(const std::string& file_path) {
   void* cpu_data = malloc(total_size);
   void* tensor_data_ptr = GetPtr<void>();
   auto memcpy_type = device == MEMORY_GPU ? cudaMemcpyDeviceToHost : cudaMemcpyHostToHost;
-  printf("addr = %p, type = %d, size = %d\n", tensor_data_ptr, memcpy_type == cudaMemcpyDeviceToHost, total_size);
 
   cudaError_t ret = cudaMemcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
   if (ret != cudaSuccess) {
+    NLLM_LOG_ERROR << "CUDA error: " << cudaGetErrorString(ret);
     std::cerr << "CUDA error: " << cudaGetErrorString(ret) << std::endl;
     exit(1);
   }
-  printf("第一个值  %d\n", ((char*)cpu_data)[0]);
-  printf("第二个值  %d\n", ((char*)cpu_data)[1]);
+
+  std::filesystem::path dir_path = std::filesystem::path(file_path).parent_path();
+  if (!std::filesystem::exists(dir_path)) {
+    // std::filesystem::create_directories(dir_path);
+    NLLM_LOG_INFO << fmt::format("Do not exists the saved path {}", file_path);
+    return;
+  }
 
   std::ofstream file(file_path, std::ios::binary);
   if (!file.is_open()) {
