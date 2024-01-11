@@ -55,6 +55,8 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   int inter_size = model_config.inter_size;
   int max_position_embeddings = model_config.max_position_embeddings;
   float rope_theta = model_config.rope_theta;
+  block_token_num_ = GetBlockManager()->GetBlockTokenNum();
+  block_size_ = GetBlockManager()->GetBlockSize();
 
   // 1: KV 一块空间
   // 2: 运行时中间空间
@@ -123,9 +125,16 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   std::vector<int> kv_cache_offset_list(1, 0);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
-    total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+    total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
     kv_cache_offset_list.push_back(total_block_num);
   }
+Tensor kv_cache_offset_tensor;
+    CreateTensor(kv_cache_offset_tensor, kv_cache_offset_list.size() * sizeof(int));
+    kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
+    kv_cache_offset_tensor.dtype = TYPE_INT32;
+    void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
+    CUDA_CHECK(cudaMemcpy(kv_cache_offset_ptr, kv_cache_offset_list.data(),
+                          kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice));
 
   // create input ids tensor
   // TODO(zezhao): input_ids 复用tmp空间
@@ -178,24 +187,32 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     int kv_list_index = 0;
     // 处理k
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++){
-        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] =
-            forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx * block_num + block_idx];
+        void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
+        kv_cache_ptr += layer_idx * block_size_ / num_layer_;
+        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = kv_cache_ptr;
+        NLLM_LOG_WARNING << fmt::format("cpu_kv_list {} layer_idx {}", layer_idx * total_block_num * 2 + kv_list_index,
+                                      layer_idx );
         kv_list_index++;
       }
     }
     // 处理v
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++){
-        void * k = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx * block_num + block_idx];
-        size_t block_size = forward_reqs[idx].block_size; //字节数
-        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] =
-            reinterpret_cast<void *>(reinterpret_cast<char *>(k) + (block_size/2));
+        void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
+        kv_cache_ptr += layer_idx * block_size_ / num_layer_ + block_size_ / num_layer_ /2;
+        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = kv_cache_ptr;
         kv_list_index++;
       }
     }
+  }
+  int pi = 0;
+  for (void* pp : cpu_kv_list){
+    void* pb=  forward_reqs[0].kv_cache_ptrs[rank_][0];
+    NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} {}", pi++,
+                                      pp);
   }
   void* kv_list_ptr = kv_list.GetPtr<void>();
   CUDA_CHECK(cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice));
@@ -217,7 +234,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   // create forward shape tensor
   Tensor forward_shape;
   CreateTensor(forward_shape, sizeof(int));
-  forward_shape.shape = {batch_size, max_tokens};
+  forward_shape.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
 
   // Forward
   // embedding
@@ -253,7 +270,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     // MMHA Flash Attention
     std::vector<Tensor>& flash_attention_output = output_1;
     STATUS_CHECK_RETURN(flash_attention_layer_[layer_num]->Forward({attn_proj_output[0], input_offset_uint64_tensor, kv_list,
-                                                                   kv_cache_buffer_, rotary_embedding_pos,
+                                                                   kv_cache_offset_tensor, rotary_embedding_pos,
                                                                    forward_shape}, flash_attention_output));
     flash_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA.npy");
     NLLM_LOG_INFO << "MMHA Flash Attention";
@@ -377,10 +394,17 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   std::vector<int> kv_cache_offset_list(1, 0);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
-    total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+    total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
     kv_cache_offset_list.push_back(total_block_num);
   }
 
+Tensor kv_cache_offset_tensor;
+    CreateTensor(kv_cache_offset_tensor, kv_cache_offset_list.size() * sizeof(int));
+    kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
+    kv_cache_offset_tensor.dtype = TYPE_INT32;
+    void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
+    CUDA_CHECK(cudaMemcpy(kv_cache_offset_ptr, kv_cache_offset_list.data(),
+                          kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice));
   // create input ids tensor
   // TODO(zezhao): input_ids 复用tmp空间
   Tensor input_ids;
@@ -391,13 +415,16 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   std::vector<int> input_ids_cpu(batch_size);
   size_t input_offset = 0;
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
+  std::vector<int> input_tokens_list_int32(batch_size, 0);
   std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
-  int max_tokens = 1;
+  int max_tokens = 0;
   for (int idx = 0; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
     input_ids_cpu[idx] = req_input->at(length - 1);
-    input_offset += length;
+    max_tokens = std::max(max_tokens, int(length));
+    input_offset ++;
+    input_tokens_list_int32[idx] = length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
   }
@@ -405,15 +432,21 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   CUDA_CHECK(cudaStreamSynchronize(context_->GetH2DStreams()[rank_]));
 
   // create input offset tensor int32 and uint64
-  Tensor input_offset_int32_tensor, input_offset_uint64_tensor;
+  Tensor input_offset_int32_tensor, input_offset_uint64_tensor, input_tokens_int32_tensor;
   CreateTensor(input_offset_int32_tensor, input_offset_list_int32.size() * sizeof(int));
+  CreateTensor(input_tokens_int32_tensor, input_offset_list_int32.size() * sizeof(int));
   CreateTensor(input_offset_uint64_tensor, input_offset_list_uint64.size() * sizeof(size_t));
   input_offset_int32_tensor.shape = {batch_size + 1};
+  input_tokens_int32_tensor.shape = {batch_size };
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_int32_tensor.dtype = TYPE_INT32;
+  input_tokens_int32_tensor.dtype = TYPE_INT32;
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
   void* input_offset_int32_ptr = input_offset_int32_tensor.GetPtr<void>();
   cudaMemcpy(input_offset_int32_ptr, input_offset_list_int32.data(), (batch_size + 1) * sizeof(int),
+             cudaMemcpyHostToDevice);
+  void* input_tokens_int32_ptr = input_tokens_int32_tensor.GetPtr<void>();
+  cudaMemcpy(input_tokens_int32_ptr, input_tokens_list_int32.data(), (batch_size) * sizeof(int),
              cudaMemcpyHostToDevice);
   void* input_offset_uint64_ptr = input_offset_uint64_tensor.GetPtr<void>();
   cudaMemcpy(input_offset_uint64_ptr, input_offset_list_uint64.data(), (batch_size + 1) * sizeof(size_t),
@@ -429,24 +462,32 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     int kv_list_index = 0;
     // 处理k
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++){
-        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] =
-            forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx * block_num + block_idx];
+        void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
+        kv_cache_ptr += layer_idx * block_size_ / num_layer_;
+        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = kv_cache_ptr;
+        NLLM_LOG_WARNING << fmt::format("cpu_kv_list {} layer_idx {}", layer_idx * total_block_num * 2 + kv_list_index,
+                                      layer_idx );
         kv_list_index++;
       }
     }
     // 处理v
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size() / num_layer_;
+      size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++){
-        void * k = forward_reqs[idx].kv_cache_ptrs[rank_][layer_idx * block_num + block_idx];
-        size_t block_size = forward_reqs[idx].block_size; //字节数
-        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] =
-            reinterpret_cast<void *>(reinterpret_cast<char *>(k) + (block_size/2));
+        void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
+        kv_cache_ptr += layer_idx * block_size_ / num_layer_ + block_size_ / num_layer_ /2;
+        cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = kv_cache_ptr;
         kv_list_index++;
       }
     }
+  }
+  int pi = 0;
+  for (void* pp : cpu_kv_list){
+    void* pb=  forward_reqs[0].kv_cache_ptrs[rank_][0];
+    NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} {}", pi++,
+                                      pp);
   }
   void* kv_list_ptr = kv_list.GetPtr<void>();
   CUDA_CHECK(cudaMemcpy(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), cudaMemcpyHostToDevice));
@@ -456,7 +497,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   CreateTensor(rotary_embedding_pos, sizeof(int64_t) * batch_size);
   std::vector<int64_t> cpu_rotary_pos(batch_size);
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size();
+    cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size() - 1;
   }
   void* rotary_embedding_pos_ptr = rotary_embedding_pos.GetPtr<void>();
   CUDA_CHECK(cudaMemcpy(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * batch_size,
@@ -465,7 +506,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   // create forward shape tensor
   Tensor forward_shape;
   CreateTensor(forward_shape, sizeof(int));
-  forward_shape.shape = {batch_size, max_tokens};
+  forward_shape.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
 
   // Forward
   // embedding
@@ -500,20 +541,10 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
 
     // MMHA Paged Attention
     std::vector<Tensor>& paged_attention_output = output_1;
-    paged_attention_output.push_back(kv_list);
-    paged_attention_output.push_back(up_matmul_tensor);
     // TODO(zezhao): workspace 需与 catheywang 确认传入大小,暂时使用此处用不到的空间跑通流程
-    Tensor kv_cache_offset_tensor;
-    CreateTensor(kv_cache_offset_tensor, kv_cache_offset_list.size() * sizeof(int));
-    kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
-    kv_cache_offset_tensor.dtype = TYPE_INT32;
-    void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
-    CUDA_CHECK(cudaMemcpy(kv_cache_offset_ptr, kv_cache_offset_list.data(),
-                          kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice));
-    STATUS_CHECK_RETURN(paged_attention_layer_[layer_num]->Forward({attn_proj_output[0], input_offset_uint64_tensor,
-                                                                    kv_cache_offset_tensor, forward_shape},
+    STATUS_CHECK_RETURN(paged_attention_layer_[layer_num]->Forward({attn_proj_output[0], input_tokens_int32_tensor, kv_list,
+                                                                    kv_cache_offset_tensor, rotary_embedding_pos, kv_cache_buffer_, forward_shape},
                                                                    paged_attention_output));
-    DestroyTensor(kv_cache_offset_tensor);
     paged_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA.npy");
     NLLM_LOG_INFO << "MMHA Paged Attention";
 
@@ -614,6 +645,8 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   DestroyTensor(kv_list);
   DestroyTensor(forward_shape);
   DestroyTensor(rotary_embedding_pos);
+  DestroyTensor(kv_cache_offset_tensor);
+
   return Status();
 }
 

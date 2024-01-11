@@ -18,6 +18,7 @@ class AttentionLayer : public BaseLayer {
   int layer_index_;
   int max_position_embeddings_;
   int block_size_;
+  int block_token_num_;
   int num_heads_;
   int num_kv_heads_;
   int head_size_;

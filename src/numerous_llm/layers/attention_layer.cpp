@@ -28,14 +28,11 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
                                    context_->GetMemoryManageStreams()[rank_]);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[rank_]));
 
-  BlockManagerConfig block_manager_config;
-  Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-  block_size_ = block_manager_config.device_allocator_config.block_size;
-  // TODO: 这个值为空
-  block_size_ = 64;
-
-  NLLM_LOG_INFO << fmt::format("layer_index_ {}; max_position_embeddings {}; block_size_ {}", layer_index_,
-                               max_position_embeddings_, block_size_);
+  block_size_ = GetBlockManager()->GetBlockSize();
+  block_token_num_ = GetBlockManager()->GetBlockTokenNum();
+  
+  NLLM_LOG_INFO << fmt::format("layer_index_ {}; max_position_embeddings {}; block_size_ {}; block_token_num_ {}", layer_index_,
+                               max_position_embeddings_, block_size_, block_token_num_);
   return Status();
 }
 

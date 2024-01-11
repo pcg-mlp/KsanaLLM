@@ -59,7 +59,8 @@ class Llama : public BaseModel {
   uint32_t vocab_size_;
   float layernorm_eps_;
   DataType weight_data_type_;
-
+  int block_token_num_;
+  int block_size_;
   Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
   Tensor up_matmul_tensor;
   Tensor kv_cache_buffer_;

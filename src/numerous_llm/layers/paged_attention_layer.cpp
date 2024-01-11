@@ -19,39 +19,46 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
-  //   1: input_offset_tensor (uint64 版本)
-  //   2: kv_cache_offset_tensor
-  //   3: forward_shape
+  //   1: int_input_tokens_tensor
+  //   2: kv_list
+  //   3: kv_cache_offset_tensor
+  //   4: rotary_embedding_pos
+  //   5: workspace 空间(TODO: 计算大小)
+  //   6: forward_shape
   // output_tensors:
   //   0: paged attention output
-  //   1: kv_list
-  //   2: workspace 空间(TODO: 计算大小)
+  NLLM_LOG_WARNING <<"";
   const Tensor& query = input_tensors[0];
   const Tensor& context_lens = input_tensors[1];
   // 块的位移情况
   // 如上kv_list的情况
   // 一块有8个token时
-  // context_lens是0,17,58
+  // context_lens是17,41
+  // input_offse是0,17,58
   // cache_offset是0,3,9
-  const Tensor& cache_offset = input_tensors[2];
-  const Tensor& forward_shape = input_tensors[3];
-  int batch_size = forward_shape.shape[0];
-  int max_tokens = forward_shape.shape[1];
+  const Tensor& kv_list = input_tensors[2];
+  const Tensor& cache_offset = input_tensors[3];
+  const Tensor& rotary_embedding_pos = input_tensors[4];
+  const Tensor& workspace = input_tensors[5];
+  const Tensor& forward_shape = input_tensors[6];
+  int layer_block_num = input_tensors[6].shape[2];
+  int max_tokens = input_tensors[6].shape[1];
+  int batch_size = input_tensors[6].shape[0];
+  int total_tokens = input_tensors[0].shape[0];
+
+  NLLM_LOG_WARNING << fmt::format("max_tokens = {}, batch_size = {}, total_tokens = {}, kv_list.GetPtr<void*>() = {}",
+                               max_tokens, batch_size, total_tokens, kv_list.GetPtr<void>());
+  void** k_list = (kv_list.GetPtr<void*>()) + layer_index_ * layer_block_num * 2;
+  void** v_list = k_list + layer_block_num;
+  NLLM_LOG_WARNING << fmt::format("k_list = {}, v_list = {}, cache_offset.GetPtr<void>() = {}, layer_block_num = {}",
+                               reinterpret_cast<void*>(k_list), reinterpret_cast<void*>(v_list), cache_offset.GetPtr<void>(), layer_block_num);
 
   Tensor& out = output_tensors[0];
-  Tensor& kv_list = output_tensors[1];
-  Tensor& workspace = output_tensors[2];
-  int layers_num = kv_list.shape[0];
-  int total_blocks = kv_list.shape[1] / 2;
-  void** key_cache_ptrs = reinterpret_cast<void**>(layer_index_ * total_blocks * 2);
-  void** value_cache_ptrs = reinterpret_cast<void**>(layer_index_ * total_blocks * 2 + total_blocks);
 
-  NLLM_LOG_INFO  <<  fmt::format("batch_size = {}, total_blocks = {}, layers_num = {}, max_tokens = {}", batch_size,
-                                 total_blocks, layers_num, max_tokens);
-  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), key_cache_ptrs, value_cache_ptrs,
+  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list,
                             context_lens.GetPtr<void>(), max_tokens, context_->GetComputeStreams()[rank_],
-                            cache_offset.GetPtr<void>(), batch_size, num_heads_, head_size_, num_kv_heads_, block_size_,
-                            workspace.GetPtr<void>(), workspace.GetTotalBytes(), {});
+                            cache_offset.GetPtr<void>(), batch_size, num_heads_, head_size_, num_kv_heads_, block_token_num_, batch_size, rotary_embedding_pos.GetPtr<void>(), total_tokens,
+                            rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {});
   return Status();
 }
 

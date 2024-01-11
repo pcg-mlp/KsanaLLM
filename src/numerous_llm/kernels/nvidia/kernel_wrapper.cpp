@@ -16,6 +16,8 @@
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/cast/cast.h"
+#include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
+#include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 
 #include "numerous_llm/utils/nvidia/cuda_utils.h"
 
@@ -73,7 +75,7 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
 
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, int total_tokens,
-                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank,
+                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* block_offset,
                  cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
   torch::Tensor qkv_tensor = torch::from_blob(qkv_ptr, {total_tokens, num_heads * head_size * 3}, options);
@@ -87,6 +89,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   // TODO: 临时实现: 使用 contiguous() 将离散的 q, k 迁移到连续空间
   torch::Tensor q_tensor = tt[0].contiguous();
   torch::Tensor k_tensor = tt[1].contiguous();
+  torch::Tensor v_tensor = tt[2].contiguous();
   rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
                                   reinterpret_cast<half*>(q_tensor.data_ptr()),
                                   reinterpret_cast<half*>(k_tensor.data_ptr()),
@@ -94,10 +97,66 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
                                   stream);
   rotary_embedding_cuda.Forward();
 
+  llm_kernels::nvidia::CacheCopy<half>(reinterpret_cast<half*>(k_tensor.data_ptr()), reinterpret_cast<half*>(v_tensor.data_ptr()), k_list, v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<int*>(block_offset), block_size, batch, total_tokens, num_heads, head_size, stream);
   // flash attention
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}), torch::reshape(k_tensor, {total_tokens, num_heads, head_size}), torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor, seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens,
                              max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
 }
+
+
+template <typename T>
+void run_paged_attention(void* out,                     // [num_seqs, num_heads, head_size]
+                         void* query,             // [num_seqs, num_heads, head_size]
+                         void** key_cache_ptrs,         // num_seqs,[seq_blocks]
+                         void** value_cache_ptrs,       // num_seqs,[seq_blocks]
+                         void* context_lens_ptr,  // [num_seqs]
+                         int max_context_len, cudaStream_t stream,
+                         void* cache_offsets_ptr,  // num_seqs
+                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,
+                         llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, void* workspace,
+                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes) {
+  const float* alibi_slopes_ptr =
+      reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);  auto int64_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
+
+  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
+  torch::Tensor qkv_tensor = torch::from_blob(query, {total_tokens, num_heads * head_size * 3}, options);
+  auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
+
+  // rotary embedding
+  // TODO: 临时实现: 使用 contiguous() 将离散的 q, k 迁移到连续空间
+  torch::Tensor q_tensor = tt[0].contiguous();
+  torch::Tensor k_tensor = tt[1].contiguous();
+  torch::Tensor v_tensor = tt[2].contiguous();
+  rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                  reinterpret_cast<half*>(q_tensor.data_ptr()),
+                                  reinterpret_cast<half*>(k_tensor.data_ptr()),
+                                  max_context_len,
+                                  stream);
+  rotary_embedding_cuda.Forward();
+
+  llm_kernels::nvidia::CachePosCopy<half>(reinterpret_cast<half*>(k_tensor.data_ptr()), reinterpret_cast<half*>(v_tensor.data_ptr()), key_cache_ptrs, value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_heads, head_size, stream);
+
+  llm_kernels::nvidia::PagedAttentionCuda<uint16_t> op;
+  op.SetConfig(num_kv_heads, num_heads, head_size, block_size);
+
+  op.SetInput(reinterpret_cast<uint16_t*>(out), reinterpret_cast<const uint16_t*>(q_tensor.data_ptr()),
+              reinterpret_cast<uint16_t**>(key_cache_ptrs), reinterpret_cast<uint16_t**>(value_cache_ptrs),
+              reinterpret_cast<const int*>(cache_offsets_ptr),
+              reinterpret_cast<const int*>(context_lens_ptr), max_context_len, num_seqs, stream, workspace, work_size,
+              alibi_slopes_ptr);
+  op.Forward();
+}
+
+template void run_paged_attention<half>(void* out,                     // [num_seqs, num_heads, head_size]
+                         void* query,             // [num_seqs, num_heads, head_size]
+                         void** key_cache_ptrs,         // num_seqs,[seq_blocks]
+                         void** value_cache_ptrs,       // num_seqs,[seq_blocks]
+                         void* context_lens_ptr,  // [num_seqs]
+                         int max_context_len, cudaStream_t stream,
+                         void* cache_offsets_ptr,  // num_seqs
+                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,
+                         llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, void* workspace,
+                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes);
 
 void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,
                        void* output, cudaStream_t& stream) {

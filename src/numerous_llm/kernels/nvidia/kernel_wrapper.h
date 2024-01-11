@@ -6,7 +6,6 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <optional>
-#include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 
 namespace numerous_llm {
@@ -31,33 +30,21 @@ void AssembleLastToken(const void* input, const void* offset, const int batch_si
 
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, int total_tokens,
-                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank,
+                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* block_offset,
                  cudaStream_t stream);
 
 
 template <typename T>
 void run_paged_attention(void* out,                     // [num_seqs, num_heads, head_size]
-                         const void* query,             // [num_seqs, num_heads, head_size]
+                         void* query,             // [num_seqs, num_heads, head_size]
                          void** key_cache_ptrs,         // num_seqs,[seq_blocks]
                          void** value_cache_ptrs,       // num_seqs,[seq_blocks]
-                         const void* context_lens_ptr,  // [num_seqs]
+                         void* context_lens_ptr,  // [num_seqs]
                          int max_context_len, cudaStream_t stream,
-                         const void* cache_offsets_ptr,  // num_seqs
-                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size, void* workspace,
-                         size_t work_size, const std::optional<void*>& alibi_slopes) {
-  const float* alibi_slopes_ptr =
-      reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
-
-  llm_kernels::nvidia::PagedAttentionCuda<uint16_t> op;
-  op.SetConfig(num_kv_heads, num_heads, head_size, block_size);
-
-  op.SetInput(reinterpret_cast<uint16_t*>(out), reinterpret_cast<const uint16_t*>(query),
-              reinterpret_cast<uint16_t**>(key_cache_ptrs), reinterpret_cast<uint16_t**>(value_cache_ptrs),
-              reinterpret_cast<const int*>(cache_offsets_ptr),
-              reinterpret_cast<const int*>(context_lens_ptr), max_context_len, num_seqs, stream, workspace, work_size,
-              alibi_slopes_ptr);
-  op.Forward();
-}
+                         void* cache_offsets_ptr,  // num_seqs
+                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,
+                         llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, void* workspace,
+                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes);
 
 void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream);
 

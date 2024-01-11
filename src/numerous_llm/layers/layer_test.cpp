@@ -15,6 +15,7 @@
 #include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/utils/dtypes.h"
 #include "test.h"
+#include "flash_api.h"
 
 namespace numerous_llm {
 
@@ -22,20 +23,38 @@ class LayerTest : public testing::Test {
  protected:
   // 在每个测试用例执行之前调用的函数
   void SetUp() override {
-    // 创建一个 BlockManagerConfig 对象，用于配置 BlockManager
+    model_config.path = "/model/llama-ft/7B/1-gpu/";
+    model_config.weight_data_type = TYPE_FP16;
+    model_config.head_num = 32;
+    model_config.size_per_head = 128;
+    model_config.inter_size = 11008;
+    model_config.num_layer = 32;
+    model_config.vocab_size = 32000;
+    model_config.tensor_para_size = 1;
+    model_config.layernorm_eps = 1e-6;
+    model_config.default_batch_size = 4;
+    model_config.max_token_num = 1024;
+    model_config.rotary_embedding = 128;
+    model_config.max_position_embeddings = 2048;
+    model_config.rope_theta = 10000.0f;
+    model_config.num_key_value_heads = model_config.head_num;
+
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_size = 1024;
+    block_manager_config.cpu_allocator_config.block_token_num = 16;
+    block_manager_config.cpu_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer;
     block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
-    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.block_token_num = 16;
+    block_manager_config.device_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer * sizeof(half);
+    NLLM_LOG_WARNING << fmt::format("block_size {}",
+                                    block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
-    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(1, 1);
 
     // 使用配置创建一个 BlockManager 对象
-    block_manager = new BlockManager(block_manager_config, context);
-
+    block_manager = new BlockManager(block_manager_config, context_);
     SetBlockManager(block_manager);
   }
 
@@ -56,8 +75,10 @@ class LayerTest : public testing::Test {
   }
 
  protected:
-  // 定义一个 BlockManager 指针，用于在测试用例中使用
-  BlockManager* block_manager;
+  ModelConfig model_config;
+  BlockManager *block_manager = nullptr;
+
+  std::shared_ptr<Context> context_{nullptr};
 };
 
 TEST_F(LayerTest, AttentionLayerTest) {
@@ -75,19 +96,34 @@ TEST_F(LayerTest, AttentionLayerTest) {
   Tensor qkv, input_len, pos, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
   CreateHalfDataTypeTensor(qkv, input_shape, GetTensorType<half>());
-  CreateHalfDataTypeTensor(input_len, {1}, GetTensorType<int32_t>(), sizeof(int));
+  CreateHalfDataTypeTensor(input_len, {2}, GetTensorType<uint64_t>(), sizeof(uint64_t));
   CreateHalfDataTypeTensor(pos, {2}, GetTensorType<uint64_t>(), /*dtype_size*/sizeof(uint64_t));
-  forward_shape.shape = {1, 2};
+  forward_shape.shape = {1, 2, 1};
   void* pos_ptr = pos.GetPtr<void>();
-  std::vector<uint64_t> pos_cpu({0, 2});
-  CUDA_CHECK(cudaMemcpy(pos_ptr, pos_cpu.data(), 2 * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  std::vector<uint64_t> pos_cpu({0, 1});
+  CUDA_CHECK(cudaMemcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
   void* input_len_ptr = input_len.GetPtr<void>();
-  std::vector<int> input_len_cpu({2});
-  CUDA_CHECK(cudaMemcpy(input_len_ptr, input_len_cpu.data(), sizeof(int), cudaMemcpyHostToDevice));
+  std::vector<uint64_t> input_len_cpu({0, 2});
+  CUDA_CHECK(cudaMemcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
   Tensor output_tensor;
   CreateHalfDataTypeTensor(output_tensor, input_shape, GetTensorType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
-  EXPECT_TRUE(flash_attention_layer.Forward({qkv, input_len, /*kv_list*/ Tensor(), /*kv_cache_buffer*/ Tensor(), pos,
+
+  int block_size = GetBlockManager()->GetBlockSize();
+  std::vector<int> h_block_offset = {0 , 1};
+  Tensor block_offset;
+  CreateHalfDataTypeTensor(block_offset, {h_block_offset.size()}, GetTensorType<int>(), sizeof(int));
+  cudaMemcpy(block_offset.GetPtr<void>(), h_block_offset.data(), h_block_offset.size() * sizeof(int), cudaMemcpyHostToDevice);
+  // 为 kv_list 分配内存并初始化
+  Tensor kv_list;
+  CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetTensorType<uint64_t>());
+  std::vector<void*> h_kv_list_ptrs(h_block_offset.back() * 2);
+  for (int i = 0; i < h_kv_list_ptrs.size(); i++) {
+    cudaError_t error = cudaMalloc(&h_kv_list_ptrs[i], block_size);
+  }
+  cudaMemcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), cudaMemcpyHostToDevice);
+
+  EXPECT_TRUE(flash_attention_layer.Forward({qkv, input_len, kv_list, block_offset, pos,
                                              forward_shape}, output_tensors).OK());
 
   PagedAttentionLayer attention_layer;

@@ -30,10 +30,14 @@ class LlamaTest : public testing::Test {
 
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_size = 64;
+    block_manager_config.cpu_allocator_config.block_token_num = 16;
+    block_manager_config.cpu_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer;
     block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
-    block_manager_config.device_allocator_config.block_size = 64;
+    block_manager_config.device_allocator_config.block_token_num = 16;
+    block_manager_config.device_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer * sizeof(half);
+    NLLM_LOG_WARNING << fmt::format("block_size {}",
+                                    block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
     context_ = std::make_shared<Context>(1, 1);
@@ -72,20 +76,23 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   // std::vector<int> input_ids = {1,306,4658,278,6593,310,2834,338};
   forward.output_tokens = &input_ids;
   forward.logits_buf.resize(1);
-  forward.block_size = 64;
-  // TODO 需要替换为实际的block
-  std::vector<char> blocks_buffer(model_config.num_layer * forward.block_size);
-  std::vector<void *> kv_cache_ptrs;
-  for (int i = 0; i < model_config.num_layer; i++) {
-    kv_cache_ptrs.push_back(reinterpret_cast<void *>(blocks_buffer.data() + i * forward.block_size));
-  }
-  forward.kv_cache_ptrs.push_back(kv_cache_ptrs);
+  std::vector<int> block_ids;
+  GetBlockManager()->AllocateBlocks(1, block_ids);
+  forward.kv_cache_ptrs.resize(1);
+  GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
+  cudaMemset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
+  NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} end {}",
+                                    forward.kv_cache_ptrs[0][0], forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
   input_ids.push_back(29871);
   forward.output_tokens = &input_ids;
   forward_reqs = {forward};
-  //EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+  EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+  input_ids.push_back(29896);
+  forward.output_tokens = &input_ids;
+  forward_reqs = {forward};
+  EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {
