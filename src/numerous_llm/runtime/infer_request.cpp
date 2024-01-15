@@ -62,6 +62,7 @@ std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() {
   std::vector<std::vector<void*>> block_ptrs;
   for (int rank = 0; rank < kv_cache_blocks.size(); ++rank) {
     std::vector<void*> block_ptr(kv_cache_blocks[rank].size());
+    GetBlockManager()->SetDeviceId(rank);
     GetBlockManager()->GetBlockPtrs(kv_cache_blocks[rank], block_ptr);
     block_ptrs.push_back(block_ptr);
   }
