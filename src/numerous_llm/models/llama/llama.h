@@ -4,7 +4,9 @@
 #pragma once
 
 #include "numerous_llm/layers/add_layer.h"
+#include "numerous_llm/layers/assemble_last_token_layer.h"
 #include "numerous_llm/layers/base_layer.h"
+#include "numerous_llm/layers/cast_layer.h"
 #include "numerous_llm/layers/emb_lookup_layer.h"
 #include "numerous_llm/layers/flash_attention_layer.h"
 #include "numerous_llm/layers/layernorm_layer.h"
@@ -12,8 +14,6 @@
 #include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "numerous_llm/layers/paged_attention_layer.h"
 #include "numerous_llm/layers/silu_mul_layer.h"
-#include "numerous_llm/layers/assemble_last_token_layer.h"
-#include "numerous_llm/layers/cast_layer.h"
 #include "numerous_llm/models/base/base_model.h"
 #include "numerous_llm/models/llama/llama_weight.h"
 #include "numerous_llm/utils/status.h"
@@ -64,6 +64,7 @@ class Llama : public BaseModel {
   Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
   Tensor up_matmul_tensor;
   Tensor kv_cache_buffer_;
+  Tensor logits_tensor_;
 
   std::shared_ptr<Context> context_{nullptr};
 

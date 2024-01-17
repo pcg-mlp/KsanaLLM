@@ -64,6 +64,8 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   // std::vector<int> input_ids = {1,306,4658,278,6593,310,2834,338};
   forward.output_tokens = &input_ids;
   forward.logits_buf.resize(1);
+  forward.logits_buf[0] = llama->GetLogitsPtr();
+  forward.logits_offset = 0;
   std::vector<int> block_ids;
   GetBlockManager()->AllocateBlocks(1, block_ids);
   forward.kv_cache_ptrs.resize(1);

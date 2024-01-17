@@ -9,13 +9,13 @@
 namespace numerous_llm {
 
 Status AssembleLastTokenLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int bs = 1;
-
+  int batch_size = input_tensors[1].shape[0] - 1;
   AssembleLastToken(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                    reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), bs, input_tensors[0].shape[1],
-                    reinterpret_cast<void*>(output_tensors[0].GetPtr<void>()), context_->GetComputeStreams()[rank_]);
+                    reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), batch_size,
+                    input_tensors[0].shape[1], reinterpret_cast<void*>(output_tensors[0].GetPtr<void>()),
+                    context_->GetComputeStreams()[rank_]);
   output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].shape[0] = 1;
+  output_tensors[0].shape[0] = batch_size;
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
