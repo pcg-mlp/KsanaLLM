@@ -44,6 +44,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   // 解析 Model Config
   num_layer_ = model_config.num_layer;
   rank_ = rank;
+  GetBlockManager()->SetDeviceId(rank_);
   // TODO: 目前所有层都使用这个 dtype
   weight_data_type_ = model_config.weight_data_type;
   vocab_size_ = model_config.vocab_size;
@@ -110,12 +111,14 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
 
 template <typename T>
 float* Llama<T>::GetLogitsPtr() {
+  GetBlockManager()->SetDeviceId(rank_);
   return logits_tensor_.GetPtr<float>();
 }
 
 template <typename T>
 Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                                std::vector<ForwardRequest>& forward_reqs) {
+  GetBlockManager()->SetDeviceId(rank_);
   NLLM_LOG_INFO << "llama context decode stage inference";
 
   size_t batch_size = forward_reqs.size();
@@ -260,7 +263,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
         layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
 
     input_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".input_layernorm.npy");
-    NLLM_LOG_INFO << "input layernorm";
+    NLLM_LOG_INFO << layer_num << " input layernorm";
 
     // Attn proj MatMul
     Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
@@ -268,7 +271,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
 
     attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj.npy");
-    NLLM_LOG_INFO << "attn proj";
+    NLLM_LOG_INFO << layer_num << " attn proj";
 
     // MMHA Flash Attention
     std::vector<Tensor>& flash_attention_output = output_1;
@@ -277,7 +280,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
                                                     kv_cache_offset_tensor, rotary_embedding_pos, forward_shape},
                                                    flash_attention_output));
     flash_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA.npy");
-    NLLM_LOG_INFO << "MMHA Flash Attention";
+    NLLM_LOG_INFO << layer_num << " MMHA Flash Attention";
 
     // Attn o_proj MatMul
     Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
@@ -383,9 +386,10 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
 template <typename T>
 Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
+  GetBlockManager()->SetDeviceId(rank_);
   NLLM_LOG_INFO << "llama decode stage inference";
 
-  saved_dir = "/model/llama-ft/7B/nllm_decode1/";
+  saved_dir  = "/model/llama-ft/7B/nllm_decode/";
 
   size_t batch_size = forward_reqs.size();
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -532,7 +536,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
         layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
 
     input_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".input_layernorm.npy");
-    NLLM_LOG_INFO << "input layernorm";
+    NLLM_LOG_INFO << layer_num << " input layernorm";
 
     // Attn proj MatMul
     Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
@@ -540,7 +544,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
 
     attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj.npy");
-    NLLM_LOG_INFO << "attn proj";
+    NLLM_LOG_INFO << layer_num << " attn proj";
 
     // MMHA Paged Attention
     std::vector<Tensor>& paged_attention_output = output_1;
@@ -551,7 +555,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
         paged_attention_output));
 
     paged_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA.npy");
-    NLLM_LOG_INFO << "MMHA Paged Attention";
+    NLLM_LOG_INFO << layer_num << " MMHA Paged Attention";
 
     // Attn o_proj MatMul
     Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");

@@ -28,7 +28,9 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
   }
 }
 
-void BlockManager::SetDeviceId(int device_id) { CUDA_CHECK(cudaSetDevice(device_id)); }
+void BlockManager::SetDeviceId(int device_id) {
+  CUDA_CHECK(cudaSetDevice(device_id));
+}
 
 int BlockManager::GetDeviceId() {
   int device_id;

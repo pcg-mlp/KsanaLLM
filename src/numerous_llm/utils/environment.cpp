@@ -83,7 +83,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   PrepareModeAttirbutes(ini_reader, model_config);
 
   // TODO: Get from config.
-  model_config.max_token_num = 32;
+  model_config.max_token_num = ini_reader.GetInteger("ft_instance_hyperparameter", "max_token_num");;
 
   model_configs_[model_config.name] = model_config;
 

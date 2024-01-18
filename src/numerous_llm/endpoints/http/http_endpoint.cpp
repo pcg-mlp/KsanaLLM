@@ -66,6 +66,7 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
 
     return Status();
   }
+  NLLM_LOG_ERROR << "Invalid http request [input_tokens not exists].";
   return Status(RET_INVALID_ARGUMENT, "Invalid http request.");
 }
 
