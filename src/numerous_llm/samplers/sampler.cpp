@@ -59,6 +59,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream
       // copy result
       CUDA_CHECK(
           cudaMemcpyAsync(&host_output_token_, device_output_token_, sizeof(uint32_t), cudaMemcpyDeviceToHost, stream));
+      NLLM_LOG_INFO<<"Request "<<sampling_req.req_id<< " generate token["<<output_tokens->size()<<"]:"<< host_output_token_;
       output_tokens->push_back(static_cast<int>(host_output_token_));
     }
   }

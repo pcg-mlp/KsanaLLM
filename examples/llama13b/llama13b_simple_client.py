@@ -4,7 +4,7 @@ import json
 
 
 def request(data, queue=None):
-    resp = requests.post("http://localhost:8080/generate", data=data, timeout=3)
+    resp = requests.post("http://localhost:8080/generate", data=data, timeout=30)
     if queue is None:
         return json.loads(resp.content)
     else:
@@ -19,7 +19,7 @@ if __name__ == "__main__":
     resp_data = request(data)
     print(resp_data)
     check_result(data, resp_data)
-
+    pass
     multi_proc_queue = multiprocessing.Queue()
     multi_proc_list = []
     # concurrent 10 proc

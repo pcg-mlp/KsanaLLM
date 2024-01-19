@@ -12,6 +12,9 @@ namespace numerous_llm {
 
 // The information used for sampling.
 struct SamplingRequest {
+  // The req id of the user's request.
+  int64_t req_id;
+
   // The sampling config.
   SamplingConfig* sampling_config;
 
