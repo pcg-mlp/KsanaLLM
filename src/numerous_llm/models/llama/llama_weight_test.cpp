@@ -68,10 +68,8 @@ TEST_F(LlamaWeightTest, GetModelWeightsTest) {
   // 当环境中不包含该路径时, 下载该模型
   std::filesystem::path ft_path(model_config.path);
   if (!std::filesystem::exists(ft_path)) {
-    NLLM_LOG_WARNING << fmt::format("The given model path {} does not exist. Generating a test model",
-                                    model_config.path);
-    std::filesystem::create_directories(model_config.path);
-    create_model(model_config);
+    NLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
+    EXPECT_TRUE(std::filesystem::exists(ft_path));
   }
 
   LlamaWeight<half> llama_weight(model_config, 0, context_);

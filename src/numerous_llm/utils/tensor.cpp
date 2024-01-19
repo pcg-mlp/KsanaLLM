@@ -92,9 +92,8 @@ void Tensor::SaveToFile(const std::string& file_path) {
 
   std::filesystem::path dir_path = std::filesystem::path(file_path).parent_path();
   if (!std::filesystem::exists(dir_path)) {
-    // std::filesystem::create_directories(dir_path);
-    NLLM_LOG_INFO << fmt::format("Do not exists the saved path {}", file_path);
-    return;
+    NLLM_LOG_WARNING << fmt::format("Do not exists the saved path {}", dir_path.string());
+    std::filesystem::create_directories(dir_path);
   }
 
   std::ofstream file(file_path, std::ios::binary);

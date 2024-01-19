@@ -49,10 +49,8 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   CUDA_CHECK(cudaSetDevice(device_id));
   std::filesystem::path ft_path(model_config.path);
   if (!std::filesystem::exists(ft_path)) {
-    NLLM_LOG_WARNING << fmt::format("The given model path {} does not exist. Generating a test model",
-                                    model_config.path);
-    std::filesystem::create_directories(model_config.path);
-    create_model(model_config);
+    NLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
+    EXPECT_TRUE(std::filesystem::exists(ft_path));
   }
 
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
