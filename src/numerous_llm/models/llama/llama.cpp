@@ -53,7 +53,8 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   int size_per_head = model_config.size_per_head;
   int hidden_units = size_per_head * head_num;
   int rotary_embedding = model_config.rotary_embedding;
-  int num_key_value_heads = model_config.num_key_value_heads;
+  head_num /= model_config.tensor_para_size;
+  int num_key_value_heads = model_config.num_key_value_heads / model_config.tensor_para_size;
   int inter_size = model_config.inter_size;
   int max_position_embeddings = model_config.max_position_embeddings;
   float rope_theta = model_config.rope_theta;
