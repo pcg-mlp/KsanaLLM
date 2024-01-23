@@ -54,6 +54,9 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
                                reinterpret_cast<void*>(k_list), reinterpret_cast<void*>(v_list), cache_offset.GetPtr<void>(), layer_block_num);
 
   Tensor& out = output_tensors[0];
+  out.shape[0] = query.shape[0];
+  out.shape[1] = query.shape[1] / 3;
+  out.dtype = query.dtype;
 
   run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list,
                             context_lens.GetPtr<void>(), max_tokens, context_->GetComputeStreams()[rank_],
