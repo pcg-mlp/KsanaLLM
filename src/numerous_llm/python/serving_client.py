@@ -9,7 +9,9 @@ import time
 
 
 def post_request(data, queue=None):
-    resp = requests.post("http://localhost:8888/generate", data=data, timeout=30)
+    resp = requests.post("http://localhost:8888/generate",
+                         data=data,
+                         timeout=1000)
     if queue is None:
         return json.loads(resp.content)
     else:
@@ -29,16 +31,23 @@ multi_proc_queue = multiprocessing.Queue()
 for i in range(len(text_list)):
     prompt = text_list[i]
 
-    data = {"model_name": "llama",
-            "prompt": prompt,
-            "sampling_config": {"temperature": 1.0, "topk": 1, "topp": 0.0},
-            }
+    data = {
+        "model_name": "llama",
+        "prompt": prompt,
+        "sampling_config": {
+            "temperature": 0.0,
+            "topk": 1,
+            "topp": 0.0
+        },
+    }
 
-    proc = multiprocessing.Process(
-        target=post_request, args=(json.dumps(data), multi_proc_queue,))
+    proc = multiprocessing.Process(target=post_request,
+                                   args=(
+                                       json.dumps(data),
+                                       multi_proc_queue,
+                                   ))
     proc.start()
     multi_proc_list.append(proc)
-
 
 for i in range(len(text_list)):
     show_response(text_list[i], multi_proc_queue.get())
