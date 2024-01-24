@@ -128,7 +128,8 @@ Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile, boo
     }
   }
   
-  cudaMemcpy(tensor_ptr, host_array.data(), loaded_data_size, cudaMemcpyHostToDevice);
+  CUDA_CHECK(cudaMemcpyAsync(tensor_ptr, host_array.data(), loaded_data_size, cudaMemcpyHostToDevice,
+                             context_->GetComputeStreams()[rank_]));
   return Status();
 }
 
