@@ -10,8 +10,7 @@
 namespace numerous_llm {
 
 TEST(ThreadPool, ThreadPoolTest) {
-  ThreadPool threadpool;
-  threadpool.SetThreadNumber(10);
+  ThreadPool threadpool(10);
   threadpool.Start();
 
   // calc 0 + 1 + 2 + 3 + 4, expect 10

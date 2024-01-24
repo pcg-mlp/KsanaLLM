@@ -14,3 +14,9 @@ target_link_libraries(runtime PUBLIC
   -lpthread -ldl gflags ${NCCL_LIBRARIES} -lcublas -lcublasLt -lcudart
   models utils 
 )
+
+# for test
+file(GLOB_RECURSE runtime_test_SRCS
+     ${PROJECT_SOURCE_DIR}/src/numerous_llm/runtime/*test.cpp)
+message(STATUS "runtime_test_SRCS: ${runtime_test_SRCS}")
+cc_test(runtime_test SRCS ${runtime_test_SRCS} DEPS runtime)
