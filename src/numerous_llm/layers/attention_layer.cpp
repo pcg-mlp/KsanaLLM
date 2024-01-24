@@ -21,6 +21,7 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   GetBlockManager()->AllocateContiguous(total_bytes, cos_sin_cache_block_id_);
   // TODO: 完全一致是否存储一份
   void* cos_sin_cache_ptr;
+  GetBlockManager()->SetDeviceId(rank_);
   GetBlockManager()->GetContiguousPtr(cos_sin_cache_block_id_, cos_sin_cache_ptr);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[rank_]));
   rotary_embedding_cuda_.SetConfig(reinterpret_cast<half*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings_,

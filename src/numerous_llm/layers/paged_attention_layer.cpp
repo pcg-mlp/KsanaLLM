@@ -27,7 +27,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   //   6: forward_shape
   // output_tensors:
   //   0: paged attention output
-  NLLM_LOG_WARNING <<"";
+  // NLLM_LOG_WARNING <<"";
   const Tensor& query = input_tensors[0];
   const Tensor& context_lens = input_tensors[1];
   // 块的位移情况
@@ -46,17 +46,25 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   int batch_size = input_tensors[6].shape[0];
   int total_tokens = input_tensors[0].shape[0];
 
-  NLLM_LOG_WARNING << fmt::format("max_tokens = {}, batch_size = {}, total_tokens = {}, kv_list.GetPtr<void*>() = {}",
-                               max_tokens, batch_size, total_tokens, kv_list.GetPtr<void>());
+  auto stream =  context_->GetComputeStreams()[rank_];
+
+  // NLLM_LOG_WARNING << fmt::format("max_tokens = {}, batch_size = {}, total_tokens = {},"
+  //                                 " kv_list.GetPtr<void*>() = {}",
+  //                                 max_tokens, batch_size, total_tokens, kv_list.GetPtr<void>());
   void** k_list = (kv_list.GetPtr<void*>()) + layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
-  NLLM_LOG_WARNING << fmt::format("k_list = {}, v_list = {}, cache_offset.GetPtr<void>() = {}, layer_block_num = {}",
-                               reinterpret_cast<void*>(k_list), reinterpret_cast<void*>(v_list), cache_offset.GetPtr<void>(), layer_block_num);
+  // NLLM_LOG_WARNING << fmt::format("k_list = {}, v_list = {}, cache_offset.GetPtr<void>() = {},"
+  //                                 " layer_block_num = {}",
+  //                                 reinterpret_cast<void*>(k_list), reinterpret_cast<void*>(v_list),
+  //                                 cache_offset.GetPtr<void>(), layer_block_num);
 
   Tensor& out = output_tensors[0];
   out.shape[0] = query.shape[0];
   out.shape[1] = query.shape[1] / 3;
   out.dtype = query.dtype;
+
+  out.dtype = query.dtype;
+  out.shape = {query.shape[0], query.shape[1] / 3};
 
   run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list,
                             context_lens.GetPtr<void>(), max_tokens, context_->GetComputeStreams()[rank_],
