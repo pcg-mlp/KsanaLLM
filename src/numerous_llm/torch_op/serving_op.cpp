@@ -91,16 +91,20 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def("generate",
            [](std::shared_ptr<numerous_llm::ServingOp> &self, const std::string &model_name,
               const std::vector<int> &input_tokens, const numerous_llm::SamplingConfig &sampling_config) {
+             pybind11::gil_scoped_release release;
              std::vector<int> output_tokens;
              numerous_llm::Status status = self->Generate(model_name, input_tokens, sampling_config, output_tokens);
+             pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, output_tokens);
            })
       .def("generate_streaming",
            [](std::shared_ptr<numerous_llm::ServingOp> &self, const std::string &model_name,
               const std::vector<int> &input_tokens, const numerous_llm::SamplingConfig &sampling_config) {
+             pybind11::gil_scoped_release release;
              std::shared_ptr<numerous_llm::StreamingIterator> streaming_iterator;
              numerous_llm::Status status =
                  self->GenerateStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
+             pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, streaming_iterator);
            });
 }

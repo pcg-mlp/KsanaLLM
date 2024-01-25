@@ -53,7 +53,7 @@ def generate():
         temperature=sampling_config["temperature"])
 
     try:
-        enable_streaming = True
+        enable_streaming = False
         if enable_streaming:
             streaming_iter = model.generate(
                 model_name=model_name,
@@ -62,7 +62,7 @@ def generate():
                 streamer=True)
             output_tokens = []
             for output_token in streaming_iter:
-                print("Get step token:", output_token)
+                print("Get step token:", output_token, flush=True)
                 output_tokens.append(output_token)
 
         else:
