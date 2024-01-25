@@ -65,6 +65,25 @@ Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
   BuildForwardRequests(reqs, grouped_reqs);
 
+  // sync context decode and decode
+  if (1) {
+    // Wait all instances done and check status.
+    Status result_status = Status();
+    for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
+      for (auto& [stage, vec_req] : stage_vec_reqs) {
+        std::vector<std::future<Status>> inst_results = model_inst->ForwardAsync(worker_group_, stage, vec_req);
+        for (auto& worker_result : inst_results) {
+          Status status = worker_result.get();
+          if (!status.OK()) {
+            result_status = status;
+          }
+        }
+      }
+    }
+
+    return result_status;
+  }
+
   std::vector<std::vector<std::future<Status>>> results;
   for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
     for (auto& [stage, vec_req] : stage_vec_reqs) {

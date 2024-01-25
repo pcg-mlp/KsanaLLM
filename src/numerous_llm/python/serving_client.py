@@ -24,7 +24,7 @@ def args_config():
 
 
 def post_request(serv, data, queue=None):
-    resp = requests.post(serv, data=data, timeout=30000)
+    resp = requests.post(serv, data=data, timeout=600000)
     if queue is None:
         return json.loads(resp.content)
     else:
@@ -39,8 +39,8 @@ if __name__ == "__main__":
     args = args_config()
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
 
+    # text_list = ["您好！"]
     text_list = ["您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!"]
-    # text_list = ["你是谁？"]
 
     multi_proc_list = []
     multi_proc_queue = multiprocessing.Queue()
