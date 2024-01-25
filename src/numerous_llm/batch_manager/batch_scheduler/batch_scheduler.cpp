@@ -27,7 +27,7 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_confi
 BatchScheduler::~BatchScheduler() {}
 
 Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_request) {
-  NLLM_LOG_INFO << "batch scheduler add infer request.";
+  NLLM_LOG_INFO << "batch scheduler add infer req " << infer_request->req_id << ".";
   if (CheckWaitingQueueFull()) {
     infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
     infer_request->finished = true;

@@ -137,7 +137,7 @@ void Environment::InitializeBlockManagerConfig() {
 }
 
 Status Environment::CheckEnvironment() {
-  if (block_manager_config_.cpu_allocator_config.block_size ==
+  if (block_manager_config_.cpu_allocator_config.block_size !=
       block_manager_config_.device_allocator_config.block_size) {
     return Status(RET_INVALID_ARGUMENT, "block size of device and host is not equal.");
   }
