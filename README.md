@@ -86,7 +86,7 @@ wget https://mirrors.tencent.com/repository/generic/pcg-numerous/dependency/nume
 tar vzxf llama2_7b_hf.tgz
 
 # launch server
-python serving_server.py --model llama2_7b_fp16_1_gpu --tokenizer_dir llama2_7b_hf
+python serving_server.py --model_dir llama2_7b_fp16_1_gpu --tokenizer_dir llama2_7b_hf
 
 # open another session, request client
 python serving_client.py

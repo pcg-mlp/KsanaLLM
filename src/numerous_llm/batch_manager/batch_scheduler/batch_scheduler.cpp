@@ -63,7 +63,7 @@ bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req)
 void BatchScheduler::ResetSchedule() { schedule_time_in_ms_ = GetCurrentTimeInMs(); }
 
 void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                                     size_t max_free_block_num) {
+                                     size_t &max_free_block_num, size_t &total_swapout_num) {
   for (auto it = running_queue_.begin(); it != running_queue_.end();) {
     auto req = *it;
     NLLM_LOG_INFO << "try req " << req->req_id << " in running_queue_";
@@ -73,6 +73,9 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     // Check if finished.
     if (CheckRequestFinish(req)) {
       NLLM_LOG_INFO << "req " << req->req_id << " finished.";
+
+      max_free_block_num += req->GetCurrentBlockNumber();
+
       req->finish_status = Status(RET_SUCCESS);
       it = running_queue_.erase(it);
       req->finished = true;
@@ -83,6 +86,9 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     // Check timeout
     if (CheckRequestTimeout(req)) {
       NLLM_LOG_INFO << "req " << req->req_id << " timeout in running.";
+
+      max_free_block_num += req->GetCurrentBlockNumber();
+
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       it = running_queue_.erase(it);
       req->finished = true;
@@ -100,7 +106,18 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
 
     // Swap left running reqs if schedule step finished.
     if (schedule_step_finish) {
-      NLLM_LOG_INFO << "req " << req->req_id << " swapped out.";
+      NLLM_LOG_INFO << "req " << req->req_id << " following swapped out.";
+      NLLM_LOG_INFO << "Reason: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
+      total_swapout_num += 1;
+      max_free_block_num += req->GetCurrentBlockNumber();
+
+      NLLM_LOG_INFO << "Result: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
       req->SwapOutAsync();
       swapped_queue_.push_back(req);
       it = running_queue_.erase(it);
@@ -108,12 +125,28 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     }
 
     // Check total token number and block number.
-    total_token_num += req->GetStepTokenNumber();
-    size_t block_num_wanted = req->GetStepBlockNumber();
-    total_block_num += block_num_wanted;
+    size_t step_token_num_wanted = req->GetStepTokenNumber();
+    size_t step_block_num_wanted = req->GetStepBlockNumber();
+
+    total_token_num += step_token_num_wanted;
+    total_block_num += step_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num) {
       NLLM_LOG_INFO << "req " << req->req_id << " swapped out.";
+      NLLM_LOG_INFO << "Reason: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
+      total_token_num -= step_token_num_wanted;
+      total_block_num -= step_block_num_wanted;
+
+      total_swapout_num += 1;
+      max_free_block_num += req->GetCurrentBlockNumber();
+
+      NLLM_LOG_INFO << "Result: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
       req->SwapOutAsync();
       swapped_queue_.push_back(req);
       it = running_queue_.erase(it);
@@ -123,11 +156,11 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
 
     // Allocate blocks and continue running.
     NLLM_LOG_INFO << "req " << req->req_id << " continue running.";
-    if (block_num_wanted > 0) {
+    if (step_block_num_wanted > 0) {
       for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
         std::vector<int> blocks;
         GetBlockManager()->SetDeviceId(i);
-        GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+        GetBlockManager()->AllocateBlocks(step_block_num_wanted, blocks);
         req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
       }
     }
@@ -136,7 +169,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
 }
 
 void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                                     size_t max_free_block_num) {
+                                     size_t &max_free_block_num) {
   for (auto it = swapped_queue_.begin(); it != swapped_queue_.end();) {
     auto req = *it;
     NLLM_LOG_INFO << "Try req " << req->req_id << " in swapped_queue_";
@@ -144,6 +177,8 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
     // Check timeout, no finished req in swapped queue.
     if (CheckRequestTimeout(req)) {
       NLLM_LOG_INFO << "req " << req->req_id << " timeout in swapped.";
+
+      max_free_block_num += req->GetCurrentBlockNumber();
 
       // Drop the swapped blocks.
       req->DropSwappedAsync();
@@ -164,26 +199,40 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
 
     // All the bocks must be swapped in for swapped reqs.
     // For swapped req, all blocks should be swapped in, and then allocate new block if necessary.
-    total_token_num += req->GetStepTokenNumber();
-    total_block_num += req->GetTotalBlockNumber();
+    size_t step_token_num_wanted = req->GetStepTokenNumber();
+    size_t total_block_num_wanted = req->GetTotalBlockNumber();
+
+    total_token_num += step_token_num_wanted;
+    total_block_num += total_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num) {
       // stay swapped.
       NLLM_LOG_INFO << "swapped req " << req->req_id << " stay swapped.";
+      NLLM_LOG_INFO << "Reason: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
+      total_token_num -= step_token_num_wanted;
+      total_block_num -= total_block_num_wanted;
+
+      NLLM_LOG_INFO << "Result: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
       schedule_step_finish = true;
       ++it;
       continue;
     }
 
-    size_t block_num_wanted = req->GetStepBlockNumber();
+    size_t step_block_num_wanted = req->GetStepBlockNumber();
 
     NLLM_LOG_INFO << "swapped req " << req->req_id << " swap in and ready to run.";
     req->SwapInAsync();
-    if (block_num_wanted > 0) {
+    if (step_block_num_wanted > 0) {
       for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
         std::vector<int> blocks;
         GetBlockManager()->SetDeviceId(i);
-        GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+        GetBlockManager()->AllocateBlocks(step_block_num_wanted, blocks);
         req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
       }
     }
@@ -194,7 +243,7 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
 }
 
 void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                                     size_t max_free_block_num) {
+                                     size_t &max_free_block_num) {
   for (auto it = waiting_queue_.begin(); it != waiting_queue_.end();) {
     auto &req = *it;
     NLLM_LOG_INFO << "Try req " << req->req_id << " in waiting_queue_";
@@ -202,6 +251,8 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
     // Check timeout
     if (CheckRequestTimeout(req)) {
       NLLM_LOG_INFO << "req " << req->req_id << " timeout in waiting.";
+
+      // No blocks allocated yet.
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       it = waiting_queue_.erase(it);
       req->finished = true;
@@ -216,9 +267,11 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
       continue;
     }
 
-    total_token_num += req->GetStepTokenNumber();
-    size_t block_num_wanted = req->GetTotalBlockNumber();
-    total_block_num += block_num_wanted;
+    size_t step_token_num_wanted = req->GetStepTokenNumber();
+    size_t total_block_num_wanted = req->GetTotalBlockNumber();
+
+    total_token_num += step_token_num_wanted;
+    total_block_num += total_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num) {
       // stay waiting.
@@ -226,16 +279,24 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
       NLLM_LOG_INFO << "Reason: total_token_num:" << total_token_num
                     << ", max_token_number:" << batch_schedule_config_.max_token_number
                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
+      total_token_num -= step_token_num_wanted;
+      total_block_num -= total_block_num_wanted;
+
+      NLLM_LOG_INFO << "Result: total_token_num:" << total_token_num
+                    << ", max_token_number:" << batch_schedule_config_.max_token_number
+                    << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+
       schedule_step_finish = true;
       ++it;
       continue;
     }
 
-    if (block_num_wanted > 0) {
+    if (total_block_num_wanted > 0) {
       for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
         std::vector<int> blocks;
         GetBlockManager()->SetDeviceId(i);
-        GetBlockManager()->AllocateBlocks(block_num_wanted, blocks);
+        GetBlockManager()->AllocateBlocks(total_block_num_wanted, blocks);
         req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
       }
     }
@@ -256,17 +317,19 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   size_t total_block_num = 0;
   size_t max_free_block_num = GetBlockManager()->GetFreeBlockNumber();
 
+  size_t total_swapout_num = 0;
   bool schedule_step_finish = false;
-  ScheduleRunning(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
+  ScheduleRunning(total_token_num, total_block_num, schedule_step_finish, max_free_block_num, total_swapout_num);
 
-  if (!schedule_step_finish) {
-    ScheduleSwapped(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
+  // Reschedule if reqs swapped, because more blocks is available.
+  if (total_swapout_num > 0) {
+    schedule_step_finish = false;
   }
 
-  if (!schedule_step_finish) {
-    ScheduleWaiting(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
-  }
+  ScheduleSwapped(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
+  ScheduleWaiting(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
 
+  NLLM_LOG_INFO << "batch scheduler result: " << running_queue_.size();
   return running_queue_;
 }
 

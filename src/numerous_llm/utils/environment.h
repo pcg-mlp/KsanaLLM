@@ -154,6 +154,9 @@ class Environment {
   // Calculate block size via model configs.
   void InitializeBlockManagerConfig();
 
+  // Check Whether the environment config is valid.
+  Status CheckEnvironment();
+
  private:
   // The model list that should be loaded.
   std::unordered_map<std::string, ModelConfig> model_configs_;
