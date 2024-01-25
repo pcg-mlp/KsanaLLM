@@ -17,14 +17,11 @@ Status StreamingIterator::GetNext(int& token_id) {
         return request_->finish_status;
       }
 
-      // Make sure the last token is fetched.
-      if (!last_token_fetched_) {
-        last_token_fetched_ = true;
-        std::unique_lock<std::mutex> lock(request_->output_mutex);
-        if (cur_index_ < request_->output_tokens.size()) {
-          token_id = request_->output_tokens[cur_index_++];
-          return Status();
-        }
+      // Fetch next token util the last token is fetched.
+      std::unique_lock<std::mutex> lock(request_->output_mutex);
+      if (cur_index_ < request_->output_tokens.size()) {
+        token_id = request_->output_tokens[cur_index_++];
+        return Status();
       }
 
       return Status(RET_STOP_ITERATION);
