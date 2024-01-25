@@ -53,7 +53,7 @@ def generate():
         temperature=sampling_config["temperature"])
 
     try:
-        enable_streaming = False
+        enable_streaming = True
         if enable_streaming:
             streaming_iter = model.generate(
                 model_name=model_name,

@@ -29,9 +29,6 @@ class StreamingIterator {
 
   // The current index, useful when notify event lost.
   size_t cur_index_;
-
-  // Whether the last token is fetched.
-  bool last_token_fetched_ = false;
 };
 
 }  // namespace numerous_llm
