@@ -17,6 +17,9 @@ namespace numerous_llm {
 
 BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context)
     : block_manager_config_(block_manager_config), context_(context) {
+  NLLM_CHECK_WITH_INFO(
+      block_manager_config.device_allocator_config.block_size == block_manager_config.cpu_allocator_config.block_size,
+      "The block size of host and device must be equal.");
   // Create host allocator
   host_allocator_ = std::make_shared<HostAllocator>(block_manager_config.cpu_allocator_config, context);
 
@@ -28,9 +31,7 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
   }
 }
 
-void BlockManager::SetDeviceId(int device_id) {
-  CUDA_CHECK(cudaSetDevice(device_id));
-}
+void BlockManager::SetDeviceId(int device_id) { CUDA_CHECK(cudaSetDevice(device_id)); }
 
 int BlockManager::GetDeviceId() {
   int device_id;

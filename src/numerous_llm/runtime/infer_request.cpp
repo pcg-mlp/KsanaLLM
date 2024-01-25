@@ -100,6 +100,13 @@ size_t InferRequest::GetTotalBlockNumber() {
   return (block_token_num + GetTotalTokenNumber() - 1) / block_token_num;
 }
 
+size_t InferRequest::GetCurrentBlockNumber() {
+  if (!kv_cache_blocks.empty()) {
+    return kv_cache_blocks[0].size();
+  }
+  return 0;
+}
+
 Status InferRequest::SwapInAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     std::vector<int> device_blocks;

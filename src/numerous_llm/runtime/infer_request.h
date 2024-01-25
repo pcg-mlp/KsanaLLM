@@ -56,7 +56,12 @@ class InferRequest {
   size_t GetStepBlockNumber();
 
   // Get the total block number for current request.
+  // that is, the current tokens and the next token.
   size_t GetTotalBlockNumber();
+
+  // Get the current block number
+  // Include all the generated tokens, except the next token.
+  size_t GetCurrentBlockNumber();
 
   // Swap in/out this request asynchronous.
   Status SwapInAsync();

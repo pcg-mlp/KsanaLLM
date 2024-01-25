@@ -13,6 +13,7 @@
 
 #include "3rdparty/ini_reader.h"
 #include "numerous_llm/utils/logger.h"
+#include "numerous_llm/utils/ret_code.h"
 #include "numerous_llm/utils/status.h"
 
 DEFINE_string(model_config, "./config.ini", "Get the model config file path");
@@ -83,7 +84,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
   PrepareModeAttirbutes(ini_reader, model_config);
 
   // TODO: Get from config.
-  model_config.max_token_num = ini_reader.GetInteger("ft_instance_hyperparameter", "max_token_num");;
+  model_config.max_token_num = ini_reader.GetInteger("ft_instance_hyperparameter", "max_token_num");
+  ;
 
   model_configs_[model_config.name] = model_config;
 
@@ -91,7 +93,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
 
   InitializeBlockManagerConfig();
 
-  return Status();
+  return CheckEnvironment();
 }
 
 Status Environment::ParseOptions(int argc, char **argv) {
@@ -123,15 +125,32 @@ void Environment::InitializeBlockManagerConfig() {
   size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *
                       (model_config.head_num / GetTensorParallelSize()) * model_config.size_per_head;
 
-  block_manager_config_.cpu_allocator_config.block_size = token_size * block_token_num_ * 2;
+  block_manager_config_.cpu_allocator_config.block_size = token_size * block_token_num_ * 2 * sizeof(half);
   block_manager_config_.device_allocator_config.block_size = token_size * block_token_num_ * 2 * sizeof(half);
 
   block_manager_config_.cpu_allocator_config.device = MemoryDevice::MEMORY_CPU_PINNED;
   block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_GPU;
 
   // TODO(yancyliu): should calculated through device memory useage.
-  block_manager_config_.cpu_allocator_config.blocks_num = 128;
+  block_manager_config_.cpu_allocator_config.blocks_num = 128 * 10;
   block_manager_config_.device_allocator_config.blocks_num = 128;
+}
+
+Status Environment::CheckEnvironment() {
+  if (block_manager_config_.cpu_allocator_config.block_size ==
+      block_manager_config_.device_allocator_config.block_size) {
+    return Status(RET_INVALID_ARGUMENT, "block size of device and host is not equal.");
+  }
+
+  size_t total_token_num = block_manager_config_.device_allocator_config.blocks_num *
+                           block_manager_config_.device_allocator_config.block_token_num;
+  for (auto &[model_name, model_config] : model_configs_) {
+    if (total_token_num <= model_config.max_token_num) {
+      return Status(RET_INVALID_ARGUMENT, "total block token num must be large than model max_token_num.");
+    }
+  }
+
+  return Status();
 }
 
 Status Environment::GetModelConfigs(std::unordered_map<std::string, ModelConfig> &model_configs) {

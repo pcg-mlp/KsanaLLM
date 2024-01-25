@@ -40,13 +40,13 @@ class BatchScheduler {
 
   // Schedule the running/swapped/waiting queue.
   void ScheduleRunning(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                       size_t max_free_block_num);
+                       size_t &max_free_block_num, size_t &total_swapout_num);
 
   void ScheduleSwapped(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                       size_t max_free_block_num);
+                       size_t &max_free_block_num);
 
   void ScheduleWaiting(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                       size_t max_free_block_num);
+                       size_t &max_free_block_num);
 
  private:
   BatchSchedulerConfig batch_schedule_config_;
