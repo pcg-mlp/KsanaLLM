@@ -40,7 +40,7 @@ if __name__ == "__main__":
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
 
     # text_list = ["您好！"]
-    text_list = ["您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!", "您好!"]
+    text_list = ["您好!", "您好!"]
 
     multi_proc_list = []
     multi_proc_queue = multiprocessing.Queue()
