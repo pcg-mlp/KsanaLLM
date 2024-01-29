@@ -114,7 +114,8 @@ Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<
     CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost,
                                context_->d2h_streams_[device_id]));
   }
-
+  // (TODO) use event
+  CUDA_CHECK(cudaStreamSynchronize(context_->d2h_streams_[device_id]));
   // Free device blocks.
   device_allocators_[device_id]->FreeBlocks(device_blocks);
   return Status();
@@ -139,6 +140,8 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
                                context_->h2d_streams_[device_id]));
   }
 
+  // (TODO) use event
+  CUDA_CHECK(cudaStreamSynchronize(context_->h2d_streams_[device_id]));
   // Free host blocks.
   host_allocator_->FreeBlocks(host_blocks);
   return Status();
