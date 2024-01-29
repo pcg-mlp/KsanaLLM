@@ -129,7 +129,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   size_t batch_size = forward_reqs.size();
   cudaStream_t stream = context_->GetComputeStreams()[rank_];
   cudaStream_t h2d_stream = context_->GetH2DStreams()[rank_];
-  cudaStream_t d2h_stream = context_->GetD2HStreams()[rank_];
+  cudaStream_t d2d_stream = context_->GetD2DStreams()[rank_];
   cudaStream_t nccl_stream = context_->GetNCCLStreams()[rank_];
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -405,7 +405,8 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     ForwardRequest& req = forward_reqs[idx];
     float* logits_dst = req.logits_buf[rank_] + req.logits_offset * vocab_size_;
     float* logits_src = logits_ptr + idx * vocab_size_;
-    CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_src, vocab_size_ * sizeof(float), cudaMemcpyDeviceToHost, d2h_stream));
+    CUDA_CHECK(
+        cudaMemcpyAsync(logits_dst, logits_src, vocab_size_ * sizeof(float), cudaMemcpyDeviceToDevice, d2d_stream));
   }
 
   DestroyTensor(input_ids);
@@ -414,7 +415,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   DestroyTensor(kv_list);
   DestroyTensor(rotary_embedding_pos);
   DestroyTensor(forward_shape);
-  CUDA_CHECK(cudaStreamSynchronize(d2h_stream));
+  CUDA_CHECK(cudaStreamSynchronize(d2d_stream));
   return Status();
 }
 
@@ -434,7 +435,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   size_t batch_size = forward_reqs.size();
   cudaStream_t stream = context_->GetComputeStreams()[rank_];
   cudaStream_t h2d_stream = context_->GetH2DStreams()[rank_];
-  cudaStream_t d2h_stream = context_->GetD2HStreams()[rank_];
+  cudaStream_t d2d_stream = context_->GetD2DStreams()[rank_];
   cudaStream_t nccl_stream = context_->GetNCCLStreams()[rank_];
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -481,8 +482,8 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
   }
-  CUDA_CHECK(
-      cudaMemcpyAsync(input_ids_ptr, input_ids_cpu.data(), batch_size * sizeof(int), cudaMemcpyHostToDevice, h2d_stream));
+  CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr, input_ids_cpu.data(), batch_size * sizeof(int), cudaMemcpyHostToDevice,
+                             h2d_stream));
 
   // create input offset tensor int32 and uint64
   Tensor input_offset_int32_tensor, input_offset_uint64_tensor, input_tokens_int32_tensor;
@@ -717,7 +718,8 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     ForwardRequest& req = forward_reqs[idx];
     float* logits_dst = req.logits_buf[rank_] + req.logits_offset * vocab_size_;
     float* logits_src = logits_ptr + idx * vocab_size_;
-    CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_src, vocab_size_ * sizeof(float), cudaMemcpyDeviceToHost, d2h_stream));
+    CUDA_CHECK(
+        cudaMemcpyAsync(logits_dst, logits_src, vocab_size_ * sizeof(float), cudaMemcpyDeviceToDevice, d2d_stream));
   }
 
   DestroyTensor(input_ids);
@@ -728,7 +730,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   DestroyTensor(rotary_embedding_pos);
   DestroyTensor(kv_cache_offset_tensor);
 
-  CUDA_CHECK(cudaStreamSynchronize(d2h_stream));
+  CUDA_CHECK(cudaStreamSynchronize(d2d_stream));
   return Status();
 }
 
