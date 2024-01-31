@@ -70,6 +70,9 @@ struct BatchSchedulerConfig {
 
   // The max token number for one scheduler step.
   size_t max_token_number = 4096;
+
+  // The max queue len of running request.
+  size_t max_running_queue_len = 4;
 };
 
 struct LoraCoordinatorConfig {};

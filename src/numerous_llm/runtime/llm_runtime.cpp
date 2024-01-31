@@ -139,7 +139,7 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
 }
 
 Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
-  NLLM_LOG_INFO << "llm runtime step invoked.";
+  // NLLM_LOG_INFO << "llm runtime step invoked.";
   Forward(reqs);
   return Sampling(reqs);
 }

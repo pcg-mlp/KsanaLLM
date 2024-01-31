@@ -54,6 +54,7 @@ class Llama : public BaseModel {
   int num_layer_;
   int rank_;
   int max_seq_len_;
+  int max_batch_size_;
   size_t hidden_units_;
   int pad_token_id_;
   uint32_t vocab_size_;
@@ -65,7 +66,6 @@ class Llama : public BaseModel {
   Tensor up_matmul_tensor;
   Tensor kv_cache_buffer_;
   Tensor logits_tensor_;
-
   std::shared_ptr<Context> context_{nullptr};
 
   std::string saved_dir = "/model/llama-ft/7B/nllm/";
