@@ -65,17 +65,17 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   // 2: 运行时中间空间
   // 3: 矩阵计算需要一块空间
 
-  // input_ids: [max_b, max_s]
-  int max_b = model_config.default_batch_size;
+  // input_ids: [max_batch_size_, max_s]
+  max_batch_size_ = model_config.default_batch_size;
   max_seq_len_ = model_config.max_token_num;
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
   size_t tmp_tensor_size =
-      max_b * std::max((int)vocab_size_ * sizeof(float), max_seq_len_ * hidden_units * 3 * dtype_size);
-  CreateTensor(tmp_tensor_0, max_b * max_seq_len_ * hidden_units * dtype_size * 3);
+      max_batch_size_ * std::max((int)vocab_size_ * sizeof(float), max_seq_len_ * hidden_units * 3 * dtype_size);
+  CreateTensor(tmp_tensor_0, max_batch_size_ * max_seq_len_ * hidden_units * dtype_size * 3);
   CreateTensor(tmp_tensor_1, tmp_tensor_size);
-  CreateTensor(tmp_tensor_2, max_b * max_seq_len_ * hidden_units * dtype_size * 3);
-  CreateTensor(up_matmul_tensor, max_b * max_seq_len_ * inter_size * dtype_size);
-  CreateTensor(kv_cache_buffer_, num_layer_ * max_b * max_seq_len_ * 2 * hidden_units * dtype_size);
+  CreateTensor(tmp_tensor_2, max_batch_size_ * max_seq_len_ * hidden_units * dtype_size * 3);
+  CreateTensor(up_matmul_tensor, max_batch_size_ * max_seq_len_ * inter_size * dtype_size);
+  CreateTensor(kv_cache_buffer_, num_layer_ * max_batch_size_ * max_seq_len_ * 2 * hidden_units * dtype_size);
   CreateTensor(logits_tensor_, 128 * (int)vocab_size_ * sizeof(float));
 
   // 初始化各层实例
@@ -127,6 +127,13 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   CUDA_CHECK(cudaEventCreateWithFlags(&nccl_finish_event, cudaEventDisableTiming));
 
   size_t batch_size = forward_reqs.size();
+  NLLM_LOG_INFO << "ContextDecode With Batch Size " << batch_size;
+  if (batch_size > max_batch_size_) {
+    NLLM_LOG_ERROR << fmt::format("Context Decode Batch Size out of max batch size! {} > {}",
+                                  batch_size, max_batch_size_);
+    std::exit(-1);
+  }
+
   cudaStream_t stream = context_->GetComputeStreams()[rank_];
   cudaStream_t h2d_stream = context_->GetH2DStreams()[rank_];
   cudaStream_t d2d_stream = context_->GetD2DStreams()[rank_];
@@ -433,6 +440,11 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   saved_dir = "/model/llama-ft/7B/nllm_decode/";
 
   size_t batch_size = forward_reqs.size();
+  NLLM_LOG_INFO << "Decode Batch_size = " << batch_size;
+  if (batch_size > max_batch_size_) {
+    NLLM_LOG_ERROR << fmt::format("Decode Batch Size out of max batch size! {} > {}", batch_size, max_batch_size_);
+    std::exit(-1);
+  }
   cudaStream_t stream = context_->GetComputeStreams()[rank_];
   cudaStream_t h2d_stream = context_->GetH2DStreams()[rank_];
   cudaStream_t d2d_stream = context_->GetD2DStreams()[rank_];

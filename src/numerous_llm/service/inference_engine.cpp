@@ -41,7 +41,6 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
   }
-  batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
   // Load model instances.
   std::unordered_map<std::string, ModelConfig> model_configs;
@@ -49,7 +48,15 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
   }
-  NLLM_LOG_INFO << "Get model instance size: " << model_configs.size();
+  // NLLM_LOG_INFO << "Get model instance size: " << model_configs.size();
+
+  size_t max_batch_size = 0;
+  for (auto &[model_name, model_config] : model_configs) {
+    max_batch_size = std::max(max_batch_size, (size_t)model_config.default_batch_size);
+  }
+  batch_manager_config.batch_scheduler_config.max_running_queue_len = max_batch_size;
+  NLLM_LOG_INFO << "Batch Scheduler Config Max Batch Size = " <<  max_batch_size;
+  batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
   for (auto &[model_name, model_config] : model_configs) {
     std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(model_config, context_);
@@ -64,7 +71,7 @@ Status InferenceEngine::Initialize() {
 }
 
 Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
-  NLLM_LOG_INFO << "Handle request id " << req->req_id;
+  // NLLM_LOG_INFO << "Handle request id " << req->req_id;
   Status handle_req_status = batch_manager_->Enqueue(req);
   if (!handle_req_status.OK()) {
     return handle_req_status;
@@ -73,7 +80,7 @@ Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
 }
 
 Status InferenceEngine::HandleLoop() {
-  NLLM_LOG_INFO << "Start handler";
+  // NLLM_LOG_INFO << "Start handler";
 
   while (!terminated_) {
     std::pair<Status, std::shared_ptr<Request>> req_pair;
@@ -120,14 +127,14 @@ Status InferenceEngine::Stop() {
   handle_thread_.join();
 
   // Wait all request done.
-  NLLM_LOG_INFO << "Waiting all running request.";
+  // NLLM_LOG_INFO << "Waiting all running request.";
   Status status = batch_manager_->WaitAllDone();
   if (!status.OK()) {
     NLLM_LOG_ERROR << "Wait all requests done error:" << status.ToString();
   }
 
   // Stop the batch manger.
-  NLLM_LOG_INFO << "Stop batch manager.";
+  // NLLM_LOG_INFO << "Stop batch manager.";
   batch_manager_->Stop();
 
   return Status();

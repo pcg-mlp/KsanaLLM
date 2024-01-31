@@ -17,11 +17,11 @@ Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWei
 
   switch (stage) {
     case InferStage::STAGE_CONTEXT:
-      NLLM_LOG_INFO << "ContextDecode infer on work_id: " << rank_;
+      // NLLM_LOG_INFO << "ContextDecode infer on work_id: " << rank_;
       model->ContextDecode(weight, forward_reqs);
       break;
     case InferStage::STATE_DECODE:
-      NLLM_LOG_INFO << "Decode infer on work_id: " << rank_;
+      // NLLM_LOG_INFO << "Decode infer on work_id: " << rank_;
       model->Decode(weight, forward_reqs);
       break;
     default:
