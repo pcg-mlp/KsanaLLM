@@ -22,10 +22,10 @@ ServingOp::ServingOp() {}
 ServingOp::~ServingOp() { serving_impl_->Stop(); }
 
 void ServingOp::InitServing(const std::string &model_dir) {
-  NLLM_LOG_INFO << "ServingOp::InitServing invoked.";
+  NLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
 
   InitLoguru();
-  NLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
+  NLLM_LOG_DEBUG << "Log INFO level: " << GetLevelName(GetLogLevel());
 
   std::string config_file = model_dir + "/config.ini";
   Status status = Singleton<Environment>::GetInstance()->ParseConfig(config_file);
@@ -35,19 +35,19 @@ void ServingOp::InitServing(const std::string &model_dir) {
 
   serving_impl_ = std::make_shared<ServingImpl>();
   serving_impl_->Start();
-  NLLM_LOG_INFO << "ServingOp::InitServing finished.";
+  NLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
 }
 
 Status ServingOp::Generate(const std::string &model_name, const std::vector<int> &input_tokens,
                            const SamplingConfig &sampling_config, std::vector<int> &output_tokens) {
-  NLLM_LOG_INFO << "ServingOp::Generate invoked.";
+  NLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
   return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens);
 }
 
 Status ServingOp::GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
                                     const SamplingConfig &sampling_config,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  NLLM_LOG_INFO << "ServingOp::GenerateStreaming invoked.";
+  NLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
   return serving_impl_->HandleStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
 }
 

@@ -46,7 +46,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   int batch_size = input_tensors[6].shape[0];
   int total_tokens = input_tensors[0].shape[0];
 
-  auto stream =  context_->GetComputeStreams()[rank_];
+  auto stream = context_->GetComputeStreams()[rank_];
 
   // NLLM_LOG_WARNING << fmt::format("max_tokens = {}, batch_size = {}, total_tokens = {},"
   //                                 " kv_list.GetPtr<void*>() = {}",
@@ -66,10 +66,11 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   out.dtype = query.dtype;
   out.shape = {query.shape[0], query.shape[1] / 3};
 
-  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list,
-                            context_lens.GetPtr<void>(), max_tokens, context_->GetComputeStreams()[rank_],
-                            cache_offset.GetPtr<void>(), batch_size, num_heads_, head_size_, num_kv_heads_, block_token_num_, batch_size, rotary_embedding_pos.GetPtr<void>(), total_tokens,
-                            rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {});
+  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
+                            max_tokens, context_->GetComputeStreams()[rank_], cache_offset.GetPtr<void>(), batch_size,
+                            num_heads_, head_size_, num_kv_heads_, block_token_num_, batch_size,
+                            rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
+                            workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {});
   return Status();
 }
 

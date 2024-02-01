@@ -60,7 +60,7 @@ size_t get_hash_code(short* data, size_t data_size) {
     hash_value ^= (hash_value % mod) + delta + (hash_value << 6) + (hash_value >> 2);
   }
   hash_value %= mod;
-  NLLM_LOG_INFO << fmt::format("Hash Result = {}", hash_value);
+  NLLM_LOG_DEBUG << fmt::format("Hash Result = {}", hash_value);
   return hash_value;
 }
 

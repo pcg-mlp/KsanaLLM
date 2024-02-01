@@ -33,7 +33,7 @@ InferRequest::InferRequest(std::shared_ptr<Request>& request)
 }
 
 InferRequest::~InferRequest() {
-  // NLLM_LOG_INFO << "req " << req_id << " destroyed, free block.";
+  NLLM_LOG_DEBUG << "req " << req_id << " destroyed, free block.";
   // Free memory on every device.
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);
@@ -72,9 +72,9 @@ std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() {
 size_t InferRequest::GetBlockSize() const { return 4096; }
 
 void InferRequest::ResetInferStage() {
-  // NLLM_LOG_INFO << "input tokens number " << input_tokens.size();
+  NLLM_LOG_DEBUG << "input tokens number " << input_tokens.size();
   if (input_tokens.size() < output_tokens.size()) {
-    // NLLM_LOG_INFO << "change from context decode to decode";
+    NLLM_LOG_DEBUG << "change from context decode to decode";
     infer_stage = InferStage::STATE_DECODE;
   }
 }

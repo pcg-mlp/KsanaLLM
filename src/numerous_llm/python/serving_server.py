@@ -62,7 +62,7 @@ def generate():
                 streamer=True)
             output_tokens = []
             for output_token in streaming_iter:
-                print("Get step token:", output_token, flush=True)
+                # print("Get step token:", output_token, flush=True)
                 output_tokens.append(output_token)
 
         else:

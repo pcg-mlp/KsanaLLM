@@ -112,7 +112,7 @@ class InferRequest {
   Status &finish_status;
 
   // Protect parallel access for output token.
-  std::mutex& output_mutex;
+  std::mutex &output_mutex;
 
   // The model instance pointer.
   std::shared_ptr<ModelInstance> model_instance;

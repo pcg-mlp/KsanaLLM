@@ -31,9 +31,9 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
 
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
-  
-  NLLM_LOG_INFO << fmt::format("layer_index_ {}; max_position_embeddings {}; block_size_ {}; block_token_num_ {}", layer_index_,
-                               max_position_embeddings_, block_size_, block_token_num_);
+
+  NLLM_LOG_DEBUG << fmt::format("layer_index_ {}; max_position_embeddings {}; block_size_ {}; block_token_num_ {}",
+                                layer_index_, max_position_embeddings_, block_size_, block_token_num_);
   return Status();
 }
 

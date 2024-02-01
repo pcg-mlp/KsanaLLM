@@ -12,9 +12,9 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
     ncclResult_t ncclError =
         ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
                       input_tensors[0].GetElementNumber(), ncclHalf, ncclSum, context_->GetNCCLParam()[rank_].nccl_comm,
-                      context_->GetNCCLStreams()[rank_]);
+                      context_->GetComputeStreams()[rank_]);
     if (ncclError != ncclSuccess) {
-      NLLM_LOG_INFO << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
+      NLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
     }
     NCCL_CHECK(ncclGroupEnd());
   } else {

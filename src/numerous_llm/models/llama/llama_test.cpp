@@ -2,12 +2,12 @@
  *
  * ==============================================================================*/
 
-#include <filesystem>
-#include "test.h"
-#include "flash_api.h"
 #include "numerous_llm/models/llama/llama.h"
+#include <filesystem>
+#include "flash_api.h"
 #include "numerous_llm/models/llama/create_test_model.h"
 #include "numerous_llm/samplers/sampler.h"
+#include "test.h"
 
 using namespace numerous_llm;
 // 定义一个 LlamaTest 类,继承自 testing::Test
@@ -27,8 +27,7 @@ class LlamaTest : public testing::Test {
 
     BlockManagerConfig block_manager_config;
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-    NLLM_LOG_WARNING << fmt::format("block_size {}",
-                                    block_manager_config.device_allocator_config.block_size);
+    NLLM_LOG_WARNING << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
     block_manager = new BlockManager(block_manager_config, context_);
     SetBlockManager(block_manager);
@@ -69,8 +68,8 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   forward.kv_cache_ptrs.resize(1);
   GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
   cudaMemset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
-  NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} end {}",
-                                    forward.kv_cache_ptrs[0][0], forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
+  NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
+                                  forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
 
@@ -100,8 +99,6 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
   sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
-
-  
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

@@ -26,7 +26,7 @@ void ModelInstance::Load() {
 
   if (unified_model_name.find("llama") != std::string::npos) {
     name = "llama";
-    NLLM_LOG_INFO << "Start to init LLaMA model instance";
+    NLLM_LOG_DEBUG << "Start to init LLaMA model instance";
 
     // Load model and weights on every device.
     for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
