@@ -25,7 +25,7 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
   CUDA_CHECK(cudaDriverGetVersion(&driver_version_));
 
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
-    NLLM_LOG_INFO << "Init nvidia gpu relate handler on worker " << worker_id;
+    NLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
 
     CUDA_CHECK(cudaSetDevice(worker_id));
 
@@ -68,7 +68,7 @@ Context::~Context() {
 }
 
 void Context::InitGpuMemoryPool(const int worker_id) {
-  NLLM_LOG_INFO << "Init nvidia memroy pool on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia memroy pool on worker " << worker_id;
   if (driver_version_ >= CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
     int device_supports_memory_pools = 0;
     int pool_supported_handle_types = 0;
@@ -82,39 +82,39 @@ void Context::InitGpuMemoryPool(const int worker_id) {
 }
 
 void Context::InitCudaStreams(const int worker_id) {
-  NLLM_LOG_INFO << "Init nvidia memroy_manage_stream on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia memroy_manage_stream on worker " << worker_id;
   cudaStream_t memory_manage_stream;
   CUDA_CHECK(cudaStreamCreate(&memory_manage_stream));
   memory_manage_streams_.emplace_back(std::move(memory_manage_stream));
 
-  NLLM_LOG_INFO << "Init nvidia compute_stream on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia compute_stream on worker " << worker_id;
   cudaStream_t compute_stream;
   CUDA_CHECK(cudaStreamCreate(&compute_stream));
   compute_streams_.emplace_back(std::move(compute_stream));
 
-  NLLM_LOG_INFO << "Init nvidia h2d_stream on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia h2d_stream on worker " << worker_id;
   cudaStream_t h2d_stream;
   CUDA_CHECK(cudaStreamCreate(&h2d_stream));
   h2d_streams_.emplace_back(std::move(h2d_stream));
 
-  NLLM_LOG_INFO << "Init nvidia d2h_stream on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia d2h_stream on worker " << worker_id;
   cudaStream_t d2h_stream;
   CUDA_CHECK(cudaStreamCreate(&d2h_stream));
   d2h_streams_.emplace_back(std::move(d2h_stream));
 
-  NLLM_LOG_INFO << "Init nvidia d2d_stream on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia d2d_stream on worker " << worker_id;
   cudaStream_t d2d_stream;
   CUDA_CHECK(cudaStreamCreate(&d2d_stream));
   d2d_streams_.emplace_back(std::move(d2d_stream));
 
-  NLLM_LOG_INFO << "Init nvidia nccl_stream on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia nccl_stream on worker " << worker_id;
   cudaStream_t nccl_stream;
   CUDA_CHECK(cudaStreamCreate(&nccl_stream));
   nccl_streams_.emplace_back(std::move(nccl_stream));
 }
 
 void Context::InitCublasHandle(const int worker_id) {
-  NLLM_LOG_INFO << "Init nvidia cublas/cublasLt on worker " << worker_id;
+  NLLM_LOG_DEBUG << "Init nvidia cublas/cublasLt on worker " << worker_id;
   cublasHandle_t cublas_handle;
   cublasLtHandle_t cublaslt_handle;
   CUDA_CHECK(cublasCreate(&cublas_handle));

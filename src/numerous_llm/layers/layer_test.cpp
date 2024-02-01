@@ -2,12 +2,12 @@
 
 ==============================================================================*/
 
+#include "flash_api.h"
 #include "numerous_llm/layers/activation_layer.h"
 #include "numerous_llm/layers/add_layer.h"
 #include "numerous_llm/layers/attention_layer.h"
 #include "numerous_llm/layers/emb_lookup_layer.h"
 #include "numerous_llm/layers/flash_attention_layer.h"
-#include "numerous_llm/layers/paged_attention_layer.h"
 #include "numerous_llm/layers/layernorm_layer.h"
 #include "numerous_llm/layers/matmul_layer.h"
 #include "numerous_llm/layers/nccl_all_reduce_sum_layer.h"
@@ -15,7 +15,6 @@
 #include "numerous_llm/layers/silu_mul_layer.h"
 #include "numerous_llm/utils/dtypes.h"
 #include "test.h"
-#include "flash_api.h"
 
 namespace numerous_llm {
 
@@ -42,13 +41,16 @@ class LayerTest : public testing::Test {
     BlockManagerConfig block_manager_config;
     block_manager_config.cpu_allocator_config.blocks_num = 2;
     block_manager_config.cpu_allocator_config.block_token_num = 16;
-    block_manager_config.cpu_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer * sizeof(half);
+    block_manager_config.cpu_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num *
+                                                           2 * model_config.head_num * model_config.size_per_head *
+                                                           model_config.num_layer * sizeof(half);
     block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_token_num = 16;
-    block_manager_config.device_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num * model_config.size_per_head * model_config.num_layer * sizeof(half);
-    NLLM_LOG_WARNING << fmt::format("block_size {}",
-                                    block_manager_config.device_allocator_config.block_size);
+    block_manager_config.device_allocator_config.block_size =
+        block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num *
+        model_config.size_per_head * model_config.num_layer * sizeof(half);
+    NLLM_LOG_WARNING << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
     context_ = std::make_shared<Context>(1, 1);
@@ -64,7 +66,8 @@ class LayerTest : public testing::Test {
     delete block_manager;
   }
 
-  Status CreateHalfDataTypeTensor(Tensor& tensor, const std::vector<size_t>& shape, const DataType data_type, size_t dtype_size = 2) {
+  Status CreateHalfDataTypeTensor(Tensor& tensor, const std::vector<size_t>& shape, const DataType data_type,
+                                  size_t dtype_size = 2) {
     int idx;
     GetBlockManager()->SetDeviceId(0);
     size_t total_bytes =
@@ -76,7 +79,7 @@ class LayerTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
-  BlockManager *block_manager = nullptr;
+  BlockManager* block_manager = nullptr;
 
   std::shared_ptr<Context> context_{nullptr};
 };
@@ -90,30 +93,35 @@ TEST_F(LayerTest, AttentionLayerTest) {
   int rotary_embedding = 128;
   float rope_theta = 10000.0f;
   bool is_neox = true;
-  EXPECT_TRUE(flash_attention_layer.Init({int(0), int(2048), head_num, kv_head_num, size_per_head, rotary_embedding,
-                                          rope_theta, is_neox}, context, 0).OK());
+  EXPECT_TRUE(
+      flash_attention_layer
+          .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, rotary_embedding, rope_theta, is_neox},
+                context, 0)
+          .OK());
 
   Tensor qkv, input_len, pos, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
   CreateHalfDataTypeTensor(qkv, input_shape, GetTensorType<half>());
   CreateHalfDataTypeTensor(input_len, {2}, GetTensorType<uint64_t>(), sizeof(uint64_t));
-  CreateHalfDataTypeTensor(pos, {2}, GetTensorType<uint64_t>(), /*dtype_size*/sizeof(uint64_t));
+  CreateHalfDataTypeTensor(pos, {2}, GetTensorType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
   forward_shape.shape = {1, 2, 1};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
   CUDA_CHECK(cudaMemcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
   void* input_len_ptr = input_len.GetPtr<void>();
   std::vector<uint64_t> input_len_cpu({0, 2});
-  CUDA_CHECK(cudaMemcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
   Tensor output_tensor;
   CreateHalfDataTypeTensor(output_tensor, input_shape, GetTensorType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
 
   int block_size = GetBlockManager()->GetBlockSize();
-  std::vector<int> h_block_offset = {0 , 1};
+  std::vector<int> h_block_offset = {0, 1};
   Tensor block_offset;
   CreateHalfDataTypeTensor(block_offset, {h_block_offset.size()}, GetTensorType<int>(), sizeof(int));
-  cudaMemcpy(block_offset.GetPtr<void>(), h_block_offset.data(), h_block_offset.size() * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(block_offset.GetPtr<void>(), h_block_offset.data(), h_block_offset.size() * sizeof(int),
+             cudaMemcpyHostToDevice);
   // 为 kv_list 分配内存并初始化
   Tensor kv_list;
   CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetTensorType<uint64_t>());
@@ -121,15 +129,18 @@ TEST_F(LayerTest, AttentionLayerTest) {
   for (int i = 0; i < h_kv_list_ptrs.size(); i++) {
     cudaError_t error = cudaMalloc(&h_kv_list_ptrs[i], block_size);
   }
-  cudaMemcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), cudaMemcpyHostToDevice);
+  cudaMemcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*),
+             cudaMemcpyHostToDevice);
 
-  EXPECT_TRUE(flash_attention_layer.Forward({qkv, input_len, kv_list, block_offset, pos,
-                                             forward_shape}, output_tensors).OK());
+  EXPECT_TRUE(
+      flash_attention_layer.Forward({qkv, input_len, kv_list, block_offset, pos, forward_shape}, output_tensors).OK());
 
   PagedAttentionLayer attention_layer;
-  EXPECT_TRUE(
-      attention_layer.Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num,
-                            static_cast<int>(size_per_head), rotary_embedding, rope_theta, is_neox}, context, 0).OK());
+  EXPECT_TRUE(attention_layer
+                  .Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num, static_cast<int>(size_per_head),
+                         rotary_embedding, rope_theta, is_neox},
+                        context, 0)
+                  .OK());
 }
 
 }  // namespace numerous_llm

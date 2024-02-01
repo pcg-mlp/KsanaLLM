@@ -116,18 +116,18 @@ Status LlamaWeight<T>::LoadWeightFromBin(Tensor tensor, std::string binfile, boo
                                             "request " + std::to_string(loaded_data_size) + ", loading model fails!");
   }
   T* tensor_ptr = tensor.GetPtr<T>();
- 
+
   if (transpose) {
     std::vector<char> host_array_transpose = host_array;
     for (int i = 0; i < dim0; i++) {
       for (int j = 0; j < dim1; j++) {
-        size_t dtype_size  = loaded_data_size / size;
+        size_t dtype_size = loaded_data_size / size;
         memcpy(host_array.data() + (i * dim1 + j) * dtype_size,
                host_array_transpose.data() + (j * dim0 + i) * dtype_size, dtype_size);
       }
     }
   }
-  
+
   CUDA_CHECK(cudaMemcpyAsync(tensor_ptr, host_array.data(), loaded_data_size, cudaMemcpyHostToDevice,
                              context_->GetComputeStreams()[rank_]));
   return Status();

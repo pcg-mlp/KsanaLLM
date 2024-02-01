@@ -157,7 +157,6 @@ message(STATUS "find Python3_LIBRARIES ${Python3_LIBRARIES}")
 message(STATUS "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS}")
 
 add_subdirectory(3rdparty)
-add_subdirectory(benchmarks)
 add_subdirectory(examples)
 add_subdirectory(src)
 # for integration test

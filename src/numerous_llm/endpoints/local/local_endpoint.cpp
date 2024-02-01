@@ -30,12 +30,12 @@ Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<in
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
 
   // Get inference result
-  NLLM_LOG_INFO << "LocalEndpoint::Handle start Wait.";
+  NLLM_LOG_DEBUG << "LocalEndpoint::Handle start Wait.";
   waiter->Wait();
 
-  NLLM_LOG_INFO << "LocalEndpoint::Handle Wait finished.";
+  NLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
   output_tokens = {req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end()};
-  NLLM_LOG_INFO << "LocalEndpoint::Handle Fetch result.";
+  NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
 }
 

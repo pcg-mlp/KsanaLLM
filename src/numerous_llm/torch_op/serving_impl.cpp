@@ -45,13 +45,13 @@ Status ServingImpl::Start() {
 }
 
 Status ServingImpl::Stop() {
-  NLLM_LOG_INFO << "Recive stop signal, ready to quit.";
+  NLLM_LOG_DEBUG << "Recive stop signal, ready to quit.";
 
   request_queue_.Close();
   inference_engine_->Stop();
 
   // Force exit here.
-  NLLM_LOG_INFO << "Exit now.";
+  NLLM_LOG_DEBUG << "Exit now.";
   _exit(0);
 
   return Status();

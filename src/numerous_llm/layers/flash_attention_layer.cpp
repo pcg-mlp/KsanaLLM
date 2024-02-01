@@ -16,7 +16,7 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
    *    3: kv_cache_offset_tensor
    *    4: rotary embedding pos tensor
    *    5: forward shape
-  */
+   */
 
   int max_tokens = input_tensors[5].shape[1];
   int batch_size = input_tensors[5].shape[0];
@@ -34,9 +34,9 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   //                                 reinterpret_cast<void*>(k_list), reinterpret_cast<void*>(v_list),
   //                                 input_tensors[3].GetPtr<void>(), layer_block_num);
   AttenVarlen(input_tensors[0].GetPtr<void>(), input_tensors[4].GetPtr<void>(), output_tensors[0].GetPtr<void>(),
-              input_tensors[1].GetPtr<void>(), rotary_embedding_cuda_, total_tokens, max_tokens, batch_size,
-              num_heads_, head_size_, is_causal_, rank_, block_token_num_, k_list, v_list,
-              input_tensors[3].GetPtr<void>(), context_->GetComputeStreams()[rank_]);
+              input_tensors[1].GetPtr<void>(), rotary_embedding_cuda_, total_tokens, max_tokens, batch_size, num_heads_,
+              head_size_, is_causal_, rank_, block_token_num_, k_list, v_list, input_tensors[3].GetPtr<void>(),
+              context_->GetComputeStreams()[rank_]);
   output_tensors[0].shape[0] = input_tensors[0].shape[0];
   output_tensors[0].shape[1] = input_tensors[0].shape[1] / 3;
   output_tensors[0].dtype = input_tensors[0].dtype;

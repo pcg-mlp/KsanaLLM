@@ -63,7 +63,8 @@ struct ContextCachingConfig {};
 
 struct BatchSchedulerConfig {
   // Max waiting time in millisecond.
-  size_t timeout_in_ms = 60000;
+  // TODO(karlluo): load from config
+  size_t timeout_in_ms = 600000;
 
   // The max queue len of waiting request.
   size_t max_waiting_queue_len = 100;
@@ -138,7 +139,7 @@ class Environment {
   Status GetModelConfigs(std::unordered_map<std::string, ModelConfig> &model_configs);
 
   // Get the model config by name.
-  Status GetModelConfig(const std::string& model_name, ModelConfig& model_config);
+  Status GetModelConfig(const std::string &model_name, ModelConfig &model_config);
 
   // Get the config of a batch manager.
   Status GetBatchManagerConfig(BatchManagerConfig &batch_manager_config);

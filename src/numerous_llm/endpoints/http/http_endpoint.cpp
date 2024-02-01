@@ -19,7 +19,7 @@ Status HttpEndpoint::Accept(std::shared_ptr<Request> &req) {
   if (terminated_) {
     return Status(RET_TERMINATED);
   }
-  NLLM_LOG_INFO << "Accept a req.";
+  NLLM_LOG_DEBUG << "Accept a req.";
 
   SamplingConfig sampling_config;
   req->sampling_config = sampling_config;
@@ -71,7 +71,7 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
 }
 
 Status HttpEndpoint::Start() {
-  NLLM_LOG_INFO << "Listen on port " << endpoint_config_.port;
+  NLLM_LOG_DEBUG << "Listen on port " << endpoint_config_.port;
 
   // define generate
   // TODO(karlluo): should also support stream mode
@@ -89,7 +89,7 @@ Status HttpEndpoint::Start() {
 }
 
 Status HttpEndpoint::Stop() {
-  NLLM_LOG_INFO << "Close http endpoint.";
+  NLLM_LOG_DEBUG << "Close http endpoint.";
   http_server_.stop();
   terminated_ = true;
   return Status();

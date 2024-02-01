@@ -40,13 +40,13 @@ Status BatchManager::Initialize() {
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
-  // NLLM_LOG_INFO << "register model instance " << model_instance->name << " : " << model_instance.get();
+  NLLM_LOG_DEBUG << "register model instance " << model_instance->name << " : " << model_instance.get();
   model_instances_[model_instance->name] = model_instance;
   return Status();
 }
 
 Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
-  // NLLM_LOG_INFO << "batch manager enqueue req id " << req->req_id;
+  NLLM_LOG_DEBUG << "batch manager enqueue req id " << req->req_id;
 
   Status enqueue_status = Status(RetCode::RET_SUCCESS);
 
@@ -61,8 +61,8 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
   enqueue_status = batch_scheduler_->AddInferRequest(infer_req);
   if (enqueue_status.OK()) {
-    // NLLM_LOG_INFO << "batch schdule add req id " << req->req_id << " and " << infer_req->input_tokens.size()
-    //               << " tokens";
+    NLLM_LOG_DEBUG << "batch schdule add req id " << req->req_id << " and " << infer_req->input_tokens.size()
+                   << " tokens";
   } else {
     NLLM_LOG_ERROR << "batch schdule add req id " << req->req_id << " and " << infer_req->input_tokens.size()
                    << " tokens failed, message: " << enqueue_status.ToString();
@@ -84,7 +84,7 @@ Status BatchManager::Process() {
       continue;
     }
 
-    // NLLM_LOG_INFO << "batch scheduler result " << scheduled_reqs.size();
+    NLLM_LOG_DEBUG << "batch scheduler result " << scheduled_reqs.size();
     llm_runtime_->Step(scheduled_reqs);
   }
 
@@ -98,7 +98,7 @@ Status BatchManager::Start() {
 }
 
 Status BatchManager::Stop() {
-  // NLLM_LOG_INFO << "Stop batch manager.";
+  NLLM_LOG_DEBUG << "Stop batch manager.";
 
   terminated_ = true;
 
@@ -109,7 +109,7 @@ Status BatchManager::Stop() {
     batch_manager_thread_->join();
   }
 
-  // NLLM_LOG_INFO << "batch manager stopped.";
+  NLLM_LOG_DEBUG << "batch manager stopped.";
   return Status();
 }
 

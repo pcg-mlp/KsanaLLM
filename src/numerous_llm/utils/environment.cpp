@@ -83,16 +83,11 @@ Status Environment::ParseConfig(const std::string &config_file) {
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(ini_reader, model_config);
 
-  // TODO: Get from config.
   model_config.max_token_num = ini_reader.GetInteger("ft_instance_hyperparameter", "max_token_num");
-  ;
-
   model_configs_[model_config.name] = model_config;
-
-  NLLM_LOG_INFO << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
+  NLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
 
   InitializeBlockManagerConfig();
-
   return CheckEnvironment();
 }
 
@@ -132,8 +127,11 @@ void Environment::InitializeBlockManagerConfig() {
   block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_GPU;
 
   // TODO(yancyliu): should calculated through device memory useage.
-  block_manager_config_.cpu_allocator_config.blocks_num = 128 * 10;
-  block_manager_config_.device_allocator_config.blocks_num = 128;
+  // block_manager_config_.cpu_allocator_config.blocks_num = 128 * 10;
+  // block_manager_config_.device_allocator_config.blocks_num = 128;
+
+  block_manager_config_.cpu_allocator_config.blocks_num = 1024 * 10;
+  block_manager_config_.device_allocator_config.blocks_num = 1024;
 }
 
 Status Environment::CheckEnvironment() {
