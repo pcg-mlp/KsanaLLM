@@ -32,7 +32,6 @@ static Level GetLogLevel() {
   if (log_name_to_level.find(log_level_str) != log_name_to_level.end()) {
     level = log_name_to_level[log_level_str];
   }
-
   return level;
 }
 
@@ -51,7 +50,7 @@ inline void InitLoguru() {
   Level log_level = GetLogLevel();
 
   loguru::Verbosity verbosity = loguru::Verbosity_MAX;
-  if (log_level >= Level::DEBUG) {
+  if (log_level <= Level::DEBUG) {
     verbosity = loguru::Verbosity_MAX;
   } else if (log_level == Level::INFO) {
     verbosity = loguru::Verbosity_INFO;
@@ -62,6 +61,7 @@ inline void InitLoguru() {
   } else if (log_level == Level::FATAL) {
     verbosity = loguru::Verbosity_FATAL;
   }
+
   loguru::g_stderr_verbosity = loguru::Verbosity_OFF;
   loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
 }
