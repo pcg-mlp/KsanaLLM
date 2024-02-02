@@ -132,7 +132,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     total_block_num += step_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() >= batch_schedule_config_.max_running_queue_len) {
+        running_queue_.size() > batch_schedule_config_.max_running_queue_len) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " swapped out.";
       NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
                      << ", max_token_number:" << batch_schedule_config_.max_token_number
