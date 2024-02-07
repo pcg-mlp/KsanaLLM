@@ -23,8 +23,9 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   //   2: kv_list
   //   3: kv_cache_offset_tensor
   //   4: rotary_embedding_pos
-  //   5: workspace 空间(TODO: 计算大小)
+  //   5: workspace 空间
   //   6: forward_shape
+  //   7: 用于存储 qk 的临时空间(TODO:)
   // output_tensors:
   //   0: paged attention output
   // NLLM_LOG_WARNING <<"";
@@ -41,6 +42,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   const Tensor& rotary_embedding_pos = input_tensors[4];
   const Tensor& workspace = input_tensors[5];
   const Tensor& forward_shape = input_tensors[6];
+  const Tensor& qkv_workspace = input_tensors[7];
   int layer_block_num = input_tensors[6].shape[2];
   int max_tokens = input_tensors[6].shape[1];
   int batch_size = input_tensors[6].shape[0];
@@ -51,7 +53,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   // NLLM_LOG_WARNING << fmt::format("max_tokens = {}, batch_size = {}, total_tokens = {},"
   //                                 " kv_list.GetPtr<void*>() = {}",
   //                                 max_tokens, batch_size, total_tokens, kv_list.GetPtr<void>());
-  void** k_list = (kv_list.GetPtr<void*>()) + layer_index_ * layer_block_num * 2;
+  void** k_list = (kv_list.GetPtr<void*>()) + (size_t)layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
   // NLLM_LOG_WARNING << fmt::format("k_list = {}, v_list = {}, cache_offset.GetPtr<void>() = {},"
   //                                 " layer_block_num = {}",
@@ -70,7 +72,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
                             max_tokens, context_->GetComputeStreams()[rank_], cache_offset.GetPtr<void>(), batch_size,
                             num_heads_, head_size_, num_kv_heads_, block_token_num_, batch_size,
                             rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
-                            workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {});
+                            workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {}, qkv_workspace.GetPtr<void>());
   return Status();
 }
 
