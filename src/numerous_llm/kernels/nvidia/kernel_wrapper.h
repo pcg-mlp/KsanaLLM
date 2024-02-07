@@ -44,7 +44,7 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
                          int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size, int batch,
                          void* rotary_embedding_pos, int total_tokens,
                          llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, void* workspace,
-                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes);
+                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
 
 void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream);
 

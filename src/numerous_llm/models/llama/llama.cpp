@@ -37,6 +37,14 @@ Llama<T>::~Llama() {
   DestroyTensor(up_matmul_tensor);
   DestroyTensor(kv_cache_buffer_);
   DestroyTensor(logits_tensor_);
+
+  DestroyTensor(input_ids);
+  DestroyTensor(input_offset_int32_tensor);
+  DestroyTensor(input_offset_uint64_tensor);
+  DestroyTensor(kv_list);
+  DestroyTensor(forward_shape);
+  DestroyTensor(rotary_embedding_pos);
+  DestroyTensor(kv_cache_offset_tensor);
 }
 
 template <typename T>
@@ -74,9 +82,25 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CreateTensor(tmp_tensor_0, max_batch_size_ * max_seq_len_ * hidden_units * dtype_size * 3);
   CreateTensor(tmp_tensor_1, tmp_tensor_size);
   CreateTensor(tmp_tensor_2, max_batch_size_ * max_seq_len_ * hidden_units * dtype_size * 3);
-  CreateTensor(up_matmul_tensor, max_batch_size_ * max_seq_len_ * inter_size * dtype_size);
-  CreateTensor(kv_cache_buffer_, num_layer_ * max_batch_size_ * max_seq_len_ * 2 * hidden_units * dtype_size);
-  CreateTensor(logits_tensor_, 128 * (int)vocab_size_ * sizeof(float));
+
+  size_t up_matmul_tensor_size = max_batch_size_ * max_seq_len_ * dtype_size * std::max(inter_size, hidden_units * 2);
+  CreateTensor(up_matmul_tensor, up_matmul_tensor_size);
+  CreateTensor(kv_cache_buffer_,
+      (size_t)max_seq_len_ * (max_seq_len_ + 511) / 512 * head_num * (size_per_head + 2) * sizeof(float));
+  kv_cache_buffer_.shape = {max_seq_len_, (max_seq_len_ + 511) / 512, head_num, size_per_head + 2};
+  kv_cache_buffer_.dtype = TYPE_FP32;
+  CreateTensor(logits_tensor_, (size_t)max_batch_size_ * max_seq_len_  * vocab_size_ * sizeof(float));
+
+  CreateTensor(kv_cache_offset_tensor, (max_batch_size_ + 1) * sizeof(int));
+  size_t max_block_num = max_batch_size_ * (max_seq_len_ / 16 + 1);
+  NLLM_LOG_DEBUG << "Max Block Num =  " << max_block_num;
+  CreateTensor(kv_list, num_layer_ * max_block_num * 2 * sizeof(void*));
+  CreateTensor(input_ids, max_batch_size_ * max_seq_len_ * sizeof(int));
+  CreateTensor(input_offset_int32_tensor, (max_batch_size_ + 1) * sizeof(int));
+  CreateTensor(input_offset_uint64_tensor, (max_batch_size_ + 1) * sizeof(uint64_t));
+  CreateTensor(input_tokens_int32_tensor, (max_batch_size_ + 1) * sizeof(int));
+  CreateTensor(rotary_embedding_pos, max_batch_size_ * max_seq_len_ * sizeof(int64_t));
+  CreateTensor(forward_shape, sizeof(int));
 
   // 初始化各层实例
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
@@ -145,8 +169,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
     total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
     kv_cache_offset_list.push_back(total_block_num);
   }
-  Tensor kv_cache_offset_tensor;
-  CreateTensor(kv_cache_offset_tensor, kv_cache_offset_list.size() * sizeof(int));
   kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
   kv_cache_offset_tensor.dtype = TYPE_INT32;
   void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
@@ -154,9 +176,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
                              kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
 
   // create input ids tensor
-  // TODO(zezhao): input_ids 复用tmp空间
-  Tensor input_ids;
-  CreateTensor(input_ids, total_seq_len * sizeof(int));
   input_ids.shape = {total_seq_len};
   input_ids.dtype = TYPE_INT32;
   int* input_ids_ptr = input_ids.GetPtr<int>();
@@ -176,9 +195,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   }
 
   // create input offset tensor int32 and uint64
-  Tensor input_offset_int32_tensor, input_offset_uint64_tensor;
-  CreateTensor(input_offset_int32_tensor, input_offset_list_int32.size() * sizeof(int));
-  CreateTensor(input_offset_uint64_tensor, input_offset_list_uint64.size() * sizeof(size_t));
   input_offset_int32_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_int32_tensor.dtype = TYPE_INT32;
@@ -191,8 +207,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
                              (batch_size + 1) * sizeof(size_t), cudaMemcpyHostToDevice, stream));
 
   // create kv list tensor
-  Tensor kv_list;
-  CreateTensor(kv_list, num_layer_ * total_block_num * 2 * sizeof(void*));
+  NLLM_LOG_DEBUG << "ContextDecode Total  Block Num = " << total_block_num;
   kv_list.shape = {num_layer_, total_block_num * 2};
   kv_list.dtype = TYPE_POINTER;
   std::vector<void*> cpu_kv_list(num_layer_ * total_block_num * 2);
@@ -222,18 +237,11 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
       }
     }
   }
-  int pi = 0;
-  for (void* pp : cpu_kv_list) {
-    void* pb = forward_reqs[0].kv_cache_ptrs[rank_][0];
-    // NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} {}", pi++, pp);
-  }
   void* kv_list_ptr = kv_list.GetPtr<void>();
   CUDA_CHECK(cudaMemcpyAsync(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*),
                              cudaMemcpyHostToDevice, stream));
 
   // create rotary embedding pos tensor
-  Tensor rotary_embedding_pos;
-  CreateTensor(rotary_embedding_pos, sizeof(int64_t) * total_seq_len);
   std::vector<int64_t> cpu_rotary_pos(total_seq_len);
   int cpu_rotary_pos_idx = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
@@ -246,8 +254,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
                              cudaMemcpyHostToDevice, stream));
 
   // create forward shape tensor
-  Tensor forward_shape;
-  CreateTensor(forward_shape, sizeof(int));
   forward_shape.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
 
   // Forward
@@ -397,12 +403,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<numerous_llm::BaseWeight>& base_w
   }
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  DestroyTensor(input_ids);
-  DestroyTensor(input_offset_uint64_tensor);
-  DestroyTensor(input_offset_int32_tensor);
-  DestroyTensor(kv_list);
-  DestroyTensor(rotary_embedding_pos);
-  DestroyTensor(forward_shape);
   return Status();
 }
 
@@ -437,17 +437,12 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     kv_cache_offset_list.push_back(total_block_num);
   }
 
-  Tensor kv_cache_offset_tensor;
-  CreateTensor(kv_cache_offset_tensor, kv_cache_offset_list.size() * sizeof(int));
   kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
   kv_cache_offset_tensor.dtype = TYPE_INT32;
   void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
   CUDA_CHECK(cudaMemcpyAsync(kv_cache_offset_ptr, kv_cache_offset_list.data(),
                              kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
   // create input ids tensor
-  // TODO(zezhao): input_ids 复用tmp空间
-  Tensor input_ids;
-  CreateTensor(input_ids, batch_size * sizeof(int));
   input_ids.shape = {batch_size};
   input_ids.dtype = TYPE_INT32;
   void* input_ids_ptr = input_ids.GetPtr<void>();
@@ -471,10 +466,6 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
       cudaMemcpyAsync(input_ids_ptr, input_ids_cpu.data(), batch_size * sizeof(int), cudaMemcpyHostToDevice, stream));
 
   // create input offset tensor int32 and uint64
-  Tensor input_offset_int32_tensor, input_offset_uint64_tensor, input_tokens_int32_tensor;
-  CreateTensor(input_offset_int32_tensor, input_offset_list_int32.size() * sizeof(int));
-  CreateTensor(input_tokens_int32_tensor, input_offset_list_int32.size() * sizeof(int));
-  CreateTensor(input_offset_uint64_tensor, input_offset_list_uint64.size() * sizeof(size_t));
   input_offset_int32_tensor.shape = {batch_size + 1};
   input_tokens_int32_tensor.shape = {batch_size};
   input_offset_uint64_tensor.shape = {batch_size + 1};
@@ -492,8 +483,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                              (batch_size + 1) * sizeof(size_t), cudaMemcpyHostToDevice, stream));
 
   // create kv list tensor
-  Tensor kv_list;
-  CreateTensor(kv_list, num_layer_ * total_block_num * 2 * sizeof(void*));
+  NLLM_LOG_DEBUG << "Decode Total  Block Num = " << total_block_num;
   kv_list.shape = {num_layer_, total_block_num * 2};
   kv_list.dtype = TYPE_POINTER;
   std::vector<void*> cpu_kv_list(num_layer_ * total_block_num * 2);
@@ -523,18 +513,11 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
       }
     }
   }
-  int pi = 0;
-  for (void* pp : cpu_kv_list) {
-    void* pb = forward_reqs[0].kv_cache_ptrs[rank_][0];
-    // NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} {}", pi++, pp);
-  }
   void* kv_list_ptr = kv_list.GetPtr<void>();
   CUDA_CHECK(cudaMemcpyAsync(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*),
                              cudaMemcpyHostToDevice, stream));
 
   // create rotary embedding pos tensor
-  Tensor rotary_embedding_pos;
-  CreateTensor(rotary_embedding_pos, sizeof(int64_t) * batch_size);
   std::vector<int64_t> cpu_rotary_pos(batch_size);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size() - 1;
@@ -544,8 +527,6 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
                              cudaMemcpyHostToDevice, stream));
 
   // create forward shape tensor
-  Tensor forward_shape;
-  CreateTensor(forward_shape, sizeof(int));
   forward_shape.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
 
   // Forward
@@ -586,7 +567,7 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
     // TODO(zezhao): workspace 需与 catheywang 确认传入大小,暂时使用此处用不到的空间跑通流程
     STATUS_CHECK_RETURN(paged_attention_layer_[layer_num]->Forward(
         {attn_proj_output[0], input_tokens_int32_tensor, kv_list, kv_cache_offset_tensor, rotary_embedding_pos,
-         kv_cache_buffer_, forward_shape},
+         kv_cache_buffer_, forward_shape, up_matmul_tensor},
         paged_attention_output));
 
     paged_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA." +
@@ -695,13 +676,6 @@ Status Llama<T>::Decode(std::shared_ptr<numerous_llm::BaseWeight>& base_weight,
   }
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  DestroyTensor(input_ids);
-  DestroyTensor(input_offset_int32_tensor);
-  DestroyTensor(input_offset_uint64_tensor);
-  DestroyTensor(kv_list);
-  DestroyTensor(forward_shape);
-  DestroyTensor(rotary_embedding_pos);
-  DestroyTensor(kv_cache_offset_tensor);
   return Status();
 }
 

@@ -66,6 +66,12 @@ class Llama : public BaseModel {
   Tensor up_matmul_tensor;
   Tensor kv_cache_buffer_;
   Tensor logits_tensor_;
+  Tensor kv_cache_offset_tensor;
+  Tensor kv_list;
+  Tensor input_ids, input_offset_int32_tensor, input_offset_uint64_tensor;
+  Tensor input_tokens_int32_tensor;
+  Tensor rotary_embedding_pos;
+  Tensor forward_shape;
   std::shared_ptr<Context> context_{nullptr};
 
   std::string saved_dir = "/model/llama-ft/7B/nllm/";
