@@ -2,11 +2,21 @@
 #
 # ==============================================================================
 
-import requests
-import multiprocessing
+import asyncio
 import argparse
 import json
 import time
+import argparse
+import asyncio
+import json
+import time
+from typing import AsyncGenerator, List, Tuple
+import aiohttp
+import numpy as np
+from tqdm.asyncio import tqdm
+
+# (prompt len, output len, latency)
+REQUEST_LATENCY: List[Tuple[int, int, float]] = []
 
 
 def args_config():
@@ -20,27 +30,15 @@ def args_config():
                         type=str,
                         default="benchmark_input.csv",
                         help='input data for benchmark')
+    parser.add_argument("--request_rate",
+                        type=float,
+                        default=float("inf"),
+                        help="Number of requests per second. If this is inf, "
+                        "then all the requests are sent at time 0. "
+                        "Otherwise, we use Poisson process to synthesize "
+                        "the request arrival times.")
     args = parser.parse_args()
     return args
-
-
-def post_request(serv, data, queue=None):
-    while not queue.empty():
-        prompt = queue.get(False)
-        if prompt is None:
-            break
-        data = {
-            "model_name": "llama",
-            "prompt": prompt,
-            "sampling_config": {
-                "temperature": 0.0,
-                "topk": 1,
-                "topp": 0.0
-            },
-        }
-        resp = requests.post(serv, data=json.dumps(data), timeout=6000000)
-        result_str = json.loads(resp.content)
-        print(result_str)
 
 
 def read_from_csv(csv_file, col_idx=0, remove_head=True):
@@ -52,34 +50,93 @@ def read_from_csv(csv_file, col_idx=0, remove_head=True):
         yield line[col_idx]
 
 
+async def generate_prompt(
+    input_requests: List[str],
+    request_rate: float,
+) -> AsyncGenerator[str, None]:
+    input_requests = iter(input_requests)
+    for request in input_requests:
+        yield request
+
+        if request_rate == float("inf"):
+            # If the request rate is infinity, then we don't need to wait.
+            continue
+        # Sample the request interval from the exponential distribution.
+        interval = np.random.exponential(1.0 / request_rate)
+        # The next request will be sent after the interval.
+        await asyncio.sleep(interval)
+
+
+async def send_request(prompt: str, api_url: str, pbar: tqdm):
+    request_start_time = time.perf_counter()
+    headers = {"User-Agent": "Benchmark Client"}
+    data = {
+        "model_name": "llama",
+        "prompt": prompt,
+        "sampling_config": {
+            "temperature": 0.0,
+            "topk": 1,
+            "topp": 0.0
+        },
+        "stream": False,
+    }
+    timeout = aiohttp.ClientTimeout(total=3 * 3600)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while True:
+            async with session.post(api_url, headers=headers,
+                                    json=data) as response:
+                chunks = []
+                async for chunk, _ in response.content.iter_chunks():
+                    chunks.append(chunk)
+            output = b"".join(chunks).decode("utf-8")
+            output = json.loads(output)
+
+            # Re-send the request if it failed.
+            if "error" not in output:
+                break
+    request_end_time = time.perf_counter()
+    request_latency = request_end_time - request_start_time
+    output_len = len(output.get("texts", ""))
+    REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
+    pbar.update(1)
+
+
+async def benchmark(args: argparse.Namespace, api_url: str, inputs: List[str]):
+    tasks: List[asyncio.Task] = []
+    pbar = tqdm(total=len(inputs))
+    async for prompt in generate_prompt(inputs, args.request_rate):
+        task = asyncio.create_task(send_request(prompt, api_url, pbar))
+        tasks.append(task)
+    await asyncio.gather(*tasks)
+    pbar.close()
+
+
+def main(args: argparse.Namespace):
+    api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
+    input_generator = read_from_csv(args.input_csv)
+    inputs = list(input_generator)
+
+    benchmark_start_time = time.perf_counter()
+    asyncio.run(benchmark(args, api_url, inputs))
+    benchmark_end_time = time.perf_counter()
+    benchmark_time = benchmark_end_time - benchmark_start_time
+    print(f"Total time: {benchmark_time:.2f} s")
+    print(f"Throughput: {len(inputs) / benchmark_time:.2f} requests/s")
+
+    # Compute the latency statistics.
+    avg_latency = np.mean([latency for _, _, latency in REQUEST_LATENCY])
+    print(f"Average latency: {avg_latency:.2f} s")
+    avg_per_token_latency = np.mean([
+        latency / (prompt_len + output_len)
+        for prompt_len, output_len, latency in REQUEST_LATENCY
+    ])
+    print(f"Average latency per token: {avg_per_token_latency:.2f} s")
+    avg_per_output_token_latency = np.mean(
+        [latency / output_len for _, output_len, latency in REQUEST_LATENCY])
+    print("Average latency per output token: "
+          f"{avg_per_output_token_latency:.2f} s")
+
+
 if __name__ == "__main__":
     args = args_config()
-    serv = "http://" + args.host + ":" + str(args.port) + "/generate"
-    input_generator = read_from_csv(args.input_csv)
-    multi_proc_list = []
-    multi_proc_queue = multiprocessing.Queue()
-    input_data_list = []
-    thread_num = 16
-
-    start_time = time.time()
-    for input_idx, input_str in enumerate(input_generator):
-        prompt = "USER: %s\nASSISTANT:" % input_str
-        input_data_list.append(input_str)
-        multi_proc_queue.put(prompt)
-
-    for _ in range(thread_num):
-        proc = multiprocessing.Process(target=post_request,
-                                       args=(
-                                           serv,
-                                           None,
-                                           multi_proc_queue,
-                                       ))
-        proc.start()
-        multi_proc_list.append(proc)
-
-    for proc in multi_proc_list:
-        proc.join()
-
-    end_time = time.time()
-    print("{} requests duration: {:.3f}s".format(len(input_data_list),
-                                                 end_time - start_time))
+    main(args)

@@ -231,7 +231,7 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
     NLLM_LOG_DEBUG << "swapped req " << req->req_id << " swap in and ready to run.";
     req->SwapInAsync();
     if (step_block_num_wanted > 0) {
-      for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+      for (int i = 0; i < context_->GetTensorParallelSize(); ++i) {
         std::vector<int> blocks;
         GetBlockManager()->SetDeviceId(i);
         GetBlockManager()->AllocateBlocks(step_block_num_wanted, blocks);

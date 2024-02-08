@@ -32,7 +32,7 @@ Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
                     nullptr, output_tensors[0].GetPtr<void>(), vocab_size, hidden_units, bs, step, vocab_id,
                     context_->GetComputeStreams()[rank_]);
   }
-  output_tensors[0].shape = {total_seq_len, hidden_units};
+  output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[2].dtype;
   return Status();
 }
