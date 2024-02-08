@@ -2,6 +2,7 @@
 #
 # ==============================================================================
 
+import asyncio
 import os
 import sys
 import torch
@@ -26,8 +27,12 @@ class PyStreamingIterator(object):
 
     def __init__(self, serving_iterator: libtorch_serving.StreamingIterator):
         self._serving_iterator = serving_iterator
+        self._queue = asyncio.Queue()
 
     def __iter__(self):
+        return self
+
+    def __aiter__(self):
         return self
 
     def __next__(self):
@@ -42,6 +47,22 @@ class PyStreamingIterator(object):
             raise RuntimeError(
                 "Iterator error, ret code {}, message {}.".format(
                     status.GetCode(), status.GetMessage()))
+
+    async def __anext__(self):
+        status, token_id = self._serving_iterator.GetNext()
+        if status.OK():
+            self._queue.put_nowait(token_id)
+        elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
+            self._queue.put_nowait(None)
+        else:
+            self._queue.put_nowait(
+                RuntimeError("Iterator error, ret code {}, message {}.".format(
+                    status.GetCode(), status.GetMessage())))
+
+        result = await self._queue.get()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class ServingModel(object):
@@ -68,7 +89,8 @@ class ServingModel(object):
         generation_config: GenerationConfig = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
-        prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
+        prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor],
+                                                    List[int]]] = None,
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
         streamer: Optional["BaseStreamer"] = None,
@@ -83,8 +105,8 @@ class ServingModel(object):
         sampling_config.temperature = generation_config.temperature
 
         if streamer is None:
-            status, outputs = self._serving.generate(
-                model_name, inputs, sampling_config)
+            status, outputs = self._serving.generate(model_name, inputs,
+                                                     sampling_config)
             return outputs
         else:
             status, streaming_iterator = self._serving.generate_streaming(

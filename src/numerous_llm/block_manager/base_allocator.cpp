@@ -14,7 +14,7 @@ BaseAllocator::BaseAllocator(const AllocatorConfig& allocator_config, std::share
 
 void BaseAllocator::PreAllocateBlocks() {
   void* memory_ptr;
-  for (size_t i = 0; i < allocator_config_.blocks_num; ++i) {
+  for (int64_t i = 0; i < allocator_config_.blocks_num; ++i) {
     AllocateMemory(&memory_ptr, allocator_config_.block_size);
 
     int block_id = id_generator_.Gen();

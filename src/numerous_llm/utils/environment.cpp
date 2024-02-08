@@ -127,11 +127,8 @@ void Environment::InitializeBlockManagerConfig() {
   block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_GPU;
 
   // TODO(yancyliu): should calculated through device memory useage.
-  // block_manager_config_.cpu_allocator_config.blocks_num = 128 * 10;
-  // block_manager_config_.device_allocator_config.blocks_num = 128;
-
-  block_manager_config_.cpu_allocator_config.blocks_num = 1024 * 10;
-  block_manager_config_.device_allocator_config.blocks_num = 1024;
+  block_manager_config_.cpu_allocator_config.blocks_num = 128 * 10;
+  block_manager_config_.device_allocator_config.blocks_num = 128;
 }
 
 Status Environment::CheckEnvironment() {
