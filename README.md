@@ -14,7 +14,7 @@ sudo docker run -itd --name xxx_container_name --network host --privileged \
 ## Clone source code
 
 ```bash
-git clone --recurse-submodules https://git.woa.com/RondaServing/LLM/NumerousLLM.git
+git clone --recurse-submodules https://git.woa.com/RondaServing/LLM/KsanaLLM.git
 ```
 
 ## Compile and Test
@@ -51,7 +51,7 @@ mkdir -p ${GIT_PROJECT_REPO_ROOT}/build
 cd ${GIT_PROJECT_REPO_ROOT}/build
 cmake -DSM=86 -DWITH_TESTING=ON ..
 make -j
-cd ${GIT_PROJECT_REPO_ROOT}/src/numerous_llm/python
+cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 ln -s ${GIT_PROJECT_REPO_ROOT}/build/lib .
 ```
 
@@ -71,7 +71,7 @@ python setup.py build_ext
  3. launch local serving server
 
 ```bash
-cd ${GIT_PROJECT_REPO_ROOT}/src/numerous_llm/python
+cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 
 # download model: for example 7b
 wget https://mirrors.tencent.com/repository/generic/pcg-numerous//dependency/numerous_llm_models/llama2_7b_fp16_1_gpu.tgz
@@ -101,21 +101,21 @@ cd ${GIT_PROJECT_REPO_ROOT}
 # for distribute wheel
 python setup.py bdist_wheel
 # install wheel
-pip install dist/numerous_llm-0.1-cp39-cp39-linux_x86_64.whl
+pip install dist/ksana_llm-0.1-cp39-cp39-linux_x86_64.whl
 
 # check install success
-pip show -f numerous_llm
-python -c "import numerous_llm"
+pip show -f ksana_llm
+python -c "import ksana_llm"
 ```
 
 ## Run with http raw server (Deprecated)
 
 ```bash
 # run standalone demo using llama7b
-./bin/numerous_llm --model_config ../examples/llama7b/config.ini
+./bin/ksana_llm --model_config ../examples/llama7b/config.ini
 # check runing status
 # open another terminal or session
-cat ./log/numerous_llm.log
+cat ./log/ksana_llm.log
 ```
 
 Start client

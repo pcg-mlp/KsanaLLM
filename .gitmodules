@@ -1,7 +1,7 @@
 [submodule "3rdparty/LLM_kernels"]
 	path = 3rdparty/LLM_kernels
 	url = https://git.woa.com/Numerous/LLM/LLM_kernels.git
-    branch = master
+  branch = master
 [submodule "3rdparty/FlashAttention"]
 	path = 3rdparty/FlashAttention
 	url = https://git.woa.com/Numerous/LLM/FlashAttention.git

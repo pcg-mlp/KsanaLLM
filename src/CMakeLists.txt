@@ -2,4 +2,4 @@
 #
 # ==============================================================================
 
-add_subdirectory(numerous_llm)
+add_subdirectory(ksana_llm)
