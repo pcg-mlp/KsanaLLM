@@ -3,7 +3,7 @@
 # ==============================================================================
 
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
-project(numerous_llm LANGUAGES CXX CUDA)
+project(ksana_llm LANGUAGES CXX CUDA)
 add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 

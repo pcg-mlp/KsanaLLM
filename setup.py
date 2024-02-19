@@ -54,7 +54,7 @@ class build_ext(build_ext_orig):
         # temporary CMake files including "CMakeCache.txt" in top level dir.
         os.chdir(str(cwd))
         # cp all temp dir's lib to cwd for dist package
-        deps_lib = cwd.joinpath('src/numerous_llm/python/lib')
+        deps_lib = cwd.joinpath('src/ksana_llm/python/lib')
         build_temp_lib = build_temp.joinpath('lib')
         deps_lib.mkdir(parents=True, exist_ok=True)
         target_libs = ["libtorch_serving.so", "libloguru.so"]
@@ -65,18 +65,18 @@ class build_ext(build_ext_orig):
             copy_file(str(build_temp_lib.joinpath(target_lib)), str(extdir.parent.absolute()))
 
 
-setup(name='numerous_llm',
+setup(name='ksana_llm',
       version='0.1',
-      author='numerous',
-      author_email='karlluo@tencent.com',
-      description='Numerous LLM inference server',
+      author='ksana_llm',
+      author_email='ksana_llm@tencent.com',
+      description='Ksana LLM inference server',
       platforms='python3',
-      url='https://git.woa.com/RondaServing/LLM/NumerousLLM/',
-      packages=find_packages('src/numerous_llm/python'),
+      url='https://git.woa.com/RondaServing/LLM/KsanaLLM/',
+      packages=find_packages('src/ksana_llm/python'),
       package_dir={
-          '': 'src/numerous_llm/python',
+          '': 'src/ksana_llm/python',
       },
-      ext_modules=[CMakeExtension('numerous_llm')],
+      ext_modules=[CMakeExtension('ksana_llm')],
       python_requires='>=3',
       cmdclass={
           'build_ext': build_ext,

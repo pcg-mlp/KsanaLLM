@@ -1,0 +1,59 @@
+# 全局设置
+setting:
+  # 全局配置
+  global:
+    # TP并行
+    tensor_para_size: 2
+    # PP并行
+    pipeline_para_size: 1
+    # 是否启用lora，0表示启用，1表示不使用lora
+    enable_lora: 0
+  # 调度相关配置
+  batch_scheduler:
+    # 请求在队列中的超时时间，单位为毫秒
+    timeout_in_ms: 600000
+    # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
+    max_waiting_queue_len: 100
+    # 一个调度step处理的最大token个数，一次context decode视为多个token。
+    max_token_number: 4096
+    # 每一步推理时的最大batch_size
+    max_batch_size: 16
+    # 最大输入长度
+    max_input_len: 1024
+    # 最大输出长度
+    max_output_len: 1024
+  # 显存块相关配置
+  block_manager:
+    # 单个block可处理的最大token个数
+    block_token_num: 16
+    # 内存分配策略
+    memory_strategy:
+      # 保留的显存占比，单位为百分比。
+      reserved_device_memory_ratio: 0.05
+      # Lora权重的显存占比
+      lora_deivce_memory_ratio: 0
+      # Lora权重在host上的预分配大小，相比device上的倍数
+      lora_host_memory_factor: 10
+      # block部分的显存占比，-1表示使用所有剩余显存
+      block_device_memory_ratio: -1
+      # block部分在host上的预分配大小，相比device上的倍数
+      block_host_memory_factor: 10
+# 模型配置
+model_spec:
+  # embedding相关配置
+  embedding:
+    # 最大embedding长度
+    max_position_embeddings: 2048
+  # 基础模型配置，只能有一个
+  base_model:
+    # 模型名称
+    model_name: llama
+    # 模型路径
+    model_dir: /model/llama-ft/13B/2-gpu
+  # lora模型配置，可以有多个
+  lora_models:
+      # lora模型名称
+    - model_name: lora_1
+      # lora模型路径
+      model_dir: /model/lora/lora_1/13B/2-gpu
+

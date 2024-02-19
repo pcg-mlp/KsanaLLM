@@ -12,7 +12,7 @@ function(cc_test TARGET_NAME)
     cmake_parse_arguments(cc_test "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     add_executable(${TARGET_NAME} ${cc_test_SRCS})
     target_link_libraries(${TARGET_NAME} ${cc_test_DEPS} 
-      numerous_llm_libs gtest_main gtest gmock_main gmock -pthread)
+      ksana_llm_libs gtest_main gtest gmock_main gmock -pthread)
     add_dependencies(${TARGET_NAME} ${cc_test_DEPS} gtest_main gtest gmock_main gmock)
     add_test(NAME ${TARGET_NAME}
               COMMAND ${TARGET_NAME} ${cc_test_ARGS}
