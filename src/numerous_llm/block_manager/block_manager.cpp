@@ -109,13 +109,24 @@ Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<
   std::vector<void*> device_addrs;
   STATUS_CHECK_RETURN(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
 
+  cudaStream_t* stream;
+  if (context_->IsRunContextDecodeAndDecodeSerially()) {
+    stream = &(context_->GetComputeStreams()[device_id]);
+  } else {
+    // TODO(karlluo): implement multiple thread stream event concurrent.
+    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
+  }
+
   // Copy from device to host.
   for (size_t i = 0; i < device_blocks.size(); i++) {
-    CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost,
-                               context_->d2h_streams_[device_id]));
+    CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, (*stream)));
   }
-  // (TODO) use event
-  CUDA_CHECK(cudaStreamSynchronize(context_->d2h_streams_[device_id]));
+
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    // TODO(karlluo): implement multiple thread stream event concurrent.
+    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
+  }
+
   // Free device blocks.
   device_allocators_[device_id]->FreeBlocks(device_blocks);
   return Status();
@@ -134,14 +145,23 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
   std::vector<void*> host_addrs;
   STATUS_CHECK_RETURN(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
 
-  // Copy from host to device.
-  for (size_t i = 0; i < host_blocks.size(); i++) {
-    CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice,
-                               context_->h2d_streams_[device_id]));
+  cudaStream_t* stream;
+  if (context_->IsRunContextDecodeAndDecodeSerially()) {
+    stream = &(context_->GetComputeStreams()[device_id]);
+  } else {
+    // TODO(karlluo): implement multiple thread stream event concurrent.
+    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
   }
 
-  // (TODO) use event
-  CUDA_CHECK(cudaStreamSynchronize(context_->h2d_streams_[device_id]));
+  // Copy from host to device.
+  for (size_t i = 0; i < host_blocks.size(); i++) {
+    CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, (*stream)));
+  }
+
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    // TODO(karlluo): implement multiple thread stream event concurrent.
+    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
+  }
   // Free host blocks.
   host_allocator_->FreeBlocks(host_blocks);
   return Status();

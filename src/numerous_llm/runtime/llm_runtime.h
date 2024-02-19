@@ -38,6 +38,10 @@ class LlmRuntime {
   void BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>> &reqs,
                             std::vector<SamplingRequest> &sampling_reqs);
 
+  // Run context decode and decode serially in single thread.
+  Status RunContextDecodeAndDecodeRunSerially(
+      std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
+
  private:
   // The runtime context.
   std::shared_ptr<Context> context_ = nullptr;

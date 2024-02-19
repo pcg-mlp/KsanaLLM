@@ -16,6 +16,8 @@ void HostAllocator::AllocateMemory(void** memory_ptr, size_t bytes) {
   CUDA_CHECK(cudaHostAlloc(memory_ptr, bytes, cudaHostAllocDefault));
 }
 
-void HostAllocator::FreeMemory(void* memory_ptr) { CUDA_CHECK(cudaFreeAsync(memory_ptr, context_->h2d_streams_[0])); }
+void HostAllocator::FreeMemory(void* memory_ptr) {
+  CUDA_CHECK(cudaFreeAsync(memory_ptr, context_->GetH2DStreams()[0]));
+}
 
 }  // namespace numerous_llm
