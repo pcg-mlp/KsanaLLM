@@ -17,11 +17,11 @@ NvidiaDeviceAllocator::NvidiaDeviceAllocator(const AllocatorConfig& allocator_co
 }
 
 void NvidiaDeviceAllocator::AllocateMemory(void** memory_ptr, size_t bytes) {
-  CUDA_CHECK(cudaMallocAsync(memory_ptr, bytes, context_->memory_manage_streams_[device_id_]));
+  CUDA_CHECK(cudaMallocAsync(memory_ptr, bytes, context_->GetMemoryManageStreams()[device_id_]));
 }
 
 void NvidiaDeviceAllocator::FreeMemory(void* memory_ptr) {
-  CUDA_CHECK(cudaFreeAsync(memory_ptr, context_->memory_manage_streams_[device_id_]));
+  CUDA_CHECK(cudaFreeAsync(memory_ptr, context_->GetMemoryManageStreams()[device_id_]));
 }
 
 }  // namespace numerous_llm

@@ -22,6 +22,8 @@ class Context {
 
   int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
+  inline bool IsRunContextDecodeAndDecodeSerially() { return is_contextdecode_and_decode_run_serially_; }
+
   std::vector<cudaMemPool_t>& GetMemoryPools() { return memory_pool_; }
 
   std::vector<cudaStream_t>& GetMemoryManageStreams() { return memory_manage_streams_; }
@@ -50,12 +52,15 @@ class Context {
     return MemoryDevice::MEMORY_GPU;
   }
 
-  // private:
+ private:
   int device_num_{0};
   int tensor_parallel_size_{0};
   int pipeline_parallel_size_{0};
   const int defalt_device_num_{0};
   int driver_version_;
+  // if true, only one thread execute context_decode/decode and context_decode decode run in sync
+  // TODO(karlluo): load from environment
+  bool is_contextdecode_and_decode_run_serially_{true};
 
   // Nvidia GPU memory pool
   std::vector<cudaMemPoolProps> memory_pool_props_;
