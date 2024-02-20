@@ -47,8 +47,6 @@ def args_config():
     return args
 
 
-# @app.route('/generate', methods=["POST"])
-# def generate():
 @app.post("/generate")
 async def generate(request: Request) -> Response:
     """Generate completion for the request.
