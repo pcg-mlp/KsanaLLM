@@ -97,14 +97,17 @@ async def send_request(prompt: str, api_url: str, pbar: tqdm):
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
     output_len = len(output.get("texts", ""))
+    # print("Result:", output.get("texts", ""))
     REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
     pbar.update(1)
 
 
 async def benchmark(args: argparse.Namespace, api_url: str, inputs: List[str]):
+    # inputs = inputs[0:8]
     tasks: List[asyncio.Task] = []
     pbar = tqdm(total=len(inputs))
     async for prompt in generate_prompt(inputs, args.request_rate):
+        prompt = "[INST]%s[/INST]" % prompt
         task = asyncio.create_task(send_request(prompt, api_url, pbar))
         tasks.append(task)
     await asyncio.gather(*tasks)

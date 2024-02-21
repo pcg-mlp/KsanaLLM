@@ -20,6 +20,12 @@ class BlockManager {
 
   ~BlockManager() {}
 
+  // Preallocate blocks.
+  Status PreAllocateBlocks();
+
+  // Reset the preallocated blocks for device & hosg.
+  Status ResetPreAllocatedBlocks();
+
   // This function maybe called concurrently from different threads.
   // DO NOT store the device id in variable.
   void SetDeviceId(int device_id);
@@ -92,6 +98,9 @@ class BlockManager {
   size_t GetBlockTokenNum() const;
 
  private:
+  // Calculate the block number.
+  Status CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num);
+
   // Get the device allocator for current selected device.
   std::shared_ptr<DeviceAllocator>& GetDeviceAllocator();
 

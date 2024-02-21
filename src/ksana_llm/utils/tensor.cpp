@@ -76,9 +76,9 @@ size_t Tensor::GetTypeSize(DataType dtype) {
 }
 
 void Tensor::SaveToFile(const std::string& file_path) {
+  return;
   NLLM_LOG_DEBUG << fmt::format("Save {} To File {}", ToString(), file_path);
   // CUDA_CHECK(cudaDeviceSynchronize());
-  return;
   size_t total_size = GetTotalBytes();
   void* cpu_data = malloc(total_size);
   void* tensor_data_ptr = GetPtr<void>();

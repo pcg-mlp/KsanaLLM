@@ -42,7 +42,7 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
 }
 
 bool BatchScheduler::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
-  return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_schedule_config_.timeout_in_ms;
+  return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_schedule_config_.waiting_timeout_in_ms;
 }
 
 bool BatchScheduler::CheckWaitingQueueFull() {
@@ -132,7 +132,7 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     total_block_num += step_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() > batch_schedule_config_.max_running_queue_len) {
+        running_queue_.size() > batch_schedule_config_.max_batch_size) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " swapped out.";
       NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
                      << ", max_token_number:" << batch_schedule_config_.max_token_number
@@ -207,7 +207,7 @@ void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_bloc
     total_block_num += total_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() >= batch_schedule_config_.max_running_queue_len) {
+        running_queue_.size() >= batch_schedule_config_.max_batch_size) {
       // stay swapped.
       NLLM_LOG_DEBUG << "swapped req " << req->req_id << " stay swapped.";
       NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
@@ -276,7 +276,7 @@ void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_bloc
     total_block_num += total_block_num_wanted;
 
     if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() >= batch_schedule_config_.max_running_queue_len) {
+        running_queue_.size() >= batch_schedule_config_.max_batch_size) {
       // stay waiting.
       NLLM_LOG_DEBUG << "req " << req->req_id << " stay waiting.";
       NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num

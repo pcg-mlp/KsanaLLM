@@ -8,9 +8,7 @@
 namespace ksana_llm {
 
 HostAllocator::HostAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context)
-    : BaseAllocator(allocator_config, context) {
-  PreAllocateBlocks();
-}
+    : BaseAllocator(allocator_config, context) {}
 
 void HostAllocator::AllocateMemory(void** memory_ptr, size_t bytes) {
   CUDA_CHECK(cudaHostAlloc(memory_ptr, bytes, cudaHostAllocDefault));

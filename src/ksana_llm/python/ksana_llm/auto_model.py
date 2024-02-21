@@ -16,26 +16,18 @@ class AutoModel(object):
     """
 
     @classmethod
-    def from_pretrained(
-        cls,
-        pretrained_model_name_or_path: Optional[Union[str, os.PathLike]],
-        *model_args,
-        config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
-        cache_dir: Optional[Union[str, os.PathLike]] = None,
-        ignore_mismatched_sizes: bool = False,
-        force_download: bool = False,
-        local_files_only: bool = False,
-        token: Optional[Union[str, bool]] = None,
-        revision: str = "main",
-        use_safetensors: bool = None,
-        **kwargs,
-    ):
+    def from_config(cls,
+                    config_file: Optional[Union[str, os.PathLike]],
+                    **kwargs):
         """The model loader interface, invoked by venus.
         """
-        if not os.path.exists(pretrained_model_name_or_path):
+        if not os.path.exists(config_file):
             raise RuntimeError(
-                f"The model dir {pretrained_model_name_or_path} is not exists.")
+                f"The config file {config_file} is not exists.")
 
-        serving_model = ServingModel(pretrained_model_name_or_path)
+        if not config_file.lower().endswith('.yaml'):
+            raise RuntimeError(
+                f"The config file {config_file} must be YAML format.")
+
+        serving_model = ServingModel(config_file)
         return serving_model
-

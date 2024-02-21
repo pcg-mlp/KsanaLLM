@@ -23,6 +23,12 @@ void BaseAllocator::PreAllocateBlocks() {
   }
 }
 
+Status BaseAllocator::ResetPreAllocatedBlocks(size_t blocks_num) {
+  allocator_config_.blocks_num = blocks_num;
+  PreAllocateBlocks();
+  return Status();
+}
+
 Status BaseAllocator::AllocateBlocks(size_t block_num, std::vector<int>& blocks) {
   std::unique_lock<std::mutex> lock(block_mutex_);
 

@@ -36,6 +36,21 @@ inline std::string FormatStr(const std::string& format, Args... args) {
   return std::string(buf.get(), buf.get() + size - 1);  // We don't want the '\0' inside
 }
 
+// Split string to a vector.
+inline std::vector<std::string> Str2Vector(const std::string& str, const std::string& delimiters = " ") {
+  std::vector<std::string> results;
+
+  std::string::size_type last_pos = str.find_first_not_of(delimiters, 0);
+  std::string::size_type pos = str.find_first_of(delimiters, last_pos);
+  while (std::string::npos != pos || std::string::npos != last_pos) {
+    results.push_back(str.substr(last_pos, pos - last_pos));
+    last_pos = str.find_first_not_of(delimiters, pos);
+    pos = str.find_first_of(delimiters, last_pos);
+  }
+
+  return results;
+}
+
 template <typename T>
 inline std::string Vector2Str(std::vector<T> vec) {
   std::stringstream ss;
@@ -62,12 +77,6 @@ inline std::string Array2Str(T* arr, size_t size) {
   }
   ss << ")";
   return ss.str();
-}
-
-// Get current time in milliseconds.
-inline uint64_t GetCurrentTimeInMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-      .count();
 }
 
 }  // namespace ksana_llm

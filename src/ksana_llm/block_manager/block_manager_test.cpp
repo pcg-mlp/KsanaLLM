@@ -16,9 +16,9 @@ class BlockManagerTest : public testing::Test {
   void SetUp() override {
     // 创建一个 BlockManagerConfig 对象，用于配置 BlockManager
     BlockManagerConfig block_manager_config;
-    block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_size = 1024;
-    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.host_allocator_config.blocks_num = 2;
+    block_manager_config.host_allocator_config.block_size = 1024;
+    block_manager_config.host_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_size = 1024;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
@@ -27,6 +27,7 @@ class BlockManagerTest : public testing::Test {
 
     // 使用配置创建一个 BlockManager 对象
     block_manager = new BlockManager(block_manager_config, context);
+    block_manager->PreAllocateBlocks();
   }
 
   // 在每个测试用例执行之后调用的函数

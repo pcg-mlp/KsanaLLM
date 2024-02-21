@@ -42,6 +42,9 @@ class BaseAllocator {
   // Get number of used blocked memory.
   virtual int GetUsedBlockNumber();
 
+  // Reset the preallocated blocks.
+  Status ResetPreAllocatedBlocks(size_t blocks_num);
+
  protected:
   // pre-allocate all blocks.
   void PreAllocateBlocks();

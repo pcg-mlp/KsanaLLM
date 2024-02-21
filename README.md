@@ -86,7 +86,7 @@ wget https://mirrors.tencent.com/repository/generic/pcg-numerous/dependency/nume
 tar vzxf llama2_7b_hf.tgz
 
 # launch server
-python serving_server.py --model_dir llama2_7b_fp16_1_gpu --tokenizer_dir llama2_7b_hf
+python serving_server.py --config_file examples/ksana_llm.yaml --tokenizer_dir llama2_7b_hf
 
 # open another session, request client
 python serving_client.py
@@ -112,7 +112,7 @@ python -c "import ksana_llm"
 
 ```bash
 # run standalone demo using llama7b
-./bin/ksana_llm --model_config ../examples/llama7b/config.ini
+./bin/ksana_llm --config_file examples/ksana_llm.yaml
 # check runing status
 # open another terminal or session
 cat ./log/ksana_llm.log
@@ -120,7 +120,7 @@ cat ./log/ksana_llm.log
 
 Start client
 ```bash
-python ../examples/llama13b/llama13b_simple_client.py
+python examples/llama13b/llama13b_simple_client.py
 ```
 
 ## Code format command line

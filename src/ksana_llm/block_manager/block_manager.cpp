@@ -11,6 +11,7 @@
 #include "ksana_llm/block_manager/host_allocator.h"
 #include "ksana_llm/block_manager/nvidia_allocator.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -18,10 +19,10 @@ namespace ksana_llm {
 BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context)
     : block_manager_config_(block_manager_config), context_(context) {
   NLLM_CHECK_WITH_INFO(
-      block_manager_config.device_allocator_config.block_size == block_manager_config.cpu_allocator_config.block_size,
+      block_manager_config.device_allocator_config.block_size == block_manager_config.host_allocator_config.block_size,
       "The block size of host and device must be equal.");
   // Create host allocator
-  host_allocator_ = std::make_shared<HostAllocator>(block_manager_config.cpu_allocator_config, context);
+  host_allocator_ = std::make_shared<HostAllocator>(block_manager_config.host_allocator_config, context);
 
   // Create device allocator for every device.
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
@@ -29,6 +30,78 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
         std::make_shared<NvidiaDeviceAllocator>(block_manager_config.device_allocator_config, context, worker_id);
     device_allocators_.push_back(device_allocator);
   }
+}
+
+Status BlockManager::PreAllocateBlocks() {
+  host_allocator_->ResetPreAllocatedBlocks(block_manager_config_.host_allocator_config.blocks_num);
+  for (auto& allocator : device_allocators_) {
+    allocator->ResetPreAllocatedBlocks(block_manager_config_.device_allocator_config.blocks_num);
+  }
+
+  return Status();
+}
+
+Status BlockManager::ResetPreAllocatedBlocks() {
+  size_t host_block_num;
+  size_t device_blocks_num;
+
+  Status status = CalculateBlockNumber(device_blocks_num, host_block_num);
+  if (!status.OK()) {
+    NLLM_LOG_ERROR << "Calculate block num error." << std::endl;
+    return status;
+  }
+
+  NLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_block_num
+                << std::endl;
+
+  host_allocator_->ResetPreAllocatedBlocks(host_block_num);
+  for (auto& allocator : device_allocators_) {
+    allocator->ResetPreAllocatedBlocks(device_blocks_num);
+  }
+
+  return Status();
+}
+
+Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num) {
+  size_t host_total, host_free;
+  size_t device_total, device_free;
+
+  Status status = GetDeviceMemoryInfo(&device_free, &device_total);
+  if (!status.OK()) {
+    return status;
+  }
+
+  status = GetHostMemoryInfo(&host_free, &host_total);
+  if (!status.OK()) {
+    return status;
+  }
+
+  NLLM_LOG_INFO << "Get memory info, host_total:" << host_total << ", host_free:" << host_free
+                << ", device_total:" << device_total << ", device_free:" << device_free;
+
+  NLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
+                       "reserved_device_memory_ratio must be large than 0.0");
+  NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor > 1.0,
+                       "lora_host_memory_factor should large than 1.0");
+  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor > 1.0,
+                       "block_host_memory_factor should large than 1.0");
+
+  size_t alignment_bytes = 8;
+  size_t device_block_memory_size = 0;
+  if (block_manager_config_.block_device_memory_ratio >= 0.0) {
+    device_block_memory_size = (device_total * block_manager_config_.block_device_memory_ratio) / alignment_bytes;
+  } else {
+    size_t reserved_memory_size =
+        ((device_total * block_manager_config_.reserved_device_memory_ratio) / alignment_bytes + 1) * alignment_bytes;
+    device_block_memory_size = ((device_free - reserved_memory_size) / alignment_bytes + 1) * alignment_bytes;
+  }
+
+  device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
+  host_block_num = device_blocks_num * block_manager_config_.block_host_memory_factor;
+  NLLM_CHECK_WITH_INFO(host_block_num * block_manager_config_.host_allocator_config.block_size < host_free,
+                       "Not enough host free memory");
+
+  return Status();
 }
 
 void BlockManager::SetDeviceId(int device_id) { CUDA_CHECK(cudaSetDevice(device_id)); }

@@ -52,9 +52,9 @@ Status InferenceEngine::Initialize() {
 
   size_t max_batch_size = 0;
   for (auto &[model_name, model_config] : model_configs) {
-    max_batch_size = std::max(max_batch_size, (size_t)model_config.default_batch_size);
+    max_batch_size = std::max(max_batch_size, (size_t)model_config.max_batch_size);
   }
-  batch_manager_config.batch_scheduler_config.max_running_queue_len = max_batch_size;
+  batch_manager_config.batch_scheduler_config.max_batch_size = max_batch_size;
   NLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size = " << max_batch_size;
   batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
@@ -111,6 +111,9 @@ Status InferenceEngine::StartHandler() {
 Status InferenceEngine::Start() {
   // Start batch manager.
   batch_manager_->Start();
+
+  // Reset block num via device memory usage.
+  block_manager_->ResetPreAllocatedBlocks();
 
   // Start service handler.
   StartHandler();

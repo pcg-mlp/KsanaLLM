@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <chrono>
 #include <string>
 #include <unordered_map>
 
@@ -83,6 +84,12 @@ inline void CheckAssert(bool result, const char* const file, int const line, std
   if (!result) {
     ThrowRuntimeError(file, line, info);
   }
+}
+
+// Get current time in ms.
+inline uint64_t GetCurrentTimeInMs() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
 #define NLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__)

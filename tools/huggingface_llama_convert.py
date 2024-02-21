@@ -113,6 +113,7 @@ def split_and_convert(args):
         config['llama']["end_id"] = str(hf_config["eos_token_id"])
         config['llama']["num_key_value_heads"] = str(kv_head_num)
         config['llama']["weight_data_type"] = args.weight_data_type
+        config['llama']["max_position_embeddings"] = str(hf_config["max_position_embeddings"])
 
         with open((Path(saved_dir) / f"config.ini").as_posix(), 'w') as configfile:
             config.write(configfile)

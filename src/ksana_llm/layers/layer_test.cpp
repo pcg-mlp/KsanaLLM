@@ -31,7 +31,7 @@ class LayerTest : public testing::Test {
     model_config.vocab_size = 32000;
     model_config.tensor_para_size = 1;
     model_config.layernorm_eps = 1e-6;
-    model_config.default_batch_size = 4;
+    model_config.max_batch_size = 4;
     model_config.max_token_num = 1024;
     model_config.rotary_embedding = 128;
     model_config.max_position_embeddings = 2048;
@@ -39,16 +39,16 @@ class LayerTest : public testing::Test {
     model_config.num_key_value_heads = model_config.head_num;
 
     BlockManagerConfig block_manager_config;
-    block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_token_num = 16;
-    block_manager_config.cpu_allocator_config.block_size = block_manager_config.cpu_allocator_config.block_token_num *
+    block_manager_config.host_allocator_config.blocks_num = 2;
+    block_manager_config.host_allocator_config.block_token_num = 16;
+    block_manager_config.host_allocator_config.block_size = block_manager_config.host_allocator_config.block_token_num *
                                                            2 * model_config.head_num * model_config.size_per_head *
                                                            model_config.num_layer * sizeof(half);
-    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.host_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_token_num = 16;
     block_manager_config.device_allocator_config.block_size =
-        block_manager_config.cpu_allocator_config.block_token_num * 2 * model_config.head_num *
+        block_manager_config.host_allocator_config.block_token_num * 2 * model_config.head_num *
         model_config.size_per_head * model_config.num_layer * sizeof(half);
     NLLM_LOG_WARNING << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
