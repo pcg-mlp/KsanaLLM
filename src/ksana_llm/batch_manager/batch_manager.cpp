@@ -75,8 +75,12 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 Status BatchManager::WaitAllDone() { return Status(); }
 
 Status BatchManager::Process() {
+  // uint64_t scheduling_time_ns = 0;
+  // uint64_t generate_time_ns = 0;
   while (!terminated_) {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
+
+    // auto start_time = std::chrono::high_resolution_clock::now();
     scheduled_reqs = batch_scheduler_->Schedule();
     if (scheduled_reqs.empty()) {
       queue_waiter_->Wait();
@@ -84,8 +88,15 @@ Status BatchManager::Process() {
       continue;
     }
 
-    NLLM_LOG_DEBUG << "batch scheduler result " << scheduled_reqs.size();
+    NLLM_LOG_INFO << "batch scheduler result " << scheduled_reqs.size();
+                  // << ", scheduling/generate:" << scheduling_time_ns << "/" << generate_time_ns;
+    // auto ready_time = std::chrono::high_resolution_clock::now();
     llm_runtime_->Step(scheduled_reqs);
+    // auto finish_time = std::chrono::high_resolution_clock::now();
+
+    // Skip empty scheduling time.
+    // scheduling_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(ready_time - start_time).count();
+    // generate_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(finish_time - ready_time).count();
   }
 
   return Status();

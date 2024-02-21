@@ -15,6 +15,6 @@ list(FILTER utils_SRCS EXCLUDE REGEX ".*test.cpp")
 add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS})
 add_dependencies(utils fmt gflags)
 target_link_libraries(utils PUBLIC 
-  -lpthread -ldl gflags loguru -lcudart block_manager ${NCCL_LIBRARIES}
+  -lpthread -ldl gflags loguru -lcudart block_manager ksana_llm_yaml ${NCCL_LIBRARIES}
 )
 

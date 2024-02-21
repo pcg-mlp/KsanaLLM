@@ -69,17 +69,17 @@ class ServingModel(object):
     """The LLM serving model instance.
     """
 
-    def __init__(self, model_dir: str):
+    def __init__(self, config_file: str):
         """Initialize a ServingModel instance.
 
         Args:
-            model_dir: The model directory path.
+            config_file: The serving config file.
         """
         self._serving_cls = libtorch_serving.Serving
 
         # The serving instance.
         self._serving = self._serving_cls()
-        self._serving.init_serving(model_dir)
+        self._serving.init_serving(config_file)
 
     @torch.no_grad()
     def generate(

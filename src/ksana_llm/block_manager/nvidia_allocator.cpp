@@ -12,9 +12,7 @@ namespace ksana_llm {
 
 NvidiaDeviceAllocator::NvidiaDeviceAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context,
                                              int device_id)
-    : DeviceAllocator(allocator_config, context, device_id) {
-  PreAllocateBlocks();
-}
+    : DeviceAllocator(allocator_config, context, device_id) {}
 
 void NvidiaDeviceAllocator::AllocateMemory(void** memory_ptr, size_t bytes) {
   CUDA_CHECK(cudaMallocAsync(memory_ptr, bytes, context_->GetMemoryManageStreams()[device_id_]));

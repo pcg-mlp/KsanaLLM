@@ -21,13 +21,13 @@ ServingOp::ServingOp() {}
 
 ServingOp::~ServingOp() { serving_impl_->Stop(); }
 
-void ServingOp::InitServing(const std::string &model_dir) {
+void ServingOp::InitServing(const std::string &config_file) {
   NLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
 
   InitLoguru();
-  NLLM_LOG_DEBUG << "Log INFO level: " << GetLevelName(GetLogLevel());
+  NLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
 
-  std::string config_file = model_dir + "/config.ini";
+  NLLM_LOG_INFO << "InitServing with config file: " << config_file;
   Status status = Singleton<Environment>::GetInstance()->ParseConfig(config_file);
   if (!status.OK()) {
     std::cerr << status.ToString() << std::endl;

@@ -19,7 +19,7 @@ class LlamaTest : public testing::Test {
     // 解析 config.ini,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
-    std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/config.ini";
+    std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
     Singleton<Environment>::GetInstance()->ParseConfig(config_path);
@@ -30,6 +30,7 @@ class LlamaTest : public testing::Test {
     NLLM_LOG_WARNING << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
     block_manager = new BlockManager(block_manager_config, context_);
+    block_manager->PreAllocateBlocks();
     SetBlockManager(block_manager);
   }
 

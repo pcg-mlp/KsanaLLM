@@ -28,9 +28,9 @@ class LlamaWeightTest : public testing::Test {
     model_config.tensor_para_size = 1;
 
     BlockManagerConfig block_manager_config;
-    block_manager_config.cpu_allocator_config.blocks_num = 2;
-    block_manager_config.cpu_allocator_config.block_size = 64;
-    block_manager_config.cpu_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.host_allocator_config.blocks_num = 2;
+    block_manager_config.host_allocator_config.block_size = 64;
+    block_manager_config.host_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_size = 64;
     block_manager_config.device_allocator_config.device = MEMORY_GPU;

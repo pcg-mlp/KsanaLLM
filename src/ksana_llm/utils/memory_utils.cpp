@@ -48,6 +48,8 @@ Status GetHostMemoryInfo(size_t* free, size_t* total) {
   }
 
   if (found_free && found_total) {
+    // convert kB to bytes.
+    *free *= 1024, *total *= 1024;
     return Status();
   }
 

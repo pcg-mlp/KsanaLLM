@@ -62,7 +62,7 @@ struct Tensor {
   template <typename T>
   inline T* GetPtr() const {
     if (GetTensorType<T>() != dtype) {
-      NLLM_LOG_DEBUG << "GetPtr and dtype not matched.";
+      // NLLM_LOG_DEBUG << "GetPtr and dtype not matched.";
     }
     NLLM_CHECK_WITH_INFO(!blocks.empty(), "No available blocks");
     return GetContiguousPtr<T>(blocks.front());

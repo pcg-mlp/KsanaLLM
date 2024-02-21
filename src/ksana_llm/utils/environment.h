@@ -50,7 +50,7 @@ struct ModelConfig {
   int start_id;
   int end_id;
   size_t num_key_value_heads;
-  int default_batch_size;
+  int max_batch_size;
   int max_position_embeddings;
 
   // others attributes
@@ -64,16 +64,22 @@ struct ContextCachingConfig {};
 struct BatchSchedulerConfig {
   // Max waiting time in millisecond.
   // TODO(karlluo): load from config
-  size_t timeout_in_ms = 600000;
+  size_t waiting_timeout_in_ms = 600000;
 
   // The max queue len of waiting request.
-  size_t max_waiting_queue_len = 100;
+  size_t max_waiting_queue_len = 256;
 
   // The max token number for one scheduler step.
   size_t max_token_number = 4096;
 
-  // The max queue len of running request.
-  size_t max_running_queue_len = 4;
+  // The max batch size.
+  size_t max_batch_size = 8;
+
+  // The max input sequeue length.
+  size_t max_input_len = 1024;
+
+  // The max output sequeue length.
+  size_t max_output_len = 1024;
 };
 
 struct LoraCoordinatorConfig {};
@@ -93,8 +99,23 @@ struct AllocatorConfig {
 
 struct BlockManagerConfig {
   // The config of allocator for cpu/gpu/npu.
-  AllocatorConfig cpu_allocator_config;
+  AllocatorConfig host_allocator_config;
   AllocatorConfig device_allocator_config;
+
+  // The ratio of reserved device memory.
+  float reserved_device_memory_ratio = 0.05;
+
+  // The ratio of lora device memory.
+  float lora_deivce_memory_ratio = 0.0;
+
+  // The ratio of block device memory. use all left memory if less than 0.0.
+  float block_device_memory_ratio = -1.0;
+
+  // The scale fator of lora host memory.
+  float lora_host_memory_factor = 10.0;
+
+  // The scale fator of block host memory.
+  float block_host_memory_factor = 10.0;
 };
 
 // The config of batch manager.
@@ -129,8 +150,13 @@ struct EndpointConfig {
 
 class Environment {
  public:
-  // Parse environment from config file.
+  Environment() {}
+
+  // Parse environment from YAML config file.
   Status ParseConfig(const std::string &config_file);
+
+  // Parse model config from model dir.
+  Status ParseModelConfig(const std::string &model_name, const std::string &model_dir);
 
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
@@ -150,9 +176,9 @@ class Environment {
   // Get the config of endpoint.
   Status GetEndpointConfig(EndpointConfig &endpoint_config);
 
-  int GetTensorParallelSize() { return tensor_parallel_size_; }
+  size_t GetTensorParallelSize() { return tensor_parallel_size_; }
 
-  int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
+  size_t GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
  private:
   // Calculate block size via model configs.
@@ -174,11 +200,11 @@ class Environment {
   // The config of endpoint.
   EndpointConfig endpoint_config_;
 
-  int tensor_parallel_size_{0};
-  int pipeline_parallel_size_{0};
+  size_t tensor_parallel_size_{0};
+  size_t pipeline_parallel_size_{0};
 
-  // The max token number of one block.
-  size_t block_token_num_ = 16;
+  // Whether lora is enabled.
+  bool enable_lora_adapter_ = false;
 };
 
 }  // namespace ksana_llm

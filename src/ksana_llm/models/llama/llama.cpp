@@ -74,7 +74,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   // 3: 矩阵计算需要一块空间
 
   // input_ids: [max_batch_size_, max_s]
-  max_batch_size_ = model_config.default_batch_size;
+  max_batch_size_ = model_config.max_batch_size;
   max_seq_len_ = model_config.max_token_num;
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
   size_t tmp_tensor_size =

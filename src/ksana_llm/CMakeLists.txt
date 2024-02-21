@@ -10,6 +10,7 @@ include(external/loguru)
 include(external/gflags)
 include(external/httplib)
 include(external/pybind11)
+include(external/yaml-cpp)
 include(external/nlohmann_json)
 
 include_directories(

@@ -2,6 +2,7 @@
 #
 # ==============================================================================
 
+import ksana_llm
 import argparse
 import json
 import uvicorn
@@ -13,7 +14,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import GenerationConfig, LlamaTokenizer
 from fastapi import FastAPI
 
-import ksana_llm
+import asyncio
+from functools import partial
+from concurrent import futures
+model_executor = futures.ThreadPoolExecutor(max_workers=64)
+tokenizer_executor = futures.ThreadPoolExecutor(max_workers=32)
+
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
@@ -23,10 +29,10 @@ tokenizer = None
 
 def args_config():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_dir',
+    parser.add_argument('--config_file',
                         type=str,
-                        default="/model/llama-ft/13B/2-gpu",
-                        help='model dir')
+                        default="examples/ksana_llm.yaml",
+                        help='serving config file')
     parser.add_argument('--tokenizer_dir',
                         type=str,
                         default="/model/llama-hf/13B",
@@ -72,37 +78,42 @@ async def generate(request: Request) -> Response:
         top_p=sampling_config["topp"],
         temperature=sampling_config["temperature"])
 
-    results_generator = model.generate(model_name=model_name,
-                                       inputs=input_tokens,
-                                       generation_config=generation_config,
-                                       streamer=True)
-
-    async def stream_results() -> AsyncGenerator[bytes, None]:
-        async for request_output in results_generator:
-            if request_output:
-                ret = {"texts": tokenizer.decode([request_output])}
-                yield (json.dumps(ret) + "\0").encode("utf-8")
-            else:
-                return
+    loop = asyncio.get_event_loop()
+    results_generator = await loop.run_in_executor(model_executor,
+                                                   partial(model.generate,
+                                                           model_name=model_name,
+                                                           inputs=input_tokens,
+                                                           generation_config=generation_config,
+                                                           streamer=None))
 
     if enable_streaming:
+        async def stream_results() -> AsyncGenerator[bytes, None]:
+            async for request_output in results_generator:
+                if request_output:
+                    ret = {"texts": tokenizer.decode([request_output])}
+                    yield (json.dumps(ret) + "\0").encode("utf-8")
+                else:
+                    return
+
         return StreamingResponse(stream_results())
 
-    output_text = tokenizer.decode(results_generator)
+    output_text = await loop.run_in_executor(tokenizer_executor,
+                                             partial(tokenizer.decode, results_generator))
+
     return JSONResponse({"texts": output_text})
 
 
 if __name__ == "__main__":
     args = args_config()
     tokenizer = LlamaTokenizer.from_pretrained(args.tokenizer_dir)
-    model = ksana_llm.AutoModel.from_pretrained(args.model_dir)
+    model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.
-    log_level = os.getenv("NLLM_LOG_LEVEL", "info")
+    log_level = os.getenv("NLLM_LOG_LEVEL", "INFO").upper()
     if log_level in ["DEBUG", "INFO"]:
         log_level = log_level.lower()
     else:
-        log_level = "info"
+        log_level = "INFO"
         print(
             f"Not support env: NLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
         )
