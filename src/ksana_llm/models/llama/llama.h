@@ -7,6 +7,7 @@
 #include "ksana_llm/layers/assemble_last_token_layer.h"
 #include "ksana_llm/layers/base_layer.h"
 #include "ksana_llm/layers/cast_layer.h"
+#include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
@@ -45,6 +46,8 @@ class Llama : public BaseModel {
   std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layer_;
   std::vector<std::shared_ptr<PagedAttentionLayer>> paged_attention_layer_;
   std::shared_ptr<NcclAllReduceSumLayer> nccl_all_reduce_sum_layer_;
+  std::shared_ptr<CustomAllReduceSumLayer> custom_all_reduce_sum_layer_0_;
+  std::shared_ptr<CustomAllReduceSumLayer> custom_all_reduce_sum_layer_1_;
   std::shared_ptr<AddLayer> add_layer_;
   std::shared_ptr<SiluMulLayer> silu_mul_layer_;
   std::shared_ptr<MatMulLayer> matmul_layer_;
@@ -61,10 +64,14 @@ class Llama : public BaseModel {
   DataType weight_data_type_;
   int block_token_num_;
   int block_size_;
+  bool use_custom_all_reduce_ = true;
   Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
   Tensor up_matmul_tensor;
   Tensor kv_cache_buffer_;
   Tensor logits_tensor_;
+  Tensor reduce_tensor_;
+  Tensor rank_tensor_0_;
+  Tensor rank_tensor_1_;
   Tensor kv_cache_offset_tensor;
   Tensor kv_list;
   Tensor input_ids, input_offset_int32_tensor, input_offset_uint64_tensor;

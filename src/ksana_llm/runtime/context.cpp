@@ -127,6 +127,13 @@ void Context::InitCublasHandle(const int worker_id) {
 }
 
 void Context::InitNcclParam() {
+  reduce_metas_.resize(max_reduce_inputs_num_);
+  reduce_buffers_.resize(tensor_parallel_size_);
+  reduce_inputs_.resize(max_reduce_inputs_num_);
+  for (int i = 0; i < max_reduce_inputs_num_; ++i) {
+    reduce_inputs_[i].resize(tensor_parallel_size_);
+  }
+
   nccl_uid_ = GenerateNCCLUniqueID();
   nccl_params_.resize(tensor_parallel_size_);
   NCCL_CHECK(ncclGroupStart());
