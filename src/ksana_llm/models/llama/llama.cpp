@@ -38,6 +38,12 @@ Llama<T>::~Llama() {
   DestroyTensor(kv_cache_buffer_);
   DestroyTensor(logits_tensor_);
 
+  if (use_custom_all_reduce_) {
+    DestroyTensor(reduce_tensor_);
+    DestroyTensor(rank_tensor_0_);
+    DestroyTensor(rank_tensor_1_);
+  }
+
   DestroyTensor(input_ids);
   DestroyTensor(input_offset_int32_tensor);
   DestroyTensor(input_offset_uint64_tensor);
@@ -103,6 +109,18 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   kv_cache_buffer_.dtype = TYPE_FP32;
   CreateTensor(logits_tensor_, max_batch_size_ * vocab_size_ * sizeof(float));
 
+  cudaEvent_t create_reduce_tensor_event;
+  if (use_custom_all_reduce_) {
+    CUDA_CHECK(cudaEventCreateWithFlags(&create_reduce_tensor_event, cudaEventDisableTiming));
+    // create buffer for custom all reduce sum
+    size_t reduce_buffer_size = 256;
+    CreateTensor(reduce_tensor_, reduce_buffer_size);
+    size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
+    CreateTensor(rank_tensor_0_, rank_data_sz);
+    CreateTensor(rank_tensor_1_, rank_data_sz);
+    CUDA_CHECK(cudaEventRecord(create_reduce_tensor_event, context_->GetMemoryManageStreams()[rank_]));
+  }
+
   CreateTensor(kv_cache_offset_tensor, (max_batch_size_ + 1) * sizeof(int));
   kv_cache_offset_tensor.dtype = TYPE_INT32;
 
@@ -129,6 +147,10 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   // 初始化各层实例
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   layernorm_layer_ = std::make_shared<LayernormLayer>();
+  if (use_custom_all_reduce_) {
+    custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer>();
+    custom_all_reduce_sum_layer_1_ = std::make_shared<CustomAllReduceSumLayer>();
+  }
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   add_layer_ = std::make_shared<AddLayer>();
   silu_mul_layer_ = std::make_shared<SiluMulLayer>();
@@ -157,6 +179,24 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
         {idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head, stride_size, rotary_embedding,
          rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
         context_, rank_);
+  }
+  if (use_custom_all_reduce_) {
+    CUDA_CHECK(cudaStreamWaitEvent(context_->GetMemoryManageStreams()[rank_], create_reduce_tensor_event));
+    size_t reduce_buffer_size = 256;
+
+    CUDA_CHECK(cudaMemsetAsync(reduce_tensor_.GetPtr<void>(), 0, reduce_buffer_size,
+                               context_->GetMemoryManageStreams()[rank_]));
+
+    size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
+    custom_all_reduce_sum_layer_0_->Init(
+        {reduce_tensor_.GetPtr<void>(), tmp_tensor_0.GetPtr<void>(), reduce_buffer_size, rank_tensor_0_.GetPtr<void>(),
+         rank_data_sz, tmp_tensor_2.GetPtr<void>(), 0},
+        context_, rank_);
+    custom_all_reduce_sum_layer_1_->Init(
+        {reduce_tensor_.GetPtr<void>(), tmp_tensor_2.GetPtr<void>(), reduce_buffer_size, rank_tensor_1_.GetPtr<void>(),
+         rank_data_sz, tmp_tensor_0.GetPtr<void>(), 1},
+        context_, rank_);
+    CUDA_CHECK(cudaEventDestroy(create_reduce_tensor_event));
   }
 
   // init cuda event
@@ -643,12 +683,15 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
     }
     // Attn NcclAllReduceSum
     std::vector<Tensor>& attn_all_reduce_sum_output = output_1;
-    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
+    if (use_custom_all_reduce_) {
+      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_0_->Forward({attn_o_proj_output[0]}, attn_all_reduce_sum_output));
+    } else {
+      STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
+    }
     if (!context_->IsRunContextDecodeAndDecodeSerially()) {
       CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream));
       CUDA_CHECK(cudaStreamWaitEvent(stream, nccl_finish_event_));
     }
-
     // Attn Add
     std::vector<Tensor>& attn_add_output = output_2;
     STATUS_CHECK_RETURN(
@@ -698,7 +741,11 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
     }
     // Mlp NcclAllReduceSum
     std::vector<Tensor>& mlp_all_reduce_sum_output = output_1;
-    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
+    if (use_custom_all_reduce_) {
+      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_1_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
+    } else {
+      STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
+    }
     mlp_all_reduce_sum_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.nccl_all_reducesum." +
                                             std::to_string(rank_) + ".npy");
     if (!context_->IsRunContextDecodeAndDecodeSerially()) {

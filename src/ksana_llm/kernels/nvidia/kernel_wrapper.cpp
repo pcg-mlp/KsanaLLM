@@ -11,6 +11,7 @@
 
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
+#include "csrc/kernels/nvidia/all_reduce/custom_all_reduce.h"
 #include "csrc/kernels/nvidia/assemble_last_token/assemble_last_token.h"
 #include "csrc/kernels/nvidia/cast/cast.h"
 #include "csrc/kernels/nvidia/embedding/embedding.h"
@@ -19,6 +20,7 @@
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 namespace ksana_llm {
@@ -175,6 +177,31 @@ void AssembleLastToken(const void* input, const void* offset, const int batch_si
 void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream) {
   llm_kernels::nvidia::HalfToFloat(reinterpret_cast<const half*>(input), data_size, reinterpret_cast<float*>(output),
                                    stream);
+}
+
+void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,
+                         void** input_handles, int data_size, size_t rank_data_sz, int tp_size, int rank,
+                         cudaStream_t& stream) {
+  std::vector<int64_t> offsets(tp_size, 0);
+  *ptr = new llm_kernels::nvidia::CustomAllreduce(metas, rank_data, rank_data_sz, data_handles, offsets, rank);
+  llm_kernels::nvidia::CustomAllreduce* reduce_op = static_cast<llm_kernels::nvidia::CustomAllreduce*>(*ptr);
+  // hack buffer registration
+  if (input != input_handles[rank]) {
+    NLLM_LOG_ERROR << "input != input_handles[rank]";
+  }
+  std::vector<std::string> handles;
+  handles.reserve(tp_size);
+  for (int i = 0; i < tp_size; i++) {
+    char* begin = (char*)&(input_handles[i]);
+    char* end = (char*)&(input_handles[i + 1]);
+    handles.emplace_back(begin, end);
+  }
+  reduce_op->RegisterBuffer(handles, offsets, input, stream);
+}
+
+void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream) {
+  llm_kernels::nvidia::CustomAllreduce* reduce_op = static_cast<llm_kernels::nvidia::CustomAllreduce*>(ptr);
+  reduce_op->AllReduce<half>(stream, static_cast<half*>(input), static_cast<half*>(result), data_size);
 }
 
 }  // namespace ksana_llm

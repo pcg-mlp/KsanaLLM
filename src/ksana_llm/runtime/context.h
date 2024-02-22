@@ -46,6 +46,12 @@ class Context {
 
   std::vector<cublasLtHandle_t>& GetCublasLtHandles() { return cublaslt_handles_; }
 
+  void** GetCustomAllReduceBuffers() { return static_cast<void**>(reduce_buffers_.data()); }
+
+  void** GetCustomAllReduceMetas() { return static_cast<void**>(reduce_metas_.data()); }
+
+  void** GetCustomAllReduceInputs(int input_index) { return static_cast<void**>(reduce_inputs_[input_index].data()); }
+
   // Get the device type.
   MemoryDevice GetDevice() {
     // Support GPU only for now.
@@ -76,6 +82,12 @@ class Context {
   // nccl comms
   ncclUniqueId nccl_uid_;
   std::vector<NCCLParam> nccl_params_;
+
+  std::vector<void*> reduce_buffers_;
+  std::vector<void*> reduce_metas_;
+  int max_reduce_inputs_num_{2};
+  std::vector<std::vector<void*>> reduce_inputs_;
+
   // cublas handles
   std::vector<cublasHandle_t> cublas_handles_;
   std::vector<cublasLtHandle_t> cublaslt_handles_;

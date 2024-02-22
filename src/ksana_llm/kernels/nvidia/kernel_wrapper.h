@@ -1,11 +1,13 @@
 /* Copyright 2023 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-
+#pragma once
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <optional>
+#include <vector>
+
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 
 namespace ksana_llm {
@@ -47,5 +49,11 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
 
 void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream);
+
+void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,
+                         void** input_handles, int data_size, size_t rank_data_sz, int tp_size, int rank,
+                         cudaStream_t& stream);
+
+void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream);
 
 }  // namespace ksana_llm
