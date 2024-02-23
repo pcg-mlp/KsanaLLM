@@ -65,7 +65,6 @@ struct ContextCachingConfig {};
 
 struct BatchSchedulerConfig {
   // Max waiting time in millisecond.
-  // TODO(karlluo): load from config
   size_t waiting_timeout_in_ms = 600000;
 
   // The max queue len of waiting request.
@@ -82,6 +81,18 @@ struct BatchSchedulerConfig {
 
   // The max output sequeue length.
   size_t max_output_len = 1024;
+
+  // The swapin block threshold.
+  float swapout_block_threshold = 1.0;
+
+  // The swapout block threshold.
+  float swapin_block_threshold = 2.0;
+
+  // The launch block threshold.
+  float launch_block_threshold = 2.0;
+
+  // The threadpool size used for swap in/out.
+  size_t swap_threadpool_size = 8;
 };
 
 struct LoraCoordinatorConfig {};

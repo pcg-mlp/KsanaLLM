@@ -93,6 +93,14 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_input_len", 1024);
   batch_manager_config_.batch_scheduler_config.max_output_len =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_output_len", 1024);
+  batch_manager_config_.batch_scheduler_config.swapout_block_threshold =
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
+  batch_manager_config_.batch_scheduler_config.swapin_block_threshold =
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapin_block_threshold", 2.0);
+  batch_manager_config_.batch_scheduler_config.launch_block_threshold =
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
+  batch_manager_config_.batch_scheduler_config.swap_threadpool_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 8);
 
   // Read block manager config.
   block_manager_config_.host_allocator_config.block_token_num =

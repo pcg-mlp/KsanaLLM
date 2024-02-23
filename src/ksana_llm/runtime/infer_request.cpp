@@ -33,12 +33,21 @@ InferRequest::InferRequest(std::shared_ptr<Request>& request)
 }
 
 InferRequest::~InferRequest() {
-  NLLM_LOG_DEBUG << "req " << req_id << " destroyed, free block.";
+  NLLM_LOG_DEBUG << "req " << req_id << " destroyed, free blocks if necessary.";
+  if (!kv_cache_blocks.empty()) {
+    FreeBlocks();
+  }
+}
+
+Status InferRequest::FreeBlocks() {
+  NLLM_LOG_DEBUG << "req " << req_id << " free blocks.";
   // Free memory on every device.
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);
     GetBlockManager()->FreeBlocks(kv_cache_blocks[i]);
   }
+  kv_cache_blocks.clear();
+  return Status();
 }
 
 void InferRequest::Notify() {

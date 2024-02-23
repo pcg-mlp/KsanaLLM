@@ -127,7 +127,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     request_latency = request_end_time - request_start_time
     output_len = len(output.get("texts", ""))
     result_list[req_id] = output.get("texts", "")
-    REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
+    print("")
+    REQUEST_LATENCY.append((len(prompt), output_len if output_len > 0 else 1, request_latency))
     pbar.update(1)
 
 

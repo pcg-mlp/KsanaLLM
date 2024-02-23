@@ -18,6 +18,9 @@ class DeviceAllocator : public BaseAllocator {
   DeviceAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context, int device_id);
   virtual ~DeviceAllocator();
 
+  // Get the device id.
+  int GetDeviceId();
+
  protected:
   // The device index for current allocator.
   int device_id_;

@@ -177,7 +177,7 @@ float* Llama<T>::GetLogitsPtr() {
 template <typename T>
 void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                               const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
-                              cudaStream_t& stream, cudaEvent_t& event) {
+                              cudaStream_t& stream, cudaEvent_t& event, bool context_stage) {
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
     total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
@@ -187,7 +187,7 @@ void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, si
   void* kv_cache_offset_ptr = kv_cache_offset_tensor.GetPtr<void>();
   CUDA_CHECK(cudaMemcpyAsync(kv_cache_offset_ptr, kv_cache_offset_list.data(),
                              kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
-  NLLM_LOG_DEBUG << "ContextDecode Total Block Num " << total_block_num;
+  NLLM_LOG_DEBUG << (context_stage ? "ContextDecode" : "Decode") << " Total Block Num " << total_block_num;
   kv_list.shape = {num_layer_, total_block_num * 2};
   std::vector<void*> cpu_kv_list(num_layer_ * total_block_num * 2);
   for (size_t layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
@@ -367,7 +367,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   std::vector<int> kv_cache_offset_list(1, 0);
 
   PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream,
-                 kvcache_offset_event_);
+                 kvcache_offset_event_, true);
   PrepareContextRotaryEmbeddingPos(batch_size, total_seq_len, forward_reqs, d2h_stream, rotary_embedding_event_);
 
   PrepareContextInputIds(batch_size, total_seq_len, max_tokens, forward_reqs, h2d_stream, input_ids_event_);
@@ -574,7 +574,7 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
   // prepare inputs
   PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream,
-                 kvcache_offset_event_);
+                 kvcache_offset_event_, false);
   PrepareRotaryEmbeddingPos(batch_size, forward_reqs, d2h_stream, rotary_embedding_event_);
   PrepareInputIds(batch_size, max_tokens, forward_reqs, h2d_stream, input_ids_event_);
 

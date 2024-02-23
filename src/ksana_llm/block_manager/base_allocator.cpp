@@ -37,6 +37,7 @@ Status BaseAllocator::AllocateBlocks(size_t block_num, std::vector<int>& blocks)
   }
 
   blocks.clear();
+  blocks.reserve(block_num);
   auto it = free_blocks_.begin();
   while (block_num--) {
     used_blocks_.insert(*it);

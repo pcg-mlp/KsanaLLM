@@ -44,7 +44,7 @@ class Worker {
   // Current worker rank.
   int rank_;
 
-  // Thread threadpool used to execute async task.
+  // Threadpool used to execute async task.
   std::shared_ptr<ThreadPool> threadpool_ = nullptr;
 
   // GPU related context

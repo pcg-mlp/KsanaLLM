@@ -30,9 +30,13 @@ void ModelInstance::Load() {
 
     // Load model and weights on every device.
     for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      NLLM_LOG_DEBUG << "Start to create model on device " << worker_id;
       models_.push_back(CreateModel<Llama>(worker_id));
+
+      NLLM_LOG_DEBUG << "Start to create model weight on device " << worker_id;
       weights_.push_back(CreateModelWeight<LlamaWeight>(worker_id));
-      // weights_.push_back(std::make_shared<LlamaWeight<float>>());
+
+      NLLM_LOG_DEBUG << "Finish to load model on device " << worker_id;
     }
   } else {
     throw std::runtime_error(
