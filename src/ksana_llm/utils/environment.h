@@ -33,6 +33,8 @@ struct ModelConfig {
   // The max number of (input + output tokens)
   size_t max_token_num;
 
+  size_t max_scheduler_token_num;
+
   // TODO(karlluo): Quant mode
 
   // Device Type

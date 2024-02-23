@@ -77,29 +77,35 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   max_batch_size_ = model_config.max_batch_size;
   max_seq_len_ = model_config.max_token_num;
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
+  size_t max_token_num = model_config.max_scheduler_token_num;
+  NLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}", max_batch_size_,
+                                max_seq_len_, max_token_num);
   size_t tmp_tensor_size =
-      max_batch_size_ * std::max((int)vocab_size_ * sizeof(float), max_seq_len_ * hidden_units * 3 * dtype_size);
-  CreateTensor(tmp_tensor_0, max_batch_size_ * max_seq_len_ * hidden_units * dtype_size * 3);
+      std::max(max_batch_size_ * vocab_size_ * sizeof(float), max_token_num * hidden_units * 3 * dtype_size);
+  CreateTensor(tmp_tensor_0, max_token_num * hidden_units * dtype_size * 3);
   CreateTensor(tmp_tensor_1, tmp_tensor_size);
-  CreateTensor(tmp_tensor_2, max_batch_size_ * max_seq_len_ * hidden_units * dtype_size * 3);
+  CreateTensor(tmp_tensor_2, max_token_num * hidden_units * dtype_size * 3);
 
-  size_t up_matmul_tensor_size = max_batch_size_ * max_seq_len_ * dtype_size * std::max(inter_size, hidden_units * 2);
+  size_t up_matmul_tensor_size = max_token_num * dtype_size * std::max(inter_size, hidden_units * 2);
   CreateTensor(up_matmul_tensor, up_matmul_tensor_size);
   CreateTensor(kv_cache_buffer_,
       (size_t)max_seq_len_ * (max_seq_len_ + 511) / 512 * head_num * (size_per_head + 2) * sizeof(float));
   kv_cache_buffer_.shape = {max_seq_len_, (max_seq_len_ + 511) / 512, head_num, size_per_head + 2};
   kv_cache_buffer_.dtype = TYPE_FP32;
-  CreateTensor(logits_tensor_, (size_t)max_batch_size_ * max_seq_len_  * vocab_size_ * sizeof(float));
+  CreateTensor(logits_tensor_, max_batch_size_ * vocab_size_ * sizeof(float));
 
   CreateTensor(kv_cache_offset_tensor, (max_batch_size_ + 1) * sizeof(int));
-  size_t max_block_num = max_batch_size_ * (max_seq_len_ / 16 + 1);
-  NLLM_LOG_DEBUG << "Max Block Num =  " << max_block_num;
+
+  GetBlockManager()->SetDeviceId(rank_);
+  // TODO: 该步骤先于 Reset device_blocks_Num 发生
+  size_t max_block_num = 2048;
   CreateTensor(kv_list, num_layer_ * max_block_num * 2 * sizeof(void*));
-  CreateTensor(input_ids, max_batch_size_ * max_seq_len_ * sizeof(int));
+
+  CreateTensor(input_ids, max_token_num * sizeof(int));
   CreateTensor(input_offset_int32_tensor, (max_batch_size_ + 1) * sizeof(int));
   CreateTensor(input_offset_uint64_tensor, (max_batch_size_ + 1) * sizeof(uint64_t));
   CreateTensor(input_tokens_int32_tensor, (max_batch_size_ + 1) * sizeof(int));
-  CreateTensor(rotary_embedding_pos, max_batch_size_ * max_seq_len_ * sizeof(int64_t));
+  CreateTensor(rotary_embedding_pos, max_token_num * sizeof(int64_t));
   CreateTensor(forward_shape, sizeof(int));
 
   // 初始化各层实例
@@ -183,17 +189,18 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
   std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
   int max_tokens = 0;
+  std::vector<int> input_ids_cpu(0);
   for (int idx = 0; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
-    CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr + input_offset, req_input->data(), length * sizeof(int),
-                               cudaMemcpyHostToDevice, stream));
+    input_ids_cpu.insert(input_ids_cpu.end(), req_input->begin(), req_input->end());
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
     max_tokens = std::max(max_tokens, static_cast<int>(length));
   }
-
+  CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr, input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int),
+                             cudaMemcpyHostToDevice, stream));
   // create input offset tensor int32 and uint64
   input_offset_int32_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.shape = {batch_size + 1};
