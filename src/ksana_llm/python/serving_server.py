@@ -110,10 +110,10 @@ if __name__ == "__main__":
 
     # Use multithread to support parallelism.
     log_level = os.getenv("NLLM_LOG_LEVEL", "INFO").upper()
-    if log_level in ["DEBUG", "INFO"]:
+    if log_level in ["DEBUG", "INFO", "ERROR"]:
         log_level = log_level.lower()
     else:
-        log_level = "INFO"
+        log_level = "info"
         print(
             f"Not support env: NLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
         )

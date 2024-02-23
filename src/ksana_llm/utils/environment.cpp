@@ -155,6 +155,7 @@ Status Environment::ParseModelConfig(const std::string &model_name, const std::s
   PrepareModeAttirbutes(ini_reader, model_config);
 
   model_config.max_batch_size = batch_manager_config_.batch_scheduler_config.max_batch_size;
+  model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_token_number;
   model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_input_len +
                                batch_manager_config_.batch_scheduler_config.max_output_len;
   model_configs_[model_config.name] = model_config;
