@@ -1,4 +1,6 @@
 build
+debug
+testing
 deps
 core.*
 .cache

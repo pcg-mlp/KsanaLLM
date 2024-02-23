@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -70,6 +71,9 @@ class InferRequest {
   // Drop this swapped request.
   Status DropSwappedAsync();
 
+  // Free blocks this request hold.
+  Status FreeBlocks();
+
   // Check whether the model instance enable lora.
   bool CheckLoraEnable();
 
@@ -135,6 +139,12 @@ class InferRequest {
 
   // The offset for model forward's logits output.
   size_t logits_offset = 0;
+
+  // Whether the current req is in pending status of swappiness.
+  bool swap_pending = false;
+
+  // The swappiness future.
+  std::future<void> swap_future;
 };
 
 }  // namespace ksana_llm

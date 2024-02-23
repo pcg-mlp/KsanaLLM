@@ -16,4 +16,6 @@ DeviceAllocator::DeviceAllocator(const AllocatorConfig& allocator_config, std::s
 
 DeviceAllocator::~DeviceAllocator() {}
 
+int DeviceAllocator::GetDeviceId() { return device_id_; }
+
 }  // namespace ksana_llm

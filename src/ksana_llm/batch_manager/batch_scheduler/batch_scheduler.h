@@ -4,12 +4,14 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "ksana_llm/batch_manager/batch_scheduler/priority/base_priority.h"
 #include "ksana_llm/batch_manager/batch_scheduler/strategy/base_strategy.h"
 #include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
@@ -39,17 +41,50 @@ class BatchScheduler {
   inline void ResetSchedule();
 
   // Schedule the running/swapped/waiting queue.
-  void ScheduleRunning(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                       size_t &max_free_block_num, size_t &total_swapout_num);
+  void ScheduleRunning(size_t &step_token_num_sum, bool &skip_other);
+  void ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other);
+  void ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other);
 
-  void ScheduleSwapped(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                       size_t &max_free_block_num);
+  // Execute swap in separate threadpool.
+  void SwapOutAsync(std::shared_ptr<InferRequest> req);
+  void SwapInAsync(std::shared_ptr<InferRequest> req);
 
-  void ScheduleWaiting(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                       size_t &max_free_block_num);
+  // Prepare the running/swapped/waiting queue.
+  void PrepareRunningRequests(std::vector<size_t> &step_token_num_list, std::vector<size_t> &step_block_num_list,
+                              std::vector<size_t> &curr_block_num_list);
+  void PrepareSwappedRequests(std::vector<size_t> &step_token_num_list, std::vector<size_t> &curr_block_num_list,
+                              bool skip_collect = false);
+  void PrepareWaitingRequests(std::vector<size_t> &step_token_num_list, std::vector<size_t> &total_block_num_list,
+                              bool skip_collect = false);
+
+  // Merge waiting buffer to waiting queue.
+  void MergeWaitingBufferQueue();
+
+  // Merge pending swap out/in requests.
+  void MergePendingSwapoutRequest();
+  void MergePendingSwapinRequests();
+
+  // Wait pending swap out/in done.
+  void WaitPendingSwapoutDone();
+  void WaitPendingSwapinDone();
+
+  // Get the pending block number used by async swapin.
+  size_t GetPendingBlockNumber();
+
+  // Process the running/swapped/waiting queue.
+  void ProcessRunningRequests(const std::vector<size_t> &step_token_num_list,
+                              const std::vector<size_t> &step_block_num_list,
+                              const std::vector<size_t> &curr_block_num_list, std::vector<int> &swapped_indexes,
+                              size_t &step_token_num_sum);
+  void ProcessSwappedRequests(const std::vector<size_t> &step_token_num_list,
+                              const std::vector<size_t> &curr_block_num_list, std::vector<int> &running_indexes,
+                              size_t &step_token_num_sum, size_t &total_block_num_sum);
+  void ProcessWaitingRequests(const std::vector<size_t> &step_token_num_list,
+                              const std::vector<size_t> &total_block_num_list, std::vector<int> &running_indexes,
+                              size_t &step_token_num_sum, size_t &total_block_num_sum);
 
  private:
-  BatchSchedulerConfig batch_schedule_config_;
+  BatchSchedulerConfig batch_scheduler_config_;
 
   // The current timestamp for current schedule loop.
   unsigned long schedule_time_in_ms_;
@@ -58,6 +93,9 @@ class BatchScheduler {
 
   // To guard queue.
   std::mutex queue_mutex_;
+
+  // Protect the queue buffer.
+  std::mutex queue_buffer_mutex_;
 
   // The scheduler priority.
   std::shared_ptr<BasePriority> priority_;
@@ -69,6 +107,30 @@ class BatchScheduler {
   std::vector<std::shared_ptr<InferRequest>> waiting_queue_;
   std::vector<std::shared_ptr<InferRequest>> running_queue_;
   std::vector<std::shared_ptr<InferRequest>> swapped_queue_;
+
+  // The buffer queue used to save input request temporary.
+  std::vector<std::shared_ptr<InferRequest>> waiting_buffer_queue_;
+
+  // The pending queue used for swap in/out.
+  std::vector<std::shared_ptr<InferRequest>> swapin_pending_queue_;
+  std::vector<std::shared_ptr<InferRequest>> swapout_pending_queue_;
+
+  // Threadpool used to swap in/out.
+  std::shared_ptr<ThreadPool> threadpool_ = nullptr;
+
+  // Preallocate vectors, for speedup.
+  std::vector<size_t> running_step_token_num_list_;
+  std::vector<size_t> running_step_block_num_list_;
+  std::vector<size_t> running_curr_block_num_list_;
+  std::vector<int> running_swapped_indexes_;
+
+  std::vector<size_t> swapped_step_token_num_list_;
+  std::vector<size_t> swapped_curr_block_num_list_;
+  std::vector<int> swapped_running_indexes_;
+
+  std::vector<size_t> waiting_step_token_num_list_;
+  std::vector<size_t> waiting_total_block_num_list_;
+  std::vector<int> waiting_running_indexes_;
 };
 
 }  // namespace ksana_llm

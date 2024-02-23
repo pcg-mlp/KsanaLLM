@@ -18,7 +18,7 @@ import asyncio
 from functools import partial
 from concurrent import futures
 
-model_executor = futures.ThreadPoolExecutor(max_workers=64)
+model_executor = futures.ThreadPoolExecutor(max_workers=128)
 tokenizer_executor = futures.ThreadPoolExecutor(max_workers=32)
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.

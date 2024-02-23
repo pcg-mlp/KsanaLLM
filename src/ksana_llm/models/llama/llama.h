@@ -87,7 +87,7 @@ class Llama : public BaseModel {
  private:
   void PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                       const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
-                      cudaStream_t& stream, cudaEvent_t& event);
+                      cudaStream_t& stream, cudaEvent_t& event, bool context_stage = false);
 
   void PrepareContextRotaryEmbeddingPos(const size_t batch_size, const size_t total_seq_len,
                                         const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,

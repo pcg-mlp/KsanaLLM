@@ -11,17 +11,25 @@ setting:
   # 调度相关配置
   batch_scheduler:
     # 请求在队列中的超时时间，单位为毫秒
-    waiting_timeout_in_ms: 600000
+    waiting_timeout_in_ms: 3600000
     # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
-    max_waiting_queue_len: 100
+    max_waiting_queue_len: 1200
     # 一个调度step处理的最大token个数，一次context decode视为多个token。
     max_token_number: 4096
     # 每一步推理时的最大batch_size
-    max_batch_size: 12
+    max_batch_size: 128
     # 最大输入长度
     max_input_len: 1024
     # 最大输出长度
     max_output_len: 1024
+    # 单个请求可用blck小于该值触发换出
+    swapout_block_threshold: 1.0
+    # 单个请求可用block大于该值触发换入
+    swapin_block_threshold: 2.0
+    # 单个请求可用block大于该值拉起新任务
+    launch_block_threshold: 2.0
+    # 用于执行异步swap的线程池大小
+    swap_threadpool_size: 8
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数
@@ -35,7 +43,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 1.1
+    block_host_memory_factor: 5.0
 # 模型配置
 model_spec:
   # 基础模型配置，只能有一个

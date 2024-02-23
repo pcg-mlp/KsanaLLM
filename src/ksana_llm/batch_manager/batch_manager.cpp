@@ -88,7 +88,7 @@ Status BatchManager::Process() {
       continue;
     }
 
-    NLLM_LOG_INFO << "batch scheduler result " << scheduled_reqs.size();
+    // NLLM_LOG_INFO << "batch scheduler result " << scheduled_reqs.size();
                   // << ", scheduling/generate:" << scheduling_time_ns << "/" << generate_time_ns;
     // auto ready_time = std::chrono::high_resolution_clock::now();
     llm_runtime_->Step(scheduled_reqs);

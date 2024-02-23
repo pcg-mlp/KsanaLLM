@@ -47,18 +47,23 @@ Status BlockManager::ResetPreAllocatedBlocks() {
 
   Status status = CalculateBlockNumber(device_blocks_num, host_block_num);
   if (!status.OK()) {
-    NLLM_LOG_ERROR << "Calculate block num error." << std::endl;
+    NLLM_LOG_ERROR << "Calculate block num error.";
     return status;
   }
 
-  NLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_block_num
-                << std::endl;
+  NLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_block_num;
 
+  NLLM_LOG_INFO << "Start to preallocate host blocks.";
   host_allocator_->ResetPreAllocatedBlocks(host_block_num);
+  NLLM_LOG_INFO << "Finish to preallocate host blocks.";
+
   for (auto& allocator : device_allocators_) {
+    NLLM_LOG_INFO << "Start to preallocate device blocks on " << allocator->GetDeviceId();
     allocator->ResetPreAllocatedBlocks(device_blocks_num);
+    NLLM_LOG_INFO << "Finish to preallocate device blocks on " << allocator->GetDeviceId();
   }
 
+  NLLM_LOG_INFO << "Reset block num finish.";
   return Status();
 }
 
@@ -81,9 +86,9 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
 
   NLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
                        "reserved_device_memory_ratio must be large than 0.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor > 1.0,
+  NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0,
                        "lora_host_memory_factor should large than 1.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor > 1.0,
+  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 1.0,
                        "block_host_memory_factor should large than 1.0");
 
   size_t alignment_bytes = 8;
@@ -170,21 +175,21 @@ int BlockManager::GetHostUsedBlockNumber() { return GetHostAllocator()->GetUsedB
 
 Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks) {
   // Allocate memory on host.
-  STATUS_CHECK_RETURN(host_allocator_->AllocateBlocks(device_blocks.size(), host_blocks));
+  STATUS_CHECK_FAILURE(host_allocator_->AllocateBlocks(device_blocks.size(), host_blocks));
 
   // Get host and device address.
   std::vector<void*> host_addrs;
-  STATUS_CHECK_RETURN(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
+  STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
 
   int device_id = GetDeviceId();
   int block_size = block_manager_config_.device_allocator_config.block_size;
 
   std::vector<void*> device_addrs;
-  STATUS_CHECK_RETURN(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
+  STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
 
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetComputeStreams()[device_id]);
+    stream = &(context_->GetD2HStreams()[device_id]);
   } else {
     // TODO(karlluo): implement multiple thread stream event concurrent.
     throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
@@ -194,6 +199,7 @@ Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<
   for (size_t i = 0; i < device_blocks.size(); i++) {
     CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, (*stream)));
   }
+  CUDA_CHECK(cudaStreamSynchronize(*stream));
 
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     // TODO(karlluo): implement multiple thread stream event concurrent.
@@ -210,17 +216,17 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
   int block_size = block_manager_config_.device_allocator_config.block_size;
 
   // Allocate memory on device.
-  STATUS_CHECK_RETURN(device_allocators_[device_id]->AllocateBlocks(host_blocks.size(), device_blocks));
+  STATUS_CHECK_FAILURE(device_allocators_[device_id]->AllocateBlocks(host_blocks.size(), device_blocks));
 
   std::vector<void*> device_addrs;
-  STATUS_CHECK_RETURN(GetBlockPtrs(device_blocks, device_addrs));
+  STATUS_CHECK_FAILURE(GetBlockPtrs(device_blocks, device_addrs));
 
   std::vector<void*> host_addrs;
-  STATUS_CHECK_RETURN(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
+  STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
 
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetComputeStreams()[device_id]);
+    stream = &(context_->GetH2DStreams()[device_id]);
   } else {
     // TODO(karlluo): implement multiple thread stream event concurrent.
     throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
@@ -230,6 +236,7 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
   for (size_t i = 0; i < host_blocks.size(); i++) {
     CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, (*stream)));
   }
+  CUDA_CHECK(cudaStreamSynchronize(*stream));
 
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     // TODO(karlluo): implement multiple thread stream event concurrent.

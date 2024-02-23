@@ -4,7 +4,10 @@
 
 #include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler.h"
 
+#include <algorithm>
+#include <future>
 #include <memory>
+#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -17,14 +20,55 @@
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
 
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context)
-    : batch_schedule_config_(batch_scheduler_config), context_(context) {}
+    : batch_scheduler_config_(batch_scheduler_config), context_(context) {
+  threadpool_ = std::make_shared<ThreadPool>(batch_scheduler_config.swap_threadpool_size);
+  threadpool_->Start();
 
-BatchScheduler::~BatchScheduler() {}
+  waiting_queue_.reserve(batch_scheduler_config_.max_waiting_queue_len);
+  running_queue_.reserve(batch_scheduler_config_.max_batch_size);
+  swapped_queue_.reserve(batch_scheduler_config_.max_batch_size);
+
+  waiting_buffer_queue_.reserve(batch_scheduler_config_.max_waiting_queue_len);
+  swapin_pending_queue_.reserve(batch_scheduler_config_.max_batch_size);
+  swapout_pending_queue_.reserve(batch_scheduler_config_.max_batch_size);
+
+  running_step_token_num_list_.reserve(batch_scheduler_config_.max_batch_size);
+  running_step_block_num_list_.reserve(batch_scheduler_config_.max_batch_size);
+  running_curr_block_num_list_.reserve(batch_scheduler_config_.max_batch_size);
+  running_swapped_indexes_.reserve(batch_scheduler_config_.max_batch_size);
+
+  swapped_step_token_num_list_.reserve(batch_scheduler_config_.max_batch_size);
+  swapped_curr_block_num_list_.reserve(batch_scheduler_config_.max_batch_size);
+  swapped_running_indexes_.reserve(batch_scheduler_config_.max_batch_size);
+
+  waiting_step_token_num_list_.reserve(batch_scheduler_config_.max_waiting_queue_len);
+  waiting_total_block_num_list_.reserve(batch_scheduler_config_.max_waiting_queue_len);
+  waiting_running_indexes_.reserve(batch_scheduler_config_.max_waiting_queue_len);
+}
+
+BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
+
+void BatchScheduler::SwapOutAsync(std::shared_ptr<InferRequest> req) {
+  req->swap_pending = true;
+  req->swap_future = threadpool_->Submit([=]() {
+    req->SwapOutAsync();
+    req->swap_pending = false;
+  });
+}
+
+void BatchScheduler::SwapInAsync(std::shared_ptr<InferRequest> req) {
+  req->swap_pending = true;
+  threadpool_->Submit([=]() {
+    req->SwapInAsync();
+    req->swap_pending = false;
+  });
+}
 
 Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_request) {
   NLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ".";
@@ -36,17 +80,79 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
     return infer_request->finish_status;
   }
 
-  std::lock_guard<std::mutex> guard(queue_mutex_);
-  waiting_queue_.push_back(infer_request);
+  std::lock_guard<std::mutex> guard(queue_buffer_mutex_);
+  waiting_buffer_queue_.push_back(infer_request);
   return Status();
 }
 
+void BatchScheduler::MergeWaitingBufferQueue() {
+  std::lock_guard<std::mutex> guard(queue_buffer_mutex_);
+
+  waiting_queue_.insert(waiting_queue_.end(), waiting_buffer_queue_.begin(), waiting_buffer_queue_.end());
+  waiting_buffer_queue_.clear();
+}
+
+void BatchScheduler::MergePendingSwapoutRequest() {
+  for (auto it = swapout_pending_queue_.begin(); it != swapout_pending_queue_.end();) {
+    auto &req = *it;
+    if (!req->swap_pending) {
+      NLLM_LOG_DEBUG << "Merge swapout req " << req->req_id << " to swapped.";
+      swapped_queue_.insert(swapped_queue_.begin(), req);
+      it = swapout_pending_queue_.erase(it);
+      continue;
+    }
+    ++it;
+  }
+}
+
+void BatchScheduler::MergePendingSwapinRequests() {
+  for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end();) {
+    auto &req = *it;
+    if (!req->swap_pending) {
+      NLLM_LOG_DEBUG << "Merge swapin req " << req->req_id << " to running.";
+      running_queue_.push_back(req);
+      it = swapin_pending_queue_.erase(it);
+      continue;
+    }
+    ++it;
+  }
+}
+
+void BatchScheduler::WaitPendingSwapoutDone() {
+  for (auto it = swapout_pending_queue_.begin(); it != swapout_pending_queue_.end(); ++it) {
+    auto &req = *it;
+    if (req->swap_pending) {
+      req->swap_future.wait();
+    }
+  }
+}
+
+void BatchScheduler::WaitPendingSwapinDone() {
+  for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end(); ++it) {
+    auto &req = *it;
+    if (req->swap_pending) {
+      req->swap_future.wait();
+    }
+  }
+}
+
+size_t BatchScheduler::GetPendingBlockNumber() {
+  size_t pending_block_num = 0;
+  for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end(); ++it) {
+    auto &req = *it;
+    if (req->swap_pending) {
+      pending_block_num += req->GetCurrentBlockNumber();
+    }
+  }
+  return pending_block_num;
+}
+
 bool BatchScheduler::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
-  return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_schedule_config_.waiting_timeout_in_ms;
+  return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_scheduler_config_.waiting_timeout_in_ms;
 }
 
 bool BatchScheduler::CheckWaitingQueueFull() {
-  return waiting_queue_.size() >= batch_schedule_config_.max_waiting_queue_len;
+  return waiting_queue_.size() >= batch_scheduler_config_.max_waiting_queue_len;
 }
 
 bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
@@ -62,11 +168,12 @@ bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req)
 
 void BatchScheduler::ResetSchedule() { schedule_time_in_ms_ = GetCurrentTimeInMs(); }
 
-void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                                     size_t &max_free_block_num, size_t &total_swapout_num) {
+void BatchScheduler::PrepareRunningRequests(std::vector<size_t> &step_token_num_list,
+                                            std::vector<size_t> &step_block_num_list,
+                                            std::vector<size_t> &curr_block_num_list) {
   for (auto it = running_queue_.begin(); it != running_queue_.end();) {
-    auto req = *it;
-    NLLM_LOG_DEBUG << "try req " << req->req_id << " in running_queue_";
+    auto &req = *it;
+    NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in running_queue_";
 
     req->ResetInferStage();
 
@@ -74,12 +181,11 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     if (CheckRequestFinish(req)) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
 
-      max_free_block_num += req->GetCurrentBlockNumber();
-
       req->finish_status = Status(RET_SUCCESS);
-      it = running_queue_.erase(it);
+      req->FreeBlocks();
       req->finished = true;
       req->Notify();
+      it = running_queue_.erase(it);
       continue;
     }
 
@@ -87,250 +193,359 @@ void BatchScheduler::ScheduleRunning(size_t &total_token_num, size_t &total_bloc
     if (CheckRequestTimeout(req)) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " timeout in running.";
 
-      max_free_block_num += req->GetCurrentBlockNumber();
-
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
-      it = running_queue_.erase(it);
       req->finished = true;
+      req->FreeBlocks();
       req->Notify();
+      it = running_queue_.erase(it);
       continue;
     }
 
     // Notify streaming iterator if needed.
     req->NotifyStep();
 
-    if (req->infer_stage == InferStage::STAGE_CONTEXT) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " change from context decode to decode";
-      req->infer_stage = InferStage::STATE_DECODE;
-    }
-
-    // Swap left running reqs if schedule step finished.
-    if (schedule_step_finish) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " following swapped out.";
-      NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      total_swapout_num += 1;
-      max_free_block_num += req->GetCurrentBlockNumber();
-
-      NLLM_LOG_DEBUG << "Result: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      req->SwapOutAsync();
-      swapped_queue_.push_back(req);
-      it = running_queue_.erase(it);
-      continue;
-    }
-
-    // Check total token number and block number.
-    size_t step_token_num_wanted = req->GetStepTokenNumber();
-    size_t step_block_num_wanted = req->GetStepBlockNumber();
-
-    total_token_num += step_token_num_wanted;
-    total_block_num += step_block_num_wanted;
-
-    if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() > batch_schedule_config_.max_batch_size) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " swapped out.";
-      NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      total_token_num -= step_token_num_wanted;
-      total_block_num -= step_block_num_wanted;
-
-      total_swapout_num += 1;
-      max_free_block_num += req->GetCurrentBlockNumber();
-
-      NLLM_LOG_DEBUG << "Result: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      req->SwapOutAsync();
-      swapped_queue_.push_back(req);
-      it = running_queue_.erase(it);
-      schedule_step_finish = true;
-      continue;
-    }
-
-    // Allocate blocks and continue running.
-    NLLM_LOG_DEBUG << "req " << req->req_id << " continue running.";
-    if (step_block_num_wanted > 0) {
-      for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
-        std::vector<int> blocks;
-        GetBlockManager()->SetDeviceId(i);
-        GetBlockManager()->AllocateBlocks(step_block_num_wanted, blocks);
-        req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
-      }
-    }
+    step_token_num_list.push_back(req->GetStepTokenNumber());
+    step_block_num_list.push_back(req->GetStepBlockNumber());
+    curr_block_num_list.push_back(req->GetCurrentBlockNumber());
     ++it;
   }
 }
 
-void BatchScheduler::ScheduleSwapped(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                                     size_t &max_free_block_num) {
+void BatchScheduler::PrepareSwappedRequests(std::vector<size_t> &step_token_num_list,
+                                            std::vector<size_t> &curr_block_num_list, bool skip_collect) {
   for (auto it = swapped_queue_.begin(); it != swapped_queue_.end();) {
-    auto req = *it;
-    NLLM_LOG_DEBUG << "Try req " << req->req_id << " in swapped_queue_";
+    auto &req = *it;
+    NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in swapped_queue_";
 
     // Check timeout, no finished req in swapped queue.
     if (CheckRequestTimeout(req)) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " timeout in swapped.";
 
-      max_free_block_num += req->GetCurrentBlockNumber();
-
-      // Drop the swapped blocks.
       req->DropSwappedAsync();
 
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
-      it = swapped_queue_.erase(it);
       req->finished = true;
       req->Notify();
+      it = swapped_queue_.erase(it);
       continue;
     }
 
-    // Stay swapped and step to next.
-    if (schedule_step_finish) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " stay swapped.";
-      ++it;
-      continue;
+    if (!skip_collect) {
+      step_token_num_list.push_back(req->GetStepTokenNumber());
+      curr_block_num_list.push_back(req->GetCurrentBlockNumber());
     }
-
-    // All the bocks must be swapped in for swapped reqs.
-    // For swapped req, all blocks should be swapped in, and then allocate new block if necessary.
-    size_t step_token_num_wanted = req->GetStepTokenNumber();
-    size_t total_block_num_wanted = req->GetTotalBlockNumber();
-
-    total_token_num += step_token_num_wanted;
-    total_block_num += total_block_num_wanted;
-
-    if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() >= batch_schedule_config_.max_batch_size) {
-      // stay swapped.
-      NLLM_LOG_DEBUG << "swapped req " << req->req_id << " stay swapped.";
-      NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      total_token_num -= step_token_num_wanted;
-      total_block_num -= total_block_num_wanted;
-
-      NLLM_LOG_DEBUG << "Result: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      schedule_step_finish = true;
-      ++it;
-      continue;
-    }
-
-    size_t step_block_num_wanted = req->GetStepBlockNumber();
-
-    NLLM_LOG_DEBUG << "swapped req " << req->req_id << " swap in and ready to run.";
-    req->SwapInAsync();
-    if (step_block_num_wanted > 0) {
-      for (int i = 0; i < context_->GetTensorParallelSize(); ++i) {
-        std::vector<int> blocks;
-        GetBlockManager()->SetDeviceId(i);
-        GetBlockManager()->AllocateBlocks(step_block_num_wanted, blocks);
-        req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
-      }
-    }
-
-    running_queue_.push_back(req);
-    it = swapped_queue_.erase(it);
+    ++it;
   }
 }
 
-void BatchScheduler::ScheduleWaiting(size_t &total_token_num, size_t &total_block_num, bool &schedule_step_finish,
-                                     size_t &max_free_block_num) {
+void BatchScheduler::PrepareWaitingRequests(std::vector<size_t> &step_token_num_list,
+                                            std::vector<size_t> &total_block_num_list, bool skip_collect) {
   for (auto it = waiting_queue_.begin(); it != waiting_queue_.end();) {
     auto &req = *it;
-    NLLM_LOG_DEBUG << "Try req " << req->req_id << " in waiting_queue_";
+    NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in waiting_queue_";
 
     // Check timeout
     if (CheckRequestTimeout(req)) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " timeout in waiting.";
 
-      // No blocks allocated yet.
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
-      it = waiting_queue_.erase(it);
       req->finished = true;
       req->Notify();
+      it = waiting_queue_.erase(it);
       continue;
     }
 
-    // Stay waiting and step to next.
-    if (schedule_step_finish) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " stay waiting.";
-      ++it;
+    if (!skip_collect) {
+      step_token_num_list.push_back(req->GetStepTokenNumber());
+      total_block_num_list.push_back(req->GetTotalBlockNumber());
+    }
+    ++it;
+  }
+}
+
+void BatchScheduler::ProcessRunningRequests(const std::vector<size_t> &step_token_num_list,
+                                            const std::vector<size_t> &step_block_num_list,
+                                            const std::vector<size_t> &curr_block_num_list,
+                                            std::vector<int> &swapped_indexes, size_t &step_token_num_sum) {
+  size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  size_t total_pending_block_num = GetPendingBlockNumber();
+  if (total_free_block_num > total_pending_block_num) {
+    total_free_block_num -= total_pending_block_num;
+  } else {
+    WaitPendingSwapinDone();
+    total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+    total_pending_block_num = GetPendingBlockNumber();
+    if (total_free_block_num > total_pending_block_num) {
+      total_free_block_num -= total_pending_block_num;
+    } else {
+      total_free_block_num = 0;
+    }
+  }
+
+  size_t step_block_num_sum = std::reduce(step_block_num_list.begin(), step_block_num_list.end());
+
+  step_token_num_sum = std::reduce(step_token_num_list.begin(), step_token_num_list.end());
+
+  size_t step_batch_size = running_queue_.size();
+  size_t swapout_block_threshold = step_batch_size * batch_scheduler_config_.swapout_block_threshold;
+
+  // Swapout the last requests.
+  swapped_indexes.clear();
+  while (step_token_num_sum > batch_scheduler_config_.max_token_number ||
+         step_batch_size > batch_scheduler_config_.max_batch_size ||
+         step_block_num_sum + swapout_block_threshold > total_free_block_num) {
+    --step_batch_size;
+    swapout_block_threshold = step_batch_size * batch_scheduler_config_.swapout_block_threshold;
+
+    step_token_num_sum -= step_token_num_list[step_batch_size];
+    step_block_num_sum -= step_block_num_list[step_batch_size];
+    total_free_block_num += curr_block_num_list[step_batch_size];
+
+    swapped_indexes.push_back(step_batch_size);
+  }
+
+  // Make if [N - 1, N, N + 1] order.
+  std::reverse(swapped_indexes.begin(), swapped_indexes.end());
+}
+
+void BatchScheduler::ProcessSwappedRequests(const std::vector<size_t> &step_token_num_list,
+                                            const std::vector<size_t> &curr_block_num_list,
+                                            std::vector<int> &running_indexes, size_t &step_token_num_sum,
+                                            size_t &curr_block_num_sum) {
+  size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  size_t total_pending_block_num = GetPendingBlockNumber();
+  if (total_free_block_num > total_pending_block_num) {
+    total_free_block_num -= total_pending_block_num;
+  } else {
+    WaitPendingSwapinDone();
+    total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+    total_pending_block_num = GetPendingBlockNumber();
+    if (total_free_block_num > total_pending_block_num) {
+      total_free_block_num -= total_pending_block_num;
+    } else {
+      total_free_block_num = 0;
+    }
+  }
+
+  size_t step_batch_size = running_queue_.size();
+  size_t swapin_block_threshold = step_batch_size * batch_scheduler_config_.swapin_block_threshold;
+
+  running_indexes.clear();
+  for (size_t i = 0; i < swapped_queue_.size(); ++i) {
+    ++step_batch_size;
+    swapin_block_threshold = step_batch_size * batch_scheduler_config_.swapin_block_threshold;
+
+    step_token_num_sum += step_token_num_list[i];
+    curr_block_num_sum += curr_block_num_list[i];
+
+    if (step_token_num_sum < batch_scheduler_config_.max_token_number &&
+        step_batch_size < batch_scheduler_config_.max_batch_size &&
+        curr_block_num_sum + swapin_block_threshold < total_free_block_num) {
+      running_indexes.push_back(i);
       continue;
     }
 
-    size_t step_token_num_wanted = req->GetStepTokenNumber();
-    size_t total_block_num_wanted = req->GetTotalBlockNumber();
+    // Stop swapin.
+    step_token_num_sum -= step_token_num_list[i];
+    curr_block_num_sum -= curr_block_num_list[i];
+    break;
+  }
+}
 
-    total_token_num += step_token_num_wanted;
-    total_block_num += total_block_num_wanted;
+void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_token_num_list,
+                                            const std::vector<size_t> &total_block_num_list,
+                                            std::vector<int> &running_indexes, size_t &step_token_num_sum,
+                                            size_t &total_block_num_sum) {
+  size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  size_t total_pending_block_num = GetPendingBlockNumber();
+  if (total_free_block_num > total_pending_block_num) {
+    total_free_block_num -= total_pending_block_num;
+  } else {
+    WaitPendingSwapinDone();
+    total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+    total_pending_block_num = GetPendingBlockNumber();
+    if (total_free_block_num > total_pending_block_num) {
+      total_free_block_num -= total_pending_block_num;
+    } else {
+      total_free_block_num = 0;
+    }
+  }
 
-    if (total_token_num > batch_schedule_config_.max_token_number || total_block_num > max_free_block_num ||
-        running_queue_.size() >= batch_schedule_config_.max_batch_size) {
-      // stay waiting.
-      NLLM_LOG_DEBUG << "req " << req->req_id << " stay waiting.";
-      NLLM_LOG_DEBUG << "Reason: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
+  size_t step_batch_size = running_queue_.size() + swapin_pending_queue_.size();
+  size_t launch_block_threshold = step_batch_size * batch_scheduler_config_.launch_block_threshold;
 
-      total_token_num -= step_token_num_wanted;
-      total_block_num -= total_block_num_wanted;
+  running_indexes.clear();
+  for (size_t i = 0; i < waiting_queue_.size(); ++i) {
+    ++step_batch_size;
+    launch_block_threshold = step_batch_size * batch_scheduler_config_.launch_block_threshold;
+    step_token_num_sum += step_token_num_list[i];
+    total_block_num_sum += total_block_num_list[i];
 
-      NLLM_LOG_DEBUG << "Result: total_token_num:" << total_token_num
-                     << ", max_token_number:" << batch_schedule_config_.max_token_number
-                     << ", total_block_num:" << total_block_num << ", max_free_block_num:" << max_free_block_num;
-
-      schedule_step_finish = true;
-      ++it;
+    if (step_token_num_sum < batch_scheduler_config_.max_token_number &&
+        step_batch_size < batch_scheduler_config_.max_batch_size &&
+        total_block_num_sum + launch_block_threshold < total_free_block_num) {
+      running_indexes.push_back(i);
       continue;
     }
 
-    if (total_block_num_wanted > 0) {
-      for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
-        std::vector<int> blocks;
-        GetBlockManager()->SetDeviceId(i);
-        GetBlockManager()->AllocateBlocks(total_block_num_wanted, blocks);
-        req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+    // Stay waiting.
+    step_token_num_sum -= step_token_num_list[i];
+    total_block_num_sum -= total_block_num_list[i];
+    break;
+  }
+}
+
+void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_other) {
+  MergePendingSwapinRequests();
+  if (running_queue_.empty()) {
+    return;
+  }
+
+  // Check timeout and finish status.
+  running_step_token_num_list_.clear();
+  running_step_block_num_list_.clear();
+  running_curr_block_num_list_.clear();
+  PrepareRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_);
+  if (running_queue_.empty()) {
+    return;
+  }
+
+  running_swapped_indexes_.clear();
+  ProcessRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_,
+                         running_swapped_indexes_, step_token_num_sum);
+  skip_other = !running_swapped_indexes_.empty();
+
+  size_t visit_idx = 0;
+  constexpr size_t MAX_SIZE_T = std::numeric_limits<size_t>::max();
+  size_t swapout_pos = running_swapped_indexes_.empty() ? MAX_SIZE_T : running_swapped_indexes_.front();
+  for (size_t idx = 0; idx < running_queue_.size();) {
+    auto &req = running_queue_[idx];
+    if (visit_idx < swapout_pos) {
+      NLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
+      size_t step_block_num = running_step_block_num_list_[visit_idx];
+      if (step_block_num > 0) {
+        for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+          std::vector<int> blocks;
+          GetBlockManager()->SetDeviceId(i);
+          Status status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
+          if (!status.OK()) {
+            if (!swapout_pending_queue_.empty()) {
+              NLLM_LOG_DEBUG << "No more blocks, waiting util swapout done.";
+              WaitPendingSwapoutDone();
+              status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
+              if (!status.OK()) {
+                NLLM_CHECK_WITH_INFO(false, "No more blocks, exit.");
+              }
+            } else {
+              NLLM_CHECK_WITH_INFO(false, "No more blocks, exit.");
+            }
+          }
+          req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+        }
       }
+      ++idx;
+    } else {
+      NLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
+      SwapOutAsync(req);
+      swapout_pending_queue_.insert(swapout_pending_queue_.begin(), req);
+      running_queue_.erase(running_queue_.begin() + idx);
     }
+    ++visit_idx;
+  }
+}
 
-    NLLM_LOG_DEBUG << "req " << req->req_id << " ready to run.";
-    running_queue_.push_back(req);
-    it = waiting_queue_.erase(it);
+void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
+  MergePendingSwapoutRequest();
+  if (swapped_queue_.empty()) {
+    return;
+  }
+
+  swapped_step_token_num_list_.clear();
+  swapped_curr_block_num_list_.clear();
+  PrepareSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, skip_other);
+  if (skip_other || swapped_queue_.empty()) {
+    return;
+  }
+
+  swapped_running_indexes_.clear();
+  ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
+                         step_token_num_sum, curr_block_num_sum);
+
+  size_t visit_idx = 0;
+  size_t swapin_pos = swapped_running_indexes_.empty() ? 0 : swapped_running_indexes_.back() + 1;
+  for (size_t idx = 0; idx < swapped_queue_.size();) {
+    auto &req = swapped_queue_[idx];
+    if (visit_idx < swapin_pos) {
+      NLLM_LOG_DEBUG << "swapped req " << req->req_id << " swapin async.";
+      SwapInAsync(req);
+      swapin_pending_queue_.push_back(req);
+      swapped_queue_.erase(swapped_queue_.begin() + idx);
+      ++visit_idx;
+      continue;
+    }
+    break;
+  }
+
+  // Skip launch waiting if swapped list is not empty.
+  skip_other = !swapped_queue_.empty();
+}
+
+void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
+  if (waiting_queue_.empty()) {
+    return;
+  }
+
+  waiting_step_token_num_list_.clear();
+  waiting_total_block_num_list_.clear();
+  PrepareWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, skip_other);
+  if (skip_other || waiting_queue_.empty()) {
+    return;
+  }
+
+  waiting_running_indexes_.clear();
+  ProcessWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, waiting_running_indexes_,
+                         step_token_num_sum, curr_block_num_sum);
+
+  size_t visit_idx = 0;
+  size_t launch_pos = waiting_running_indexes_.empty() ? 0 : waiting_running_indexes_.back() + 1;
+  for (size_t idx = 0; idx < waiting_queue_.size();) {
+    auto &req = waiting_queue_[idx];
+    if (visit_idx < launch_pos) {
+      NLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch.";
+      size_t total_block_num = waiting_total_block_num_list_[visit_idx];
+      if (total_block_num > 0) {
+        for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+          std::vector<int> blocks;
+          GetBlockManager()->SetDeviceId(i);
+          GetBlockManager()->AllocateBlocks(total_block_num, blocks);
+          req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
+        }
+      }
+
+      running_queue_.push_back(req);
+      waiting_queue_.erase(waiting_queue_.begin() + idx);
+      ++visit_idx;
+      continue;
+    }
+    break;
   }
 }
 
 std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
-  NLLM_LOG_DEBUG << "Try a scheduler loop.";
-  ResetSchedule();
-
+  NLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(queue_mutex_);
 
-  size_t total_token_num = 0;
-  size_t total_block_num = 0;
-  size_t max_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  MergeWaitingBufferQueue();
+  ResetSchedule();
 
-  size_t total_swapout_num = 0;
-  bool schedule_step_finish = false;
-  ScheduleRunning(total_token_num, total_block_num, schedule_step_finish, max_free_block_num, total_swapout_num);
+  bool skip_other = false;
+  size_t step_token_num_sum = 0;
+  ScheduleRunning(step_token_num_sum, skip_other);
 
-  // Reschedule if reqs swapped, because more blocks is available.
-  if (total_swapout_num > 0) {
-    schedule_step_finish = false;
-  }
+  size_t curr_block_num_sum = 0;
+  ScheduleSwapped(step_token_num_sum, curr_block_num_sum, skip_other);
 
-  ScheduleSwapped(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
-  ScheduleWaiting(total_token_num, total_block_num, schedule_step_finish, max_free_block_num);
+  ScheduleWaiting(step_token_num_sum, curr_block_num_sum, skip_other);
 
   NLLM_LOG_DEBUG << "batch scheduler result: " << running_queue_.size();
   return running_queue_;
