@@ -15,4 +15,4 @@ target_link_libraries(block_manager PUBLIC utils)
 file(GLOB_RECURSE block_manager_test_SRCS
 		 ${PROJECT_SOURCE_DIR}/src/ksana_llm/block_manager/*test.cpp)
 message(STATUS "block_manager_test_SRCS: ${block_manager_test_SRCS}")
-cc_test(block_manager_test SRCS ${block_manager_test_SRCS} DEPS block_manager runtime)
+cpp_test(block_manager_test SRCS ${block_manager_test_SRCS} DEPS block_manager runtime)
