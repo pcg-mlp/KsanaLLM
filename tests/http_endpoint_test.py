@@ -5,6 +5,7 @@ import unittest
 
 
 class TestInferServerHttpEndpoint(unittest.TestCase):
+
     def setUp(self):
         pass
 

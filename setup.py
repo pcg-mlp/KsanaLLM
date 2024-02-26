@@ -62,7 +62,8 @@ class build_ext(build_ext_orig):
             # for local develop
             copy_file(str(build_temp_lib.joinpath(target_lib)), str(deps_lib))
             # for wheel pacakge
-            copy_file(str(build_temp_lib.joinpath(target_lib)), str(extdir.parent.absolute()))
+            copy_file(str(build_temp_lib.joinpath(target_lib)),
+                      str(extdir.parent.absolute()))
 
 
 setup(name='ksana_llm',
