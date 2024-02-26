@@ -15,7 +15,6 @@ from transformers import LlamaConfig
 # install the library with `pip install bfloat16`
 from bfloat16 import bfloat16
 
-
 LORA_WEIGHTS_NAME = "adapter_model.bin"
 LORA_CONFIG_NAME = "adapter_config.json"
 
@@ -47,12 +46,12 @@ def split_and_convert_process(saved_dir, factor, key, val):
 def split_and_convert(args):
     saved_dir = args.saved_dir + "/%d-gpu/" % args.infer_gpu_num
 
-    if(os.path.exists(saved_dir) == False):
+    if (os.path.exists(saved_dir) == False):
         os.makedirs(saved_dir)
 
     t_gpu_num = args.trained_gpu_num
     i_gpu_num = args.infer_gpu_num
-    assert(i_gpu_num % t_gpu_num == 0)
+    assert (i_gpu_num % t_gpu_num == 0)
 
     factor = (int)(i_gpu_num / t_gpu_num)
 
@@ -76,8 +75,8 @@ def split_and_convert(args):
     kv_head_num = head_num
     if "num_key_value_heads" in hf_config:
         kv_head_num = hf_config["num_key_value_heads"]
-    assert(head_num % kv_head_num == 0)
-    assert(kv_head_num % factor == 0)
+    assert (head_num % kv_head_num == 0)
+    assert (kv_head_num % factor == 0)
     kv_head_rep_num = head_num // kv_head_num
 
     np_weight_data_type = get_weight_data_type(args.weight_data_type)
@@ -101,96 +100,114 @@ def split_and_convert(args):
         if kv_head_rep_num == 1:
             # concat direct to FT shape: [hidden_size, 3, head_num, head_size]
             # copied from huggingface_gptj_ckpt_convert.py
-            lora_A_qkv_weights = np.stack(
-                [
-                    param_to_weights(
-                        lora_weights[f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_A.weight']),
-                    param_to_weights(
-                        lora_weights[f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_A.weight']),
-                    param_to_weights(
-                        lora_weights[f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_A.weight']),
-                ])
+            lora_A_qkv_weights = np.stack([
+                param_to_weights(lora_weights[
+                    f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_A.weight']
+                                 ),
+                param_to_weights(lora_weights[
+                    f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_A.weight']
+                                 ),
+                param_to_weights(lora_weights[
+                    f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_A.weight']
+                                 ),
+            ])
             lora_A_qkv_weights = np.transpose(lora_A_qkv_weights, (2, 0, 1))
 
-            lora_B_qkv_weights = np.stack(
-                [
-                    param_to_weights(
-                        lora_weights[f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_B.weight']),
-                    param_to_weights(
-                        lora_weights[f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_B.weight']),
-                    param_to_weights(
-                        lora_weights[f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_B.weight']),
-                ])
+            lora_B_qkv_weights = np.stack([
+                param_to_weights(lora_weights[
+                    f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_B.weight']
+                                 ),
+                param_to_weights(lora_weights[
+                    f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_B.weight']
+                                 ),
+                param_to_weights(lora_weights[
+                    f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_B.weight']
+                                 ),
+            ])
             lora_B_qkv_weights = np.transpose(lora_B_qkv_weights, (2, 0, 1))
         else:
             # for GQA
             # concat to FT shape: [hidden_size, kv_head_num * (kv_head_rep_num + 2) * head_size]
             # according to https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/convert_llama_weights_to_hf.py
             # [head_num * head_size, hidden_size]->[factor, head_num // factor * head_size, hidden_size]
-            lora_A_q_weight = param_to_weights(
-                lora_weights[f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_A.weight']).reshape(
-                factor, head_num // factor * head_size, hidden_size)
+            lora_A_q_weight = param_to_weights(lora_weights[
+                f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_A.weight']
+                                               ).reshape(
+                                                   factor, head_num // factor *
+                                                   head_size, hidden_size)
             # [kv_head_num * head_size, hidden_size]->[factor, kv_head_num // factor * head_size, hidden_size]
-            lora_A_k_weight = param_to_weights(
-                lora_weights[f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_A.weight']).reshape(
-                factor, kv_head_num // factor * head_size, hidden_size)
+            lora_A_k_weight = param_to_weights(lora_weights[
+                f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_A.weight']
+                                               ).reshape(
+                                                   factor, kv_head_num //
+                                                   factor * head_size,
+                                                   hidden_size)
             # [kv_head_num * head_size, hidden_size]->[factor, kv_head_num // factor * head_size, hidden_size]
-            lora_A_v_weight = param_to_weights(
-                lora_weights[f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_A.weight']).reshape(
-                factor, kv_head_num // factor * head_size, hidden_size)
+            lora_A_v_weight = param_to_weights(lora_weights[
+                f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_A.weight']
+                                               ).reshape(
+                                                   factor, kv_head_num //
+                                                   factor * head_size,
+                                                   hidden_size)
             # [factor, head_num // factor * head_size + 2 * kv_head_num // factor * head_size, hidden_size]
             lora_A_qkv_weights = np.concatenate(
                 (lora_A_q_weight, lora_A_k_weight, lora_A_v_weight), axis=1)
             # [hidden_size, factor * (head_num // factor * head_size + 2 * kv_head_num // factor * head_size)]
-            lora_A_qkv_weights = np.transpose(
-                lora_A_qkv_weights, (2, 0, 1)).reshape(
-                hidden_size, -1)
+            lora_A_qkv_weights = np.transpose(lora_A_qkv_weights,
+                                              (2, 0, 1)).reshape(
+                                                  hidden_size, -1)
 
-            lora_B_q_weight = param_to_weights(
-                lora_weights[f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_B.weight']).reshape(
-                factor, head_num // factor * head_size, hidden_size)
+            lora_B_q_weight = param_to_weights(lora_weights[
+                f'base_model.model.model.layers.{l}.self_attn.q_proj.lora_B.weight']
+                                               ).reshape(
+                                                   factor, head_num // factor *
+                                                   head_size, hidden_size)
             # [kv_head_num * head_size, hidden_size]->[factor, kv_head_num // factor * head_size, hidden_size]
-            lora_B_k_weight = param_to_weights(
-                lora_weights[f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_B.weight']).reshape(
-                factor, kv_head_num // factor * head_size, hidden_size)
+            lora_B_k_weight = param_to_weights(lora_weights[
+                f'base_model.model.model.layers.{l}.self_attn.k_proj.lora_B.weight']
+                                               ).reshape(
+                                                   factor, kv_head_num //
+                                                   factor * head_size,
+                                                   hidden_size)
             # [kv_head_num * head_size, hidden_size]->[factor, kv_head_num // factor * head_size, hidden_size]
-            lora_B_v_weight = param_to_weights(
-                lora_weights[f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_B.weight']).reshape(
-                factor, kv_head_num // factor * head_size, hidden_size)
+            lora_B_v_weight = param_to_weights(lora_weights[
+                f'base_model.model.model.layers.{l}.self_attn.v_proj.lora_B.weight']
+                                               ).reshape(
+                                                   factor, kv_head_num //
+                                                   factor * head_size,
+                                                   hidden_size)
             # [factor, head_num // factor * head_size + 2 * kv_head_num // factor * head_size, hidden_size]
             lora_B_qkv_weights = np.concatenate(
                 (lora_B_q_weight, lora_B_k_weight, lora_B_v_weight), axis=1)
             # [hidden_size, factor * (head_num // factor * head_size + 2 * kv_head_num // factor * head_size)]
-            lora_B_qkv_weights = np.transpose(
-                lora_B_qkv_weights, (2, 0, 1)).reshape(
-                hidden_size, -1)
+            lora_B_qkv_weights = np.transpose(lora_B_qkv_weights,
+                                              (2, 0, 1)).reshape(
+                                                  hidden_size, -1)
 
         lora_A_qkv_weights_base_name = f'base_model.model.model.layers.{l}.attention.query_key_value.lora_A.weight'
-        split_and_convert_process(
-            saved_dir,
-            factor,
-            lora_A_qkv_weights_base_name,
-            lora_A_qkv_weights)
+        split_and_convert_process(saved_dir, factor,
+                                  lora_A_qkv_weights_base_name,
+                                  lora_A_qkv_weights)
 
         lora_B_qkv_weights_base_name = f'base_model.model.model.layers.{l}.attention.query_key_value.lora_B.weight'
-        split_and_convert_process(
-            saved_dir,
-            factor,
-            lora_B_qkv_weights_base_name,
-            lora_B_qkv_weights)
+        split_and_convert_process(saved_dir, factor,
+                                  lora_B_qkv_weights_base_name,
+                                  lora_B_qkv_weights)
 
         # attention dense
-        lora_A_o_weight = param_to_weights(
-            lora_weights[f'base_model.model.model.layers.{l}.self_attn.o_proj.lora_A.weight']).T
+        lora_A_o_weight = param_to_weights(lora_weights[
+            f'base_model.model.model.layers.{l}.self_attn.o_proj.lora_A.weight']
+                                           ).T
         lora_A_o_weight_base_name = f'base_model.model.model.layers.{l}.attention.dense.lora_A.weight'
-        split_and_convert_process(
-            saved_dir, factor, lora_A_o_weight_base_name, lora_A_o_weight)
+        split_and_convert_process(saved_dir, factor, lora_A_o_weight_base_name,
+                                  lora_A_o_weight)
 
-        lora_B_o_weight = param_to_weights(
-            lora_weights[f'base_model.model.model.layers.{l}.self_attn.o_proj.lora_B.weight']).T
+        lora_B_o_weight = param_to_weights(lora_weights[
+            f'base_model.model.model.layers.{l}.self_attn.o_proj.lora_B.weight']
+                                           ).T
         lora_B_o_weight_base_name = f'base_model.model.model.layers.{l}.attention.dense.lora_B.weight'
-        split_and_convert_process(
-            saved_dir, factor, lora_B_o_weight_base_name, lora_B_o_weight)
+        split_and_convert_process(saved_dir, factor, lora_B_o_weight_base_name,
+                                  lora_B_o_weight)
 
         print(f"done layer {l}")
 
@@ -226,10 +243,7 @@ if __name__ == "__main__":
     parser.add_argument("-weight_data_type",
                         type=str,
                         default="fp32",
-                        choices=[
-                            "fp32",
-                            "fp16",
-                            "bf16"])
+                        choices=["fp32", "fp16", "bf16"])
     parser.add_argument('-model_name',
                         '-m_n',
                         type=str,

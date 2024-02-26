@@ -17,9 +17,9 @@ from fastapi import FastAPI
 import asyncio
 from functools import partial
 from concurrent import futures
+
 model_executor = futures.ThreadPoolExecutor(max_workers=64)
 tokenizer_executor = futures.ThreadPoolExecutor(max_workers=32)
-
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
@@ -61,7 +61,6 @@ async def generate(request: Request) -> Response:
     - model_name: the model your wanner to infer.
     - prompt: the prompt to use for the generation.
     - stream: whether to stream the results or not.
-    - other fields: the sampling parameters (See `SamplingParams` for details).
     """
 
     request_dict = await request.json()
@@ -79,14 +78,16 @@ async def generate(request: Request) -> Response:
         temperature=sampling_config["temperature"])
 
     loop = asyncio.get_event_loop()
-    results_generator = await loop.run_in_executor(model_executor,
-                                                   partial(model.generate,
-                                                           model_name=model_name,
-                                                           inputs=input_tokens,
-                                                           generation_config=generation_config,
-                                                           streamer=None))
+    results_generator = await loop.run_in_executor(
+        model_executor,
+        partial(model.generate,
+                model_name=model_name,
+                inputs=input_tokens,
+                generation_config=generation_config,
+                streamer=None))
 
     if enable_streaming:
+
         async def stream_results() -> AsyncGenerator[bytes, None]:
             async for request_output in results_generator:
                 if request_output:
@@ -97,8 +98,8 @@ async def generate(request: Request) -> Response:
 
         return StreamingResponse(stream_results())
 
-    output_text = await loop.run_in_executor(tokenizer_executor,
-                                             partial(tokenizer.decode, results_generator))
+    output_text = await loop.run_in_executor(
+        tokenizer_executor, partial(tokenizer.decode, results_generator))
 
     return JSONResponse({"texts": output_text})
 
@@ -115,7 +116,7 @@ if __name__ == "__main__":
     else:
         log_level = "info"
         print(
-            f"Not support env: NLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
+            f"Uvicorn's logging not support env: NLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
         )
     app.root_path = args.root_path
     uvicorn.run(app,

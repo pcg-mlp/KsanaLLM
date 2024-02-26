@@ -16,14 +16,12 @@ class AutoModel(object):
     """
 
     @classmethod
-    def from_config(cls,
-                    config_file: Optional[Union[str, os.PathLike]],
+    def from_config(cls, config_file: Optional[Union[str, os.PathLike]],
                     **kwargs):
         """The model loader interface, invoked by venus.
         """
         if not os.path.exists(config_file):
-            raise RuntimeError(
-                f"The config file {config_file} is not exists.")
+            raise RuntimeError(f"The config file {config_file} is not exists.")
 
         if not config_file.lower().endswith('.yaml'):
             raise RuntimeError(

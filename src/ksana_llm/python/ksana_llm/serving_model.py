@@ -105,10 +105,10 @@ class ServingModel(object):
         sampling_config.temperature = generation_config.temperature
 
         if streamer is None:
-            status, outputs = self._serving.generate(model_name, inputs,
-                                                     sampling_config)
+            _, outputs = self._serving.generate(model_name, inputs,
+                                                sampling_config)
             return outputs
         else:
-            status, streaming_iterator = self._serving.generate_streaming(
+            _, streaming_iterator = self._serving.generate_streaming(
                 model_name, inputs, sampling_config)
             return PyStreamingIterator(streaming_iterator)

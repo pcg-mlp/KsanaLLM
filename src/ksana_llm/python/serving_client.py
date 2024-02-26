@@ -15,10 +15,7 @@ def args_config():
                         type=str,
                         default="0.0.0.0",
                         help='server host address')
-    parser.add_argument('--port',
-                        type=int,
-                        default=8888,
-                        help='server port')
+    parser.add_argument('--port', type=int, default=8888, help='server port')
     args = parser.parse_args()
     return args
 
@@ -39,15 +36,13 @@ if __name__ == "__main__":
     args = args_config()
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
 
-    # text_list = ["您好！"]
     text_list = ["您好!", "您好!"]
 
     multi_proc_list = []
     multi_proc_queue = multiprocessing.Queue()
 
     for i in range(len(text_list)):
-        # prompt = "USER:%s\nASSISTANT:" % text_list[i]
-        prompt = "[INST]%s[/INST]" % text_list[i]
+        prompt = "USER:%s\nASSISTANT:" % text_list[i]
 
         data = {
             "model_name": "llama",
@@ -57,11 +52,15 @@ if __name__ == "__main__":
                 "topk": 1,
                 "topp": 0.0
             },
+            "stream": False,
         }
 
-        proc = multiprocessing.Process(
-            target=post_request, args=(
-                serv, json.dumps(data), multi_proc_queue,))
+        proc = multiprocessing.Process(target=post_request,
+                                       args=(
+                                           serv,
+                                           json.dumps(data),
+                                           multi_proc_queue,
+                                       ))
         proc.start()
         multi_proc_list.append(proc)
 

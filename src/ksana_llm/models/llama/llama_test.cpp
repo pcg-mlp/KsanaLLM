@@ -43,8 +43,7 @@ class LlamaTest : public testing::Test {
   std::shared_ptr<Context> context_{nullptr};
 };
 
-TEST_F(LlamaTest, ContextDecodeTest) {
-  // 当环境中不包含该路径时, 下载该模型
+TEST_F(LlamaTest, ForwardTest) {
   int device_id = 0;
   CUDA_CHECK(cudaSetDevice(device_id));
   std::filesystem::path ft_path(model_config.path);
@@ -53,13 +52,19 @@ TEST_F(LlamaTest, ContextDecodeTest) {
     EXPECT_TRUE(std::filesystem::exists(ft_path));
   }
 
+  cudaEvent_t start;
+  cudaEvent_t stop;
+  float milliseconds = 0;
+  int rounds = 10;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
   std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
 
   // ContextDecode
   ForwardRequest forward;
   std::vector<int> input_ids = {233, 1681};
-  // std::vector<int> input_ids = {1,306,4658,278,6593,310,2834,338};
   forward.output_tokens = &input_ids;
   forward.logits_buf.resize(1);
   forward.logits_buf[0] = llama->GetLogitsPtr();
@@ -68,11 +73,21 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   GetBlockManager()->AllocateBlocks(1, block_ids);
   forward.kv_cache_ptrs.resize(1);
   GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
-  cudaMemset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
+  CUDA_CHECK(cudaMemset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize()));
   NLLM_LOG_WARNING << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
                                   forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
+
+  std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
+  CUDA_CHECK(cudaEventRecord(start));
+  for (int i = 0; i < rounds; ++i) {
+    llama->ContextDecode(llama_weight, multi_forward_reqs);
+  }
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+  CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+  EXPECT_TRUE((milliseconds / 10) < 35);
 
   // Sampling
   SamplingRequest sample_req;
@@ -100,6 +115,19 @@ TEST_F(LlamaTest, ContextDecodeTest) {
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
   sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
+
+  CUDA_CHECK(cudaEventRecord(start));
+  for (int i = 0; i < rounds; ++i) {
+    llama->Decode(llama_weight, multi_forward_reqs);
+  }
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+  CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+
+  EXPECT_TRUE((milliseconds / 10) < 30);
+
+  CUDA_CHECK(cudaEventDestroy(stop));
+  CUDA_CHECK(cudaEventDestroy(start));
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {
