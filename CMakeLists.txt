@@ -19,9 +19,9 @@ find_package(Git QUIET)
 execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
-include(base)
 include(LLM_kernels)
 include(FlashAttention)
+include(base)
 
 # set compiler flags
 set(CXX_STD "17" CACHE STRING "C++ standard")

@@ -20,4 +20,4 @@ file(GLOB_RECURSE models_test_SRCS
      ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/*test.cpp
      ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/*test.cpp)
 message(STATUS "models_test_SRCS: ${models_test_SRCS}")
-cc_test(models_test SRCS ${models_test_SRCS} DEPS models runtime)
+cpp_test(models_test SRCS ${models_test_SRCS} DEPS models runtime)
