@@ -85,6 +85,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   torch::Tensor q_tensor = tt[0];
   torch::Tensor k_tensor = tt[1];
   torch::Tensor v_tensor = tt[2];
+
   rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
                                  reinterpret_cast<half*>(q_tensor.data_ptr()),
                                  reinterpret_cast<half*>(k_tensor.data_ptr()), total_tokens, stream);
@@ -94,6 +95,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
                                        reinterpret_cast<half*>(v_tensor.data_ptr()), k_list, v_list,
                                        reinterpret_cast<size_t*>(seqlen), reinterpret_cast<int*>(block_offset),
                                        block_size, batch, total_tokens, num_heads, head_size, stride_size, stream);
+
   // flash attention
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
                              torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),

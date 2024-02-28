@@ -13,7 +13,7 @@ def args_config():
     parser = argparse.ArgumentParser()
     parser.add_argument('--host',
                         type=str,
-                        default="0.0.0.0",
+                        default="localhost",
                         help='server host address')
     parser.add_argument('--port', type=int, default=8888, help='server port')
     args = parser.parse_args()
@@ -21,7 +21,7 @@ def args_config():
 
 
 def post_request(serv, data, queue=None):
-    resp = requests.post(serv, data=data, timeout=600000)
+    resp = requests.post(serv, json=data, timeout=600000)
     if queue is None:
         return json.loads(resp.content)
     else:
@@ -36,13 +36,13 @@ if __name__ == "__main__":
     args = args_config()
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
 
-    text_list = ["您好!", "您好!"]
+    text_list = ["[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]"]
 
     multi_proc_list = []
     multi_proc_queue = multiprocessing.Queue()
-
+    start_time = time.time()
     for i in range(len(text_list)):
-        prompt = "USER:%s\nASSISTANT:" % text_list[i]
+        prompt = "%s" % text_list[i]
 
         data = {
             "model_name": "llama",
@@ -58,7 +58,7 @@ if __name__ == "__main__":
         proc = multiprocessing.Process(target=post_request,
                                        args=(
                                            serv,
-                                           json.dumps(data),
+                                           data,
                                            multi_proc_queue,
                                        ))
         proc.start()
@@ -69,3 +69,6 @@ if __name__ == "__main__":
 
     for proc in multi_proc_list:
         proc.join()
+
+    end_time = time.time()
+    print("{} requests duration: {:.3f}s".format(len(text_list), end_time - start_time))

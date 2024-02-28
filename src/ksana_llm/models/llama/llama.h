@@ -71,6 +71,7 @@ class Llama : public BaseModel {
   Tensor input_tokens_int32_tensor;
   Tensor rotary_embedding_pos;
   Tensor forward_shape;
+  Tensor cos_sin_cache_tensor;
   std::shared_ptr<Context> context_{nullptr};
 
   std::string saved_dir = "/model/llama-ft/7B/nllm/";
