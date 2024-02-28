@@ -63,6 +63,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   int rotary_embedding = model_config.rotary_embedding;
   head_num /= model_config.tensor_para_size;
   int num_key_value_heads = model_config.num_key_value_heads / model_config.tensor_para_size;
+  int stride_size = head_num * size_per_head * 3;
   int inter_size = model_config.inter_size;
   int max_position_embeddings = model_config.max_position_embeddings;
   float rope_theta = model_config.rope_theta;
@@ -132,10 +133,10 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
     flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
-                                       rotary_embedding, rope_theta, /*is_neox*/ true},
+                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true},
                                       context_, rank_);
     paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
-                                       rotary_embedding, rope_theta, /*is_neox*/ true},
+                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true},
                                       context_, rank_);
   }
 }

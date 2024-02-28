@@ -70,7 +70,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
 
   run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
                             max_tokens, context_->GetComputeStreams()[rank_], cache_offset.GetPtr<void>(), batch_size,
-                            num_heads_, head_size_, num_kv_heads_, block_token_num_, batch_size,
+                            num_heads_, head_size_, num_kv_heads_, stride_size_, block_token_num_, batch_size,
                             rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
                             workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {}, qkv_workspace.GetPtr<void>());
   return Status();

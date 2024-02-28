@@ -91,11 +91,12 @@ TEST_F(LayerTest, AttentionLayerTest) {
   int kv_head_num = 32;
   int size_per_head = 128;
   int rotary_embedding = 128;
+  int stride_size = head_num * size_per_head;
   float rope_theta = 10000.0f;
   bool is_neox = true;
   EXPECT_TRUE(
       flash_attention_layer
-          .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, rotary_embedding, rope_theta, is_neox},
+          .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, rotary_embedding, rope_theta, is_neox},
                 context, 0)
           .OK());
 
@@ -138,7 +139,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   PagedAttentionLayer attention_layer;
   EXPECT_TRUE(attention_layer
                   .Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num, static_cast<int>(size_per_head),
-                         rotary_embedding, rope_theta, is_neox},
+                         stride_size, rotary_embedding, rope_theta, is_neox},
                         context, 0)
                   .OK());
 }
