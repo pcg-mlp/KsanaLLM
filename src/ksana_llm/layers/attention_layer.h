@@ -16,7 +16,6 @@ class AttentionLayer : public BaseLayer {
 
  protected:
   int layer_index_;
-  int max_position_embeddings_;
   int block_size_;
   int block_token_num_;
   int num_heads_;
@@ -24,9 +23,7 @@ class AttentionLayer : public BaseLayer {
   int head_size_;
   int stride_size_;
   bool is_causal_{true};
-  int cos_sin_cache_block_id_;
   llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
-  half* cos_sin_cache_ptr_;
 };
 
 }  // namespace ksana_llm

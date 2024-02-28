@@ -45,6 +45,7 @@ Llama<T>::~Llama() {
   DestroyTensor(forward_shape);
   DestroyTensor(rotary_embedding_pos);
   DestroyTensor(kv_cache_offset_tensor);
+  DestroyTensor(cos_sin_cache_tensor);
 
   // free all cude event
   CUDA_CHECK(cudaEventDestroy(kvcache_offset_event_));
@@ -105,6 +106,9 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CreateTensor(kv_cache_offset_tensor, (max_batch_size_ + 1) * sizeof(int));
   kv_cache_offset_tensor.dtype = TYPE_INT32;
 
+  CreateTensor(cos_sin_cache_tensor, rotary_embedding * max_position_embeddings * sizeof(half));
+  half* cos_sin_cache_ptr = cos_sin_cache_tensor.GetPtr<half>();
+
   GetBlockManager()->SetDeviceId(rank_);
   // TODO: 该步骤先于 Reset device_blocks_Num 发生
   size_t max_block_num = 2048;
@@ -146,10 +150,12 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
     flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
-                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true},
+                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
+                                       std::any(cos_sin_cache_ptr)},
                                       context_, rank_);
     paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
-                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true},
+                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
+                                       std::any(cos_sin_cache_ptr)},
                                       context_, rank_);
   }
 
@@ -325,13 +331,9 @@ void Llama<T>::CopyToLogistBuffer(const size_t batch_size, cudaEvent_t& compute_
   CUDA_CHECK(cudaStreamWaitEvent(d2d_stream, compute_ready_event_));
   // Copy to logits buf
   float* logits_ptr = logits_float[0].GetPtr<float>();
-  for (int idx = 0; idx < batch_size; ++idx) {
-    ForwardRequest& req = forward_reqs[idx];
-    float* logits_dst = req.logits_buf[rank_] + req.logits_offset * vocab_size_;
-    float* logits_src = logits_ptr + idx * vocab_size_;
-    CUDA_CHECK(
-        cudaMemcpyAsync(logits_dst, logits_src, vocab_size_ * sizeof(float), cudaMemcpyDeviceToDevice, d2d_stream));
-  }
+  float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_;
+  CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float),
+                             cudaMemcpyDeviceToDevice, d2d_stream));
   CUDA_CHECK(cudaStreamSynchronize(d2d_stream));
 }
 
@@ -537,7 +539,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   logits_float[0].SaveToFile(saved_dir + "logits_float." + std::to_string(rank_) + ".npy");
 
   CopyToLogistBuffer(batch_size, compute_ready_event_, stream, d2d_stream, forward_reqs, logits_float);
-
   return Status();
 }
 
@@ -744,7 +745,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   logits_float[0].SaveToFile(saved_dir + "logits_float." + std::to_string(rank_) + ".npy");
 
   CopyToLogistBuffer(batch_size, compute_ready_event_, stream, d2d_stream, forward_reqs, logits_float);
-
   return Status();
 }
 
