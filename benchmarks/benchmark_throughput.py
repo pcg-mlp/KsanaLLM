@@ -14,6 +14,7 @@ from typing import AsyncGenerator, List, Tuple
 import aiohttp
 import numpy as np
 from tqdm.asyncio import tqdm
+import csv
 
 # (prompt len, output len, latency)
 REQUEST_LATENCY: List[Tuple[int, int, float]] = []
@@ -30,6 +31,10 @@ def args_config():
                         type=str,
                         default="benchmark_input.csv",
                         help='input data for benchmark')
+    parser.add_argument('--output_csv',
+                        type=str,
+                        default="",
+                        help='output csv file path')
     parser.add_argument("--request_rate",
                         type=float,
                         default=float("inf"),
@@ -54,9 +59,9 @@ async def generate_prompt(
     input_requests: List[str],
     request_rate: float,
 ) -> AsyncGenerator[str, None]:
-    input_requests = iter(input_requests)
-    for request in input_requests:
-        yield request
+    input_requests = enumerate(input_requests)
+    for req_id, request in input_requests:
+        yield req_id, request
 
         if request_rate == float("inf"):
             # If the request rate is infinity, then we don't need to wait.
@@ -67,7 +72,7 @@ async def generate_prompt(
         await asyncio.sleep(interval)
 
 
-async def send_request(prompt: str, api_url: str, pbar: tqdm):
+async def send_request(prompt: str, api_url: str, req_id: int, result_list: List, pbar: tqdm):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
     data = {
@@ -97,7 +102,8 @@ async def send_request(prompt: str, api_url: str, pbar: tqdm):
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
     output_len = len(output.get("texts", ""))
-    # print("Result:", output.get("texts", ""))
+    print(f"\nQuestion {req_id}: {prompt}\nAnswer: ", output.get("texts", ""))
+    result_list[req_id] = output.get("texts", "")
     REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
     pbar.update(1)
 
@@ -106,13 +112,14 @@ async def benchmark(args: argparse.Namespace, api_url: str, inputs: List[str]):
     # inputs = inputs[0:8]
     tasks: List[asyncio.Task] = []
     pbar = tqdm(total=len(inputs))
-    async for prompt in generate_prompt(inputs, args.request_rate):
+    result_list = [""] * len(inputs)
+    async for req_id, prompt in generate_prompt(inputs, args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
-        task = asyncio.create_task(send_request(prompt, api_url, pbar))
+        task = asyncio.create_task(send_request(prompt, api_url, req_id, result_list, pbar))
         tasks.append(task)
     await asyncio.gather(*tasks)
     pbar.close()
-
+    return result_list
 
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
@@ -120,7 +127,8 @@ def main(args: argparse.Namespace):
     inputs = list(input_generator)
 
     benchmark_start_time = time.perf_counter()
-    asyncio.run(benchmark(args, api_url, inputs))
+    result_list = asyncio.run(benchmark(args, api_url, inputs))
+
     benchmark_end_time = time.perf_counter()
     benchmark_time = benchmark_end_time - benchmark_start_time
     print(f"Total time: {benchmark_time:.2f} s")
@@ -139,6 +147,12 @@ def main(args: argparse.Namespace):
     print("Average latency per output token: "
           f"{avg_per_output_token_latency:.2f} s")
 
+    if args.output_csv != "":
+        with open(args.output_csv, "w", newline='') as fs:
+            writer = csv.writer(fs)
+            for idx in range(len(result_list)):
+                result = result_list[idx]
+                writer.writerow([result.replace("</s>", "")])
 
 if __name__ == "__main__":
     args = args_config()

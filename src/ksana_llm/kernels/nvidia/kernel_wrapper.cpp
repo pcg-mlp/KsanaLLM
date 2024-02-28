@@ -71,8 +71,8 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
 
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, int total_tokens,
-                 int max_tokens, int batch, int num_heads, int head_size, bool is_causal, int rank, int block_size,
-                 void** k_list, void** v_list, void* block_offset, cudaStream_t stream) {
+                 int max_tokens, int batch, int num_heads, int head_size, int stride_size, bool is_causal, int rank,
+                 int block_size, void** k_list, void** v_list, void* block_offset, cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
   torch::Tensor qkv_tensor = torch::from_blob(qkv_ptr, {total_tokens, num_heads * head_size * 3}, options);
   auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
@@ -82,13 +82,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
 
   // rotary embedding
-  // TODO: 临时实现: 使用 contiguous() 将离散的 q, k 迁移到连续空间
-  torch::Tensor q_tensor = tt[0].contiguous();
-  torch::Tensor k_tensor = tt[1].contiguous();
-  torch::Tensor v_tensor = tt[2].contiguous();
-  //torch::Tensor q_tensor = tt[0];
-  //torch::Tensor k_tensor = tt[1];
-  //torch::Tensor v_tensor = tt[2];
+  torch::Tensor q_tensor = tt[0];
+  torch::Tensor k_tensor = tt[1];
+  torch::Tensor v_tensor = tt[2];
   rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
                                  reinterpret_cast<half*>(q_tensor.data_ptr()),
                                  reinterpret_cast<half*>(k_tensor.data_ptr()), total_tokens, stream);
@@ -97,7 +93,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   llm_kernels::nvidia::CacheCopy<half>(reinterpret_cast<half*>(k_tensor.data_ptr()),
                                        reinterpret_cast<half*>(v_tensor.data_ptr()), k_list, v_list,
                                        reinterpret_cast<size_t*>(seqlen), reinterpret_cast<int*>(block_offset),
-                                       block_size, batch, total_tokens, num_heads, head_size, stream);
+                                       block_size, batch, total_tokens, num_heads, head_size, stride_size, stream);
   // flash attention
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
                              torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
@@ -114,8 +110,8 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
                          void* context_lens_ptr,   // [num_seqs]
                          int max_context_len, cudaStream_t stream,
                          void* cache_offsets_ptr,  // num_seqs
-                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size, int batch,
-                         void* rotary_embedding_pos, int total_tokens,
+                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
+                         int batch, void* rotary_embedding_pos, int total_tokens,
                          llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, void* workspace,
                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace) {
   const float* alibi_slopes_ptr =
@@ -127,23 +123,12 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
   auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
 
   // rotary embedding
-  void* q_tensor_ptr = qkv_workspace;
-  void* k_tensor_ptr = q_tensor_ptr + (size_t)total_tokens * num_heads * head_size * sizeof(half);
-  void* v_tensor_ptr = k_tensor_ptr + (size_t)total_tokens * num_heads * head_size * sizeof(half);
-
-  // copy q k into contiguous GPU memory
-  size_t data_size = sizeof(half);
-  void* dst = qkv_workspace;
-  void* src = query;
-  CUDA_CHECK(cudaMemcpy2DAsync((char*)dst + 0 * total_tokens * num_heads * head_size * data_size, num_heads * head_size * data_size,
-                               (char*)src + 0 * num_heads * head_size * data_size, 3 * num_heads * head_size * data_size,
-                               num_heads * head_size * data_size, total_tokens, cudaMemcpyDeviceToDevice, stream));
-  CUDA_CHECK(cudaMemcpy2DAsync((char*)dst + 1 * total_tokens * num_heads * head_size * data_size, num_heads * head_size * data_size,
-                               (char*)src + 1 * num_heads * head_size * data_size, 3 * num_heads * head_size * data_size,
-                               num_heads * head_size * data_size, total_tokens, cudaMemcpyDeviceToDevice, stream));
-  CUDA_CHECK(cudaMemcpy2DAsync((char*)dst + 2 * total_tokens * num_heads * head_size * data_size, num_heads * head_size * data_size,
-                               (char*)src + 2 * num_heads * head_size * data_size, 3 * num_heads * head_size * data_size,
-                               num_heads * head_size * data_size, total_tokens, cudaMemcpyDeviceToDevice, stream));
+  torch::Tensor q_tensor = tt[0];
+  torch::Tensor k_tensor = tt[1];
+  torch::Tensor v_tensor = tt[2];
+  void* q_tensor_ptr = q_tensor.data_ptr();
+  void* k_tensor_ptr = k_tensor.data_ptr();
+  void* v_tensor_ptr = v_tensor.data_ptr();
 
   rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
                                  reinterpret_cast<half*>(q_tensor_ptr),
@@ -153,10 +138,11 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
   llm_kernels::nvidia::CachePosCopy<half>(
       reinterpret_cast<half*>(k_tensor_ptr), reinterpret_cast<half*>(v_tensor_ptr), key_cache_ptrs,
       value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
-      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_heads, head_size, stream);
+      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_heads, head_size, stride_size,
+      stream);
 
   llm_kernels::nvidia::PagedAttentionCuda<uint16_t> op;
-  op.SetConfig(num_kv_heads, num_heads, head_size, block_size);
+  op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size);
 
   op.SetInput(reinterpret_cast<uint16_t*>(out), reinterpret_cast<const uint16_t*>(q_tensor_ptr),
               reinterpret_cast<uint16_t**>(key_cache_ptrs), reinterpret_cast<uint16_t**>(value_cache_ptrs),
@@ -172,8 +158,8 @@ template void run_paged_attention<half>(void* out,                // [num_seqs, 
                                         void* context_lens_ptr,   // [num_seqs]
                                         int max_context_len, cudaStream_t stream,
                                         void* cache_offsets_ptr,  // num_seqs
-                                        int num_seqs, int num_heads, int head_size, int num_kv_heads, int block_size,
-                                        int batch, void* rotary_embedding_pos, int total_tokens,
+                                        int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size,
+                                        int block_size, int batch, void* rotary_embedding_pos, int total_tokens,
                                         llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda,
                                         void* workspace, size_t work_size, int rank,
                                         const std::optional<void*>& alibi_slopes, void* qkv_workspace);

@@ -22,6 +22,7 @@ class AttentionLayer : public BaseLayer {
   int num_heads_;
   int num_kv_heads_;
   int head_size_;
+  int stride_size_;
   bool is_causal_{true};
   int cos_sin_cache_block_id_;
   llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;

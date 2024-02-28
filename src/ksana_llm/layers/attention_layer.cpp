@@ -13,6 +13,7 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   num_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
   num_kv_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
   head_size_ = std::any_cast<const int>(parameters[parameter_index++]);
+  stride_size_ = std::any_cast<const int>(parameters[parameter_index++]);
   uint32_t rotary_dim = std::any_cast<const int>(parameters[parameter_index++]);
   float base = std::any_cast<const float>(parameters[parameter_index++]);
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);
@@ -25,7 +26,7 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   GetBlockManager()->GetContiguousPtr(cos_sin_cache_block_id_, cos_sin_cache_ptr);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[rank_]));
   rotary_embedding_cuda_.SetConfig(reinterpret_cast<half*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings_,
-                                   base, head_size_, num_heads_, num_kv_heads_, is_neox,
+                                   base, head_size_, num_heads_, num_kv_heads_, stride_size_, is_neox,
                                    context_->GetMemoryManageStreams()[rank_]);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[rank_]));
 
