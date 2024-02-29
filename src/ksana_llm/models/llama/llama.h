@@ -31,8 +31,7 @@ class Llama : public BaseModel {
   float* GetLogitsPtr();
 
   // The prefill stage.
-  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                       std::vector<ForwardRequest>& forward_reqs);
+  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
   // The decode stage.
   Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
@@ -75,6 +74,37 @@ class Llama : public BaseModel {
   std::shared_ptr<Context> context_{nullptr};
 
   std::string saved_dir = "/model/llama-ft/7B/nllm/";
+
+ private:
+  cudaEvent_t kvcache_offset_event_;
+  cudaEvent_t rotary_embedding_event_;
+  cudaEvent_t input_ids_event_;
+  cudaEvent_t nccl_finish_event_;
+  cudaEvent_t compute_ready_event_;
+  cudaEvent_t logits_transfer_event_;
+
+ private:
+  void PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
+                      const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
+                      cudaStream_t& stream, cudaEvent_t& event);
+
+  void PrepareContextRotaryEmbeddingPos(const size_t batch_size, const size_t total_seq_len,
+                                        const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
+                                        cudaEvent_t& event);
+
+  void PrepareRotaryEmbeddingPos(const size_t batch_size, const std::vector<ForwardRequest>& forward_reqs,
+                                 cudaStream_t& stream, cudaEvent_t& event);
+
+  void PrepareContextInputIds(const size_t batch_size, const size_t total_seq_len, int& max_tokens,
+                              const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
+                              cudaEvent_t& event);
+
+  void PrepareInputIds(const size_t batch_size, int& max_tokens, const std::vector<ForwardRequest>& forward_reqs,
+                       cudaStream_t& stream, cudaEvent_t& event);
+
+  void CopyToLogistBuffer(const size_t batch_size, cudaEvent_t& compute_ready_event_, cudaStream_t& compute_stream,
+                          cudaStream_t& d2d_stream, std::vector<ForwardRequest>& forward_reqs,
+                          std::vector<Tensor>& logits_float);
 };
 
 }  // namespace ksana_llm

@@ -10,11 +10,13 @@ import argparse
 import asyncio
 import json
 import time
-from typing import AsyncGenerator, List, Tuple
 import aiohttp
 import numpy as np
-from tqdm.asyncio import tqdm
 import csv
+import requests
+
+from typing import AsyncGenerator, List, Tuple
+from tqdm.asyncio import tqdm
 
 # (prompt len, output len, latency)
 REQUEST_LATENCY: List[Tuple[int, int, float]] = []
@@ -42,6 +44,11 @@ def args_config():
                         "then all the requests are sent at time 0. "
                         "Otherwise, we use Poisson process to synthesize "
                         "the request arrival times.")
+    parser.add_argument("--mode",
+                        type=str,
+                        default="async",
+                        choices=['async', 'sync'],
+                        help="requests send with async mode or sync mode")
     args = parser.parse_args()
     return args
 
@@ -55,7 +62,7 @@ def read_from_csv(csv_file, col_idx=0, remove_head=True):
         yield line[col_idx]
 
 
-async def generate_prompt(
+async def generate_prompt_async(
     input_requests: List[str],
     request_rate: float,
 ) -> AsyncGenerator[str, None]:
@@ -72,7 +79,24 @@ async def generate_prompt(
         await asyncio.sleep(interval)
 
 
-async def send_request(prompt: str, api_url: str, req_id: int, result_list: List, pbar: tqdm):
+def generate_prompt_sync(
+    input_requests: List[str],
+    request_rate: float,
+):
+    input_requests = enumerate(input_requests)
+    for req_id, request in input_requests:
+        yield req_id, request
+        if request_rate == float("inf"):
+            # If the request rate is infinity, then we don't need to wait.
+            continue
+        # Sample the request interval from the exponential distribution.
+        interval = np.random.exponential(1.0 / request_rate)
+        # The next request will be sent after the interval.
+        time.sleep(interval)
+
+
+async def send_request_async(prompt: str, api_url: str, req_id: int,
+                             result_list: List, pbar: tqdm):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
     data = {
@@ -102,24 +126,61 @@ async def send_request(prompt: str, api_url: str, req_id: int, result_list: List
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
     output_len = len(output.get("texts", ""))
-    print(f"\nQuestion {req_id}: {prompt}\nAnswer: ", output.get("texts", ""))
     result_list[req_id] = output.get("texts", "")
     REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
     pbar.update(1)
 
 
-async def benchmark(args: argparse.Namespace, api_url: str, inputs: List[str]):
-    # inputs = inputs[0:8]
+def send_request_sync(prompt: str, api_url: str, req_id: int,
+                      result_list: List, pbar: tqdm):
+    request_start_time = time.perf_counter()
+    headers = {"User-Agent": "Benchmark Client"}
+    data = {
+        "model_name": "llama",
+        "prompt": prompt,
+        "sampling_config": {
+            "temperature": 0.0,
+            "topk": 1,
+            "topp": 0.0
+        },
+        "stream": False,
+    }
+    timeout = 3 * 3600
+    resp = requests.post(api_url, headers=headers, data=data, timeout=timeout)
+    output = json.loads(resp.content)
+    request_end_time = time.perf_counter()
+    request_latency = request_end_time - request_start_time
+    output_len = len(output.get("texts", ""))
+    result_list[req_id] = output.get("texts", "")
+    REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
+    pbar.update(1)
+
+
+async def benchmark_async(args: argparse.Namespace, api_url: str,
+                          inputs: List[str]):
     tasks: List[asyncio.Task] = []
     pbar = tqdm(total=len(inputs))
     result_list = [""] * len(inputs)
-    async for req_id, prompt in generate_prompt(inputs, args.request_rate):
+    async for req_id, prompt in generate_prompt_async(inputs,
+                                                      args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
-        task = asyncio.create_task(send_request(prompt, api_url, req_id, result_list, pbar))
+        task = asyncio.create_task(
+            send_request_async(prompt, api_url, req_id, result_list, pbar))
         tasks.append(task)
     await asyncio.gather(*tasks)
     pbar.close()
     return result_list
+
+
+def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
+    pbar = tqdm(total=len(inputs))
+    result_list = [""] * len(inputs)
+    for req_id, prompt in generate_prompt_sync(inputs, args.request_rate):
+        prompt = "[INST]%s[/INST]" % prompt
+        send_request_sync(prompt, api_url, req_id, result_list, pbar)
+    pbar.close()
+    return result_list
+
 
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
@@ -127,9 +188,12 @@ def main(args: argparse.Namespace):
     inputs = list(input_generator)
 
     benchmark_start_time = time.perf_counter()
-    result_list = asyncio.run(benchmark(args, api_url, inputs))
-
+    if args.mode == "async":
+        result_list = asyncio.run(benchmark_async(args, api_url, inputs))
+    else:
+        result_list = benchmark_sync(args, api_url, inputs)
     benchmark_end_time = time.perf_counter()
+
     benchmark_time = benchmark_end_time - benchmark_start_time
     print(f"Total time: {benchmark_time:.2f} s")
     print(f"Throughput: {len(inputs) / benchmark_time:.2f} requests/s")
@@ -153,6 +217,7 @@ def main(args: argparse.Namespace):
             for idx in range(len(result_list)):
                 result = result_list[idx]
                 writer.writerow([result.replace("</s>", "")])
+
 
 if __name__ == "__main__":
     args = args_config()
