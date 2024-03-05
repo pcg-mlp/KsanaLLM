@@ -22,12 +22,13 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
   return m.emplace(key, std::forward<T>(default_value)).first->second;
 }
 
-LlmRuntime::LlmRuntime(std::shared_ptr<Context> context) : context_(context) {
+LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::shared_ptr<Context> context)
+    : batch_schedule_config_(batch_scheduler_config), context_(context) {
   worker_group_ =
       std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize(), context_);
 
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    samplers_.push_back(std::make_shared<Sampler>(worker_id));
+    samplers_.push_back(std::make_shared<Sampler>(batch_schedule_config_, worker_id));
   }
 }
 

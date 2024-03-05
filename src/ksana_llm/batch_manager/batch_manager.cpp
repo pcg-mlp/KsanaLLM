@@ -32,7 +32,7 @@ Status BatchManager::Initialize() {
 
   request_batching_ = std::make_shared<RequestBatching>(batch_manager_config_.request_batching_config);
 
-  llm_runtime_ = std::make_shared<LlmRuntime>(context_);
+  llm_runtime_ = std::make_shared<LlmRuntime>(batch_manager_config_.batch_scheduler_config, context_);
 
   queue_waiter_ = std::make_shared<Waiter>(1);
 

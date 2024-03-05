@@ -51,11 +51,15 @@ Status InferenceEngine::Initialize() {
   NLLM_LOG_DEBUG << "Get model instance size: " << model_configs.size();
 
   size_t max_batch_size = 0;
+  size_t max_vocab_size = 0;
   for (auto &[model_name, model_config] : model_configs) {
     max_batch_size = std::max(max_batch_size, (size_t)model_config.max_batch_size);
+    max_vocab_size = std::max(max_vocab_size, (size_t)model_config.vocab_size);
   }
   batch_manager_config.batch_scheduler_config.max_batch_size = max_batch_size;
-  NLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size = " << max_batch_size;
+  batch_manager_config.batch_scheduler_config.max_vocab_size = max_vocab_size;
+  NLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size = " << max_batch_size
+                 << " Max Vocab Size = " << max_vocab_size;
   batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
   for (auto &[model_name, model_config] : model_configs) {
