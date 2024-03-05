@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <unistd.h>
+#include <fstream>
+#include <iostream>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#include "httplib.h"
 
 #include "ksana_llm/block_manager/memory_block.h"
 #include "ksana_llm/utils/dtypes.h"
@@ -75,6 +77,9 @@ struct BatchSchedulerConfig {
 
   // The max batch size.
   size_t max_batch_size = 8;
+
+  // The max vocab size.
+  size_t max_vocab_size = 32000;
 
   // The max input sequeue length.
   size_t max_input_len = 1024;

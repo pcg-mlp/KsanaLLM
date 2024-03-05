@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "httplib.h"
 #include "ksana_llm/endpoints/base/base_endpoint.h"
 
 namespace ksana_llm {

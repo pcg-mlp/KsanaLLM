@@ -17,7 +17,7 @@ namespace ksana_llm {
 
 class LlmRuntime {
  public:
-  LlmRuntime(std::shared_ptr<Context> contex);
+  LlmRuntime(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context);
 
   // Execute one req in parallel.
   Status Step(std::vector<std::shared_ptr<InferRequest>> &reqs);
@@ -43,6 +43,8 @@ class LlmRuntime {
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 
  private:
+  BatchSchedulerConfig batch_schedule_config_;
+
   // The runtime context.
   std::shared_ptr<Context> context_ = nullptr;
 
