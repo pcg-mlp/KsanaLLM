@@ -41,6 +41,6 @@ T* GetContiguousPtr(int block_id) {
 Status GetDeviceMemoryInfo(size_t* free, size_t* total);
 
 // Get free & total host memory in bytes.
-Status GetHostMemoryInfo(size_t* free, size_t *total);
+Status GetHostMemoryInfo(size_t* free, size_t* total);
 
 }  // namespace ksana_llm

@@ -37,10 +37,10 @@ class BaseAllocator {
   virtual Status GetContiguousPtr(int block_id, void*& addr);
 
   // Get number of free blocked memory.
-  virtual int GetFreeBlockNumber();
+  virtual size_t GetFreeBlockNumber();
 
   // Get number of used blocked memory.
-  virtual int GetUsedBlockNumber();
+  virtual size_t GetUsedBlockNumber();
 
   // Reset the preallocated blocks.
   Status ResetPreAllocatedBlocks(size_t blocks_num);

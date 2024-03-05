@@ -33,4 +33,4 @@ class EventReporter {
 
 #define REPORT_EVENT_STR(event1, str_anything)
 
-} // namespace ksana_llm
+}  // namespace ksana_llm

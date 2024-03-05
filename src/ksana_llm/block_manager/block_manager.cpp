@@ -86,10 +86,8 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
 
   NLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
                        "reserved_device_memory_ratio must be large than 0.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0,
-                       "lora_host_memory_factor should large than 1.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 1.0,
-                       "block_host_memory_factor should large than 1.0");
+  NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0, "lora_host_memory_factor should >= 1.0");
+  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 1.0, "block_host_memory_factor should >= 1.0");
 
   size_t alignment_bytes = 8;
   size_t device_block_memory_size = 0;
@@ -145,9 +143,9 @@ Status BlockManager::GetContiguousPtr(int block_id, void*& addr) {
   return GetDeviceAllocator()->GetContiguousPtr(block_id, addr);
 }
 
-int BlockManager::GetFreeBlockNumber() { return GetDeviceAllocator()->GetFreeBlockNumber(); }
+size_t BlockManager::GetFreeBlockNumber() { return GetDeviceAllocator()->GetFreeBlockNumber(); }
 
-int BlockManager::GetUsedBlockNumber() { return GetDeviceAllocator()->GetUsedBlockNumber(); }
+size_t BlockManager::GetUsedBlockNumber() { return GetDeviceAllocator()->GetUsedBlockNumber(); }
 
 Status BlockManager::AllocateHostBlocks(int64_t block_num, std::vector<int>& blocks) {
   return GetHostAllocator()->AllocateBlocks(block_num, blocks);
@@ -169,9 +167,9 @@ Status BlockManager::GetHostContiguousPtr(int block_id, void*& addr) {
   return GetHostAllocator()->GetContiguousPtr(block_id, addr);
 }
 
-int BlockManager::GetHostFreeBlockNumber() { return GetHostAllocator()->GetFreeBlockNumber(); }
+size_t BlockManager::GetHostFreeBlockNumber() { return GetHostAllocator()->GetFreeBlockNumber(); }
 
-int BlockManager::GetHostUsedBlockNumber() { return GetHostAllocator()->GetUsedBlockNumber(); }
+size_t BlockManager::GetHostUsedBlockNumber() { return GetHostAllocator()->GetUsedBlockNumber(); }
 
 Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks) {
   // Allocate memory on host.
@@ -187,24 +185,12 @@ Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<
   std::vector<void*> device_addrs;
   STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
 
-  cudaStream_t* stream;
-  if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetD2HStreams()[device_id]);
-  } else {
-    // TODO(karlluo): implement multiple thread stream event concurrent.
-    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
-  }
-
+  cudaStream_t* stream = &(context_->GetD2HStreams()[device_id]);
   // Copy from device to host.
   for (size_t i = 0; i < device_blocks.size(); i++) {
     CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, (*stream)));
   }
   CUDA_CHECK(cudaStreamSynchronize(*stream));
-
-  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    // TODO(karlluo): implement multiple thread stream event concurrent.
-    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
-  }
 
   // Free device blocks.
   device_allocators_[device_id]->FreeBlocks(device_blocks);
@@ -224,24 +210,13 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
   std::vector<void*> host_addrs;
   STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
 
-  cudaStream_t* stream;
-  if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetH2DStreams()[device_id]);
-  } else {
-    // TODO(karlluo): implement multiple thread stream event concurrent.
-    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
-  }
-
+  cudaStream_t* stream = &(context_->GetH2DStreams()[device_id]);
   // Copy from host to device.
   for (size_t i = 0; i < host_blocks.size(); i++) {
     CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, (*stream)));
   }
   CUDA_CHECK(cudaStreamSynchronize(*stream));
 
-  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    // TODO(karlluo): implement multiple thread stream event concurrent.
-    throw std::runtime_error("Context decode and decode run in concurrently is unimplemented.");
-  }
   // Free host blocks.
   host_allocator_->FreeBlocks(host_blocks);
   return Status();

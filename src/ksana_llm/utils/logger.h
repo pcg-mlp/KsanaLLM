@@ -93,12 +93,12 @@ inline uint64_t GetCurrentTimeInMs() {
 }
 
 #define NLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__)
-#define NLLM_CHECK_WITH_INFO(val, info)                                    \
-  do {                                                                     \
-    bool is_valid_val = (val);                                             \
-    if (!is_valid_val) {                                                   \
+#define NLLM_CHECK_WITH_INFO(val, info)                                 \
+  do {                                                                  \
+    bool is_valid_val = (val);                                          \
+    if (!is_valid_val) {                                                \
       ksana_llm::CheckAssert(is_valid_val, __FILE__, __LINE__, (info)); \
-    }                                                                      \
+    }                                                                   \
   } while (0)
 
 #define NLLM_THROW(info) ThrowRuntimeError(__FILE__, __LINE__, info)

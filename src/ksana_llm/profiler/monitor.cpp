@@ -6,8 +6,6 @@
 
 namespace ksana_llm {
 
-ProfilerMonitor::ProfilerMonitor() {
-}
+ProfilerMonitor::ProfilerMonitor() {}
 
-} // namespace ksana_llm
-
+}  // namespace ksana_llm

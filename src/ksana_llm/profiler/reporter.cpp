@@ -6,16 +6,12 @@
 
 namespace ksana_llm {
 
-TimeReporter::TimeReporter() {
-}
+TimeReporter::TimeReporter() {}
 
-TimeReporter::~TimeReporter() {
-}
+TimeReporter::~TimeReporter() {}
 
-MetricReporter::MetricReporter() {
-}
+MetricReporter::MetricReporter() {}
 
-EventReporter::EventReporter() {
-}
+EventReporter::EventReporter() {}
 
-} // namespace ksana_llm
+}  // namespace ksana_llm

@@ -149,14 +149,14 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
-                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
-                                       std::any(cos_sin_cache_ptr)},
-                                      context_, rank_);
-    paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head,
-                                       stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
-                                       std::any(cos_sin_cache_ptr)},
-                                      context_, rank_);
+    flash_attention_layer_[idx]->Init(
+        {idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head, stride_size, rotary_embedding,
+         rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
+        context_, rank_);
+    paged_attention_layer_[idx]->Init(
+        {idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head, stride_size, rotary_embedding,
+         rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
+        context_, rank_);
   }
 
   // init cuda event
@@ -332,8 +332,8 @@ void Llama<T>::CopyToLogistBuffer(const size_t batch_size, cudaEvent_t& compute_
   // Copy to logits buf
   float* logits_ptr = logits_float[0].GetPtr<float>();
   float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_;
-  CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float),
-                             cudaMemcpyDeviceToDevice, d2d_stream));
+  CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), cudaMemcpyDeviceToDevice,
+                             d2d_stream));
   CUDA_CHECK(cudaStreamSynchronize(d2d_stream));
 }
 

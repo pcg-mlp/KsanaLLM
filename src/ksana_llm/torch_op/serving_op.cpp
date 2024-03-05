@@ -78,8 +78,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature);
 
   // Export `StreamingIterator` to python.
-  pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(
-      m, "StreamingIterator")
+  pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")
       .def(pybind11::init<>())
       .def("GetNext", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
         int token_id;
