@@ -54,11 +54,11 @@ class Status {
     }                                        \
   }
 
-#define STATUS_CHECK_FAILURE(status)         \
-  {                                          \
-    if (!status.OK()) {                      \
-      NLLM_THROW(status.GetMessage());       \
-    }                                        \
+#define STATUS_CHECK_FAILURE(status)   \
+  {                                    \
+    if (!status.OK()) {                \
+      NLLM_THROW(status.GetMessage()); \
+    }                                  \
   }
 
 }  // namespace ksana_llm

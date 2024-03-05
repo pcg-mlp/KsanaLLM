@@ -52,10 +52,10 @@ class BlockManager {
   Status GetContiguousPtr(int block_id, void*& addr);
 
   // Get number of free blocked memory on device.
-  int GetFreeBlockNumber();
+  size_t GetFreeBlockNumber();
 
   // Get number of used blocked memory on device.
-  int GetUsedBlockNumber();
+  size_t GetUsedBlockNumber();
 
   // Allocate blocked memory on host.
   Status AllocateHostBlocks(int64_t block_num, std::vector<int>& blocks);
@@ -76,10 +76,10 @@ class BlockManager {
   Status GetHostContiguousPtr(int block_id, void*& addr);
 
   // Get number of free blocked memory on host.
-  int GetHostFreeBlockNumber();
+  size_t GetHostFreeBlockNumber();
 
   // Get number of used blocked memory on host.
-  int GetHostUsedBlockNumber();
+  size_t GetHostUsedBlockNumber();
 
   // Swap out blocks from device to host,
   // it could be swapped in later and keep block id not changed.

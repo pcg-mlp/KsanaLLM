@@ -10,14 +10,11 @@ ProfileCollector::ProfileCollector() { StartHandle(); }
 
 ProfileCollector::~ProfileCollector() { StopHandle(); }
 
-void ProfileCollector::StartHandle() {
-}
+void ProfileCollector::StartHandle() {}
 
-void ProfileCollector::StopHandle() {
-}
+void ProfileCollector::StopHandle() {}
 
-void ProfileCollector::Process() {
-}
+void ProfileCollector::Process() {}
 
 void ProfileCollector::Report(const std::string& name, int64_t val) {}
 

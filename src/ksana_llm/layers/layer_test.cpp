@@ -42,8 +42,8 @@ class LayerTest : public testing::Test {
     block_manager_config.host_allocator_config.blocks_num = 2;
     block_manager_config.host_allocator_config.block_token_num = 16;
     block_manager_config.host_allocator_config.block_size = block_manager_config.host_allocator_config.block_token_num *
-                                                           2 * model_config.head_num * model_config.size_per_head *
-                                                           model_config.num_layer * sizeof(half);
+                                                            2 * model_config.head_num * model_config.size_per_head *
+                                                            model_config.num_layer * sizeof(half);
     block_manager_config.host_allocator_config.device = MEMORY_CPU_PINNED;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_token_num = 16;
@@ -97,12 +97,11 @@ TEST_F(LayerTest, AttentionLayerTest) {
   bool is_neox = true;
   Tensor cos_sin_cache_tensor;
   CreateHalfDataTypeTensor(cos_sin_cache_tensor, {rotary_embedding, max_position_embeddings}, GetTensorType<half>());
-  EXPECT_TRUE(
-      flash_attention_layer
-          .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, rotary_embedding, rope_theta,
-                 is_neox, std::any(cos_sin_cache_tensor.GetPtr<half>())},
-                context, 0)
-          .OK());
+  EXPECT_TRUE(flash_attention_layer
+                  .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, rotary_embedding,
+                         rope_theta, is_neox, std::any(cos_sin_cache_tensor.GetPtr<half>())},
+                        context, 0)
+                  .OK());
 
   Tensor qkv, input_len, pos, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
@@ -141,12 +140,12 @@ TEST_F(LayerTest, AttentionLayerTest) {
       flash_attention_layer.Forward({qkv, input_len, kv_list, block_offset, pos, forward_shape}, output_tensors).OK());
 
   PagedAttentionLayer attention_layer;
-  EXPECT_TRUE(attention_layer
-                  .Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num, static_cast<int>(size_per_head),
-                         stride_size, rotary_embedding, rope_theta, is_neox,
-                         std::any(cos_sin_cache_tensor.GetPtr<half>())},
-                        context, 0)
-                  .OK());
+  EXPECT_TRUE(
+      attention_layer
+          .Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num, static_cast<int>(size_per_head),
+                 stride_size, rotary_embedding, rope_theta, is_neox, std::any(cos_sin_cache_tensor.GetPtr<half>())},
+                context, 0)
+          .OK());
 }
 
 }  // namespace ksana_llm

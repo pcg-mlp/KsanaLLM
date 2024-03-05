@@ -133,15 +133,14 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
   void* v_tensor_ptr = v_tensor.data_ptr();
 
   rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                 reinterpret_cast<half*>(q_tensor_ptr),
-                                 reinterpret_cast<half*>(k_tensor_ptr), total_tokens, stream);
+                                 reinterpret_cast<half*>(q_tensor_ptr), reinterpret_cast<half*>(k_tensor_ptr),
+                                 total_tokens, stream);
   rotary_embedding_cuda.Forward();
 
   llm_kernels::nvidia::CachePosCopy<half>(
-      reinterpret_cast<half*>(k_tensor_ptr), reinterpret_cast<half*>(v_tensor_ptr), key_cache_ptrs,
-      value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
-      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_heads, head_size, stride_size,
-      stream);
+      reinterpret_cast<half*>(k_tensor_ptr), reinterpret_cast<half*>(v_tensor_ptr), key_cache_ptrs, value_cache_ptrs,
+      rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
+      block_size, batch, total_tokens, num_heads, head_size, stride_size, stream);
 
   llm_kernels::nvidia::PagedAttentionCuda<uint16_t> op;
   op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size);

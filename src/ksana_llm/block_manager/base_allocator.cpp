@@ -116,12 +116,12 @@ Status BaseAllocator::GetContiguousPtr(int block_id, void*& addr) {
   return Status(RET_SEGMENT_FAULT, "Get contiguous address error.");
 }
 
-int BaseAllocator::GetFreeBlockNumber() {
+size_t BaseAllocator::GetFreeBlockNumber() {
   std::unique_lock<std::mutex> lock(block_mutex_);
   return free_blocks_.size();
 }
 
-int BaseAllocator::GetUsedBlockNumber() {
+size_t BaseAllocator::GetUsedBlockNumber() {
   std::unique_lock<std::mutex> lock(block_mutex_);
   return used_blocks_.size();
 }

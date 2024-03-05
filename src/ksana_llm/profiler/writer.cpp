@@ -6,11 +6,9 @@
 
 namespace ksana_llm {
 
-ProfileWriter::ProfileWriter() {
-}
+ProfileWriter::ProfileWriter() {}
 
 // Write message to disk file.
-Status ProfileWriter::Write(const std::string& message) {
-}
+Status ProfileWriter::Write(const std::string& message) {}
 
-} // namespace ksana_llm
+}  // namespace ksana_llm

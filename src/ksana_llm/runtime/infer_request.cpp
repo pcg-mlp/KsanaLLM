@@ -18,6 +18,9 @@
 
 namespace ksana_llm {
 
+// TODO(karlluo): should load from config
+constexpr size_t BLOCK_SIZE = 4096;
+
 InferRequest::InferRequest(std::shared_ptr<Request>& request)
     : req_id(request->req_id),
       model_name(request->model_name),
@@ -78,10 +81,10 @@ std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() {
   return block_ptrs;
 }
 
-size_t InferRequest::GetBlockSize() const { return 4096; }
+size_t InferRequest::GetBlockSize() const { return BLOCK_SIZE; }
 
 void InferRequest::ResetInferStage() {
-  NLLM_LOG_DEBUG << "input tokens number " << input_tokens.size();
+  NLLM_LOG_DEBUG << "req_id " << req_id << " input tokens number " << input_tokens.size();
   if (input_tokens.size() < output_tokens.size()) {
     NLLM_LOG_DEBUG << "change from context decode to decode";
     infer_stage = InferStage::STATE_DECODE;
