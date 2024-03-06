@@ -31,6 +31,7 @@ add_subdirectory(plugins)
 add_subdirectory(runtime)
 add_subdirectory(samplers)
 add_subdirectory(service)
+add_subdirectory(profiler)
 add_subdirectory(utils)
 
 add_library(ksana_llm_libs INTERFACE)
@@ -46,6 +47,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   runtime
   endpoints 
   samplers
+  profiler
   loguru
   gflags
   # kernels

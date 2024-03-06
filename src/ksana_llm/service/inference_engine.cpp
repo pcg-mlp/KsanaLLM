@@ -3,7 +3,9 @@
 ==============================================================================*/
 
 #include "ksana_llm/service/inference_engine.h"
+#include <memory>
 #include <thread>
+#include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
 
@@ -16,6 +18,11 @@ InferenceEngine::~InferenceEngine() {
   if (block_manager_) {
     delete block_manager_;
     block_manager_ = nullptr;
+  }
+
+  if (profile_collector_) {
+    delete profile_collector_;
+    profile_collector_ = nullptr;
   }
 }
 
@@ -35,6 +42,11 @@ Status InferenceEngine::Initialize() {
   }
   block_manager_ = new BlockManager(block_manager_config, context_);
   SetBlockManager(block_manager_);
+
+  ProfilerConfig profiler_config;
+  status = env->GetProfilerConfig(profiler_config);
+  profile_collector_ = new ProfileCollector(profiler_config);
+  SetProfileCollector(profile_collector_);
 
   BatchManagerConfig batch_manager_config;
   status = env->GetBatchManagerConfig(batch_manager_config);
@@ -113,6 +125,9 @@ Status InferenceEngine::StartHandler() {
 }
 
 Status InferenceEngine::Start() {
+  // Start profiler, invoked before batch manager.
+  profile_collector_->Start();
+
   // Start batch manager.
   batch_manager_->Start();
 
@@ -143,6 +158,9 @@ Status InferenceEngine::Stop() {
   // Stop the batch manger.
   NLLM_LOG_DEBUG << "Stop batch manager.";
   batch_manager_->Stop();
+
+  // Stop profiler, after profiler.
+  profile_collector_->Stop();
 
   return Status();
 }

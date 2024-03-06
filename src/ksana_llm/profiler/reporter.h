@@ -2,35 +2,53 @@
 
 ==============================================================================*/
 
+#include <string>
+
 namespace ksana_llm {
 
 // Report time.
-class TimeReporter {
- public:
-  TimeReporter();
+struct TimeReporter {
+  // The time unit.
+  enum TimeUnit { TIME_MS, TIME_US, TIME_NS };
+
+  TimeReporter(const std::string &name, TimeUnit time_unit);
 
   ~TimeReporter();
+
+ private:
+  inline time_t GetCurrentByUnit(TimeUnit time_unit);
+
+ private:
+  // The profile name.
+  std::string name_;
+
+  TimeUnit time_unit_;
+  time_t start_;
 };
 
 // Report metric.
-class MetricReporter {
- public:
-  MetricReporter();
+struct MetricReporter {
+  MetricReporter(const std::string &name, int value);
+  MetricReporter(const std::string &name, size_t value);
+  MetricReporter(const std::string &name, int64_t value);
+
+  MetricReporter(const std::string &name, float value);
+  MetricReporter(const std::string &name, double value);
 };
 
 // Report event.
-class EventReporter {
- public:
-  EventReporter();
+struct EventReporter {
+  EventReporter(const std::string &name, const std::string &message);
 };
 
-#define REPORT_TIME_MS(var)
-#define REPORT_TIME_US(var)
-#define REPORT_TIME_NS(var)
+#define REPORT_TIME_MS(name) TimeReporter time_reporter_##name(#name, TimeReporter::TimeUnit::TIME_MS)
 
-#define REPORT_METRIC_INT(metric1, int_value)
-#define REPORT_METRIC_FLOAT(metric1, int_value)
+#define REPORT_TIME_US(name) TimeReporter time_reporter_##name(#name, TimeReporter::TimeUnit::TIME_US)
 
-#define REPORT_EVENT_STR(event1, str_anything)
+#define REPORT_TIME_NS(name) TimeReporter time_reporter_##name(#name, TimeReporter::TimeUnit::TIME_NS)
+
+#define REPORT_METRIC(name, value) MetricReporter metirc_reporter_##name(#name, value)
+
+#define REPORT_EVENT(name, message) EventReporter event_reporter_##name(#name, #message)
 
 }  // namespace ksana_llm

@@ -119,6 +119,14 @@ Status Environment::ParseConfig(const std::string &config_file) {
   block_manager_config_.block_host_memory_factor =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
 
+  // Read profiler config.
+  profiler_config_.stat_interval_second =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_interval_second", 60);
+  profiler_config_.stat_buffer_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_buffer_size", 1024);
+  profiler_config_.report_threadpool_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.report_threadpool_size", 4);
+
   // Read base model.
   std::string base_model_name =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_name", "");
@@ -245,6 +253,11 @@ Status Environment::GetBlockManagerConfig(BlockManagerConfig &block_manager_conf
 
 Status Environment::GetEndpointConfig(EndpointConfig &endpoint_config) {
   endpoint_config = endpoint_config_;
+  return Status();
+}
+
+Status Environment::GetProfilerConfig(ProfilerConfig &profiler_config) {
+  profiler_config = profiler_config_;
   return Status();
 }
 

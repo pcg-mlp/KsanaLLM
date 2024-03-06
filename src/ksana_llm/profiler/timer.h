@@ -20,6 +20,9 @@ class ProfileTimer {
 
   // Get current time in ns.
   static std::time_t GetCurrentTimeInNs();
+
+  // Get current time in string.
+  static std::string GetCurrentTimeInStr(const std::string& format = "%Y-%m-%d %H:%M:%S");
 };
 
 }  // namespace ksana_llm

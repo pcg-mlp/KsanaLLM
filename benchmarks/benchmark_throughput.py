@@ -49,16 +49,35 @@ def args_config():
                         default="async",
                         choices=['async', 'sync'],
                         help="requests send with async mode or sync mode")
+    parser.add_argument('--backend',
+                        type=str,
+                        default="ksana",
+                        help='serving backend, ksana or vllm')
+    parser.add_argument('--prompt_num',
+                        type=int,
+                        default=0,
+                        help='number of input prompts')
     args = parser.parse_args()
     return args
 
 
-def read_from_csv(csv_file, col_idx=0, remove_head=True):
+def read_from_csv(csv_file, col_idx=0, remove_head=True, num: int = 0):
     import csv
     csv_reader = csv.reader(open(csv_file))
     if remove_head:
         next(csv_reader)
-    for line in csv_reader:
+
+    input_lines = []
+    csv_lines = list(csv_reader)
+    if num > 0:
+        csv_num = len(csv_lines)
+        for _ in range(int(num / csv_num)):
+            input_lines += csv_lines
+        input_lines += csv_lines[0:(num % csv_num)]
+    else:
+        input_lines = csv_lines
+
+    for line in input_lines:
         yield line[col_idx]
 
 
@@ -96,19 +115,30 @@ def generate_prompt_sync(
 
 
 async def send_request_async(prompt: str, api_url: str, req_id: int,
-                             result_list: List, pbar: tqdm):
+                             result_list: List, pbar: tqdm, backend: str):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
-    data = {
-        "model_name": "llama",
-        "prompt": prompt,
-        "sampling_config": {
-            "temperature": 0.0,
-            "topk": 1,
-            "topp": 0.0
-        },
-        "stream": False,
-    }
+    if backend == "ksana":
+        data = {
+            "model_name": "llama",
+            "prompt": prompt,
+            "sampling_config": {
+                "temperature": 0.0,
+                "topk": 1,
+                "topp": 0.0
+            },
+            "stream": False,
+        }
+    elif backend == "vllm":
+        # max outputlen is 1024.
+        data = {
+            "prompt": prompt,
+            "use_beam_search": False,
+            "n": 1,
+            "temperature": 0.00000001,
+            "max_tokens": 1024,
+        }
+
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
@@ -125,15 +155,23 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 break
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
-    output_len = len(output.get("output_token_ids", ""))
-    result_list[req_id] = output.get("texts", "")
+
+    if backend == "ksana":
+        output_text = output.get("texts", "")
+    elif backend == "vllm":
+        output_text = output["text"][0]
+    output_len = len(output_text)
+    result_list[req_id] = output_text
     print("")
-    REQUEST_LATENCY.append((len(prompt), output_len if output_len > 0 else 1, request_latency))
+    REQUEST_LATENCY.append(
+        (len(prompt),
+         output_len if output_len > 0 else 1,
+         request_latency))
     pbar.update(1)
 
 
 def send_request_sync(prompt: str, api_url: str, req_id: int,
-                      result_list: List, pbar: tqdm):
+                      result_list: List, pbar: tqdm, backend: str):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
     data = {
@@ -166,7 +204,13 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
                                                       args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
         task = asyncio.create_task(
-            send_request_async(prompt, api_url, req_id, result_list, pbar))
+            send_request_async(
+                prompt,
+                api_url,
+                req_id,
+                result_list,
+                pbar,
+                args.backend))
         tasks.append(task)
     await asyncio.gather(*tasks)
     pbar.close()
@@ -178,14 +222,20 @@ def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
     result_list = [""] * len(inputs)
     for req_id, prompt in generate_prompt_sync(inputs, args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
-        send_request_sync(prompt, api_url, req_id, result_list, pbar)
+        send_request_sync(
+            prompt,
+            api_url,
+            req_id,
+            result_list,
+            pbar,
+            args.backend)
     pbar.close()
     return result_list
 
 
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
-    input_generator = read_from_csv(args.input_csv)
+    input_generator = read_from_csv(args.input_csv, num=args.prompt_num)
     inputs = list(input_generator)
 
     benchmark_start_time = time.perf_counter()
@@ -201,9 +251,11 @@ def main(args: argparse.Namespace):
 
     # Compute the latency statistics.
     avg_latency = np.mean([latency for _, _, latency in REQUEST_LATENCY])
-    print(f"Average latency: {avg_latency:.2f} s")
+    avg_input_len = np.mean([prompt_len for prompt_len, _, _ in REQUEST_LATENCY])
     avg_output_len = np.mean([output_len for _, output_len, _ in REQUEST_LATENCY])
-    print(f"Average output_len: {avg_output_len:.2f}")
+    print(f"Average latency: {avg_latency:.2f} s")
+    print(f"Average input len: {avg_input_len:.2f} chars")
+    print(f"Average output len: {avg_output_len:.2f} chars")
     avg_per_token_latency = np.mean([
         latency / (prompt_len + output_len)
         for prompt_len, output_len, latency in REQUEST_LATENCY
