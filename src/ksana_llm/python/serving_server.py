@@ -101,7 +101,7 @@ async def generate(request: Request) -> Response:
     output_text = await loop.run_in_executor(
         tokenizer_executor, partial(tokenizer.decode, results_generator))
 
-    return JSONResponse({"texts": output_text})
+    return JSONResponse({"texts": output_text, "output_token_ids": results_generator})
 
 
 if __name__ == "__main__":
