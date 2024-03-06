@@ -125,7 +125,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 break
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
-    output_len = len(output.get("texts", ""))
+    output_len = len(output.get("output_token_ids", ""))
     result_list[req_id] = output.get("texts", "")
     print("")
     REQUEST_LATENCY.append((len(prompt), output_len if output_len > 0 else 1, request_latency))
@@ -202,6 +202,8 @@ def main(args: argparse.Namespace):
     # Compute the latency statistics.
     avg_latency = np.mean([latency for _, _, latency in REQUEST_LATENCY])
     print(f"Average latency: {avg_latency:.2f} s")
+    avg_output_len = np.mean([output_len for _, output_len, _ in REQUEST_LATENCY])
+    print(f"Average output_len: {avg_output_len:.2f}")
     avg_per_token_latency = np.mean([
         latency / (prompt_len + output_len)
         for prompt_len, output_len, latency in REQUEST_LATENCY
