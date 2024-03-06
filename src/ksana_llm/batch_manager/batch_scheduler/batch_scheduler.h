@@ -27,6 +27,9 @@ class BatchScheduler {
   // Add infer request to waiting list.
   Status AddInferRequest(std::shared_ptr<InferRequest> infer_request);
 
+  // Check whether the waiting buffer is empty.
+  bool WaitingBufferEmpty();
+
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);

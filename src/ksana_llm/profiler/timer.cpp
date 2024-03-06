@@ -30,4 +30,14 @@ std::time_t ProfileTimer::GetCurrentTimeInNs() {
   return nano_sec.count();
 }
 
+std::string ProfileTimer::GetCurrentTimeInStr(const std::string& format) {
+  struct tm tm_val;
+  time_t time_sec = time(nullptr);
+  localtime_r(&time_sec, &tm_val);
+
+  char time_string[255] = "\0";
+  strftime(time_string, sizeof(time_string), format.c_str(), &tm_val);
+  return std::string(time_string);
+}
+
 }  // namespace ksana_llm

@@ -166,6 +166,18 @@ struct EndpointConfig {
   uint32_t port;
 };
 
+// The config of profiler.
+struct ProfilerConfig {
+  // The stat interval, in second.
+  size_t stat_interval_second;
+
+  // The stat buffer size.
+  size_t stat_buffer_size;
+
+  // The async report thread num.
+  size_t report_threadpool_size;
+};
+
 class Environment {
  public:
   Environment() {}
@@ -194,6 +206,9 @@ class Environment {
   // Get the config of endpoint.
   Status GetEndpointConfig(EndpointConfig &endpoint_config);
 
+  // Get the config of profiler.
+  Status GetProfilerConfig(ProfilerConfig& profiler_config);
+
   size_t GetTensorParallelSize() { return tensor_parallel_size_; }
 
   size_t GetPipeLineParallelSize() { return pipeline_parallel_size_; }
@@ -217,6 +232,9 @@ class Environment {
 
   // The config of endpoint.
   EndpointConfig endpoint_config_;
+
+  // The config of profiler.
+  ProfilerConfig profiler_config_;
 
   size_t tensor_parallel_size_{0};
   size_t pipeline_parallel_size_{0};

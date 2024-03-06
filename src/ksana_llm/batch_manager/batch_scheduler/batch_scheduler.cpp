@@ -13,6 +13,7 @@
 
 #include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/block_manager/memory_block.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/channel.h"
@@ -57,15 +58,21 @@ BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
 void BatchScheduler::SwapOutAsync(std::shared_ptr<InferRequest> req) {
   req->swap_pending = true;
   req->swap_future = threadpool_->Submit([=]() {
-    req->SwapOutAsync();
+    {
+      REPORT_TIME_US(batch_scheduler_swapout_us);
+      req->SwapOutAsync();
+    }
     req->swap_pending = false;
   });
 }
 
 void BatchScheduler::SwapInAsync(std::shared_ptr<InferRequest> req) {
   req->swap_pending = true;
-  threadpool_->Submit([=]() {
-    req->SwapInAsync();
+  req->swap_future = threadpool_->Submit([=]() {
+    {
+      REPORT_TIME_US(batch_scheduler_swapin_us);
+      req->SwapInAsync();
+    }
     req->swap_pending = false;
   });
 }
@@ -83,6 +90,11 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
   std::lock_guard<std::mutex> guard(queue_buffer_mutex_);
   waiting_buffer_queue_.push_back(infer_request);
   return Status();
+}
+
+bool BatchScheduler::WaitingBufferEmpty() {
+  std::lock_guard<std::mutex> guard(queue_buffer_mutex_);
+  return waiting_buffer_queue_.empty();
 }
 
 void BatchScheduler::MergeWaitingBufferQueue() {
@@ -148,7 +160,7 @@ size_t BatchScheduler::GetPendingBlockNumber() {
 }
 
 bool BatchScheduler::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
-  return schedule_time_in_ms_ - req->timestamp_in_ms >= batch_scheduler_config_.waiting_timeout_in_ms;
+  return schedule_time_in_ms_ >= req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms;
 }
 
 bool BatchScheduler::CheckWaitingQueueFull() {
@@ -410,9 +422,22 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
     return;
   }
 
-  running_swapped_indexes_.clear();
-  ProcessRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_,
-                         running_swapped_indexes_, step_token_num_sum);
+  int retry_times = 0;
+  size_t step_token_num_sum_tmp;
+  do {
+    running_swapped_indexes_.clear();
+    step_token_num_sum_tmp = step_token_num_sum;
+    ProcessRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_,
+                           running_swapped_indexes_, step_token_num_sum_tmp);
+    if (!running_queue_.empty() && running_queue_.size() == running_swapped_indexes_.size()) {
+      if (!swapout_pending_queue_.empty()) {
+        REPORT_TIME_US(batch_scheduler_wait_swapout_us);
+        WaitPendingSwapoutDone();
+        ++retry_times;
+      }
+    }
+  } while (retry_times == 1);
+  step_token_num_sum = step_token_num_sum_tmp;
   skip_other = !running_swapped_indexes_.empty();
 
   size_t visit_idx = 0;
@@ -430,14 +455,16 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
           Status status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
           if (!status.OK()) {
             if (!swapout_pending_queue_.empty()) {
-              NLLM_LOG_DEBUG << "No more blocks, waiting util swapout done.";
+              NLLM_LOG_DEBUG << "No more blocks, waiting util all swapout reqs done.";
               WaitPendingSwapoutDone();
               status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
               if (!status.OK()) {
-                NLLM_CHECK_WITH_INFO(false, "No more blocks, exit.");
+                NLLM_LOG_ERROR << "No more blocks after all swapout reqs done, exit.";
+                abort();
               }
             } else {
-              NLLM_CHECK_WITH_INFO(false, "No more blocks, exit.");
+              NLLM_LOG_ERROR << "No more blocks, and no pending swapout reqs, exit.";
+              abort();
             }
           }
           req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
@@ -467,9 +494,25 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
     return;
   }
 
-  swapped_running_indexes_.clear();
-  ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
-                         step_token_num_sum, curr_block_num_sum);
+  int retry_times = 0;
+  size_t step_token_num_sum_tmp;
+  size_t curr_block_num_sum_tmp;
+  do {
+    swapped_running_indexes_.clear();
+    step_token_num_sum_tmp = step_token_num_sum;
+    curr_block_num_sum_tmp = curr_block_num_sum;
+    ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
+                           step_token_num_sum_tmp, curr_block_num_sum_tmp);
+    if (running_queue_.empty() && !swapped_queue_.empty() && swapped_running_indexes_.empty()) {
+      if (!swapout_pending_queue_.empty()) {
+        REPORT_TIME_US(batch_scheduler_wait_swapout_us);
+        WaitPendingSwapoutDone();
+        ++retry_times;
+      }
+    }
+  } while (retry_times == 1);
+  step_token_num_sum = step_token_num_sum_tmp;
+  curr_block_num_sum = curr_block_num_sum_tmp;
 
   size_t visit_idx = 0;
   size_t swapin_pos = swapped_running_indexes_.empty() ? 0 : swapped_running_indexes_.back() + 1;
@@ -491,6 +534,7 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
 }
 
 void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
+  MergeWaitingBufferQueue();
   if (waiting_queue_.empty()) {
     return;
   }
@@ -502,9 +546,25 @@ void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_bl
     return;
   }
 
-  waiting_running_indexes_.clear();
-  ProcessWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, waiting_running_indexes_,
-                         step_token_num_sum, curr_block_num_sum);
+  int retry_times = 0;
+  size_t step_token_num_sum_tmp;
+  size_t curr_block_num_sum_tmp;
+  do {
+    waiting_running_indexes_.clear();
+    step_token_num_sum_tmp = step_token_num_sum;
+    curr_block_num_sum_tmp = curr_block_num_sum;
+    ProcessWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, waiting_running_indexes_,
+                           step_token_num_sum_tmp, curr_block_num_sum_tmp);
+    if (running_queue_.empty() && !waiting_queue_.empty() && waiting_running_indexes_.empty()) {
+      if (!swapout_pending_queue_.empty()) {
+        REPORT_TIME_US(batch_scheduler_wait_swapout_us);
+        WaitPendingSwapoutDone();
+        ++retry_times;
+      }
+    }
+  } while (retry_times == 1);
+  step_token_num_sum = step_token_num_sum_tmp;
+  curr_block_num_sum = curr_block_num_sum_tmp;
 
   size_t visit_idx = 0;
   size_t launch_pos = waiting_running_indexes_.empty() ? 0 : waiting_running_indexes_.back() + 1;
@@ -534,18 +594,35 @@ void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_bl
 std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   NLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(queue_mutex_);
-
-  MergeWaitingBufferQueue();
   ResetSchedule();
 
   bool skip_other = false;
   size_t step_token_num_sum = 0;
-  ScheduleRunning(step_token_num_sum, skip_other);
-
   size_t curr_block_num_sum = 0;
-  ScheduleSwapped(step_token_num_sum, curr_block_num_sum, skip_other);
 
+  ScheduleRunning(step_token_num_sum, skip_other);
+  ScheduleSwapped(step_token_num_sum, curr_block_num_sum, skip_other);
   ScheduleWaiting(step_token_num_sum, curr_block_num_sum, skip_other);
+
+  if (running_queue_.empty() && !swapin_pending_queue_.empty()) {
+    if (!swapin_pending_queue_.empty()) {
+      REPORT_TIME_US(batch_scheduler_wait_swapin_us);
+      WaitPendingSwapinDone();
+      MergePendingSwapinRequests();
+    }
+  }
+
+  REPORT_METRIC(batch_scheduler_running, running_queue_.size());
+  REPORT_METRIC(batch_scheduler_waiting, waiting_queue_.size());
+  REPORT_METRIC(batch_scheduler_swapped, swapped_queue_.size());
+
+  REPORT_METRIC(batch_scheduler_pending_swapin, swapin_pending_queue_.size());
+  REPORT_METRIC(batch_scheduler_pending_swapout, swapout_pending_queue_.size());
+
+  REPORT_METRIC(batch_scheduler_tokens, step_token_num_sum);
+
+  REPORT_METRIC(block_manager_free, GetBlockManager()->GetFreeBlockNumber());
+  REPORT_METRIC(block_manager_used, GetBlockManager()->GetUsedBlockNumber());
 
   NLLM_LOG_DEBUG << "batch scheduler result: " << running_queue_.size();
   return running_queue_;

@@ -589,7 +589,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids, input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
   emb_lookup_output[0].SaveToFile(saved_dir + "emb_lookup_output." + std::to_string(rank_) + ".npy");
-  NLLM_LOG_DEBUG << "embeddig";
 
   // LlamaDecoder
   for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
@@ -604,7 +603,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
     input_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".input_layernorm." +
                                          std::to_string(rank_) + ".npy");
-    NLLM_LOG_DEBUG << layer_num << " input layernorm";
 
     // Attn proj MatMul
     Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
@@ -613,7 +611,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
     attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj." + std::to_string(rank_) +
                                    ".npy");
-    NLLM_LOG_DEBUG << layer_num << " attn proj";
 
     // MMHA Paged Attention
     std::vector<Tensor>& paged_attention_output = output_1;
@@ -630,7 +627,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
     paged_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA." +
                                          std::to_string(rank_) + ".npy");
-    NLLM_LOG_DEBUG << layer_num << " MMHA Paged Attention";
 
     // Attn o_proj MatMul
     Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");

@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/batch_manager/batch_manager.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
@@ -78,14 +79,23 @@ Status BatchManager::Process() {
   while (!terminated_) {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
 
-    scheduled_reqs = batch_scheduler_->Schedule();
+    {
+      REPORT_TIME_US(batch_manager_schedule_us);
+      scheduled_reqs = batch_scheduler_->Schedule();
+    }
+
     if (scheduled_reqs.empty()) {
-      queue_waiter_->Wait();
-      queue_waiter_->Reset(1);
+      if (batch_scheduler_->WaitingBufferEmpty()) {
+        queue_waiter_->Wait();
+        queue_waiter_->Reset(1);
+      }
       continue;
     }
 
-    llm_runtime_->Step(scheduled_reqs);
+    {
+      REPORT_TIME_US(batch_manager_step_us);
+      llm_runtime_->Step(scheduled_reqs);
+    }
   }
 
   return Status();
