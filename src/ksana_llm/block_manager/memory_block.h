@@ -30,7 +30,7 @@ struct MemoryBlock {
   int64_t block_size;
 
   // The reference count of current block.
-  int64_t ref_count = 0;
+  uint64_t ref_count = 0;
 
   // /The device of this block, CPU or GPU or NPU.
   MemoryDevice device;

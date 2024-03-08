@@ -228,4 +228,70 @@ size_t BlockManager::GetBlockSize() const { return block_manager_config_.device_
 
 size_t BlockManager::GetBlockTokenNum() const { return block_manager_config_.device_allocator_config.block_token_num; }
 
+Status BlockManager::PreparePrefixCacheBlocks() {
+  if (block_manager_config_.prefix_cache_len == 0) {
+    NLLM_LOG_DEBUG << "Disalbe prefix cache";
+    return Status();
+  } else if (block_manager_config_.prefix_cache_len > 0) {
+    NLLM_LOG_DEBUG << "Prefix cache token number " << block_manager_config_.prefix_cache_len;
+  } else if (block_manager_config_.prefix_cache_len == -1) {
+    throw std::invalid_argument("Not support prefix_cache_len == -1, autofix mode");
+  } else {
+    throw std::invalid_argument(
+        fmt::format("Not support prefix_cache_len setting {}", block_manager_config_.prefix_cache_len));
+  }
+  int block_num =
+      block_manager_config_.prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num;
+
+  // TODO(karlluo): support pipeline parallel
+  // prepare prefixed cache blocks
+  for (size_t device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
+    SetDeviceId(device_id);
+    std::vector<int> prefix_cache_block_tmp;
+    AllocateBlocks(block_num, prefix_cache_block_tmp);
+    prefix_cache_blocks_.emplace_back(std::move(prefix_cache_block_tmp));
+  }
+  prefix_cache_block_num_ = block_num;
+  return Status();
+}
+
+int BlockManager::GetPrefixCacheTokensNumber() const { return block_manager_config_.prefix_cache_len; }
+
+size_t BlockManager::GetPrefixCacheBlocksNumber() const { return prefix_cache_block_num_; }
+
+bool BlockManager::CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) {
+  if (input_tokens.size() < block_manager_config_.prefix_cache_len) {
+    return false;
+  }
+
+  if (prefix_cache_tokens_.empty()) {
+    // init with the first request
+    prefix_cache_tokens_.resize(block_manager_config_.prefix_cache_len, 0);
+    std::copy(input_tokens.begin(), input_tokens.begin() + block_manager_config_.prefix_cache_len,
+              prefix_cache_tokens_.begin());
+  } else {
+    for (int token_idx = 0; token_idx < block_manager_config_.prefix_cache_len; ++token_idx) {
+      if (prefix_cache_tokens_[token_idx] != input_tokens[token_idx]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+Status BlockManager::FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) {
+  // TODO(karlluo): support pipeline parallel
+  // prepare prefixed cache blocks
+  for (size_t device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
+    if (kv_cache_blocks[device_id].size() == 0) {
+      std::copy(prefix_cache_blocks_[device_id].begin(), prefix_cache_blocks_[device_id].end(),
+                std::back_inserter(kv_cache_blocks[device_id]));
+    } else {
+      std::copy(prefix_cache_blocks_[device_id].begin(), prefix_cache_blocks_[device_id].end(),
+                kv_cache_blocks[device_id].begin());
+    }
+  }
+  return Status();
+}
+
 }  // namespace ksana_llm

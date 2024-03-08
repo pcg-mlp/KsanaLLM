@@ -148,7 +148,7 @@ void BatchScheduler::WaitPendingSwapinDone() {
   }
 }
 
-size_t BatchScheduler::GetPendingBlockNumber() {
+size_t BatchScheduler::GetSwapinPendingBlockNumber() {
   size_t pending_block_num = 0;
   for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end(); ++it) {
     auto &req = *it;
@@ -219,6 +219,7 @@ void BatchScheduler::PrepareRunningRequests(std::vector<size_t> &step_token_num_
     step_token_num_list.push_back(req->GetStepTokenNumber());
     step_block_num_list.push_back(req->GetStepBlockNumber());
     curr_block_num_list.push_back(req->GetCurrentBlockNumber());
+
     ++it;
   }
 }
@@ -280,13 +281,13 @@ void BatchScheduler::ProcessRunningRequests(const std::vector<size_t> &step_toke
                                             const std::vector<size_t> &curr_block_num_list,
                                             std::vector<int> &swapped_indexes, size_t &step_token_num_sum) {
   size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
-  size_t total_pending_block_num = GetPendingBlockNumber();
+  size_t total_pending_block_num = GetSwapinPendingBlockNumber();
   if (total_free_block_num > total_pending_block_num) {
     total_free_block_num -= total_pending_block_num;
   } else {
     WaitPendingSwapinDone();
     total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
-    total_pending_block_num = GetPendingBlockNumber();
+    total_pending_block_num = GetSwapinPendingBlockNumber();
     if (total_free_block_num > total_pending_block_num) {
       total_free_block_num -= total_pending_block_num;
     } else {
@@ -325,13 +326,13 @@ void BatchScheduler::ProcessSwappedRequests(const std::vector<size_t> &step_toke
                                             std::vector<int> &running_indexes, size_t &step_token_num_sum,
                                             size_t &curr_block_num_sum) {
   size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
-  size_t total_pending_block_num = GetPendingBlockNumber();
+  size_t total_pending_block_num = GetSwapinPendingBlockNumber();
   if (total_free_block_num > total_pending_block_num) {
     total_free_block_num -= total_pending_block_num;
   } else {
     WaitPendingSwapinDone();
     total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
-    total_pending_block_num = GetPendingBlockNumber();
+    total_pending_block_num = GetSwapinPendingBlockNumber();
     if (total_free_block_num > total_pending_block_num) {
       total_free_block_num -= total_pending_block_num;
     } else {
@@ -369,13 +370,13 @@ void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_toke
                                             std::vector<int> &running_indexes, size_t &step_token_num_sum,
                                             size_t &total_block_num_sum) {
   size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
-  size_t total_pending_block_num = GetPendingBlockNumber();
+  size_t total_pending_block_num = GetSwapinPendingBlockNumber();
   if (total_free_block_num > total_pending_block_num) {
     total_free_block_num -= total_pending_block_num;
   } else {
     WaitPendingSwapinDone();
     total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
-    total_pending_block_num = GetPendingBlockNumber();
+    total_pending_block_num = GetSwapinPendingBlockNumber();
     if (total_free_block_num > total_pending_block_num) {
       total_free_block_num -= total_pending_block_num;
     } else {
