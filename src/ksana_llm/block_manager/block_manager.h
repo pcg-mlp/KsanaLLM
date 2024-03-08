@@ -94,8 +94,23 @@ class BlockManager {
   // Get the size in bytes for one block.
   size_t GetBlockSize() const;
 
-  // get the token number for one block.
+  // Get the token number for one block.
   size_t GetBlockTokenNum() const;
+
+  // Prepare blocks for prefix cache
+  Status PreparePrefixCacheBlocks();
+
+  // Get the prefix cache tokens numbers
+  int GetPrefixCacheTokensNumber() const;
+
+  // Get the prefix cache blocks numbers
+  size_t GetPrefixCacheBlocksNumber() const;
+
+  // Check the input token is valid for prefix cache
+  bool CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens);
+
+  // Fill prefix kv cache to input blocks vector
+  Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks);
 
  private:
   // Calculate the block number.
@@ -118,6 +133,15 @@ class BlockManager {
 
   // The allocators used to manage device memory, one allocator for one device.
   std::vector<std::shared_ptr<DeviceAllocator>> device_allocators_;
+
+  // The prefix cache blocks on different device
+  std::vector<std::vector<int>> prefix_cache_blocks_;
+
+  // The prefix cache blocks number
+  size_t prefix_cache_block_num_{0ul};
+
+  // The target prefix cache token
+  std::vector<int> prefix_cache_tokens_;
 };
 
 }  // namespace ksana_llm

@@ -134,6 +134,9 @@ Status InferenceEngine::Start() {
   // Reset block num via device memory usage.
   block_manager_->ResetPreAllocatedBlocks();
 
+  // Prepare prefix cache tokens if need
+  block_manager_->PreparePrefixCacheBlocks();
+
   // Start service handler.
   StartHandler();
 

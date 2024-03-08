@@ -25,13 +25,13 @@ function(py_test TARGET_NAME)
       set(options "")
       set(oneValueArgs "")
       set(multiValueArgs SRCS DEPS ARGS ENVS)
+      set(ENV{<PYTHONPATH>} ${CMAKE_CURRENT_BINARY_DIR}/lib)
       cmake_parse_arguments(py_test "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-      set(working_dir ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME})
+      set(working_dir ${CMAKE_CURRENT_BINARY_DIR})
       file(MAKE_DIRECTORY ${working_dir})
       add_test(NAME ${TARGET_NAME}
-               COMMAND ${CMAKE_COMMAND}
-               ${PYTHON_EXECUTABLE} -u ${py_test_SRCS} ${py_test_ARGS}
+               COMMAND ${PYTHON_EXECUTABLE} ${py_test_SRCS} ${py_test_ARGS}
                WORKING_DIRECTORY ${working_dir})
       message(STATUS "test added ${TARGET_NAME} ${working_dir}/${py_test_SRCS}")
   endif()

@@ -60,6 +60,16 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   infer_req->infer_stage = InferStage::STAGE_CONTEXT;
   infer_req->step = 0;
 
+  // check if this request qualify to use prefix cache
+  if (GetBlockManager()->GetPrefixCacheBlocksNumber() > 0) {
+    infer_req->is_use_prefix_cache = GetBlockManager()->CheckReqIsValidForPrefixCache(infer_req->input_tokens);
+    infer_req->prefix_cache_len = GetBlockManager()->GetPrefixCacheTokensNumber();
+    infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
+    GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
+    // NOTE(karlluo): preallocate prefix kv cache for infer request
+    NLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
+  }
+
   enqueue_status = batch_scheduler_->AddInferRequest(infer_req);
   if (enqueue_status.OK()) {
     NLLM_LOG_DEBUG << "batch schdule add req id " << req->req_id << " and " << infer_req->input_tokens.size()

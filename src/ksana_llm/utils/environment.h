@@ -134,6 +134,12 @@ struct BlockManagerConfig {
 
   // The scale fator of block host memory.
   float block_host_memory_factor = 10.0;
+
+  // Prefix cache length cache token numbers of prompt prefix
+  // default is 0, disable this function
+  // positve integer is the real length of this prompt prefix
+  // TODO(karlluo): -1 is autofix mode
+  int prefix_cache_len = 0;
 };
 
 // The config of batch manager.
@@ -207,7 +213,7 @@ class Environment {
   Status GetEndpointConfig(EndpointConfig &endpoint_config);
 
   // Get the config of profiler.
-  Status GetProfilerConfig(ProfilerConfig& profiler_config);
+  Status GetProfilerConfig(ProfilerConfig &profiler_config);
 
   size_t GetTensorParallelSize() { return tensor_parallel_size_; }
 

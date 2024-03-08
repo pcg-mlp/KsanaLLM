@@ -36,7 +36,10 @@ if __name__ == "__main__":
     args = args_config()
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
 
-    text_list = ["[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]"]
+    text_list = [
+        "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]",
+        "[INST]想象一下您是夏洛克·福尔摩斯，您被要求解开一个涉及失踪传家宝的谜团。请解释一下您找到该物品的策略。[/INST]"
+    ]
 
     multi_proc_list = []
     multi_proc_queue = multiprocessing.Queue()
@@ -71,4 +74,5 @@ if __name__ == "__main__":
         proc.join()
 
     end_time = time.time()
-    print("{} requests duration: {:.3f}s".format(len(text_list), end_time - start_time))
+    print("{} requests duration: {:.3f}s".format(len(text_list),
+                                                 end_time - start_time))

@@ -37,9 +37,6 @@ class InferRequest {
   // Get addr ptr of blocks.
   std::vector<std::vector<void *>> GetBlockPtrs();
 
-  // Get the block size.
-  size_t GetBlockSize() const;
-
   // Reset the infer stage.
   void ResetInferStage();
 
@@ -145,6 +142,15 @@ class InferRequest {
 
   // The swappiness future.
   std::future<void> swap_future;
+
+  // The flag for tagging request prefix cache usage
+  bool is_use_prefix_cache = false;
+
+  // The prefix cache tokens number
+  int prefix_cache_len = 0;
+
+  // The prefix cache blocks number
+  int prefix_cache_blocks_number = 0;
 };
 
 }  // namespace ksana_llm

@@ -65,6 +65,8 @@ class BatchScheduler {
 
   // Merge pending swap out/in requests.
   void MergePendingSwapoutRequest();
+  // Iterate all request in swapin_pending_queue, take request which swap_pending is false(already finished swapin) into
+  // running_queue
   void MergePendingSwapinRequests();
 
   // Wait pending swap out/in done.
@@ -72,7 +74,7 @@ class BatchScheduler {
   void WaitPendingSwapinDone();
 
   // Get the pending block number used by async swapin.
-  size_t GetPendingBlockNumber();
+  size_t GetSwapinPendingBlockNumber();
 
   // Process the running/swapped/waiting queue.
   void ProcessRunningRequests(const std::vector<size_t> &step_token_num_list,

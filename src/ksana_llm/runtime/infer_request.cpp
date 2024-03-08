@@ -18,9 +18,6 @@
 
 namespace ksana_llm {
 
-// TODO(karlluo): should load from config
-constexpr size_t BLOCK_SIZE = 4096;
-
 InferRequest::InferRequest(std::shared_ptr<Request>& request)
     : req_id(request->req_id),
       model_name(request->model_name),
@@ -47,7 +44,17 @@ Status InferRequest::FreeBlocks() {
   // Free memory on every device.
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->FreeBlocks(kv_cache_blocks[i]);
+    if (is_use_prefix_cache) {
+      NLLM_LOG_DEBUG << fmt::format("req {} kv_cache_blocks[{}] len: {} include prefix share cache len: {}", req_id, i,
+                                    kv_cache_blocks[i].size(), prefix_cache_blocks_number);
+      // NOTE(karlluo): skip prefix share blocks
+      std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
+      std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
+                private_kv_cache_blocks.begin());
+      GetBlockManager()->FreeBlocks(private_kv_cache_blocks);
+    } else {
+      GetBlockManager()->FreeBlocks(kv_cache_blocks[i]);
+    }
   }
   kv_cache_blocks.clear();
   return Status();
@@ -81,8 +88,6 @@ std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() {
   return block_ptrs;
 }
 
-size_t InferRequest::GetBlockSize() const { return BLOCK_SIZE; }
-
 void InferRequest::ResetInferStage() {
   if (input_tokens.size() < output_tokens.size()) {
     infer_stage = InferStage::STATE_DECODE;
@@ -92,12 +97,12 @@ void InferRequest::ResetInferStage() {
 size_t InferRequest::GetStepTokenNumber() {
   size_t step_token_num = 1;
   if (infer_stage == STAGE_CONTEXT) {
-    step_token_num += output_tokens.size();
+    step_token_num += (output_tokens.size() - prefix_cache_len);
   }
   return step_token_num;
 }
 
-size_t InferRequest::GetTotalTokenNumber() { return output_tokens.size() + 1; }
+size_t InferRequest::GetTotalTokenNumber() { return output_tokens.size() + 1 - prefix_cache_len; }
 
 size_t InferRequest::GetStepBlockNumber() {
   size_t block_token_num = GetBlockManager()->GetBlockTokenNum();
@@ -112,7 +117,7 @@ size_t InferRequest::GetTotalBlockNumber() {
 
 size_t InferRequest::GetCurrentBlockNumber() {
   if (!kv_cache_blocks.empty()) {
-    return kv_cache_blocks[0].size();
+    return kv_cache_blocks[0].size() - prefix_cache_blocks_number;
   }
   return 0;
 }
@@ -121,8 +126,20 @@ Status InferRequest::SwapInAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     std::vector<int> device_blocks;
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->SwapIn(kv_cache_blocks[i], device_blocks);
-    kv_cache_blocks[i].swap(device_blocks);
+    if (is_use_prefix_cache) {
+      NLLM_LOG_DEBUG << fmt::format("req {} kv_cache_blocks[{}] len: {} include prefix share cache len: {}", req_id, i,
+                                    kv_cache_blocks[i].size(), prefix_cache_blocks_number);
+      // NOTE(karlluo): skip prefix share blocks
+      std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
+      std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
+                private_kv_cache_blocks.begin());
+      GetBlockManager()->SwapIn(private_kv_cache_blocks, device_blocks);
+      std::copy(device_blocks.begin(), device_blocks.end(), kv_cache_blocks[i].begin() + prefix_cache_blocks_number);
+    } else {
+      NLLM_LOG_DEBUG << fmt::format("req {} kv_cache_blocks[{}] len: {}", req_id, i, kv_cache_blocks[i].size());
+      GetBlockManager()->SwapIn(kv_cache_blocks[i], device_blocks);
+      kv_cache_blocks[i].swap(device_blocks);
+    }
   }
 
   return Status();
@@ -132,8 +149,19 @@ Status InferRequest::SwapOutAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     std::vector<int> host_blocks;
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->SwapOut(kv_cache_blocks[i], host_blocks);
-    kv_cache_blocks[i].swap(host_blocks);
+    if (is_use_prefix_cache) {
+      NLLM_LOG_DEBUG << fmt::format("req {} kv_cache_blocks[{}] len: {} include prefix share cache len: {}", req_id, i,
+                                    kv_cache_blocks[i].size(), prefix_cache_blocks_number);
+      // NOTE(karlluo): skip prefix share blocks
+      std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
+      std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
+                private_kv_cache_blocks.begin());
+      GetBlockManager()->SwapOut(private_kv_cache_blocks, host_blocks);
+      std::copy(host_blocks.begin(), host_blocks.end(), kv_cache_blocks[i].begin() + prefix_cache_blocks_number);
+    } else {
+      GetBlockManager()->SwapOut(kv_cache_blocks[i], host_blocks);
+      kv_cache_blocks[i].swap(host_blocks);
+    }
   }
 
   return Status();
@@ -142,7 +170,15 @@ Status InferRequest::SwapOutAsync() {
 Status InferRequest::DropSwappedAsync() {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     GetBlockManager()->SetDeviceId(i);
-    GetBlockManager()->SwapDrop(kv_cache_blocks[i]);
+    if (is_use_prefix_cache) {
+      // NOTE(karlluo): skip prefix share blocks
+      std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
+      std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
+                private_kv_cache_blocks.begin());
+      GetBlockManager()->SwapDrop(private_kv_cache_blocks);
+    } else {
+      GetBlockManager()->SwapDrop(kv_cache_blocks[i]);
+    }
   }
 
   return Status();

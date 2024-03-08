@@ -107,7 +107,6 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
-
   block_manager_config_.reserved_device_memory_ratio = yaml_reader.GetScalar<float>(
       yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.05);
   block_manager_config_.lora_deivce_memory_ratio =
@@ -118,6 +117,18 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_host_memory_factor", 10.0);
   block_manager_config_.block_host_memory_factor =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
+  int prefix_cache_len =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.prefix_cache_len", 0);
+  if (prefix_cache_len > 0 && prefix_cache_len % block_manager_config_.device_allocator_config.block_token_num != 0) {
+    int retrieve_prefix_ceche_len =
+        std::floor(prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num) *
+        block_manager_config_.device_allocator_config.block_token_num;
+    NLLM_LOG_WARNING << "prefix_cache_len " << prefix_cache_len << " cannot round up block token num "
+                     << block_manager_config_.device_allocator_config.block_token_num
+                     << " retrieve the prefix cache num to " << retrieve_prefix_ceche_len;
+    prefix_cache_len = retrieve_prefix_ceche_len;
+  }
+  block_manager_config_.prefix_cache_len = prefix_cache_len;
 
   // Read profiler config.
   profiler_config_.stat_interval_second =

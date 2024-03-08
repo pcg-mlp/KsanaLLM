@@ -161,4 +161,6 @@ add_subdirectory(3rdparty)
 add_subdirectory(examples)
 add_subdirectory(src)
 # for integration test
-add_subdirectory(tests)
+if (WITH_TESTING)
+  add_subdirectory(tests)
+endif()
