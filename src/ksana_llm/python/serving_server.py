@@ -84,14 +84,20 @@ async def generate(request: Request) -> Response:
                 model_name=model_name,
                 inputs=input_tokens,
                 generation_config=generation_config,
-                streamer=None))
+                streamer=(True if enable_streaming else None)))
 
     if enable_streaming:
-
         async def stream_results() -> AsyncGenerator[bytes, None]:
+            unfinished_token = []
             async for request_output in results_generator:
                 if request_output:
-                    ret = {"texts": tokenizer.decode([request_output])}
+                    output_text = tokenizer.decode(unfinished_token + [request_output])
+                    if output_text[-1:] == "\uFFFD":
+                        unfinished_token = unfinished_token + [request_output]
+                        output_text = ""
+                    else :
+                        unfinished_token = []
+                    ret = {"texts": output_text}
                     yield (json.dumps(ret) + "\0").encode("utf-8")
                 else:
                     return
@@ -101,7 +107,8 @@ async def generate(request: Request) -> Response:
     output_text = await loop.run_in_executor(
         tokenizer_executor, partial(tokenizer.decode, results_generator))
 
-    return JSONResponse({"texts": output_text, "output_token_ids": results_generator})
+    return JSONResponse({"texts": output_text,
+                         "output_token_ids": results_generator})
 
 
 if __name__ == "__main__":

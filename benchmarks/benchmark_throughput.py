@@ -157,9 +157,10 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     request_latency = request_end_time - request_start_time
 
     if backend == "ksana":
-        output_text = output.get("texts", "")
+        output_text = output.get("texts", "").strip()
     elif backend == "vllm":
-        output_text = output["text"][0]
+        prompt_len = len(prompt)
+        output_text = output["text"][0][prompt_len:].strip()
     output_len = len(output_text)
     result_list[req_id] = output_text
     print("")
