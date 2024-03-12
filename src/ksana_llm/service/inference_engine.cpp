@@ -128,14 +128,14 @@ Status InferenceEngine::Start() {
   // Start profiler, invoked before batch manager.
   profile_collector_->Start();
 
-  // Start batch manager.
-  batch_manager_->Start();
-
   // Reset block num via device memory usage.
   block_manager_->ResetPreAllocatedBlocks();
 
   // Prepare prefix cache tokens if need
   block_manager_->PreparePrefixCacheBlocks();
+
+  // Start batch manager.
+  batch_manager_->Start();
 
   // Start service handler.
   StartHandler();

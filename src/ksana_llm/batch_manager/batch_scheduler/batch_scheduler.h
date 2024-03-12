@@ -37,6 +37,9 @@ class BatchScheduler {
   // True if waiting queue is already full.
   inline bool CheckWaitingQueueFull();
 
+  // True if request length exceed the max input length.
+  inline bool CheckRequestExceedLength(const std::shared_ptr<InferRequest> req);
+
   // True if request finished, that is, arrive max output len or encounter eos.
   inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
 
