@@ -6,7 +6,7 @@
 
 namespace ksana_llm {
 
-Status BaseSampling::Forward(const float* logits, const uint32_t* offsets, uint32_t* output_token,
+Status BaseSampling::Forward(float* logits, const uint32_t* offsets, uint32_t* output_token,
                              const SamplingConfig* sampling_config, SamplingDevideParameter sampling_devide_parameter,
                              const ModelConfig* model_config, cudaStream_t& stream) {
   // the same for all type sampling

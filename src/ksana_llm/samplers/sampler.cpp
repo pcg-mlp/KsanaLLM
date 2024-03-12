@@ -17,7 +17,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank) {
   GetBlockManager()->SetDeviceId(rank_);
 
   GetBlockManager()->AllocateContiguous(
-      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(curandState_t) + sizeof(int*)) * max_batch_size,
+      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(curandState_t) + sizeof(int*)) * max_batch_size,
       device_buffer_block_id_);
   GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
   NLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
@@ -25,7 +25,9 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank) {
   device_output_tokens_ = static_cast<uint32_t*>(device_buffer_);
   device_offset_ = device_output_tokens_ + max_batch_size;
   device_topKs_ = reinterpret_cast<int*>(device_offset_ + max_batch_size);
-  device_curandstates_ = reinterpret_cast<curandState_t*>(device_topKs_ + max_batch_size);
+  device_topPs_ = reinterpret_cast<float*>(device_topKs_ + max_batch_size);
+  device_temperatures_ = reinterpret_cast<float*>(device_topPs_ + max_batch_size);
+  device_curandstates_ = reinterpret_cast<curandState_t*>(device_temperatures_ + max_batch_size);
   device_output_tokens_ptrs_ = reinterpret_cast<int**>(device_curandstates_ + max_batch_size);
   if (sizeof(uint32_t) != sizeof(int)) {
     NLLM_LOG_ERROR << fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int));
@@ -40,6 +42,8 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank) {
                              sizeof(uint32_t*) * max_batch_size, cudaMemcpyHostToDevice));
   host_offset_.resize(max_batch_size);
   host_topKs_.resize(max_batch_size);
+  host_topPs_.resize(max_batch_size);
+  host_temperatures_.resize(max_batch_size);
   host_output_tokens_.resize(max_batch_size);
   topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
 }
@@ -54,6 +58,8 @@ Sampler::~Sampler() {
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream_t& stream) {
   if (rank_ == 0) {
     bool use_arg_max = true;
+    bool use_top_p = false;
+    bool use_temperature = false;
     int req_index = 0;
     float* device_logits = nullptr;
     SamplingDevideParameter sampling_devide_parameter;
@@ -68,31 +74,30 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream
       } else {
         return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
       }
-      host_offset_[req_index] = sampling_req.logits_offset;
+      int offset = sampling_req.logits_offset;
+      if (offset >= sampling_devide_parameter.bs) {
+        return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= sampling_devide_parameter.bs");
+      }
+      host_offset_[req_index] = offset;
       if (sampling_config->beam_width == 1) {
-        if (sampling_config->temperature == 0.0f) {
-          if (sampling_config->topp == 0.0f || sampling_config->topp == 1.0f) {
-            if (sampling_config->topk > 1024) {
-              return Status(RET_INVALID_ARGUMENT, "topk > 1024.");
-            }
-            host_topKs_[req_index] = sampling_config->topk;
-            sampling_devide_parameter.max_topK = sampling_devide_parameter.max_topK > sampling_config->topk
-                                                     ? sampling_devide_parameter.max_topK
-                                                     : sampling_config->topk;
-            use_arg_max = use_arg_max && sampling_config->topk == 1;
-          } else {
-            return Status(RET_INVALID_ARGUMENT, "sampling for topp not implemented");
-          }
-        } else {
-          return Status(RET_INVALID_ARGUMENT, "sampling for temperature not implemented");
+        if (sampling_config->topk > 1024) {
+          return Status(RET_INVALID_ARGUMENT, "topk > 1024.");
         }
+        host_topKs_[offset] = sampling_config->topk;
+        host_topPs_[offset] = sampling_config->topp == 0.0f ? 1.0f : sampling_config->topp;
+        host_temperatures_[offset] = sampling_config->temperature == 0.0f ? 1.0f : sampling_config->temperature;
+        sampling_devide_parameter.max_topK = sampling_devide_parameter.max_topK > sampling_config->topk
+                                                 ? sampling_devide_parameter.max_topK
+                                                 : sampling_config->topk;
+        use_arg_max = use_arg_max && sampling_config->topk == 1;
+        use_top_p = use_top_p || !(host_topPs_[offset] == 1.0f);
+        use_temperature = use_temperature || !(host_temperatures_[offset] == 1.0f);
+
       } else {
         return Status(RET_INVALID_ARGUMENT, "sampling for beam_width > 1 not implemented");
       }
       req_index++;
     }
-    CUDA_CHECK(cudaMemcpyAsync(device_offset_, host_offset_.data(), sizeof(uint32_t) * sampling_devide_parameter.bs,
-                               cudaMemcpyHostToDevice, stream));
 
     if (!use_arg_max) {
       CUDA_CHECK(cudaMemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_devide_parameter.bs,
@@ -100,14 +105,24 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream
       sampling_devide_parameter.device_topKs = device_topKs_;
       sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
       sampling_devide_parameter.device_curandstates = device_curandstates_;
+      if (use_top_p) {
+        CUDA_CHECK(cudaMemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs,
+                                   cudaMemcpyHostToDevice, stream));
+        sampling_devide_parameter.device_topPs = device_topPs_;
+      }
+      if (use_temperature) {
+        CUDA_CHECK(cudaMemcpyAsync(device_temperatures_, host_temperatures_.data(),
+                                   sizeof(float) * sampling_devide_parameter.bs, cudaMemcpyHostToDevice, stream));
+        sampling_devide_parameter.device_temperatures = device_temperatures_;
+      }
     }
-    STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, device_offset_, device_output_tokens_, nullptr,
+    STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, nullptr, device_output_tokens_, nullptr,
                                                 sampling_devide_parameter, nullptr, stream));
     CUDA_CHECK(cudaMemcpyAsync(host_output_tokens_.data(), device_output_tokens_,
                                sizeof(uint32_t) * sampling_devide_parameter.bs, cudaMemcpyDeviceToHost, stream));
     cudaStreamSynchronize(stream);
     for (int i = 0; i < sampling_devide_parameter.bs; i++) {
-      sampling_reqs[i].output_tokens->push_back(host_output_tokens_[i]);
+      sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
     }
   }
   return Status();

@@ -27,12 +27,16 @@ class Sampler {
   uint32_t* device_output_tokens_;
   uint32_t* device_offset_;
   int* device_topKs_;
+  float* device_topPs_;
+  float* device_temperatures_;
   int** device_output_tokens_ptrs_;
   curandState_t* device_curandstates_;
 
   std::vector<int> host_output_tokens_;
   std::vector<uint32_t> host_offset_;
   std::vector<int> host_topKs_;
+  std::vector<float> host_topPs_;
+  std::vector<float> host_temperatures_;
   std::vector<const float*> host_logits_;
 };
 
