@@ -25,23 +25,26 @@ enum RetCode {
   // The sequence len exceed the capacity.
   RET_EXCEED_CAPACITY = 5,
 
+  // The input len exceed max input length.
+  RET_EXCEED_LENGTH = 6,
+
   // handle timeout.
-  RET_TIMEOUT = 6,
+  RET_TIMEOUT = 7,
 
   // block manager allocate fail
-  RET_ALLOCATE_FAIL = 7,
+  RET_ALLOCATE_FAIL = 8,
 
   // block manager free fail
-  RET_FREE_FAIL = 8,
+  RET_FREE_FAIL = 9,
 
   // undefined reference
-  RET_UNDEFINED_REFERENCE = 9,
+  RET_UNDEFINED_REFERENCE = 10,
 
   // iteratioin stopped.
-  RET_STOP_ITERATION = 10,
+  RET_STOP_ITERATION = 11,
 
   // The runtime error.
-  RET_RUNTIME = 8,
+  RET_RUNTIME = 12,
 
   // something not in above values.
   RET_UNKNOWN = 255,

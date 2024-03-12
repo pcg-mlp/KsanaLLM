@@ -28,6 +28,10 @@ namespace ksana_llm {
 
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context)
     : batch_scheduler_config_(batch_scheduler_config), context_(context) {
+  // Config validation.
+  NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_token_number > batch_scheduler_config_.max_input_len,
+                       "The max_token_number must large than max_input_len.");
+
   threadpool_ = std::make_shared<ThreadPool>(batch_scheduler_config.swap_threadpool_size);
   threadpool_->Start();
 
@@ -80,7 +84,19 @@ void BatchScheduler::SwapInAsync(std::shared_ptr<InferRequest> req) {
 Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_request) {
   NLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ".";
   if (CheckWaitingQueueFull()) {
+    NLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
+
     infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
+    infer_request->finished = true;
+    infer_request->Notify();
+
+    return infer_request->finish_status;
+  }
+
+  if (CheckRequestExceedLength(infer_request)) {
+    NLLM_LOG_DEBUG << "input len is too long, req " << infer_request->req_id << " failed.";
+
+    infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length exceed max_input_len.");
     infer_request->finished = true;
     infer_request->Notify();
 
@@ -165,6 +181,10 @@ bool BatchScheduler::CheckRequestTimeout(const std::shared_ptr<InferRequest> req
 
 bool BatchScheduler::CheckWaitingQueueFull() {
   return waiting_queue_.size() >= batch_scheduler_config_.max_waiting_queue_len;
+}
+
+inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
+  return req->input_tokens.size() > batch_scheduler_config_.max_input_len;
 }
 
 bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {

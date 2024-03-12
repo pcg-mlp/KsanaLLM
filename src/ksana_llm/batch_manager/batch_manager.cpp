@@ -6,6 +6,7 @@
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
@@ -112,6 +113,12 @@ Status BatchManager::Process() {
 }
 
 Status BatchManager::Start() {
+  // Check config here, because the block number is determined after all models loaded.
+  NLLM_CHECK_WITH_INFO((GetBlockManager()->GetFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum()) >
+                           (batch_manager_config_.batch_scheduler_config.max_input_len +
+                            batch_manager_config_.batch_scheduler_config.max_output_len),
+                       "Total device block_num * block_token_size must large than max_input_len + max_output_len.");
+
   batch_manager_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::Process, this));
 
   return Status();
