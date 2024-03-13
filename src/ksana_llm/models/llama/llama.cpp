@@ -84,6 +84,14 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
   block_size_ = GetBlockManager()->GetBlockSize();
 
+  BlockManagerConfig block_manager_config;
+  Status status = Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
+  if (!status.OK()) {
+    throw std::runtime_error("Get block manager config from environment failed");
+  }
+  int prefix_cache_tokens_number =
+      block_manager_config.prefix_cache_len > 0 ? block_manager_config.prefix_cache_len : 0;
+
   // 1: KV 一块空间
   // 2: 运行时中间空间
   // 3: 矩阵计算需要一块空间
@@ -93,6 +101,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   max_seq_len_ = model_config.max_token_num;
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
   size_t max_token_num = model_config.max_scheduler_token_num;
+  max_token_num_ = max_token_num;
   NLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}", max_batch_size_,
                                 max_seq_len_, max_token_num);
   size_t tmp_tensor_size =
@@ -132,7 +141,13 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CreateTensor(kv_list_, num_layer_ * max_block_num * 2 * sizeof(void*));
   kv_list_.dtype = TYPE_POINTER;
 
-  CreateTensor(input_ids_, max_token_num * sizeof(int));
+  // NOTE(karlluo): when using prefixed cache, more tokens come into forward, hence we need more buffer.
+  size_t extra_token_number = 0;
+  if (prefix_cache_tokens_number > 0) {
+    extra_token_number = prefix_cache_tokens_number * 10;
+  }
+  // TODO(karlluo): all create tensor used dynamic memory pool
+  CreateTensor(input_ids_, (max_token_num + extra_token_number) * sizeof(int));
   input_ids_.dtype = TYPE_INT32;
   CreateTensor(input_offset_int32_tensor_, (max_batch_size_ + 1) * sizeof(int));
   input_offset_int32_tensor_.dtype = TYPE_INT32;
@@ -140,7 +155,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   input_offset_uint64_tensor_.dtype = TYPE_UINT64;
   CreateTensor(input_tokens_int32_tensor_, (max_batch_size_ + 1) * sizeof(int));
   input_tokens_int32_tensor_.dtype = TYPE_INT32;
-  CreateTensor(rotary_embedding_pos_, max_token_num * sizeof(int64_t));
+  CreateTensor(rotary_embedding_pos_, (max_token_num + extra_token_number) * sizeof(int64_t));
   CreateTensor(forward_shape_, sizeof(int));
 
   // 初始化各层实例
@@ -270,6 +285,8 @@ void Llama<T>::PrepareContextRotaryEmbeddingPos(const size_t batch_size, const s
     }
   }
   void* rotary_embedding_pos_ptr = rotary_embedding_pos_.GetPtr<void>();
+  NLLM_LOG_DEBUG << "rotary_embedding_pos_ shape: [" << max_token_num_ * 2
+                 << "] of int64 and total_seq_len: " << total_seq_len;
   CUDA_CHECK(cudaMemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
                              cudaMemcpyHostToDevice, stream));
   CUDA_CHECK(cudaEventRecord(event, stream));

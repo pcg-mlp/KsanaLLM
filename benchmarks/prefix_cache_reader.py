@@ -3,11 +3,13 @@ import math
 from transformers import LlamaTokenizer
 
 
-def load_prompts(tokenizer_dir="/dockerdata/karlluo/llama2_ksana_13b/hf_fp16"):
+def load_prompts(tokenizer_dir=None):
     header = {}
     tokens = []
     prompts = []
-    tokenizer = LlamaTokenizer.from_pretrained(tokenizer_dir)
+    tokenizer = None
+    if not tokenizer_dir is None:
+        tokenizer = LlamaTokenizer.from_pretrained(tokenizer_dir)
 
     with open('prefix_cache_input.csv', "r") as csvfile:
         spamreader = csv.reader(csvfile, delimiter=',')
@@ -29,7 +31,10 @@ def load_prompts(tokenizer_dir="/dockerdata/karlluo/llama2_ksana_13b/hf_fp16"):
                     "\"}], 'stream': False, 'temperature': 0.5, 'max_length': 8192, 'top_p': 1.0, 'delete_prompt_from_output': 1}"
                 ).strip("{'messages': [{'role': 'user', 'content': \"")
                 prompt = "[INST]%s[/INST]" % raw_message
-                token_list = tokenizer.encode(prompt, add_special_tokens=True)
+                if tokenizer is None:
+                    token_list = []
+                else:
+                    token_list = tokenizer.encode(prompt, add_special_tokens=True)
                 
                 prompts.append(prompt)
                 tokens.append(token_list)
@@ -44,15 +49,16 @@ def load_prompts(tokenizer_dir="/dockerdata/karlluo/llama2_ksana_13b/hf_fp16"):
     longest_prefix_tokens_num = 0
     tokens_number_list = [len(t) for t in tokens]
     tokens_min_len = min(tokens_number_list)
-    for idx in range(tokens_min_len):
-        tmp_set = set()
-        for prefix_tokens in tokens:
-            tmp_set.add(prefix_tokens[idx])
-        if len(tmp_set) == 1:
-            longest_prefix_tokens_num += 1
-            continue
-        elif len(tmp_set) > 1:
-            break
+    if not tokenizer is None:
+        for idx in range(tokens_min_len):
+            tmp_set = set()
+            for prefix_tokens in tokens:
+                tmp_set.add(prefix_tokens[idx])
+            if len(tmp_set) == 1:
+                longest_prefix_tokens_num += 1
+                continue
+            elif len(tmp_set) > 1:
+                break
 
     final_prompts = None
     if len(prompts) < 220:
@@ -67,5 +73,5 @@ def load_prompts(tokenizer_dir="/dockerdata/karlluo/llama2_ksana_13b/hf_fp16"):
 
 
 if __name__ == "__main__":
-    longest_prefix_tokens_num, final_prompts = load_prompts("/dockerdata/karlluo/llama2_ksana_13b/hf_fp16")
+    longest_prefix_tokens_num, final_prompts = load_prompts("/model/llama2_ksana_13b/hf_fp16")
     print(longest_prefix_tokens_num)

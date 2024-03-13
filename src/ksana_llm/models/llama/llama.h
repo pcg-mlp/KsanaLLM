@@ -65,6 +65,7 @@ class Llama : public BaseModel {
   int block_token_num_;
   int block_size_;
   bool use_custom_all_reduce_ = true;
+  size_t max_token_num_{0ul};
 
   Tensor reduce_tensor_;
   Tensor rank_tensor_0_;
