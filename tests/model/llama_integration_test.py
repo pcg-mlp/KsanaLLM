@@ -42,7 +42,7 @@ def args_config():
     return args
 
 
-def infer(prompt, tokenizer, generation_config, model, queue=None):
+def infer(prompt, tokenizer, generation_config, model, queue=None, idx=0):
     input_tokens = tokenizer.encode(prompt, add_special_tokens=True)
     generation_config = GenerationConfig(num_beams=1,
                                          top_k=1,
@@ -55,7 +55,7 @@ def infer(prompt, tokenizer, generation_config, model, queue=None):
     if queue is None:
         return tokenizer.decode(result)
     else:
-        queue.put(tokenizer.decode(result))
+        queue.put((idx, tokenizer.decode(result)))
         return
 
 
@@ -111,6 +111,7 @@ if __name__ == "__main__":
                                       generation_config,
                                       model,
                                       multi_thread_queue,
+                                      idx,
                                   ))
         thread.start()
         multi_thread_list.append(thread)
@@ -120,8 +121,11 @@ if __name__ == "__main__":
     end_time = time.perf_counter()
     total_infer_time = end_time - start_time
     logging.info("finish infer")
-
     assert total_infer_time < warmup_time
+
+    while not multi_thread_queue.empty():
+        idx, result = multi_thread_queue.get(block=False)
+        assert result.replace("\n", "") == ref_result[idx]
 
     print(f"Total model load time: {model_load_time:.2f} s")
     print(f"Total warmup time: {warmup_time:.2f} s")

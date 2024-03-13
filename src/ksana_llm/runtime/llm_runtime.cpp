@@ -58,6 +58,9 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
     forward_req.logits_offset = req_ptr->logits_offset;
     forward_req.output_tokens = &(req_ptr->output_tokens);
+    forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
+    forward_req.prefix_cache_len = req_ptr->prefix_cache_len;
+    forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;
     grouped_reqs[key][stage].push_back(forward_req);
   }
 }

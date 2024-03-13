@@ -65,20 +65,22 @@ class Llama : public BaseModel {
   int block_token_num_;
   int block_size_;
   bool use_custom_all_reduce_ = true;
-  Tensor tmp_tensor_0, tmp_tensor_1, tmp_tensor_2;
-  Tensor up_matmul_tensor;
-  Tensor kv_cache_buffer_;
-  Tensor logits_tensor_;
+
   Tensor reduce_tensor_;
   Tensor rank_tensor_0_;
   Tensor rank_tensor_1_;
-  Tensor kv_cache_offset_tensor;
-  Tensor kv_list;
-  Tensor input_ids, input_offset_int32_tensor, input_offset_uint64_tensor;
-  Tensor input_tokens_int32_tensor;
-  Tensor rotary_embedding_pos;
-  Tensor forward_shape;
-  Tensor cos_sin_cache_tensor;
+  Tensor tensor_buffer_0_, tensor_buffer_1_, tensor_buffer_2_;
+  Tensor up_matmul_tensor_;
+  Tensor kv_cache_buffer_;
+  Tensor logits_tensor_;
+  Tensor kv_cache_offset_tensor_;
+  Tensor kv_list_;
+  Tensor input_ids_, input_offset_int32_tensor_, input_offset_uint64_tensor_;
+  Tensor input_tokens_int32_tensor_;
+  Tensor rotary_embedding_pos_;
+  Tensor forward_shape_;
+  Tensor cos_sin_cache_tensor_;
+
   std::shared_ptr<Context> context_{nullptr};
 
   std::string saved_dir = "/model/llama-ft/7B/nllm/";

@@ -181,6 +181,7 @@ Status Environment::ParseModelConfig(const std::string &model_name, const std::s
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(ini_reader, model_config);
 
+  model_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   model_config.max_batch_size = batch_manager_config_.batch_scheduler_config.max_batch_size;
   model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_token_number;
   model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_input_len +
