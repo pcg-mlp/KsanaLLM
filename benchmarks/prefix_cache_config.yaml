@@ -3,7 +3,7 @@ setting:
   # 全局配置
   global:
     # TP并行
-    tensor_para_size: 2
+    tensor_para_size: 4
     # PP并行
     pipeline_para_size: 1
     # 是否启用lora适配，false表示不启用，true表示启用
@@ -51,7 +51,7 @@ setting:
     # 例如设置了45，将会调整到32作为实际生效的值。
     # 目前策略是如果这不能整取，则存在block的浪费，所以暂时选择向下回退的策略。
     # -1表示自动适配，自动适配暂时还没实现。
-    prefix_cache_len: 0
+    prefix_cache_len: 910
   # 性能统计相关配置
   profiler:
     # 统计周期，每隔多少秒输出一次统计数据
@@ -67,7 +67,7 @@ model_spec:
     # 模型名称
     model_name: llama
     # 模型路径
-    model_dir: /model/llama-ft/13B/2-gpu
+    model_dir: /model/llama-ft/13B/4-gpu
   # lora模型配置，可以有多个
   lora_models:
       # lora模型名称
