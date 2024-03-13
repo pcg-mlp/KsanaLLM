@@ -30,6 +30,15 @@ struct ForwardRequest {
 
   // The block size for every kv cache block.
   size_t block_size;
+
+  // The flag for tagging request prefix cache usage
+  bool is_use_prefix_cache = false;
+
+  // The prefix cache tokens number
+  int prefix_cache_len = 0;
+
+  // The prefix cache blocks number
+  int prefix_cache_blocks_number = 0;
 };
 
 }  // namespace ksana_llm

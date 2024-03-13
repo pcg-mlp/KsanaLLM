@@ -18,6 +18,8 @@ import requests
 from typing import AsyncGenerator, List, Tuple
 from tqdm.asyncio import tqdm
 
+import prefix_cache_reader
+
 # (prompt len, output len, latency)
 REQUEST_LATENCY: List[Tuple[int, int, float]] = []
 
@@ -57,6 +59,9 @@ def args_config():
                         type=int,
                         default=0,
                         help='number of input prompts')
+    parser.add_argument('--use_prefix_cache_prompts',
+                        action='store_true',
+                        help='test with prompts with very long prefix cache')
     args = parser.parse_args()
     return args
 
@@ -165,9 +170,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     result_list[req_id] = output_text
     print("")
     REQUEST_LATENCY.append(
-        (len(prompt),
-         output_len if output_len > 0 else 1,
-         request_latency))
+        (len(prompt), output_len if output_len > 0 else 1, request_latency))
     pbar.update(1)
 
 
@@ -205,13 +208,8 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
                                                       args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
         task = asyncio.create_task(
-            send_request_async(
-                prompt,
-                api_url,
-                req_id,
-                result_list,
-                pbar,
-                args.backend))
+            send_request_async(prompt, api_url, req_id, result_list, pbar,
+                               args.backend))
         tasks.append(task)
     await asyncio.gather(*tasks)
     pbar.close()
@@ -223,21 +221,22 @@ def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
     result_list = [""] * len(inputs)
     for req_id, prompt in generate_prompt_sync(inputs, args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
-        send_request_sync(
-            prompt,
-            api_url,
-            req_id,
-            result_list,
-            pbar,
-            args.backend)
+        send_request_sync(prompt, api_url, req_id, result_list, pbar,
+                          args.backend)
     pbar.close()
     return result_list
 
 
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
-    input_generator = read_from_csv(args.input_csv, num=args.prompt_num)
-    inputs = list(input_generator)
+    inputs = None
+    if args.use_prefix_cache_prompts:
+        _, inputs = prefix_cache_reader.load_prompts()
+        if args.prompt_num > 0: 
+            inputs = inputs[:args.prompt_num]
+    else:
+        input_generator = read_from_csv(args.input_csv, num=args.prompt_num)
+        inputs = list(input_generator)
 
     benchmark_start_time = time.perf_counter()
     if args.mode == "async":
@@ -252,8 +251,10 @@ def main(args: argparse.Namespace):
 
     # Compute the latency statistics.
     avg_latency = np.mean([latency for _, _, latency in REQUEST_LATENCY])
-    avg_input_len = np.mean([prompt_len for prompt_len, _, _ in REQUEST_LATENCY])
-    avg_output_len = np.mean([output_len for _, output_len, _ in REQUEST_LATENCY])
+    avg_input_len = np.mean(
+        [prompt_len for prompt_len, _, _ in REQUEST_LATENCY])
+    avg_output_len = np.mean(
+        [output_len for _, output_len, _ in REQUEST_LATENCY])
     print(f"Average latency: {avg_latency:.2f} s")
     print(f"Average input len: {avg_input_len:.2f} chars")
     print(f"Average output len: {avg_output_len:.2f} chars")
