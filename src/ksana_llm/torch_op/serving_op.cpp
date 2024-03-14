@@ -3,6 +3,8 @@
 ==============================================================================*/
 
 #include "ksana_llm/torch_op/serving_op.h"
+
+#include <iostream>
 #include <memory>
 #include <string>
 
@@ -31,6 +33,7 @@ void ServingOp::InitServing(const std::string &config_file) {
   Status status = Singleton<Environment>::GetInstance()->ParseConfig(config_file);
   if (!status.OK()) {
     std::cerr << status.ToString() << std::endl;
+    NLLM_LOG_FATAL << "InitServing error, " << status.ToString();
   }
 
   serving_impl_ = std::make_shared<ServingImpl>();
