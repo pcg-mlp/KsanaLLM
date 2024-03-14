@@ -3,7 +3,7 @@ import math
 from transformers import LlamaTokenizer
 
 
-def load_prompts(tokenizer_dir=None):
+def load_prompts(input_csv="prefix_cache_input.csv", tokenizer_dir=None):
     header = {}
     tokens = []
     prompts = []
@@ -11,7 +11,7 @@ def load_prompts(tokenizer_dir=None):
     if not tokenizer_dir is None:
         tokenizer = LlamaTokenizer.from_pretrained(tokenizer_dir)
 
-    with open('prefix_cache_input.csv', "r") as csvfile:
+    with open(input_csv, "r") as csvfile:
         spamreader = csv.reader(csvfile, delimiter=',')
         for idx, row in enumerate(spamreader):
             if idx == 0:
@@ -73,5 +73,6 @@ def load_prompts(tokenizer_dir=None):
 
 
 if __name__ == "__main__":
-    longest_prefix_tokens_num, final_prompts = load_prompts("/model/llama2_ksana_13b/hf_fp16")
+    longest_prefix_tokens_num, final_prompts = load_prompts(
+        input_csv="prefix_cache_input.csv", tokenizer_dir="/model/llama2_ksana_13b/hf_fp16")
     print(longest_prefix_tokens_num)

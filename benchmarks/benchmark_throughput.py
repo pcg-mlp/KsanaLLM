@@ -231,7 +231,7 @@ def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
     inputs = None
     if args.use_prefix_cache_prompts:
-        _, inputs = prefix_cache_reader.load_prompts()
+        _, inputs = prefix_cache_reader.load_prompts(input_csv=args.input_csv)
         if args.prompt_num > 0: 
             inputs = inputs[:args.prompt_num]
     else:

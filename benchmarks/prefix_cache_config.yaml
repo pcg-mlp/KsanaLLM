@@ -43,7 +43,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 2.0
+    block_host_memory_factor: 5.0
     # prefix cache长度，即每个request共享多少个prefix token。
     # 默认为0表示不启用prefix cache。
     # 正整数为指定个数prefix tokens会被cache起来。

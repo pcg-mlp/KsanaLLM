@@ -8,6 +8,7 @@
 #include <future>
 #include <memory>
 #include <numeric>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -30,7 +31,8 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_confi
     : batch_scheduler_config_(batch_scheduler_config), context_(context) {
   // Config validation.
   NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_token_number > batch_scheduler_config_.max_input_len,
-                       "The max_token_number must large than max_input_len.");
+                       FormatStr("The max_token_number must large than max_input_len, %d vs %d.",
+                                 batch_scheduler_config_.max_token_number, batch_scheduler_config_.max_input_len));
 
   threadpool_ = std::make_shared<ThreadPool>(batch_scheduler_config.swap_threadpool_size);
   threadpool_->Start();
@@ -62,22 +64,26 @@ BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
 void BatchScheduler::SwapOutAsync(std::shared_ptr<InferRequest> req) {
   req->swap_pending = true;
   req->swap_future = threadpool_->Submit([=]() {
+    NLLM_LOG_DEBUG << "Start to async swapout req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
     {
       REPORT_TIME_US(batch_scheduler_swapout_us);
       req->SwapOutAsync();
+      req->swap_pending = false;
     }
-    req->swap_pending = false;
+    NLLM_LOG_DEBUG << "Finish to async swapout req " << req->req_id;
   });
 }
 
 void BatchScheduler::SwapInAsync(std::shared_ptr<InferRequest> req) {
   req->swap_pending = true;
   req->swap_future = threadpool_->Submit([=]() {
+    NLLM_LOG_DEBUG << "Start to async swapin req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
     {
       REPORT_TIME_US(batch_scheduler_swapin_us);
       req->SwapInAsync();
+      req->swap_pending = false;
     }
-    req->swap_pending = false;
+    NLLM_LOG_DEBUG << "Finish to async swapin req " << req->req_id;
   });
 }
 
@@ -113,6 +119,11 @@ bool BatchScheduler::WaitingBufferEmpty() {
   return waiting_buffer_queue_.empty();
 }
 
+bool BatchScheduler::SwappedQueueEmtpy() {
+  std::lock_guard<std::mutex> guard(queue_mutex_);
+  return swapped_queue_.empty();
+}
+
 void BatchScheduler::MergeWaitingBufferQueue() {
   std::lock_guard<std::mutex> guard(queue_buffer_mutex_);
 
@@ -129,6 +140,8 @@ void BatchScheduler::MergePendingSwapoutRequest() {
       it = swapout_pending_queue_.erase(it);
       continue;
     }
+
+    NLLM_LOG_DEBUG << "swapout req " << req->req_id << " is pending, skip merge";
     ++it;
   }
 }
@@ -142,6 +155,8 @@ void BatchScheduler::MergePendingSwapinRequests() {
       it = swapin_pending_queue_.erase(it);
       continue;
     }
+
+    NLLM_LOG_DEBUG << "swapin req " << req->req_id << " is pending, skip merge";
     ++it;
   }
 }
@@ -150,7 +165,12 @@ void BatchScheduler::WaitPendingSwapoutDone() {
   for (auto it = swapout_pending_queue_.begin(); it != swapout_pending_queue_.end(); ++it) {
     auto &req = *it;
     if (req->swap_pending) {
-      req->swap_future.wait();
+      NLLM_LOG_DEBUG << "Wait until swapout req " << req->req_id << " done.";
+      try {
+        req->swap_future.get();
+      } catch (const std::exception &e) {
+        NLLM_LOG_FATAL << "Exception in swapout, info: " << e.what();
+      }
     }
   }
 }
@@ -159,7 +179,12 @@ void BatchScheduler::WaitPendingSwapinDone() {
   for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end(); ++it) {
     auto &req = *it;
     if (req->swap_pending) {
-      req->swap_future.wait();
+      NLLM_LOG_DEBUG << "Wait until swapin req " << req->req_id << " done.";
+      try {
+        req->swap_future.get();
+      } catch (const std::exception &e) {
+        NLLM_LOG_FATAL << "Exception in swapin, info: " << e.what();
+      }
     }
   }
 }
@@ -612,6 +637,36 @@ void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_bl
   }
 }
 
+void BatchScheduler::SchedulePending() {
+  // Process pending only if running queue is empty.
+  if (running_queue_.empty()) {
+    if (!swapin_pending_queue_.empty()) {
+      {
+        REPORT_TIME_US(batch_scheduler_wait_swapin_us);
+        WaitPendingSwapinDone();
+      }
+      MergePendingSwapinRequests();
+      if (!swapin_pending_queue_.empty()) {
+        NLLM_CHECK_WITH_INFO(false, "Wait and merge pending swapin error.");
+      }
+    }
+
+    // Waiting for swapout finished, then batch manager will invoke the next schedule step.
+    if (running_queue_.empty()) {
+      if (!swapout_pending_queue_.empty()) {
+        {
+          REPORT_TIME_US(batch_scheduler_wait_swapout_us);
+          WaitPendingSwapoutDone();
+        }
+        MergePendingSwapoutRequest();
+        if (!swapout_pending_queue_.empty()) {
+          NLLM_CHECK_WITH_INFO(false, "Wait and merge pending swapout error.");
+        }
+      }
+    }
+  }
+}
+
 std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   NLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(queue_mutex_);
@@ -624,14 +679,7 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   ScheduleRunning(step_token_num_sum, skip_other);
   ScheduleSwapped(step_token_num_sum, curr_block_num_sum, skip_other);
   ScheduleWaiting(step_token_num_sum, curr_block_num_sum, skip_other);
-
-  if (running_queue_.empty() && !swapin_pending_queue_.empty()) {
-    if (!swapin_pending_queue_.empty()) {
-      REPORT_TIME_US(batch_scheduler_wait_swapin_us);
-      WaitPendingSwapinDone();
-      MergePendingSwapinRequests();
-    }
-  }
+  SchedulePending();
 
   REPORT_METRIC(batch_scheduler_running, running_queue_.size());
   REPORT_METRIC(batch_scheduler_waiting, waiting_queue_.size());
@@ -639,8 +687,6 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
 
   REPORT_METRIC(batch_scheduler_pending_swapin, swapin_pending_queue_.size());
   REPORT_METRIC(batch_scheduler_pending_swapout, swapout_pending_queue_.size());
-
-  REPORT_METRIC(batch_scheduler_tokens, step_token_num_sum);
 
   REPORT_METRIC(block_manager_free, GetBlockManager()->GetFreeBlockNumber());
   REPORT_METRIC(block_manager_used, GetBlockManager()->GetUsedBlockNumber());
