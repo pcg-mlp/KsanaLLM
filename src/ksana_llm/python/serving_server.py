@@ -8,7 +8,6 @@ import json
 import uvicorn
 import os
 
-from typing import AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import GenerationConfig, LlamaTokenizer
@@ -19,7 +18,6 @@ from functools import partial
 from concurrent import futures
 
 model_executor = futures.ThreadPoolExecutor(max_workers=128)
-tokenizer_executor = futures.ThreadPoolExecutor(max_workers=32)
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
@@ -53,6 +51,46 @@ def args_config():
     return args
 
 
+def streaming_generate(model_name, input_tokens, generation_config):
+    """Do the streaming generate.
+    """
+    results_iterator = model.generate(model_name=model_name,
+                                      inputs=input_tokens,
+                                      generation_config=generation_config,
+                                      streamer=True)
+
+    def stream_results():
+        unfinished_token = []
+        for request_output in results_iterator:
+            if request_output:
+                output_text = tokenizer.decode(
+                    unfinished_token + [request_output])
+                if output_text[-1:] == "\uFFFD":
+                    unfinished_token = unfinished_token + [request_output]
+                    output_text = ""
+                else:
+                    unfinished_token = []
+                ret = {"texts": output_text}
+                yield (json.dumps(ret) + "\0").encode("utf-8")
+            else:
+                return
+
+    return StreamingResponse(stream_results())
+
+
+def batch_generate(model_name, input_tokens, generation_config):
+    """Do the batch generate.
+    """
+    results_tokens = model.generate(model_name=model_name,
+                                    inputs=input_tokens,
+                                    generation_config=generation_config,
+                                    streamer=None)
+
+    output_text = tokenizer.decode(results_tokens)
+    return JSONResponse(
+        {"texts": output_text, "output_token_ids": results_tokens})
+
+
 @app.post("/generate")
 async def generate(request: Request) -> Response:
     """Generate completion for the request.
@@ -78,37 +116,21 @@ async def generate(request: Request) -> Response:
         temperature=sampling_config["temperature"])
 
     loop = asyncio.get_event_loop()
-    results_generator = await loop.run_in_executor(
-        model_executor,
-        partial(model.generate,
-                model_name=model_name,
-                inputs=input_tokens,
-                generation_config=generation_config,
-                streamer=(True if enable_streaming else None)))
-
     if enable_streaming:
-        async def stream_results() -> AsyncGenerator[bytes, None]:
-            unfinished_token = []
-            async for request_output in results_generator:
-                if request_output:
-                    output_text = tokenizer.decode(unfinished_token + [request_output])
-                    if output_text[-1:] == "\uFFFD":
-                        unfinished_token = unfinished_token + [request_output]
-                        output_text = ""
-                    else :
-                        unfinished_token = []
-                    ret = {"texts": output_text}
-                    yield (json.dumps(ret) + "\0").encode("utf-8")
-                else:
-                    return
-
-        return StreamingResponse(stream_results())
-
-    output_text = await loop.run_in_executor(
-        tokenizer_executor, partial(tokenizer.decode, results_generator))
-
-    return JSONResponse({"texts": output_text,
-                         "output_token_ids": results_generator})
+        results = await loop.run_in_executor(
+            model_executor,
+            partial(streaming_generate,
+                    model_name=model_name,
+                    input_tokens=input_tokens,
+                    generation_config=generation_config))
+    else:
+        results = await loop.run_in_executor(
+            model_executor,
+            partial(batch_generate,
+                    model_name=model_name,
+                    input_tokens=input_tokens,
+                    generation_config=generation_config))
+    return results
 
 
 if __name__ == "__main__":

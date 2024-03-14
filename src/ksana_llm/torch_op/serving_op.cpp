@@ -84,8 +84,10 @@ PYBIND11_MODULE(libtorch_serving, m) {
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")
       .def(pybind11::init<>())
       .def("GetNext", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
+        pybind11::gil_scoped_release release;
         int token_id;
         ksana_llm::Status status = self->GetNext(token_id);
+        pybind11::gil_scoped_acquire acquire;
         return std::make_tuple(status, token_id);
       });
 
