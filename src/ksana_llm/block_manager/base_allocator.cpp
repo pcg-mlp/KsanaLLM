@@ -4,6 +4,7 @@
 
 #include "ksana_llm/block_manager/base_allocator.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
 
@@ -33,7 +34,8 @@ Status BaseAllocator::AllocateBlocks(size_t block_num, std::vector<int>& blocks)
   std::unique_lock<std::mutex> lock(block_mutex_);
 
   if (block_num > free_blocks_.size()) {
-    return Status(RET_ALLOCATE_FAIL, "No more free blocks.");
+    return Status(RET_ALLOCATE_FAIL,
+                  FormatStr("No more free blocks, expect %d, free %d", block_num, free_blocks_.size()));
   }
 
   blocks.clear();
@@ -100,7 +102,7 @@ Status BaseAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<v
       continue;
     }
     NLLM_LOG_ERROR << "Get block id " << block_id << " address error on device " << allocator_config_.device;
-    return Status(RET_SEGMENT_FAULT, "Get block address error.");
+    return Status(RET_SEGMENT_FAULT, FormatStr("Get block address error, block id ", block_id));
   }
   return Status();
 }
@@ -113,7 +115,7 @@ Status BaseAllocator::GetContiguousPtr(int block_id, void*& addr) {
     addr = it->second.address;
     return Status();
   }
-  return Status(RET_SEGMENT_FAULT, "Get contiguous address error.");
+  return Status(RET_SEGMENT_FAULT, FormatStr("Get contiguous address error, block id %d.", block_id));
 }
 
 size_t BaseAllocator::GetFreeBlockNumber() {

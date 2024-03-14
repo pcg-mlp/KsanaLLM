@@ -96,7 +96,7 @@ Status BatchManager::Process() {
     }
 
     if (scheduled_reqs.empty()) {
-      if (batch_scheduler_->WaitingBufferEmpty()) {
+      if (batch_scheduler_->WaitingBufferEmpty() && batch_scheduler_->SwappedQueueEmtpy()) {
         queue_waiter_->Wait();
         queue_waiter_->Reset(1);
       }

@@ -13,6 +13,7 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
 
@@ -20,7 +21,9 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
     : block_manager_config_(block_manager_config), context_(context) {
   NLLM_CHECK_WITH_INFO(
       block_manager_config.device_allocator_config.block_size == block_manager_config.host_allocator_config.block_size,
-      "The block size of host and device must be equal.");
+      FormatStr("The block size of host and device must be equal, %d vs %d",
+                block_manager_config.device_allocator_config.block_size,
+                block_manager_config.host_allocator_config.block_size));
   // Create host allocator
   host_allocator_ = std::make_shared<HostAllocator>(block_manager_config.host_allocator_config, context);
 
@@ -101,8 +104,10 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
 
   device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
   host_block_num = device_blocks_num * block_manager_config_.block_host_memory_factor;
-  NLLM_CHECK_WITH_INFO(host_block_num * block_manager_config_.host_allocator_config.block_size < host_free,
-                       "Not enough host free memory");
+
+  size_t host_allocate_bytes = host_block_num * block_manager_config_.host_allocator_config.block_size;
+  NLLM_CHECK_WITH_INFO(host_allocate_bytes < host_free,
+                       FormatStr("Not enough host free memory, expect %d, free %d", host_allocate_bytes, host_free));
 
   return Status();
 }

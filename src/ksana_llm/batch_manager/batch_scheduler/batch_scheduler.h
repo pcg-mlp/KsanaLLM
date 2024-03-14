@@ -30,6 +30,9 @@ class BatchScheduler {
   // Check whether the waiting buffer is empty.
   bool WaitingBufferEmpty();
 
+  // Check whether the swapped queue is empty.
+  bool SwappedQueueEmtpy();
+
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
@@ -50,6 +53,7 @@ class BatchScheduler {
   void ScheduleRunning(size_t &step_token_num_sum, bool &skip_other);
   void ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other);
   void ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other);
+  void SchedulePending();
 
   // Execute swap in separate threadpool.
   void SwapOutAsync(std::shared_ptr<InferRequest> req);
