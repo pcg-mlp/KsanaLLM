@@ -25,16 +25,10 @@ class PyStreamingIterator(object):
     """The streaming iterator.
     """
 
-    def __init__(self, serving_iterator: libtorch_serving.StreamingIterator, loop):
+    def __init__(self, serving_iterator: libtorch_serving.StreamingIterator):
         self._serving_iterator = serving_iterator
 
-        asyncio.set_event_loop(loop)
-        self._queue = asyncio.Queue()
-
     def __iter__(self):
-        return self
-
-    def __aiter__(self):
         return self
 
     def __next__(self):
@@ -49,22 +43,6 @@ class PyStreamingIterator(object):
             raise RuntimeError(
                 "Iterator error, ret code {}, message {}.".format(
                     status.GetCode(), status.GetMessage()))
-
-    async def __anext__(self):
-        status, token_id = self._serving_iterator.GetNext()
-        if status.OK():
-            self._queue.put_nowait(token_id)
-        elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
-            self._queue.put_nowait(None)
-        else:
-            self._queue.put_nowait(
-                RuntimeError("Iterator error, ret code {}, message {}.".format(
-                    status.GetCode(), status.GetMessage())))
-
-        result = await self._queue.get()
-        if isinstance(result, Exception):
-            raise result
-        return result
 
 
 class ServingModel(object):
@@ -82,9 +60,6 @@ class ServingModel(object):
         # The serving instance.
         self._serving = self._serving_cls()
         self._serving.init_serving(config_file)
-
-        # For streaming mode.
-        self._event_loop = asyncio.new_event_loop()
 
     @torch.no_grad()
     def generate(
@@ -116,4 +91,4 @@ class ServingModel(object):
         else:
             _, streaming_iterator = self._serving.generate_streaming(
                 model_name, inputs, sampling_config)
-            return PyStreamingIterator(streaming_iterator, self._event_loop)
+            return PyStreamingIterator(streaming_iterator)
