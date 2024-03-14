@@ -216,7 +216,7 @@ bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req)
   if (req->infer_stage == InferStage::STATE_DECODE) {
     if (req->output_tokens.size() > req->input_tokens.size() &&
         ((req->output_tokens.back()) == req->model_instance->GetModelConfig().end_id ||
-         req->output_tokens.size() >= req->model_instance->GetMaxTokenNum())) {
+         req->output_tokens.size() >= req->input_tokens.size() + batch_scheduler_config_.max_output_len)) {
       return true;
     }
   }

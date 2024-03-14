@@ -164,14 +164,12 @@ Status Environment::ParseConfig(const std::string &config_file) {
 Status Environment::ParseModelConfig(const std::string &model_name, const std::string &model_dir) {
   std::string config_file = model_dir + "/config.ini";
   if (!IsFileExists(config_file)) {
-    NLLM_LOG_ERROR << fmt::format("Model config file: {} is not exists.", config_file) << std::endl;
-    return Status(RetCode::RET_SEGMENT_FAULT);
+    return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Model config file: {} is not exists.", config_file));
   }
 
   INIReader ini_reader = INIReader(config_file);
   if (ini_reader.ParseError() < 0) {
-    NLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file) << std::endl;
-    return Status(RetCode::RET_SEGMENT_FAULT);
+    return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load model config file: {} error.", config_file));
   }
 
   ModelConfig model_config;
@@ -232,7 +230,9 @@ void Environment::InitializeBlockManagerConfig() {
 Status Environment::CheckEnvironment() {
   if (block_manager_config_.host_allocator_config.block_size !=
       block_manager_config_.device_allocator_config.block_size) {
-    return Status(RET_INVALID_ARGUMENT, "block size of device and host is not equal.");
+    return Status(RET_INVALID_ARGUMENT, fmt::format("block size of device and host is not equal, {} vs {}.",
+                                                    block_manager_config_.host_allocator_config.block_size,
+                                                    block_manager_config_.device_allocator_config.block_size));
   }
 
   return Status();
@@ -246,7 +246,7 @@ Status Environment::GetModelConfigs(std::unordered_map<std::string, ModelConfig>
 Status Environment::GetModelConfig(const std::string &model_name, ModelConfig &model_config) {
   auto it = model_configs_.find(model_name);
   if (it == model_configs_.end()) {
-    return Status(RET_INVALID_ARGUMENT, "No model found.");
+    return Status(RET_INVALID_ARGUMENT, fmt::format("No model named {} found.", model_name));
   }
 
   model_config = it->second;
