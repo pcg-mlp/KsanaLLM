@@ -433,7 +433,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
 
   // Forward
   // embedding
-  Tensor embedding_weight = base_weight->GetModelWeights("gather_embedding");
+  Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
   std::vector<Tensor>& emb_lookup_output = output_0;
   CUDA_CHECK(cudaStreamWaitEvent(stream, input_ids_event_));
   STATUS_CHECK_RETURN(
@@ -444,7 +444,8 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   // LlamaDecoder
   for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
     // input layernorm
-    Tensor input_layernorm_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".input_layernorm");
+    Tensor input_layernorm_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".input_layernorm.weight");
     // input_layernorm_input = layer_num == 0 ? emb_lookup_output : mlp_add_output
     // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
     std::vector<Tensor>& input_layernorm_input = output_0;
@@ -457,7 +458,8 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
     NLLM_LOG_DEBUG << layer_num << " input layernorm";
 
     // Attn proj MatMul
-    Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
+    Tensor attn_proj_weight = base_weight->GetModelWeights(
+        "model.layers." + std::to_string(layer_num) + ".self_attn.query_key_value.weight");
     std::vector<Tensor>& attn_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
 
@@ -481,7 +483,8 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
     NLLM_LOG_DEBUG << layer_num << " MMHA Flash Attention";
 
     // Attn o_proj MatMul
-    Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
+    Tensor attn_o_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".self_attn.o_proj.weight");
     std::vector<Tensor>& attn_o_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({flash_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
     attn_o_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.o_proj." +
@@ -512,21 +515,23 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
 
     // post_attention_layernorm
     Tensor post_layernorm_weight =
-        base_weight->GetModelWeights(std::to_string(layer_num) + ".post_attention_layernorm");
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".post_attention_layernorm.weight");
     std::vector<Tensor>& post_layernorm_output = output_1;
     STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
     post_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".post_attention_layernorm." +
                                         std::to_string(rank_) + ".npy");
 
     // Mlp gate_proj MatMul
-    Tensor gate_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.gate_proj");
+    Tensor gate_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.gate_proj.weight");
     std::vector<Tensor>& gate_matmul_output = output_0;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], gate_proj_weight}, gate_matmul_output));
     gate_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.gate_proj." + std::to_string(rank_) +
                                      ".npy");
 
     // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
-    Tensor up_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.up_proj");
+    Tensor up_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.up_proj.weight");
     std::vector<Tensor> up_matmul_output = {up_matmul_tensor_};
     STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], up_proj_weight}, up_matmul_output));
     up_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.up_proj." + std::to_string(rank_) +
@@ -538,7 +543,8 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
                                   ".npy");
 
     // Mlp down_proj MatMul
-    Tensor down_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.down_proj");
+    Tensor down_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.down_proj.weight");
     std::vector<Tensor>& down_proj_output = output_0;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
     down_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.down_proj." + std::to_string(rank_) +
@@ -567,7 +573,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   }
 
   // final norm
-  Tensor final_layernorm_weight = base_weight->GetModelWeights("norm");
+  Tensor final_layernorm_weight = base_weight->GetModelWeights("model.norm.weight");
   std::vector<Tensor>& final_layernorm_input = output_0;
   std::vector<Tensor>& final_layernorm_output = output_1;
   STATUS_CHECK_RETURN(
@@ -582,7 +588,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   assemble_last_token_output[0].SaveToFile(saved_dir + "assemble_last_token." + std::to_string(rank_) + ".npy");
 
   // lm_head
-  Tensor lm_head_weight = base_weight->GetModelWeights("lm_head");
+  Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
   lm_head_weight.SaveToFile(saved_dir + "lm_head.weight." + std::to_string(rank_) + ".npy");
   std::vector<Tensor>& lm_head_output = output_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
@@ -639,7 +645,7 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
   // Forward
   // embedding
-  Tensor embedding_weight = base_weight->GetModelWeights("gather_embedding");
+  Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
   std::vector<Tensor>& emb_lookup_output = output_0;
   CUDA_CHECK(cudaStreamWaitEvent(stream, input_ids_event_));
   STATUS_CHECK_RETURN(
@@ -649,7 +655,8 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   // LlamaDecoder
   for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
     // input layernorm
-    Tensor input_layernorm_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".input_layernorm");
+    Tensor input_layernorm_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".input_layernorm.weight");
     // input_layernorm_input = layer_num == 0 ? emb_lookup_output : mlp_add_output
     // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
     std::vector<Tensor>& input_layernorm_input = output_0;
@@ -661,7 +668,8 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                          std::to_string(rank_) + ".npy");
 
     // Attn proj MatMul
-    Tensor attn_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.query_key_value");
+    Tensor attn_proj_weight = base_weight->GetModelWeights(
+        "model.layers." + std::to_string(layer_num) + ".self_attn.query_key_value.weight");
     std::vector<Tensor>& attn_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
 
@@ -685,7 +693,8 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                          std::to_string(rank_) + ".npy");
 
     // Attn o_proj MatMul
-    Tensor attn_o_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".attention.dense");
+    Tensor attn_o_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".self_attn.o_proj.weight");
     std::vector<Tensor>& attn_o_proj_output = output_2;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({paged_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
     attn_o_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.o_proj." +
@@ -717,21 +726,23 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
     // post_attention_layernorm
     Tensor post_layernorm_weight =
-        base_weight->GetModelWeights(std::to_string(layer_num) + ".post_attention_layernorm");
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".post_attention_layernorm.weight");
     std::vector<Tensor>& post_layernorm_output = output_1;
     STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
     post_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".post_attention_layernorm." +
                                         std::to_string(rank_) + ".npy");
 
     // Mlp gate_proj MatMul
-    Tensor gate_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.gate_proj");
+    Tensor gate_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.gate_proj.weight");
     std::vector<Tensor>& gate_matmul_output = output_0;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], gate_proj_weight}, gate_matmul_output));
     gate_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.gate_proj." + std::to_string(rank_) +
                                      ".npy");
 
     // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
-    Tensor up_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.up_proj");
+    Tensor up_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.up_proj.weight");
     std::vector<Tensor> up_matmul_output = {up_matmul_tensor_};
     STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], up_proj_weight}, up_matmul_output));
     up_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.up_proj." + std::to_string(rank_) +
@@ -743,7 +754,8 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                   ".npy");
 
     // Mlp down_proj MatMul
-    Tensor down_proj_weight = base_weight->GetModelWeights(std::to_string(layer_num) + ".mlp.down_proj");
+    Tensor down_proj_weight =
+        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.down_proj.weight");
     std::vector<Tensor>& down_proj_output = output_0;
     STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
     down_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.down_proj." + std::to_string(rank_) +
@@ -776,7 +788,7 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   }
 
   // final norm
-  Tensor final_layernorm_weight = base_weight->GetModelWeights("norm");
+  Tensor final_layernorm_weight = base_weight->GetModelWeights("model.norm.weight");
   std::vector<Tensor>& final_layernorm_input = output_0;
   std::vector<Tensor>& final_layernorm_output = output_1;
   STATUS_CHECK_RETURN(
@@ -791,7 +803,7 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   assemble_last_token_output[0].SaveToFile(saved_dir + "assemble_last_token." + std::to_string(rank_) + ".npy");
 
   // lm_head
-  Tensor lm_head_weight = base_weight->GetModelWeights("lm_head");
+  Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
   lm_head_weight.SaveToFile(saved_dir + "lm_head.weight." + std::to_string(rank_) + ".npy");
   std::vector<Tensor>& lm_head_output = output_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));

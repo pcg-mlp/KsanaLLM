@@ -16,7 +16,7 @@ class LlamaTest : public testing::Test {
   void SetUp() override {
     context_ = std::make_shared<Context>(1, 1);
 
-    // 解析 config.ini,初始化 ModelConfig 以及 BlockManager
+    // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
@@ -46,12 +46,12 @@ class LlamaTest : public testing::Test {
 TEST_F(LlamaTest, ForwardTest) {
   int device_id = 0;
   CUDA_CHECK(cudaSetDevice(device_id));
-  std::filesystem::path ft_path(model_config.path);
-  if (!std::filesystem::exists(ft_path)) {
-    NLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
-    EXPECT_TRUE(std::filesystem::exists(ft_path));
-  }
 
+  std::filesystem::path model_path(model_config.path);
+  if (!std::filesystem::exists(model_path)) {
+    NLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
+    EXPECT_TRUE(std::filesystem::exists(model_path));
+  }
   cudaEvent_t start;
   cudaEvent_t stop;
   float milliseconds = 0;
@@ -59,8 +59,23 @@ TEST_F(LlamaTest, ForwardTest) {
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
 
+  Py_Initialize();
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
   std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
+
+  // Weight Name Check
+  // 正确的 weight 名称
+  std::string weight_name = "lm_head.weight";
+  Tensor lm_head = llama_weight->GetModelWeights(weight_name);
+  EXPECT_EQ(lm_head.device, MEMORY_GPU);
+  EXPECT_EQ(lm_head.storage, STORAGE_CONTIGUOUS);
+  EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
+
+  // 错误的 weight 名称
+  weight_name = "wrong_name";
+  Tensor wrong_tensor = llama_weight->GetModelWeights(weight_name);
+  EXPECT_EQ(wrong_tensor.device, MEMORY_CPU);
+  EXPECT_TRUE(wrong_tensor.shape.empty());
 
   // ContextDecode
   ForwardRequest forward;
@@ -128,8 +143,14 @@ TEST_F(LlamaTest, ForwardTest) {
 
   EXPECT_TRUE((milliseconds / 10) < 30);
 
+  llama.reset();
+  llama_weight.reset();
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[device_id]));
+  Py_Finalize();
   CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaEventDestroy(start));
+
+  CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

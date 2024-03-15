@@ -19,19 +19,23 @@ class LlamaWeight : public BaseWeight {
   Tensor GetModelWeights(const std::string& weight_name);
 
  private:
-  Status LoadWeightFromBin(Tensor tensor, std::string binfile, bool transpose = false);
+  // Status LoadWeightsFromBin(const std::string& file_name);
+  Status PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size, int tensor_para_size);
+
+  std::vector<std::string> SearchLocalPath(const std::string& model_path);
 
   Status LoadLlamaWeightsMap(const ModelConfig& model_config);
 
   std::string ConcatLayerName(std::string layer_flag, int& layer_index);
 
-  std::string GetBinfileName(std::string weight_name);
+  Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
 
-  Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype, bool transpose = false);
+  Status LoadWeightsFromBin(const std::string& file_name);
+
+  bool IsLoaded();
+  bool weights_had_loaded_ = false;
 
   std::unordered_map<std::string, Tensor> weights_map_;
-
-  static std::pair<const char*, const char*> binfile_map_[];
 
   std::string model_path_ = "";
   int rank_ = 0;

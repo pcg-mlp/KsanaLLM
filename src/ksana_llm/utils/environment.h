@@ -46,6 +46,7 @@ struct ModelConfig {
   size_t head_num;
   uint32_t size_per_head;
   uint32_t inter_size;
+  uint32_t hidden_units;
   uint32_t num_layer;
   uint32_t rotary_embedding;
   float rope_theta;
