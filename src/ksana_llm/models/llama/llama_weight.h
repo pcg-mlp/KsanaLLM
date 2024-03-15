@@ -19,10 +19,9 @@ class LlamaWeight : public BaseWeight {
   Tensor GetModelWeights(const std::string& weight_name);
 
  private:
-  // Status LoadWeightsFromBin(const std::string& file_name);
-  Status PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size, int tensor_para_size);
+  Status PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
 
-  std::vector<std::string> SearchLocalPath(const std::string& model_path);
+  std::vector<std::string> SearchLocalPath(const std::string& model_path, bool& is_safetensors);
 
   Status LoadLlamaWeightsMap(const ModelConfig& model_config);
 
@@ -30,7 +29,7 @@ class LlamaWeight : public BaseWeight {
 
   Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
 
-  Status LoadWeightsFromBin(const std::string& file_name);
+  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
   bool IsLoaded();
   bool weights_had_loaded_ = false;
@@ -39,6 +38,7 @@ class LlamaWeight : public BaseWeight {
 
   std::string model_path_ = "";
   int rank_ = 0;
+  int tensor_para_size_ = 1;
 
   std::shared_ptr<Context> context_{nullptr};
 };

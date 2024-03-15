@@ -5,6 +5,8 @@
 
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/tensor.h"
+#include "ksana_llm/utils/pytorch_file_tensor_loader.h"
+#include "ksana_llm/utils/safetensors_file_tensor_loader.h"
 
 namespace ksana_llm {
 
