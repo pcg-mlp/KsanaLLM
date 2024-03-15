@@ -98,12 +98,22 @@ void InferRequest::ResetInferStage() {
 size_t InferRequest::GetStepTokenNumber() {
   size_t step_token_num = 1;
   if (infer_stage == STAGE_CONTEXT) {
-    step_token_num += (output_tokens.size() - prefix_cache_len);
+    if (is_use_prefix_cache) {
+      step_token_num += (output_tokens.size() - prefix_cache_len);
+    } else {
+      step_token_num += output_tokens.size();
+    }
   }
   return step_token_num;
 }
 
-size_t InferRequest::GetTotalTokenNumber() { return output_tokens.size() + 1 - prefix_cache_len; }
+size_t InferRequest::GetTotalTokenNumber() {
+  if (is_use_prefix_cache) {
+    return output_tokens.size() + 1 - prefix_cache_len;
+  } else {
+    return output_tokens.size() + 1;
+  }
+}
 
 size_t InferRequest::GetStepBlockNumber() {
   size_t block_token_num = GetBlockManager()->GetBlockTokenNum();
