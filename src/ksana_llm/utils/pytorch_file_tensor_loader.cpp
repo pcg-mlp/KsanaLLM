@@ -1,6 +1,7 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #include "pytorch_file_tensor_loader.h"
 #include "logger.h"
+#include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 namespace ksana_llm {
 // Constructor of PytorchFileTensorLoader that takes a file name as input
@@ -20,16 +21,24 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
 
   auto records = pytorch_reader_->getAllRecords();
 
-  std::vector<int64_t> storage_indexs(records.size());
+  char* storage_indexs = nullptr;
+  size_t max_tensor_size = 80 * 1024 * 1024;
+  std::vector<char> storage_indexs_vector(max_tensor_size * records.size());
+  storage_indexs = storage_indexs_vector.data();
 
-  auto storage_context = std::make_shared<torch::jit::DeserializationStorageContext>();
-
-  // Add fictional storage context
-  for (int i = 0; i < records.size(); i++) {
-    storage_indexs[i] = i;
-    auto storage = at::Storage(c10::Storage::use_byte_size_t(), sizeof(int64_t),
-                               at::DataPtr((void*)(storage_indexs.data() + i), c10::DeviceType::CPU), nullptr, false);
-    storage_context->addStorage(std::to_string(i), storage);
+  // When storage_context is nullptr, it indicates that the actual data of the torch tensor should be read directly.
+  // Otherwise, it temporarily skips the reading process and waits until it is actually used before reading.
+  std::shared_ptr<torch::jit::DeserializationStorageContext> storage_context = nullptr;
+  if (fast_load_) {
+    storage_context = std::make_shared<torch::jit::DeserializationStorageContext>();
+    // Add fictional storage context
+    for (int i = 0; i < records.size(); i++) {
+      storage_indexs[i * max_tensor_size] = i;
+      auto storage = at::Storage(c10::Storage::use_byte_size_t(), max_tensor_size,
+                                 at::DataPtr((void*)(storage_indexs + i * max_tensor_size), c10::DeviceType::CPU),
+                                 nullptr, false);
+      storage_context->addStorage(std::to_string(i), storage);
+    }
   }
 
   auto pytorch_value =
@@ -43,27 +52,34 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
       std::string tensor_name = it.key().toStringRef();
       tensor_name_list_.push_back(tensor_name);
       if (it.value().isTensor()) {
-        pytorch_tensor_index_map_[tensor_name] = *static_cast<int64_t*>(it.value().toTensor().data_ptr());
+        if (fast_load_) {
+          pytorch_tensor_index_map_[tensor_name] = *static_cast<int64_t*>(it.value().toTensor().data_ptr());
+        } else {
+          pytorch_tensor_map_[tensor_name] = it.value().toTensor();
+        }
       }
     }
   }
 }
 
 void* PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
-  if (pytorch_tensor_index_map_.find(tensor_name) == pytorch_tensor_index_map_.end()) {
+  if (fast_load_) {
+    if (pytorch_tensor_index_map_.find(tensor_name) == pytorch_tensor_index_map_.end()) {
+      return nullptr;
+    }
+    int64_t index = pytorch_tensor_index_map_[tensor_name];
+    auto data_pair = pytorch_reader_->getRecord("data/" + std::to_string(index));
+    // Get the data pointer and size of the tensor
+    at::DataPtr at_data_ptr = std::move(std::get<0>(data_pair));
+    void* data_ptr = std::get<0>(data_pair).get();
+    pytorch_tensor_list_.push_back(std::move(at_data_ptr));
+    int64_t data_size = std::get<1>(data_pair);
+    return data_ptr;
+  }
+  if (!pytorch_tensor_map_.count(tensor_name)) {
     return nullptr;
   }
-  int64_t index = pytorch_tensor_index_map_[tensor_name];
-  auto data_pair = pytorch_reader_->getRecord("data/" + std::to_string(index));
-
-  // Get the data pointer and size of the tensor
-  at::DataPtr at_data_ptr = std::move(std::get<0>(data_pair));
-  void* data_ptr = std::get<0>(data_pair).get();
-  pytorch_tensor_list_.push_back(std::move(at_data_ptr));
-  int64_t data_size = std::get<1>(data_pair);
-
-  NLLM_LOG_DEBUG << tensor_name << " " << data_ptr << " data_size= " << data_size;
-  return data_ptr;
+  return pytorch_tensor_map_[tensor_name].data_ptr();
 }
 
 }  // namespace ksana_llm

@@ -31,9 +31,13 @@ class PytorchFileTensorLoader : public BaseFileTensorLoader {
 
   // Use unordered_map to store the tensor names and their corresponding indices for easy lookup
   std::unordered_map<std::string, int64_t> pytorch_tensor_index_map_;
+  std::unordered_map<std::string, torch::Tensor> pytorch_tensor_map_;
 
   // Use vector to store the DataPtr of tensors for easy management and access
   std::vector<at::DataPtr> pytorch_tensor_list_;
+
+  // 是否采用异步读取,llama7B 模型可采用,llama13B 模型采用会 CoreDump(TODO)
+  bool fast_load_ = false;
 };
 
 }  // namespace ksana_llm
