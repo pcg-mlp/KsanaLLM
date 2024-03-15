@@ -456,6 +456,7 @@ void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_toke
 void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_other) {
   MergePendingSwapinRequests();
   if (running_queue_.empty()) {
+    NLLM_LOG_DEBUG << "Empty running queue after merge swapin, skip.";
     return;
   }
 
@@ -465,6 +466,7 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
   running_curr_block_num_list_.clear();
   PrepareRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_);
   if (running_queue_.empty()) {
+    NLLM_LOG_DEBUG << "Empty running queue after prepare, skip.";
     return;
   }
 
@@ -475,6 +477,7 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
     step_token_num_sum_tmp = step_token_num_sum;
     ProcessRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_,
                            running_swapped_indexes_, step_token_num_sum_tmp);
+    NLLM_LOG_DEBUG << "Process running requests, swapped size:" << running_swapped_indexes_.size();
     if (!running_queue_.empty() && running_queue_.size() == running_swapped_indexes_.size()) {
       if (!swapout_pending_queue_.empty()) {
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
@@ -530,6 +533,7 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
 void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
   MergePendingSwapoutRequest();
   if (swapped_queue_.empty()) {
+    NLLM_LOG_DEBUG << "Empty swapped queue after merge, skip.";
     return;
   }
 
@@ -537,6 +541,7 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
   swapped_curr_block_num_list_.clear();
   PrepareSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, skip_other);
   if (skip_other || swapped_queue_.empty()) {
+    NLLM_LOG_DEBUG << "Empty swapped queue after prepare, skip.";
     return;
   }
 
@@ -549,6 +554,7 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
     curr_block_num_sum_tmp = curr_block_num_sum;
     ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
+    NLLM_LOG_DEBUG << "Process swapped requests, running size:" << swapped_running_indexes_.size();
     if (running_queue_.empty() && !swapped_queue_.empty() && swapped_running_indexes_.empty()) {
       if (!swapout_pending_queue_.empty()) {
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
@@ -582,6 +588,7 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
 void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
   MergeWaitingBufferQueue();
   if (waiting_queue_.empty()) {
+    NLLM_LOG_DEBUG << "Empty waiting queue after merge, skip.";
     return;
   }
 
@@ -589,6 +596,7 @@ void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_bl
   waiting_total_block_num_list_.clear();
   PrepareWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, skip_other);
   if (skip_other || waiting_queue_.empty()) {
+    NLLM_LOG_DEBUG << "Empty waiting queue after prepare, skip.";
     return;
   }
 
@@ -601,6 +609,7 @@ void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_bl
     curr_block_num_sum_tmp = curr_block_num_sum;
     ProcessWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, waiting_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
+    NLLM_LOG_DEBUG << "Process waiting requests, running size:" << waiting_running_indexes_.size();
     if (running_queue_.empty() && !waiting_queue_.empty() && waiting_running_indexes_.empty()) {
       if (!swapout_pending_queue_.empty()) {
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
