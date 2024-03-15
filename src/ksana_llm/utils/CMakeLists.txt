@@ -18,3 +18,8 @@ target_link_libraries(utils PUBLIC
   -lpthread -ldl gflags loguru -lcudart block_manager ksana_llm_yaml ${NCCL_LIBRARIES}
 )
 
+# for test
+file(GLOB_RECURSE utils_test_SRCS
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/*test.cpp)
+message(STATUS "utils_test_SRCS: ${utils_test_SRCS}")
+cpp_test(utils_test SRCS ${utils_test_SRCS} DEPS runtime)
