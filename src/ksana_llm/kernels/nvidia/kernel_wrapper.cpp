@@ -19,6 +19,7 @@
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
+#include "csrc/kernels/nvidia/permute/permute.h"
 
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
@@ -120,8 +121,6 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace) {
   const float* alibi_slopes_ptr =
       reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
-  auto int64_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
-
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
   torch::Tensor qkv_tensor = torch::from_blob(query, {total_tokens, num_heads * head_size * 3}, options);
   auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
@@ -202,6 +201,15 @@ void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data,
 void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream) {
   llm_kernels::nvidia::CustomAllreduce* reduce_op = static_cast<llm_kernels::nvidia::CustomAllreduce*>(ptr);
   reduce_op->AllReduce<half>(stream, static_cast<half*>(input), static_cast<half*>(result), data_size);
+}
+
+void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation, cudaStream_t& stream) {
+  // Extend to num_dims = 4
+  input_shape.resize(4, 1);
+  for (size_t i = permutation.size(); i < 4; ++i) {
+    permutation.push_back(i);
+  }
+  llm_kernels::nvidia::InvokePermute<4ul, sizeof(half)>(input, output, input_shape, permutation, stream);
 }
 
 }  // namespace ksana_llm

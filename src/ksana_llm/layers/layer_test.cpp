@@ -22,7 +22,7 @@ class LayerTest : public testing::Test {
  protected:
   // 在每个测试用例执行之前调用的函数
   void SetUp() override {
-    model_config.path = "/model/llama-ft/7B/1-gpu/";
+    model_config.path = "/model/llama-hf/7B/";
     model_config.weight_data_type = TYPE_FP16;
     model_config.head_num = 32;
     model_config.size_per_head = 128;

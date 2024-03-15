@@ -56,4 +56,7 @@ void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data,
 
 void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream);
 
+void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
+                   cudaStream_t& stream);
+
 }  // namespace ksana_llm
