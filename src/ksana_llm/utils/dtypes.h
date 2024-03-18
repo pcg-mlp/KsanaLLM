@@ -54,6 +54,8 @@ DataType GetTensorType() {
     return TYPE_INT32;
   } else if (std::is_same<T, int8_t>::value || std::is_same<T, const int8_t>::value) {
     return TYPE_INT8;
+  } else if (std::is_same<T, uint8_t>::value || std::is_same<T, const uint8_t>::value) {
+    return TYPE_UINT8;
   } else if (std::is_same<T, unsigned int>::value || std::is_same<T, const unsigned int>::value) {
     return TYPE_UINT32;
   } else if (std::is_same<T, unsigned long long int>::value || std::is_same<T, const unsigned long long int>::value) {

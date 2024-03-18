@@ -83,6 +83,9 @@ if __name__ == "__main__":
         "作为一名国际空间站上的宇航员，如果我意外地目睹了外星实体接近空间站，我的第一反应可能是惊恐和惊讶。但是，我们的训练和准备使我们能够在任何情况下保持冷静和专业。在太空中吃饭是一项非常重要的任务，因为我们需要保持身体健康和精神状态良好，以便完成我们的任务。在太空中，我们使用特殊的食品和餐具，以确保我们的食物和饮料不会漂浮到空间站的其他部分或飘出太空舱。我们的食物通常是预包装的，并且在太空中使用特殊的加热器和冷却器进行加热和冷却。我们还使用特殊的餐具，例如吸管和勺子，以避免食物和液体漂浮到空间站的其他部分。在太空中，我们通常会吃固体食物，例如面包、饼干和坚果，以及液体食物，例如果汁和牛奶。我们还会吃一些特殊的食物，例如蛋白质棒和能量棒，以帮助我们保持身体健康和精神状态良好。在太空中，我们通常会在特殊的餐桌上吃饭，这些餐桌可以固定在空间站的墙壁上，以避免食物和餐具漂浮到空间站的其他部分。我们还会在特殊的食品袋中储存食物和饮料，以便在需要时使用。总之，在太空中吃饭需要特殊的准备和技巧，以确保我们的食物和饮料不会漂浮到空间站的其他部分或飘出太空舱。我们的训练和准备使我们能够在任何情况下保持冷静和专业，以确保我们的身体健康和精神状态良好。</s>"
     ]
 
+    none_prefix_prompt = ["[INST]你好。[/INST]"]
+    none_prefix_prompt_ref = ["你好，有什么我可以帮助你的吗？</s>"]
+
     generation_config = GenerationConfig(num_beams=1,
                                          top_k=1,
                                          top_p=0.0,
@@ -130,3 +133,6 @@ if __name__ == "__main__":
     print(f"Total model load time: {model_load_time:.2f} s")
     print(f"Total warmup time: {warmup_time:.2f} s")
     print(f"Total infer time: {total_infer_time:.2f} s")
+
+    result = infer(none_prefix_prompt[0], tokenizer, generation_config, model)
+    assert result.replace("\n", "") == none_prefix_prompt_ref[0]

@@ -37,9 +37,17 @@ class Llama : public BaseModel {
   // The decode stage.
   Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
- protected:
-  Status CreateTensor(Tensor& tensor, size_t length);
-  Status DestroyTensor(Tensor& tensor);
+ private:
+  using BaseModel::context_;
+  using BaseModel::logits_tensor_;
+  using BaseModel::rank_;
+  using BaseModel::use_custom_all_reduce_;
+
+  using BaseModel::compute_stream_;
+  using BaseModel::d2d_stream_;
+  using BaseModel::d2h_stream_;
+  using BaseModel::h2d_stream_;
+  using BaseModel::nccl_stream_;
 
   std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;
@@ -53,8 +61,8 @@ class Llama : public BaseModel {
   std::shared_ptr<MatMulLayer> matmul_layer_;
   std::shared_ptr<AssembleLastTokenLayer> assemble_last_token_layer_;
   std::shared_ptr<CastLayer> cast_layer_;
+
   int num_layer_;
-  int rank_;
   int max_seq_len_;
   int max_batch_size_;
   size_t hidden_units_;
@@ -64,29 +72,26 @@ class Llama : public BaseModel {
   DataType weight_data_type_;
   int block_token_num_;
   int block_size_;
-  bool use_custom_all_reduce_ = true;
   size_t max_token_num_{0ul};
 
   Tensor reduce_tensor_;
   Tensor rank_tensor_0_;
   Tensor rank_tensor_1_;
-  Tensor tensor_buffer_0_, tensor_buffer_1_, tensor_buffer_2_;
-  Tensor up_matmul_tensor_;
+  Tensor tensor_buffer_0_;
+  Tensor tensor_buffer_1_;
+  Tensor tensor_buffer_2_;
+  Tensor up_matmul_tensor_buffer_;
   Tensor kv_cache_buffer_;
-  Tensor logits_tensor_;
   Tensor kv_cache_offset_tensor_;
   Tensor kv_list_;
-  Tensor input_ids_, input_offset_int32_tensor_, input_offset_uint64_tensor_;
+  Tensor input_ids_;
+  Tensor input_offset_int32_tensor_;
+  Tensor input_offset_uint64_tensor_;
   Tensor input_tokens_int32_tensor_;
   Tensor rotary_embedding_pos_;
   Tensor forward_shape_;
   Tensor cos_sin_cache_tensor_;
 
-  std::shared_ptr<Context> context_{nullptr};
-
-  std::string saved_dir = "/model/llama-ft/7B/nllm/";
-
- private:
   cudaEvent_t kvcache_offset_event_;
   cudaEvent_t rotary_embedding_event_;
   cudaEvent_t input_ids_event_;
@@ -97,7 +102,7 @@ class Llama : public BaseModel {
  private:
   void PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                       const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
-                      cudaStream_t& stream, cudaEvent_t& event, bool context_stage = false);
+                      cudaStream_t& stream, cudaEvent_t& event, bool is_context_stage = false);
 
   void PrepareContextRotaryEmbeddingPos(const size_t batch_size, const size_t total_seq_len,
                                         const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
@@ -113,9 +118,26 @@ class Llama : public BaseModel {
   void PrepareInputIds(const size_t batch_size, int& max_tokens, const std::vector<ForwardRequest>& forward_reqs,
                        cudaStream_t& stream, cudaEvent_t& event);
 
-  void CopyToLogistBuffer(const size_t batch_size, cudaEvent_t& compute_ready_event_, cudaStream_t& compute_stream,
-                          cudaStream_t& d2d_stream, std::vector<ForwardRequest>& forward_reqs,
+  void CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
                           std::vector<Tensor>& logits_float);
+
+  // refer to
+  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
+  Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight, Tensor& hidden_states,
+                        std::vector<Tensor>& output_0, std::vector<Tensor>& output_1, std::vector<Tensor>& output_2,
+                        const bool is_context_stage);
+
+  // refer to
+  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L211
+  Status LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                  Tensor& post_layernorm_output, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
+                  std::vector<Tensor>& output_2);
+
+  // refer to
+  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L694
+  Status LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                      std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
+                      std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
 };
 
 }  // namespace ksana_llm

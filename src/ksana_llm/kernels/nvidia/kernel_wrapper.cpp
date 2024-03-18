@@ -203,7 +203,8 @@ void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cud
   reduce_op->AllReduce<half>(stream, static_cast<half*>(input), static_cast<half*>(result), data_size);
 }
 
-void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation, cudaStream_t& stream) {
+void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
+                   cudaStream_t& stream) {
   // Extend to num_dims = 4
   input_shape.resize(4, 1);
   for (size_t i = permutation.size(); i < 4; ++i) {

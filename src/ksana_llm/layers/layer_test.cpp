@@ -131,7 +131,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetTensorType<uint64_t>());
   std::vector<void*> h_kv_list_ptrs(h_block_offset.back() * 2);
   for (int i = 0; i < h_kv_list_ptrs.size(); i++) {
-    cudaError_t error = cudaMalloc(&h_kv_list_ptrs[i], block_size);
+    CUDA_CHECK(cudaMalloc(&h_kv_list_ptrs[i], block_size));
   }
   cudaMemcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*),
              cudaMemcpyHostToDevice);

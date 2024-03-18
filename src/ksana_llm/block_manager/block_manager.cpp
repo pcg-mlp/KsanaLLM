@@ -121,8 +121,8 @@ int BlockManager::GetDeviceId() {
 }
 
 std::shared_ptr<DeviceAllocator>& BlockManager::GetDeviceAllocator() {
-  int device_id = GetDeviceId();
-  NLLM_CHECK_WITH_INFO(device_id < device_allocators_.size(), "Invalid device id " + std::to_string(device_id));
+  size_t device_id = static_cast<size_t>(GetDeviceId());
+  NLLM_CHECK_WITH_INFO(device_id < device_allocators_.size(), fmt::format("Invalid device id {}", device_id));
   return device_allocators_[device_id];
 }
 
@@ -139,6 +139,8 @@ Status BlockManager::AllocateContiguous(int64_t size, int& block_id) {
 Status BlockManager::FreeBlocks(const std::vector<int>& blocks) { return GetDeviceAllocator()->FreeBlocks(blocks); }
 
 Status BlockManager::FreeContiguous(int block_id) { return GetDeviceAllocator()->FreeContiguous(block_id); }
+
+bool BlockManager::IsContiguousUsed(const int block_id) { return GetDeviceAllocator()->IsContiguousUsed(block_id); }
 
 Status BlockManager::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
   return GetDeviceAllocator()->GetBlockPtrs(blocks, addrs);
@@ -265,7 +267,8 @@ int BlockManager::GetPrefixCacheTokensNumber() const { return block_manager_conf
 size_t BlockManager::GetPrefixCacheBlocksNumber() const { return prefix_cache_block_num_; }
 
 bool BlockManager::CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) {
-  if (input_tokens.size() < block_manager_config_.prefix_cache_len) {
+  if (block_manager_config_.prefix_cache_len <= 0 ||
+      input_tokens.size() < static_cast<size_t>(block_manager_config_.prefix_cache_len)) {
     return false;
   }
 
@@ -287,7 +290,7 @@ bool BlockManager::CheckReqIsValidForPrefixCache(const std::vector<int>& input_t
 Status BlockManager::FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) {
   // TODO(karlluo): support pipeline parallel
   // prepare prefixed cache blocks
-  for (size_t device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
+  for (int device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
     if (kv_cache_blocks[device_id].size() == 0) {
       std::copy(prefix_cache_blocks_[device_id].begin(), prefix_cache_blocks_[device_id].end(),
                 std::back_inserter(kv_cache_blocks[device_id]));

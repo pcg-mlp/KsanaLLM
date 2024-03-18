@@ -8,9 +8,9 @@
 #include "ksana_llm/utils/memory_utils.h"
 
 #include <Python.h>
-#include <pybind11/pybind11.h>
 #include <pybind11/embed.h>
 #include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
 
 namespace py = pybind11;
 
@@ -145,7 +145,8 @@ Status LlamaWeight<T>::LoadWeightsFromBin(const std::string& file_name) {
     if (weights_map_.count(key)) {
       tensor_para_offset *= weights_map_[key].GetTotalBytes();
       CUDA_CHECK(cudaMemcpyAsync(weights_map_[key].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                 weights_map_[key].GetTotalBytes(), cudaMemcpyHostToDevice, context_->GetComputeStreams()[rank_]));
+                                 weights_map_[key].GetTotalBytes(), cudaMemcpyHostToDevice,
+                                 context_->GetComputeStreams()[rank_]));
     } else if (qkv_offset = CheckQKVWeight(key)) {
       std::string qkv_name = key.substr(0, key.find_last_of('_') - 1) + "query_key_value.weight";
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
@@ -208,7 +209,6 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   lm_head_transpose_tensor = lm_head_tensor;
   weights_map_["lm_head.weight"] = t;
 
-
   CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
   GetBlockManager()->SetDeviceId(rank_);
   GetBlockManager()->FreeContiguous(last_qkv_tensor.GetBlockIds()[0]);
@@ -243,8 +243,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
                     weight_data_type);
     AddWeightTensor(ConcatLayerName("mlp.gate_proj", l), {hidden_units, inter_size / tensor_para_size},
                     weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.up_proj", l), {hidden_units, inter_size / tensor_para_size},
-                    weight_data_type);
+    AddWeightTensor(ConcatLayerName("mlp.up_proj", l), {hidden_units, inter_size / tensor_para_size}, weight_data_type);
     AddWeightTensor(ConcatLayerName("self_attn.query_key_value", l),
                     {hidden_units, 3 * hidden_units / tensor_para_size}, weight_data_type);
   }

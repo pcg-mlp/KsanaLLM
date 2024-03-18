@@ -17,7 +17,7 @@ setting:
     # 一个调度step处理的最大token个数，一次context decode视为多个token。
     max_token_number: 10240
     # 每一步推理时的最大batch_size
-    max_batch_size: 128
+    max_batch_size: 10
     # 最大输入长度
     max_input_len: 8192
     # 最大输出长度
