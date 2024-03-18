@@ -30,6 +30,13 @@ Status BaseAllocator::ResetPreAllocatedBlocks(size_t blocks_num) {
   return Status();
 }
 
+bool BaseAllocator::IsContiguousUsed(const int block_id) {
+  std::unique_lock<std::mutex> lock(block_mutex_);
+
+  auto it = used_blocks_.find(block_id);
+  return it != used_blocks_.end();
+}
+
 Status BaseAllocator::AllocateBlocks(size_t block_num, std::vector<int>& blocks) {
   std::unique_lock<std::mutex> lock(block_mutex_);
 

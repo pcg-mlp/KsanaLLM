@@ -9,50 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Status Llama<T>::CreateTensor(Tensor& tensor, size_t total_bytes) {
-  int block_id;
-  GetBlockManager()->SetDeviceId(rank_);
-  GetBlockManager()->AllocateContiguous(total_bytes, block_id);
-  // 此处的 shape 是默认生成的, 2  = sizeof(fp16)
-  tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, weight_data_type_, std::vector<size_t>{total_bytes / 2},
-                  std::vector<int>{block_id});
-  return Status();
-}
-
-template <typename T>
-Status Llama<T>::DestroyTensor(Tensor& tensor) {
-  GetBlockManager()->SetDeviceId(rank_);
-  const std::vector<int>& block_ids = tensor.GetBlockIds();
-  NLLM_CHECK_WITH_INFO(block_ids.size() == 1, "Contiguous must have only one block.");
-  return GetBlockManager()->FreeContiguous(block_ids.front());
-}
-
-template <typename T>
 Llama<T>::~Llama() {
-  GetBlockManager()->SetDeviceId(rank_);
-
-  DestroyTensor(tensor_buffer_0_);
-  DestroyTensor(tensor_buffer_1_);
-  DestroyTensor(tensor_buffer_2_);
-  DestroyTensor(up_matmul_tensor_);
-  DestroyTensor(kv_cache_buffer_);
-  DestroyTensor(logits_tensor_);
-
-  if (use_custom_all_reduce_) {
-    DestroyTensor(reduce_tensor_);
-    DestroyTensor(rank_tensor_0_);
-    DestroyTensor(rank_tensor_1_);
-  }
-
-  DestroyTensor(input_ids_);
-  DestroyTensor(input_offset_int32_tensor_);
-  DestroyTensor(input_offset_uint64_tensor_);
-  DestroyTensor(kv_list_);
-  DestroyTensor(forward_shape_);
-  DestroyTensor(rotary_embedding_pos_);
-  DestroyTensor(kv_cache_offset_tensor_);
-  DestroyTensor(cos_sin_cache_tensor_);
-
   // free all cude event
   CUDA_CHECK(cudaEventDestroy(kvcache_offset_event_));
   CUDA_CHECK(cudaEventDestroy(rotary_embedding_event_));
@@ -63,21 +20,23 @@ Llama<T>::~Llama() {
 }
 
 template <typename T>
-Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) : context_(context) {
-  num_layer_ = model_config.num_layer;
-  rank_ = rank;
+Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) {
   GetBlockManager()->SetDeviceId(rank_);
-  // TODO: 目前所有层都使用这个 dtype
+
+  context_ = context;
+  rank_ = rank;
+  num_layer_ = model_config.num_layer;
   weight_data_type_ = model_config.weight_data_type;
   vocab_size_ = model_config.vocab_size;
+
   float layernorm_eps_ = model_config.layernorm_eps;
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
   int hidden_units = size_per_head * head_num;
   int rotary_embedding = model_config.rotary_embedding;
-  head_num /= model_config.tensor_para_size;
+  int head_num_per_tp = head_num / model_config.tensor_para_size;
   int num_key_value_heads = model_config.num_key_value_heads / model_config.tensor_para_size;
-  int stride_size = head_num * size_per_head * 3;
+  int stride_size = head_num_per_tp * size_per_head * 3;
   int inter_size = model_config.inter_size;
   int max_position_embeddings = model_config.max_position_embeddings;
   float rope_theta = model_config.rope_theta;
@@ -85,18 +44,11 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   block_size_ = GetBlockManager()->GetBlockSize();
 
   BlockManagerConfig block_manager_config;
-  Status status = Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-  if (!status.OK()) {
-    throw std::runtime_error("Get block manager config from environment failed");
-  }
+  STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config));
+
   int prefix_cache_tokens_number =
       block_manager_config.prefix_cache_len > 0 ? block_manager_config.prefix_cache_len : 0;
 
-  // 1: KV 一块空间
-  // 2: 运行时中间空间
-  // 3: 矩阵计算需要一块空间
-
-  // input_ids_: [max_batch_size_, max_s]
   max_batch_size_ = model_config.max_batch_size;
   max_seq_len_ = model_config.max_token_num;
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
@@ -104,59 +56,52 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   max_token_num_ = max_token_num;
   NLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}", max_batch_size_,
                                 max_seq_len_, max_token_num);
-  size_t tmp_tensor_size =
-      std::max(max_batch_size_ * vocab_size_ * sizeof(float), max_token_num * hidden_units * 3 * dtype_size);
-  CreateTensor(tensor_buffer_0_, max_token_num * hidden_units * dtype_size * 3);
-  CreateTensor(tensor_buffer_1_, tmp_tensor_size);
-  CreateTensor(tensor_buffer_2_, max_token_num * hidden_units * dtype_size * 3);
 
-  size_t up_matmul_tensor_size = max_token_num * dtype_size * std::max(inter_size, hidden_units * 2);
-  CreateTensor(up_matmul_tensor_, up_matmul_tensor_size);
-  CreateTensor(kv_cache_buffer_,
-               (size_t)max_seq_len_ * (max_seq_len_ + 511) / 512 * head_num * (size_per_head + 2) * sizeof(float));
-  kv_cache_buffer_.shape = {max_seq_len_, (max_seq_len_ + 511) / 512, head_num, size_per_head + 2};
-  kv_cache_buffer_.dtype = TYPE_FP32;
-  CreateTensor(logits_tensor_, max_batch_size_ * vocab_size_ * sizeof(float));
+  size_t tensor_buffer_1_size =
+      std::max(max_batch_size_ * vocab_size_ * sizeof(float), max_token_num * hidden_units * 3 * dtype_size) /
+      Tensor::GetTypeSize(weight_data_type_);
+  size_t up_matmul_tensor_buffer_size = max_token_num * std::max(inter_size, hidden_units * 2);
+  size_t max_block_num =
+      (max_seq_len_ * max_batch_size_ + model_config.block_token_num - 1) / model_config.block_token_num;
+  // NOTE(karlluo): when using prefixed cache, more tokens come into forward, hence we need more buffer.
+  size_t extra_token_number = 0;
+  if (prefix_cache_tokens_number > 0) {
+    extra_token_number = prefix_cache_tokens_number * max_batch_size_;
+  }
+
+  // TODO(karlluo): all create tensor used dynamic memory pool
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {max_token_num, hidden_units, 3}, weight_data_type_));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_1_size}, weight_data_type_))
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, hidden_units, 3}, weight_data_type_));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, weight_data_type_));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(
+      kv_cache_buffer_, {max_seq_len_, (max_seq_len_ + 511) / 512, head_num_per_tp, size_per_head + 2}, TYPE_FP32));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(logits_tensor_, {max_batch_size_, vocab_size_}, TYPE_FP32));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(kv_cache_offset_tensor_, {max_batch_size_ + 1}, TYPE_INT32));
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(kv_list_, {num_layer_, max_block_num, 2}, TYPE_POINTER));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(input_ids_, {max_token_num + extra_token_number}, TYPE_INT32));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(input_offset_int32_tensor_, {max_batch_size_ + 1}, TYPE_INT32));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(input_offset_uint64_tensor_, {max_batch_size_ + 1}, TYPE_UINT64));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(input_tokens_int32_tensor_, {max_batch_size_ + 1}, TYPE_INT32));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(rotary_embedding_pos_, {max_token_num + extra_token_number}, TYPE_INT64));
+  // TODO(karlluo): we needn't tensor's shape to transfer attribute
+  STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 
   cudaEvent_t create_reduce_tensor_event;
   if (use_custom_all_reduce_) {
     CUDA_CHECK(cudaEventCreateWithFlags(&create_reduce_tensor_event, cudaEventDisableTiming));
     // create buffer for custom all reduce sum
-    size_t reduce_buffer_size = 256;
-    CreateTensor(reduce_tensor_, reduce_buffer_size);
+    constexpr size_t reduce_buffer_size = 256;
+    STATUS_CHECK_FAILURE(CreateBufferTensor(reduce_tensor_, {reduce_buffer_size}, TYPE_UINT8));
     size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
-    CreateTensor(rank_tensor_0_, rank_data_sz);
-    CreateTensor(rank_tensor_1_, rank_data_sz);
+    STATUS_CHECK_FAILURE(CreateBufferTensor(rank_tensor_0_, {rank_data_sz}, TYPE_UINT8));
+    STATUS_CHECK_FAILURE(CreateBufferTensor(rank_tensor_1_, {rank_data_sz}, TYPE_UINT8));
     CUDA_CHECK(cudaEventRecord(create_reduce_tensor_event, context_->GetMemoryManageStreams()[rank_]));
   }
 
-  CreateTensor(kv_cache_offset_tensor_, (max_batch_size_ + 1) * sizeof(int));
-  kv_cache_offset_tensor_.dtype = TYPE_INT32;
-
-  CreateTensor(cos_sin_cache_tensor_, rotary_embedding * max_position_embeddings * sizeof(half));
-  half* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<half>();
-
-  size_t max_block_num =
-      (max_seq_len_ * max_batch_size_ + model_config.block_token_num - 1) / model_config.block_token_num;
-  CreateTensor(kv_list_, num_layer_ * max_block_num * 2 * sizeof(void*));
-  kv_list_.dtype = TYPE_POINTER;
-
-  // NOTE(karlluo): when using prefixed cache, more tokens come into forward, hence we need more buffer.
-  size_t extra_token_number = 0;
-  if (prefix_cache_tokens_number > 0) {
-    extra_token_number = prefix_cache_tokens_number * 10;
-  }
-  // TODO(karlluo): all create tensor used dynamic memory pool
-  CreateTensor(input_ids_, (max_token_num + extra_token_number) * sizeof(int));
-  input_ids_.dtype = TYPE_INT32;
-  CreateTensor(input_offset_int32_tensor_, (max_batch_size_ + 1) * sizeof(int));
-  input_offset_int32_tensor_.dtype = TYPE_INT32;
-  CreateTensor(input_offset_uint64_tensor_, (max_batch_size_ + 1) * sizeof(uint64_t));
-  input_offset_uint64_tensor_.dtype = TYPE_UINT64;
-  CreateTensor(input_tokens_int32_tensor_, (max_batch_size_ + 1) * sizeof(int));
-  input_tokens_int32_tensor_.dtype = TYPE_INT32;
-  CreateTensor(rotary_embedding_pos_, (max_token_num + extra_token_number) * sizeof(int64_t));
-  CreateTensor(forward_shape_, sizeof(int));
+  NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
 
   // 初始化各层实例
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
@@ -182,18 +127,20 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   cast_layer_->Init({}, context_, rank_);
   flash_attention_layer_.resize(num_layer_);
   paged_attention_layer_.resize(num_layer_);
+  half* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<half>();
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
     flash_attention_layer_[idx]->Init(
-        {idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head, stride_size, rotary_embedding,
-         rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
+        {idx, max_position_embeddings, head_num_per_tp, num_key_value_heads, size_per_head, stride_size,
+         rotary_embedding, rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
         context_, rank_);
     paged_attention_layer_[idx]->Init(
-        {idx, max_position_embeddings, head_num, num_key_value_heads, size_per_head, stride_size, rotary_embedding,
-         rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
+        {idx, max_position_embeddings, head_num_per_tp, num_key_value_heads, size_per_head, stride_size,
+         rotary_embedding, rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
         context_, rank_);
   }
+
   if (use_custom_all_reduce_) {
     CUDA_CHECK(cudaStreamWaitEvent(context_->GetMemoryManageStreams()[rank_], create_reduce_tensor_event));
     size_t reduce_buffer_size = 256;
@@ -220,6 +167,13 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CUDA_CHECK(cudaEventCreateWithFlags(&nccl_finish_event_, cudaEventDisableTiming));
   CUDA_CHECK(cudaEventCreateWithFlags(&compute_ready_event_, cudaEventDisableTiming));
   CUDA_CHECK(cudaEventCreateWithFlags(&logits_transfer_event_, cudaEventDisableTiming));
+
+  // init cuda stream from context
+  compute_stream_ = context_->GetComputeStreams()[rank_];
+  h2d_stream_ = context_->GetH2DStreams()[rank_];
+  d2h_stream_ = context_->GetD2HStreams()[rank_];
+  d2d_stream_ = context_->GetD2DStreams()[rank_];
+  nccl_stream_ = context_->GetNCCLStreams()[rank_];
 }
 
 template <typename T>
@@ -231,7 +185,7 @@ float* Llama<T>::GetLogitsPtr() {
 template <typename T>
 void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                               const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
-                              cudaStream_t& stream, cudaEvent_t& event, bool context_stage) {
+                              cudaStream_t& stream, cudaEvent_t& event, bool is_context_stage) {
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
     total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
@@ -241,7 +195,7 @@ void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, si
   void* kv_cache_offset_ptr = kv_cache_offset_tensor_.GetPtr<void>();
   CUDA_CHECK(cudaMemcpyAsync(kv_cache_offset_ptr, kv_cache_offset_list.data(),
                              kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
-  NLLM_LOG_DEBUG << (context_stage ? "ContextDecode" : "Decode") << " Total Block Num " << total_block_num;
+  NLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " Total Block Num " << total_block_num;
   kv_list_.shape = {num_layer_, total_block_num * 2};
   std::vector<void*> cpu_kv_list(num_layer_ * total_block_num * 2);
   for (size_t layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
@@ -285,8 +239,6 @@ void Llama<T>::PrepareContextRotaryEmbeddingPos(const size_t batch_size, const s
     }
   }
   void* rotary_embedding_pos_ptr = rotary_embedding_pos_.GetPtr<void>();
-  NLLM_LOG_DEBUG << "rotary_embedding_pos_ shape: [" << max_token_num_ * 2
-                 << "] of int64 and total_seq_len: " << total_seq_len;
   CUDA_CHECK(cudaMemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
                              cudaMemcpyHostToDevice, stream));
   CUDA_CHECK(cudaEventRecord(event, stream));
@@ -351,7 +303,7 @@ void Llama<T>::PrepareInputIds(const size_t batch_size, int& max_tokens,
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
   std::vector<int> input_tokens_list_int32(batch_size, 0);
   std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
-  for (int idx = 0; idx < batch_size; ++idx) {
+  for (size_t idx = 0; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
     input_ids_cpu[idx] = req_input->at(length - 1);
@@ -380,17 +332,159 @@ void Llama<T>::PrepareInputIds(const size_t batch_size, int& max_tokens,
 }
 
 template <typename T>
-void Llama<T>::CopyToLogistBuffer(const size_t batch_size, cudaEvent_t& compute_ready_event_,
-                                  cudaStream_t& compute_stream, cudaStream_t& d2d_stream,
-                                  std::vector<ForwardRequest>& forward_reqs, std::vector<Tensor>& logits_float) {
-  CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream));
-  CUDA_CHECK(cudaStreamWaitEvent(d2d_stream, compute_ready_event_));
+void Llama<T>::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
+                                  std::vector<Tensor>& logits_float) {
+  CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream_));
+  CUDA_CHECK(cudaStreamWaitEvent(d2d_stream_, compute_ready_event_));
   // Copy to logits buf
   float* logits_ptr = logits_float[0].GetPtr<float>();
   float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_;
   CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), cudaMemcpyDeviceToDevice,
-                             d2d_stream));
-  CUDA_CHECK(cudaStreamSynchronize(d2d_stream));
+                             d2d_stream_));
+  CUDA_CHECK(cudaStreamSynchronize(d2d_stream_));
+}
+
+template <typename T>
+Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
+                                std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
+                                const bool is_context_stage) {
+  // Attn proj MatMul
+  Tensor attn_proj_weight =
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
+  std::vector<Tensor>& attn_proj_output = temp_buffer_2;
+  STATUS_CHECK_RETURN(matmul_layer_->Forward({hidden_states, attn_proj_weight}, attn_proj_output));
+
+  // MMHA Flash/Paged Attention
+  std::vector<Tensor>& mmha_attention_output = temp_buffer_1;
+  if (layer_idx == 0) {
+    // only need sync in the first layer
+    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, kvcache_offset_event_));
+    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, rotary_embedding_event_));
+  }
+
+  if (is_context_stage) {
+    STATUS_CHECK_RETURN(
+        flash_attention_layer_[layer_idx]->Forward({attn_proj_output[0], input_offset_uint64_tensor_, kv_list_,
+                                                    kv_cache_offset_tensor_, rotary_embedding_pos_, forward_shape_},
+                                                   mmha_attention_output));
+  } else {
+    STATUS_CHECK_RETURN(paged_attention_layer_[layer_idx]->Forward(
+        {attn_proj_output[0], input_tokens_int32_tensor_, kv_list_, kv_cache_offset_tensor_, rotary_embedding_pos_,
+         kv_cache_buffer_, forward_shape_, up_matmul_tensor_buffer_},
+        mmha_attention_output));
+  }
+
+  // Attn o_proj MatMul
+  Tensor attn_o_proj_weight =
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
+  std::vector<Tensor>& attn_o_proj_output = temp_buffer_2;
+  STATUS_CHECK_RETURN(matmul_layer_->Forward({mmha_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
+
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream_));
+    CUDA_CHECK(cudaStreamWaitEvent(nccl_stream_, compute_ready_event_));
+  }
+  // Attn NcclAllReduceSum
+  std::vector<Tensor>& attn_all_reduce_sum_output = temp_buffer_1;
+  if (is_context_stage) {
+    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
+  } else {
+    if (use_custom_all_reduce_) {
+      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_0_->Forward({attn_o_proj_output[0]}, attn_all_reduce_sum_output));
+    } else {
+      STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
+    }
+  }
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream_));
+    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, nccl_finish_event_));
+  }
+
+  return Status();
+}
+
+template <typename T>
+Status Llama<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                          Tensor& post_layernorm_output, std::vector<Tensor>& temp_buffer_0,
+                          std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
+  // Mlp gate_proj MatMul
+  Tensor gate_proj_weight =
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
+  std::vector<Tensor>& gate_matmul_output = temp_buffer_0;
+  STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output, gate_proj_weight}, gate_matmul_output));
+
+  // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
+  Tensor up_proj_weight = base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.up_proj.weight", layer_idx));
+  std::vector<Tensor> up_matmul_output = {up_matmul_tensor_buffer_};
+  STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output, up_proj_weight}, up_matmul_output));
+
+  std::vector<Tensor>& silu_mul_output = temp_buffer_1;
+  STATUS_CHECK_RETURN(silu_mul_layer_->Forward({gate_matmul_output[0], up_matmul_output[0]}, silu_mul_output));
+
+  // Mlp down_proj MatMul
+  Tensor down_proj_weight =
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.down_proj.weight", layer_idx));
+  std::vector<Tensor>& down_proj_output = temp_buffer_0;
+  STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
+
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream_));
+    CUDA_CHECK(cudaStreamWaitEvent(nccl_stream_, compute_ready_event_));
+  }
+  // Mlp NcclAllReduceSum
+  std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
+  STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream_));
+    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, nccl_finish_event_));
+  }
+
+  return Status();
+}
+
+template <typename T>
+Status Llama<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                              std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
+                              std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
+  // input layernorm
+  Tensor input_layernorm_weight =
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
+  // input_layernorm_input = layer_idx == 0 ? emb_lookup_output : mlp_add_output
+  // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
+  std::vector<Tensor>& input_layernorm_input = temp_buffer_0;
+  std::vector<Tensor>& input_layernorm_output = temp_buffer_1;
+  STATUS_CHECK_RETURN(
+      layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
+
+  STATUS_CHECK_RETURN(LlamaAttention(layer_idx, base_weight, input_layernorm_output[0], temp_buffer_0, temp_buffer_1,
+                                     temp_buffer_2,
+                                     /*is_context_stage*/ is_context_stage));
+
+  // Attn Add
+  std::vector<Tensor>& attn_all_reduce_sum_output = temp_buffer_1;
+  std::vector<Tensor>& attn_add_output = temp_buffer_2;
+  STATUS_CHECK_RETURN(add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]}, attn_add_output));
+
+  // post_attention_layernorm
+  Tensor post_layernorm_weight =
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.post_attention_layernorm.weight", layer_idx));
+  std::vector<Tensor>& post_layernorm_output = temp_buffer_1;
+  STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
+
+  STATUS_CHECK_RETURN(
+      LlamaMlp(layer_idx, base_weight, post_layernorm_output[0], temp_buffer_0, temp_buffer_1, temp_buffer_2));
+
+  // Mlp Add
+  std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
+  std::vector<Tensor>& mlp_add_output = temp_buffer_0;
+  STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
+
+  return Status();
 }
 
 template <typename T>
@@ -400,207 +494,66 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
 
   size_t batch_size = forward_reqs.size();
   NLLM_LOG_DEBUG << "ContextDecode With Batch Size " << batch_size;
-
   if (batch_size > max_batch_size_) {
     std::invalid_argument(
         fmt::format("Context Decode Batch Size out of max batch size! {} > {}", batch_size, max_batch_size_));
   }
 
-  cudaStream_t& stream = context_->GetComputeStreams()[rank_];
-  cudaStream_t& h2d_stream = context_->GetH2DStreams()[rank_];
-  cudaStream_t& d2h_stream = context_->GetD2HStreams()[rank_];
-  cudaStream_t& nccl_stream = context_->GetNCCLStreams()[rank_];
-  cudaStream_t& d2d_stream = context_->GetD2HStreams()[rank_];
-
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
-  std::vector<Tensor> output_0{tensor_buffer_0_};
-  std::vector<Tensor> output_1{tensor_buffer_1_};
-  std::vector<Tensor> output_2{tensor_buffer_2_};
+  std::vector<Tensor> temp_buffer_0{tensor_buffer_0_};
+  std::vector<Tensor> temp_buffer_1{tensor_buffer_1_};
+  std::vector<Tensor> temp_buffer_2{tensor_buffer_2_};
   // 解析外部 CPU 输入,拷贝到 GPU Tensor 中
   size_t total_seq_len = 0;
   size_t total_block_num = 0;
   int max_tokens = 0;
   std::vector<int> kv_cache_offset_list(1, 0);
 
-  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream,
+  // prepare all inputs
+  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream_,
                  kvcache_offset_event_, true);
-  PrepareContextRotaryEmbeddingPos(batch_size, total_seq_len, forward_reqs, d2h_stream, rotary_embedding_event_);
-
-  PrepareContextInputIds(batch_size, total_seq_len, max_tokens, forward_reqs, h2d_stream, input_ids_event_);
+  PrepareContextRotaryEmbeddingPos(batch_size, total_seq_len, forward_reqs, d2h_stream_, rotary_embedding_event_);
+  PrepareContextInputIds(batch_size, total_seq_len, max_tokens, forward_reqs, h2d_stream_, input_ids_event_);
 
   // create forward shape tensor
   forward_shape_.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
 
-  // Forward
   // embedding
   Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
-  std::vector<Tensor>& emb_lookup_output = output_0;
-  CUDA_CHECK(cudaStreamWaitEvent(stream, input_ids_event_));
+  std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
+  CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, input_ids_event_));
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids_, input_offset_uint64_tensor_, embedding_weight}, emb_lookup_output));
-  emb_lookup_output[0].SaveToFile(saved_dir + "emb_lookup_output." + std::to_string(rank_) + ".npy");
-  NLLM_LOG_DEBUG << "embeddig";
 
   // LlamaDecoder
-  for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
-    // input layernorm
-    Tensor input_layernorm_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".input_layernorm.weight");
-    // input_layernorm_input = layer_num == 0 ? emb_lookup_output : mlp_add_output
-    // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
-    std::vector<Tensor>& input_layernorm_input = output_0;
-    std::vector<Tensor>& input_layernorm_output = output_1;
-    STATUS_CHECK_RETURN(
-        layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
-
-    input_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".input_layernorm." +
-                                         std::to_string(rank_) + ".npy");
-    NLLM_LOG_DEBUG << layer_num << " input layernorm";
-
-    // Attn proj MatMul
-    Tensor attn_proj_weight = base_weight->GetModelWeights(
-        "model.layers." + std::to_string(layer_num) + ".self_attn.query_key_value.weight");
-    std::vector<Tensor>& attn_proj_output = output_2;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
-
-    attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj." + std::to_string(rank_) +
-                                   ".npy");
-    NLLM_LOG_DEBUG << layer_num << " attn proj";
-
-    // MMHA Flash Attention
-    if (layer_num == 0) {
-      // only need sync in the first layer
-      CUDA_CHECK(cudaStreamWaitEvent(stream, kvcache_offset_event_));
-      CUDA_CHECK(cudaStreamWaitEvent(stream, rotary_embedding_event_));
-    }
-    std::vector<Tensor>& flash_attention_output = output_1;
-    STATUS_CHECK_RETURN(
-        flash_attention_layer_[layer_num]->Forward({attn_proj_output[0], input_offset_uint64_tensor_, kv_list_,
-                                                    kv_cache_offset_tensor_, rotary_embedding_pos_, forward_shape_},
-                                                   flash_attention_output));
-    flash_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA." +
-                                         std::to_string(rank_) + ".npy");
-    NLLM_LOG_DEBUG << layer_num << " MMHA Flash Attention";
-
-    // Attn o_proj MatMul
-    Tensor attn_o_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".self_attn.o_proj.weight");
-    std::vector<Tensor>& attn_o_proj_output = output_2;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({flash_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
-    attn_o_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.o_proj." +
-                                     std::to_string(rank_) + ".npy");
-
-    // NOTE(karlluo): multiple event in nccl will cause preformance regression
-    // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(compute_ready_event_, stream));
-      CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, compute_ready_event_));
-    }
-    // Attn NcclAllReduceSum
-    std::vector<Tensor>& attn_all_reduce_sum_output = output_1;
-    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
-    attn_all_reduce_sum_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".attn_all_reduce_sum." +
-                                             std::to_string(rank_) + ".npy");
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream));
-      CUDA_CHECK(cudaStreamWaitEvent(stream, nccl_finish_event_));
-    }
-
-    // Attn Add
-    std::vector<Tensor>& attn_add_output = output_2;
-    STATUS_CHECK_RETURN(
-        add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]}, attn_add_output));
-    attn_add_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.add." + std::to_string(rank_) +
-                                  ".npy");
-
-    // post_attention_layernorm
-    Tensor post_layernorm_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".post_attention_layernorm.weight");
-    std::vector<Tensor>& post_layernorm_output = output_1;
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
-    post_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".post_attention_layernorm." +
-                                        std::to_string(rank_) + ".npy");
-
-    // Mlp gate_proj MatMul
-    Tensor gate_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.gate_proj.weight");
-    std::vector<Tensor>& gate_matmul_output = output_0;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], gate_proj_weight}, gate_matmul_output));
-    gate_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.gate_proj." + std::to_string(rank_) +
-                                     ".npy");
-
-    // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
-    Tensor up_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.up_proj.weight");
-    std::vector<Tensor> up_matmul_output = {up_matmul_tensor_};
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], up_proj_weight}, up_matmul_output));
-    up_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.up_proj." + std::to_string(rank_) +
-                                   ".npy");
-
-    std::vector<Tensor>& silu_mul_output = output_1;
-    STATUS_CHECK_RETURN(silu_mul_layer_->Forward({gate_matmul_output[0], up_matmul_output[0]}, silu_mul_output));
-    silu_mul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.silu." + std::to_string(rank_) +
-                                  ".npy");
-
-    // Mlp down_proj MatMul
-    Tensor down_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.down_proj.weight");
-    std::vector<Tensor>& down_proj_output = output_0;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
-    down_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.down_proj." + std::to_string(rank_) +
-                                   ".npy");
-
-    // NOTE(karlluo): multiple event in nccl will cause preformance regression
-    // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(compute_ready_event_, stream));
-      CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, compute_ready_event_));
-    }
-    // Mlp NcclAllReduceSum
-    std::vector<Tensor>& mlp_all_reduce_sum_output = output_1;
-    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
-    mlp_all_reduce_sum_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.nccl_all_reducesum." +
-                                            std::to_string(rank_) + ".npy");
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream));
-      CUDA_CHECK(cudaStreamWaitEvent(stream, nccl_finish_event_));
-    }
-
-    // Mlp Add
-    std::vector<Tensor>& mlp_add_output = output_0;
-    STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
-    mlp_add_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.add." + std::to_string(rank_) + ".npy");
+  for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
+    STATUS_CHECK_RETURN(LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2,
+                                     /*is_context_stage*/ true));
   }
 
   // final norm
   Tensor final_layernorm_weight = base_weight->GetModelWeights("model.norm.weight");
-  std::vector<Tensor>& final_layernorm_input = output_0;
-  std::vector<Tensor>& final_layernorm_output = output_1;
+  std::vector<Tensor>& final_layernorm_input = temp_buffer_0;
+  std::vector<Tensor>& final_layernorm_output = temp_buffer_1;
   STATUS_CHECK_RETURN(
       layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
-  final_layernorm_input[0].SaveToFile(saved_dir + "final_norm.input." + std::to_string(rank_) + ".npy");
-  final_layernorm_output[0].SaveToFile(saved_dir + "final_norm." + std::to_string(rank_) + ".npy");
 
   // assemble last token
-  std::vector<Tensor>& assemble_last_token_output = output_2;
+  std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;
   STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward({final_layernorm_output[0], input_offset_uint64_tensor_},
                                                           assemble_last_token_output));
-  assemble_last_token_output[0].SaveToFile(saved_dir + "assemble_last_token." + std::to_string(rank_) + ".npy");
 
   // lm_head
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
-  lm_head_weight.SaveToFile(saved_dir + "lm_head.weight." + std::to_string(rank_) + ".npy");
-  std::vector<Tensor>& lm_head_output = output_0;
+  std::vector<Tensor>& lm_head_output = temp_buffer_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
-  lm_head_output[0].SaveToFile(saved_dir + "lm_head." + std::to_string(rank_) + ".npy");
 
   // Cast to float
-  std::vector<Tensor>& logits_float = output_1;
+  std::vector<Tensor>& logits_float = temp_buffer_1;
   logits_float[0].dtype = TYPE_FP32;
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
-  logits_float[0].SaveToFile(saved_dir + "logits_float." + std::to_string(rank_) + ".npy");
 
-  CopyToLogistBuffer(batch_size, compute_ready_event_, stream, d2d_stream, forward_reqs, logits_float);
+  CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
   return Status();
 }
 
@@ -608,9 +561,6 @@ template <typename T>
 Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
-  NLLM_LOG_DEBUG << "llama decode stage inference";
-
-  saved_dir = "/model/llama-ft/7B/nllm_decode/";
 
   size_t batch_size = forward_reqs.size();
   NLLM_LOG_DEBUG << "Decode Batch_size = " << batch_size;
@@ -618,16 +568,10 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
     std::invalid_argument(fmt::format("Decode Batch Size out of max batch size! {} > {}", batch_size, max_batch_size_));
   }
 
-  cudaStream_t& stream = context_->GetComputeStreams()[rank_];
-  cudaStream_t& h2d_stream = context_->GetH2DStreams()[rank_];
-  cudaStream_t& d2h_stream = context_->GetD2HStreams()[rank_];
-  cudaStream_t& nccl_stream = context_->GetNCCLStreams()[rank_];
-  cudaStream_t& d2d_stream = context_->GetD2HStreams()[rank_];
-
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
-  std::vector<Tensor> output_0{tensor_buffer_0_};
-  std::vector<Tensor> output_1{tensor_buffer_1_};
-  std::vector<Tensor> output_2{tensor_buffer_2_};
+  std::vector<Tensor> temp_buffer_0{tensor_buffer_0_};
+  std::vector<Tensor> temp_buffer_1{tensor_buffer_1_};
+  std::vector<Tensor> temp_buffer_2{tensor_buffer_2_};
 
   size_t total_seq_len = 0;
   size_t total_block_num = 0;
@@ -635,187 +579,50 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   std::vector<int> kv_cache_offset_list(1, 0);
 
   // prepare inputs
-  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream,
+  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream_,
                  kvcache_offset_event_, false);
-  PrepareRotaryEmbeddingPos(batch_size, forward_reqs, d2h_stream, rotary_embedding_event_);
-  PrepareInputIds(batch_size, max_tokens, forward_reqs, h2d_stream, input_ids_event_);
+  PrepareRotaryEmbeddingPos(batch_size, forward_reqs, d2h_stream_, rotary_embedding_event_);
+  PrepareInputIds(batch_size, max_tokens, forward_reqs, h2d_stream_, input_ids_event_);
 
   // create forward shape tensor
   forward_shape_.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
 
   // Forward
-  // embedding
   Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
-  std::vector<Tensor>& emb_lookup_output = output_0;
-  CUDA_CHECK(cudaStreamWaitEvent(stream, input_ids_event_));
+  std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
+  CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, input_ids_event_));
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids_, input_offset_uint64_tensor_, embedding_weight}, emb_lookup_output));
-  emb_lookup_output[0].SaveToFile(saved_dir + "emb_lookup_output." + std::to_string(rank_) + ".npy");
 
   // LlamaDecoder
-  for (int layer_num = 0; layer_num < num_layer_; ++layer_num) {
-    // input layernorm
-    Tensor input_layernorm_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".input_layernorm.weight");
-    // input_layernorm_input = layer_num == 0 ? emb_lookup_output : mlp_add_output
-    // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
-    std::vector<Tensor>& input_layernorm_input = output_0;
-    std::vector<Tensor>& input_layernorm_output = output_1;
-    STATUS_CHECK_RETURN(
-        layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
-
-    input_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".input_layernorm." +
-                                         std::to_string(rank_) + ".npy");
-
-    // Attn proj MatMul
-    Tensor attn_proj_weight = base_weight->GetModelWeights(
-        "model.layers." + std::to_string(layer_num) + ".self_attn.query_key_value.weight");
-    std::vector<Tensor>& attn_proj_output = output_2;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({input_layernorm_output[0], attn_proj_weight}, attn_proj_output));
-
-    attn_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.proj." + std::to_string(rank_) +
-                                   ".npy");
-
-    // MMHA Paged Attention
-    std::vector<Tensor>& paged_attention_output = output_1;
-    if (layer_num == 0) {
-      // only need sync in the first layer
-      CUDA_CHECK(cudaStreamWaitEvent(stream, kvcache_offset_event_));
-      CUDA_CHECK(cudaStreamWaitEvent(stream, rotary_embedding_event_));
-    }
-    // TODO(zezhao): workspace 需与 catheywang 确认传入大小,暂时使用此处用不到的空间跑通流程
-    STATUS_CHECK_RETURN(paged_attention_layer_[layer_num]->Forward(
-        {attn_proj_output[0], input_tokens_int32_tensor_, kv_list_, kv_cache_offset_tensor_, rotary_embedding_pos_,
-         kv_cache_buffer_, forward_shape_, up_matmul_tensor_},
-        paged_attention_output));
-
-    paged_attention_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.MMHA." +
-                                         std::to_string(rank_) + ".npy");
-
-    // Attn o_proj MatMul
-    Tensor attn_o_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".self_attn.o_proj.weight");
-    std::vector<Tensor>& attn_o_proj_output = output_2;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({paged_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
-    attn_o_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.o_proj." +
-                                     std::to_string(rank_) + ".npy");
-
-    // NOTE(karlluo): multiple event in nccl will cause preformance regression
-    // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(compute_ready_event_, stream));
-      CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, compute_ready_event_));
-    }
-    // Attn NcclAllReduceSum
-    std::vector<Tensor>& attn_all_reduce_sum_output = output_1;
-    if (use_custom_all_reduce_) {
-      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_0_->Forward({attn_o_proj_output[0]}, attn_all_reduce_sum_output));
-    } else {
-      STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(attn_o_proj_output, attn_all_reduce_sum_output));
-    }
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream));
-      CUDA_CHECK(cudaStreamWaitEvent(stream, nccl_finish_event_));
-    }
-    // Attn Add
-    std::vector<Tensor>& attn_add_output = output_2;
-    STATUS_CHECK_RETURN(
-        add_layer_->Forward({input_layernorm_input[0], attn_all_reduce_sum_output[0]}, attn_add_output));
-    attn_add_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".self_attn.add." + std::to_string(rank_) +
-                                  ".npy");
-
-    // post_attention_layernorm
-    Tensor post_layernorm_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".post_attention_layernorm.weight");
-    std::vector<Tensor>& post_layernorm_output = output_1;
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
-    post_layernorm_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".post_attention_layernorm." +
-                                        std::to_string(rank_) + ".npy");
-
-    // Mlp gate_proj MatMul
-    Tensor gate_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.gate_proj.weight");
-    std::vector<Tensor>& gate_matmul_output = output_0;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], gate_proj_weight}, gate_matmul_output));
-    gate_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.gate_proj." + std::to_string(rank_) +
-                                     ".npy");
-
-    // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
-    Tensor up_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.up_proj.weight");
-    std::vector<Tensor> up_matmul_output = {up_matmul_tensor_};
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output[0], up_proj_weight}, up_matmul_output));
-    up_matmul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.up_proj." + std::to_string(rank_) +
-                                   ".npy");
-
-    std::vector<Tensor>& silu_mul_output = output_1;
-    STATUS_CHECK_RETURN(silu_mul_layer_->Forward({gate_matmul_output[0], up_matmul_output[0]}, silu_mul_output));
-    silu_mul_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.silu." + std::to_string(rank_) +
-                                  ".npy");
-
-    // Mlp down_proj MatMul
-    Tensor down_proj_weight =
-        base_weight->GetModelWeights("model.layers." + std::to_string(layer_num) + ".mlp.down_proj.weight");
-    std::vector<Tensor>& down_proj_output = output_0;
-    STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
-    down_proj_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.down_proj." + std::to_string(rank_) +
-                                   ".npy");
-
-    // NOTE(karlluo): multiple event in nccl will cause preformance regression
-    // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(compute_ready_event_, stream));
-      CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, compute_ready_event_));
-    }
-    // Mlp NcclAllReduceSum
-    std::vector<Tensor>& mlp_all_reduce_sum_output = output_1;
-    if (use_custom_all_reduce_) {
-      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_1_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
-    } else {
-      STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
-    }
-    mlp_all_reduce_sum_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.nccl_all_reducesum." +
-                                            std::to_string(rank_) + ".npy");
-    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-      CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream));
-      CUDA_CHECK(cudaStreamWaitEvent(stream, nccl_finish_event_));
-    }
-
-    // Mlp Add
-    std::vector<Tensor>& mlp_add_output = output_0;
-    STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
-    mlp_add_output[0].SaveToFile(saved_dir + std::to_string(layer_num) + ".mlp.add." + std::to_string(rank_) + ".npy");
+  for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
+    STATUS_CHECK_RETURN(LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2,
+                                     /*is_context_stage*/ false));
   }
 
   // final norm
   Tensor final_layernorm_weight = base_weight->GetModelWeights("model.norm.weight");
-  std::vector<Tensor>& final_layernorm_input = output_0;
-  std::vector<Tensor>& final_layernorm_output = output_1;
+  std::vector<Tensor>& final_layernorm_input = temp_buffer_0;
+  std::vector<Tensor>& final_layernorm_output = temp_buffer_1;
   STATUS_CHECK_RETURN(
       layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
-  final_layernorm_output[0].SaveToFile(saved_dir + "final_norm." + std::to_string(rank_) + ".npy");
 
   // assemble last token
-  std::vector<Tensor>& assemble_last_token_output = output_2;
+  std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;
   STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward({final_layernorm_output[0], input_offset_uint64_tensor_},
                                                           assemble_last_token_output));
 
-  assemble_last_token_output[0].SaveToFile(saved_dir + "assemble_last_token." + std::to_string(rank_) + ".npy");
-
   // lm_head
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
-  lm_head_weight.SaveToFile(saved_dir + "lm_head.weight." + std::to_string(rank_) + ".npy");
-  std::vector<Tensor>& lm_head_output = output_0;
+  std::vector<Tensor>& lm_head_output = temp_buffer_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
-  lm_head_output[0].SaveToFile(saved_dir + "lm_head." + std::to_string(rank_) + ".npy");
 
   // Cast to float
-  std::vector<Tensor>& logits_float = output_1;
+  std::vector<Tensor>& logits_float = temp_buffer_1;
   logits_float[0].dtype = TYPE_FP32;
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
-  logits_float[0].SaveToFile(saved_dir + "logits_float." + std::to_string(rank_) + ".npy");
 
-  CopyToLogistBuffer(batch_size, compute_ready_event_, stream, d2d_stream, forward_reqs, logits_float);
+  CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
   return Status();
 }
 

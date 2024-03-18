@@ -629,7 +629,7 @@ void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_bl
       NLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch.";
       size_t total_block_num = waiting_total_block_num_list_[visit_idx];
       if (total_block_num > 0) {
-        for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+        for (int i = 0; i < context_->GetTensorParallelSize(); ++i) {
           std::vector<int> blocks;
           GetBlockManager()->SetDeviceId(i);
           GetBlockManager()->AllocateBlocks(total_block_num, blocks);

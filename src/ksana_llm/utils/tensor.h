@@ -148,4 +148,14 @@ class TensorMap {
   inline bool IsValid(const Tensor& tensor) { return tensor.GetElementNumber() > 0 && !tensor.blocks.empty(); }
 };
 
+template <typename T>
+Status CreateTensor(Tensor& tensor, const size_t total_bytes, const int rank,
+                    const MemoryDevice memory_device = MEMORY_GPU,
+                    const StorageType storage_type = STORAGE_CONTIGUOUS);
+
+Status DestroyTensor(Tensor& tensor, const int rank);
+
+Status CreateTensor(Tensor& tensor, const std::vector<size_t> shape, const DataType dtype, const int rank,
+                    const MemoryDevice memory_device, const StorageType storage_type);
+
 }  // namespace ksana_llm

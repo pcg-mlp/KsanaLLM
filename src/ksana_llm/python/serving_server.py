@@ -17,7 +17,7 @@ import asyncio
 from functools import partial
 from concurrent import futures
 
-model_executor = futures.ThreadPoolExecutor(max_workers=128)
+model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()

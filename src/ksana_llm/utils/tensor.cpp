@@ -183,4 +183,70 @@ std::string TensorMap::ToString() {
   return ss.str();
 }
 
+template <typename T>
+Status CreateTensor(Tensor& tensor, const size_t total_bytes, const int rank, const MemoryDevice memory_device,
+                    const StorageType storage_type) {
+  int block_id;
+  GetBlockManager()->SetDeviceId(rank);
+  GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+  tensor = Tensor(memory_device, storage_type, GetTensorType<T>(), std::vector<size_t>{total_bytes / sizeof(T)},
+                  std::vector<int>{block_id});
+  return Status();
+}
+
+#define CREATE_TENSOR(T)                                                                     \
+  template Status CreateTensor<T>(Tensor & tensor, const size_t total_bytes, const int rank, \
+                                  const MemoryDevice memory_device, const StorageType storage_type);
+
+CREATE_TENSOR(float);
+CREATE_TENSOR(half);
+#ifdef ENABLE_BF16
+CREATE_TENSOR(__nv_bfloat16);
+#endif
+#ifdef ENABLE_FP8
+CREATE_TENSOR(__nv_fp8_e4m3);
+#endif
+CREATE_TENSOR(int);
+CREATE_TENSOR(int8_t);
+CREATE_TENSOR(char);
+CREATE_TENSOR(void*);
+
+#undef CREATE_TENSOR
+
+Status DestroyTensor(Tensor& tensor, const int rank) {
+  if (tensor.GetBlockIds().empty()) {
+    return Status();
+  }
+  GetBlockManager()->SetDeviceId(rank);
+  const std::vector<int>& block_ids = tensor.GetBlockIds();
+  Status status;
+  if (tensor.storage == STORAGE_CONTIGUOUS) {
+    NLLM_CHECK_WITH_INFO(block_ids.size() == 1ul, "Contiguous must have only one block.");
+    // prevent double free
+    if (GetBlockManager()->IsContiguousUsed(block_ids.front())) {
+      status = GetBlockManager()->FreeContiguous(block_ids.front());
+    } else {
+      status = Status();
+    }
+  } else {
+    status = GetBlockManager()->FreeBlocks(block_ids);
+  }
+  tensor.blocks.clear();
+  return status;
+}
+
+Status CreateTensor(Tensor& tensor, const std::vector<size_t> shape, const DataType dtype, const int rank,
+                    const MemoryDevice memory_device, const StorageType storage_type) {
+  if (shape.empty()) {
+    return Status();
+  }
+  size_t total_bytes =
+      std::accumulate(shape.begin(), shape.end(), 1ul, std::multiplies<size_t>()) * Tensor::GetTypeSize(dtype);
+  int block_id;
+  GetBlockManager()->SetDeviceId(rank);
+  GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+  tensor = Tensor(memory_device, storage_type, dtype, shape, std::vector<int>{block_id});
+  return Status();
+}
+
 }  // namespace ksana_llm

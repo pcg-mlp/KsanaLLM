@@ -31,10 +31,6 @@ make -j
 # Set visible devices
 export CUDA_VISIBLE_DEVICES=14,15
 
-# create temp dir for test models_test, TODO: remove after test is fixed
-mkdir -p /model/llama-ft/7B/nllm
-mkdir -p /model/llama-ft/7B/nllm_decode
-
 # test
 make test
 ```
@@ -49,6 +45,7 @@ make test
 
 mkdir -p ${GIT_PROJECT_REPO_ROOT}/build
 cd ${GIT_PROJECT_REPO_ROOT}/build
+# SM86 is for A10 GPU, change what you need
 cmake -DSM=86 -DWITH_TESTING=ON ..
 make -j
 cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
@@ -61,7 +58,7 @@ ln -s ${GIT_PROJECT_REPO_ROOT}/build/lib .
 
 cd ${GIT_PROJECT_REPO_ROOT}
 python setup.py build_ext
-python setuppy develop
+python setup.py develop
 
 # when you change C++ code, you need run
 python setup.py build_ext
@@ -73,20 +70,12 @@ python setup.py build_ext
 ```bash
 cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 
-# download model: for example 7b
-wget https://mirrors.tencent.com/repository/generic/pcg-numerous//dependency/numerous_llm_models/llama2_7b_fp16_1_gpu.tgz
-tar vzxf llama2_7b_fp16_1_gpu.tgz
-# change llama2_7b_fp16_1_gpu/config.ini
-# ...
-# model_dir=/path/to/llama2_7b_fp16_1_gpu
-# ...
-
-# download tokenizer: for example 7b
+# download huggingface model for example
 wget https://mirrors.tencent.com/repository/generic/pcg-numerous/dependency/numerous_llm_models/llama2_7b_hf.tgz
 tar vzxf llama2_7b_hf.tgz
 
 # launch server
-python serving_server.py --config_file examples/ksana_llm.yaml --tokenizer_dir llama2_7b_hf
+python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm.yaml --tokenizer_dir llama2_7b_hf
 
 # open another session, request client
 python serving_client.py
@@ -108,30 +97,6 @@ pip show -f ksana_llm
 python -c "import ksana_llm"
 ```
 
-## Run with http raw server (Deprecated)
+### Debug
 
-```bash
-# run standalone demo using llama7b
-./bin/ksana_llm --config_file examples/ksana_llm.yaml
-# check runing status
-# open another terminal or session
-cat ./log/ksana_llm.log
-```
-
-Start client
-```bash
-python examples/llama13b/llama13b_simple_client.py
-```
-
-## Code format command line
-
-please format your code before submit a merge request
-
-```bash
-# prepare clang-format
-# pip install clang-format
-# prefer clang-format 17.0.5
-cd ${GIT_PROJECT_ROOT_DIR}
-clang-for
-clang-format -i ${CODE_YOUR_EDIT}
-```
+set environment variable `NLLM_LOG_LEVEL=DEBUG` to get more log info

@@ -45,6 +45,9 @@ class BaseAllocator {
   // Reset the preallocated blocks.
   Status ResetPreAllocatedBlocks(size_t blocks_num);
 
+  // Check whether contiguous is in used
+  bool IsContiguousUsed(const int block_id);
+
  protected:
   // pre-allocate all blocks.
   void PreAllocateBlocks();

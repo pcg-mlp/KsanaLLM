@@ -45,6 +45,9 @@ class BlockManager {
   // Free contiguous memory on device.
   Status FreeContiguous(int block_id);
 
+  // Check contiguous memory is in used.
+  bool IsContiguousUsed(const int block_id);
+
   // Get memory addresses of blocked memory on device.
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs);
 
