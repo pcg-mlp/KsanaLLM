@@ -72,7 +72,10 @@ std::vector<std::string> LlamaWeight<T>::SearchLocalPath(const std::string& mode
     if (entry.is_regular_file()) {
       std::string file_name = entry.path().filename().string();
       std::string extension = entry.path().extension().string();
-      if (extension == ".bin") {
+      if (file_name.length() >= 6 && file_name.compare(0, 6, ".etag.") == 0) {
+        // skip etag file
+        continue;
+      } else if (extension == ".bin") {
         bool is_black_file = false;
         for (std::string& black_file_name : black_list) {
           if (entry.path().filename().string() == black_file_name) {
