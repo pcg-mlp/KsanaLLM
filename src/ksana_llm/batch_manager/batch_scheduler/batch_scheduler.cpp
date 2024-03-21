@@ -42,6 +42,7 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_confi
   swapped_queue_.reserve(batch_scheduler_config_.max_batch_size);
 
   waiting_buffer_queue_.reserve(batch_scheduler_config_.max_waiting_queue_len);
+  recompute_queue_.reserve(batch_scheduler_config_.max_waiting_queue_len);
   swapin_pending_queue_.reserve(batch_scheduler_config_.max_batch_size);
   swapout_pending_queue_.reserve(batch_scheduler_config_.max_batch_size);
 
@@ -129,6 +130,11 @@ void BatchScheduler::MergeWaitingBufferQueue() {
 
   waiting_queue_.insert(waiting_queue_.end(), waiting_buffer_queue_.begin(), waiting_buffer_queue_.end());
   waiting_buffer_queue_.clear();
+}
+
+void BatchScheduler::MergeRecomputeQueue() {
+  waiting_queue_.insert(waiting_queue_.begin(), recompute_queue_.begin(), recompute_queue_.end());
+  recompute_queue_.clear();
 }
 
 void BatchScheduler::MergePendingSwapoutRequest() {
@@ -454,7 +460,9 @@ void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_toke
 }
 
 void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_other) {
-  MergePendingSwapinRequests();
+  if (batch_scheduler_config_.preempt_mode == SWAP) {
+    MergePendingSwapinRequests();
+  }
   if (running_queue_.empty()) {
     NLLM_LOG_DEBUG << "Empty running queue after merge swapin, skip.";
     return;
@@ -521,10 +529,20 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
       }
       ++idx;
     } else {
-      NLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
-      SwapOutAsync(req);
-      swapout_pending_queue_.insert(swapout_pending_queue_.begin(), req);
-      running_queue_.erase(running_queue_.begin() + idx);
+      if (batch_scheduler_config_.preempt_mode == SWAP) {
+        NLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
+        SwapOutAsync(req);
+        swapout_pending_queue_.insert(swapout_pending_queue_.begin(), req);
+        running_queue_.erase(running_queue_.begin() + idx);
+      } else {
+        NLLM_LOG_DEBUG << "running req " << req->req_id << " recompute.";
+        req->FreeBlocks();
+        req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
+        req->infer_stage = InferStage::STAGE_CONTEXT;
+        req->step = 0;
+        recompute_queue_.push_back(req);
+        running_queue_.erase(running_queue_.begin() + idx);
+      }
     }
     ++visit_idx;
   }
@@ -586,6 +604,10 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
 }
 
 void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
+  if (batch_scheduler_config_.preempt_mode == RECOMPUTE) {
+    MergeRecomputeQueue();
+  }
+
   MergeWaitingBufferQueue();
   if (waiting_queue_.empty()) {
     NLLM_LOG_DEBUG << "Empty waiting queue after merge, skip.";
@@ -686,7 +708,9 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   size_t curr_block_num_sum = 0;
 
   ScheduleRunning(step_token_num_sum, skip_other);
-  ScheduleSwapped(step_token_num_sum, curr_block_num_sum, skip_other);
+  if (batch_scheduler_config_.preempt_mode == SWAP) {
+    ScheduleSwapped(step_token_num_sum, curr_block_num_sum, skip_other);
+  }
   ScheduleWaiting(step_token_num_sum, curr_block_num_sum, skip_other);
   SchedulePending();
 

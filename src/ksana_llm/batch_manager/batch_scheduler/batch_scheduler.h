@@ -76,6 +76,9 @@ class BatchScheduler {
   // running_queue
   void MergePendingSwapinRequests();
 
+  // Merge Recompute Queue to waiting queue
+  void MergeRecomputeQueue();
+
   // Wait pending swap out/in done.
   void WaitPendingSwapoutDone();
   void WaitPendingSwapinDone();
@@ -122,6 +125,7 @@ class BatchScheduler {
 
   // The buffer queue used to save input request temporary.
   std::vector<std::shared_ptr<InferRequest>> waiting_buffer_queue_;
+  std::vector<std::shared_ptr<InferRequest>> recompute_queue_;
 
   // The pending queue used for swap in/out.
   std::vector<std::shared_ptr<InferRequest>> swapin_pending_queue_;
