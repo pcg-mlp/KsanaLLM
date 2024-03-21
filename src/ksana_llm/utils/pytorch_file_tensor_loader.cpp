@@ -42,7 +42,7 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
   }
 
   auto pytorch_value =
-      torch::jit::readArchiveAndTensors("data", "", "", c10::nullopt, c10::nullopt, c10::nullopt, *pytorch_reader_,
+      torch::jit::readArchiveAndTensors("data", "", "", c10::nullopt, c10::nullopt, c10::DeviceType::CPU, *pytorch_reader_,
                                         torch::jit::Unpickler::defaultTypeParser, storage_context);
 
   // If the value is a generic dictionary, process the tensors in the dictionary
@@ -60,6 +60,29 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
       }
     }
   }
+}
+
+DataType PytorchFileTensorLoader::GetDataType(const std::string& tensor_name) {
+  DataType data_type = TYPE_INVALID;
+  if (fast_load_) {
+    data_type = TYPE_FP16; // TODO
+  } else {
+    c10::ScalarType dtype = pytorch_tensor_map_[tensor_name].scalar_type();
+    switch (dtype) {
+      case c10::kBFloat16:
+        data_type = TYPE_BF16;
+        break;
+      case torch::kFloat16:
+        data_type = TYPE_FP16;
+        break;
+      case torch::kFloat32:
+        data_type = TYPE_FP32;
+        break;
+      default:
+        break;
+    }
+  }
+  return data_type;
 }
 
 void* PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {

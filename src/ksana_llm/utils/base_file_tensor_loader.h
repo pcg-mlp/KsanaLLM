@@ -1,6 +1,8 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #pragma once
 
+#include "ksana_llm/utils/dtypes.h"
+
 #include <caffe2/serialize/inline_container.h>
 #include <torch/csrc/jit/serialization/import_read.h>
 #include <torch/csrc/jit/serialization/storage_context.h>
@@ -19,6 +21,8 @@ class BaseFileTensorLoader {
 
   // Pure virtual function to get a tensor by its name
   virtual void* GetTensor(const std::string& tensor_name) = 0;
+
+  virtual DataType GetDataType(const std::string& tensor_name) = 0;
 
  protected:
   std::string file_name_;
