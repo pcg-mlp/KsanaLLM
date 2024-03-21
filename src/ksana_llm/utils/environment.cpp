@@ -122,6 +122,9 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
   batch_manager_config_.batch_scheduler_config.swap_threadpool_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 8);
+  batch_manager_config_.batch_scheduler_config.preempt_mode =
+      static_cast<ksana_llm::PreemptMode>(
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
 
   // Read block manager config.
   block_manager_config_.host_allocator_config.block_token_num =

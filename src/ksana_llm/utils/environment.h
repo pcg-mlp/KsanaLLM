@@ -74,6 +74,8 @@ struct RequestBatchingConfig {};
 
 struct ContextCachingConfig {};
 
+enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
+
 struct BatchSchedulerConfig {
   // Max waiting time in millisecond.
   size_t waiting_timeout_in_ms = 600000;
@@ -107,6 +109,9 @@ struct BatchSchedulerConfig {
 
   // The threadpool size used for swap in/out.
   size_t swap_threadpool_size = 8;
+
+  // The preempt mode in case of insufficient GPU blocks.
+  PreemptMode preempt_mode = SWAP;
 };
 
 struct LoraCoordinatorConfig {};
