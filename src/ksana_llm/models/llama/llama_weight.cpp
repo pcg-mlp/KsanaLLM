@@ -128,35 +128,40 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
 
     // get weight's data ptr
     void* weight_ptr = weights_loader->GetTensor(tensor_name);
+    DataType weight_data_type = weights_loader->GetDataType(tensor_name);
 
     // copy host data to device
     int qkv_offset;
     if (weights_map_.count(tensor_name)) {
+      weights_data_type_map_[tensor_name] = weight_data_type;
       if (transpose_first) {
         size_t src_pitch = weights_map_[tensor_name].shape[0] * tensor_para_size_  * sizeof(T);
         size_t dst_pitch = weights_map_[tensor_name].shape[0] * sizeof(T);
         tensor_para_offset *= dst_pitch;
+        GetBlockManager()->SetDeviceId(rank_);
         CUDA_CHECK(cudaMemcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset,
                                      src_pitch, dst_pitch, weights_map_[tensor_name].shape[1], cudaMemcpyHostToDevice,
                                      context_->GetComputeStreams()[rank_]));
       } else {
         tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
+        GetBlockManager()->SetDeviceId(rank_);
         CUDA_CHECK(cudaMemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
                    weights_map_[tensor_name].GetTotalBytes(), cudaMemcpyHostToDevice, context_->GetComputeStreams()[rank_]));
       }
     } else if ((qkv_offset = CheckQKVWeight(tensor_name))) {
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
+      weights_data_type_map_[qkv_name] = weight_data_type;
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
       size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / 3;
       size_t saved_offset = (qkv_offset - 1) * single_proj_size;
       tensor_para_offset *= single_proj_size;
+      GetBlockManager()->SetDeviceId(rank_);
       CUDA_CHECK(cudaMemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset,
                                  single_proj_size, cudaMemcpyHostToDevice, context_->GetComputeStreams()[rank_]));
     } else {
       NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
   }
-  CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
   return Status();
 }
 
@@ -235,7 +240,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   GetBlockManager()->FreeContiguous(last_o_proj_tensor.GetBlockIds()[0]);
   GetBlockManager()->FreeContiguous(last_qkv_tensor.GetBlockIds()[0]);
   GetBlockManager()->FreeContiguous(lm_head_transpose_tensor.GetBlockIds()[0]);
-
+  weights_map_.erase("empty_qkv_tensor");
+  weights_map_.erase("empty_mlp_tensor");
+  weights_map_.erase("empty_lm_head_tensor");
+  weights_map_.erase("empty_o_proj_tensor");
   return Status();
 }
 
@@ -283,7 +291,18 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     }
     LoadWeightsFromFile(weights_loader);
   }
+
   PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
+
+  // Convert BFP16 to FP16
+  for (auto& data_type_iter : weights_data_type_map_) {
+    if (data_type_iter.second == TYPE_BF16) {
+      Tensor& tensor = weights_map_[data_type_iter.first];
+      GetBlockManager()->SetDeviceId(rank_);
+      BFloat16ToFloat16(tensor.GetPtr<void>(), tensor.GetElementNumber(), context_->GetComputeStreams()[rank_]);
+    }
+  }
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
   return Status();
 }
 

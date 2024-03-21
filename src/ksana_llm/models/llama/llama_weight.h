@@ -35,6 +35,7 @@ class LlamaWeight : public BaseWeight {
   bool weights_had_loaded_ = false;
 
   std::unordered_map<std::string, Tensor> weights_map_;
+  std::unordered_map<std::string, DataType> weights_data_type_map_;
 
   std::string model_path_ = "";
   int rank_ = 0;

@@ -20,6 +20,18 @@ SafeTensorsLoader::~SafeTensorsLoader() {
   delete[] weights_buffer_;
 }
 
+DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensors_dtype) {
+  DataType data_type = TYPE_INVALID;
+  if (safetensors_dtype == "F16") {
+    return TYPE_FP16;
+  } else if (safetensors_dtype == "F32") {
+    return TYPE_FP32;
+  } else if (safetensors_dtype == "BF16") {
+    return TYPE_BF16;
+  }
+  return TYPE_INVALID;
+}
+
 // Function to load the SafeTensors binary file
 void SafeTensorsLoader::LoadSafeTensors() {
   std::ifstream safetensors_file(file_name_, std::ios::binary | std::ios::ate);
@@ -57,6 +69,10 @@ void SafeTensorsLoader::LoadSafeTensors() {
     // tensor ptr
     size_t tensor_begin_index = tensor_data["data_offsets"][0];
     size_t tensor_end_index = tensor_data["data_offsets"][1];
+
+    std::string tensor_dtype_str = tensor_data["dtype"];
+    tensor_data_type_map_[tensor_name] = ConvertDtypeToDataType(tensor_dtype_str);
+    NLLM_LOG_DEBUG << fmt::format("SafeTensors Loader: tensor_name = {}, dtype = {}", tensor_name, tensor_dtype_str);
     tensor_offset_map_[tensor_name] = tensor_begin_index;
     tensor_size_map_[tensor_name] = tensor_end_index - tensor_begin_index;
   }
@@ -80,6 +96,13 @@ void* SafeTensorsLoader::GetTensor(const std::string& tensor_name) {
     tensor_ptr_map_[tensor_name] = weights_buffer_ + tensor_offset_map_[tensor_name];
   }
   return tensor_ptr_map_[tensor_name];
+}
+
+DataType SafeTensorsLoader::GetDataType(const std::string& tensor_name) {
+  if (!tensor_data_type_map_.count(tensor_name)) {
+    return TYPE_INVALID;
+  }
+  return tensor_data_type_map_[tensor_name];
 }
 
 }  // namespace ksana_llm

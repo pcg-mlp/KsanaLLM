@@ -178,6 +178,10 @@ void HalfToFloat(const void* input, const int data_size, void* output, cudaStrea
                                    stream);
 }
 
+void BFloat16ToFloat16(void* data_ptr, const int data_size, cudaStream_t& stream) {
+  llm_kernels::nvidia::BFP16ToFP16(data_ptr, data_size, stream);
+}
+
 void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,
                          void** input_handles, int data_size, size_t rank_data_sz, int tp_size, int rank,
                          cudaStream_t& stream) {

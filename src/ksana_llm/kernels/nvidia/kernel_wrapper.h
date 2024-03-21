@@ -50,6 +50,8 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
 
 void HalfToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream);
 
+void BFloat16ToFloat16(void* data_ptr, const int data_size, cudaStream_t& stream);
+
 void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,
                          void** input_handles, int data_size, size_t rank_data_sz, int tp_size, int rank,
                          cudaStream_t& stream);
