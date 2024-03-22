@@ -56,6 +56,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
   size_t max_token_num = model_config.max_scheduler_token_num;
   max_token_num_ = max_token_num;
+  qkv_add_bias_ = (model_config.type.find("qwen") != std::string::npos);
   NLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}", max_batch_size_,
                                 max_seq_len_, max_token_num);
 
@@ -361,6 +362,11 @@ Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
   std::vector<Tensor>& attn_proj_output = temp_buffer_2;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({hidden_states, attn_proj_weight}, attn_proj_output));
+  if (qkv_add_bias_) {
+    Tensor attn_proj_bias =
+        base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.bias", layer_idx));
+    STATUS_CHECK_RETURN(add_layer_->Forward({attn_proj_output[0], attn_proj_bias}, attn_proj_output));
+  }
 
   // MMHA Flash/Paged Attention
   std::vector<Tensor>& mmha_attention_output = temp_buffer_1;

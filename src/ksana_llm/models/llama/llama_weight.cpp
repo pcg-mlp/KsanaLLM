@@ -57,6 +57,9 @@ LlamaWeight<T>::LlamaWeight(const ModelConfig& model_config, int rank, std::shar
 
 int CheckQKVWeight(const std::string& str) {
   std::string suffix = "_proj.weight";
+  if (str.find("_proj.bias") != std::string::npos) {
+    suffix = "_proj.bias";
+  }
   if (str.length() < suffix.length() + 1 || str.compare(str.length() - suffix.length(), suffix.length(), suffix)) {
     return 0;
   }
@@ -126,7 +129,7 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
      */
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
-    if (tensor_name.find("_proj.weight") != std::string::npos) {
+    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos) {
       tensor_para_offset = rank_;
       if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
         transpose_first = true;
@@ -157,7 +160,9 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
                                    context_->GetComputeStreams()[rank_]));
       }
     } else if ((qkv_offset = CheckQKVWeight(tensor_name))) {
-      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
+      bool is_bias = (tensor_name.find("_proj.bias") != std::string::npos);
+      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
+                             (is_bias ? ".bias" : ".weight");
       weights_data_type_map_[qkv_name] = weight_data_type;
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
       size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / 3;
@@ -289,6 +294,10 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
                     weight_data_type);
     AddWeightTensor(ConcatLayerName("self_attn.query_key_value", l),
                     {hidden_units, 3 * hidden_units / tensor_para_size_}, weight_data_type);
+    if (model_config.type.find("qwen") != std::string::npos) {
+      AddWeightTensor(ConcatLayerName("self_attn.query_key_value", l, true), {1, 3 * hidden_units / tensor_para_size_},
+                      weight_data_type);
+    }
   }
   AddWeightTensor("lm_head.weight", {vocab_size, hidden_units}, weight_data_type);
 
@@ -341,8 +350,9 @@ Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size
 }
 
 template <typename T>
-std::string LlamaWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index) {
-  std::string layer_name = "model.layers." + std::to_string(layer_index) + "." + layer_flag + ".weight";
+std::string LlamaWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias) {
+  std::string layer_name =
+      "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
   return layer_name;
 }
 

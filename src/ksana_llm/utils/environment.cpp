@@ -44,6 +44,7 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
 }
 
 void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
+  model_config.type = config_json.at("model_type");
   model_config.head_num = config_json.at("num_attention_heads");
   model_config.num_key_value_heads = config_json.value("num_key_value_heads", model_config.head_num);
   model_config.inter_size = config_json.at("intermediate_size");

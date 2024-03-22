@@ -25,7 +25,7 @@ class LlamaWeight : public BaseWeight {
 
   Status LoadLlamaWeightsMap(const ModelConfig& model_config);
 
-  std::string ConcatLayerName(std::string layer_flag, int& layer_index);
+  std::string ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias = false);
 
   Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
 

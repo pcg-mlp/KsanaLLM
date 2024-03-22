@@ -48,11 +48,11 @@ void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle
                                                    CUDA_R_32F, stream));
 }
 
-void InvokeAddBiasResidual(const void* input_a, const void* input_b, const int m, const int n, void* output,
-                           cudaStream_t stream) {
+void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
+                           void* output, cudaStream_t stream) {
   llm_kernels::nvidia::InvokeAddBiasResidual<half>(
       reinterpret_cast<half*>(output), reinterpret_cast<const half*>(input_a), reinterpret_cast<const half*>(input_b),
-      nullptr, nullptr, nullptr, nullptr, m, n, stream);
+      nullptr, reinterpret_cast<const half*>(bias), nullptr, nullptr, m, n, stream);
 }
 
 void InvokeSiluActivation(const void* input, const void* gated_weights, const int m, const int n, void* output,
