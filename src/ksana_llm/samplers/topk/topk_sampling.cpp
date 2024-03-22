@@ -13,7 +13,6 @@
 #include <cstdint>
 
 namespace ksana_llm {
-#ifdef ENABLE_CUDA
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandState_t* device_curandstates)
     : BaseSampling(max_batch_size, max_vocab_size) {
   float* logits = nullptr;
@@ -29,12 +28,6 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandS
   tensorrt_llm::kernels::invokeCurandBatchInitialize(device_curandstates, nullptr, max_batch_size,
                                                      static_cast<uint64_t*>(workspace_ + workspace_size_), 0);
 }
-#endif
-
-#ifdef ENABLE_ACL
-TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size)
-    : BaseSampling(max_batch_size, max_vocab_size) {}
-#endif
 
 TopkSampling::~TopkSampling() {
   if (workspace_size_ > 0) {
@@ -42,15 +35,14 @@ TopkSampling::~TopkSampling() {
   }
 }
 
-#ifdef ENABLE_CUDA
 Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
                                  const SamplingConfig* sampling_config,
                                  SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
-                                 cudaStream_t& stream) {
+                                 Stream& stream) {
   if (sampling_devide_parameter.device_topKs == nullptr) {
     // greedy
     llm_kernels::nvidia::InvokeArgMaxReduce(logits, offsets, sampling_devide_parameter.bs,
-                                            sampling_devide_parameter.vocab_size_padded, output_token, stream);
+                                            sampling_devide_parameter.vocab_size_padded, output_token, stream.Get());
   } else {
     bool logitHasProbs = false;
     if (sampling_devide_parameter.device_temperatures || sampling_devide_parameter.device_topPs) {
@@ -58,26 +50,16 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
       tensorrt_llm::kernels::invokeAddBiasSoftMax<float>(
           logits, nullptr, sampling_devide_parameter.device_temperatures, nullptr, nullptr, nullptr, nullptr,
           sampling_devide_parameter.bs, 0, 1, sampling_devide_parameter.vocab_size_padded,
-          sampling_devide_parameter.vocab_size_padded, false, true, stream);
+          sampling_devide_parameter.vocab_size_padded, false, true, stream.Get());
     }
     tensorrt_llm::kernels::invokeBatchTopKSampling(
         workspace_, workspace_size_, logits, sampling_devide_parameter.device_output_tokens_ptrs, nullptr, nullptr,
         nullptr, nullptr, nullptr, sampling_devide_parameter.device_curandstates, sampling_devide_parameter.max_topK,
         sampling_devide_parameter.device_topKs, 1.0, sampling_devide_parameter.device_topPs,
-        static_cast<int>(sampling_devide_parameter.vocab_size_padded), nullptr, nullptr, stream,
+        static_cast<int>(sampling_devide_parameter.vocab_size_padded), nullptr, nullptr, stream.Get(),
         static_cast<int>(sampling_devide_parameter.bs), 0, nullptr, false, logitHasProbs);
   }
   return Status();
 }
-#endif
-
-#ifdef ENABLE_ACL
-Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
-                                 const SamplingConfig* sampling_config,
-                                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
-                                 aclrtStream& stream) {
-  return Status();
-}
-#endif
 
 }  // namespace ksana_llm

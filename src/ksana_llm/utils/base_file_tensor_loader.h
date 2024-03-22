@@ -22,7 +22,7 @@ class BaseFileTensorLoader {
   // Pure virtual function to get a tensor by its name
   virtual void* GetTensor(const std::string& tensor_name) = 0;
 
-  virtual DataType GetDataType(const std::string& tensor_name) = 0;
+  virtual DataType GetTensorDataType(const std::string& tensor_name) = 0;
 
  protected:
   std::string file_name_;

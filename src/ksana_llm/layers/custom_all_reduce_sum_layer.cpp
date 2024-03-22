@@ -25,14 +25,14 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, st
 
   int tp_size = context_->GetTensorParallelSize();
 
-  data_handles_ = context_->GetCustomAllReduceBuffers();
+  data_handles_ = context_->ext->GetCustomAllReduceBuffers();
   data_handles_[rank_] = buffer_;
 
-  metas_ = context_->GetCustomAllReduceMetas();
+  metas_ = context_->ext->GetCustomAllReduceMetas();
   metas_[rank_] = meta;
 
   // init inputs for custom reduce sum
-  input_handles_ = context_->GetCustomAllReduceInputs(input_index);
+  input_handles_ = context_->ext->GetCustomAllReduceInputs(input_index);
   input_handles_[rank_] = input;
 
   for (int i = 0; i < tp_size; ++i) {
@@ -54,9 +54,9 @@ Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors
 #ifdef ENABLE_CUDA
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetComputeStreams()[rank_].GetStreamIns());
+    stream = &(context_->GetComputeStreams()[rank_].Get());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_].GetStreamIns());
+    stream = &(context_->GetNCCLStreams()[rank_].Get());
   }
   if (context_->GetTensorParallelSize() > 1) {
     void* input = input_tensors[0].GetPtr<void>();

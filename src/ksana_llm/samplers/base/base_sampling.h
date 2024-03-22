@@ -27,30 +27,15 @@ class BaseSampling {
  public:
   BaseSampling(size_t max_batch_size, size_t max_vocab_size)
       : max_batch_size_(max_batch_size), max_vocab_size_(max_vocab_size) {}
-#ifdef ENABLE_CUDA
   Status Forward(float* logits, const uint32_t* offsets, uint32_t* output_token, const SamplingConfig* sampling_config,
-                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
-                 cudaStream_t& stream);
-#endif
-#ifdef ENABLE_ACL
-  Status Forward(float* logits, const uint32_t* offsets, uint32_t* output_token, const SamplingConfig* sampling_config,
-                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
-                 aclrtStream& stream);
-#endif
+                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config, Stream& stream);
   virtual ~BaseSampling() {}
 
  protected:
-#ifdef ENABLE_CUDA
   virtual Status RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
                              const SamplingConfig* sampling_config, SamplingDevideParameter sampling_devide_parameter,
-                             const ModelConfig* model_config, cudaStream_t& stream) = 0;
-#endif
+                             const ModelConfig* model_config, Stream& stream) = 0;
 
-#ifdef ENABLE_ACL
-  virtual Status RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
-                             const SamplingConfig* sampling_config, SamplingDevideParameter sampling_devide_parameter,
-                             const ModelConfig* model_config, aclrtStream& stream) = 0;
-#endif
   // The max batch size.
   size_t max_batch_size_ = 8;
 

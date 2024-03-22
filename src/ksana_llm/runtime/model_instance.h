@@ -8,9 +8,9 @@
 #include <string>
 
 #include "ksana_llm/models/llama/llama.h"
-#include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/tensor.h"
 
@@ -44,7 +44,7 @@ class ModelInstance {
   }
 
   // Get  the data type.
-  DataType GetDataType() { return model_config_.weight_data_type; }
+  DataType GetWeightDataType() { return model_config_.weight_data_type; }
 
   // Get the base ptr of model's logits buf.
   std::vector<float*> GetLogitsPtr();
@@ -60,21 +60,7 @@ class ModelInstance {
     std::shared_ptr<BaseT> model_obj = nullptr;
     switch (model_config_.weight_data_type) {
       case DataType::TYPE_FP16:
-        if (model_config_.memory_device == MemoryDevice::MEMORY_GPU) {
-#ifdef ENABLE_CUDA
-          model_obj = std::make_shared<ClassT<half>>(model_config_, rank, context_);
-#else
-          throw std::invalid_argument("Using NVIDIA GPU but not compile WITH_CUDA=ON");
-#endif
-        } else if (model_config_.memory_device == MemoryDevice::MEMORY_ASCEND) {
-#ifdef ENABLE_ACL
-          model_obj = std::make_shared<ClassT<aclFloat16>>(model_config_, rank, context_);
-#else
-          throw std::invalid_argument("Using Huawei Ascend but not compile WITH_ACL=ON");
-#endif
-        } else {
-          throw std::invalid_argument("Unknown device type during CreatetModelObject");
-        }
+        model_obj = std::make_shared<ClassT<half>>(model_config_, rank, context_);
         break;
       case DataType::TYPE_FP32:
         model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);

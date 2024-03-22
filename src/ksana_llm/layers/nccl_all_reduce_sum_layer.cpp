@@ -12,16 +12,16 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetComputeStreams()[rank_].GetStreamIns());
+    stream = &(context_->GetComputeStreams()[rank_].Get());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_].GetStreamIns());
+    stream = &(context_->GetNCCLStreams()[rank_].Get());
   }
 
   if (context_->GetTensorParallelSize() > 1) {
     NCCL_CHECK(ncclGroupStart());
     ncclResult_t ncclError = ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                                            output_tensors[0].GetPtr<void>(), input_tensors[0].GetElementNumber(),
-                                           ncclHalf, ncclSum, context_->GetNCCLParam()[rank_].nccl_comm, *stream);
+                                           ncclHalf, ncclSum, context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       NLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
     }

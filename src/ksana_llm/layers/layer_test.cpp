@@ -1,26 +1,20 @@
 /* Copyright 2023 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#ifdef ENABLE_CUDA
-
-#  ifdef ENABLE_FLASH_ATTN_2
-#    include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#  else
-#    include "flash_api.h"
-#  endif
-
-#  include "ksana_llm/layers/activation_layer.h"
-#  include "ksana_llm/layers/add_layer.h"
-#  include "ksana_llm/layers/attention_layer.h"
-#  include "ksana_llm/layers/emb_lookup_layer.h"
-#  include "ksana_llm/layers/flash_attention_layer.h"
-#  include "ksana_llm/layers/layernorm_layer.h"
-#  include "ksana_llm/layers/matmul_layer.h"
-#  include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
-#  include "ksana_llm/layers/paged_attention_layer.h"
-#  include "ksana_llm/layers/silu_mul_layer.h"
-#  include "ksana_llm/utils/dtypes.h"
-#  include "test.h"
+#include "flash_api.h"
+#include "ksana_llm/layers/activation_layer.h"
+#include "ksana_llm/layers/add_layer.h"
+#include "ksana_llm/layers/attention_layer.h"
+#include "ksana_llm/layers/emb_lookup_layer.h"
+#include "ksana_llm/layers/flash_attention_layer.h"
+#include "ksana_llm/layers/layernorm_layer.h"
+#include "ksana_llm/layers/matmul_layer.h"
+#include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
+#include "ksana_llm/layers/paged_attention_layer.h"
+#include "ksana_llm/layers/silu_mul_layer.h"
+#include "ksana_llm/utils/common_device.h"
+#include "ksana_llm/utils/dtypes.h"
+#include "test.h"
 
 namespace ksana_llm {
 
@@ -79,7 +73,7 @@ class LayerTest : public testing::Test {
     size_t total_bytes =
         std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) * dtype_size;
     GetBlockManager()->AllocateContiguous(total_bytes, idx);
-    tensor = Tensor(MEMORY_GPU, STORAGE_CONTIGUOUS, data_type, shape, std::vector<int>{idx});
+    tensor = Tensor(MEMORY_GPU, data_type, shape, idx);
     return Status();
   }
 
@@ -103,7 +97,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   bool is_neox = true;
   Tensor cos_sin_cache_tensor;
   RoPEScalingFactor rope_scaling_factor;
-  CreateHalfDataTypeTensor(cos_sin_cache_tensor, {rotary_embedding, max_position_embeddings}, GetTensorType<half>());
+  CreateHalfDataTypeTensor(cos_sin_cache_tensor, {rotary_embedding, max_position_embeddings}, GetDataType<half>());
   EXPECT_TRUE(flash_attention_layer
                   .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, rotary_embedding,
                          rope_theta, is_neox, std::any(cos_sin_cache_tensor.GetPtr<half>()), rope_scaling_factor},
@@ -112,36 +106,34 @@ TEST_F(LayerTest, AttentionLayerTest) {
 
   Tensor qkv, input_len, pos, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
-  CreateHalfDataTypeTensor(qkv, input_shape, GetTensorType<half>());
-  CreateHalfDataTypeTensor(input_len, {2}, GetTensorType<uint64_t>(), sizeof(uint64_t));
-  CreateHalfDataTypeTensor(pos, {2}, GetTensorType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
+  CreateHalfDataTypeTensor(qkv, input_shape, GetDataType<half>());
+  CreateHalfDataTypeTensor(input_len, {2}, GetDataType<uint64_t>(), sizeof(uint64_t));
+  CreateHalfDataTypeTensor(pos, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
   forward_shape.shape = {1, 2, 1};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
-  CUDA_CHECK(cudaMemcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  Memcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
   void* input_len_ptr = input_len.GetPtr<void>();
   std::vector<uint64_t> input_len_cpu({0, 2});
-  CUDA_CHECK(
-      cudaMemcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  Memcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
   Tensor output_tensor;
-  CreateHalfDataTypeTensor(output_tensor, input_shape, GetTensorType<half>());
+  CreateHalfDataTypeTensor(output_tensor, input_shape, GetDataType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
 
   int block_size = GetBlockManager()->GetBlockSize();
   std::vector<int> h_block_offset = {0, 1};
   Tensor block_offset;
-  CreateHalfDataTypeTensor(block_offset, {h_block_offset.size()}, GetTensorType<int>(), sizeof(int));
-  cudaMemcpy(block_offset.GetPtr<void>(), h_block_offset.data(), h_block_offset.size() * sizeof(int),
-             cudaMemcpyHostToDevice);
+  CreateHalfDataTypeTensor(block_offset, {h_block_offset.size()}, GetDataType<int>(), sizeof(int));
+  Memcpy(block_offset.GetPtr<void>(), h_block_offset.data(), h_block_offset.size() * sizeof(int),
+         MEMCPY_HOST_TO_DEVICE);
   // 为 kv_list 分配内存并初始化
   Tensor kv_list;
-  CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetTensorType<uint64_t>());
+  CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetDataType<uint64_t>());
   std::vector<void*> h_kv_list_ptrs(h_block_offset.back() * 2);
   for (int i = 0; i < h_kv_list_ptrs.size(); i++) {
-    CUDA_CHECK(cudaMalloc(&h_kv_list_ptrs[i], block_size));
+    Malloc(&h_kv_list_ptrs[i], block_size);
   }
-  cudaMemcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*),
-             cudaMemcpyHostToDevice);
+  Memcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE);
 
   EXPECT_TRUE(
       flash_attention_layer.Forward({qkv, input_len, kv_list, block_offset, pos, forward_shape}, output_tensors).OK());
@@ -156,4 +148,3 @@ TEST_F(LayerTest, AttentionLayerTest) {
 }
 
 }  // namespace ksana_llm
-#endif

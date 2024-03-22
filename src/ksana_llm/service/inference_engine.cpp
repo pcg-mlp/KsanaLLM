@@ -6,6 +6,7 @@
 #include <memory>
 #include <thread>
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 

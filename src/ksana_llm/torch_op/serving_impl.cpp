@@ -6,6 +6,7 @@
 
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 

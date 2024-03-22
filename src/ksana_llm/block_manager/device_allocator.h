@@ -12,7 +12,7 @@
 
 namespace ksana_llm {
 
-// The base class of all device allocator.
+// The device allocator implement..
 class DeviceAllocator : public BaseAllocator {
  public:
   DeviceAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context, int device_id);
@@ -20,6 +20,13 @@ class DeviceAllocator : public BaseAllocator {
 
   // Get the device id.
   int GetDeviceId();
+
+ private:
+  // allocate memory
+  virtual void AllocateMemory(void** memory_ptr, size_t bytes) override;
+
+  // Free memory.
+  virtual void FreeMemory(void* memory_ptr) override;
 
  protected:
   // The device index for current allocator.

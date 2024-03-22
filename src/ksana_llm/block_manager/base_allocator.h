@@ -4,7 +4,7 @@
 #pragma once
 
 #include <vector>
-#include "ksana_llm/runtime/context.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"

@@ -62,7 +62,7 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
   }
 }
 
-DataType PytorchFileTensorLoader::GetDataType(const std::string& tensor_name) {
+DataType PytorchFileTensorLoader::GetTensorDataType(const std::string& tensor_name) {
   DataType data_type = TYPE_INVALID;
   if (fast_load_) {
     data_type = TYPE_FP16;  // TODO

@@ -2,22 +2,20 @@
 
 ==============================================================================*/
 
+#include <curand_kernel.h>
+
 #include "ksana_llm/samplers/sampler.h"
-#ifdef ENABLE_CUDA
-#  include <curand_kernel.h>
-#endif
+#include "ksana_llm/utils/common_device.h"
+#include "ksana_llm/utils/device_helper.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
-#ifdef ENABLE_ACL
-#  include "ksana_llm/utils/ascend/acl_utils.h"
-#endif
 
 namespace ksana_llm {
 
-Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank) {
+Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context) {
   batch_schedule_config_ = batch_scheduler_config;
+  context_ = context;
   rank_ = rank;
-#ifdef ENABLE_CUDA
   auto max_batch_size = batch_scheduler_config.max_batch_size;
   // need to allocate device buffer for sampling
   GetBlockManager()->SetDeviceId(rank_);
@@ -47,20 +45,9 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank) {
   }
 
   if (GetBlockManager()->GetBlockManagerConfig().device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
-#  ifdef ENABLE_CUDA
-    CUDA_CHECK(cudaMemcpyAsync(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(),
-                               sizeof(uint32_t*) * max_batch_size, cudaMemcpyHostToDevice));
-#  else
-    throw std::invalid_argument("Using NVIDIA GPU but not compile WITH_CUDA=ON");
-#  endif
+    MemcpyAsync(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(), sizeof(uint32_t*) * max_batch_size,
+                MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[0]);
   } else if (GetBlockManager()->GetBlockManagerConfig().device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
-#  ifdef ENABLE_ACL
-    // TODO(karlluo): using async mode
-    ACL_CHECK(aclrtMemcpy(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(),
-                          sizeof(uint32_t*) * max_batch_size, ACL_MEMCPY_HOST_TO_DEVICE));
-#  else
-    throw std::invalid_argument("Using Huawei Ascend but not compile WITH_ACL=ON");
-#  endif
   } else {
     throw std::invalid_argument("Unknown device type during Sampler construction");
   }
@@ -71,22 +58,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank) {
   host_temperatures_.resize(max_batch_size);
   host_output_tokens_.resize(max_batch_size);
 
-  if (GetBlockManager()->GetBlockManagerConfig().device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
-#  ifdef ENABLE_CUDA
-    topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
-#  else
-    throw std::invalid_argument("Using NVIDIA GPU but not compile WITH_CUDA=ON");
-#  endif
-  } else if (GetBlockManager()->GetBlockManagerConfig().device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
-#  ifdef ENABLE_ACL
-    topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size);
-#  else
-    throw std::invalid_argument("Using Huawei Ascend but not compile WITH_ACL=ON");
-#  endif
-  } else {
-    throw std::invalid_argument("Unknown device type during Sampler construction of topk sampling");
-  }
-#endif
+  topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
 }
 
 Sampler::~Sampler() {
@@ -100,8 +72,7 @@ Sampler::~Sampler() {
   }
 }
 
-#ifdef ENABLE_CUDA
-Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream_t& stream) {
+Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
   if (rank_ == 0) {
     bool use_arg_max = true;
     bool use_top_p = false;
@@ -146,37 +117,32 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream
     }
 
     if (!use_arg_max) {
-      CUDA_CHECK(cudaMemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_devide_parameter.bs,
-                                 cudaMemcpyHostToDevice, stream));
+      MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_devide_parameter.bs, MEMCPY_HOST_TO_DEVICE,
+                  stream);
       sampling_devide_parameter.device_topKs = device_topKs_;
       sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
       sampling_devide_parameter.device_curandstates = device_curandstates_;
       if (use_top_p) {
-        CUDA_CHECK(cudaMemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs,
-                                   cudaMemcpyHostToDevice, stream));
+        MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs,
+                    MEMCPY_HOST_TO_DEVICE, stream);
         sampling_devide_parameter.device_topPs = device_topPs_;
       }
       if (use_temperature) {
-        CUDA_CHECK(cudaMemcpyAsync(device_temperatures_, host_temperatures_.data(),
-                                   sizeof(float) * sampling_devide_parameter.bs, cudaMemcpyHostToDevice, stream));
+        MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_devide_parameter.bs,
+                    MEMCPY_HOST_TO_DEVICE, stream);
         sampling_devide_parameter.device_temperatures = device_temperatures_;
       }
     }
     STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, nullptr, device_output_tokens_, nullptr,
                                                 sampling_devide_parameter, nullptr, stream));
-    CUDA_CHECK(cudaMemcpyAsync(host_output_tokens_.data(), device_output_tokens_,
-                               sizeof(uint32_t) * sampling_devide_parameter.bs, cudaMemcpyDeviceToHost, stream));
-    cudaStreamSynchronize(stream);
+    MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
+                MEMCPY_DEVICE_TO_HOST, stream);
+    StreamSynchronize(stream);
     for (int i = 0; i < sampling_devide_parameter.bs; i++) {
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
     }
   }
   return Status();
 }
-#endif
-
-#ifdef ENABLE_ACL
-Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, aclrtStream& stream) { return Status(); }
-#endif
 
 }  // namespace ksana_llm

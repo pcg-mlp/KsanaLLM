@@ -15,4 +15,4 @@ target_link_libraries(layers PUBLIC kernels)
 file(GLOB_RECURSE layers_test_SRCS
 	${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/*test.cpp
 	${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/nvidia/*test.cpp)
-cpp_test(layers_test SRCS ${layers_test_SRCS} DEPS layers runtime)
+cpp_test(layers_test SRCS ${layers_test_SRCS} DEPS layers runtime utils)

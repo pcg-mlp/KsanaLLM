@@ -9,9 +9,9 @@
 
 #include "ksana_llm/batch_manager/batch_scheduler/priority/base_priority.h"
 #include "ksana_llm/batch_manager/batch_scheduler/strategy/base_strategy.h"
-#include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/threadpool.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {

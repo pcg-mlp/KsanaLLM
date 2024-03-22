@@ -54,7 +54,7 @@ def args_config():
     parser.add_argument('--backend',
                         type=str,
                         default="ksana",
-                        help='serving backend, ksana or vllm')
+                        help='serving backend, ksana or vllm or evart')
     parser.add_argument('--prompt_num',
                         type=int,
                         default=0,
@@ -134,7 +134,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             },
             "stream": False,
         }
-    elif backend == "vllm":
+    elif backend in ["vllm", "evart"]:
         # max outputlen is 1024.
         data = {
             "prompt": prompt,
@@ -169,9 +169,13 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
         output_token_num = len(output.get("output_token_ids")[0])
+    elif backend == "evart":
+        prompt_len = len(prompt)
+        output_text = output["text"][0].strip()
+        output_token_num = len(output.get("output_token_ids")[0])
     output_len = len(output_text)
     result_list[req_id] = output_text
-    print("")
+    print("", output_text)
     REQUEST_LATENCY.append(
         (len(prompt), output_len if output_len > 0 else 1, input_token_num, output_token_num, request_latency))
     pbar.update(1)

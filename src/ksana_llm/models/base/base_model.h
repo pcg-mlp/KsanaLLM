@@ -4,8 +4,9 @@
 #pragma once
 
 #include "ksana_llm/models/base/base_weight.h"
-#include "ksana_llm/runtime/context.h"
+#include "ksana_llm/runtime/cuda_graph_runner.h"
 #include "ksana_llm/runtime/forward_request.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 
@@ -29,6 +30,9 @@ class BaseModel {
   virtual Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) = 0;
 
+  // Implement this method if cuda graph is used.
+  virtual Status WarmUpCudaGraph() { return Status(); }
+
  protected:
   std::shared_ptr<Context> context_{nullptr};
 
@@ -42,19 +46,16 @@ class BaseModel {
   // Record all buffer used
   std::vector<Tensor*> buffer_tensor_heap_;
 
-  // Stream for GPU/NPU dispatch task concurrency
-#ifdef ENABLE_CUDA
-  cudaStream_t compute_stream_;
-  cudaStream_t h2d_stream_;
-  cudaStream_t d2h_stream_;
-  cudaStream_t d2d_stream_;
-  cudaStream_t nccl_stream_;
-#endif
+  // Whether cuda graph is enabled.
+  bool enable_cuda_graph_ = true;
+
+  // The cuda graph runner.
+  CudaGraphRunner cuda_graph_runner_;
 
  protected:
   // Create Buffer tensor
-  Status CreateBufferTensor(Tensor& buf_tensor, const std::vector<size_t> shape, const DataType dtype, const MemoryDevice memory_device = MEMORY_GPU,
-                    const StorageType storage_type = STORAGE_CONTIGUOUS);
+  Status CreateBufferTensor(Tensor& buf_tensor, const std::vector<size_t> shape, const DataType dtype,
+                            const MemoryDevice memory_device = MEMORY_GPU);
 
   // Release all buffer tensors
   Status ReleaseBufferTensors();

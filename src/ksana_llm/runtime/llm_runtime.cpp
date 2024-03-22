@@ -28,7 +28,7 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::
       std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize(), context_);
 
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    samplers_.push_back(std::make_shared<Sampler>(batch_schedule_config_, worker_id));
+    samplers_.push_back(std::make_shared<Sampler>(batch_schedule_config_, worker_id, context_));
   }
 }
 

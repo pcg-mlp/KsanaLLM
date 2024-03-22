@@ -5,7 +5,7 @@
 
 #include <any>
 
-#include "ksana_llm/runtime/context.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 

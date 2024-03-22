@@ -3,7 +3,6 @@
 ==============================================================================*/
 #pragma once
 
-#ifdef ENABLE_CUDA
 #include "ksana_llm/layers/add_layer.h"
 #include "ksana_llm/layers/assemble_last_token_layer.h"
 #include "ksana_llm/layers/base_layer.h"
@@ -16,7 +15,6 @@
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
-#endif
 
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/models/llama/llama_weight.h"
@@ -46,28 +44,17 @@ class Llama : public BaseModel {
   using BaseModel::rank_;
   using BaseModel::use_custom_all_reduce_;
 
-#ifdef ENABLE_CUDA
-  using BaseModel::compute_stream_;
-  using BaseModel::d2d_stream_;
-  using BaseModel::d2h_stream_;
-  using BaseModel::h2d_stream_;
-  using BaseModel::nccl_stream_;
-#endif
-
-#ifdef ENABLE_CUDA
   std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;
-  std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layer_;
-  std::vector<std::shared_ptr<PagedAttentionLayer>> paged_attention_layer_;
+  std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layers_;
+  std::vector<std::shared_ptr<PagedAttentionLayer>> paged_attention_layers_;
   std::shared_ptr<NcclAllReduceSumLayer> nccl_all_reduce_sum_layer_;
   std::shared_ptr<CustomAllReduceSumLayer> custom_all_reduce_sum_layer_0_;
-  std::shared_ptr<CustomAllReduceSumLayer> custom_all_reduce_sum_layer_1_;
   std::shared_ptr<AddLayer> add_layer_;
   std::shared_ptr<SiluMulLayer> silu_mul_layer_;
   std::shared_ptr<MatMulLayer> matmul_layer_;
   std::shared_ptr<AssembleLastTokenLayer> assemble_last_token_layer_;
   std::shared_ptr<CastLayer> cast_layer_;
-#endif
 
   int num_layer_;
   int max_seq_len_;
@@ -84,7 +71,6 @@ class Llama : public BaseModel {
 
   Tensor reduce_tensor_;
   Tensor rank_tensor_0_;
-  Tensor rank_tensor_1_;
   Tensor tensor_buffer_0_;
   Tensor tensor_buffer_1_;
   Tensor tensor_buffer_2_;
@@ -100,39 +86,32 @@ class Llama : public BaseModel {
   Tensor forward_shape_;
   Tensor cos_sin_cache_tensor_;
 
-#ifdef ENABLE_CUDA
-  cudaEvent_t kvcache_offset_event_;
-  cudaEvent_t rotary_embedding_event_;
-  cudaEvent_t input_ids_event_;
-  cudaEvent_t nccl_finish_event_;
-  cudaEvent_t compute_ready_event_;
-  cudaEvent_t logits_transfer_event_;
-#endif
+  Event kvcache_offset_event_;
+  Event rotary_embedding_event_;
+  Event input_ids_event_;
+  Event nccl_finish_event_;
+  Event compute_ready_event_;
+  Event logits_transfer_event_;
 
  private:
-
-#ifdef ENABLE_CUDA
   void PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                       const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
-                      cudaStream_t& stream, cudaEvent_t& event, bool is_context_stage = false);
+                      Stream& stream, Event& event, bool is_context_stage = false);
 
   void PrepareContextRotaryEmbeddingPos(const size_t batch_size, const size_t total_seq_len,
-                                        const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
-                                        cudaEvent_t& event);
+                                        const std::vector<ForwardRequest>& forward_reqs, Stream& stream, Event& event);
 
   void PrepareRotaryEmbeddingPos(const size_t batch_size, const std::vector<ForwardRequest>& forward_reqs,
-                                 cudaStream_t& stream, cudaEvent_t& event);
+                                 Stream& stream, Event& event);
 
   void PrepareContextInputIds(const size_t batch_size, const size_t total_seq_len, int& max_tokens,
-                              const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
-                              cudaEvent_t& event);
+                              const std::vector<ForwardRequest>& forward_reqs, Stream& stream, Event& event);
 
   void PrepareInputIds(const size_t batch_size, int& max_tokens, const std::vector<ForwardRequest>& forward_reqs,
-                       cudaStream_t& stream, cudaEvent_t& event);
+                       Stream& stream, Event& event);
 
   void CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
                           std::vector<Tensor>& logits_float);
-#endif
 
   // refer to
   // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
