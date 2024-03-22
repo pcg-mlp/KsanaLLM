@@ -34,16 +34,16 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
     // Add fictional storage context
     for (int i = 0; i < records.size(); i++) {
       storage_indexs[i * max_tensor_size] = i;
-      auto storage = at::Storage(c10::Storage::use_byte_size_t(), max_tensor_size,
-                                 at::DataPtr((void*)(storage_indexs + i * max_tensor_size), c10::DeviceType::CPU),
-                                 nullptr, false);
+      auto storage =
+          at::Storage(c10::Storage::use_byte_size_t(), max_tensor_size,
+                      at::DataPtr((void*)(storage_indexs + i * max_tensor_size), c10::DeviceType::CPU), nullptr, false);
       storage_context->addStorage(std::to_string(i), storage);
     }
   }
 
   auto pytorch_value =
-      torch::jit::readArchiveAndTensors("data", "", "", c10::nullopt, c10::nullopt, c10::DeviceType::CPU, *pytorch_reader_,
-                                        torch::jit::Unpickler::defaultTypeParser, storage_context);
+      torch::jit::readArchiveAndTensors("data", "", "", c10::nullopt, c10::nullopt, c10::DeviceType::CPU,
+                                        *pytorch_reader_, torch::jit::Unpickler::defaultTypeParser, storage_context);
 
   // If the value is a generic dictionary, process the tensors in the dictionary
   if (pytorch_value.isGenericDict()) {
@@ -65,7 +65,7 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
 DataType PytorchFileTensorLoader::GetDataType(const std::string& tensor_name) {
   DataType data_type = TYPE_INVALID;
   if (fast_load_) {
-    data_type = TYPE_FP16; // TODO
+    data_type = TYPE_FP16;  // TODO
   } else {
     c10::ScalarType dtype = pytorch_tensor_map_[tensor_name].scalar_type();
     switch (dtype) {

@@ -134,14 +134,14 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layer_[idx]->Init(
-        {idx, max_position_embeddings, head_num_per_tp, num_key_value_heads, size_per_head, stride_size,
-         rotary_embedding, rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
-        context_, rank_);
-    paged_attention_layer_[idx]->Init(
-        {idx, max_position_embeddings, head_num_per_tp, num_key_value_heads, size_per_head, stride_size,
-         rotary_embedding, rope_theta, /*is_neox*/ true, std::any(cos_sin_cache_ptr)},
-        context_, rank_);
+    flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
+                                       size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
+                                       std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
+                                      context_, rank_);
+    paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
+                                       size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
+                                       std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
+                                      context_, rank_);
   }
 
   if (use_custom_all_reduce_) {

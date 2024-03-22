@@ -56,6 +56,12 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.end_id = config_json.at("eos_token_id");
   model_config.max_position_embeddings = config_json.at("max_position_embeddings");
 
+  auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
+  if (!rope_scaling_setting.is_null()) {
+    model_config.rope_scaling_factor_config.type = rope_scaling_setting.value("type", "default");
+    model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
+  }
+
   size_t size_per_head = model_config.hidden_units / model_config.head_num;
   model_config.size_per_head = size_per_head;
   model_config.rotary_embedding = size_per_head;
