@@ -18,6 +18,11 @@
 
 namespace ksana_llm {
 
+struct RoPEScalingFactor {
+  std::string type{"default"};
+  float factor{1.0f};
+};
+
 // The model informations.
 struct ModelConfig {
   // The model name.
@@ -58,6 +63,8 @@ struct ModelConfig {
   int max_batch_size;
   int max_position_embeddings;
   int block_token_num;
+
+  RoPEScalingFactor rope_scaling_factor_config;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

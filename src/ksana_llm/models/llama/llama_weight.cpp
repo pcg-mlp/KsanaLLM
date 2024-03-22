@@ -124,7 +124,7 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
      *     norm:                     不做分卡处理
      *     embedding:                不做分卡处理
      */
-    bool transpose_first = false; // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
+    bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     if (tensor_name.find("_proj.weight") != std::string::npos) {
       tensor_para_offset = rank_;
@@ -142,18 +142,19 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
     if (weights_map_.count(tensor_name)) {
       weights_data_type_map_[tensor_name] = weight_data_type;
       if (transpose_first) {
-        size_t src_pitch = weights_map_[tensor_name].shape[0] * tensor_para_size_  * sizeof(T);
+        size_t src_pitch = weights_map_[tensor_name].shape[0] * tensor_para_size_ * sizeof(T);
         size_t dst_pitch = weights_map_[tensor_name].shape[0] * sizeof(T);
         tensor_para_offset *= dst_pitch;
         GetBlockManager()->SetDeviceId(rank_);
-        CUDA_CHECK(cudaMemcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset,
-                                     src_pitch, dst_pitch, weights_map_[tensor_name].shape[1], cudaMemcpyHostToDevice,
-                                     context_->GetComputeStreams()[rank_]));
+        CUDA_CHECK(cudaMemcpy2DAsync(
+            weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
+            weights_map_[tensor_name].shape[1], cudaMemcpyHostToDevice, context_->GetComputeStreams()[rank_]));
       } else {
         tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
         GetBlockManager()->SetDeviceId(rank_);
         CUDA_CHECK(cudaMemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                   weights_map_[tensor_name].GetTotalBytes(), cudaMemcpyHostToDevice, context_->GetComputeStreams()[rank_]));
+                                   weights_map_[tensor_name].GetTotalBytes(), cudaMemcpyHostToDevice,
+                                   context_->GetComputeStreams()[rank_]));
       }
     } else if ((qkv_offset = CheckQKVWeight(tensor_name))) {
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";

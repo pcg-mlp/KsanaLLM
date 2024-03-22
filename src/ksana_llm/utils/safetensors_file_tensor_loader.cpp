@@ -1,6 +1,6 @@
 #include "safetensors_file_tensor_loader.h"
-#include "logger.h"
 #include <nlohmann/json.hpp>
+#include "logger.h"
 
 using json = nlohmann::json;
 
@@ -16,9 +16,7 @@ SafeTensorsLoader::SafeTensorsLoader(const std::string& file_name) : BaseFileTen
   }
 }
 
-SafeTensorsLoader::~SafeTensorsLoader() {
-  delete[] weights_buffer_;
-}
+SafeTensorsLoader::~SafeTensorsLoader() { delete[] weights_buffer_; }
 
 DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensors_dtype) {
   DataType data_type = TYPE_INVALID;
