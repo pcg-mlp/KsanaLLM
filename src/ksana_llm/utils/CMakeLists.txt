@@ -15,7 +15,7 @@ set(utils_nvidia_LIBS, "")
 
 if(WITH_CUDA)
   file(GLOB_RECURSE utils_nvidia_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/nvidia/*.cpp)
-  list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart)
+  list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt)
 endif()
 
 set(utils_ascend_SRCS, "")

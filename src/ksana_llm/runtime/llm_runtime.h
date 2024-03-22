@@ -6,11 +6,11 @@
 #include <memory>
 #include <vector>
 
-#include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {

@@ -11,6 +11,7 @@
 
 #include "fmt/core.h"
 #include "gflags/gflags.h"
+#include "ksana_llm/utils/device_helper.h"
 #include "nlohmann/json.hpp"
 
 #include "ksana_llm/utils/logger.h"
@@ -249,25 +250,7 @@ void Environment::InitializeBlockManagerConfig() {
   size_t block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   size_t block_dtype_size = 0ul;
 
-#ifdef ENABLE_CUDA
-  if (memory_device_ == MemoryDevice::MEMORY_GPU) {
-    if (model_config.weight_data_type == DataType::TYPE_FP16) {
-      block_dtype_size = sizeof(half);
-    } else {
-      throw std::invalid_argument("Invalid quant_type");
-    }
-  }
-#endif
-
-#ifdef ENABLE_ACL
-  if (memory_device_ == MemoryDevice::MEMORY_ASCEND) {
-    if (model_config.weight_data_type == DataType::TYPE_FP16) {
-      block_dtype_size = sizeof(uint16_t);
-    } else {
-      throw std::invalid_argument("Invalid quant_type");
-    }
-  }
-#endif
+  block_dtype_size = GetTypeSize(DataType::TYPE_FP16);
 
   block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
   block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;

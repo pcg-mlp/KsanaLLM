@@ -24,7 +24,7 @@ Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
   InvokeSiluActivation(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                        reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()),
                        static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[0].shape[1]),
-                       output_tensors[0].GetPtr<void>(), context_->GetComputeStreams()[rank_].GetStreamIns());
+                       output_tensors[0].GetPtr<void>(), context_->GetComputeStreams()[rank_].Get());
 #endif
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

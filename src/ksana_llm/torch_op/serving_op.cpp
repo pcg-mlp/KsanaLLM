@@ -11,6 +11,7 @@
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/singleton.h"
 
 #include "ksana_llm/utils/request.h"
 #include "pybind11/pybind11.h"

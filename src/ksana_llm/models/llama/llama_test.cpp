@@ -2,17 +2,13 @@
  *
  * ==============================================================================*/
 
-#ifdef ENABLE_CUDA
+#include "ksana_llm/utils/singleton.h"
 
-#  include "ksana_llm/models/llama/llama.h"
-#  include <filesystem>
-#  ifdef ENABLE_FLASH_ATTN_2
-#    include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#  else
-#    include "flash_api.h"
-#  endif
-#  include "ksana_llm/samplers/sampler.h"
-#  include "test.h"
+#include <filesystem>
+#include "flash_api.h"
+#include "ksana_llm/models/llama/llama.h"
+#include "ksana_llm/samplers/sampler.h"
+#include "test.h"
 
 using namespace ksana_llm;
 
@@ -51,19 +47,19 @@ class LlamaTest : public testing::Test {
 
 TEST_F(LlamaTest, ForwardTest) {
   int device_id = 0;
-  CUDA_CHECK(cudaSetDevice(device_id));
+  SetDevice(device_id);
 
   std::filesystem::path model_path(model_config.path);
   if (!std::filesystem::exists(model_path)) {
     NLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
     EXPECT_TRUE(std::filesystem::exists(model_path));
   }
-  cudaEvent_t start;
-  cudaEvent_t stop;
+  Event start;
+  Event stop;
   float milliseconds = 0;
   int rounds = 10;
-  CUDA_CHECK(cudaEventCreate(&start));
-  CUDA_CHECK(cudaEventCreate(&stop));
+  EventCreate(&start);
+  EventCreate(&stop);
 
   Py_Initialize();
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
@@ -74,7 +70,6 @@ TEST_F(LlamaTest, ForwardTest) {
   std::string weight_name = "lm_head.weight";
   Tensor lm_head = llama_weight->GetModelWeights(weight_name);
   EXPECT_EQ(lm_head.device, MEMORY_GPU);
-  EXPECT_EQ(lm_head.storage, STORAGE_CONTIGUOUS);
   EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
 
   // 错误的 weight 名称
@@ -94,20 +89,20 @@ TEST_F(LlamaTest, ForwardTest) {
   GetBlockManager()->AllocateBlocks(1, block_ids);
   forward.kv_cache_ptrs.resize(1);
   GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
-  CUDA_CHECK(cudaMemset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize()));
+  Memset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
   NLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
                                 forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
 
   std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
-  CUDA_CHECK(cudaEventRecord(start));
+  EventRecord(start, context_->GetComputeStreams()[device_id]);
   for (int i = 0; i < rounds; ++i) {
     llama->ContextDecode(llama_weight, multi_forward_reqs);
   }
-  CUDA_CHECK(cudaEventRecord(stop));
-  CUDA_CHECK(cudaEventSynchronize(stop));
-  CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+  EventRecord(stop, context_->GetComputeStreams()[device_id]);
+  EventSynchronize(stop);
+  EventElapsedTime(&milliseconds, start, stop);
   EXPECT_TRUE((milliseconds / 10) < 35);
 
   // Sampling
@@ -126,57 +121,57 @@ TEST_F(LlamaTest, ForwardTest) {
   Singleton<Environment>::GetInstance()->GetBatchManagerConfig(batch_manager_config);
 
   std::vector<SamplingRequest> sample_reqs = {sample_req};
-  std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id);
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id].GetStreamIns());
+  std::shared_ptr<Sampler> sampler =
+      std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
 
   // Decode
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id].GetStreamIns());
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29896, (*forward_reqs[0].output_tokens)[3]);
 
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id].GetStreamIns());
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
 
-  CUDA_CHECK(cudaEventRecord(start));
+  EventRecord(start, context_->GetComputeStreams()[device_id]);
   for (int i = 0; i < rounds; ++i) {
     llama->Decode(llama_weight, multi_forward_reqs);
   }
-  CUDA_CHECK(cudaEventRecord(stop));
-  CUDA_CHECK(cudaEventSynchronize(stop));
-  CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+  EventRecord(stop, context_->GetComputeStreams()[device_id]);
+  EventSynchronize(stop);
+  EventElapsedTime(&milliseconds, start, stop);
 
   EXPECT_TRUE((milliseconds / 10) < 30);
 
   llama.reset();
   llama_weight.reset();
-  CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[device_id].GetStreamIns()));
+  StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   Py_Finalize();
-  CUDA_CHECK(cudaEventDestroy(stop));
-  CUDA_CHECK(cudaEventDestroy(start));
-
-  CUDA_CHECK(cudaDeviceSynchronize());
+  EventDestroy(stop);
+  EventDestroy(start);
+  DeviceSynchronize();
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {
   int device_id = 0;
-  CUDA_CHECK(cudaSetDevice(device_id));
+  SetDevice(device_id);
   // 设定张量的大小
   const int64_t size = 10;
 
   // 在GPU上分配内存
-  float *a_ptr, *b_ptr, *c_ptr;
-  CUDA_CHECK(cudaMalloc(&a_ptr, size * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&b_ptr, size * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&c_ptr, size * sizeof(float)));
+  void *a_ptr, *b_ptr, *c_ptr;
+  Malloc(&a_ptr, size * sizeof(float));
+  Malloc(&b_ptr, size * sizeof(float));
+  Malloc(&c_ptr, size * sizeof(float));
 
   // 创建并初始化输入数据
   std::vector<float> a_host(size, 1.0), b_host(size, 2.0);
 
   // 将数据复制到GPU
-  CUDA_CHECK(cudaMemcpy(a_ptr, a_host.data(), size * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(b_ptr, b_host.data(), size * sizeof(float), cudaMemcpyHostToDevice));
+  Memcpy(a_ptr, a_host.data(), size * sizeof(float), MEMCPY_HOST_TO_DEVICE);
+  Memcpy(b_ptr, b_host.data(), size * sizeof(float), MEMCPY_HOST_TO_DEVICE);
 
   // 创建torch::Tensor，它们共享GPU内存
   auto options = torch::TensorOptions().device(torch::kCUDA, device_id).dtype(torch::kFloat32);
@@ -193,7 +188,7 @@ TEST(TorchTensorTest, TorchTensorTest) {
 
   // 将结果复制回CPU以进行验证
   std::vector<float> c_host(size);
-  CUDA_CHECK(cudaMemcpy(c_host.data(), c_ptr, size * sizeof(float), cudaMemcpyDeviceToHost));
+  Memcpy(c_host.data(), c_ptr, size * sizeof(float), MEMCPY_DEVICE_TO_HOST);
 
   // 验证结果
   for (int i = 0; i < size; ++i) {
@@ -201,9 +196,7 @@ TEST(TorchTensorTest, TorchTensorTest) {
   }
 
   // 清理GPU内存
-  cudaFree(a_ptr);
-  cudaFree(b_ptr);
-  cudaFree(c_ptr);
+  Free(a_ptr);
+  Free(b_ptr);
+  Free(c_ptr);
 }
-
-#endif

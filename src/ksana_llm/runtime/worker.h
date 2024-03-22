@@ -10,12 +10,12 @@
 #include <vector>
 
 #include "ksana_llm/models/base/base_model.h"
-#include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 

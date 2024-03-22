@@ -4,7 +4,7 @@
 #pragma once
 
 #include "ksana_llm/block_manager/base_allocator.h"
-#include "ksana_llm/runtime/context.h"
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {

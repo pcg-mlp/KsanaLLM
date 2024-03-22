@@ -6,11 +6,9 @@
 
 #include <memory>
 
+#include "ksana_llm/utils/device_helper.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
-#ifdef ENABLE_ACL
-#  include "ksana_llm/utils/ascend/acl_utils.h"
-#endif
 
 namespace ksana_llm {
 
@@ -21,17 +19,7 @@ void SetBlockManager(BlockManager* block_manager) { g_block_manager = block_mana
 BlockManager* GetBlockManager() { return g_block_manager; }
 
 Status GetDeviceMemoryInfo(MemoryDevice device, size_t* free, size_t* total) {
-  if (device == MemoryDevice::MEMORY_GPU) {
-#ifdef ENABLE_CUDA
-    CUDA_CHECK(cudaMemGetInfo(free, total));
-#endif
-  } else if (device == MemoryDevice::MEMORY_ASCEND) {
-#ifdef ENABLE_ACL
-    ACL_CHECK(aclrtGetMemInfo(ACL_HBM_MEM, free, total));
-#endif
-  } else {
-    throw std::invalid_argument("Unknown device type in GetDeviceMemoryInfo");
-  }
+  MemGetInfo(free, total);
   return Status();
 }
 

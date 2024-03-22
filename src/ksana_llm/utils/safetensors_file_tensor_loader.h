@@ -19,7 +19,7 @@ class SafeTensorsLoader : public BaseFileTensorLoader {
   // Get a tensor by its name
   void* GetTensor(const std::string& tensor_name);
 
-  DataType GetDataType(const std::string& tensor_name);
+  DataType GetTensorDataType(const std::string& tensor_name);
 
  private:
   // Load the PyTorch binary file

@@ -3,22 +3,22 @@
 ==============================================================================*/
 
 #include "ksana_llm/models/llama/llama.h"
+#include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
 template <typename T>
 Llama<T>::~Llama() {
-#ifdef ENABLE_CUDA
   // free all cude event
-  CUDA_CHECK(cudaEventDestroy(kvcache_offset_event_));
-  CUDA_CHECK(cudaEventDestroy(rotary_embedding_event_));
-  CUDA_CHECK(cudaEventDestroy(input_ids_event_));
-  CUDA_CHECK(cudaEventDestroy(nccl_finish_event_));
-  CUDA_CHECK(cudaEventDestroy(compute_ready_event_));
-  CUDA_CHECK(cudaEventDestroy(logits_transfer_event_));
-#endif
+  EventDestroy(kvcache_offset_event_);
+  EventDestroy(rotary_embedding_event_);
+  EventDestroy(input_ids_event_);
+  EventDestroy(nccl_finish_event_);
+  EventDestroy(compute_ready_event_);
+  EventDestroy(logits_transfer_event_);
 }
 
 template <typename T>
@@ -53,7 +53,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
 
   max_batch_size_ = model_config.max_batch_size;
   max_seq_len_ = model_config.max_token_num;
-  size_t dtype_size = Tensor::GetTypeSize(weight_data_type_);
+  size_t dtype_size = GetTypeSize(weight_data_type_);
   size_t max_token_num = model_config.max_scheduler_token_num;
   max_token_num_ = max_token_num;
   qkv_add_bias_ = (model_config.type.find("qwen") != std::string::npos);
@@ -62,7 +62,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
 
   size_t tensor_buffer_1_size =
       std::max(max_batch_size_ * vocab_size_ * sizeof(float), max_token_num * hidden_units * 3 * dtype_size) /
-      Tensor::GetTypeSize(weight_data_type_);
+      GetTypeSize(weight_data_type_);
   size_t up_matmul_tensor_buffer_size = max_token_num * std::max(inter_size, hidden_units * 2);
   size_t max_block_num =
       (max_seq_len_ * max_batch_size_ + model_config.block_token_num - 1) / model_config.block_token_num;
@@ -92,17 +92,15 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 
-#ifdef ENABLE_CUDA
-  cudaEvent_t create_reduce_tensor_event;
+  Event create_reduce_tensor_event;
   if (use_custom_all_reduce_) {
-    CUDA_CHECK(cudaEventCreateWithFlags(&create_reduce_tensor_event, cudaEventDisableTiming));
+    EventCreateWithFlags(&create_reduce_tensor_event, EVENT_DISABLE_TIMING);
     // create buffer for custom all reduce sum
     constexpr size_t reduce_buffer_size = 256;
     STATUS_CHECK_FAILURE(CreateBufferTensor(reduce_tensor_, {reduce_buffer_size}, TYPE_UINT8));
     size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
     STATUS_CHECK_FAILURE(CreateBufferTensor(rank_tensor_0_, {rank_data_sz}, TYPE_UINT8));
-    STATUS_CHECK_FAILURE(CreateBufferTensor(rank_tensor_1_, {rank_data_sz}, TYPE_UINT8));
-    CUDA_CHECK(cudaEventRecord(create_reduce_tensor_event, context_->GetMemoryManageStreams()[rank_].GetStreamIns()));
+    EventRecord(create_reduce_tensor_event, context_->GetMemoryManageStreams()[rank_]);
   }
 
   NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
@@ -112,7 +110,6 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   layernorm_layer_ = std::make_shared<LayernormLayer>();
   if (use_custom_all_reduce_) {
     custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer>();
-    custom_all_reduce_sum_layer_1_ = std::make_shared<CustomAllReduceSumLayer>();
   }
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   add_layer_ = std::make_shared<AddLayer>();
@@ -129,57 +126,43 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   matmul_layer_->Init({}, context_, rank_);
   assemble_last_token_layer_->Init({}, context_, rank_);
   cast_layer_->Init({}, context_, rank_);
-  flash_attention_layer_.resize(num_layer_);
-  paged_attention_layer_.resize(num_layer_);
+  flash_attention_layers_.resize(num_layer_);
+  paged_attention_layers_.resize(num_layer_);
   half* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<half>();
   for (int idx = 0; idx < num_layer_; ++idx) {
-    flash_attention_layer_[idx] = std::make_shared<FlashAttentionLayer>();
-    paged_attention_layer_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
-                                       size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
-                                       std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
-                                      context_, rank_);
-    paged_attention_layer_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
-                                       size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
-                                       std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
-                                      context_, rank_);
+    flash_attention_layers_[idx] = std::make_shared<FlashAttentionLayer>();
+    paged_attention_layers_[idx] = std::make_shared<PagedAttentionLayer>();
+    flash_attention_layers_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
+                                        size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
+                                        std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
+                                       context_, rank_);
+    paged_attention_layers_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
+                                        size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
+                                        std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
+                                       context_, rank_);
   }
 
   if (use_custom_all_reduce_) {
-    CUDA_CHECK(
-        cudaStreamWaitEvent(context_->GetMemoryManageStreams()[rank_].GetStreamIns(), create_reduce_tensor_event));
+    StreamWaitEvent(context_->GetMemoryManageStreams()[rank_], create_reduce_tensor_event);
     size_t reduce_buffer_size = 256;
 
-    CUDA_CHECK(cudaMemsetAsync(reduce_tensor_.GetPtr<void>(), 0, reduce_buffer_size,
-                               context_->GetMemoryManageStreams()[rank_].GetStreamIns()));
+    MemsetAsync(reduce_tensor_.GetPtr<void>(), 0, reduce_buffer_size, context_->GetMemoryManageStreams()[rank_]);
 
     size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
     custom_all_reduce_sum_layer_0_->Init(
         {reduce_tensor_.GetPtr<void>(), tensor_buffer_0_.GetPtr<void>(), reduce_buffer_size,
          rank_tensor_0_.GetPtr<void>(), rank_data_sz, tensor_buffer_2_.GetPtr<void>(), 0},
         context_, rank_);
-    custom_all_reduce_sum_layer_1_->Init(
-        {reduce_tensor_.GetPtr<void>(), tensor_buffer_2_.GetPtr<void>(), reduce_buffer_size,
-         rank_tensor_1_.GetPtr<void>(), rank_data_sz, tensor_buffer_0_.GetPtr<void>(), 1},
-        context_, rank_);
-    CUDA_CHECK(cudaEventDestroy(create_reduce_tensor_event));
+    EventDestroy(create_reduce_tensor_event);
   }
 
   // init cuda event
-  CUDA_CHECK(cudaEventCreateWithFlags(&kvcache_offset_event_, cudaEventDisableTiming));
-  CUDA_CHECK(cudaEventCreateWithFlags(&rotary_embedding_event_, cudaEventDisableTiming));
-  CUDA_CHECK(cudaEventCreateWithFlags(&input_ids_event_, cudaEventDisableTiming));
-  CUDA_CHECK(cudaEventCreateWithFlags(&nccl_finish_event_, cudaEventDisableTiming));
-  CUDA_CHECK(cudaEventCreateWithFlags(&compute_ready_event_, cudaEventDisableTiming));
-  CUDA_CHECK(cudaEventCreateWithFlags(&logits_transfer_event_, cudaEventDisableTiming));
-
-  // init cuda stream from context
-  compute_stream_ = context_->GetComputeStreams()[rank_].GetStreamIns();
-  h2d_stream_ = context_->GetH2DStreams()[rank_].GetStreamIns();
-  d2h_stream_ = context_->GetD2HStreams()[rank_].GetStreamIns();
-  d2d_stream_ = context_->GetD2DStreams()[rank_].GetStreamIns();
-  nccl_stream_ = context_->GetNCCLStreams()[rank_].GetStreamIns();
-#endif
+  EventCreateWithFlags(&kvcache_offset_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&rotary_embedding_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&input_ids_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&nccl_finish_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&compute_ready_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&logits_transfer_event_, EVENT_DISABLE_TIMING);
 }
 
 template <typename T>
@@ -188,11 +171,10 @@ float* Llama<T>::GetLogitsPtr() {
   return logits_tensor_.GetPtr<float>();
 }
 
-#ifdef ENABLE_CUDA
 template <typename T>
 void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                               const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
-                              cudaStream_t& stream, cudaEvent_t& event, bool is_context_stage) {
+                              Stream& stream, Event& event, bool is_context_stage) {
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
     total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
@@ -200,8 +182,8 @@ void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, si
   }
   kv_cache_offset_tensor_.shape = {kv_cache_offset_list.size()};
   void* kv_cache_offset_ptr = kv_cache_offset_tensor_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(kv_cache_offset_ptr, kv_cache_offset_list.data(),
-                             kv_cache_offset_list.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+  MemcpyAsync(kv_cache_offset_ptr, kv_cache_offset_list.data(), kv_cache_offset_list.size() * sizeof(int),
+              MEMCPY_HOST_TO_DEVICE, stream);
   NLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " Total Block Num " << total_block_num;
   kv_list_.shape = {num_layer_, total_block_num * 2};
   std::vector<void*> cpu_kv_list(num_layer_ * total_block_num * 2);
@@ -229,15 +211,14 @@ void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, si
     }
   }
   void* kv_list_ptr = kv_list_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*),
-                             cudaMemcpyHostToDevice, stream));
-  CUDA_CHECK(cudaEventRecord(event, stream));
+  MemcpyAsync(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE, stream);
+  EventRecord(event, stream);
 }
 
 template <typename T>
 void Llama<T>::PrepareContextRotaryEmbeddingPos(const size_t batch_size, const size_t total_seq_len,
-                                                const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
-                                                cudaEvent_t& event) {
+                                                const std::vector<ForwardRequest>& forward_reqs, Stream& stream,
+                                                Event& event) {
   std::vector<int64_t> cpu_rotary_pos(total_seq_len);
   int cpu_rotary_pos_idx = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
@@ -246,28 +227,27 @@ void Llama<T>::PrepareContextRotaryEmbeddingPos(const size_t batch_size, const s
     }
   }
   void* rotary_embedding_pos_ptr = rotary_embedding_pos_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
-                             cudaMemcpyHostToDevice, stream));
-  CUDA_CHECK(cudaEventRecord(event, stream));
+  MemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len, MEMCPY_HOST_TO_DEVICE,
+              stream);
+  EventRecord(event, stream);
 }
 
 template <typename T>
 void Llama<T>::PrepareRotaryEmbeddingPos(const size_t batch_size, const std::vector<ForwardRequest>& forward_reqs,
-                                         cudaStream_t& stream, cudaEvent_t& event) {
+                                         Stream& stream, Event& event) {
   std::vector<int64_t> cpu_rotary_pos(batch_size);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size() - 1;
   }
   void* rotary_embedding_pos_ptr = rotary_embedding_pos_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * batch_size,
-                             cudaMemcpyHostToDevice, stream));
-  CUDA_CHECK(cudaEventRecord(event, stream));
+  MemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * batch_size, MEMCPY_HOST_TO_DEVICE,
+              stream);
+  EventRecord(event, stream);
 }
 
 template <typename T>
 void Llama<T>::PrepareContextInputIds(const size_t batch_size, const size_t total_seq_len, int& max_tokens,
-                                      const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
-                                      cudaEvent_t& event) {
+                                      const std::vector<ForwardRequest>& forward_reqs, Stream& stream, Event& event) {
   input_ids_.shape = {total_seq_len};
   int* input_ids_ptr = input_ids_.GetPtr<int>();
   size_t input_offset = 0;
@@ -283,26 +263,24 @@ void Llama<T>::PrepareContextInputIds(const size_t batch_size, const size_t tota
     input_offset_list_uint64[idx + 1] = input_offset;
     max_tokens = std::max(max_tokens, static_cast<int>(length));
   }
-  CUDA_CHECK(cudaMemcpyAsync(input_ids_ptr, input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int),
-                             cudaMemcpyHostToDevice, stream));
+  MemcpyAsync(input_ids_ptr, input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, stream);
   // create input offset tensor int32 and uint64
   input_offset_int32_tensor_.shape = {batch_size + 1};
   input_offset_uint64_tensor_.shape = {batch_size + 1};
   input_offset_int32_tensor_.dtype = TYPE_INT32;
   input_offset_uint64_tensor_.dtype = TYPE_UINT64;
   void* input_offset_int32_ptr = input_offset_int32_tensor_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(input_offset_int32_ptr, input_offset_list_int32.data(), (batch_size + 1) * sizeof(int),
-                             cudaMemcpyHostToDevice, stream));
+  MemcpyAsync(input_offset_int32_ptr, input_offset_list_int32.data(), (batch_size + 1) * sizeof(int),
+              MEMCPY_HOST_TO_DEVICE, stream);
   void* input_offset_uint64_ptr = input_offset_uint64_tensor_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(input_offset_uint64_ptr, input_offset_list_uint64.data(),
-                             (batch_size + 1) * sizeof(size_t), cudaMemcpyHostToDevice, stream));
-  CUDA_CHECK(cudaEventRecord(event, stream));
+  MemcpyAsync(input_offset_uint64_ptr, input_offset_list_uint64.data(), (batch_size + 1) * sizeof(size_t),
+              MEMCPY_HOST_TO_DEVICE, stream);
+  EventRecord(event, stream);
 }
 
 template <typename T>
 void Llama<T>::PrepareInputIds(const size_t batch_size, int& max_tokens,
-                               const std::vector<ForwardRequest>& forward_reqs, cudaStream_t& stream,
-                               cudaEvent_t& event) {
+                               const std::vector<ForwardRequest>& forward_reqs, Stream& stream, Event& event) {
   input_ids_.shape = {batch_size};
   void* input_ids_ptr = input_ids_.GetPtr<void>();
   std::vector<int> input_ids_cpu(batch_size);
@@ -320,44 +298,42 @@ void Llama<T>::PrepareInputIds(const size_t batch_size, int& max_tokens,
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
   }
-  CUDA_CHECK(
-      cudaMemcpyAsync(input_ids_ptr, input_ids_cpu.data(), batch_size * sizeof(int), cudaMemcpyHostToDevice, stream));
+
+  MemcpyAsync(input_ids_ptr, input_ids_cpu.data(), batch_size * sizeof(int), MEMCPY_HOST_TO_DEVICE, stream);
   // create input offset tensor int32 and uint64
   input_offset_int32_tensor_.shape = {batch_size + 1};
   input_tokens_int32_tensor_.shape = {batch_size};
   input_offset_uint64_tensor_.shape = {batch_size + 1};
   void* input_offset_int32_ptr = input_offset_int32_tensor_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(input_offset_int32_ptr, input_offset_list_int32.data(), (batch_size + 1) * sizeof(int),
-                             cudaMemcpyHostToDevice, stream));
+  MemcpyAsync(input_offset_int32_ptr, input_offset_list_int32.data(), (batch_size + 1) * sizeof(int),
+              MEMCPY_HOST_TO_DEVICE, stream);
   void* input_tokens_int32_ptr = input_tokens_int32_tensor_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), (batch_size) * sizeof(int),
-                             cudaMemcpyHostToDevice, stream));
+  MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), (batch_size) * sizeof(int), MEMCPY_HOST_TO_DEVICE,
+              stream);
   void* input_offset_uint64_ptr = input_offset_uint64_tensor_.GetPtr<void>();
-  CUDA_CHECK(cudaMemcpyAsync(input_offset_uint64_ptr, input_offset_list_uint64.data(),
-                             (batch_size + 1) * sizeof(size_t), cudaMemcpyHostToDevice, stream));
-  CUDA_CHECK(cudaEventRecord(event, stream));
+  MemcpyAsync(input_offset_uint64_ptr, input_offset_list_uint64.data(), (batch_size + 1) * sizeof(size_t),
+              MEMCPY_HOST_TO_DEVICE, stream);
+  EventRecord(event, stream);
 }
 
 template <typename T>
 void Llama<T>::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
                                   std::vector<Tensor>& logits_float) {
-  CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream_));
-  CUDA_CHECK(cudaStreamWaitEvent(d2d_stream_, compute_ready_event_));
+  EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+  StreamWaitEvent(context_->GetD2DStreams()[rank_], compute_ready_event_);
   // Copy to logits buf
   float* logits_ptr = logits_float[0].GetPtr<float>();
   float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_;
-  CUDA_CHECK(cudaMemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), cudaMemcpyDeviceToDevice,
-                             d2d_stream_));
-  CUDA_CHECK(cudaStreamSynchronize(d2d_stream_));
+  MemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), MEMCPY_DEVICE_TO_DEVICE,
+              context_->GetD2DStreams()[rank_]);
+  StreamSynchronize(context_->GetD2DStreams()[rank_]);
 }
-#endif
 
 template <typename T>
 Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                 Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
                                 std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
                                 const bool is_context_stage) {
-#ifdef ENABLE_CUDA
   // Attn proj MatMul
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
@@ -373,17 +349,17 @@ Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::
   std::vector<Tensor>& mmha_attention_output = temp_buffer_1;
   if (layer_idx == 0) {
     // only need sync in the first layer
-    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, kvcache_offset_event_));
-    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, rotary_embedding_event_));
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], kvcache_offset_event_);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], rotary_embedding_event_);
   }
 
   if (is_context_stage) {
     STATUS_CHECK_RETURN(
-        flash_attention_layer_[layer_idx]->Forward({attn_proj_output[0], input_offset_uint64_tensor_, kv_list_,
-                                                    kv_cache_offset_tensor_, rotary_embedding_pos_, forward_shape_},
-                                                   mmha_attention_output));
+        flash_attention_layers_[layer_idx]->Forward({attn_proj_output[0], input_offset_uint64_tensor_, kv_list_,
+                                                     kv_cache_offset_tensor_, rotary_embedding_pos_, forward_shape_},
+                                                    mmha_attention_output));
   } else {
-    STATUS_CHECK_RETURN(paged_attention_layer_[layer_idx]->Forward(
+    STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
         {attn_proj_output[0], input_tokens_int32_tensor_, kv_list_, kv_cache_offset_tensor_, rotary_embedding_pos_,
          kv_cache_buffer_, forward_shape_, up_matmul_tensor_buffer_},
         mmha_attention_output));
@@ -398,8 +374,8 @@ Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream_));
-    CUDA_CHECK(cudaStreamWaitEvent(nccl_stream_, compute_ready_event_));
+    EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetNCCLStreams()[rank_], compute_ready_event_);
   }
   // Attn NcclAllReduceSum
   std::vector<Tensor>& attn_all_reduce_sum_output = temp_buffer_1;
@@ -413,10 +389,9 @@ Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::
     }
   }
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream_));
-    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, nccl_finish_event_));
+    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
-#endif
 
   return Status();
 }
@@ -425,7 +400,6 @@ template <typename T>
 Status Llama<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                           Tensor& post_layernorm_output, std::vector<Tensor>& temp_buffer_0,
                           std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
-#ifdef ENABLE_CUDA
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
@@ -449,17 +423,16 @@ Status Llama<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWe
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    CUDA_CHECK(cudaEventRecord(compute_ready_event_, compute_stream_));
-    CUDA_CHECK(cudaStreamWaitEvent(nccl_stream_, compute_ready_event_));
+    EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetNCCLStreams()[rank_], compute_ready_event_);
   }
   // Mlp NcclAllReduceSum
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
   STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward({down_proj_output[0]}, mlp_all_reduce_sum_output));
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    CUDA_CHECK(cudaEventRecord(nccl_finish_event_, nccl_stream_));
-    CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, nccl_finish_event_));
+    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
-#endif
 
   return Status();
 }
@@ -468,7 +441,6 @@ template <typename T>
 Status Llama<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
                               std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
-#ifdef ENABLE_CUDA
   // input layernorm
   Tensor input_layernorm_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
@@ -501,7 +473,6 @@ Status Llama<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::Ba
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
   std::vector<Tensor>& mlp_add_output = temp_buffer_0;
   STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
-#endif
 
   return Status();
 }
@@ -511,7 +482,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
                                std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
 
-#ifdef ENABLE_CUDA
   size_t batch_size = forward_reqs.size();
   NLLM_LOG_DEBUG << "ContextDecode With Batch Size " << batch_size;
   if (batch_size > max_batch_size_) {
@@ -530,10 +500,12 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   std::vector<int> kv_cache_offset_list(1, 0);
 
   // prepare all inputs
-  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream_,
-                 kvcache_offset_event_, true);
-  PrepareContextRotaryEmbeddingPos(batch_size, total_seq_len, forward_reqs, d2h_stream_, rotary_embedding_event_);
-  PrepareContextInputIds(batch_size, total_seq_len, max_tokens, forward_reqs, h2d_stream_, input_ids_event_);
+  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list,
+                 context_->GetD2HStreams()[rank_], kvcache_offset_event_, true);
+  PrepareContextRotaryEmbeddingPos(batch_size, total_seq_len, forward_reqs, context_->GetD2HStreams()[rank_],
+                                   rotary_embedding_event_);
+  PrepareContextInputIds(batch_size, total_seq_len, max_tokens, forward_reqs, context_->GetH2DStreams()[rank_],
+                         input_ids_event_);
 
   // create forward shape tensor
   forward_shape_.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
@@ -541,7 +513,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   // embedding
   Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
   std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
-  CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, input_ids_event_));
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], input_ids_event_);
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids_, input_offset_uint64_tensor_, embedding_weight}, emb_lookup_output));
 
@@ -574,7 +546,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
 
   CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
-#endif
 
   return Status();
 }
@@ -584,7 +555,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
 
-#ifdef ENABLE_CUDA
   size_t batch_size = forward_reqs.size();
   NLLM_LOG_DEBUG << "Decode Batch_size = " << batch_size;
   if (batch_size > max_batch_size_) {
@@ -602,10 +572,10 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   std::vector<int> kv_cache_offset_list(1, 0);
 
   // prepare inputs
-  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list, d2h_stream_,
-                 kvcache_offset_event_, false);
-  PrepareRotaryEmbeddingPos(batch_size, forward_reqs, d2h_stream_, rotary_embedding_event_);
-  PrepareInputIds(batch_size, max_tokens, forward_reqs, h2d_stream_, input_ids_event_);
+  PrepareKVCache(batch_size, total_seq_len, total_block_num, forward_reqs, kv_cache_offset_list,
+                 context_->GetD2HStreams()[rank_], kvcache_offset_event_, false);
+  PrepareRotaryEmbeddingPos(batch_size, forward_reqs, context_->GetD2HStreams()[rank_], rotary_embedding_event_);
+  PrepareInputIds(batch_size, max_tokens, forward_reqs, context_->GetH2DStreams()[rank_], input_ids_event_);
 
   // create forward shape tensor
   forward_shape_.shape = {batch_size, max_tokens, kv_cache_offset_list.back()};
@@ -613,7 +583,7 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   // Forward
   Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
   std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
-  CUDA_CHECK(cudaStreamWaitEvent(compute_stream_, input_ids_event_));
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], input_ids_event_);
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids_, input_offset_uint64_tensor_, embedding_weight}, emb_lookup_output));
 
@@ -646,7 +616,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
 
   CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
-#endif
 
   return Status();
 }

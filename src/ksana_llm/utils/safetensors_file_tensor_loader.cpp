@@ -96,7 +96,7 @@ void* SafeTensorsLoader::GetTensor(const std::string& tensor_name) {
   return tensor_ptr_map_[tensor_name];
 }
 
-DataType SafeTensorsLoader::GetDataType(const std::string& tensor_name) {
+DataType SafeTensorsLoader::GetTensorDataType(const std::string& tensor_name) {
   if (!tensor_data_type_map_.count(tensor_name)) {
     return TYPE_INVALID;
   }

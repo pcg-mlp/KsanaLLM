@@ -9,8 +9,8 @@ namespace ksana_llm {
 BaseModel::~BaseModel() { ReleaseBufferTensors(); }
 
 Status BaseModel::CreateBufferTensor(Tensor& buf_tensor, const std::vector<size_t> shape, const DataType dtype,
-                                     const MemoryDevice memory_device, const StorageType storage_type) {
-  STATUS_CHECK_FAILURE(CreateTensor(buf_tensor, shape, dtype, rank_, memory_device, storage_type));
+                                     const MemoryDevice memory_device) {
+  STATUS_CHECK_FAILURE(CreateTensor(buf_tensor, shape, dtype, rank_, memory_device));
   buffer_tensor_heap_.push_back(&buf_tensor);
   total_buffer_size_ += buf_tensor.GetTotalBytes();
   return Status();

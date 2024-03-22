@@ -14,14 +14,9 @@ namespace ksana_llm {
 
 class Sampler {
  public:
-  Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank);
+  Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context);
   ~Sampler();
-#ifdef ENABLE_CUDA
-  Status Sampling(std::vector<SamplingRequest>& sampling_reqs, cudaStream_t& stream);
-#endif
-#ifdef ENABLE_ACL
-  Status Sampling(std::vector<SamplingRequest>& sampling_reqs, aclrtStream& stream);
-#endif
+  Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
 
  private:
   BatchSchedulerConfig batch_schedule_config_;
@@ -45,6 +40,9 @@ class Sampler {
   std::vector<float> host_topPs_;
   std::vector<float> host_temperatures_;
   std::vector<const float*> host_logits_;
+
+  // The context
+  std::shared_ptr<Context> context_;
 };
 
 }  // namespace ksana_llm
