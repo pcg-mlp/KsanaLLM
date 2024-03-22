@@ -3,77 +3,60 @@
 # ==============================================================================
 
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
-project(ksana_llm LANGUAGES CXX CUDA)
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
-set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
-
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
+option(WITH_CUDA "Enable CUDA" ON)
+option(WITH_ACL "Enable Ascend" OFF)
 option(WITH_TESTING "Enable testing" OFF)
 
-# dedicate for Nvidia GPU
-option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
-find_package(CUDA 11.8 REQUIRED)
-find_package(NCCL REQUIRED)
-find_package(Git QUIET)
-execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(WITH_CUDA)
+  project(ksana_llm LANGUAGES CXX CUDA)
+else()
+  project(LLMKernels LANGUAGES CXX)
+endif()
 
+if (NOT WITH_CUDA AND NOT WITH_ACL)
+  message(FATAL_ERROR "WITH_CUDA=OFF and WITH_ACL=OFF is not allow")
+endif()
+
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
+
+find_package(Git QUIET)
+
+if(WITH_CUDA)
+  # dedicate for Nvidia GPU
+  option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
+  find_package(CUDA 11.8 REQUIRED)
+  find_package(NCCL REQUIRED)
+  execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+  include(FlashAttention)
+endif()
+
 include(LLM_kernels)
-include(FlashAttention)
 include(base)
 
 # set compiler flags
 set(CXX_STD "17" CACHE STRING "C++ standard")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wall -O0 -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 
-set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS} -g3")
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++17 -g3")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl -g3")
-
-if(CUDA_PTX_VERBOSE_INFO)
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -v")
-endif()
-
-set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    -DWMMA -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -DWMMA -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
-
-set(CMAKE_C_FLAGS_DEBUG    "${CMAKE_C_FLAGS_DEBUG}    -Wall -O0 -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=0 -Wno-unknown-pragmas")
 set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0 -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall -DCUDA_PTX_FP8_F2FP_ENABLED")
-
 set(CMAKE_CXX_STANDARD "${CXX_STD}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD} -DCUDA_PTX_FP8_F2FP_ENABLED")
-
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
-set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3 -DCUDA_PTX_FP8_F2FP_ENABLED")
-set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
-message(STATUS "CMAKE_CUDA_FLAGS_RELEASE: ${CMAKE_CUDA_FLAGS_RELEASE}")
 
-# set CUDA related
-set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
-list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
-set(SM_SETS 80 86 89 90)
-# check if custom define SM
-if(NOT DEFINED SM)
-  foreach(SM_NUM IN LISTS SM_SETS)
-      set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM_NUM},code=\\\"sm_${SM_NUM},compute_${SM_NUM}\\\"")
-      list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
-      message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
-  endforeach()
-else()
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\"")
-  list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM})
-  message(STATUS "Assign GPU architecture (sm=${SM})")
+if(WITH_CUDA)
+  include(nvidia)
 endif()
 
-# TODO(karlluo): ABI detect by torch
-set(CMAKE_CXX_FLAGS "-std=c++17 -ggdb -O3 -g3 -gdwarf-4 -gstrict-dwarf -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=0 -Wno-unknown-pragmas")
+if(WITH_ACL)
+  include(ascend)
+endif()
 
 # set cmake output path
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -84,22 +67,19 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(COMMON_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/src
-  ${CUDA_PATH}/include
-)
-
-# set libs
-set(COMMON_LIB_DIRS
-  ${CUDA_PATH}/lib64
 )
 
 # set headers
 include_directories(
   ${COMMON_HEADER_DIRS}
+  ${CUDA_INC_DIRS}
+  ${ACL_INC_DIRS}
 )
 
 # set linked libraries
 link_directories(
-  ${COMMON_LIB_DIRS}
+  ${CUDA_LIB_DIRS}
+  ${ACL_LIB_DIRS}
 )
 
 if (WITH_TESTING)
@@ -116,20 +96,19 @@ if (WITH_TESTING)
 endif()
 
 # include torch
-set(CMAKE_CXX_STANDARD 17)
 set(PYTHON_PATH "python" CACHE STRING "Python path")
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch; print(torch.__version__,end='');"
 	  RESULT_VARIABLE _PYTHON_SUCCESS
 	  OUTPUT_VARIABLE TORCH_VERSION)
 if (TORCH_VERSION VERSION_LESS "1.5.0")
-message(FATAL_ERROR "PyTorch >= 1.5.0 is needed for TorchScript mode.")
+  message(FATAL_ERROR "PyTorch >= 1.5.0 is needed for TorchScript mode.")
 endif()
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import os; import torch;
 print(os.path.dirname(torch.__file__),end='');"
 	  RESULT_VARIABLE _PYTHON_SUCCESS
 	  OUTPUT_VARIABLE TORCH_DIR)
 if (NOT _PYTHON_SUCCESS MATCHES 0)
-message(FATAL_ERROR "Torch config Error.")
+  message(FATAL_ERROR "Torch config Error.")
 endif()
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_DIR})
 find_package(Torch REQUIRED)
@@ -138,24 +117,18 @@ print(sysconfig.get_python_inc());"
 	  RESULT_VARIABLE _PYTHON_SUCCESS
 	  OUTPUT_VARIABLE PY_INCLUDE_DIR)
 if (NOT _PYTHON_SUCCESS MATCHES 0)
-message(FATAL_ERROR "Python config Error.")
+  message(FATAL_ERROR "Python config Error.")
 endif()
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch;
 print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
 	  RESULT_VARIABLE _PYTHON_SUCCESS
 	  OUTPUT_VARIABLE USE_CXX11_ABI)
-message(STATUS "FlashAttention PY_INCLUDE_DIR ${PY_INCLUDE_DIR}")
 include_directories(${PY_INCLUDE_DIR})
 include_directories(${TORCH_DIR}/include/torch/csrc/api/include/)
 include_directories(${TORCH_DIR}/include/)
-
 find_package(PythonLibs REQUIRED)
 include_directories(${PYTHON_INCLUDE_DIRS})
-
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
-message(STATUS "find Python3_LIBRARIES ${Python3_LIBRARIES}")
-
-message(STATUS "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS}")
 
 add_subdirectory(3rdparty)
 add_subdirectory(examples)

@@ -10,7 +10,9 @@
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/utils/dtypes.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/nvidia/cuda_utils.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/utils/nvidia/cuda_utils.h"
+#endif
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {

@@ -1,7 +1,7 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #include "pytorch_file_tensor_loader.h"
 #include "logger.h"
-#include "ksana_llm/utils/nvidia/cuda_utils.h"
+// #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 namespace ksana_llm {
 // Constructor of PytorchFileTensorLoader that takes a file name as input

@@ -8,10 +8,15 @@ file(GLOB_RECURSE runtime_SRCS
 list(FILTER runtime_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "runtime_SRCS: ${runtime_SRCS}")
 
+set(runtime_nvidia_LIBS, "")
+if (WITH_CUDA)
+  list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublasLt -lcublas)
+endif()
+
 add_library(runtime STATIC ${runtime_SRCS})
 add_dependencies(runtime utils fmt gflags)
 target_link_libraries(runtime PUBLIC 
-  -lpthread -ldl gflags ${NCCL_LIBRARIES} -lcublas -lcublasLt -lcudart
+  -lpthread -ldl gflags ${utils_nvidia_LIBS}
   models utils 
 )
 

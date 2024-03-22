@@ -10,5 +10,10 @@ file(GLOB_RECURSE samplers_SRCS
 list(FILTER samplers_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "samplers_SRCS: ${samplers_SRCS}")
 
+set(samplers_nvidia_LIBS "")
+if (WITH_CUDA)
+	list(APPEND samplers_nvidia_LIBS llm_kernels_nvidia_kernel_greedy cudart)
+endif()
+
 add_library(samplers STATIC ${samplers_SRCS})
-target_link_libraries(samplers PUBLIC block_manager utils llm_kernels_nvidia_kernel_greedy cudart) 
+target_link_libraries(samplers PUBLIC block_manager utils ${samplers_nvidia_LIBS}) 

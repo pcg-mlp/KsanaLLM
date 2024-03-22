@@ -50,8 +50,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   profiler
   loguru
   gflags
-  # kernels
-  llm_kernels_nvidia_kernel_embedding
+  ${NCCL_LIBRARIES}
 )
 
 add_executable(ksana_llm main.cpp)

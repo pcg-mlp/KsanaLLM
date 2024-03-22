@@ -42,6 +42,8 @@ class LlamaWeight : public BaseWeight {
   int tensor_para_size_ = 1;
 
   std::shared_ptr<Context> context_{nullptr};
+
+  ModelConfig model_config_;
 };
 
 }  // namespace ksana_llm

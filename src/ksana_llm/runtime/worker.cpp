@@ -13,7 +13,10 @@ namespace ksana_llm {
 
 Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight, InferStage stage,
                        std::vector<ForwardRequest>& forward_reqs) {
+  // TODO(karlluo): confirm redundant usage
+#ifdef ENABLE_CUDA
   CUDA_CHECK(cudaSetDevice(rank_));
+#endif
 
   switch (stage) {
     case InferStage::STAGE_CONTEXT:
@@ -38,9 +41,12 @@ std::future<Status> Worker::ForwardAsync(std::shared_ptr<BaseModel> model, std::
 }
 
 Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs) {
+  // TODO(karlluo): confirm redundant usage
+#ifdef ENABLE_CUDA
   CUDA_CHECK(cudaSetDevice(rank_));
 
   sampler->Sampling(sampling_reqs, context_->GetComputeStreams()[rank_]);
+#endif
   return Status();
 }
 

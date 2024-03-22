@@ -52,6 +52,15 @@ std::string Tensor::GetNumpyType() const {
 }
 
 size_t Tensor::GetTypeSize(DataType dtype) {
+  size_t fp16_byte_size = 0ul;
+#ifdef ENABLE_CUDA
+  fp16_byte_size = sizeof(half);
+#endif
+
+#ifdef ENABLE_ACL
+  fp16_byte_size = sizeof(int16_t);
+#endif
+
   static const std::unordered_map<DataType, size_t> type_map{{TYPE_BOOL, sizeof(bool)},
                                                              {TYPE_BYTES, sizeof(char)},
                                                              {TYPE_UINT8, sizeof(uint8_t)},
@@ -62,13 +71,15 @@ size_t Tensor::GetTypeSize(DataType dtype) {
                                                              {TYPE_INT16, sizeof(int16_t)},
                                                              {TYPE_INT32, sizeof(int32_t)},
                                                              {TYPE_INT64, sizeof(int64_t)},
-#ifdef ENABLE_BF16
+#ifdef ENABLE_CUDA
+#  ifdef ENABLE_BF16
                                                              {TYPE_BF16, sizeof(__nv_bfloat16)},
-#endif
-#ifdef ENABLE_FP8
+#  endif
+#  ifdef ENABLE_FP8
                                                              {TYPE_FP8_E4M3, sizeof(__nv_fp8_e4m3)},
+#  endif
 #endif
-                                                             {TYPE_FP16, sizeof(half)},
+                                                             {TYPE_FP16, fp16_byte_size},
                                                              {TYPE_FP32, sizeof(float)},
                                                              {TYPE_FP64, sizeof(double)},
                                                              {TYPE_POINTER, sizeof(void*)}};
@@ -76,7 +87,7 @@ size_t Tensor::GetTypeSize(DataType dtype) {
 }
 
 void Tensor::SaveToFile(const std::string& file_path) {
-  return;
+#ifdef ENABLE_CUDA
   NLLM_LOG_DEBUG << fmt::format("Save {} To File {}", ToString(), file_path);
   // CUDA_CHECK(cudaDeviceSynchronize());
   size_t total_size = GetTotalBytes();
@@ -131,6 +142,7 @@ void Tensor::SaveToFile(const std::string& file_path) {
   // Tensor Data
   file.write(reinterpret_cast<const char*>(cpu_data), total_size);
   file.close();
+#endif
 }
 
 TensorMap::TensorMap(const std::unordered_map<std::string, Tensor>& tensor_map) {
@@ -199,7 +211,9 @@ Status CreateTensor(Tensor& tensor, const size_t total_bytes, const int rank, co
                                   const MemoryDevice memory_device, const StorageType storage_type);
 
 CREATE_TENSOR(float);
+#ifdef ENABLE_CUDA
 CREATE_TENSOR(half);
+#endif
 #ifdef ENABLE_BF16
 CREATE_TENSOR(__nv_bfloat16);
 #endif

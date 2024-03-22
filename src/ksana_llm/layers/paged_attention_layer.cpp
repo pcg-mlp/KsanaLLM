@@ -3,7 +3,13 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/paged_attention_layer.h"
-#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#endif
+
+#ifdef ENABLE_ACL
+#  include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+#endif
 
 namespace ksana_llm {
 
@@ -16,6 +22,7 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+#ifdef ENABLE_CUDA
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
@@ -74,6 +81,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
                             rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
                             workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, {},
                             qkv_workspace.GetPtr<void>());
+#endif
   return Status();
 }
 

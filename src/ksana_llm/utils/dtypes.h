@@ -6,7 +6,13 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <cuda_fp16.h>
+#ifdef ENABLE_CUDA
+#  include <cuda_fp16.h>
+#endif
+
+#ifdef ENABLE_ACL
+#  include <acl/acl.h>
+#endif
 
 namespace ksana_llm {
 
@@ -37,18 +43,21 @@ template <typename T>
 DataType GetTensorType() {
   if (std::is_same<T, float>::value || std::is_same<T, const float>::value) {
     return TYPE_FP32;
-  } else if (std::is_same<T, half>::value || std::is_same<T, const half>::value) {
+  }
+#ifdef ENABLE_CUDA
+  else if (std::is_same<T, half>::value || std::is_same<T, const half>::value) {
     return TYPE_FP16;
   }
-#ifdef ENABLE_BF16
+#  ifdef ENABLE_BF16
   else if (std::is_same<T, __nv_bfloat16>::value || std::is_same<T, const __nv_bfloat16>::value) {
     return TYPE_BF16;
   }
-#endif
-#ifdef ENABLE_FP8
+#  endif
+#  ifdef ENABLE_FP8
   else if (std::is_same<T, __nv_fp8_e4m3>::value || std::is_same<T, const __nv_fp8_e4m3>::value) {
     return TYPE_FP8_E4M3;
   }
+#  endif
 #endif
   else if (std::is_same<T, int>::value || std::is_same<T, const int>::value) {
     return TYPE_INT32;

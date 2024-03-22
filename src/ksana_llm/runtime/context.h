@@ -6,9 +6,12 @@
 #include <vector>
 
 #include "ksana_llm/block_manager/memory_block.h"
-#include "ksana_llm/utils/nvidia/cuda_utils.h"
-#include "ksana_llm/utils/nvidia/nccl_utils.h"
 #include "ksana_llm/utils/ret_code.h"
+
+#ifdef ENABLE_CUDA
+  #include "ksana_llm/utils/nvidia/cuda_utils.h"
+  #include "ksana_llm/utils/nvidia/nccl_utils.h"
+#endif
 
 namespace ksana_llm {
 
@@ -24,6 +27,7 @@ class Context {
 
   inline bool IsRunContextDecodeAndDecodeSerially() { return is_contextdecode_and_decode_run_serially_; }
 
+#ifdef ENABLE_CUDA
   std::vector<cudaMemPool_t>& GetMemoryPools() { return memory_pool_; }
 
   std::vector<cudaStream_t>& GetMemoryManageStreams() { return memory_manage_streams_; }
@@ -45,6 +49,7 @@ class Context {
   std::vector<cublasHandle_t>& GetCublasHandles() { return cublas_handles_; }
 
   std::vector<cublasLtHandle_t>& GetCublasLtHandles() { return cublaslt_handles_; }
+#endif
 
   void** GetCustomAllReduceBuffers() { return static_cast<void**>(reduce_buffers_.data()); }
 
@@ -68,6 +73,7 @@ class Context {
   // TODO(karlluo): load from environment
   bool is_contextdecode_and_decode_run_serially_{true};
 
+#ifdef ENABLE_CUDA
   // Nvidia GPU memory pool
   std::vector<cudaMemPoolProps> memory_pool_props_;
   std::vector<cudaMemPool_t> memory_pool_;
@@ -82,17 +88,18 @@ class Context {
   // nccl comms
   ncclUniqueId nccl_uid_;
   std::vector<NCCLParam> nccl_params_;
+  // cublas handles
+  std::vector<cublasHandle_t> cublas_handles_;
+  std::vector<cublasLtHandle_t> cublaslt_handles_;
+#endif
 
   std::vector<void*> reduce_buffers_;
   std::vector<void*> reduce_metas_;
   int max_reduce_inputs_num_{2};
   std::vector<std::vector<void*>> reduce_inputs_;
 
-  // cublas handles
-  std::vector<cublasHandle_t> cublas_handles_;
-  std::vector<cublasLtHandle_t> cublaslt_handles_;
-
  private:
+#ifdef ENABLE_CUDA
   // init gpu memory pool
   void InitGpuMemoryPool(const int worker_id);
 
@@ -104,6 +111,7 @@ class Context {
 
   // init nccl handle
   void InitNcclParam();
+#endif
 };
 
 }  // namespace ksana_llm

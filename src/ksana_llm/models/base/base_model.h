@@ -42,12 +42,14 @@ class BaseModel {
   // Record all buffer used
   std::vector<Tensor*> buffer_tensor_heap_;
 
-  // Stream for GPU dispatch task concurrency
+  // Stream for GPU/NPU dispatch task concurrency
+#ifdef ENABLE_CUDA
   cudaStream_t compute_stream_;
   cudaStream_t h2d_stream_;
   cudaStream_t d2h_stream_;
   cudaStream_t d2d_stream_;
   cudaStream_t nccl_stream_;
+#endif
 
  protected:
   // Create Buffer tensor

@@ -13,6 +13,8 @@
 #include "ksana_llm/runtime/context.h"
 
 namespace ksana_llm {
+
+#ifdef ENABLE_CUDA
 class ContextTest : public testing::Test {
  protected:
   void SetUp() override {}
@@ -92,5 +94,7 @@ TEST_F(ContextTest, ParallelConfigTest) {
     EXPECT_NE(context->GetCublasLtHandles()[rank_idx], nullptr);
   }
 }
+
+#endif
 
 }  // namespace ksana_llm

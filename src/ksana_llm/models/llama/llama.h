@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#ifdef ENABLE_CUDA
 #include "ksana_llm/layers/add_layer.h"
 #include "ksana_llm/layers/assemble_last_token_layer.h"
 #include "ksana_llm/layers/base_layer.h"
@@ -15,6 +16,8 @@
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
+#endif
+
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/models/llama/llama_weight.h"
 #include "ksana_llm/utils/status.h"
@@ -43,12 +46,15 @@ class Llama : public BaseModel {
   using BaseModel::rank_;
   using BaseModel::use_custom_all_reduce_;
 
+#ifdef ENABLE_CUDA
   using BaseModel::compute_stream_;
   using BaseModel::d2d_stream_;
   using BaseModel::d2h_stream_;
   using BaseModel::h2d_stream_;
   using BaseModel::nccl_stream_;
+#endif
 
+#ifdef ENABLE_CUDA
   std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;
   std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layer_;
@@ -61,6 +67,7 @@ class Llama : public BaseModel {
   std::shared_ptr<MatMulLayer> matmul_layer_;
   std::shared_ptr<AssembleLastTokenLayer> assemble_last_token_layer_;
   std::shared_ptr<CastLayer> cast_layer_;
+#endif
 
   int num_layer_;
   int max_seq_len_;
@@ -92,14 +99,18 @@ class Llama : public BaseModel {
   Tensor forward_shape_;
   Tensor cos_sin_cache_tensor_;
 
+#ifdef ENABLE_CUDA
   cudaEvent_t kvcache_offset_event_;
   cudaEvent_t rotary_embedding_event_;
   cudaEvent_t input_ids_event_;
   cudaEvent_t nccl_finish_event_;
   cudaEvent_t compute_ready_event_;
   cudaEvent_t logits_transfer_event_;
+#endif
 
  private:
+
+#ifdef ENABLE_CUDA
   void PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                       const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
                       cudaStream_t& stream, cudaEvent_t& event, bool is_context_stage = false);
@@ -120,6 +131,7 @@ class Llama : public BaseModel {
 
   void CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
                           std::vector<Tensor>& logits_float);
+#endif
 
   // refer to
   // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257

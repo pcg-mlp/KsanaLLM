@@ -16,8 +16,6 @@
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
 
-// This Tenosr class is modified from NVIDIA's FasterTransformer.
-
 namespace ksana_llm {
 
 // The storage type, contigous or segmented.

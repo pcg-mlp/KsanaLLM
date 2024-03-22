@@ -76,6 +76,17 @@ Status Environment::ParseConfig(const std::string &config_file) {
   enable_lora_adapter_ =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
 
+  std::string device_type_name =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global.device", "gpu");
+  if (device_type_name == "gpu") {
+    memory_device_ = MemoryDevice::MEMORY_GPU;
+  } else if (device_type_name == "ascend") {
+    memory_device_ = MemoryDevice::MEMORY_ASCEND;
+  } else {
+    throw std::invalid_argument(
+        fmt::format("setting.global.device in yaml is {} which is not supported", device_type_name));
+  }
+
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
     throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");
   }
@@ -191,6 +202,7 @@ Status Environment::ParseModelConfig(const std::string &model_name, const std::s
   model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_token_number;
   model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_input_len +
                                batch_manager_config_.batch_scheduler_config.max_output_len;
+  model_config.memory_device = memory_device_;
   model_configs_[model_config.name] = model_config;
 
   NLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
@@ -223,12 +235,33 @@ void Environment::InitializeBlockManagerConfig() {
   size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *
                       (model_config.head_num / GetTensorParallelSize()) * model_config.size_per_head;
   size_t block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+  size_t block_dtype_size = 0ul;
 
-  block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * sizeof(half);
-  block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * sizeof(half);
+#ifdef ENABLE_CUDA
+  if (memory_device_ == MemoryDevice::MEMORY_GPU) {
+    if (model_config.weight_data_type == DataType::TYPE_FP16) {
+      block_dtype_size = sizeof(half);
+    } else {
+      throw std::invalid_argument("Invalid quant_type");
+    }
+  }
+#endif
+
+#ifdef ENABLE_ACL
+  if (memory_device_ == MemoryDevice::MEMORY_ASCEND) {
+    if (model_config.weight_data_type == DataType::TYPE_FP16) {
+      block_dtype_size = sizeof(uint16_t);
+    } else {
+      throw std::invalid_argument("Invalid quant_type");
+    }
+  }
+#endif
+
+  block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
+  block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
 
   block_manager_config_.host_allocator_config.device = MemoryDevice::MEMORY_CPU_PINNED;
-  block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_GPU;
+  block_manager_config_.device_allocator_config.device = memory_device_;
 
   // TODO(yancyliu): should calculated through device memory useage.
   block_manager_config_.host_allocator_config.blocks_num = 512 * 10;
