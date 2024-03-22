@@ -244,6 +244,9 @@ class Environment {
   // The config of profiler.
   ProfilerConfig profiler_config_;
 
+  // The device for inference
+  MemoryDevice memory_device_{MemoryDevice::MEMORY_GPU};
+
   size_t tensor_parallel_size_{0};
   size_t pipeline_parallel_size_{0};
 

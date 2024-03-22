@@ -3,7 +3,9 @@
 ==============================================================================*/
 #pragma once
 
+#ifdef ENABLE_CUDA
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+#endif
 #include "ksana_llm/layers/base_layer.h"
 
 namespace ksana_llm {
@@ -23,7 +25,9 @@ class AttentionLayer : public BaseLayer {
   int head_size_;
   int stride_size_;
   bool is_causal_{true};
+  #ifdef ENABLE_CUDA
   llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
+  #endif
 };
 
 }  // namespace ksana_llm

@@ -5,12 +5,15 @@
 #include "ksana_llm/samplers/topk/topk_sampling.h"
 #include "ksana_llm/utils/logger.h"
 
-#include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/greedy.h"
-#include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/samplingTopKKernels.h"
+#ifdef ENABLE_CUDA
+#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/greedy.h"
+#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/samplingTopKKernels.h"
+#endif
 
 #include <cstdint>
 
 namespace ksana_llm {
+#ifdef ENABLE_CUDA
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandState_t* device_curandstates)
     : BaseSampling(max_batch_size, max_vocab_size) {
   float* logits = nullptr;
@@ -26,7 +29,20 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandS
   tensorrt_llm::kernels::invokeCurandBatchInitialize(device_curandstates, nullptr, max_batch_size,
                                                      static_cast<uint64_t*>(workspace_ + workspace_size_), 0);
 }
-TopkSampling::~TopkSampling() { GetBlockManager()->FreeContiguous(workspace_block_id_); }
+#endif
+
+#ifdef ENABLE_ACL
+TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size)
+    : BaseSampling(max_batch_size, max_vocab_size) {}
+#endif
+
+TopkSampling::~TopkSampling() {
+  if (workspace_size_ > 0) {
+    GetBlockManager()->FreeContiguous(workspace_block_id_);
+  }
+}
+
+#ifdef ENABLE_CUDA
 Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
                                  const SamplingConfig* sampling_config,
                                  SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
@@ -53,5 +69,15 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
   }
   return Status();
 }
+#endif
+
+#ifdef ENABLE_ACL
+Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
+                                 const SamplingConfig* sampling_config,
+                                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
+                                 aclrtStream& stream) {
+  return Status();
+}
+#endif
 
 }  // namespace ksana_llm

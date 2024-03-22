@@ -38,7 +38,7 @@ T* GetContiguousPtr(int block_id) {
 }
 
 // Get free & total memory in bytes of current selected device.
-Status GetDeviceMemoryInfo(size_t* free, size_t* total);
+Status GetDeviceMemoryInfo(MemoryDevice device, size_t* free, size_t* total);
 
 // Get free & total host memory in bytes.
 Status GetHostMemoryInfo(size_t* free, size_t* total);

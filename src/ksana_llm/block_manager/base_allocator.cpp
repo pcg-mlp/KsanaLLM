@@ -4,6 +4,7 @@
 
 #include "ksana_llm/block_manager/base_allocator.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {

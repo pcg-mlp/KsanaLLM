@@ -9,11 +9,18 @@
 
 #include "ATen/core/interned_strings.h"
 #include "ksana_llm/block_manager/host_allocator.h"
-#include "ksana_llm/block_manager/nvidia_allocator.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/block_manager/nvidia_allocator.h"
+#endif
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
+
+#ifdef ENABLE_ACL
+#  include "ksana_llm/block_manager/ascend_allocator.h"
+#  include "ksana_llm/utils/ascend/acl_utils.h"
+#endif
 
 namespace ksana_llm {
 
@@ -29,9 +36,25 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
 
   // Create device allocator for every device.
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    std::shared_ptr<NvidiaDeviceAllocator> device_allocator =
-        std::make_shared<NvidiaDeviceAllocator>(block_manager_config.device_allocator_config, context, worker_id);
-    device_allocators_.push_back(device_allocator);
+    if (block_manager_config.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+      std::shared_ptr<NvidiaDeviceAllocator> device_allocator =
+          std::make_shared<NvidiaDeviceAllocator>(block_manager_config.device_allocator_config, context, worker_id);
+      device_allocators_.push_back(device_allocator);
+#else
+      throw std::invalid_argument("Using NVIDIA GPU but not compile WITH_CUDA=ON");
+#endif
+    } else if (block_manager_config.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
+#ifdef ENABLE_ACL
+      std::shared_ptr<AscendDeviceAllocator> device_allocator =
+          std::make_shared<AscendDeviceAllocator>(block_manager_config.device_allocator_config, context, worker_id);
+      device_allocators_.push_back(device_allocator);
+#else
+      throw std::invalid_argument("Using Huawei Ascend but not compile WITH_ACL=ON");
+#endif
+    } else {
+      throw std::invalid_argument("Unknown device type during BlockManager construction");
+    }
   }
 }
 
@@ -74,7 +97,8 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
   size_t host_total, host_free;
   size_t device_total, device_free;
 
-  Status status = GetDeviceMemoryInfo(&device_free, &device_total);
+  Status status =
+      GetDeviceMemoryInfo(block_manager_config_.device_allocator_config.device, &device_free, &device_total);
   if (!status.OK()) {
     return status;
   }
@@ -112,11 +136,34 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
   return Status();
 }
 
-void BlockManager::SetDeviceId(int device_id) { CUDA_CHECK(cudaSetDevice(device_id)); }
+void BlockManager::SetDeviceId(int device_id) {
+  if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+    CUDA_CHECK(cudaSetDevice(device_id));
+#endif
+  } else if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
+#ifdef ENABLE_ACL
+    ACL_CHECK(aclrtSetDevice(device_id));
+#endif
+  } else {
+    throw std::invalid_argument("Unknown device type in BlockManager SetDeviceId");
+  }
+}
 
 int BlockManager::GetDeviceId() {
-  int device_id;
-  CUDA_CHECK(cudaGetDevice(&device_id));
+  int device_id = -1;
+  if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+    CUDA_CHECK(cudaGetDevice(&device_id));
+#endif
+  } else if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
+#ifdef ENABLE_ACL
+    ACL_CHECK(aclrtGetDevice(&device_id));
+#endif
+  } else {
+    throw std::invalid_argument("Unknown device type in BlockManager GetDeviceId");
+  }
+
   return device_id;
 }
 
@@ -192,12 +239,23 @@ Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<
   std::vector<void*> device_addrs;
   STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
 
-  cudaStream_t* stream = &(context_->GetD2HStreams()[device_id]);
-  // Copy from device to host.
-  for (size_t i = 0; i < device_blocks.size(); i++) {
-    CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, (*stream)));
+  if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+    cudaStream_t* stream = &(context_->GetD2HStreams()[device_id]);
+    // Copy from device to host.
+    for (size_t i = 0; i < device_blocks.size(); i++) {
+      CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, (*stream)));
+    }
+    CUDA_CHECK(cudaStreamSynchronize(*stream));
+#endif
+  } else if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
+#ifdef ENABLE_ACL
+    // TODO(karlluo): need implement
+    throw std::runtime_error("Not implement in SwapOut");
+#endif
+  } else {
+    throw std::invalid_argument("Unknown device type in SwapOut");
   }
-  CUDA_CHECK(cudaStreamSynchronize(*stream));
 
   // Free device blocks.
   device_allocators_[device_id]->FreeBlocks(device_blocks);
@@ -217,12 +275,23 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
   std::vector<void*> host_addrs;
   STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
 
-  cudaStream_t* stream = &(context_->GetH2DStreams()[device_id]);
-  // Copy from host to device.
-  for (size_t i = 0; i < host_blocks.size(); i++) {
-    CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, (*stream)));
+  if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+    cudaStream_t* stream = &(context_->GetH2DStreams()[device_id]);
+    // Copy from host to device.
+    for (size_t i = 0; i < host_blocks.size(); i++) {
+      CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, (*stream)));
+    }
+    CUDA_CHECK(cudaStreamSynchronize(*stream));
+#endif
+  } else if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
+#ifdef ENABLE_ACL
+    // TODO(karlluo): need implement
+    throw std::runtime_error("Not implement in SwapIn");
+#endif
+  } else {
+    throw std::invalid_argument("Unknown device type in SwapIn");
   }
-  CUDA_CHECK(cudaStreamSynchronize(*stream));
 
   // Free host blocks.
   host_allocator_->FreeBlocks(host_blocks);
@@ -301,5 +370,7 @@ Status BlockManager::FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cac
   }
   return Status();
 }
+
+const BlockManagerConfig& BlockManager::GetBlockManagerConfig() const { return block_manager_config_; }
 
 }  // namespace ksana_llm

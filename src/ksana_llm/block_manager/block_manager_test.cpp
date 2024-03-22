@@ -9,6 +9,9 @@
 #include "test.h"
 
 using namespace ksana_llm;
+
+#ifdef ENABLE_CUDA
+
 // 定义一个 BlockManagerTest 类，继承自 testing::Test
 class BlockManagerTest : public testing::Test {
  protected:
@@ -178,3 +181,5 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
 
   EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
+
+#endif

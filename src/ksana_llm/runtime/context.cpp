@@ -7,7 +7,9 @@
 
 namespace ksana_llm {
 
+#ifdef ENABLE_CUDA
 constexpr int CUDA_MEMPOOL_MIN_DRIVER_VERSION = 11030;
+#endif
 
 Context::Context(const int tensor_parallel_size, const int pipeline_parallel_size)
     : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
@@ -15,13 +17,16 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
     throw std::runtime_error("Only support pipeline_parallel_size == 1");
   }
 
+#ifdef ENABLE_CUDA
   device_num_ = GetDeviceNumber();
+#endif
 
   if (device_num_ < tensor_parallel_size_ * pipeline_parallel_size_) {
     throw std::runtime_error(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
                                          tensor_parallel_size_, device_num_));
   }
 
+#ifdef ENABLE_CUDA
   CUDA_CHECK(cudaDriverGetVersion(&driver_version_));
 
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
@@ -40,9 +45,11 @@ Context::Context(const int tensor_parallel_size, const int pipeline_parallel_siz
 
   // reset device id
   CUDA_CHECK(cudaSetDevice(defalt_device_num_));
+#endif
 }
 
 Context::~Context() {
+#ifdef ENABLE_CUDA
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     CUDA_CHECK(cudaSetDevice(worker_id));
 
@@ -65,8 +72,10 @@ Context::~Context() {
   d2d_streams_.clear();
   nccl_streams_.clear();
   nccl_params_.clear();
+#endif
 }
 
+#ifdef ENABLE_CUDA
 void Context::InitGpuMemoryPool(const int worker_id) {
   NLLM_LOG_DEBUG << "Init nvidia memroy pool on worker " << worker_id;
   if (driver_version_ >= CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
@@ -80,7 +89,9 @@ void Context::InitGpuMemoryPool(const int worker_id) {
     memory_pool_.emplace_back(std::move(mempool));
   }
 }
+#endif
 
+#ifdef ENABLE_CUDA
 void Context::InitCudaStreams(const int worker_id) {
   NLLM_LOG_DEBUG << "Init nvidia memroy_manage_stream on worker " << worker_id;
   cudaStream_t memory_manage_stream;
@@ -112,7 +123,9 @@ void Context::InitCudaStreams(const int worker_id) {
   CUDA_CHECK(cudaStreamCreate(&nccl_stream));
   nccl_streams_.emplace_back(std::move(nccl_stream));
 }
+#endif
 
+#ifdef ENABLE_CUDA
 void Context::InitCublasHandle(const int worker_id) {
   NLLM_LOG_DEBUG << "Init nvidia cublas/cublasLt on worker " << worker_id;
   cublasHandle_t cublas_handle;
@@ -125,7 +138,9 @@ void Context::InitCublasHandle(const int worker_id) {
   // binding compute stream to cublas
   CUDA_CHECK(cublasSetStream(cublas_handles_[worker_id], compute_streams_[worker_id]));
 }
+#endif
 
+#ifdef ENABLE_CUDA
 void Context::InitNcclParam() {
   reduce_metas_.resize(max_reduce_inputs_num_);
   reduce_buffers_.resize(tensor_parallel_size_);
@@ -147,5 +162,6 @@ void Context::InitNcclParam() {
   }
   NCCL_CHECK(ncclGroupEnd());
 }
+#endif
 
 }  // namespace ksana_llm

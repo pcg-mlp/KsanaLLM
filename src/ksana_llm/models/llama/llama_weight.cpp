@@ -3,7 +3,13 @@
 ==============================================================================*/
 
 #include "ksana_llm/models/llama/llama_weight.h"
-#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#endif
+
+#ifdef ENABLE_ACL
+#  include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+#endif
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 
@@ -40,7 +46,7 @@ LlamaWeight<T>::~LlamaWeight() {
 
 template <typename T>
 LlamaWeight<T>::LlamaWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : context_(context) {
+    : context_(context), model_config_(model_config) {
   model_path_ = model_config.path;
   rank_ = rank;
   if (!LoadLlamaWeightsMap(model_config).OK()) {
@@ -101,6 +107,7 @@ std::vector<std::string> LlamaWeight<T>::SearchLocalPath(const std::string& mode
 template <typename T>
 Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
   GetBlockManager()->SetDeviceId(rank_);
+#ifdef ENABLE_CUDA
   std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
 
   for (std::string& tensor_name : tensor_name_list) {
@@ -162,12 +169,14 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
       NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
   }
+#endif
   return Status();
 }
 
 template <typename T>
 Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size) {
   GetBlockManager()->SetDeviceId(rank_);
+#ifdef ENABLE_CUDA
 
   // permute qkv_tensor: permute((2, 0, 1))
   Tensor& last_qkv_tensor = weights_map_["empty_qkv_tensor"];
@@ -244,6 +253,8 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   weights_map_.erase("empty_mlp_tensor");
   weights_map_.erase("empty_lm_head_tensor");
   weights_map_.erase("empty_o_proj_tensor");
+
+#endif
   return Status();
 }
 
@@ -294,6 +305,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
 
   PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
 
+#ifdef ENABLE_CUDA
   // Convert BFP16 to FP16
   for (auto& data_type_iter : weights_data_type_map_) {
     if (data_type_iter.second == TYPE_BF16) {
@@ -303,6 +315,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     }
   }
   CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
+#endif
   return Status();
 }
 
@@ -342,6 +355,11 @@ Tensor LlamaWeight<T>::GetModelWeights(const std::string& weight_name) {
 }
 
 template class LlamaWeight<float>;
+#ifdef ENABLE_CUDA
 template class LlamaWeight<half>;
+#endif
+#ifdef ENABLE_ACL
+template class LlamaWeight<aclFloat16>;
+#endif
 
 }  // namespace ksana_llm

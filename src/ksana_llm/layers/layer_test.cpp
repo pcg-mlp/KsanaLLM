@@ -1,20 +1,21 @@
 /* Copyright 2023 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+#ifdef ENABLE_CUDA
 
-#include "flash_api.h"
-#include "ksana_llm/layers/activation_layer.h"
-#include "ksana_llm/layers/add_layer.h"
-#include "ksana_llm/layers/attention_layer.h"
-#include "ksana_llm/layers/emb_lookup_layer.h"
-#include "ksana_llm/layers/flash_attention_layer.h"
-#include "ksana_llm/layers/layernorm_layer.h"
-#include "ksana_llm/layers/matmul_layer.h"
-#include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
-#include "ksana_llm/layers/paged_attention_layer.h"
-#include "ksana_llm/layers/silu_mul_layer.h"
-#include "ksana_llm/utils/dtypes.h"
-#include "test.h"
+#  include "flash_api.h"
+#  include "ksana_llm/layers/activation_layer.h"
+#  include "ksana_llm/layers/add_layer.h"
+#  include "ksana_llm/layers/attention_layer.h"
+#  include "ksana_llm/layers/emb_lookup_layer.h"
+#  include "ksana_llm/layers/flash_attention_layer.h"
+#  include "ksana_llm/layers/layernorm_layer.h"
+#  include "ksana_llm/layers/matmul_layer.h"
+#  include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
+#  include "ksana_llm/layers/paged_attention_layer.h"
+#  include "ksana_llm/layers/silu_mul_layer.h"
+#  include "ksana_llm/utils/dtypes.h"
+#  include "test.h"
 
 namespace ksana_llm {
 
@@ -149,3 +150,4 @@ TEST_F(LayerTest, AttentionLayerTest) {
 }
 
 }  // namespace ksana_llm
+#endif

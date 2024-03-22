@@ -115,6 +115,9 @@ class BlockManager {
   // Fill prefix kv cache to input blocks vector
   Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks);
 
+  // Get block manager config
+  const BlockManagerConfig& GetBlockManagerConfig() const;
+
  private:
   // Calculate the block number.
   Status CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num);

@@ -7,6 +7,7 @@
 namespace ksana_llm {
 Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, context, rank);
+#ifdef ENABLE_CUDA
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
   int max_position_embeddings = std::any_cast<const int>(parameters[parameter_index++]);
@@ -25,6 +26,7 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   rotary_embedding_cuda_.SetConfig(cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, num_heads_,
                                    num_kv_heads_, stride_size_, is_neox, context_->GetComputeStreams()[rank_]);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
+#endif
   return Status();
 }
 

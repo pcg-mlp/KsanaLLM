@@ -3,7 +3,13 @@
 ==============================================================================*/
 #pragma once
 
+#ifdef ENABLE_CUDA
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#endif
+
+#ifdef ENABLE_ACL
+#include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+#endif
 #include "ksana_llm/layers/base_layer.h"
 
 namespace ksana_llm {

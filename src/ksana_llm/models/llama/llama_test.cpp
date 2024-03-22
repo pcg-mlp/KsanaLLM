@@ -2,14 +2,16 @@
  *
  * ==============================================================================*/
 
-#include "ksana_llm/models/llama/llama.h"
-#include <filesystem>
-#include "flash_api.h"
-#include "ksana_llm/models/llama/create_test_model.h"
-#include "ksana_llm/samplers/sampler.h"
-#include "test.h"
+#ifdef ENABLE_CUDA
+
+#  include "ksana_llm/models/llama/llama.h"
+#  include <filesystem>
+#  include "flash_api.h"
+#  include "ksana_llm/samplers/sampler.h"
+#  include "test.h"
 
 using namespace ksana_llm;
+
 // 定义一个 LlamaTest 类,继承自 testing::Test
 class LlamaTest : public testing::Test {
  protected:
@@ -199,3 +201,5 @@ TEST(TorchTensorTest, TorchTensorTest) {
   cudaFree(b_ptr);
   cudaFree(c_ptr);
 }
+
+#endif
