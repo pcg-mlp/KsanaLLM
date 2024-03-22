@@ -10,7 +10,7 @@ import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from transformers import GenerationConfig, LlamaTokenizer
+from transformers import GenerationConfig, AutoTokenizer
 from fastapi import FastAPI
 
 import asyncio
@@ -64,7 +64,7 @@ def streaming_generate(model_name, input_tokens, generation_config):
         for request_output in results_iterator:
             if request_output:
                 output_text = tokenizer.decode(
-                    unfinished_token + [request_output])
+                    unfinished_token + [request_output], skip_special_tokens=True)
                 if output_text[-1:] == "\uFFFD":
                     unfinished_token = unfinished_token + [request_output]
                     output_text = ""
@@ -86,7 +86,7 @@ def batch_generate(model_name, input_tokens, generation_config):
                                     generation_config=generation_config,
                                     streamer=None)
 
-    output_text = tokenizer.decode(results_tokens)
+    output_text = tokenizer.decode(results_tokens, skip_special_tokens=True)
     return JSONResponse(
         {"texts": output_text, "output_token_ids": results_tokens})
 
@@ -135,7 +135,7 @@ async def generate(request: Request) -> Response:
 
 if __name__ == "__main__":
     args = args_config()
-    tokenizer = LlamaTokenizer.from_pretrained(args.tokenizer_dir)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir)
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.

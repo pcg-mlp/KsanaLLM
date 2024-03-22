@@ -80,6 +80,7 @@ class Llama : public BaseModel {
   int block_token_num_;
   int block_size_;
   size_t max_token_num_{0ul};
+  bool qkv_add_bias_;
 
   Tensor reduce_tensor_;
   Tensor rank_tensor_0_;

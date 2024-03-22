@@ -25,6 +25,7 @@ KsanaLLM is flexible and easy to use with:
 vLLM seamlessly supports many Hugging Face models, including the following architectures:
 
 - LLaMA & LLaMA-2 (`meta-llama/Llama-2-70b-hf`, `lmsys/vicuna-13b-v1.3`, `young-geng/koala`, `openlm-research/open_llama_13b`, etc.)
+- Qwen (`Qwen1.5-14B-Chat`)
 
 ## Usage
 
