@@ -324,7 +324,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       BFloat16ToFloat16(tensor.GetPtr<void>(), tensor.GetElementNumber(), context_->GetComputeStreams()[rank_]);
     }
   }
-  CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_]));
+  CUDA_CHECK(cudaDeviceSynchronize());
 #endif
   return Status();
 }
