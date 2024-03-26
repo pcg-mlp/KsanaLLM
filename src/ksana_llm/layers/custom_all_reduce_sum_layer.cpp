@@ -54,9 +54,9 @@ Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors
 #ifdef ENABLE_CUDA
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetComputeStreams()[rank_]);
+    stream = &(context_->GetComputeStreams()[rank_].GetStreamIns());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_]);
+    stream = &(context_->GetNCCLStreams()[rank_].GetStreamIns());
   }
   if (context_->GetTensorParallelSize() > 1) {
     void* input = input_tensors[0].GetPtr<void>();

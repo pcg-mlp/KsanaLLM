@@ -102,7 +102,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
     size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
     STATUS_CHECK_FAILURE(CreateBufferTensor(rank_tensor_0_, {rank_data_sz}, TYPE_UINT8));
     STATUS_CHECK_FAILURE(CreateBufferTensor(rank_tensor_1_, {rank_data_sz}, TYPE_UINT8));
-    CUDA_CHECK(cudaEventRecord(create_reduce_tensor_event, context_->GetMemoryManageStreams()[rank_]));
+    CUDA_CHECK(cudaEventRecord(create_reduce_tensor_event, context_->GetMemoryManageStreams()[rank_].GetStreamIns()));
   }
 
   NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
@@ -146,11 +146,12 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   }
 
   if (use_custom_all_reduce_) {
-    CUDA_CHECK(cudaStreamWaitEvent(context_->GetMemoryManageStreams()[rank_], create_reduce_tensor_event));
+    CUDA_CHECK(
+        cudaStreamWaitEvent(context_->GetMemoryManageStreams()[rank_].GetStreamIns(), create_reduce_tensor_event));
     size_t reduce_buffer_size = 256;
 
     CUDA_CHECK(cudaMemsetAsync(reduce_tensor_.GetPtr<void>(), 0, reduce_buffer_size,
-                               context_->GetMemoryManageStreams()[rank_]));
+                               context_->GetMemoryManageStreams()[rank_].GetStreamIns()));
 
     size_t rank_data_sz = context_->GetTensorParallelSize() * 128;
     custom_all_reduce_sum_layer_0_->Init(
@@ -173,11 +174,11 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   CUDA_CHECK(cudaEventCreateWithFlags(&logits_transfer_event_, cudaEventDisableTiming));
 
   // init cuda stream from context
-  compute_stream_ = context_->GetComputeStreams()[rank_];
-  h2d_stream_ = context_->GetH2DStreams()[rank_];
-  d2h_stream_ = context_->GetD2HStreams()[rank_];
-  d2d_stream_ = context_->GetD2DStreams()[rank_];
-  nccl_stream_ = context_->GetNCCLStreams()[rank_];
+  compute_stream_ = context_->GetComputeStreams()[rank_].GetStreamIns();
+  h2d_stream_ = context_->GetH2DStreams()[rank_].GetStreamIns();
+  d2h_stream_ = context_->GetD2HStreams()[rank_].GetStreamIns();
+  d2d_stream_ = context_->GetD2DStreams()[rank_].GetStreamIns();
+  nccl_stream_ = context_->GetNCCLStreams()[rank_].GetStreamIns();
 #endif
 }
 

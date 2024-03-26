@@ -44,8 +44,7 @@ Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRe
   // TODO(karlluo): confirm redundant usage
 #ifdef ENABLE_CUDA
   CUDA_CHECK(cudaSetDevice(rank_));
-
-  sampler->Sampling(sampling_reqs, context_->GetComputeStreams()[rank_]);
+  sampler->Sampling(sampling_reqs, context_->GetComputeStreams()[rank_].GetStreamIns());
 #endif
   return Status();
 }

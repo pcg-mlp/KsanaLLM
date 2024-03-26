@@ -10,13 +10,18 @@ message(STATUS "runtime_SRCS: ${runtime_SRCS}")
 
 set(runtime_nvidia_LIBS, "")
 if (WITH_CUDA)
-  list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublasLt -lcublas)
+  list(APPEND runtime_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublasLt -lcublas)
+endif()
+
+set(runtime_ascend_LIBS, "")
+if (WITH_ACL)
+  list(APPEND runtime_ascend_LIBS ${ACL_SHARED_LIBS})
 endif()
 
 add_library(runtime STATIC ${runtime_SRCS})
 add_dependencies(runtime utils fmt gflags)
 target_link_libraries(runtime PUBLIC 
-  -lpthread -ldl gflags ${utils_nvidia_LIBS}
+  -lpthread -ldl gflags ${runtime_nvidia_LIBS} ${runtime_ascend_LIBS}
   models utils 
 )
 

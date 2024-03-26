@@ -12,9 +12,9 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    stream = &(context_->GetComputeStreams()[rank_]);
+    stream = &(context_->GetComputeStreams()[rank_].GetStreamIns());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_]);
+    stream = &(context_->GetNCCLStreams()[rank_].GetStreamIns());
   }
 
   if (context_->GetTensorParallelSize() > 1) {

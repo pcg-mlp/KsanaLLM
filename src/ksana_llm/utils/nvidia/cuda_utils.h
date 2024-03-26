@@ -65,6 +65,4 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
 
 #define CUDA_CHECK(val) CheckCUDAError((val), #val, __FILE__, __LINE__)
 
-int GetDeviceNumber();
-
 }  // namespace ksana_llm

@@ -3,10 +3,11 @@
 ==============================================================================*/
 
 #include "ksana_llm/utils/memory_utils.h"
+
 #include <memory>
+
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
-
 #ifdef ENABLE_ACL
 #  include "ksana_llm/utils/ascend/acl_utils.h"
 #endif

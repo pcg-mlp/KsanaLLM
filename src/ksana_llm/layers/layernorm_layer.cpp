@@ -26,7 +26,7 @@ Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
 #ifdef ENABLE_CUDA
   InvokeLayerNorm(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), rms_norm_eps_,
                   input_tensors[0].shape[0], input_tensors[0].shape[1], output_tensors[0].GetPtr<void>(),
-                  context_->GetComputeStreams()[rank_]);
+                  context_->GetComputeStreams()[rank_].GetStreamIns());
 #endif
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

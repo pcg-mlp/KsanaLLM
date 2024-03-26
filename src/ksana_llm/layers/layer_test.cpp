@@ -54,7 +54,7 @@ class LayerTest : public testing::Test {
     NLLM_LOG_WARNING << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_GPU;
 
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, MEMORY_GPU);
 
     // 使用配置创建一个 BlockManager 对象
     block_manager = new BlockManager(block_manager_config, context_);
@@ -86,7 +86,7 @@ class LayerTest : public testing::Test {
 };
 
 TEST_F(LayerTest, AttentionLayerTest) {
-  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1);
+  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, MEMORY_GPU);
   FlashAttentionLayer flash_attention_layer;
   int head_num = 32;
   int kv_head_num = 32;

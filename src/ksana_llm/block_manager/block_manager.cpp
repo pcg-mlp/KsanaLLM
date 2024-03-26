@@ -239,19 +239,24 @@ Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<
   std::vector<void*> device_addrs;
   STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
 
+  Stream& stream = context_->GetD2HStreams()[device_id];
   if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
 #ifdef ENABLE_CUDA
-    cudaStream_t* stream = &(context_->GetD2HStreams()[device_id]);
     // Copy from device to host.
     for (size_t i = 0; i < device_blocks.size(); i++) {
-      CUDA_CHECK(cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, (*stream)));
+      CUDA_CHECK(
+          cudaMemcpyAsync(host_addrs[i], device_addrs[i], block_size, cudaMemcpyDeviceToHost, stream.GetStreamIns()));
     }
-    CUDA_CHECK(cudaStreamSynchronize(*stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream.GetStreamIns()));
 #endif
   } else if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
 #ifdef ENABLE_ACL
-    // TODO(karlluo): need implement
-    throw std::runtime_error("Not implement in SwapOut");
+    // Copy from device to host.
+    for (size_t i = 0; i < device_blocks.size(); i++) {
+      ACL_CHECK(aclrtMemcpyAsync(host_addrs[i], block_size, device_addrs[i], block_size, ACL_MEMCPY_DEVICE_TO_HOST,
+                                 stream.GetStreamIns()));
+    }
+    ACL_CHECK(aclrtSynchronizeStream(stream.GetStreamIns()));
 #endif
   } else {
     throw std::invalid_argument("Unknown device type in SwapOut");
@@ -275,19 +280,24 @@ Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int
   std::vector<void*> host_addrs;
   STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
 
+  Stream& stream = context_->GetH2DStreams()[device_id];
   if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
 #ifdef ENABLE_CUDA
-    cudaStream_t* stream = &(context_->GetH2DStreams()[device_id]);
     // Copy from host to device.
     for (size_t i = 0; i < host_blocks.size(); i++) {
-      CUDA_CHECK(cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, (*stream)));
+      CUDA_CHECK(
+          cudaMemcpyAsync(device_addrs[i], host_addrs[i], block_size, cudaMemcpyHostToDevice, stream.GetStreamIns()));
     }
-    CUDA_CHECK(cudaStreamSynchronize(*stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream.GetStreamIns()));
 #endif
   } else if (block_manager_config_.device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
 #ifdef ENABLE_ACL
-    // TODO(karlluo): need implement
-    throw std::runtime_error("Not implement in SwapIn");
+    // Copy from host to device.
+    for (size_t i = 0; i < device_blocks.size(); i++) {
+      ACL_CHECK(aclrtMemcpyAsync(device_addrs[i], block_size, host_addrs[i], block_size, ACL_MEMCPY_HOST_TO_DEVICE,
+                                 stream.GetStreamIns()));
+    }
+    ACL_CHECK(aclrtSynchronizeStream(stream.GetStreamIns()));
 #endif
   } else {
     throw std::invalid_argument("Unknown device type in SwapIn");

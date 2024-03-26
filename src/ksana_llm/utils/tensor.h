@@ -9,12 +9,11 @@
 #include <vector>
 
 #include "ksana_llm/block_manager/block_manager.h"
-#include "ksana_llm/block_manager/memory_block.h"
 #include "ksana_llm/utils/dtypes.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
+#include "ksana_llm/utils/memory_utils.h"
 
 namespace ksana_llm {
 
