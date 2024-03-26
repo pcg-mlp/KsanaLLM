@@ -21,11 +21,11 @@ Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<T
   if (input_tensors[0].shape[0] == input_tensors[1].shape[0]) {
     InvokeAddBiasResidual(a, b, nullptr, static_cast<int>(input_tensors[0].shape[0]),
                           static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-                          context_->GetComputeStreams()[rank_]);
+                          context_->GetComputeStreams()[rank_].GetStreamIns());
   } else {
     InvokeAddBiasResidual(a, nullptr, b, static_cast<int>(input_tensors[0].shape[0]),
                           static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-                          context_->GetComputeStreams()[rank_]);
+                          context_->GetComputeStreams()[rank_].GetStreamIns());
   }
 #endif
   output_tensors[0].shape = input_tensors[0].shape;

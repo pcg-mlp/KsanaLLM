@@ -62,7 +62,7 @@ def streaming_generate(model_name, input_tokens, generation_config):
     def stream_results():
         unfinished_token = []
         for request_output in results_iterator:
-            if request_output:
+            if request_output is not None:
                 output_text = tokenizer.decode(
                     unfinished_token + [request_output], skip_special_tokens=True)
                 if output_text[-1:] == "\uFFFD":
@@ -104,7 +104,6 @@ async def generate(request: Request) -> Response:
     request_dict = await request.json()
     model_name = request_dict.pop("model_name")
     prompt_text = request_dict.pop("prompt")
-    prefix_pos = request_dict.pop("prefix_pos", None)
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
 

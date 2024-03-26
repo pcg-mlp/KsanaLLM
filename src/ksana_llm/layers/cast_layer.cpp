@@ -17,7 +17,7 @@ namespace ksana_llm {
 Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
 #ifdef ENABLE_CUDA
   HalfToFloat(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), input_tensors[0].GetElementNumber(),
-              output_tensors[0].GetPtr<void>(), context_->GetComputeStreams()[rank_]);
+              output_tensors[0].GetPtr<void>(), context_->GetComputeStreams()[rank_].GetStreamIns());
 #endif
   output_tensors[0].shape = input_tensors[0].shape;
   return Status();

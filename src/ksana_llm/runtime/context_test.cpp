@@ -14,7 +14,6 @@
 
 namespace ksana_llm {
 
-#ifdef ENABLE_CUDA
 class ContextTest : public testing::Test {
  protected:
   void SetUp() override {}
@@ -22,12 +21,14 @@ class ContextTest : public testing::Test {
   void TearDown() override {}
 };
 
-TEST_F(ContextTest, ParallelConfigTest) {
+#ifdef ENABLE_CUDA
+
+TEST_F(ContextTest, NvidiaInitTest) {
   EXPECT_THROW(
       {
         try {
-          std::shared_ptr<Context> context =
-              std::make_shared<Context>(/*tensor_parallel_size*/ 1, /*pipeline_parallel_size*/ 2);
+          std::shared_ptr<Context> context = std::make_shared<Context>(
+              /*tensor_parallel_size*/ 1, /*pipeline_parallel_size*/ 2, MemoryDevice::MEMORY_GPU);
         } catch (const std::runtime_error& e) {
           EXPECT_STREQ("Only support pipeline_parallel_size == 1", e.what());
           throw;
@@ -38,18 +39,21 @@ TEST_F(ContextTest, ParallelConfigTest) {
   EXPECT_THROW(
       {
         try {
-          std::shared_ptr<Context> context =
-              std::make_shared<Context>(/*tensor_parallel_size*/ 100, /*pipeline_parallel_size*/ 1);
+          std::shared_ptr<Context> context = std::make_shared<Context>(
+              /*tensor_parallel_size*/ 100, /*pipeline_parallel_size*/ 1, MemoryDevice::MEMORY_GPU);
         } catch (const std::runtime_error& e) {
           EXPECT_THAT(e.what(), testing::HasSubstr("tensor_parallel_size should not bigger than devices num:"));
           throw;
         }
       },
       std::runtime_error);
+}
 
+TEST_F(ContextTest, NvidiaCommonTest) {
   const int tensor_parallel_size = 2;
   const int pipeline_parallel_size = 1;
-  std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, pipeline_parallel_size);
+  std::shared_ptr<Context> context =
+      std::make_shared<Context>(tensor_parallel_size, pipeline_parallel_size, MemoryDevice::MEMORY_GPU);
   size_t total_rank_num = tensor_parallel_size * pipeline_parallel_size;
 
   EXPECT_EQ(context->GetComputeStreams().size(), total_rank_num);
@@ -69,12 +73,12 @@ TEST_F(ContextTest, ParallelConfigTest) {
 
   for (size_t rank_idx = 0; rank_idx < total_rank_num; ++rank_idx) {
     // check stream valid
-    CUDA_CHECK(cudaStreamSynchronize(context->GetComputeStreams()[rank_idx]));
-    CUDA_CHECK(cudaStreamSynchronize(context->GetMemoryManageStreams()[rank_idx]));
-    CUDA_CHECK(cudaStreamSynchronize(context->GetH2DStreams()[rank_idx]));
-    CUDA_CHECK(cudaStreamSynchronize(context->GetD2HStreams()[rank_idx]));
-    CUDA_CHECK(cudaStreamSynchronize(context->GetD2DStreams()[rank_idx]));
-    CUDA_CHECK(cudaStreamSynchronize(context->GetNCCLStreams()[rank_idx]));
+    CUDA_CHECK(cudaStreamSynchronize(context->GetComputeStreams()[rank_idx].GetStreamIns()));
+    CUDA_CHECK(cudaStreamSynchronize(context->GetMemoryManageStreams()[rank_idx].GetStreamIns()));
+    CUDA_CHECK(cudaStreamSynchronize(context->GetH2DStreams()[rank_idx].GetStreamIns()));
+    CUDA_CHECK(cudaStreamSynchronize(context->GetD2HStreams()[rank_idx].GetStreamIns()));
+    CUDA_CHECK(cudaStreamSynchronize(context->GetD2DStreams()[rank_idx].GetStreamIns()));
+    CUDA_CHECK(cudaStreamSynchronize(context->GetNCCLStreams()[rank_idx].GetStreamIns()));
 
     // check mem pool valid
     uint64_t mempool_threshold;
@@ -93,6 +97,36 @@ TEST_F(ContextTest, ParallelConfigTest) {
     EXPECT_NE(cublas_ver, -1);
     EXPECT_NE(context->GetCublasLtHandles()[rank_idx], nullptr);
   }
+}
+
+#endif
+
+#ifdef ENABLE_ACL
+
+TEST_F(ContextTest, AscendInitTest) {
+  EXPECT_THROW(
+      {
+        try {
+          std::shared_ptr<Context> context = std::make_shared<Context>(
+              /*tensor_parallel_size*/ 1, /*pipeline_parallel_size*/ 2, MemoryDevice::MEMORY_ASCEND);
+        } catch (const std::runtime_error& e) {
+          EXPECT_STREQ("Only support pipeline_parallel_size == 1", e.what());
+          throw;
+        }
+      },
+      std::runtime_error);
+
+  EXPECT_THROW(
+      {
+        try {
+          std::shared_ptr<Context> context = std::make_shared<Context>(
+              /*tensor_parallel_size*/ 100, /*pipeline_parallel_size*/ 1, MemoryDevice::MEMORY_ASCEND);
+        } catch (const std::runtime_error& e) {
+          EXPECT_THAT(e.what(), testing::HasSubstr("tensor_parallel_size should not bigger than devices num:"));
+          throw;
+        }
+      },
+      std::runtime_error);
 }
 
 #endif

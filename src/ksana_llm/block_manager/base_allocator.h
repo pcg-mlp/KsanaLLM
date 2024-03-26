@@ -8,6 +8,7 @@
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/block_manager/memory_block.h"
 
 namespace ksana_llm {
 

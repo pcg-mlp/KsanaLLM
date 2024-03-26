@@ -16,7 +16,7 @@ using namespace ksana_llm;
 class LlamaTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, MemoryDevice::MEMORY_GPU);
 
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
@@ -123,16 +123,16 @@ TEST_F(LlamaTest, ForwardTest) {
 
   std::vector<SamplingRequest> sample_reqs = {sample_req};
   std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id);
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id].GetStreamIns());
   EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
 
   // Decode
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id].GetStreamIns());
   EXPECT_EQ(29896, (*forward_reqs[0].output_tokens)[3]);
 
   EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id].GetStreamIns());
   EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
 
   CUDA_CHECK(cudaEventRecord(start));
@@ -147,7 +147,7 @@ TEST_F(LlamaTest, ForwardTest) {
 
   llama.reset();
   llama_weight.reset();
-  CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[device_id]));
+  CUDA_CHECK(cudaStreamSynchronize(context_->GetMemoryManageStreams()[device_id].GetStreamIns()));
   Py_Finalize();
   CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaEventDestroy(start));

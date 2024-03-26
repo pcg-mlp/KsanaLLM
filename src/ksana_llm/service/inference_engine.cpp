@@ -32,7 +32,7 @@ Status InferenceEngine::Initialize() {
     return Status(RET_INVALID_ARGUMENT, "The Environment is nullptr.");
   }
 
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetPipeLineParallelSize()));
+  context_.reset(new Context(env->GetTensorParallelSize(), env->GetPipeLineParallelSize(), env->GetMemoryDevice()));
 
   // Initialize global block manager.
   BlockManagerConfig block_manager_config;

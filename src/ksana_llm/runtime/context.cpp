@@ -3,6 +3,7 @@
 ==============================================================================*/
 #include "ksana_llm/runtime/context.h"
 #include "ksana_llm/runtime/worker.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
@@ -11,58 +12,76 @@ namespace ksana_llm {
 constexpr int CUDA_MEMPOOL_MIN_DRIVER_VERSION = 11030;
 #endif
 
-Context::Context(const int tensor_parallel_size, const int pipeline_parallel_size)
-    : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
+Context::Context(const int tensor_parallel_size, const int pipeline_parallel_size, const MemoryDevice device_type)
+    : tensor_parallel_size_(tensor_parallel_size),
+      pipeline_parallel_size_(pipeline_parallel_size),
+      device_type_(device_type) {
   if (pipeline_parallel_size_ != 1) {
     throw std::runtime_error("Only support pipeline_parallel_size == 1");
   }
 
-#ifdef ENABLE_CUDA
-  device_num_ = GetDeviceNumber();
-#endif
-
+  device_num_ = GetDeviceNumber(GetDevice());
   if (device_num_ < tensor_parallel_size_ * pipeline_parallel_size_) {
     throw std::runtime_error(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
                                          tensor_parallel_size_, device_num_));
   }
 
-#ifdef ENABLE_CUDA
-  CUDA_CHECK(cudaDriverGetVersion(&driver_version_));
-
+  // memory_manage_streams_.resize(device_num_);
+  // compute_streams_.resize(device_num_);
+  // h2d_streams_.resize(device_num_);
+  // d2h_streams_.resize(device_num_);
+  // d2d_streams_.resize(device_num_);
+  // nccl_streams_.resize(device_num_);
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
-    NLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
-
-    CUDA_CHECK(cudaSetDevice(worker_id));
-
-    InitGpuMemoryPool(worker_id);
-
-    InitCudaStreams(worker_id);
-
-    InitCublasHandle(worker_id);
+    InitStreams(worker_id);
   }
 
-  InitNcclParam();
+  if (device_type_ == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+    CUDA_CHECK(cudaDriverGetVersion(&driver_version_));
 
-  // reset device id
-  CUDA_CHECK(cudaSetDevice(defalt_device_num_));
+    for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
+      NLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
+
+      CUDA_CHECK(cudaSetDevice(worker_id));
+
+      InitGpuMemoryPool(worker_id);
+
+      InitCublasHandle(worker_id);
+    }
+
+    InitNcclParam();
+
+    // reset device id
+    CUDA_CHECK(cudaSetDevice(defalt_device_num_));
+#else
+    throw std::invalid_argument("Using NVIDIA GPU but not compile WITH_CUDA=ON");
 #endif
+  }
 }
 
 Context::~Context() {
-#ifdef ENABLE_CUDA
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
-    CUDA_CHECK(cudaSetDevice(worker_id));
+    memory_manage_streams_[worker_id].Destroy();
+    compute_streams_[worker_id].Destroy();
+    h2d_streams_[worker_id].Destroy();
+    d2h_streams_[worker_id].Destroy();
+    d2d_streams_[worker_id].Destroy();
+    nccl_streams_[worker_id].Destroy();
 
-    CUDA_CHECK(cudaStreamDestroy(compute_streams_[worker_id]));
-    CUDA_CHECK(cudaStreamDestroy(h2d_streams_[worker_id]));
-    CUDA_CHECK(cudaStreamDestroy(d2h_streams_[worker_id]));
-    CUDA_CHECK(cudaStreamDestroy(d2d_streams_[worker_id]));
-    CUDA_CHECK(cudaStreamDestroy(nccl_streams_[worker_id]));
-
-    CUDA_CHECK(cublasDestroy(cublas_handles_[worker_id]));
-    CUDA_CHECK(cublasLtDestroy(cublaslt_handles_[worker_id]));
-
-    NCCL_CHECK(DestroyNCCLParam(nccl_params_[worker_id]));
+    if (device_type_ == MemoryDevice::MEMORY_GPU) {
+#ifdef ENABLE_CUDA
+      CUDA_CHECK(cudaSetDevice(worker_id));
+      CUDA_CHECK(cublasDestroy(cublas_handles_[worker_id]));
+      CUDA_CHECK(cublasLtDestroy(cublaslt_handles_[worker_id]));
+      NCCL_CHECK(DestroyNCCLParam(nccl_params_[worker_id]));
+#else
+      throw std::invalid_argument("Using NVIDIA GPU but not compile WITH_CUDA=ON");
+#endif
+    } else if (device_type_ == MemoryDevice::MEMORY_ASCEND) {
+    } else {
+      throw std::invalid_argument("Unknown device type during Stream construction");
+    }
   }
 
   memory_manage_streams_.clear();
@@ -71,8 +90,6 @@ Context::~Context() {
   d2h_streams_.clear();
   d2d_streams_.clear();
   nccl_streams_.clear();
-  nccl_params_.clear();
-#endif
 }
 
 #ifdef ENABLE_CUDA
@@ -91,39 +108,14 @@ void Context::InitGpuMemoryPool(const int worker_id) {
 }
 #endif
 
-#ifdef ENABLE_CUDA
-void Context::InitCudaStreams(const int worker_id) {
-  NLLM_LOG_DEBUG << "Init nvidia memroy_manage_stream on worker " << worker_id;
-  cudaStream_t memory_manage_stream;
-  CUDA_CHECK(cudaStreamCreate(&memory_manage_stream));
-  memory_manage_streams_.emplace_back(std::move(memory_manage_stream));
-
-  NLLM_LOG_DEBUG << "Init nvidia compute_stream on worker " << worker_id;
-  cudaStream_t compute_stream;
-  CUDA_CHECK(cudaStreamCreate(&compute_stream));
-  compute_streams_.emplace_back(std::move(compute_stream));
-
-  NLLM_LOG_DEBUG << "Init nvidia h2d_stream on worker " << worker_id;
-  cudaStream_t h2d_stream;
-  CUDA_CHECK(cudaStreamCreate(&h2d_stream));
-  h2d_streams_.emplace_back(std::move(h2d_stream));
-
-  NLLM_LOG_DEBUG << "Init nvidia d2h_stream on worker " << worker_id;
-  cudaStream_t d2h_stream;
-  CUDA_CHECK(cudaStreamCreate(&d2h_stream));
-  d2h_streams_.emplace_back(std::move(d2h_stream));
-
-  NLLM_LOG_DEBUG << "Init nvidia d2d_stream on worker " << worker_id;
-  cudaStream_t d2d_stream;
-  CUDA_CHECK(cudaStreamCreate(&d2d_stream));
-  d2d_streams_.emplace_back(std::move(d2d_stream));
-
-  NLLM_LOG_DEBUG << "Init nvidia nccl_stream on worker " << worker_id;
-  cudaStream_t nccl_stream;
-  CUDA_CHECK(cudaStreamCreate(&nccl_stream));
-  nccl_streams_.emplace_back(std::move(nccl_stream));
+void Context::InitStreams(const int worker_id) {
+  memory_manage_streams_.emplace_back(worker_id, device_type_);
+  compute_streams_.emplace_back(worker_id, device_type_);
+  h2d_streams_.emplace_back(worker_id, device_type_);
+  d2h_streams_.emplace_back(worker_id, device_type_);
+  d2d_streams_.emplace_back(worker_id, device_type_);
+  nccl_streams_.emplace_back(worker_id, device_type_);
 }
-#endif
 
 #ifdef ENABLE_CUDA
 void Context::InitCublasHandle(const int worker_id) {
@@ -136,7 +128,7 @@ void Context::InitCublasHandle(const int worker_id) {
   cublaslt_handles_.emplace_back(cublaslt_handle);
 
   // binding compute stream to cublas
-  CUDA_CHECK(cublasSetStream(cublas_handles_[worker_id], compute_streams_[worker_id]));
+  CUDA_CHECK(cublasSetStream(cublas_handles_[worker_id], compute_streams_[worker_id].GetStreamIns()));
 }
 #endif
 

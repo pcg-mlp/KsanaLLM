@@ -5,12 +5,4 @@
 
 #include <iostream>
 
-namespace ksana_llm {
-
-int GetDeviceNumber() {
-  int device = 0;
-  CUDA_CHECK(cudaGetDeviceCount(&device));
-  return device;
-}
-
-}  // namespace ksana_llm
+namespace ksana_llm {}  // namespace ksana_llm

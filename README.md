@@ -11,6 +11,7 @@ KsanaLLM is fast with:
 - Continuous batching of incoming requests
 - Fast model execution with CUDA graph
 - Optimized CUDA kernels
+- Introduce high performance kernel from vllm, TensorRT-LLM, FastTransformers.
 
 KsanaLLM is flexible and easy to use with:
 
@@ -22,7 +23,7 @@ KsanaLLM is flexible and easy to use with:
 - Support NVIDIA GPUs and Huawei Ascend NPU
 - (Experimental) Prefix caching support
 
-vLLM seamlessly supports many Hugging Face models, including the following architectures:
+KsanaLLM seamlessly supports many Hugging Face models, including the following architectures:
 
 - LLaMA & LLaMA-2 (`meta-llama/Llama-2-70b-hf`, `lmsys/vicuna-13b-v1.3`, `young-geng/koala`, `openlm-research/open_llama_13b`, etc.)
 - Qwen (`Qwen1.5-14B-Chat`)

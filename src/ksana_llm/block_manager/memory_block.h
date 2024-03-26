@@ -3,23 +3,9 @@
 ==============================================================================*/
 #pragma once
 #include <cstdint>
+#include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
-
-// The memory device.
-enum MemoryDevice {
-  // CPU
-  MEMORY_CPU,
-
-  // CPU with pinned memory.
-  MEMORY_CPU_PINNED,
-
-  // NVIDIA GPU
-  MEMORY_GPU,
-
-  // HUAWEI Ascend
-  MEMORY_ASCEND
-};
 
 // The memory block information.
 struct MemoryBlock {

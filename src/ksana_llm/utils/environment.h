@@ -12,9 +12,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ksana_llm/block_manager/memory_block.h"
 #include "ksana_llm/utils/dtypes.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/memory_device.h"
 
 namespace ksana_llm {
 
@@ -232,6 +232,8 @@ class Environment {
   size_t GetTensorParallelSize() { return tensor_parallel_size_; }
 
   size_t GetPipeLineParallelSize() { return pipeline_parallel_size_; }
+
+  MemoryDevice GetMemoryDevice() { return memory_device_; }
 
  private:
   // Calculate block size via model configs.
