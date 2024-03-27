@@ -98,11 +98,7 @@ void InferRequest::ResetInferStage() {
 size_t InferRequest::GetStepTokenNumber() {
   size_t step_token_num = 1;
   if (infer_stage == STAGE_CONTEXT) {
-    if (is_use_prefix_cache) {
-      step_token_num += (output_tokens.size() - prefix_cache_len);
-    } else {
-      step_token_num += output_tokens.size();
-    }
+    step_token_num += output_tokens.size();
   }
   return step_token_num;
 }
