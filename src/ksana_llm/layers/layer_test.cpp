@@ -3,7 +3,12 @@
 ==============================================================================*/
 #ifdef ENABLE_CUDA
 
-#  include "flash_api.h"
+#  ifdef ENABLE_FLASH_ATTN_2
+#    include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
+#  else
+#    include "flash_api.h"
+#  endif
+
 #  include "ksana_llm/layers/activation_layer.h"
 #  include "ksana_llm/layers/add_layer.h"
 #  include "ksana_llm/layers/attention_layer.h"

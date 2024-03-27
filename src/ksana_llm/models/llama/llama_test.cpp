@@ -6,7 +6,11 @@
 
 #  include "ksana_llm/models/llama/llama.h"
 #  include <filesystem>
-#  include "flash_api.h"
+#  ifdef ENABLE_FLASH_ATTN_2
+#    include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
+#  else
+#    include "flash_api.h"
+#  endif
 #  include "ksana_llm/samplers/sampler.h"
 #  include "test.h"
 
