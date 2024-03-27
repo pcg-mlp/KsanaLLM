@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.8)
 
 file(GLOB_RECURSE endpoints_SRCS
-		 ${PROJECT_SOURCE_DIR}/src/ksana_llm/endpoints/*.cpp)
+	${PROJECT_SOURCE_DIR}/src/ksana_llm/endpoints/*.cpp)
 list(FILTER endpoints_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "endpoints_SRCS: ${endpoints_SRCS}")
 

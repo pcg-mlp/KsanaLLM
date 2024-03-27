@@ -7,7 +7,11 @@
 #include <fstream>
 #include <iostream>
 
-#include "flash_api.h"
+#ifdef ENABLE_FLASH_ATTN_2
+#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
+#else
+#  include "flash_api.h"
+#endif
 
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
@@ -99,12 +103,22 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
                                        reinterpret_cast<size_t*>(seqlen), reinterpret_cast<int*>(block_offset),
                                        block_size, batch, total_tokens, num_heads, head_size, stride_size, stream);
 
-  // flash attention
+// flash attention 2 or flash attention 1
+#ifdef ENABLE_FLASH_ATTN_2
+  at::Tensor q_tmp_tensor = torch::reshape(q_tensor, {total_tokens, num_heads, head_size});
+  c10::optional<at::Tensor> seqused_k = c10::nullopt;
+  c10::optional<at::Tensor> alibi_slopes = c10::nullopt;
+  mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
+                 torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor,
+                 seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes, max_tokens,
+                 max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+#else
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
                              torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
                              torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor,
                              seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens, max_tokens,
                              0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+#endif
 }
 
 template <typename T>

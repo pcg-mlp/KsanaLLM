@@ -15,7 +15,7 @@ include(external/nlohmann_json)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src
-	${PROJECT_SOURCE_DIR}/tests
+  ${PROJECT_SOURCE_DIR}/tests
   ${THIRD_PARTY_PATH}/install/loguru
   ${THIRD_PARTY_PATH}/pybind11/include
   ${THIRD_PARTY_PATH}/download/fmt/include
@@ -35,17 +35,17 @@ add_subdirectory(profiler)
 add_subdirectory(utils)
 
 add_library(ksana_llm_libs INTERFACE)
-target_link_libraries(ksana_llm_libs INTERFACE 
+target_link_libraries(ksana_llm_libs INTERFACE
   kernels
   layers
   models
   plugins
   service
   utils
-  batch_manager 
+  batch_manager
   block_manager
   runtime
-  endpoints 
+  endpoints
   samplers
   profiler
   loguru
@@ -54,9 +54,8 @@ target_link_libraries(ksana_llm_libs INTERFACE
 )
 
 add_executable(ksana_llm main.cpp)
-target_link_libraries(ksana_llm PUBLIC 
+target_link_libraries(ksana_llm PUBLIC
   -lpthread -ldl ksana_llm_libs
 )
 
 add_subdirectory(torch_op)
-

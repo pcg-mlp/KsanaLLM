@@ -41,6 +41,9 @@ sudo docker run -itd --name xxx_container_name --network host --privileged \
 # For Huawei Ascend NPU
 sudo docker run -itd --name xxx_container_name --network host --privileged \
     mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.1 bash
+
+# to use flash attention 2
+pip install flash_attn==2.5.6 --no-deps
 ```
 - replace xxx_container_name with real container name.
 - replace xxx in ```/dev/nvidiaxxx``` with GPU card index. For multiple cards, add ```--device /dev/nvidiaxxx``` in the command
