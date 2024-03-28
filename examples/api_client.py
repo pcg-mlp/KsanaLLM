@@ -25,12 +25,12 @@ def post_http_request(prompt: str,
         "n": n,
         "stream": stream,
         "sampling_config": {
-            "temperature": 0.0,
+            "temperature": 0.7,
             "topk": 1,
             "topp": 0.0
         },
     }
-    response = requests.post(api_url, headers=headers, json=pload, stream=True)
+    response = requests.post(api_url, headers=headers, json=pload, stream=stream)
     return response
 
 
@@ -55,9 +55,9 @@ def get_response(response: requests.Response) -> List[str]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--n", type=int, default=4)
+    parser.add_argument("--n", type=int, default=1)
     parser.add_argument("--prompt", type=str, default="Shanghai is")
     parser.add_argument("--stream", action="store_true")
     args = parser.parse_args()
