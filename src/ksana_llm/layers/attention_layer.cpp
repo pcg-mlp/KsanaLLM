@@ -30,6 +30,8 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   if (rope_scaling_factor_config.type == "dynamic") {
     rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
     scaling_factor = rope_scaling_factor_config.factor;
+  } else if (rope_scaling_factor_config.type != "default") {
+    throw std::invalid_argument(fmt::format("Unsupport rope scaling type: {}", rope_scaling_factor_config.type));
   }
 
   rotary_embedding_cuda_.SetConfig(

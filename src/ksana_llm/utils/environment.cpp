@@ -61,6 +61,8 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   if (!rope_scaling_setting.is_null()) {
     model_config.rope_scaling_factor_config.type = rope_scaling_setting.value("type", "default");
     model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
+    NLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
+                                  model_config.rope_scaling_factor_config.factor);
   }
 
   size_t size_per_head = model_config.hidden_units / model_config.head_num;
