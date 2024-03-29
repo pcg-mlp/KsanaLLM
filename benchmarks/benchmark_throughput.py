@@ -21,7 +21,7 @@ from tqdm.asyncio import tqdm
 import prefix_cache_reader
 
 # (prompt len, output len, latency)
-REQUEST_LATENCY: List[Tuple[int, int, float]] = []
+REQUEST_LATENCY: List[Tuple[int, int, int, int, float]] = []
 
 
 def args_config():
@@ -161,16 +161,19 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
 
+    output_token_num = len(output.get("output_token_ids", ""))
+    input_token_num = len(output.get("input_token_ids", ""))
     if backend == "ksana":
         output_text = output.get("texts", "").strip()
     elif backend == "vllm":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
+        output_token_num = len(output.get("output_token_ids")[0])
     output_len = len(output_text)
     result_list[req_id] = output_text
     print("")
     REQUEST_LATENCY.append(
-        (len(prompt), output_len if output_len > 0 else 1, request_latency))
+        (len(prompt), output_len if output_len > 0 else 1, input_token_num, output_token_num, request_latency))
     pbar.update(1)
 
 
@@ -207,6 +210,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
     async for req_id, prompt in generate_prompt_async(inputs,
                                                       args.request_rate):
         prompt = "[INST]%s[/INST]" % prompt
+        #prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n" % prompt # qwen模型
         task = asyncio.create_task(
             send_request_async(prompt, api_url, req_id, result_list, pbar,
                                args.backend))
@@ -250,23 +254,36 @@ def main(args: argparse.Namespace):
     print(f"Throughput: {len(inputs) / benchmark_time:.2f} requests/s")
 
     # Compute the latency statistics.
-    avg_latency = np.mean([latency for _, _, latency in REQUEST_LATENCY])
+    avg_latency = np.mean([latency for _, _, _, _, latency in REQUEST_LATENCY])
     avg_input_len = np.mean(
-        [prompt_len for prompt_len, _, _ in REQUEST_LATENCY])
+        [prompt_len for prompt_len, _, _, _, _ in REQUEST_LATENCY])
     avg_output_len = np.mean(
-        [output_len for _, output_len, _ in REQUEST_LATENCY])
+        [output_len for _, output_len, _, _, _ in REQUEST_LATENCY])
+    avg_input_tokens_num = np.mean(
+        [input_tokens_num for _, _, input_tokens_num, _, _ in REQUEST_LATENCY])
+    avg_output_tokens_num = np.mean(
+        [output_tokens_num for _, _, _, output_tokens_num, _ in REQUEST_LATENCY])
     print(f"Average latency: {avg_latency:.2f} s")
     print(f"Average input len: {avg_input_len:.2f} chars")
     print(f"Average output len: {avg_output_len:.2f} chars")
-    avg_per_token_latency = np.mean([
+    print(f"Average input len: {avg_input_tokens_num:.2f} tokens")
+    print(f"Average output len: {avg_output_tokens_num:.2f} tokens")
+
+    avg_per_char_latency = np.mean([
         latency / (prompt_len + output_len)
-        for prompt_len, output_len, latency in REQUEST_LATENCY
+        for prompt_len, output_len, _, _, latency in REQUEST_LATENCY
     ])
-    print(f"Average latency per token: {avg_per_token_latency:.2f} s")
-    avg_per_output_token_latency = np.mean(
-        [latency / output_len for _, output_len, latency in REQUEST_LATENCY])
-    print("Average latency per output token: "
-          f"{avg_per_output_token_latency:.2f} s")
+    print(f"Average latency per char: {avg_per_char_latency:.2f} s")
+    avg_per_output_char_latency = np.mean(
+        [latency / output_len for _, output_len, _, _, latency in REQUEST_LATENCY])
+    print("Average latency per output char: "
+          f"{avg_per_output_char_latency:.2f} s")
+
+    avg_per_token_sec = (avg_input_tokens_num + avg_output_tokens_num) * len(REQUEST_LATENCY) / benchmark_time
+    print(f"Average token per sec: {avg_per_token_sec:.2f} tokens")
+    avg_per_output_token_sec = avg_output_tokens_num * len(REQUEST_LATENCY) / benchmark_time
+    print("Average output token per sec: "
+          f"{avg_per_output_token_sec:.2f} tokens")
 
     if args.output_csv != "":
         with open(args.output_csv, "w", newline='') as fs:
