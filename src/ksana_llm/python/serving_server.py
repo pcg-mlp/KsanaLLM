@@ -88,7 +88,7 @@ def batch_generate(model_name, input_tokens, generation_config):
 
     output_text = tokenizer.decode(results_tokens, skip_special_tokens=True)
     return JSONResponse(
-        {"texts": output_text, "output_token_ids": results_tokens})
+        {"texts": output_text, "output_token_ids": results_tokens, "input_token_ids": input_tokens})
 
 
 @app.post("/generate")
