@@ -4,7 +4,10 @@
 #pragma once
 
 #ifdef ENABLE_CUDA
+#  include <optional>
+
 #  include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+#  include "csrc/kernels/nvidia/alibi/alibi.h"
 #endif
 
 #include "ksana_llm/layers/base_layer.h"
@@ -25,9 +28,11 @@ class AttentionLayer : public BaseLayer {
   int num_kv_heads_;
   int head_size_;
   int stride_size_;
+  int tensor_para_size_;
   bool is_causal_{true};
 #ifdef ENABLE_CUDA
   llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
+  std::optional<void*> alibi_slopes_ = {};
 #endif
 };
 

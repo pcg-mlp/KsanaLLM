@@ -134,7 +134,7 @@ async def generate(request: Request) -> Response:
 
 if __name__ == "__main__":
     args = args_config()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir, trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.

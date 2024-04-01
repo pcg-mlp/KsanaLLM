@@ -105,8 +105,9 @@ TEST_F(LayerTest, AttentionLayerTest) {
   RoPEScalingFactor rope_scaling_factor;
   CreateHalfDataTypeTensor(cos_sin_cache_tensor, {rotary_embedding, max_position_embeddings}, GetDataType<half>());
   EXPECT_TRUE(flash_attention_layer
-                  .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, rotary_embedding,
-                         rope_theta, is_neox, std::any(cos_sin_cache_tensor.GetPtr<half>()), rope_scaling_factor},
+                  .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, int(1), rotary_embedding,
+                         rope_theta, is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<half>()),
+                         rope_scaling_factor},
                         context, 0)
                   .OK());
 
@@ -147,7 +148,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   PagedAttentionLayer attention_layer;
   EXPECT_TRUE(attention_layer
                   .Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num, static_cast<int>(size_per_head),
-                         stride_size, rotary_embedding, rope_theta, is_neox,
+                         stride_size, int(1), rotary_embedding, rope_theta, is_neox, bool(false),
                          std::any(cos_sin_cache_tensor.GetPtr<half>()), rope_scaling_factor},
                         context, 0)
                   .OK());

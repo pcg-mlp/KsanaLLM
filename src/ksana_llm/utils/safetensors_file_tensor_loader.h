@@ -21,6 +21,8 @@ class SafeTensorsLoader : public BaseFileTensorLoader {
 
   DataType GetTensorDataType(const std::string& tensor_name);
 
+  std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
+
  private:
   // Load the PyTorch binary file
   void LoadSafeTensors();
@@ -34,6 +36,7 @@ class SafeTensorsLoader : public BaseFileTensorLoader {
   std::unordered_map<std::string, size_t> tensor_offset_map_;
   std::unordered_map<std::string, size_t> tensor_size_map_;
   std::unordered_map<std::string, DataType> tensor_data_type_map_;
+  std::unordered_map<std::string, std::vector<size_t>> tensor_shape_map_;
 
   char* weights_buffer_ = nullptr;
 };

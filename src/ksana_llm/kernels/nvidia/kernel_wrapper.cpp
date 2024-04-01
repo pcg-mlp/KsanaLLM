@@ -80,8 +80,9 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
 
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<half>& rotary_embedding_cuda, int total_tokens,
-                 int max_tokens, int batch, int num_heads, int head_size, int stride_size, bool is_causal, int rank,
-                 int block_size, void** k_list, void** v_list, void* block_offset, cudaStream_t stream) {
+                 int max_tokens, int batch, int num_heads, int head_size, int stride_size, int tensor_para_size,
+                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* block_offset,
+                 const std::optional<void*>& alibi_slopes, cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat16);
   torch::Tensor qkv_tensor = torch::from_blob(qkv_ptr, {total_tokens, num_heads * head_size * 3}, options);
   auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
@@ -95,10 +96,12 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   torch::Tensor k_tensor = tt[1];
   torch::Tensor v_tensor = tt[2];
 
-  rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                 reinterpret_cast<half*>(q_tensor.data_ptr()),
-                                 reinterpret_cast<half*>(k_tensor.data_ptr()), total_tokens, stream);
-  rotary_embedding_cuda.Forward();
+  if (!alibi_slopes.has_value()) {
+    rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                   reinterpret_cast<half*>(q_tensor.data_ptr()),
+                                   reinterpret_cast<half*>(k_tensor.data_ptr()), total_tokens, stream);
+    rotary_embedding_cuda.Forward();
+  }
 
   llm_kernels::nvidia::CacheCopy<half>(reinterpret_cast<half*>(k_tensor.data_ptr()),
                                        reinterpret_cast<half*>(v_tensor.data_ptr()), k_list, v_list,
@@ -109,10 +112,14 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
 #ifdef ENABLE_FLASH_ATTN_2
   at::Tensor q_tmp_tensor = torch::reshape(q_tensor, {total_tokens, num_heads, head_size});
   c10::optional<at::Tensor> seqused_k = c10::nullopt;
-  c10::optional<at::Tensor> alibi_slopes = c10::nullopt;
+  auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
+  c10::optional<at::Tensor> alibi_slopes_tensor = c10::nullopt;
+  if (alibi_slopes.has_value()) {
+    alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
+  }
   mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
                  torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor,
-                 seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes, max_tokens,
+                 seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor, max_tokens,
                  max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
 #else
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
@@ -141,7 +148,6 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
   torch::Tensor qkv_tensor = torch::from_blob(query, {total_tokens, num_heads * head_size * 3}, options);
   auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
 
-  // rotary embedding
   torch::Tensor q_tensor = tt[0];
   torch::Tensor k_tensor = tt[1];
   torch::Tensor v_tensor = tt[2];
@@ -149,10 +155,13 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
   void* k_tensor_ptr = k_tensor.data_ptr();
   void* v_tensor_ptr = v_tensor.data_ptr();
 
-  rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                 reinterpret_cast<half*>(q_tensor_ptr), reinterpret_cast<half*>(k_tensor_ptr),
-                                 total_tokens, stream);
-  rotary_embedding_cuda.Forward();
+  if (!alibi_slopes.has_value()) {
+    // When the alibi_slopes parameter is empty, execute the rotary embedding.
+    rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                   reinterpret_cast<half*>(q_tensor_ptr), reinterpret_cast<half*>(k_tensor_ptr),
+                                   total_tokens, stream);
+    rotary_embedding_cuda.Forward();
+  }
 
   llm_kernels::nvidia::CachePosCopy<half>(
       reinterpret_cast<half*>(k_tensor_ptr), reinterpret_cast<half*>(v_tensor_ptr), key_cache_ptrs, value_cache_ptrs,

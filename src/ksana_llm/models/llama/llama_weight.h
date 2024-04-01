@@ -29,6 +29,8 @@ class LlamaWeight : public BaseWeight {
 
   Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
 
+  Status CreateTensorWithSameShape(const std::string& origin_tensor_name, const std::string& copy_tensor_name);
+
   Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
   bool IsLoaded();
@@ -40,8 +42,12 @@ class LlamaWeight : public BaseWeight {
   std::string model_path_ = "";
   int rank_ = 0;
   int tensor_para_size_ = 1;
+  std::string model_name_ = "";
+  DataType weight_data_type_ = TYPE_FP16;
 
   std::shared_ptr<Context> context_{nullptr};
+
+  //Stream block_manage_stream_;
 
   ModelConfig model_config_;
 };
