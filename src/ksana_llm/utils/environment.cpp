@@ -53,10 +53,11 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.num_layer = config_json.at("num_hidden_layers");
   model_config.hidden_units = config_json.at("hidden_size");
   model_config.rope_theta = config_json.value("rope_theta", 10000.0f);
-  model_config.layernorm_eps = config_json.at("rms_norm_eps");
-  model_config.start_id = config_json.at("bos_token_id");
-  model_config.end_id = config_json.at("eos_token_id");
-  model_config.max_position_embeddings = config_json.at("max_position_embeddings");
+  model_config.layernorm_eps = config_json.value("rms_norm_eps", 1e-6);
+  model_config.layernorm_eps = config_json.value("layer_norm_epsilon", model_config.layernorm_eps);
+  model_config.start_id = config_json.value("bos_token_id", 1);
+  model_config.end_id = config_json.value("eos_token_id", 2);
+  model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
 
   auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
   if (!rope_scaling_setting.is_null()) {

@@ -23,6 +23,8 @@ class PytorchFileTensorLoader : public BaseFileTensorLoader {
 
   DataType GetTensorDataType(const std::string& tensor_name);
 
+  std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
+
  private:
   // Load the PyTorch binary file
   void LoadPytorchBin();

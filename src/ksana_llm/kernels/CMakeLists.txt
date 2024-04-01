@@ -17,7 +17,7 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_activation
     llm_kernels_nvidia_kernel_assemble_last_token llm_kernels_nvidia_kernel_cast
     llm_kernels_nvidia_kernel_rotary_embedding llm_kernels_nvidia_kernel_all_reduce
-    llm_kernels_nvidia_kernel_permute)
+    llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi)
 endif()
 
 message(STATUS "nvidia_kernels_SRCS: ${nvidia_kernels_SRCS}")

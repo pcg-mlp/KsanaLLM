@@ -18,6 +18,7 @@
 #include <pybind11/embed.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <torch/nn/functional/normalization.h>
 
 namespace py = pybind11;
 
@@ -111,8 +112,7 @@ template <typename T>
 Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
   GetBlockManager()->SetDeviceId(rank_);
   std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
-
-  for (std::string& tensor_name : tensor_name_list) {
+  for (size_t idx = 0; idx < tensor_name_list.size(); ++idx) {
     // TODO: 扩展支持 bfp16
     /* tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
      *     input_layernorm:          不做分卡处理
@@ -126,12 +126,18 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
      *     norm:                     不做分卡处理
      *     embedding:                不做分卡处理
      */
+    std::string& tensor_name = tensor_name_list[idx];
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
-    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos) {
+    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(tensor_name);
+    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos
+     || tensor_name.find("self_attn.W_pack") != std::string::npos) {
       tensor_para_offset = rank_;
       if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
         transpose_first = true;
+        weight_shape[1] /= tensor_para_size_;
+      } else {
+        weight_shape[0] /= tensor_para_size_;
       }
     }
 
@@ -141,27 +147,14 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
 
     // copy host data to device
     int qkv_offset;
-    if (weights_map_.count(tensor_name)) {
-      weights_data_type_map_[tensor_name] = weight_data_type;
-      if (transpose_first) {
-        size_t src_pitch = weights_map_[tensor_name].shape[0] * tensor_para_size_ * sizeof(T);
-        size_t dst_pitch = weights_map_[tensor_name].shape[0] * sizeof(T);
-        tensor_para_offset *= dst_pitch;
-        GetBlockManager()->SetDeviceId(rank_);
-        Memcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch,
-                      dst_pitch, weights_map_[tensor_name].shape[1], MEMCPY_HOST_TO_DEVICE,
-                      context_->GetComputeStreams()[rank_]);
-      } else {
-        tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
-        GetBlockManager()->SetDeviceId(rank_);
-        MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                    weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                    context_->GetComputeStreams()[rank_]);
-      }
-    } else if ((qkv_offset = CheckQKVWeight(tensor_name))) {
+    if ((qkv_offset = CheckQKVWeight(tensor_name))) {
       bool is_bias = (tensor_name.find("_proj.bias") != std::string::npos);
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
                              (is_bias ? ".bias" : ".weight");
+      if (!weights_map_.count(qkv_name)) {
+        weight_shape.insert(weight_shape.begin(), 3);
+        AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
+      }
       weights_data_type_map_[qkv_name] = weight_data_type;
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
       size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / 3;
@@ -169,7 +162,45 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
       tensor_para_offset *= single_proj_size;
       GetBlockManager()->SetDeviceId(rank_);
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
-                  MEMCPY_HOST_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+    } else if (tensor_name.find("_proj.weight") != std::string::npos
+            || tensor_name.find("_proj.bias") != std::string::npos
+            || tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "lm_head.weight"
+            || tensor_name == "model.norm.weight" || tensor_name == "model.embed_tokens.weight") {
+      AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
+      weights_data_type_map_[tensor_name] = weight_data_type;
+      if (transpose_first) {
+        size_t src_pitch = weights_map_[tensor_name].shape[1] * tensor_para_size_ * sizeof(T);
+        size_t dst_pitch = weights_map_[tensor_name].shape[1] * sizeof(T);
+        tensor_para_offset *= dst_pitch;
+        GetBlockManager()->SetDeviceId(rank_);
+        Memcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch,
+                      dst_pitch, weights_map_[tensor_name].shape[0], MEMCPY_HOST_TO_DEVICE,
+                      context_->GetMemoryManageStreams()[rank_]);
+      } else {
+        tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
+        GetBlockManager()->SetDeviceId(rank_);
+        MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
+                    weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+      }
+    } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {
+      bool is_bias = (tensor_name.find(".bias") != std::string::npos);
+      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
+                             (is_bias ? ".bias" : ".weight");
+      weights_data_type_map_[qkv_name] = weight_data_type;
+      if (!weights_map_.count(qkv_name)) {
+        weight_shape.insert(weight_shape.begin(), 3);
+        weight_shape[1] /= 3;
+        AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
+      }
+      Tensor& qkv_weight_tensor = weights_map_[qkv_name];
+      size_t src_pitch = weight_shape[1] * weight_shape[2] * tensor_para_size_ * sizeof(T);
+      size_t dst_pitch = weight_shape[1] * weight_shape[2] * sizeof(T);
+      tensor_para_offset *= dst_pitch;
+      GetBlockManager()->SetDeviceId(rank_);
+      Memcpy2DAsync(qkv_weight_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
+                    weight_shape[0], MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
@@ -186,13 +217,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& qkv_weight_tensor = weights_map_[qkv_name];
-
-    Tensor input_tensor = weights_map_[qkv_name];
-    input_tensor.shape = {3, hidden_units / tensor_para_size_, hidden_units};
-    Permute(input_tensor, last_qkv_tensor, {2, 0, 1}, context_->GetComputeStreams()[rank_]);
-
+    Permute(qkv_weight_tensor, last_qkv_tensor, {2, 0, 1}, context_->GetMemoryManageStreams()[rank_]);
     Tensor t = last_qkv_tensor;
     last_qkv_tensor = qkv_weight_tensor;
+    t.shape = {qkv_weight_tensor.shape[2], qkv_weight_tensor.shape[0] * qkv_weight_tensor.shape[1]};
     weights_map_[qkv_name] = t;
   }
 
@@ -201,39 +229,27 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string down_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.down_proj.weight";
     Tensor& down_weight_tensor = weights_map_[down_proj_name];
-
-    Tensor input_tensor = weights_map_[down_proj_name];
-    input_tensor.shape = {hidden_units, inter_size / tensor_para_size_};
-    Permute(input_tensor, last_mlp_tensor, {1, 0}, context_->GetComputeStreams()[rank_]);
-
+    Permute(down_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
     Tensor t = last_mlp_tensor;
     last_mlp_tensor = down_weight_tensor;
+    t.shape = {down_weight_tensor.shape[1], down_weight_tensor.shape[0]};
     weights_map_[down_proj_name] = t;
-    weights_map_[down_proj_name].shape = {inter_size / tensor_para_size_, hidden_units};
 
     std::string gate_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.gate_proj.weight";
     Tensor& gate_weight_tensor = weights_map_[gate_proj_name];
-
-    Tensor gate_weight_input_tensor = weights_map_[gate_proj_name];
-    gate_weight_input_tensor.shape = {inter_size / tensor_para_size_, hidden_units};
-    Permute(gate_weight_input_tensor, last_mlp_tensor, {1, 0}, context_->GetComputeStreams()[rank_]);
-
+    Permute(gate_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
     t = last_mlp_tensor;
     last_mlp_tensor = gate_weight_tensor;
+    t.shape = {gate_weight_tensor.shape[1], gate_weight_tensor.shape[0]};
     weights_map_[gate_proj_name] = t;
-    weights_map_[gate_proj_name].shape = {hidden_units, inter_size / tensor_para_size_};
 
     std::string up_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.up_proj.weight";
     Tensor& up_weight_tensor = weights_map_[up_proj_name];
-
-    Tensor up_weight_input_tensor = weights_map_[up_proj_name];
-    up_weight_input_tensor.shape = {inter_size / tensor_para_size_, hidden_units};
-    Permute(up_weight_input_tensor, last_mlp_tensor, {1, 0}, context_->GetComputeStreams()[rank_]);
-
+    Permute(up_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
     t = last_mlp_tensor;
     last_mlp_tensor = up_weight_tensor;
+    t.shape = {up_weight_tensor.shape[1], up_weight_tensor.shape[0]};
     weights_map_[up_proj_name] = t;
-    weights_map_[up_proj_name].shape = {hidden_units, inter_size / tensor_para_size_};
   }
 
   // permute o_proj: permute(1, 0)
@@ -241,30 +257,23 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string o_proj_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.o_proj.weight";
     Tensor& o_proj_weight_tensor = weights_map_[o_proj_name];
-
-    Tensor o_proj_weight_input_tensor = weights_map_[o_proj_name];
-    o_proj_weight_input_tensor.shape = {hidden_units, hidden_units / tensor_para_size_};
-    Permute(o_proj_weight_input_tensor, last_o_proj_tensor, {1, 0}, context_->GetComputeStreams()[rank_]);
-
+    Permute(o_proj_weight_tensor, last_o_proj_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
     Tensor t = last_o_proj_tensor;
     last_o_proj_tensor = o_proj_weight_tensor;
+    t.shape = {o_proj_weight_tensor.shape[1], o_proj_weight_tensor.shape[0]};
     weights_map_[o_proj_name] = t;
   }
 
   // permute lm_head: permute(1, 0)
   Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
   Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
-
-  Tensor lm_head_tensor_input_tensor = weights_map_["lm_head.weight"];
-  lm_head_tensor_input_tensor.shape = {vocab_size, hidden_units};
-  Permute(lm_head_tensor_input_tensor, lm_head_transpose_tensor, {1, 0}, context_->GetComputeStreams()[rank_]);
-
+  Permute(lm_head_tensor, lm_head_transpose_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
   Tensor t = lm_head_transpose_tensor;
   lm_head_transpose_tensor = lm_head_tensor;
+  t.shape = {lm_head_tensor.shape[1], lm_head_tensor.shape[0]};
   weights_map_["lm_head.weight"] = t;
 
   // Free useless tensor
-  StreamSynchronize(context_->GetComputeStreams()[rank_]);
   GetBlockManager()->SetDeviceId(rank_);
   GetBlockManager()->FreeContiguous(last_mlp_tensor.GetBlockId());
   GetBlockManager()->FreeContiguous(last_o_proj_tensor.GetBlockId());
@@ -274,46 +283,20 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   weights_map_.erase("empty_mlp_tensor");
   weights_map_.erase("empty_lm_head_tensor");
   weights_map_.erase("empty_o_proj_tensor");
-
   return Status();
 }
 
 template <typename T>
 Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
-  DataType weight_data_type = model_config.weight_data_type;
+  weight_data_type_ = model_config.weight_data_type;
   int head_num = model_config.head_num;
   int hidden_units = model_config.hidden_units;
   int inter_size = model_config.inter_size;
   int num_layer = model_config.num_layer;
   int rotary_embedding = model_config.rotary_embedding;
   int vocab_size = model_config.vocab_size;
+  model_name_ = model_config.name;
   tensor_para_size_ = model_config.tensor_para_size;
-
-  AddWeightTensor("model.embed_tokens.weight", {vocab_size, hidden_units}, weight_data_type);
-  AddWeightTensor("model.norm.weight", {hidden_units}, weight_data_type);
-  AddWeightTensor("empty_qkv_tensor", {hidden_units, 3 * hidden_units / tensor_para_size_}, weight_data_type);
-  AddWeightTensor("empty_mlp_tensor", {hidden_units, inter_size / tensor_para_size_}, weight_data_type);
-  AddWeightTensor("empty_lm_head_tensor", {hidden_units, vocab_size}, weight_data_type);
-  AddWeightTensor("empty_o_proj_tensor", {hidden_units / tensor_para_size_, hidden_units}, weight_data_type);
-  for (int l = 0; l < num_layer; ++l) {
-    AddWeightTensor(ConcatLayerName("input_layernorm", l), {hidden_units}, weight_data_type);
-    AddWeightTensor(ConcatLayerName("post_attention_layernorm", l), {hidden_units}, weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.down_proj", l), {inter_size / tensor_para_size_, hidden_units},
-                    weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.gate_proj", l), {hidden_units, inter_size / tensor_para_size_},
-                    weight_data_type);
-    AddWeightTensor(ConcatLayerName("mlp.up_proj", l), {hidden_units, inter_size / tensor_para_size_},
-                    weight_data_type);
-    AddWeightTensor(ConcatLayerName("self_attn.o_proj", l), {hidden_units / tensor_para_size_, hidden_units},
-                    weight_data_type);
-    AddWeightTensor(ConcatLayerName("self_attn.query_key_value", l),
-                    {hidden_units, 3 * hidden_units / tensor_para_size_}, weight_data_type);
-    if (model_config.type.find("qwen") != std::string::npos) {
-      AddWeightTensor(ConcatLayerName("self_attn.query_key_value", l, true), {1, 3 * hidden_units / tensor_para_size_},
-                      weight_data_type);
-    }
-  }
-  AddWeightTensor("lm_head.weight", {vocab_size, hidden_units}, weight_data_type);
 
   bool is_safetensors = false;
   std::vector<std::string> weights_file_list = SearchLocalPath(model_path_, is_safetensors);
@@ -327,6 +310,11 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     LoadWeightsFromFile(weights_loader);
   }
 
+  CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
+  CreateTensorWithSameShape("model.layers.0.self_attn.query_key_value.weight", "empty_qkv_tensor");
+  CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
+  CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
+
   PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
 
   // Convert BFP16 to FP16
@@ -335,10 +323,23 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       Tensor& tensor = weights_map_[data_type_iter.first];
       tensor.dtype = DataType::TYPE_BF16;
       GetBlockManager()->SetDeviceId(rank_);
-      CastInplace(tensor, DataType::TYPE_FP16, context_->GetComputeStreams()[rank_]);
+      CastInplace(tensor, DataType::TYPE_FP16, context_->GetMemoryManageStreams()[rank_]);
+      tensor.dtype = TYPE_FP16;
+      // We use vocab_size to determine whether it is the Baichuan2 model.
+      // If vocab_size is equal to 125,696, then it is the Baichuan2 model.
+      // And Unlike Baichuan1, the Baichuan2 model requires normalizing the head weights. Refer to
+      // https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/84603cde5ebffb6084e476cfaeceaf0b8b91fe54/modeling_baichuan.py#L508
+      if (model_config_.type == "baichuan" && data_type_iter.first == "lm_head.weight" && vocab_size == 125696) {
+        StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+        auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch::kFloat16);
+        torch::Tensor in = torch::from_blob(tensor.GetPtr<void>(), {tensor.shape[0], tensor.shape[1]}, options);
+        auto out = torch::nn::functional::normalize(in, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+        MemcpyAsync(tensor.GetPtr<void>(), out.data_ptr(), sizeof(T) * tensor.shape[0] * tensor.shape[1],
+                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      }
     }
   }
-  DeviceSynchronize();
+  StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   return Status();
 }
 
@@ -353,12 +354,24 @@ Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size
   for (auto& dim : shapes) {
     length *= dim;
   }
-
   int block_id;
   GetBlockManager()->SetDeviceId(rank_);
   GetBlockManager()->AllocateContiguous(length, block_id);
 
   weights_map_.emplace(weight_name, Tensor(MemoryDevice::MEMORY_DEVICE, dtype, shapes, block_id));
+  return Status();
+}
+
+template <typename T>
+Status LlamaWeight<T>::CreateTensorWithSameShape(const std::string& origin_tensor_name,
+                                                 const std::string& copy_tensor_name) {
+  if (!weights_map_.count(origin_tensor_name)) {
+    NLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
+                                  origin_tensor_name);
+    exit(-1);
+  }
+  Tensor& origin_tensor = weights_map_[origin_tensor_name];
+  AddWeightTensor(copy_tensor_name, origin_tensor.shape, origin_tensor.dtype);
   return Status();
 }
 

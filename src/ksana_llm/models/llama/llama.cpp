@@ -36,16 +36,19 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
   int hidden_units = size_per_head * head_num;
+  int tensor_para_size = model_config.tensor_para_size;
   int rotary_embedding = model_config.rotary_embedding;
-  int head_num_per_tp = head_num / model_config.tensor_para_size;
-  int num_key_value_heads = model_config.num_key_value_heads / model_config.tensor_para_size;
+  int head_num_per_tp = head_num / tensor_para_size;
+  int num_key_value_heads = model_config.num_key_value_heads / tensor_para_size;
   int stride_size = head_num_per_tp * size_per_head * 3;
   int inter_size = model_config.inter_size;
   int max_position_embeddings = model_config.max_position_embeddings;
   float rope_theta = model_config.rope_theta;
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
   block_size_ = GetBlockManager()->GetBlockSize();
-
+  // The Baichuan1-7B and Baichuan2-7B models do not use the Alibi mode for loading,
+  // and both of these models have a hidden_units value of 4096.
+  bool is_alibi = model_config.type == "baichuan" && hidden_units != 4096;
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config));
 
@@ -134,12 +137,14 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
     flash_attention_layers_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layers_[idx] = std::make_shared<PagedAttentionLayer>();
     flash_attention_layers_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
-                                        size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
-                                        std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
+                                        size_per_head, stride_size, tensor_para_size, rotary_embedding, rope_theta,
+                                        /*is_neox*/ true, is_alibi, std::any(cos_sin_cache_ptr),
+                                        model_config.rope_scaling_factor_config},
                                        context_, rank_);
     paged_attention_layers_[idx]->Init({idx, max_position_embeddings, head_num_per_tp, num_key_value_heads,
-                                        size_per_head, stride_size, rotary_embedding, rope_theta, /*is_neox*/ true,
-                                        std::any(cos_sin_cache_ptr), model_config.rope_scaling_factor_config},
+                                        size_per_head, stride_size, tensor_para_size, rotary_embedding, rope_theta,
+                                        /*is_neox*/ true, is_alibi, std::any(cos_sin_cache_ptr),
+                                        model_config.rope_scaling_factor_config},
                                        context_, rank_);
   }
 
@@ -564,7 +569,6 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   std::vector<Tensor>& logits_float = temp_buffer_1;
   logits_float[0].dtype = TYPE_FP32;
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
-
   CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
 #endif
   return Status();

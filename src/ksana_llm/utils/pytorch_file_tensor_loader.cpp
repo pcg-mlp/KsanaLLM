@@ -1,6 +1,7 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #include "pytorch_file_tensor_loader.h"
 #include "logger.h"
+
 // #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 namespace ksana_llm {
@@ -18,14 +19,11 @@ PytorchFileTensorLoader::PytorchFileTensorLoader(const std::string& file_name) :
 void PytorchFileTensorLoader::LoadPytorchBin() {
   // Create a PyTorchStreamReader object to read the model file
   pytorch_reader_ = std::make_unique<caffe2::serialize::PyTorchStreamReader>(file_name_);
-
   auto records = pytorch_reader_->getAllRecords();
-
   char* storage_indexs = nullptr;
   size_t max_tensor_size = 80 * 1024 * 1024;
   std::vector<char> storage_indexs_vector(max_tensor_size * records.size());
   storage_indexs = storage_indexs_vector.data();
-
   // When storage_context is nullptr, it indicates that the actual data of the torch tensor should be read directly.
   // Otherwise, it temporarily skips the reading process and waits until it is actually used before reading.
   std::shared_ptr<torch::jit::DeserializationStorageContext> storage_context = nullptr;
@@ -40,11 +38,9 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
       storage_context->addStorage(std::to_string(i), storage);
     }
   }
-
   auto pytorch_value =
       torch::jit::readArchiveAndTensors("data", "", "", c10::nullopt, c10::nullopt, c10::DeviceType::CPU,
                                         *pytorch_reader_, torch::jit::Unpickler::defaultTypeParser, storage_context);
-
   // If the value is a generic dictionary, process the tensors in the dictionary
   if (pytorch_value.isGenericDict()) {
     auto value_dict = pytorch_value.toGenericDict();
@@ -103,6 +99,15 @@ void* PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
     return nullptr;
   }
   return pytorch_tensor_map_[tensor_name].data_ptr();
+}
+
+std::vector<std::size_t> PytorchFileTensorLoader::GetTensorShape(const std::string& tensor_name) {
+  if (!pytorch_tensor_map_.count(tensor_name)) {
+    return {};
+  }
+  torch::Tensor& tensor = pytorch_tensor_map_[tensor_name];
+  std::vector<size_t> tensor_shape(tensor.sizes().begin(), tensor.sizes().end());
+  return tensor_shape;
 }
 
 }  // namespace ksana_llm
