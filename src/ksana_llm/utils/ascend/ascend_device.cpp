@@ -212,7 +212,6 @@ template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<uint8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned int>();
-template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<unsigned long>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned long>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<bool>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<char>();

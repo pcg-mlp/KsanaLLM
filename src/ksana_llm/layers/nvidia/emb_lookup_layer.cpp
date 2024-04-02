@@ -3,19 +3,12 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/emb_lookup_layer.h"
-#ifdef ENABLE_CUDA
-#  include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
-#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
-#endif
-
-#ifdef ENABLE_ACL
-#  include "ksana_llm/kernels/ascend/kernel_wrapper.h"
-#endif
+#include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 
 namespace ksana_llm {
 
 Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-#ifdef ENABLE_CUDA
   // weigth_shape = input_tensors[2].
   // input_tensors:
   //   0: input_ids
@@ -42,7 +35,6 @@ Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   }
   output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[2].dtype;
-#endif
   return Status();
 }
 }  // namespace ksana_llm

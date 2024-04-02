@@ -3,9 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#ifdef ENABLE_CUDA
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
-#endif
 #include "ksana_llm/layers/base_layer.h"
 
 namespace ksana_llm {
