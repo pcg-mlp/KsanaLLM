@@ -10,14 +10,34 @@ option(WITH_TESTING "Enable testing" OFF)
 if(WITH_CUDA)
   project(ksana_llm LANGUAGES CXX CUDA)
 else()
-  project(LLMKernels LANGUAGES CXX)
+  project(ksana_llm LANGUAGES CXX)
 endif()
 
 if(NOT WITH_CUDA AND NOT WITH_ACL)
   message(FATAL_ERROR "WITH_CUDA=OFF and WITH_ACL=OFF is not allow")
 endif()
 
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+set(USE_CXX11_ABI, "False")
+# according prepare ABI version
+execute_process(COMMAND python "-c" "import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
+  RESULT_VARIABLE _PYTHON_SUCCESS
+  OUTPUT_VARIABLE USE_CXX11_ABI)
+
+if(NOT _PYTHON_SUCCESS EQUAL 0)
+  message(FATAL_ERROR "run python -c \"import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');\" failed.")
+endif()
+
+set(CXX11_ABI_FLAG 0)
+
+# set compiler flags
+if("${USE_CXX11_ABI}" STREQUAL "True")
+  add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
+  set(CXX11_ABI_FLAG 1)
+else()
+  add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+  set(CXX11_ABI_FLAG 0)
+endif()
+
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
@@ -49,7 +69,7 @@ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wall -O0 -gdwarf-4 -gstrict-dwa
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=0 -Wno-unknown-pragmas")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=${CXX11_ABI_FLAG} -Wno-unknown-pragmas")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0 -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_CXX_STANDARD "${CXX_STD}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
