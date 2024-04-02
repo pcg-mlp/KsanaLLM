@@ -13,7 +13,6 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, st
                                      int rank) {
   context_ = context;
   rank_ = rank;
-#ifdef ENABLE_CUDA
   int parameter_index = 0;
   void* meta = std::any_cast<void*>(parameters[parameter_index++]);
   buffer_ = std::any_cast<void*>(parameters[parameter_index++]);
@@ -46,12 +45,10 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, st
       cudaMemPoolSetAccess(mempool, &desc, 1);
     }
   }
-#endif
   return Status();
 }
 
 Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-#ifdef ENABLE_CUDA
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
@@ -76,7 +73,6 @@ Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors
   }
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
-#endif
   return Status();
 }
 }  // namespace ksana_llm

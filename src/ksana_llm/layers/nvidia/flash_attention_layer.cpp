@@ -3,18 +3,11 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/flash_attention_layer.h"
-#ifdef ENABLE_CUDA
-#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
-#endif
-
-#ifdef ENABLE_ACL
-#  include "ksana_llm/kernels/ascend/kernel_wrapper.h"
-#endif
+#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 
 namespace ksana_llm {
 
 Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-#ifdef ENABLE_CUDA
   // input_tensors:
   //     0: qkv_tensor shape [max_token_num, hidden_units, 3], type same as weight
   //     1: input offset tensor shape [max_batch_size + 1], type uint64
@@ -39,7 +32,6 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   output_tensors[0].shape[0] = input_tensors[0].shape[0];
   output_tensors[0].shape[1] = input_tensors[0].shape[1] / 3;
   output_tensors[0].dtype = input_tensors[0].dtype;
-#endif
   return Status();
 }
 

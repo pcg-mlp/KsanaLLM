@@ -7,7 +7,6 @@
 namespace ksana_llm {
 
 Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-#ifdef ENABLE_CUDA
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
@@ -33,7 +32,6 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
   }
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
-#endif
   return Status();
 }
 }  // namespace ksana_llm
