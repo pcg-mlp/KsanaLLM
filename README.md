@@ -30,20 +30,24 @@ KsanaLLM seamlessly supports many Hugging Face models, including the following a
 
 ## Usage
 
-### Create docker container
+### Create docker container and runtime environment
 
 ```bash
 # For NVIDIA GPU
 sudo docker run -itd --name xxx_container_name --network host --privileged \
     --device /dev/nvidiaxxx --device /dev/nvidiactl \
     -v /usr/local/nvidia:/usr/local/nvidia mirrors.tencent.com/todacc/venus-numerous-llm:0.1.17 bash
+# if you want to use flash attention 2.5.6
+pip install flash_attn==2.5.6 --no-deps
+
+# or NVIDIA official image
+sudo nvidia-docker run -itd --name xxx_container_name --network host --privileged \
+    nvcr.io/nvidia/pytorch:24.03-py3 bash
+pip install -r requirements.txt
 
 # For Huawei Ascend NPU
 sudo docker run -itd --name xxx_container_name --network host --privileged \
     mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.1 bash
-
-# to use flash attention 2
-pip install flash_attn==2.5.6 --no-deps
 ```
 - replace xxx_container_name with real container name.
 - replace xxx in ```/dev/nvidiaxxx``` with GPU card index. For multiple cards, add ```--device /dev/nvidiaxxx``` in the command
