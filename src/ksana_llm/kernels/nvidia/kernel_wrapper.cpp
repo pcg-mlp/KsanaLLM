@@ -25,6 +25,8 @@
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 
+#include "ksana_llm/kernels/cast.h"
+
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
@@ -233,6 +235,17 @@ void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, s
 #ifdef ENABLE_CUDA
   llm_kernels::nvidia::InvokePermute<4ul, sizeof(half)>(input, output, input_shape, permutation, stream);
 #endif
+}
+
+Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
+  if (tensor.dtype == DataType::TYPE_BF16 && target_dtype == DataType::TYPE_FP16) {
+    BFloat16ToFloat16(tensor.GetPtr<void>(), tensor.GetElementNumber(), stream.Get());
+  } else {
+    throw std::runtime_error(
+        fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+  }
+  tensor.dtype = DataType::TYPE_FP16;
+  return Status();
 }
 
 }  // namespace ksana_llm
