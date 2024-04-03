@@ -4,16 +4,18 @@
 
 #include "ksana_llm/utils/singleton.h"
 
-#include <filesystem>
-#include "flash_api.h"
-#include "ksana_llm/models/llama/llama.h"
-#include "ksana_llm/samplers/sampler.h"
-#include "test.h"
+#ifdef ENABLE_CUDA
+
+#  include <filesystem>
+#  include "flash_api.h"
+#  include "ksana_llm/models/llama/llama.h"
+#  include "ksana_llm/samplers/sampler.h"
+#  include "test.h"
 
 using namespace ksana_llm;
 
-// 定义一个 LlamaTest 类,继承自 testing::Test
-class LlamaTest : public testing::Test {
+// 定义一个 LlamaNvidiaTest 类,继承自 testing::Test
+class LlamaNvidiaTest : public testing::Test {
  protected:
   void SetUp() override {
     context_ = std::make_shared<Context>(1, 1, MemoryDevice::MEMORY_GPU);
@@ -45,7 +47,7 @@ class LlamaTest : public testing::Test {
   std::shared_ptr<Context> context_{nullptr};
 };
 
-TEST_F(LlamaTest, ForwardTest) {
+TEST_F(LlamaNvidiaTest, ForwardTest) {
   int device_id = 0;
   SetDevice(device_id);
 
@@ -200,3 +202,5 @@ TEST(TorchTensorTest, TorchTensorTest) {
   Free(b_ptr);
   Free(c_ptr);
 }
+
+#endif

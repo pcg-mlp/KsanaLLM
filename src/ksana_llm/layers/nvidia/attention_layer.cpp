@@ -33,9 +33,9 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
     throw std::invalid_argument(fmt::format("Unsupport rope scaling type: {}", rope_scaling_factor_config.type));
   }
 
-  rotary_embedding_cuda_.SetConfig(
-      cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, num_heads_, num_kv_heads_, stride_size_,
-      is_neox, context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
+  rotary_embedding_cuda_.SetConfig(cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, num_heads_,
+                                   num_kv_heads_, stride_size_, is_neox, context_->GetComputeStreams()[rank_].Get(),
+                                   rotary_embedding_type, scaling_factor);
   CUDA_CHECK(cudaStreamSynchronize(context_->GetComputeStreams()[rank_].Get()));
   return Status();
 }

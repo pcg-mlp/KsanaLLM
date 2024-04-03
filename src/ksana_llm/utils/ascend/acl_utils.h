@@ -8,10 +8,12 @@
 #include <acl/acl_rt.h>
 
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/ret_code.h"
 
 namespace ksana_llm {
 
 // ref: https://www.hiascend.com/document/detail/zh/canncommercial/5046/windowsversion/windowsug/aclcppdevg_03_0516.html
+// https://www.hiascend.com/document/detail/en/canncommercial/601/inferapplicationdev/aclpythondevg/aclpythondevg_01_0778.html
 static const char* GetACLErrorString(aclError error) {
   switch (error) {
     case ACL_SUCCESS:
@@ -134,6 +136,10 @@ static const char* GetACLErrorString(aclError error) {
       return "ACL_ERROR_RT_FAILURE";
     case ACL_ERROR_DRV_FAILURE:
       return "ACL_ERROR_DRV_FAILURE";
+    case ACL_ERROR_RT_MEMORY_ALLOCATION:
+      return "ACL_ERROR_RT_MEMORY_ALLOCATION";
+    case ACL_ERROR_RT_DRV_INTERNAL_ERROR:
+      return "ACL_ERROR_RT_DRV_INTERNAL_ERROR";
   }
   return "UNKNOWN";
 }
@@ -141,7 +147,8 @@ static const char* GetACLErrorString(aclError error) {
 template <typename T>
 void CheckACLError(T result, const char* func, const char* file, const int line) {
   if (result != ACL_SUCCESS) {
-    NLLM_LOG_ERROR << fmt::format("ACL runtime error: {} {}:{}@{}", GetACLErrorString(result), file, line, func);
+    NLLM_LOG_ERROR << fmt::format("ACL runtime error {}: {} {}:{}@{}", result, GetACLErrorString(result), file, line,
+                                  func);
     abort();
     exit(RetCode::RET_INVALID_ARGUMENT);
   }

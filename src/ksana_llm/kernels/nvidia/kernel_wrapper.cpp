@@ -193,7 +193,9 @@ void HalfToFloat(const void* input, const int data_size, void* output, cudaStrea
 }
 
 void BFloat16ToFloat16(void* data_ptr, const int data_size, cudaStream_t& stream) {
+#ifdef ENABLE_CUDA
   llm_kernels::nvidia::BFP16ToFP16(data_ptr, data_size, stream);
+#endif
 }
 
 void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,
@@ -228,7 +230,9 @@ void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, s
   for (size_t i = permutation.size(); i < 4; ++i) {
     permutation.push_back(i);
   }
+#ifdef ENABLE_CUDA
   llm_kernels::nvidia::InvokePermute<4ul, sizeof(half)>(input, output, input_shape, permutation, stream);
+#endif
 }
 
 }  // namespace ksana_llm

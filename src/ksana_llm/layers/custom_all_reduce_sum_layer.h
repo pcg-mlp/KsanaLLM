@@ -3,7 +3,9 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#endif
 
 #include "ksana_llm/layers/base_layer.h"
 

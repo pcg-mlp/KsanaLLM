@@ -91,7 +91,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global.device", "gpu");
   if (device_type_name == "gpu") {
     memory_device_ = MemoryDevice::MEMORY_GPU;
-  } else if (device_type_name == "ascend") {
+  } else if (device_type_name == "npu") {
     memory_device_ = MemoryDevice::MEMORY_ASCEND;
   } else {
     throw std::invalid_argument(
