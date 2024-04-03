@@ -3,9 +3,6 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/device_types.h"
-
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/utils/nvidia/nvidia_device.h"
 #endif
@@ -77,3 +74,4 @@ using Event = EventT<ACTIVE_DEVICE_TYPE>;
 // The get type size function
 #define GetTypeSize GetTypeSizeT<ACTIVE_DEVICE_TYPE>
 #define GetDataType GetDataTypeT<ACTIVE_DEVICE_TYPE>::impl
+

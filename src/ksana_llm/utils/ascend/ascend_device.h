@@ -3,12 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include <acl/acl.h>
-#include <acl/acl_base.h>
-#include <acl/acl_rt.h>
-
 #include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 

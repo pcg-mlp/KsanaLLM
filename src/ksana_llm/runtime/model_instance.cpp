@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "ksana_llm/runtime/worker.h"
-#include "ksana_llm/utils/dtypes.h"
+#include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
 

@@ -352,7 +352,7 @@ Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size
   GetBlockManager()->SetDeviceId(rank_);
   GetBlockManager()->AllocateContiguous(length, block_id);
 
-  weights_map_.emplace(weight_name, Tensor(model_config_.memory_device, dtype, shapes, block_id));
+  weights_map_.emplace(weight_name, Tensor(MemoryDevice::MEMORY_DEVICE, dtype, shapes, block_id));
   return Status();
 }
 

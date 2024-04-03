@@ -60,18 +60,7 @@ class ModelInstance {
     std::shared_ptr<BaseT> model_obj = nullptr;
     switch (model_config_.weight_data_type) {
       case DataType::TYPE_FP16:
-
-if (model_config_.memory_device == MemoryDevice::MEMORY_GPU) {
-#ifdef ENABLE_CUDA
-        model_obj = std::make_shared<ClassT<half>>(model_config_, rank, context_);
-#endif
-} else if (model_config_.memory_device == MemoryDevice::MEMORY_ASCEND) {
-#ifdef ENABLE_ACL
-        model_obj = std::make_shared<ClassT<aclFloat16>>(model_config_, rank, context_);
-#endif
-} else {
-  throw std::invalid_argument("Unknown device type during Sampler construction");
-}
+        model_obj = std::make_shared<ClassT<float16>>(model_config_, rank, context_);
         break;
       case DataType::TYPE_FP32:
         model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);

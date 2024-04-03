@@ -8,7 +8,7 @@
 
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/device_helper.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 
@@ -47,13 +47,8 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
     host_device_output_tokens_ptrs[i] = device_output_tokens_ + i;
   }
 
-  if (GetBlockManager()->GetBlockManagerConfig().device_allocator_config.device == MemoryDevice::MEMORY_GPU) {
-    MemcpyAsync(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(), sizeof(uint32_t*) * max_batch_size,
-                MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[0]);
-  } else if (GetBlockManager()->GetBlockManagerConfig().device_allocator_config.device == MemoryDevice::MEMORY_ASCEND) {
-  } else {
-    throw std::invalid_argument("Unknown device type during Sampler construction");
-  }
+  MemcpyAsync(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(), sizeof(uint32_t*) * max_batch_size,
+              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[0]);
 
   host_offset_.resize(max_batch_size);
   host_topKs_.resize(max_batch_size);

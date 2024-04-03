@@ -6,16 +6,14 @@
 #include <iostream>
 #include <stdexcept>
 #include "fmt/core.h"
-#include "ksana_llm/utils/device_helper.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 
 template <int T>
-ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_parallel_size, const MemoryDevice device_type)
-    : tensor_parallel_size_(tensor_parallel_size),
-      pipeline_parallel_size_(pipeline_parallel_size),
-      device_type_(device_type) {
+ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_parallel_size)
+    : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
   if (pipeline_parallel_size_ != 1) {
     throw std::runtime_error("Only support pipeline_parallel_size == 1");
   }

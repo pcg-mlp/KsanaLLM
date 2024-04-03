@@ -11,7 +11,7 @@
 #include "ksana_llm/block_manager/device_allocator.h"
 #include "ksana_llm/block_manager/host_allocator.h"
 #include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/device_helper.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"

@@ -14,7 +14,7 @@
 #  include "ksana_llm/layers/paged_attention_layer.h"
 #  include "ksana_llm/layers/silu_mul_layer.h"
 #  include "ksana_llm/utils/common_device.h"
-#  include "ksana_llm/utils/dtypes.h"
+#  include "ksana_llm/utils/device_types.h"
 #  include "test.h"
 
 namespace ksana_llm {
@@ -45,16 +45,16 @@ class LayerTest : public testing::Test {
     block_manager_config.host_allocator_config.block_size = block_manager_config.host_allocator_config.block_token_num *
                                                             2 * model_config.head_num * model_config.size_per_head *
                                                             model_config.num_layer * sizeof(half);
-    block_manager_config.host_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.host_allocator_config.device = MEMORY_HOST;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_token_num = 16;
     block_manager_config.device_allocator_config.block_size =
         block_manager_config.host_allocator_config.block_token_num * 2 * model_config.head_num *
         model_config.size_per_head * model_config.num_layer * sizeof(half);
     NLLM_LOG_WARNING << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
-    block_manager_config.device_allocator_config.device = MEMORY_GPU;
+    block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
-    context_ = std::make_shared<Context>(1, 1, MEMORY_GPU);
+    context_ = std::make_shared<Context>(1, 1);
 
     // 使用配置创建一个 BlockManager 对象
     block_manager = new BlockManager(block_manager_config, context_);
@@ -74,7 +74,7 @@ class LayerTest : public testing::Test {
     size_t total_bytes =
         std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) * dtype_size;
     GetBlockManager()->AllocateContiguous(total_bytes, idx);
-    tensor = Tensor(MEMORY_GPU, data_type, shape, idx);
+    tensor = Tensor(MEMORY_DEVICE, data_type, shape, idx);
     return Status();
   }
 
@@ -86,7 +86,7 @@ class LayerTest : public testing::Test {
 };
 
 TEST_F(LayerTest, AttentionLayerTest) {
-  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, MEMORY_GPU);
+  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1);
   FlashAttentionLayer flash_attention_layer;
   int head_num = 32;
   int kv_head_num = 32;

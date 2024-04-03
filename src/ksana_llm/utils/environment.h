@@ -12,9 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ksana_llm/utils/dtypes.h"
 #include "ksana_llm/utils/status.h"
-#include "ksana_llm/utils/memory_device.h"
+#include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 
@@ -44,8 +43,6 @@ struct ModelConfig {
 
   // TODO(karlluo): Quant mode
 
-  // Device Type
-  MemoryDevice memory_device;
   int tensor_para_size;
 
   size_t head_num;
@@ -118,7 +115,7 @@ struct LoraCoordinatorConfig {};
 
 struct AllocatorConfig {
   // The preallocated blocks.
-  int64_t blocks_num;
+  int64_t blocks_num = 0;
 
   // The block size, in bytes.
   int64_t block_size;
@@ -233,8 +230,6 @@ class Environment {
 
   size_t GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
-  MemoryDevice GetMemoryDevice() { return memory_device_; }
-
  private:
   // Calculate block size via model configs.
   void InitializeBlockManagerConfig();
@@ -257,9 +252,6 @@ class Environment {
 
   // The config of profiler.
   ProfilerConfig profiler_config_;
-
-  // The device for inference
-  MemoryDevice memory_device_{MemoryDevice::MEMORY_GPU};
 
   size_t tensor_parallel_size_{0};
   size_t pipeline_parallel_size_{0};

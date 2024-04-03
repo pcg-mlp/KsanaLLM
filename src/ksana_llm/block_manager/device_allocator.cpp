@@ -4,7 +4,7 @@
 
 #include "ksana_llm/block_manager/device_allocator.h"
 #include "ksana_llm/block_manager/base_allocator.h"
-#include "ksana_llm/utils/device_helper.h"
+#include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 

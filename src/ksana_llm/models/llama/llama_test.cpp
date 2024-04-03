@@ -18,7 +18,7 @@ using namespace ksana_llm;
 class LlamaNvidiaTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1, MemoryDevice::MEMORY_GPU);
+    context_ = std::make_shared<Context>(1, 1);
 
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
@@ -71,13 +71,13 @@ TEST_F(LlamaNvidiaTest, ForwardTest) {
   // 正确的 weight 名称
   std::string weight_name = "lm_head.weight";
   Tensor lm_head = llama_weight->GetModelWeights(weight_name);
-  EXPECT_EQ(lm_head.device, MEMORY_GPU);
+  EXPECT_EQ(lm_head.device, MEMORY_DEVICE);
   EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
 
   // 错误的 weight 名称
   weight_name = "wrong_name";
   Tensor wrong_tensor = llama_weight->GetModelWeights(weight_name);
-  EXPECT_EQ(wrong_tensor.device, MEMORY_CPU);
+  EXPECT_EQ(wrong_tensor.device, MEMORY_HOST);
   EXPECT_TRUE(wrong_tensor.shape.empty());
 
   // ContextDecode
