@@ -9,6 +9,7 @@
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
+#include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 
@@ -326,10 +327,9 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   for (auto& data_type_iter : weights_data_type_map_) {
     if (data_type_iter.second == TYPE_BF16) {
       Tensor& tensor = weights_map_[data_type_iter.first];
+      tensor.dtype = DataType::TYPE_BF16;
       GetBlockManager()->SetDeviceId(rank_);
-#ifdef ENABLE_CUDA
-      BFloat16ToFloat16(tensor.GetPtr<void>(), tensor.GetElementNumber(), context_->GetComputeStreams()[rank_].Get());
-#endif
+      CastInplace(tensor, DataType::TYPE_FP16, context_->GetComputeStreams()[rank_]);
     }
   }
   DeviceSynchronize();
