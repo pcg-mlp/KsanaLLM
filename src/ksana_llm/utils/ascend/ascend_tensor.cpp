@@ -1,7 +1,7 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/utils/ascend_tensor.h"
+#include "ksana_llm/utils/ascend/ascend_tensor.h"
 
 namespace ksana_llm {
 
@@ -29,19 +29,24 @@ aclDataType GetAclDataType(DataType dtype) {
 }
 
 template <>
-void TensorT<DEVICE_TYPE_ASCEND>::TensorT<DEVICE_TYPE_ASCEND>::InitializeDeviceTensor() {
-  auto size = GetTotalBytes();
+void TensorT<DEVICE_TYPE_ASCEND>::InitializeDeviceTensor() {
   std::vector<int64_t> strides(shape.size(), 1);
+  std::vector<int64_t> acl_type_shape(shape.size(), 0);
   for (int64_t i = shape.size() - 2; i >= 0; i--) {
     strides[i] = shape[i + 1] * strides[i + 1];
   }
-  device_tensor_ = aclCreateTensor(shape.data(), shape.size(), GetAclDataType(dtype), strides.data(), 0,
-                                   aclFormat::ACL_FORMAT_ND, shape.data(), shape.size(), *deviceAddr);
-  return 0;
+  for (size_t i = 0; i < shape.size(); ++i) {
+    acl_type_shape[i] = static_cast<int64_t>(shape[i]);
+  }
+  void* device_addr;
+  GetBlockManager()->GetContiguousPtr(block_id, device_addr);
+  device_tensor_ =
+      aclCreateTensor(acl_type_shape.data(), acl_type_shape.size(), GetAclDataType(dtype), strides.data(), 0,
+                      aclFormat::ACL_FORMAT_ND, acl_type_shape.data(), acl_type_shape.size(), device_addr);
 }
 
 template <>
-aclTensor& TensorT<DEVICE_TYPE_NVIDIA>::GetDeviceTensor() {
+aclTensor* TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensor() {
   return device_tensor_;
 }
 

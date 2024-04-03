@@ -1,7 +1,7 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/utils/ascend_device.h"
+#include "ksana_llm/utils/ascend/ascend_device.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
 namespace ksana_llm {
@@ -11,7 +11,7 @@ StreamT<DEVICE_TYPE_ASCEND>::StreamT(int device_id) : device_id_(device_id) {
   ACL_CHECK(aclrtCreateStream(&acl_stream_));
 }
 
-StreamT<DEVICE_TYPE_ASCEND>::Destroy() {
+void StreamT<DEVICE_TYPE_ASCEND>::Destroy() {
   ACL_CHECK(aclrtSetDevice(device_id_));
   ACL_CHECK(aclrtDestroyStream(acl_stream_));
 }
@@ -29,7 +29,7 @@ void EventCreateT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND>* event) {
 template <>
 void EventCreateWithFlagsT(EventT<DEVICE_TYPE_ASCEND>* event, unsigned int flags) {
   unsigned int acl_flags = ACL_EVENT_SYNC | ACL_EVENT_TIME_LINE;
-  if (flags & EVENT_DISABLE_TIMING) {
+  if (flags & ACL_EVENT_TIME_LINE) {
     acl_flags = acl_flags ^ ACL_EVENT_TIME_LINE;
   }
 
@@ -63,7 +63,9 @@ void GetDeviceT<DEVICE_TYPE_ASCEND>(int* device_id) {
 
 template <>
 void GetDeviceCountT<DEVICE_TYPE_ASCEND>(int* count) {
-  ACL_CHECK(aclrtGetDeviceCount(count));
+  uint32_t tmp_count = 0;
+  ACL_CHECK(aclrtGetDeviceCount(&tmp_count));
+  *count = static_cast<int32_t>(tmp_count);
 }
 
 template <>
@@ -94,7 +96,8 @@ void MemGetInfoT<DEVICE_TYPE_ASCEND>(size_t* free, size_t* total) {
 
 template <>
 void MallocT<DEVICE_TYPE_ASCEND>(void** dev_ptr, size_t size) {
-  ACL_CHECK(aclrtMalloc(dev_ptr, size));
+  // NOTE(karlluo): 910B only have HBM
+  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
 }
 
 template <>
@@ -140,7 +143,7 @@ aclrtMemcpyKind GetAclMemcpyKind(enum MemcpyKind kind) {
       return ACL_MEMCPY_HOST_TO_DEVICE;
     case MEMCPY_DEVICE_TO_HOST:
       return ACL_MEMCPY_DEVICE_TO_HOST;
-    case MEMCPY_DEVICE_TO_DEVICE:
+    default:
       return ACL_MEMCPY_DEVICE_TO_DEVICE;
   }
 }
@@ -183,7 +186,7 @@ template <class U>
 DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl() {
   if (std::is_same<U, float>::value || std::is_same<U, const float>::value) {
     return TYPE_FP32;
-  } else if (std::is_same<U, half>::value || std::is_same<U, const half>::value) {
+  } else if (std::is_same<U, aclFloat16>::value || std::is_same<U, const aclFloat16>::value) {
     return TYPE_FP16;
   } else if (std::is_same<U, int>::value || std::is_same<U, const int>::value) {
     return TYPE_INT32;
@@ -207,7 +210,7 @@ DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl() {
 }
 
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<float>();
-template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<half>();
+template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<aclFloat16>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<uint8_t>();

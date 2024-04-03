@@ -25,6 +25,7 @@ template <typename T>
 Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) {
   GetBlockManager()->SetDeviceId(rank_);
 
+#ifdef ENABLE_CUDA
   context_ = context;
   rank_ = rank;
   num_layer_ = model_config.num_layer;
@@ -163,6 +164,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   EventCreateWithFlags(&nccl_finish_event_, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&compute_ready_event_, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&logits_transfer_event_, EVENT_DISABLE_TIMING);
+#endif
 }
 
 template <typename T>
@@ -175,6 +177,7 @@ template <typename T>
 void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, size_t& total_block_num,
                               const std::vector<ForwardRequest>& forward_reqs, std::vector<int>& kv_cache_offset_list,
                               Stream& stream, Event& event, bool is_context_stage) {
+#ifdef ENABLE_CUDA
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
     total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
@@ -213,12 +216,14 @@ void Llama<T>::PrepareKVCache(const size_t batch_size, size_t& total_seq_len, si
   void* kv_list_ptr = kv_list_.GetPtr<void>();
   MemcpyAsync(kv_list_ptr, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE, stream);
   EventRecord(event, stream);
+#endif
 }
 
 template <typename T>
 void Llama<T>::PrepareContextRotaryEmbeddingPos(const size_t batch_size, const size_t total_seq_len,
                                                 const std::vector<ForwardRequest>& forward_reqs, Stream& stream,
                                                 Event& event) {
+#ifdef ENABLE_CUDA
   std::vector<int64_t> cpu_rotary_pos(total_seq_len);
   int cpu_rotary_pos_idx = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
@@ -230,11 +235,13 @@ void Llama<T>::PrepareContextRotaryEmbeddingPos(const size_t batch_size, const s
   MemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len, MEMCPY_HOST_TO_DEVICE,
               stream);
   EventRecord(event, stream);
+#endif
 }
 
 template <typename T>
 void Llama<T>::PrepareRotaryEmbeddingPos(const size_t batch_size, const std::vector<ForwardRequest>& forward_reqs,
                                          Stream& stream, Event& event) {
+#ifdef ENABLE_CUDA
   std::vector<int64_t> cpu_rotary_pos(batch_size);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size() - 1;
@@ -243,11 +250,13 @@ void Llama<T>::PrepareRotaryEmbeddingPos(const size_t batch_size, const std::vec
   MemcpyAsync(rotary_embedding_pos_ptr, cpu_rotary_pos.data(), sizeof(int64_t) * batch_size, MEMCPY_HOST_TO_DEVICE,
               stream);
   EventRecord(event, stream);
+#endif
 }
 
 template <typename T>
 void Llama<T>::PrepareContextInputIds(const size_t batch_size, const size_t total_seq_len, int& max_tokens,
                                       const std::vector<ForwardRequest>& forward_reqs, Stream& stream, Event& event) {
+#ifdef ENABLE_CUDA
   input_ids_.shape = {total_seq_len};
   int* input_ids_ptr = input_ids_.GetPtr<int>();
   size_t input_offset = 0;
@@ -276,11 +285,13 @@ void Llama<T>::PrepareContextInputIds(const size_t batch_size, const size_t tota
   MemcpyAsync(input_offset_uint64_ptr, input_offset_list_uint64.data(), (batch_size + 1) * sizeof(size_t),
               MEMCPY_HOST_TO_DEVICE, stream);
   EventRecord(event, stream);
+#endif
 }
 
 template <typename T>
 void Llama<T>::PrepareInputIds(const size_t batch_size, int& max_tokens,
                                const std::vector<ForwardRequest>& forward_reqs, Stream& stream, Event& event) {
+#ifdef ENABLE_CUDA
   input_ids_.shape = {batch_size};
   void* input_ids_ptr = input_ids_.GetPtr<void>();
   std::vector<int> input_ids_cpu(batch_size);
@@ -314,11 +325,13 @@ void Llama<T>::PrepareInputIds(const size_t batch_size, int& max_tokens,
   MemcpyAsync(input_offset_uint64_ptr, input_offset_list_uint64.data(), (batch_size + 1) * sizeof(size_t),
               MEMCPY_HOST_TO_DEVICE, stream);
   EventRecord(event, stream);
+#endif
 }
 
 template <typename T>
 void Llama<T>::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
                                   std::vector<Tensor>& logits_float) {
+#ifdef ENABLE_CUDA
   EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
   StreamWaitEvent(context_->GetD2DStreams()[rank_], compute_ready_event_);
   // Copy to logits buf
@@ -327,6 +340,7 @@ void Llama<T>::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRe
   MemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), MEMCPY_DEVICE_TO_DEVICE,
               context_->GetD2DStreams()[rank_]);
   StreamSynchronize(context_->GetD2DStreams()[rank_]);
+#endif
 }
 
 template <typename T>
@@ -334,6 +348,7 @@ Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::
                                 Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
                                 std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
                                 const bool is_context_stage) {
+#ifdef ENABLE_CUDA
   // Attn proj MatMul
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
@@ -392,6 +407,7 @@ Status Llama<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::
     EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
+#endif
 
   return Status();
 }
@@ -400,6 +416,7 @@ template <typename T>
 Status Llama<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                           Tensor& post_layernorm_output, std::vector<Tensor>& temp_buffer_0,
                           std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
+#ifdef ENABLE_CUDA
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
@@ -433,6 +450,7 @@ Status Llama<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWe
     EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
+#endif
 
   return Status();
 }
@@ -441,6 +459,7 @@ template <typename T>
 Status Llama<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
                               std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
+#ifdef ENABLE_CUDA
   // input layernorm
   Tensor input_layernorm_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
@@ -473,7 +492,7 @@ Status Llama<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::Ba
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
   std::vector<Tensor>& mlp_add_output = temp_buffer_0;
   STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
-
+#endif
   return Status();
 }
 
@@ -481,6 +500,7 @@ template <typename T>
 Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
+#ifdef ENABLE_CUDA
 
   size_t batch_size = forward_reqs.size();
   NLLM_LOG_DEBUG << "ContextDecode With Batch Size " << batch_size;
@@ -546,7 +566,7 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
 
   CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
-
+#endif
   return Status();
 }
 
@@ -554,7 +574,7 @@ template <typename T>
 Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
-
+#ifdef ENABLE_CUDA
   size_t batch_size = forward_reqs.size();
   NLLM_LOG_DEBUG << "Decode Batch_size = " << batch_size;
   if (batch_size > max_batch_size_) {
@@ -616,7 +636,7 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
 
   CopyToLogistBuffer(batch_size, forward_reqs, logits_float);
-
+#endif
   return Status();
 }
 

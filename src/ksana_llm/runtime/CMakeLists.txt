@@ -18,6 +18,7 @@ set(runtime_ascend_LIBS, "")
 
 if(WITH_ACL)
   list(APPEND runtime_ascend_LIBS ${ACL_SHARED_LIBS})
+  list(FILTER runtime_SRCS EXCLUDE REGEX ".*cuda_graph_runner.cpp")
 endif()
 
 add_library(runtime STATIC ${runtime_SRCS})

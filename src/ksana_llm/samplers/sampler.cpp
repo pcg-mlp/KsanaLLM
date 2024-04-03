@@ -2,7 +2,9 @@
 
 ==============================================================================*/
 
-#include <curand_kernel.h>
+#ifdef ENABLE_CUDA
+#  include <curand_kernel.h>
+#endif
 
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/common_device.h"
@@ -13,6 +15,7 @@
 namespace ksana_llm {
 
 Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context) {
+#ifdef ENABLE_CUDA
   batch_schedule_config_ = batch_scheduler_config;
   context_ = context;
   rank_ = rank;
@@ -59,6 +62,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   host_output_tokens_.resize(max_batch_size);
 
   topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
+#endif
 }
 
 Sampler::~Sampler() {
@@ -73,6 +77,7 @@ Sampler::~Sampler() {
 }
 
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
+#ifdef ENABLE_CUDA
   if (rank_ == 0) {
     bool use_arg_max = true;
     bool use_top_p = false;
@@ -142,6 +147,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
     }
   }
+#endif
   return Status();
 }
 

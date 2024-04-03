@@ -5,7 +5,10 @@
 #include "ksana_llm/models/llama/llama_weight.h"
 #include "ksana_llm/utils/common_device.h"
 
-#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#endif
+
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 
@@ -181,9 +184,11 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& qkv_weight_tensor = weights_map_[qkv_name];
+#ifdef ENABLE_CUDA
     InvokePermute(qkv_weight_tensor.GetPtr<void>(), last_qkv_tensor.GetPtr<void>(),
                   {3, hidden_units / tensor_para_size_, hidden_units}, {2, 0, 1},
                   context_->GetComputeStreams()[rank_].Get());
+#endif
     Tensor t = last_qkv_tensor;
     last_qkv_tensor = qkv_weight_tensor;
     weights_map_[qkv_name] = t;
@@ -194,8 +199,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string down_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.down_proj.weight";
     Tensor& down_weight_tensor = weights_map_[down_proj_name];
+#ifdef ENABLE_CUDA
     InvokePermute(down_weight_tensor.GetPtr<void>(), last_mlp_tensor.GetPtr<void>(),
                   {hidden_units, inter_size / tensor_para_size_}, {1, 0}, context_->GetComputeStreams()[rank_].Get());
+#endif
     Tensor t = last_mlp_tensor;
     last_mlp_tensor = down_weight_tensor;
     weights_map_[down_proj_name] = t;
@@ -203,8 +210,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
 
     std::string gate_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.gate_proj.weight";
     Tensor& gate_weight_tensor = weights_map_[gate_proj_name];
+#ifdef ENABLE_CUDA
     InvokePermute(gate_weight_tensor.GetPtr<void>(), last_mlp_tensor.GetPtr<void>(),
                   {inter_size / tensor_para_size_, hidden_units}, {1, 0}, context_->GetComputeStreams()[rank_].Get());
+#endif
     t = last_mlp_tensor;
     last_mlp_tensor = gate_weight_tensor;
     weights_map_[gate_proj_name] = t;
@@ -212,8 +221,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
 
     std::string up_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.up_proj.weight";
     Tensor& up_weight_tensor = weights_map_[up_proj_name];
+#ifdef ENABLE_CUDA
     InvokePermute(up_weight_tensor.GetPtr<void>(), last_mlp_tensor.GetPtr<void>(),
                   {inter_size / tensor_para_size_, hidden_units}, {1, 0}, context_->GetComputeStreams()[rank_].Get());
+#endif
     t = last_mlp_tensor;
     last_mlp_tensor = up_weight_tensor;
     weights_map_[up_proj_name] = t;
@@ -225,8 +236,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string o_proj_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.o_proj.weight";
     Tensor& o_proj_weight_tensor = weights_map_[o_proj_name];
+#ifdef ENABLE_CUDA
     InvokePermute(o_proj_weight_tensor.GetPtr<void>(), last_o_proj_tensor.GetPtr<void>(),
                   {hidden_units, hidden_units / tensor_para_size_}, {1, 0}, context_->GetComputeStreams()[rank_].Get());
+#endif
     Tensor t = last_o_proj_tensor;
     last_o_proj_tensor = o_proj_weight_tensor;
     weights_map_[o_proj_name] = t;
@@ -235,8 +248,10 @@ Status LlamaWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_l
   // permute lm_head: permute(1, 0)
   Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
   Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
+#ifdef ENABLE_CUDA
   InvokePermute(lm_head_tensor.GetPtr<void>(), lm_head_transpose_tensor.GetPtr<void>(), {vocab_size, hidden_units},
                 {1, 0}, context_->GetComputeStreams()[rank_].Get());
+#endif
   Tensor t = lm_head_transpose_tensor;
   lm_head_transpose_tensor = lm_head_tensor;
   weights_map_["lm_head.weight"] = t;
@@ -312,7 +327,9 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     if (data_type_iter.second == TYPE_BF16) {
       Tensor& tensor = weights_map_[data_type_iter.first];
       GetBlockManager()->SetDeviceId(rank_);
+#ifdef ENABLE_CUDA
       BFloat16ToFloat16(tensor.GetPtr<void>(), tensor.GetElementNumber(), context_->GetComputeStreams()[rank_].Get());
+#endif
     }
   }
   DeviceSynchronize();
@@ -335,7 +352,7 @@ Status LlamaWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size
   GetBlockManager()->SetDeviceId(rank_);
   GetBlockManager()->AllocateContiguous(length, block_id);
 
-  weights_map_.emplace(weight_name, Tensor(MEMORY_GPU, dtype, shapes, block_id));
+  weights_map_.emplace(weight_name, Tensor(model_config_.memory_device, dtype, shapes, block_id));
   return Status();
 }
 

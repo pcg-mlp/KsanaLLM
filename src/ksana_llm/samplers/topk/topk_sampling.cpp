@@ -15,6 +15,7 @@
 namespace ksana_llm {
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandState_t* device_curandstates)
     : BaseSampling(max_batch_size, max_vocab_size) {
+#ifdef ENABLE_CUDA
   float* logits = nullptr;
   tensorrt_llm::kernels::invokeBatchTopKSampling(nullptr, workspace_size_, logits, nullptr, nullptr, nullptr, nullptr,
                                                  nullptr, nullptr, nullptr, 1024, nullptr, 0, nullptr,
@@ -27,6 +28,7 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandS
   GetBlockManager()->GetContiguousPtr(workspace_block_id_, workspace_);
   tensorrt_llm::kernels::invokeCurandBatchInitialize(device_curandstates, nullptr, max_batch_size,
                                                      static_cast<uint64_t*>(workspace_ + workspace_size_), 0);
+#endif
 }
 
 TopkSampling::~TopkSampling() {
@@ -39,6 +41,7 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
                                  const SamplingConfig* sampling_config,
                                  SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
                                  Stream& stream) {
+#ifdef ENABLE_CUDA
   if (sampling_devide_parameter.device_topKs == nullptr) {
     // greedy
     llm_kernels::nvidia::InvokeArgMaxReduce(logits, offsets, sampling_devide_parameter.bs,
@@ -59,6 +62,7 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
         static_cast<int>(sampling_devide_parameter.vocab_size_padded), nullptr, nullptr, stream.Get(),
         static_cast<int>(sampling_devide_parameter.bs), 0, nullptr, false, logitHasProbs);
   }
+#endif
   return Status();
 }
 
