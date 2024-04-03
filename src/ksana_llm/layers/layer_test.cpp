@@ -1,8 +1,9 @@
 /* Copyright 2023 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+#include <numeric>
+
 #ifdef ENABLE_CUDA
-#  include "flash_api.h"
 #  include "ksana_llm/layers/activation_layer.h"
 #  include "ksana_llm/layers/add_layer.h"
 #  include "ksana_llm/layers/attention_layer.h"

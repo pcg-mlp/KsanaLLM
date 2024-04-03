@@ -15,7 +15,7 @@ TensorT<T>::TensorT() : device(MEMORY_HOST), dtype(TYPE_INVALID), shape({}) {}
 
 template <int T>
 TensorT<T>::TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id,
-                    const std::vector<int>& strides, DataFormat data_format)
+                    const std::vector<int64_t>& strides, DataFormat data_format)
     : device(device), dtype(dtype), shape(shape), block_id(block_id), strides(strides), data_format(data_format) {
   InitializeDeviceTensor();
 }

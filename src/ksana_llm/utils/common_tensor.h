@@ -33,7 +33,7 @@ class TensorT {
 
   TensorT();
   TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id,
-          const std::vector<int>& strides = {}, DataFormat data_format = FORMAT_DEFAULT);
+          const std::vector<int64_t>& strides = {}, DataFormat data_format = FORMAT_DEFAULT);
 
   size_t GetElementNumber() const;
   size_t GetTotalBytes() const;
@@ -65,7 +65,7 @@ class TensorT {
   typename DeviceTensorTypeTraits<T>::value_type device_tensor_;
 
   // The data strides and data format.
-  std::vector<int> strides;
+  std::vector<int64_t> strides;
   DataFormat data_format;
 
  private:

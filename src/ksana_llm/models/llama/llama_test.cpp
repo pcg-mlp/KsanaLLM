@@ -6,8 +6,8 @@
 
 #ifdef ENABLE_CUDA
 
+#  include <Python.h>
 #  include <filesystem>
-#  include "flash_api.h"
 #  include "ksana_llm/models/llama/llama.h"
 #  include "ksana_llm/samplers/sampler.h"
 #  include "test.h"
