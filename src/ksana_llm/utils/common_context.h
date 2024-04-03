@@ -4,8 +4,7 @@
 #pragma once
 
 #include <vector>
-#include "ksana_llm/utils/device_helper.h"
-#include "ksana_llm/utils/memory_device.h"
+#include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 
@@ -19,7 +18,7 @@ struct ExtensionTypeTraits {
 template <int T>
 class ContextT {
  public:
-  ContextT(const int tensor_parallel_size, const int pipeline_parallel_size, const MemoryDevice device_type);
+  ContextT(const int tensor_parallel_size, const int pipeline_parallel_size);
   ~ContextT();
 
   int GetTensorParallelSize() { return tensor_parallel_size_; }
@@ -57,7 +56,6 @@ class ContextT {
   // if true, only one thread execute context_decode/decode and context_decode decode run in sync
   // TODO(karlluo): load from environment
   bool is_contextdecode_and_decode_run_serially_{true};
-  MemoryDevice device_type_{MemoryDevice::MEMORY_GPU};
 
   // streams
   std::vector<Stream> memory_manage_streams_;

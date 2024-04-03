@@ -3,19 +3,22 @@
 ==============================================================================*/
 #include "ksana_llm/utils/common_tensor.h"
 
-#include "ksana_llm/utils/device_helper.h"
-
 #include <numeric>
 #include <string>
+
+#include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 
 template <int T>
-TensorT<T>::TensorT() : device(MEMORY_CPU), dtype(TYPE_INVALID), shape({}) {}
+TensorT<T>::TensorT() : device(MEMORY_HOST), dtype(TYPE_INVALID), shape({}) {}
 
 template <int T>
-TensorT<T>::TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id)
-    : device(device), dtype(dtype), shape(shape), block_id(block_id) {}
+TensorT<T>::TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id,
+                    const std::vector<int>& strides, DataFormat data_format)
+    : device(device), dtype(dtype), shape(shape), block_id(block_id), strides(strides), data_format(data_format) {
+  InitializeDeviceTensor();
+}
 
 template <int T>
 size_t TensorT<T>::GetElementNumber() const {
@@ -32,8 +35,8 @@ size_t TensorT<T>::GetTotalBytes() const {
 
 template <int T>
 std::string TensorT<T>::DeviceToString() const {
-  static const std::unordered_map<MemoryDevice, std::string> mem_to_string{
-      {MEMORY_CPU, "CPU"}, {MEMORY_CPU_PINNED, "CPU_PINNED"}, {MEMORY_GPU, "GPU"}};
+  static const std::unordered_map<MemoryDevice, std::string> mem_to_string{{MEMORY_HOST, "host"},
+                                                                           {MEMORY_DEVICE, "device"}};
   return mem_to_string.at(device);
 }
 
@@ -73,7 +76,7 @@ void TensorT<T>::SaveToFile(const std::string& file_path) {
   size_t total_size = GetTotalBytes();
   void* cpu_data = malloc(total_size);
   void* tensor_data_ptr = GetPtr<void>();
-  auto memcpy_type = (device == MEMORY_GPU) ? MEMCPY_DEVICE_TO_HOST : MEMCPY_HOST_TO_HOST;
+  auto memcpy_type = (device == MEMORY_DEVICE) ? MEMCPY_DEVICE_TO_HOST : MEMCPY_HOST_TO_HOST;
   Memcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
 
   std::filesystem::path dir_path = std::filesystem::path(file_path).parent_path();
@@ -120,11 +123,11 @@ void TensorT<T>::SaveToFile(const std::string& file_path) {
 
 template class TensorT<ACTIVE_DEVICE_TYPE>;
 
-template float* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<float>() const;
-template int* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<int>() const;
-template int8_t* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<int8_t>() const;
-template char* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<char>() const;
-template void* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<void>() const;
-template void** TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<void*>() const;
+template float* TensorT<ACTIVE_DEVICE_TYPE>::GetPtr<float>() const;
+template int* TensorT<ACTIVE_DEVICE_TYPE>::GetPtr<int>() const;
+template int8_t* TensorT<ACTIVE_DEVICE_TYPE>::GetPtr<int8_t>() const;
+template char* TensorT<ACTIVE_DEVICE_TYPE>::GetPtr<char>() const;
+template void* TensorT<ACTIVE_DEVICE_TYPE>::GetPtr<void>() const;
+template void** TensorT<ACTIVE_DEVICE_TYPE>::GetPtr<void*>() const;
 
 }  // namespace ksana_llm

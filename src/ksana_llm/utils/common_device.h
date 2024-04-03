@@ -4,7 +4,7 @@
 #pragma once
 
 #include <cstddef>
-#include "ksana_llm/utils/dtypes.h"
+#include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 

@@ -641,11 +641,6 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 }
 
 template class Llama<float>;
-#ifdef ENABLE_CUDA
-template class Llama<half>;
-#endif
-#ifdef ENABLE_ACL
-template class Llama<aclFloat16>;
-#endif
+template class Llama<float16>;
 
 }  // namespace ksana_llm

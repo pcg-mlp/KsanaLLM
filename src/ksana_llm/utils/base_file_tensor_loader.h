@@ -1,7 +1,7 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #pragma once
 
-#include "ksana_llm/utils/dtypes.h"
+#include "ksana_llm/utils/device_types.h"
 
 #include <caffe2/serialize/inline_container.h>
 #include <torch/csrc/jit/serialization/import_read.h>

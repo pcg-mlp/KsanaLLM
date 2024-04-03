@@ -8,8 +8,6 @@ setting:
     pipeline_para_size: 1
     # 是否启用lora适配，false表示不启用，true表示启用
     enable_lora_adapter: false
-    # 运行设备：英伟达GPU or 华为昇腾NPU，默认是GPU
-    device: gpu
   # 调度相关配置
   batch_scheduler:
     # 请求在队列中的超时时间，单位为毫秒

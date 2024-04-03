@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ksana_llm/block_manager/block_manager.h"
-#include "ksana_llm/utils/dtypes.h"
+#include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
@@ -32,7 +32,8 @@ class TensorT {
   std::vector<size_t> shape;
 
   TensorT();
-  TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id);
+  TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id,
+          const std::vector<int>& strides = {}, DataFormat data_format = FORMAT_DEFAULT);
 
   size_t GetElementNumber() const;
   size_t GetTotalBytes() const;
@@ -62,6 +63,10 @@ class TensorT {
 
   // The device tensor.
   typename DeviceTensorTypeTraits<T>::value_type device_tensor_;
+
+  // The data strides and data format.
+  std::vector<int> strides;
+  DataFormat data_format;
 
  private:
   // Initialize the device tensor.

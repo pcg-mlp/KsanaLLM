@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "ksana_llm/utils/device_helper.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 

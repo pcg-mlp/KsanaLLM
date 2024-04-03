@@ -3,10 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include <cuda_runtime.h>
-
 #include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 
@@ -54,7 +51,7 @@ template <>
 void EventCreateT<DEVICE_TYPE_NVIDIA>(EventT<DEVICE_TYPE_NVIDIA>* event);
 
 template <>
-void EventCreateWithFlagsT(EventT<DEVICE_TYPE_NVIDIA>* event, unsigned int  flags);
+void EventCreateWithFlagsT(EventT<DEVICE_TYPE_NVIDIA>* event, unsigned int flags);
 
 template <>
 void EventDestroyT<DEVICE_TYPE_NVIDIA>(EventT<DEVICE_TYPE_NVIDIA> event);

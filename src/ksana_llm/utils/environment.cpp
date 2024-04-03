@@ -11,9 +11,9 @@
 
 #include "fmt/core.h"
 #include "gflags/gflags.h"
-#include "ksana_llm/utils/device_helper.h"
 #include "nlohmann/json.hpp"
 
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
@@ -86,17 +86,6 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.pipeline_para_size", 1);
   enable_lora_adapter_ =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
-
-  std::string device_type_name =
-      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global.device", "gpu");
-  if (device_type_name == "gpu") {
-    memory_device_ = MemoryDevice::MEMORY_GPU;
-  } else if (device_type_name == "npu") {
-    memory_device_ = MemoryDevice::MEMORY_ASCEND;
-  } else {
-    throw std::invalid_argument(
-        fmt::format("setting.global.device in yaml is {} which is not supported", device_type_name));
-  }
 
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
     throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");
@@ -215,7 +204,6 @@ Status Environment::ParseModelConfig(const std::string &model_name, const std::s
   model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_token_number;
   model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_input_len +
                                batch_manager_config_.batch_scheduler_config.max_output_len;
-  model_config.memory_device = memory_device_;
   model_configs_[model_config.name] = model_config;
 
   NLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
@@ -255,10 +243,10 @@ void Environment::InitializeBlockManagerConfig() {
   block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
   block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
 
-  block_manager_config_.host_allocator_config.device = MemoryDevice::MEMORY_CPU_PINNED;
-  block_manager_config_.device_allocator_config.device = memory_device_;
+  block_manager_config_.host_allocator_config.device = MemoryDevice::MEMORY_HOST;
+  block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
 
-  // TODO(yancyliu): should calculated through device memory useage.
+  // The default block number, will be overwrited through memory usage.
   block_manager_config_.host_allocator_config.blocks_num = 512 * 10;
   block_manager_config_.device_allocator_config.blocks_num = 512;
 }

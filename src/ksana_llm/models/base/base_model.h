@@ -59,7 +59,7 @@ class BaseModel {
  protected:
   // Create Buffer tensor
   Status CreateBufferTensor(Tensor& buf_tensor, const std::vector<size_t> shape, const DataType dtype,
-                            const MemoryDevice memory_device = MEMORY_GPU);
+                            const MemoryDevice memory_device = MEMORY_DEVICE);
 
   // Release all buffer tensors
   Status ReleaseBufferTensors();

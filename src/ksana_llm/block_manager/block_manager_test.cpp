@@ -21,13 +21,12 @@ class BlockManagerTest : public testing::Test {
     BlockManagerConfig block_manager_config;
     block_manager_config.host_allocator_config.blocks_num = 2;
     block_manager_config.host_allocator_config.block_size = 1024;
-    block_manager_config.host_allocator_config.device = MEMORY_CPU_PINNED;
+    block_manager_config.host_allocator_config.device = MEMORY_HOST;
     block_manager_config.device_allocator_config.blocks_num = 2;
     block_manager_config.device_allocator_config.block_size = 1024;
-    block_manager_config.device_allocator_config.device = MEMORY_GPU;
+    block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
-    std::shared_ptr<Context> context =
-        std::make_shared<Context>(2, 1, block_manager_config.device_allocator_config.device);
+    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
 
     // 使用配置创建一个 BlockManager 对象
     block_manager = new BlockManager(block_manager_config, context);
