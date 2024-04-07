@@ -6,8 +6,8 @@
 #include <iostream>
 #include <stdexcept>
 #include "fmt/core.h"
-#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 

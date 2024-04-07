@@ -29,7 +29,7 @@ if(WITH_ACL)
   file(GLOB_RECURSE ascend_kernels_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/ascend/*.cpp)
   list(FILTER ascend_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
-  list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_pointwise)
+  list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_pointwise llm_kernels_ascend_transpose)
 endif()
 
 message(STATUS "ascend_kernels_SRCS: ${ascend_kernels_SRCS}")

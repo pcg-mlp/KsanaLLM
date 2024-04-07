@@ -12,8 +12,8 @@
 
 using namespace ksana_llm;
 
-// 定义一个 LlamaNvidiaTest 类,继承自 testing::Test
-class LlamaNvidiaTest : public testing::Test {
+// 定义一个 LlamaTest 类,继承自 testing::Test
+class LlamaTest : public testing::Test {
  protected:
   void SetUp() override {
     context_ = std::make_shared<Context>(1, 1);
@@ -45,7 +45,7 @@ class LlamaNvidiaTest : public testing::Test {
   std::shared_ptr<Context> context_{nullptr};
 };
 
-TEST_F(LlamaNvidiaTest, ForwardTest) {
+TEST_F(LlamaTest, ForwardTest) {
   int device_id = 0;
   SetDevice(device_id);
 
