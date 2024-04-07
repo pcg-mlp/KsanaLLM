@@ -4,13 +4,11 @@
 
 #include "ksana_llm/utils/singleton.h"
 
-#ifdef ENABLE_CUDA
-
-#  include <Python.h>
-#  include <filesystem>
-#  include "ksana_llm/models/llama/llama.h"
-#  include "ksana_llm/samplers/sampler.h"
-#  include "test.h"
+#include <Python.h>
+#include <filesystem>
+#include "ksana_llm/models/llama/llama.h"
+#include "ksana_llm/samplers/sampler.h"
+#include "test.h"
 
 using namespace ksana_llm;
 
@@ -64,8 +62,8 @@ TEST_F(LlamaNvidiaTest, ForwardTest) {
   EventCreate(&stop);
 
   Py_Initialize();
-  std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<half>>(model_config, 0, context_);
-  std::shared_ptr<Llama<half>> llama = std::make_shared<Llama<half>>(model_config, 0, context_);
+  std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
+  std::shared_ptr<Llama<float16>> llama = std::make_shared<Llama<float16>>(model_config, 0, context_);
 
   // Weight Name Check
   // 正确的 weight 名称
@@ -202,5 +200,3 @@ TEST(TorchTensorTest, TorchTensorTest) {
   Free(b_ptr);
   Free(c_ptr);
 }
-
-#endif
