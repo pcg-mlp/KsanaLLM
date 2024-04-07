@@ -6,6 +6,7 @@
 
 #include <memory>
 #include "ksana_llm/utils/common_device.h"
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
 #include "test.h"
@@ -26,7 +27,12 @@ class BlockManagerTest : public testing::Test {
     block_manager_config.device_allocator_config.block_size = 1024;
     block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
-    std::shared_ptr<Context> context = std::make_shared<Context>(2, 1);
+    int device_num = 0;
+    GetDeviceCount(&device_num);
+    NLLM_LOG_INFO << "Device number: " << device_num;
+
+    std::shared_ptr<Context> context =
+        std::make_shared<Context>(/*tensor_parallel_size*/ device_num, /*pipeline_parallel_size*/ 1);
 
     // 使用配置创建一个 BlockManager 对象
     block_manager = new BlockManager(block_manager_config, context);

@@ -3,8 +3,6 @@ setting:
     tensor_para_size: 1
     pipeline_para_size: 1
     enable_lora_adapter: false
-    # 运行设备：英伟达GPU or 华为昇腾NPU，默认是GPU
-    device: npu
   batch_scheduler:
     waiting_timeout_in_ms: 600000
     max_waiting_queue_len: 100

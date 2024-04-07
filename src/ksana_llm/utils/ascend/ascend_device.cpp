@@ -65,7 +65,7 @@ template <>
 void GetDeviceCountT<DEVICE_TYPE_ASCEND>(int* count) {
   uint32_t tmp_count = 0;
   ACL_CHECK(aclrtGetDeviceCount(&tmp_count));
-  *count = static_cast<int32_t>(tmp_count);
+  *count = static_cast<int>(tmp_count);
 }
 
 template <>

@@ -227,14 +227,18 @@ void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cud
 
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
                    cudaStream_t& stream) {
+  NLLM_CHECK_WITH_INFO(input_shape.size() <= 4ul,
+                       fmt::format("input shape dims number {} > 4 is not supported", input_shape.size()));
+  if (input_shape.empty()) {
+    return;
+  }
+
   // Extend to num_dims = 4
   input_shape.resize(4, 1);
   for (size_t i = permutation.size(); i < 4; ++i) {
     permutation.push_back(i);
   }
-#ifdef ENABLE_CUDA
   llm_kernels::nvidia::InvokePermute<4ul, sizeof(half)>(input, output, input_shape, permutation, stream);
-#endif
 }
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
@@ -245,6 +249,13 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
         fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
   }
   tensor.dtype = DataType::TYPE_FP16;
+  return Status();
+}
+
+Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<size_t>& permutation, Stream& stream,
+               void* workspace_ptr) {
+  InvokePermute(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape, permutation,
+                stream.Get());
   return Status();
 }
 

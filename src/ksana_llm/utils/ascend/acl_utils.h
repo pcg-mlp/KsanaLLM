@@ -13,7 +13,6 @@
 namespace ksana_llm {
 
 // ref: https://www.hiascend.com/document/detail/zh/canncommercial/5046/windowsversion/windowsug/aclcppdevg_03_0516.html
-// https://www.hiascend.com/document/detail/en/canncommercial/601/inferapplicationdev/aclpythondevg/aclpythondevg_01_0778.html
 static const char* GetACLErrorString(aclError error) {
   switch (error) {
     case ACL_SUCCESS:
