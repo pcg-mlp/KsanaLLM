@@ -117,7 +117,8 @@ void FreeHostT<DEVICE_TYPE_ASCEND>(void* host_ptr) {
 
 template <>
 void MallocAsyncT<DEVICE_TYPE_ASCEND>(void** dev_ptr, size_t size, StreamT<DEVICE_TYPE_ASCEND> stream) {
-  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_MALLOC_NORMAL_ONLY));
+  // NOTE(karlluo): 910B only have HBM
+  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
 }
 
 template <>
