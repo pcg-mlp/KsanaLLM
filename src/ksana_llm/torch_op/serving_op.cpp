@@ -79,7 +79,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("beam_width", &ksana_llm::SamplingConfig::beam_width)
       .def_readwrite("topk", &ksana_llm::SamplingConfig::topk)
       .def_readwrite("topp", &ksana_llm::SamplingConfig::topp)
-      .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature);
+      .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature)
+      .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty);
 
   // Export `StreamingIterator` to python.
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")

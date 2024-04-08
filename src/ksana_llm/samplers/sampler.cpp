@@ -4,6 +4,7 @@
 
 #ifdef ENABLE_CUDA
 #  include <curand_kernel.h>
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
 #include "ksana_llm/samplers/sampler.h"
@@ -24,11 +25,13 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   GetBlockManager()->SetDeviceId(rank_);
 
   GetBlockManager()->AllocateContiguous(
-      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(curandState_t) + sizeof(int*)) * max_batch_size,
+      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(curandState_t) + sizeof(int*)) * max_batch_size +
+          sizeof(float) * batch_schedule_config_.max_vocab_size,
       device_buffer_block_id_);
   GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
   NLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
-                 << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(curandState_t) + sizeof(int*)) * max_batch_size;
+                 << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(curandState_t) + sizeof(int*)) * max_batch_size +
+                        sizeof(float) * batch_schedule_config_.max_vocab_size;
   device_output_tokens_ = static_cast<uint32_t*>(device_buffer_);
   device_offset_ = device_output_tokens_ + max_batch_size;
   device_topKs_ = reinterpret_cast<int*>(device_offset_ + max_batch_size);
@@ -36,6 +39,9 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   device_temperatures_ = reinterpret_cast<float*>(device_topPs_ + max_batch_size);
   device_curandstates_ = reinterpret_cast<curandState_t*>(device_temperatures_ + max_batch_size);
   device_output_tokens_ptrs_ = reinterpret_cast<int**>(device_curandstates_ + max_batch_size);
+  device_inv_repetition_penalties_ = reinterpret_cast<float*>(device_output_tokens_ptrs_ + max_batch_size);
+
+  inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
 
   if (sizeof(uint32_t) != sizeof(int)) {
     NLLM_LOG_ERROR << fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int));
@@ -69,6 +75,27 @@ Sampler::~Sampler() {
   if (device_buffer_block_id_ != -1) {
     GetBlockManager()->FreeContiguous(device_buffer_block_id_);
   }
+}
+
+void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
+                                     const int vocab_size, const float repetition_penalty, Stream& stream) {
+#ifdef ENABLE_CUDA
+  // inv_repetition_penalties_ is filled with 1.0f
+  std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
+  // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
+  float inv_repetition_penalty = 1.0f / repetition_penalty;
+  for (int i = 0; i < input_tokens->size(); ++i) {
+    inv_repetition_penalties_[input_tokens->at(i)] = inv_repetition_penalty;
+  }
+  for (int i = 0; i < output_tokens->size(); ++i) {
+    inv_repetition_penalties_[output_tokens->at(i)] = inv_repetition_penalty;
+  }
+  // copy inv_repetition_penalties_ to device
+  MemcpyAsync(device_inv_repetition_penalties_, inv_repetition_penalties_.data(), sizeof(float) * vocab_size,
+              MEMCPY_HOST_TO_DEVICE, stream);
+  // logits = mul(logits, device_inv_repetition_penalties_)
+  Mul(logits, device_inv_repetition_penalties_, logits, vocab_size, rank_);
+#endif
 }
 
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
@@ -112,6 +139,11 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
 
       } else {
         return Status(RET_INVALID_ARGUMENT, "sampling for beam_width > 1 not implemented");
+      }
+      if (sampling_config->repetition_penalty != 1.0f) {
+        int vocab_size = batch_schedule_config_.max_vocab_size;
+        ApplyRepetitionPenalty(logits + req_index * vocab_size, sampling_req.input_tokens, sampling_req.output_tokens,
+                               vocab_size, sampling_config->repetition_penalty, stream);
       }
       req_index++;
     }

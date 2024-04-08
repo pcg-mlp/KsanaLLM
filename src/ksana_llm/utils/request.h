@@ -18,6 +18,8 @@ struct SamplingConfig {
   int topk = 1;
   float topp = 0.0f;
   float temperature = 0.0f;
+  // The parameter for repetition penalty. 1.0 means no penalty
+  float repetition_penalty = 1.0f;
 };
 
 class Request {

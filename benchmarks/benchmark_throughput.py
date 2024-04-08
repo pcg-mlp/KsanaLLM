@@ -130,7 +130,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "sampling_config": {
                 "temperature": 0.0,
                 "topk": 1,
-                "topp": 0.0
+                "topp": 0.0,
+                "repetition_penalty" : 1.0
             },
             "stream": False,
         }
@@ -142,6 +143,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "n": 1,
             "temperature": 0.00000001,
             "max_tokens": 1024,
+            "repetition_penalty" : 1.0
         }
 
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
@@ -175,7 +177,6 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
         output_token_num = len(output.get("output_token_ids")[0])
     output_len = len(output_text)
     result_list[req_id] = output_text
-    print("", output_text)
     REQUEST_LATENCY.append(
         (len(prompt), output_len if output_len > 0 else 1, input_token_num, output_token_num, request_latency))
     pbar.update(1)
@@ -191,7 +192,8 @@ def send_request_sync(prompt: str, api_url: str, req_id: int,
         "sampling_config": {
             "temperature": 0.0,
             "topk": 1,
-            "topp": 0.0
+            "topp": 0.0,
+            "repetition_penalty" : 1.0
         },
         "stream": False,
     }

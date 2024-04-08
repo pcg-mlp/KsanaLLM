@@ -54,7 +54,8 @@ if __name__ == "__main__":
             "sampling_config": {
                 "temperature": 0.0,
                 "topk": 1,
-                "topp": 0.0
+                "topp": 0.0,
+                "repetition_penalty": 1.0
             },
             "stream": False,
         }
