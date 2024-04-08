@@ -78,6 +78,7 @@ TEST_F(LlamaTest, ForwardTest) {
   EXPECT_EQ(wrong_tensor.device, MEMORY_HOST);
   EXPECT_TRUE(wrong_tensor.shape.empty());
 
+#ifdef ENABLE_CUDA
   // ContextDecode
   ForwardRequest forward;
   std::vector<int> input_ids = {233, 1681};
@@ -144,6 +145,7 @@ TEST_F(LlamaTest, ForwardTest) {
   EventElapsedTime(&milliseconds, start, stop);
 
   EXPECT_TRUE((milliseconds / 10) < 30);
+#endif
 
   llama.reset();
   llama_weight.reset();
@@ -155,6 +157,7 @@ TEST_F(LlamaTest, ForwardTest) {
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {
+#ifdef ENABLE_CUDA
   int device_id = 0;
   SetDevice(device_id);
   // 设定张量的大小
@@ -199,4 +202,5 @@ TEST(TorchTensorTest, TorchTensorTest) {
   Free(a_ptr);
   Free(b_ptr);
   Free(c_ptr);
+#endif
 }

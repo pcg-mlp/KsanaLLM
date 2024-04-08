@@ -308,6 +308,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
     }
     LoadWeightsFromFile(weights_loader);
+    StreamSynchronize(context_->GetComputeStreams()[rank_]);
   }
 
   CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
