@@ -17,6 +17,8 @@ class Sampler {
   Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context);
   ~Sampler();
   Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
+  void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
+                              const int vocab_size, const float repetition_penalty, Stream& stream);
 
  private:
   BatchSchedulerConfig batch_schedule_config_;
@@ -30,6 +32,7 @@ class Sampler {
   float* device_topPs_;
   float* device_temperatures_;
   int** device_output_tokens_ptrs_;
+  float* device_inv_repetition_penalties_;
 #ifdef ENABLE_CUDA
   curandState_t* device_curandstates_{nullptr};
 #endif
@@ -43,6 +46,7 @@ class Sampler {
 
   // The context
   std::shared_ptr<Context> context_;
+  std::vector<float> inv_repetition_penalties_;
 };
 
 }  // namespace ksana_llm

@@ -62,4 +62,7 @@ void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cud
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
                    cudaStream_t& stream);
 
+// c = Mul(a, b)
+void Mul(float* a, float* b, float* c, int n, int device_rank);
+
 }  // namespace ksana_llm

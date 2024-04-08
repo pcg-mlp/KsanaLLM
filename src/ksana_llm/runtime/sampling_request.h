@@ -22,6 +22,7 @@ struct SamplingRequest {
   std::vector<float*> logits_buf;
   size_t logits_offset;
 
+  std::vector<int>* input_tokens;
   // The output token will be appended here.
   std::vector<int>* output_tokens;
 

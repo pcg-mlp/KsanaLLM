@@ -117,6 +117,7 @@ TEST_F(LlamaTest, ForwardTest) {
   sample_config.topk = 1;
   sample_config.topp = 0;
   sample_config.temperature = 0;
+  sample_config.repetition_penalty = 1;
   sample_req.sampling_config = &sample_config;
   BatchManagerConfig batch_manager_config;
   Singleton<Environment>::GetInstance()->GetBatchManagerConfig(batch_manager_config);

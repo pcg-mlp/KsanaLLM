@@ -119,8 +119,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   }
   mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
                  torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor,
-                 seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor, max_tokens,
-                 max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+                 seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
+                 max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
 #else
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
                              torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
@@ -266,6 +266,15 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
   InvokePermute(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape, permutation,
                 stream.Get());
   return Status();
+}
+
+// c = Mul(a, b)
+void Mul(float* a, float* b, float* c, int n, int device_rank) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, device_rank).dtype(torch::kFloat32);
+  auto a_tensor = torch::from_blob(a, {n}, options);
+  auto b_tensor = torch::from_blob(b, {n}, options);
+  auto c_tensor = torch::from_blob(c, {n}, options);
+  mul_out(c_tensor, a_tensor, b_tensor);
 }
 
 }  // namespace ksana_llm

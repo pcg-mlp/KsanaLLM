@@ -83,6 +83,7 @@ class ServingModel(object):
         sampling_config.topk = generation_config.top_k
         sampling_config.topp = generation_config.top_p
         sampling_config.temperature = generation_config.temperature
+        sampling_config.repetition_penalty = generation_config.repetition_penalty
 
         if streamer is None:
             _, outputs = self._serving.generate(model_name, inputs,

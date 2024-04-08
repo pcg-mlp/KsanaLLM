@@ -112,7 +112,8 @@ async def generate(request: Request) -> Response:
         num_beams=1,
         top_k=sampling_config["topk"],
         top_p=sampling_config["topp"],
-        temperature=sampling_config["temperature"])
+        temperature=sampling_config["temperature"],
+        repetition_penalty=sampling_config["repetition_penalty"])
 
     loop = asyncio.get_event_loop()
     if enable_streaming:
