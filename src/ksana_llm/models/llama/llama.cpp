@@ -12,6 +12,7 @@ namespace ksana_llm {
 
 template <typename T>
 Llama<T>::~Llama() {
+#ifdef ENABLE_CUDA
   // free all cude event
   EventDestroy(kvcache_offset_event_);
   EventDestroy(rotary_embedding_event_);
@@ -19,19 +20,20 @@ Llama<T>::~Llama() {
   EventDestroy(nccl_finish_event_);
   EventDestroy(compute_ready_event_);
   EventDestroy(logits_transfer_event_);
+#endif
 }
 
 template <typename T>
 Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) {
   GetBlockManager()->SetDeviceId(rank_);
 
-#ifdef ENABLE_CUDA
   context_ = context;
   rank_ = rank;
   num_layer_ = model_config.num_layer;
   weight_data_type_ = model_config.weight_data_type;
   vocab_size_ = model_config.vocab_size;
 
+#ifdef ENABLE_CUDA
   float layernorm_eps_ = model_config.layernorm_eps;
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
