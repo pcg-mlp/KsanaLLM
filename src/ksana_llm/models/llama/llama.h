@@ -12,6 +12,7 @@
 #include "ksana_llm/layers/flash_attention_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/matmul_layer.h"
+#include "ksana_llm/layers/nccl_all_gather_layer.h"
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
@@ -49,6 +50,7 @@ class Llama : public BaseModel {
   std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layers_;
   std::vector<std::shared_ptr<PagedAttentionLayer>> paged_attention_layers_;
   std::shared_ptr<NcclAllReduceSumLayer> nccl_all_reduce_sum_layer_;
+  std::shared_ptr<NcclAllGatherLayer> nccl_all_gather_layer_;
   std::shared_ptr<CustomAllReduceSumLayer> custom_all_reduce_sum_layer_0_;
   std::shared_ptr<AddLayer> add_layer_;
   std::shared_ptr<SiluMulLayer> silu_mul_layer_;
@@ -62,6 +64,7 @@ class Llama : public BaseModel {
   size_t hidden_units_;
   int pad_token_id_;
   uint32_t vocab_size_;
+  uint32_t vocab_size_pad_;
   float layernorm_eps_;
   DataType weight_data_type_;
   int block_token_num_;

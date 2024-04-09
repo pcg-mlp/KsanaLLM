@@ -48,6 +48,7 @@ setting:
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
     block_host_memory_factor: 2.0
+    prefix_cache_len: 0
   # 性能统计相关配置
   profiler:
     # 统计周期，每隔多少秒输出一次统计数据
@@ -63,7 +64,7 @@ model_spec:
     # 模型名称
     model_name: llama
     # 模型路径
-    model_dir: /model/qwen-hf/14B/
+    model_dir: /model/qwen-hf/Qwen1.5-14B-Chat-13995/
   # lora模型配置，可以有多个
   lora_models:
       # lora模型名称

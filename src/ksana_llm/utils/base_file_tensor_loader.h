@@ -7,6 +7,7 @@
 #include <torch/csrc/jit/serialization/import_read.h>
 #include <torch/csrc/jit/serialization/storage_context.h>
 #include <torch/script.h>
+#include <tuple>
 
 namespace ksana_llm {
 
@@ -20,7 +21,7 @@ class BaseFileTensorLoader {
   virtual const std::vector<std::string>& GetTensorNameList() = 0;
 
   // Pure virtual function to get a tensor by its name
-  virtual void* GetTensor(const std::string& tensor_name) = 0;
+  virtual std::tuple<void*, size_t> GetTensor(const std::string& tensor_name) = 0;
 
   virtual DataType GetTensorDataType(const std::string& tensor_name) = 0;
 

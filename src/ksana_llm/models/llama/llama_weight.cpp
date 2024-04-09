@@ -130,19 +130,24 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(tensor_name);
-    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos
-     || tensor_name.find("self_attn.W_pack") != std::string::npos) {
+    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos ||
+        tensor_name.find("self_attn.W_pack") != std::string::npos ||
+        tensor_name.find("embed_tokens") != std::string::npos ||
+        tensor_name.find("lm_head.weight") != std::string::npos) {
       tensor_para_offset = rank_;
-      if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
+      if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos ||
+          tensor_name.find("embed_tokens") != std::string::npos) {
         transpose_first = true;
         weight_shape[1] /= tensor_para_size_;
       } else {
-        weight_shape[0] /= tensor_para_size_;
+        weight_shape[0] = DivRoundUp(weight_shape[0], tensor_para_size_);
       }
     }
 
     // get weight's data ptr
-    void* weight_ptr = weights_loader->GetTensor(tensor_name);
+    void* weight_ptr;
+    size_t weight_size;
+    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(tensor_name);
     DataType weight_data_type = weights_loader->GetTensorDataType(tensor_name);
 
     // copy host data to device
@@ -163,10 +168,10 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
       GetBlockManager()->SetDeviceId(rank_);
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-    } else if (tensor_name.find("_proj.weight") != std::string::npos
-            || tensor_name.find("_proj.bias") != std::string::npos
-            || tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "lm_head.weight"
-            || tensor_name == "model.norm.weight" || tensor_name == "model.embed_tokens.weight") {
+    } else if (tensor_name.find("_proj.weight") != std::string::npos ||
+               tensor_name.find("_proj.bias") != std::string::npos ||
+               tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "lm_head.weight" ||
+               tensor_name == "model.norm.weight" || tensor_name == "model.embed_tokens.weight") {
       AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
       weights_data_type_map_[tensor_name] = weight_data_type;
       if (transpose_first) {
@@ -180,8 +185,12 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
       } else {
         tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
         GetBlockManager()->SetDeviceId(rank_);
+        size_t sub_bytes = 0;
+        if (rank_ == (tensor_para_size_ - 1) && tensor_name.find("lm_head.weight") != std::string::npos) {
+          sub_bytes = weights_map_[tensor_name].GetTotalBytes() * tensor_para_size_ - weight_size;
+        }
         MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                    weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                    weights_map_[tensor_name].GetTotalBytes() - sub_bytes, MEMCPY_HOST_TO_DEVICE,
                     context_->GetMemoryManageStreams()[rank_]);
       }
     } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {

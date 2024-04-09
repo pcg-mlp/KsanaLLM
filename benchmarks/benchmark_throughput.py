@@ -135,6 +135,14 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             },
             "stream": False,
         }
+    elif backend == "trt-llm":
+        data = {
+            "text_input": prompt, 
+            "max_tokens": 1024, 
+            "bad_words": "", 
+            "stop_words": "",
+            "top_k": 1, 
+        }
     elif backend in ["vllm", "evart"]:
         # max outputlen is 1024.
         data = {
@@ -167,6 +175,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     input_token_num = len(output.get("input_token_ids", ""))
     if backend == "ksana":
         output_text = output.get("texts", "").strip()
+    elif backend == "trt-llm":
+        output_text = output.get("text_output", "").strip()
     elif backend == "vllm":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
@@ -239,6 +249,8 @@ def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
 
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
+    if args.backend == "trt-llm":
+        api_url = "http://" + args.host + ":" + str(args.port) + "/v2/models/ensemble/generate"
     inputs = None
     if args.use_prefix_cache_prompts:
         _, inputs = prefix_cache_reader.load_prompts(input_csv=args.input_csv)

@@ -68,6 +68,7 @@ Status InferenceEngine::Initialize() {
   for (auto &[model_name, model_config] : model_configs) {
     max_batch_size = std::max(max_batch_size, (size_t)model_config.max_batch_size);
     max_vocab_size = std::max(max_vocab_size, (size_t)model_config.vocab_size);
+    max_vocab_size = DivRoundUp(max_vocab_size, model_config.tensor_para_size) * model_config.tensor_para_size;
   }
   batch_manager_config.batch_scheduler_config.max_batch_size = max_batch_size;
   batch_manager_config.batch_scheduler_config.max_vocab_size = max_vocab_size;

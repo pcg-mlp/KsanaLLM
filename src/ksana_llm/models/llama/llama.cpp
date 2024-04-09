@@ -32,6 +32,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   num_layer_ = model_config.num_layer;
   weight_data_type_ = model_config.weight_data_type;
   vocab_size_ = model_config.vocab_size;
+  vocab_size_pad_ = DivRoundUp(vocab_size_, model_config.tensor_para_size) * model_config.tensor_para_size;
 
 #ifdef ENABLE_CUDA
   float layernorm_eps_ = model_config.layernorm_eps;
@@ -67,7 +68,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
                                 max_seq_len_, max_token_num);
 
   size_t tensor_buffer_1_size =
-      std::max(max_batch_size_ * vocab_size_ * sizeof(float), max_token_num * hidden_units * 3 * dtype_size) /
+    std::max(max_batch_size_ * vocab_size_pad_ * sizeof(float), max_token_num * hidden_units * 3 * dtype_size) /
       GetTypeSize(weight_data_type_);
   size_t up_matmul_tensor_buffer_size = max_token_num * std::max(inter_size, hidden_units * 2);
   size_t max_block_num =
@@ -85,7 +86,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   STATUS_CHECK_FAILURE(CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, weight_data_type_));
   STATUS_CHECK_FAILURE(CreateBufferTensor(
       kv_cache_buffer_, {max_seq_len_, (max_seq_len_ + 511) / 512, head_num_per_tp, size_per_head + 2}, TYPE_FP32));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(logits_tensor_, {max_batch_size_, vocab_size_}, TYPE_FP32));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(logits_tensor_, {max_batch_size_, vocab_size_pad_}, TYPE_FP32));
   STATUS_CHECK_FAILURE(CreateBufferTensor(kv_cache_offset_tensor_, {max_batch_size_ + 1}, TYPE_INT32));
   STATUS_CHECK_FAILURE(
       CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings}, TYPE_FP16));
@@ -118,6 +119,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
     custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer>();
   }
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
+  nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer>();
   add_layer_ = std::make_shared<AddLayer>();
   silu_mul_layer_ = std::make_shared<SiluMulLayer>();
   matmul_layer_ = std::make_shared<MatMulLayer>();
@@ -127,6 +129,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   emb_lookup_layer_->Init({}, context_, rank_);
   layernorm_layer_->Init({layernorm_eps_}, context_, rank_);
   nccl_all_reduce_sum_layer_->Init({}, context_, rank_);
+  nccl_all_gather_layer_->Init({}, context_, rank_);
   add_layer_->Init({}, context_, rank_);
   silu_mul_layer_->Init({}, context_, rank_);
   matmul_layer_->Init({}, context_, rank_);
@@ -343,8 +346,8 @@ void Llama<T>::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRe
   StreamWaitEvent(context_->GetD2DStreams()[rank_], compute_ready_event_);
   // Copy to logits buf
   float* logits_ptr = logits_float[0].GetPtr<float>();
-  float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_;
-  MemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), MEMCPY_DEVICE_TO_DEVICE,
+  float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_pad_;
+  MemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_pad_ * sizeof(float), MEMCPY_DEVICE_TO_DEVICE,
               context_->GetD2DStreams()[rank_]);
   StreamSynchronize(context_->GetD2DStreams()[rank_]);
 #endif
@@ -544,6 +547,18 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids_, input_offset_uint64_tensor_, embedding_weight}, emb_lookup_output));
 
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetNCCLStreams()[rank_], compute_ready_event_);
+  }
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward({emb_lookup_output[0], temp_buffer_1[0]}, emb_lookup_output));
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
+  }
+
   // LlamaDecoder
   for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     STATUS_CHECK_RETURN(LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2,
@@ -566,6 +581,18 @@ Status Llama<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
   std::vector<Tensor>& lm_head_output = temp_buffer_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
+
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetNCCLStreams()[rank_], compute_ready_event_);
+  }
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward({lm_head_output[0], temp_buffer_1[0]}, lm_head_output));
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
+  }
 
   // Cast to float
   std::vector<Tensor>& logits_float = temp_buffer_1;
@@ -613,6 +640,18 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   STATUS_CHECK_RETURN(
       emb_lookup_layer_->Forward({input_ids_, input_offset_uint64_tensor_, embedding_weight}, emb_lookup_output));
 
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetNCCLStreams()[rank_], compute_ready_event_);
+  }
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward({emb_lookup_output[0], temp_buffer_1[0]}, emb_lookup_output));
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
+  }
+
   // LlamaDecoder
   for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     STATUS_CHECK_RETURN(LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2,
@@ -635,6 +674,18 @@ Status Llama<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
   std::vector<Tensor>& lm_head_output = temp_buffer_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
+
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(compute_ready_event_, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetNCCLStreams()[rank_], compute_ready_event_);
+  }
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward({lm_head_output[0], temp_buffer_1[0]}, lm_head_output));
+  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
+  }
 
   // Cast to float
   std::vector<Tensor>& logits_float = temp_buffer_1;

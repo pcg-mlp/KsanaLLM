@@ -114,7 +114,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       float* logits = sampling_req.logits_buf[rank_];
       if (device_logits == logits || device_logits == nullptr) {
         device_logits = logits;
-        sampling_devide_parameter.vocab_size_padded = model_config->vocab_size;
+        sampling_devide_parameter.vocab_size_padded = batch_schedule_config_.max_vocab_size;
       } else {
         return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
       }
