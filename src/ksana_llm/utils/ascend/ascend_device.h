@@ -5,7 +5,20 @@
 
 #include "ksana_llm/utils/common_device.h"
 
+#include <unordered_map>
+
 namespace ksana_llm {
+
+class AscendDeviceContextManager {
+ public:
+  AscendDeviceContextManager();
+  ~AscendDeviceContextManager();
+
+  // Get device id of device_id
+  aclrtContext& GetDeviceContext(int device_id);
+
+  std::unordered_map<int, aclrtContext> acl_contexts_;
+};
 
 template <>
 struct StreamTypeTraits<DEVICE_TYPE_ASCEND> {
