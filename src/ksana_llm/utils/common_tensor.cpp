@@ -77,6 +77,7 @@ void TensorT<T>::SaveToFile(const std::string& file_path) {
   void* cpu_data = malloc(total_size);
   void* tensor_data_ptr = GetPtr<void>();
   auto memcpy_type = (device == MEMORY_DEVICE) ? MEMCPY_DEVICE_TO_HOST : MEMCPY_HOST_TO_HOST;
+  DeviceSynchronize();
   Memcpy(cpu_data, tensor_data_ptr, total_size, memcpy_type);
 
   std::filesystem::path dir_path = std::filesystem::path(file_path).parent_path();

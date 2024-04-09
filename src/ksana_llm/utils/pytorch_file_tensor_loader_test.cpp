@@ -12,7 +12,7 @@ TEST(PytorchFileTensorLoaderTest, PytorchFileTensorLoaderTest) {
 
   // Iterate through the tensor names and check if the tensor can be loaded
   for (auto i : tensor_name_list) {
-    EXPECT_NE(loader.GetTensor(i), nullptr);  // Expect the tensor to be loaded successfully
+    EXPECT_NE(std::get<0>(loader.GetTensor(i)), nullptr);  // Expect the tensor to be loaded successfully
   }
 }
 

@@ -19,7 +19,7 @@ class PytorchFileTensorLoader : public BaseFileTensorLoader {
   const std::vector<std::string>& GetTensorNameList() { return tensor_name_list_; }
 
   // Get a tensor by its name
-  void* GetTensor(const std::string& tensor_name);
+  std::tuple<void*, size_t> GetTensor(const std::string& tensor_name);
 
   DataType GetTensorDataType(const std::string& tensor_name);
 

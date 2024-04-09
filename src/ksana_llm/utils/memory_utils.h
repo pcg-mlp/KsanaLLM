@@ -12,6 +12,8 @@
 
 namespace ksana_llm {
 
+static int64_t DivRoundUp(int64_t dividend, int64_t divisor) { return (dividend + divisor - 1) / divisor; }
+
 // Set a global block manager
 void SetBlockManager(BlockManager* block_manager);
 

@@ -81,10 +81,10 @@ DataType PytorchFileTensorLoader::GetTensorDataType(const std::string& tensor_na
   return data_type;
 }
 
-void* PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
+std::tuple<void*, size_t> PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
   if (fast_load_) {
     if (pytorch_tensor_index_map_.find(tensor_name) == pytorch_tensor_index_map_.end()) {
-      return nullptr;
+      return std::make_tuple(nullptr, 0);
     }
     int64_t index = pytorch_tensor_index_map_[tensor_name];
     auto data_pair = pytorch_reader_->getRecord("data/" + std::to_string(index));
@@ -93,12 +93,13 @@ void* PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
     void* data_ptr = std::get<0>(data_pair).get();
     pytorch_tensor_list_.push_back(std::move(at_data_ptr));
     int64_t data_size = std::get<1>(data_pair);
-    return data_ptr;
+    return std::make_tuple(data_ptr, data_size);
   }
   if (!pytorch_tensor_map_.count(tensor_name)) {
-    return nullptr;
+    return std::make_tuple(nullptr, 0);
   }
-  return pytorch_tensor_map_[tensor_name].data_ptr();
+  auto& tensor = pytorch_tensor_map_[tensor_name];
+  return std::make_tuple(tensor.data_ptr(), tensor.numel() * tensor.element_size());
 }
 
 std::vector<std::size_t> PytorchFileTensorLoader::GetTensorShape(const std::string& tensor_name) {
