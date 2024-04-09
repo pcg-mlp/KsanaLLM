@@ -6,6 +6,29 @@
 
 namespace ksana_llm {
 
+static AscendDeviceContextManager g_context_manager;
+
+AscendDeviceContextManager::AscendDeviceContextManager() {
+  ACL_CHECK(aclInit(nullptr));
+
+  uint32_t dev_count = 0;
+  ACL_CHECK(aclrtGetDeviceCount(&dev_count));
+  for (uint32_t dev_id = 0; dev_id < dev_count; ++dev_id) {
+    aclrtContext context;
+    ACL_CHECK(aclrtSetDevice(dev_id));
+    ACL_CHECK(aclrtCreateContext(&context, dev_id));
+    acl_contexts_[dev_id] = context;
+  }
+}
+
+aclrtContext& AscendDeviceContextManager::GetDeviceContext(int device_id) { return acl_contexts_[device_id]; }
+
+AscendDeviceContextManager::~AscendDeviceContextManager() {
+  for (auto& [dev_id, context] : acl_contexts_) {
+    ACL_CHECK(aclrtDestroyContext(context));
+  }
+}
+
 StreamT<DEVICE_TYPE_ASCEND>::StreamT(int device_id) : device_id_(device_id) {
   ACL_CHECK(aclrtSetDevice(device_id_));
   ACL_CHECK(aclrtCreateStream(&acl_stream_));
@@ -54,6 +77,7 @@ void DeviceSynchronizeT<DEVICE_TYPE_ASCEND>() {
 template <>
 void SetDeviceT<DEVICE_TYPE_ASCEND>(int device_id) {
   ACL_CHECK(aclrtSetDevice(device_id));
+  ACL_CHECK(aclrtSetCurrentContext(g_context_manager.GetDeviceContext(device_id)));
 }
 
 template <>
