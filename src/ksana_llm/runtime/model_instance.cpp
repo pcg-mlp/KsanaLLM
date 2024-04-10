@@ -12,6 +12,14 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
 
+#include "ksana_llm/models/baichuan/baichuan_weight.h"
+#include "ksana_llm/models/llama/llama_weight.h"
+#include "ksana_llm/models/qwen/qwen_weight.h"
+
+#include "ksana_llm/models/baichuan/baichuan_model.h"
+#include "ksana_llm/models/llama/llama_model.h"
+#include "ksana_llm/models/qwen/qwen_model.h"
+
 namespace ksana_llm {
 
 std::vector<std::shared_ptr<BaseModel>> ModelInstance::models_;
@@ -25,18 +33,13 @@ void ModelInstance::Load() {
 
   if (unified_model_name.find("llama") != std::string::npos) {
     name = "llama";
-    NLLM_LOG_DEBUG << "Start to init LLaMA model instance";
-
-    // Load model and weights on every device.
-    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      NLLM_LOG_DEBUG << "Start to create model on device " << worker_id;
-      models_.push_back(CreateModel<Llama>(worker_id));
-
-      NLLM_LOG_DEBUG << "Start to create model weight on device " << worker_id;
-      weights_.push_back(CreateModelWeight<LlamaWeight>(worker_id));
-
-      NLLM_LOG_DEBUG << "Finish to load model on device " << worker_id;
-    }
+    CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_name);
+  } else if (unified_model_name.find("qwen") != std::string::npos) {
+    name = "qwen";
+    CreateModelInstance<QwenModel, QwenWeight>(unified_model_name);
+  } else if (unified_model_name.find("baichuan") != std::string::npos) {
+    name = "baichuan";
+    CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_name);
   } else {
     throw std::runtime_error(
         "Unknown model type. Hint: if your model is llama, please let model name in config.ini contains 'llama' word "

@@ -5,7 +5,10 @@ cmake_minimum_required(VERSION 3.8)
 
 file(GLOB_RECURSE models_SRCS
      ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/*.cpp
-     ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/*.cpp)
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/*.cpp
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/*.cpp
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen/*.cpp
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/baichuan/*.cpp)
 
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "models_SRCS: ${models_SRCS}")

@@ -9,10 +9,10 @@
 namespace ksana_llm {
 
 template <typename T>
-class LlamaWeight : public BaseWeight {
+class QwenWeight : public BaseWeight {
  public:
-  LlamaWeight() {}
-  explicit LlamaWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  QwenWeight() {}
+  explicit QwenWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
   Tensor GetModelWeights(const std::string& weight_name);
 

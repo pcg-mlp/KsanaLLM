@@ -39,11 +39,7 @@ class BaseModel {
   std::shared_ptr<Context> context_{nullptr};
 
   int rank_{0};
-  bool use_custom_all_reduce_{true};
   size_t total_buffer_size_{0ul};
-
-  // Store logist result, shape: [max_batch_size, vocab_size], dtype: float
-  Tensor logits_tensor_;
 
   // Record all buffer used
   std::vector<Tensor*> buffer_tensor_heap_;

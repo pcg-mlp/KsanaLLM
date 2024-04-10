@@ -7,7 +7,7 @@
 #include <memory>
 #include <string>
 
-#include "ksana_llm/models/llama/llama.h"
+#include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/utils/context.h"
@@ -79,6 +79,20 @@ class ModelInstance {
   template <template <class> class ClassT>
   std::shared_ptr<BaseWeight> CreateModelWeight(int rank) {
     return CreatetModelObject<ClassT, BaseWeight>(rank);
+  }
+
+  template <template <class> class ModelType, template <class> class WeightType>
+  void CreateModelInstance(const std::string model_name) {
+    NLLM_LOG_DEBUG << "Start to init model instance " << model_name;
+    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      NLLM_LOG_DEBUG << "Start to create model on device " << worker_id;
+      models_.push_back(CreateModel<ModelType>(worker_id));
+
+      NLLM_LOG_DEBUG << "Start to create model weight on device " << worker_id;
+      weights_.push_back(CreateModelWeight<WeightType>(worker_id));
+
+      NLLM_LOG_DEBUG << "Finish to load model on device " << worker_id;
+    }
   }
 
  private:

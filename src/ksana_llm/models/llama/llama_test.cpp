@@ -6,7 +6,7 @@
 
 #include <Python.h>
 #include <filesystem>
-#include "ksana_llm/models/llama/llama.h"
+#include "ksana_llm/models/llama/llama_model.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "test.h"
 
@@ -63,7 +63,7 @@ TEST_F(LlamaTest, ForwardTest) {
 
   Py_Initialize();
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
-  std::shared_ptr<Llama<float16>> llama = std::make_shared<Llama<float16>>(model_config, 0, context_);
+  std::shared_ptr<LlamaModel<float16>> llama = std::make_shared<LlamaModel<float16>>(model_config, 0, context_);
 
 #ifdef ENABLE_CUDA
   // Weight Name Check
