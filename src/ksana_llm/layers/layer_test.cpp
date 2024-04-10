@@ -104,12 +104,12 @@ TEST_F(LayerTest, AttentionLayerTest) {
   Tensor cos_sin_cache_tensor;
   RoPEScalingFactor rope_scaling_factor;
   CreateHalfDataTypeTensor(cos_sin_cache_tensor, {rotary_embedding, max_position_embeddings}, GetDataType<half>());
-  EXPECT_TRUE(flash_attention_layer
-                  .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, int(1), rotary_embedding,
-                         rope_theta, is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<half>()),
-                         rope_scaling_factor},
-                        context, 0)
-                  .OK());
+  EXPECT_TRUE(
+      flash_attention_layer
+          .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, int(1), rotary_embedding,
+                 rope_theta, is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<half>()), rope_scaling_factor},
+                context, 0)
+          .OK());
 
   Tensor qkv, input_len, pos, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};

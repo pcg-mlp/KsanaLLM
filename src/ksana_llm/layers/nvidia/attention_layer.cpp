@@ -26,10 +26,9 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
 
   // setting scaling factor and mode
   if (!is_alibi) {
-    RoPEScalingFactor rope_scaling_factor_config = std::any_cast<const RoPEScalingFactor>(
-                                                       parameters[parameter_index++]);
-    llm_kernels::nvidia::RotaryEmbeddingType rotary_embedding_type =
-        llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT;
+    RoPEScalingFactor rope_scaling_factor_config =
+        std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
+    llm_kernels::nvidia::RotaryEmbeddingType rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT;
     float scaling_factor = 1.0f;
     if (rope_scaling_factor_config.type == "dynamic") {
       rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
@@ -40,11 +39,9 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
 
     rotary_embedding_cuda_.SetConfig(cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_,
                                      num_heads_, num_kv_heads_, stride_size_, is_neox,
-                                     context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type,
-                                     scaling_factor);
+                                     context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
   } else {
-    llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr),
-                                            num_heads_ * tensor_para_size_,
+    llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr), num_heads_ * tensor_para_size_,
                                             context_->GetComputeStreams()[rank_].Get());
     alibi_slopes_ = reinterpret_cast<void*>(cos_sin_cache_ptr) + num_heads_ * rank_ * sizeof(float);
   }

@@ -165,7 +165,6 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
       size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / 3;
       size_t saved_offset = (qkv_offset - 1) * single_proj_size;
       tensor_para_offset *= single_proj_size;
-      GetBlockManager()->SetDeviceId(rank_);
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else if (tensor_name.find("_proj.weight") != std::string::npos ||
@@ -178,7 +177,6 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
         size_t src_pitch = weights_map_[tensor_name].shape[1] * tensor_para_size_ * sizeof(T);
         size_t dst_pitch = weights_map_[tensor_name].shape[1] * sizeof(T);
         tensor_para_offset *= dst_pitch;
-        GetBlockManager()->SetDeviceId(rank_);
         Memcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch,
                       dst_pitch, weights_map_[tensor_name].shape[0], MEMCPY_HOST_TO_DEVICE,
                       context_->GetMemoryManageStreams()[rank_]);
@@ -207,7 +205,6 @@ Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>
       size_t src_pitch = weight_shape[1] * weight_shape[2] * tensor_para_size_ * sizeof(T);
       size_t dst_pitch = weight_shape[1] * weight_shape[2] * sizeof(T);
       tensor_para_offset *= dst_pitch;
-      GetBlockManager()->SetDeviceId(rank_);
       Memcpy2DAsync(qkv_weight_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
                     weight_shape[0], MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
@@ -317,7 +314,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
     }
     LoadWeightsFromFile(weights_loader);
-    StreamSynchronize(context_->GetComputeStreams()[rank_]);
+    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   }
 
   CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
@@ -334,7 +331,7 @@ Status LlamaWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       tensor.dtype = DataType::TYPE_BF16;
       GetBlockManager()->SetDeviceId(rank_);
       CastInplace(tensor, DataType::TYPE_FP16, context_->GetMemoryManageStreams()[rank_]);
-      tensor.dtype = TYPE_FP16;
+
       // We use vocab_size to determine whether it is the Baichuan2 model.
       // If vocab_size is equal to 125,696, then it is the Baichuan2 model.
       // And Unlike Baichuan1, the Baichuan2 model requires normalizing the head weights. Refer to
