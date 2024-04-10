@@ -76,8 +76,8 @@ void DeviceSynchronizeT<DEVICE_TYPE_ASCEND>() {
 
 template <>
 void SetDeviceT<DEVICE_TYPE_ASCEND>(int device_id) {
-  ACL_CHECK(aclrtSetDevice(device_id));
   ACL_CHECK(aclrtSetCurrentContext(g_context_manager.GetDeviceContext(device_id)));
+  ACL_CHECK(aclrtSetDevice(device_id));
 }
 
 template <>

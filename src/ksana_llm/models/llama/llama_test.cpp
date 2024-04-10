@@ -65,6 +65,7 @@ TEST_F(LlamaTest, ForwardTest) {
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
   std::shared_ptr<Llama<float16>> llama = std::make_shared<Llama<float16>>(model_config, 0, context_);
 
+#ifdef ENABLE_CUDA
   // Weight Name Check
   // 正确的 weight 名称
   std::string weight_name = "lm_head.weight";
@@ -78,7 +79,6 @@ TEST_F(LlamaTest, ForwardTest) {
   EXPECT_EQ(wrong_tensor.device, MEMORY_HOST);
   EXPECT_TRUE(wrong_tensor.shape.empty());
 
-#ifdef ENABLE_CUDA
   // ContextDecode
   ForwardRequest forward;
   std::vector<int> input_ids = {233, 1681};
@@ -147,7 +147,6 @@ TEST_F(LlamaTest, ForwardTest) {
 
   EXPECT_TRUE((milliseconds / 10) < 30);
 #endif
-
   llama.reset();
   llama_weight.reset();
   StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
