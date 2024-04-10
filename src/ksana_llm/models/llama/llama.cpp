@@ -34,7 +34,6 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
   vocab_size_ = model_config.vocab_size;
   vocab_size_pad_ = DivRoundUp(vocab_size_, model_config.tensor_para_size) * model_config.tensor_para_size;
 
-#ifdef ENABLE_CUDA
   float layernorm_eps_ = model_config.layernorm_eps;
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
@@ -112,6 +111,7 @@ Llama<T>::Llama(const ModelConfig& model_config, const int rank, std::shared_ptr
 
   NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
 
+#ifdef ENABLE_CUDA
   // 初始化各层实例
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   layernorm_layer_ = std::make_shared<LayernormLayer>();

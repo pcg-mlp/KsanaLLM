@@ -87,6 +87,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 Status BatchManager::WaitAllDone() { return Status(); }
 
 Status BatchManager::Process() {
+  GetBlockManager() ->SetDeviceId(0);
   while (!terminated_) {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
 

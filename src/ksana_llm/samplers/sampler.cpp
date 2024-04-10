@@ -99,7 +99,7 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
 }
 
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
-#ifdef ENABLE_CUDA
+
   if (rank_ == 0) {
     bool use_arg_max = true;
     bool use_top_p = false;
@@ -108,6 +108,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     float* device_logits = nullptr;
     SamplingDevideParameter sampling_devide_parameter;
     sampling_devide_parameter.bs = sampling_reqs.size();
+
     for (auto& sampling_req : sampling_reqs) {
       const ModelConfig* model_config = sampling_req.model_config;
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
@@ -153,7 +154,9 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
                   stream);
       sampling_devide_parameter.device_topKs = device_topKs_;
       sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
+#ifdef ENABLE_CUDA
       sampling_devide_parameter.device_curandstates = device_curandstates_;
+#endif
       if (use_top_p) {
         MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs,
                     MEMCPY_HOST_TO_DEVICE, stream);
@@ -165,8 +168,10 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         sampling_devide_parameter.device_temperatures = device_temperatures_;
       }
     }
+#ifdef ENABLE_CUDA
     STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, nullptr, device_output_tokens_, nullptr,
                                                 sampling_devide_parameter, nullptr, stream));
+#endif
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
     StreamSynchronize(stream);
@@ -174,7 +179,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
     }
   }
-#endif
+
   return Status();
 }
 

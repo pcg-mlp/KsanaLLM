@@ -21,7 +21,7 @@ setting:
     # 最大输入长度
     max_input_len: 1024
     # 最大输出长度
-    max_output_len: 1024
+    max_output_len: 64
     # 单个请求可用blck小于该值触发换出
     swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入
@@ -38,8 +38,9 @@ setting:
   block_manager:
     # 单个block可处理的最大token个数
     block_token_num: 16
-    # 保留的显存占比，单位为百分比。
-    reserved_device_memory_ratio: 0.01
+    # 保留的显存占比，最大为1.0。
+    # reserved_device_memory_ratio: 0.01
+    reserved_device_memory_ratio: 0.1
     # Lora权重的显存占比
     lora_deivce_memory_ratio: 0.0
     # Lora权重在host上的预分配大小，相比device上的倍数
