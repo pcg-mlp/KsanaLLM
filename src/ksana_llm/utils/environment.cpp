@@ -36,9 +36,12 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
   // unify it to lower case
   std::transform(unified_data_type_raw_str.begin(), unified_data_type_raw_str.end(), unified_data_type_raw_str.begin(),
                  [](unsigned char c) { return std::tolower(c); });
-  // TODO: Support BFloat16 inference.
-  if (unified_data_type_raw_str == "float16" || unified_data_type_raw_str == "bfloat16") {
+  if (unified_data_type_raw_str == "float16") {
     return DataType::TYPE_FP16;
+#ifdef ENABLE_BFLOAT16
+  } else if (unified_data_type_raw_str == "bfloat16") {
+    return DataType::TYPE_BF16;
+#endif
   } else {
     throw std::runtime_error("Not supported model data type.");
   }

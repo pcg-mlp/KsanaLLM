@@ -82,44 +82,44 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   STATUS_CHECK_FAILURE(
       CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
-      CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings}, TYPE_FP16));
+      CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings}, model_config_.weight_data_type));
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 
   NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
 
   // 初始化各层实例
-  emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
+  emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
   emb_lookup_layer_->Init({}, context_, rank_);
 
-  layernorm_layer_ = std::make_shared<LayernormLayer>();
+  layernorm_layer_ = std::make_shared<LayernormLayer<T>>();
   layernorm_layer_->Init({model_config_.layernorm_eps}, context_, rank_);
 
-  add_layer_ = std::make_shared<AddLayer>();
+  add_layer_ = std::make_shared<AddLayer<T>>();
   add_layer_->Init({}, context_, rank_);
 
-  silu_mul_layer_ = std::make_shared<SiluMulLayer>();
+  silu_mul_layer_ = std::make_shared<SiluMulLayer<T>>();
   silu_mul_layer_->Init({}, context_, rank_);
 
-  matmul_layer_ = std::make_shared<MatMulLayer>();
+  matmul_layer_ = std::make_shared<MatMulLayer<T>>();
   matmul_layer_->Init({}, context_, rank_);
 
-  assemble_last_token_layer_ = std::make_shared<AssembleLastTokenLayer>();
+  assemble_last_token_layer_ = std::make_shared<AssembleLastTokenLayer<T>>();
   assemble_last_token_layer_->Init({}, context_, rank_);
 
-  cast_layer_ = std::make_shared<CastLayer>();
+  cast_layer_ = std::make_shared<CastLayer<T>>();
   cast_layer_->Init({}, context_, rank_);
 
   model_input_ = std::make_shared<ModelInput>(model_config_, rank_, context_);
   model_output_ = std::make_shared<ModelOutput>(model_config_.max_batch_size, vocab_size_pad_, rank_, context_);
-  model_communicator_ = std::make_shared<ModelCommunicator>(&tensor_buffer_0_, &tensor_buffer_2_, rank_, context_);
+  model_communicator_ = std::make_shared<ModelCommunicator<T>>(&tensor_buffer_0_, &tensor_buffer_2_, rank_, context_);
 
   flash_attention_layers_.resize(num_layer_);
   paged_attention_layers_.resize(num_layer_);
-  float16* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<float16>();
+  void* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<void>();
   for (int idx = 0; idx < num_layer_; ++idx) {
-    flash_attention_layers_[idx] = std::make_shared<FlashAttentionLayer>();
-    paged_attention_layers_[idx] = std::make_shared<PagedAttentionLayer>();
+    flash_attention_layers_[idx] = std::make_shared<FlashAttentionLayer<T>>();
+    paged_attention_layers_[idx] = std::make_shared<PagedAttentionLayer<T>>();
     // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert from ‘<brace-enclosed initializer list>’
     // to ‘std::vector<std::any>’ so we use push back to make it work.
     std::vector<std::any> attention_param;
@@ -422,5 +422,8 @@ Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weigh
 
 template class CommonModel<float>;
 template class CommonModel<float16>;
+#ifdef ENABLE_BFLOAT16
+template class CommonModel<bfloat16>;
+#endif
 
 }  // namespace ksana_llm

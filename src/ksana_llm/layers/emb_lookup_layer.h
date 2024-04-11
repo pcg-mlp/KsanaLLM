@@ -6,6 +6,7 @@
 #include "ksana_llm/layers/base_layer.h"
 namespace ksana_llm {
 
+template <typename T>
 class EmbLookupLayer : public BaseLayer {
  public:
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
