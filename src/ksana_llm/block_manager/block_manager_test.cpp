@@ -146,7 +146,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   std::vector<int> device_blocks;
   status = block_manager->SwapIn(host_blocks, device_blocks);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
   EXPECT_EQ(block_manager->GetFreeBlockNumber(), 0);
 
   // 获取 block 的指针
@@ -166,7 +166,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
 // 定义一个测试用例，继承自 BlockManagerTest
 TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   // 检查 CPU 和 GPU 的空闲内存块数量是否正确
-  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
   EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
 
   // 创建一个整数向量，用于存储分配的内存块
@@ -182,7 +182,7 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   EXPECT_EQ(blocks.size(), 2);
 
   // 检查分配后的空闲内存块数量是否正确
-  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
   EXPECT_EQ(block_manager->GetFreeBlockNumber(), 0);
 
   EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());

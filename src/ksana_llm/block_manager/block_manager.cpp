@@ -93,7 +93,7 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
   NLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
                        "reserved_device_memory_ratio must be large than 0.0");
   NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0, "lora_host_memory_factor should >= 1.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 1.0, "block_host_memory_factor should >= 1.0");
+  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 0.0, "block_host_memory_factor should >= 0.0");
 
   size_t alignment_bytes = 8;
   size_t device_block_memory_size = 0;
@@ -177,9 +177,13 @@ Status BlockManager::GetHostContiguousPtr(int block_id, void*& addr) {
   return GetHostAllocator()->GetContiguousPtr(block_id, addr);
 }
 
-size_t BlockManager::GetHostFreeBlockNumber() { return GetHostAllocator()->GetFreeBlockNumber(); }
+size_t BlockManager::GetHostFreeBlockNumber() {
+  return GetHostAllocator()->GetFreeBlockNumber() / context_->GetTensorParallelSize();
+}
 
-size_t BlockManager::GetHostUsedBlockNumber() { return GetHostAllocator()->GetUsedBlockNumber(); }
+size_t BlockManager::GetHostUsedBlockNumber() {
+  return GetHostAllocator()->GetUsedBlockNumber() / context_->GetTensorParallelSize();
+}
 
 Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks) {
   // Allocate memory on host.
