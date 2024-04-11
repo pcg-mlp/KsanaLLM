@@ -5,7 +5,9 @@
 #include "ksana_llm/layers/attention_layer.h"
 
 namespace ksana_llm {
-Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+
+template <typename T>
+Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, context, rank);
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
@@ -19,7 +21,7 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   float base = std::any_cast<const float>(parameters[parameter_index++]);
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);
   bool is_alibi = std::any_cast<const bool>(parameters[parameter_index++]);
-  half* cos_sin_cache_ptr = std::any_cast<half*>(parameters[parameter_index++]);
+  void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
 
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
@@ -37,7 +39,7 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
       throw std::invalid_argument(fmt::format("Unsupport rope scaling type: {}", rope_scaling_factor_config.type));
     }
 
-    rotary_embedding_cuda_.SetConfig(cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_,
+    rotary_embedding_cuda_.SetConfig(static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base, head_size_,
                                      num_heads_, num_kv_heads_, stride_size_, is_neox,
                                      context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
   } else {
@@ -48,5 +50,11 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
   return Status();
 }
+
+template class AttentionLayer<float>;
+template class AttentionLayer<half>;
+#ifdef ENABLE_BFLOAT16
+template class AttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace ksana_llm
