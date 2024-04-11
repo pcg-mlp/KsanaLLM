@@ -64,7 +64,8 @@ def streaming_generate(model_name, input_tokens, generation_config):
         for request_output in results_iterator:
             if request_output is not None:
                 output_text = tokenizer.decode(
-                    unfinished_token + [request_output], skip_special_tokens=True)
+                    unfinished_token + [request_output],
+                    skip_special_tokens=True)
                 if output_text[-1:] == "\uFFFD":
                     unfinished_token = unfinished_token + [request_output]
                     output_text = ""
@@ -87,8 +88,15 @@ def batch_generate(model_name, input_tokens, generation_config):
                                     streamer=None)
 
     output_text = tokenizer.decode(results_tokens, skip_special_tokens=True)
-    return JSONResponse(
-        {"texts": output_text, "output_token_ids": results_tokens, "input_token_ids": input_tokens})
+    return JSONResponse({"texts": output_text,
+                         "output_token_ids": results_tokens,
+                         "input_token_ids": input_tokens})
+
+
+def get_sampling_value(sampling_config: dict, key: str, default_val=None):
+    """Get value from sampling_config dict, return default if key not exists.
+    """
+    return sampling_config[key] if key in sampling_config else default_val
 
 
 @app.post("/generate")
@@ -110,10 +118,11 @@ async def generate(request: Request) -> Response:
     input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
     generation_config = GenerationConfig(
         num_beams=1,
-        top_k=sampling_config["topk"],
-        top_p=sampling_config["topp"],
-        temperature=sampling_config["temperature"],
-        repetition_penalty=sampling_config["repetition_penalty"])
+        top_k=get_sampling_value(sampling_config, "topk", 1),
+        top_p=get_sampling_value(sampling_config, "topp", 0.0),
+        temperature=get_sampling_value(sampling_config, "temperature", 0.0),
+        max_new_tokens=get_sampling_value(sampling_config, "max_new_tokens", -1),
+        repetition_penalty=get_sampling_value(sampling_config, "repetition_penalty", 1.0))
 
     loop = asyncio.get_event_loop()
     if enable_streaming:
@@ -135,7 +144,8 @@ async def generate(request: Request) -> Response:
 
 if __name__ == "__main__":
     args = args_config()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.tokenizer_dir, trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.

@@ -80,6 +80,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("topk", &ksana_llm::SamplingConfig::topk)
       .def_readwrite("topp", &ksana_llm::SamplingConfig::topp)
       .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature)
+      .def_readwrite("max_new_tokens", &ksana_llm::SamplingConfig::max_new_tokens)
       .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty);
 
   // Export `StreamingIterator` to python.

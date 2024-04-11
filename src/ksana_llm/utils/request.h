@@ -18,8 +18,12 @@ struct SamplingConfig {
   int topk = 1;
   float topp = 0.0f;
   float temperature = 0.0f;
+
   // The parameter for repetition penalty. 1.0 means no penalty
   float repetition_penalty = 1.0f;
+
+  // The maximum numbers of tokens to generate, ignoring the number of tokens in the prompt.
+  int max_new_tokens = 1024;
 };
 
 class Request {
