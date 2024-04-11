@@ -133,6 +133,9 @@ void BatchScheduler::MergeWaitingBufferQueue() {
 }
 
 void BatchScheduler::MergeRecomputeQueue() {
+  if (recompute_queue_.empty()) {
+    return;
+  }
   waiting_queue_.insert(waiting_queue_.begin(), recompute_queue_.begin(), recompute_queue_.end());
   recompute_queue_.clear();
 }
@@ -500,6 +503,7 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
   size_t visit_idx = 0;
   constexpr size_t MAX_SIZE_T = std::numeric_limits<size_t>::max();
   size_t swapout_pos = running_swapped_indexes_.empty() ? MAX_SIZE_T : running_swapped_indexes_.front();
+  size_t host_free_num = GetBlockManager()->GetHostFreeBlockNumber();
   for (size_t idx = 0; idx < running_queue_.size();) {
     auto &req = running_queue_[idx];
     if (visit_idx < swapout_pos) {
@@ -529,12 +533,20 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
       }
       ++idx;
     } else {
+      bool swap_success = false;
       if (batch_scheduler_config_.preempt_mode == SWAP) {
         NLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
-        SwapOutAsync(req);
-        swapout_pending_queue_.insert(swapout_pending_queue_.begin(), req);
-        running_queue_.erase(running_queue_.begin() + idx);
-      } else {
+        size_t swap_size = req->kv_cache_blocks[0].size();
+        swap_success = host_free_num > swap_size;
+        if (swap_success) {
+          host_free_num -= swap_size;
+          SwapOutAsync(req);
+          swapout_pending_queue_.insert(swapout_pending_queue_.begin(), req);
+          running_queue_.erase(running_queue_.begin() + idx);
+        }
+      }
+
+      if (!swap_success || batch_scheduler_config_.preempt_mode == RECOMPUTE) {
         NLLM_LOG_DEBUG << "running req " << req->req_id << " recompute.";
         req->FreeBlocks();
         req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
@@ -604,9 +616,7 @@ void BatchScheduler::ScheduleSwapped(size_t &step_token_num_sum, size_t &curr_bl
 }
 
 void BatchScheduler::ScheduleWaiting(size_t &step_token_num_sum, size_t &curr_block_num_sum, bool &skip_other) {
-  if (batch_scheduler_config_.preempt_mode == RECOMPUTE) {
-    MergeRecomputeQueue();
-  }
+  MergeRecomputeQueue();
 
   MergeWaitingBufferQueue();
   if (waiting_queue_.empty()) {
