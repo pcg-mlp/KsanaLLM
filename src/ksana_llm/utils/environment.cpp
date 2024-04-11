@@ -97,16 +97,12 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
   batch_manager_config_.batch_scheduler_config.max_waiting_queue_len =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 256);
-  batch_manager_config_.batch_scheduler_config.max_token_number =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_number", 4096);
-  batch_manager_config_.batch_scheduler_config.max_token_number =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_number", 4096);
+  batch_manager_config_.batch_scheduler_config.max_step_tokens =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
   batch_manager_config_.batch_scheduler_config.max_batch_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 8);
-  batch_manager_config_.batch_scheduler_config.max_input_len =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_input_len", 1024);
-  batch_manager_config_.batch_scheduler_config.max_output_len =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_output_len", 1024);
+  batch_manager_config_.batch_scheduler_config.max_token_len =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 1024);
   batch_manager_config_.batch_scheduler_config.swapout_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
   batch_manager_config_.batch_scheduler_config.swapin_block_threshold =
@@ -202,9 +198,8 @@ Status Environment::ParseModelConfig(const std::string &model_name, const std::s
 
   model_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   model_config.max_batch_size = batch_manager_config_.batch_scheduler_config.max_batch_size;
-  model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_token_number;
-  model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_input_len +
-                               batch_manager_config_.batch_scheduler_config.max_output_len;
+  model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_step_tokens;
+  model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_token_len;
   model_configs_[model_config.name] = model_config;
 
   NLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);

@@ -30,9 +30,9 @@ namespace ksana_llm {
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context)
     : batch_scheduler_config_(batch_scheduler_config), context_(context) {
   // Config validation.
-  NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_token_number > batch_scheduler_config_.max_input_len,
-                       FormatStr("The max_token_number must large than max_input_len, %d vs %d.",
-                                 batch_scheduler_config_.max_token_number, batch_scheduler_config_.max_input_len));
+  NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens > batch_scheduler_config_.max_token_len,
+                       FormatStr("The max_step_tokens must large than max_token_len, %d vs %d.",
+                                 batch_scheduler_config_.max_step_tokens, batch_scheduler_config_.max_token_len));
 
   threadpool_ = std::make_shared<ThreadPool>(batch_scheduler_config.swap_threadpool_size);
   threadpool_->Start();
@@ -89,7 +89,8 @@ void BatchScheduler::SwapInAsync(std::shared_ptr<InferRequest> req) {
 }
 
 Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_request) {
-  NLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ".";
+  NLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
+                 << infer_request->sampling_config.max_new_tokens;
   if (CheckWaitingQueueFull()) {
     NLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
 
@@ -103,7 +104,7 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
   if (CheckRequestExceedLength(infer_request)) {
     NLLM_LOG_DEBUG << "input len is too long, req " << infer_request->req_id << " failed.";
 
-    infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length exceed max_input_len.");
+    infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length exceed max_token_len.");
     infer_request->finished = true;
     infer_request->Notify();
 
@@ -218,14 +219,16 @@ bool BatchScheduler::CheckWaitingQueueFull() {
 }
 
 inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
-  return req->input_tokens.size() > batch_scheduler_config_.max_input_len;
+  return req->input_tokens.size() > batch_scheduler_config_.max_token_len;
 }
 
 bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
   if (req->infer_stage == InferStage::STATE_DECODE) {
     if (req->output_tokens.size() > req->input_tokens.size() &&
-        ((req->output_tokens.back()) == req->model_instance->GetModelConfig().end_id ||
-         req->output_tokens.size() >= req->input_tokens.size() + batch_scheduler_config_.max_output_len)) {
+        (req->output_tokens.back() == req->model_instance->GetModelConfig().end_id ||
+         (req->sampling_config.max_new_tokens > 0 &&
+          req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
+         req->output_tokens.size() >= batch_scheduler_config_.max_token_len)) {
       return true;
     }
   }
@@ -358,7 +361,7 @@ void BatchScheduler::ProcessRunningRequests(const std::vector<size_t> &step_toke
 
   // Swapout the last requests.
   swapped_indexes.clear();
-  while (step_token_num_sum > batch_scheduler_config_.max_token_number ||
+  while (step_token_num_sum > batch_scheduler_config_.max_step_tokens ||
          step_batch_size > batch_scheduler_config_.max_batch_size ||
          step_block_num_sum + swapout_block_threshold > total_free_block_num) {
     --step_batch_size;
@@ -405,7 +408,7 @@ void BatchScheduler::ProcessSwappedRequests(const std::vector<size_t> &step_toke
     step_token_num_sum += step_token_num_list[i];
     curr_block_num_sum += curr_block_num_list[i];
 
-    if (step_token_num_sum < batch_scheduler_config_.max_token_number &&
+    if (step_token_num_sum < batch_scheduler_config_.max_step_tokens &&
         step_batch_size < batch_scheduler_config_.max_batch_size &&
         curr_block_num_sum + swapin_block_threshold < total_free_block_num) {
       running_indexes.push_back(i);
@@ -448,7 +451,7 @@ void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_toke
     step_token_num_sum += step_token_num_list[i];
     total_block_num_sum += total_block_num_list[i];
 
-    if (step_token_num_sum < batch_scheduler_config_.max_token_number &&
+    if (step_token_num_sum < batch_scheduler_config_.max_step_tokens &&
         step_batch_size < batch_scheduler_config_.max_batch_size &&
         total_block_num_sum + launch_block_threshold < total_free_block_num) {
       running_indexes.push_back(i);

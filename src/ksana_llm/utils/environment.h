@@ -81,7 +81,7 @@ struct BatchSchedulerConfig {
   size_t max_waiting_queue_len = 256;
 
   // The max token number for one scheduler step.
-  size_t max_token_number = 4096;
+  size_t max_step_tokens = 4096;
 
   // The max batch size.
   size_t max_batch_size = 8;
@@ -89,11 +89,9 @@ struct BatchSchedulerConfig {
   // The max vocab size.
   size_t max_vocab_size = 32000;
 
-  // The max input sequeue length.
-  size_t max_input_len = 1024;
-
-  // The max output sequeue length.
-  size_t max_output_len = 1024;
+  // The maximum length the generated tokens can have
+  // orresponds to the length of the input prompt + max_new_tokens.
+  size_t max_token_len = 2048;
 
   // The swapin block threshold.
   float swapout_block_threshold = 1.0;
