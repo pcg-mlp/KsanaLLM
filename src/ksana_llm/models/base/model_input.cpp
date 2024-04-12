@@ -78,7 +78,7 @@ ModelInput::~ModelInput() {
 
 void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage) {
   batch_size = forward_reqs.size();
-  NLLM_LOG_DEBUG << "ContextDecode With Batch Size " << batch_size;
+  NLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
     std::invalid_argument(fmt::format("ModelInput empty forward requests."));
   } else if (batch_size > model_config_.max_batch_size) {
@@ -183,6 +183,11 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   }
   MemcpyAsync(input_ids.GetPtr<int>(), input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
+#ifdef ENABLE_ACL
+  // Event wait between streams seems not work, force sync here.
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
+#endif
+
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
@@ -210,6 +215,10 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
 
   MemcpyAsync(input_ids.GetPtr<void>(), input_ids_cpu.data(), batch_size * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
+#endif
+
   // create input offset tensor int32 and uint64
   input_tokens_int32_tensor.shape = {static_cast<unsigned long>(batch_size)};
   input_offset_uint64_tensor.shape = {static_cast<unsigned long>(batch_size) + 1};

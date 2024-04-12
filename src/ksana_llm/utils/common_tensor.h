@@ -54,6 +54,10 @@ class TensorT {
   // Get the device tensor.
   typename DeviceTensorTypeTraits<T>::value_type GetDeviceTensor();
 
+  // Get a new device tensor, with new dtype and shape.
+  typename DeviceTensorTypeTraits<T>::value_type ResetDeviceTensor(const DataType dtype,
+                                                                   const std::vector<int64_t> shape);
+
   // Save to numpy
   std::string GetNumpyType() const;
   void SaveToFile(const std::string& file_path);

@@ -23,12 +23,7 @@ Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vect
   void* silu_input_buf_ptr = input_tensors[0].GetPtr<void>();
   llm_kernels::utils::CreateAclTensorWithData(silu_output_shape, &silu_input_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &silu_input);
-  WorkSpaceFunc f = GetWorkSpaceFunc();
-  constexpr uint64_t workspace_size = 1073741824ull;
-  void* ws_addr_ptr = nullptr;
-  f(workspace_size, &ws_addr_ptr);
-  llm_kernels::ascend::Silu(silu_input, &silu_output, &ws_addr_ptr, workspace_size,
-                            context_->GetComputeStreams()[rank_].Get());
+  llm_kernels::ascend::Silu(silu_input, &silu_output, context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
   aclTensor* gated_weight = nullptr;
   void* gated_weight_buf_ptr = input_tensors[1].GetPtr<void>();
@@ -39,8 +34,8 @@ Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vect
   std::vector<int64_t> mul_output_shape = {1, seq_len, ffn_size};
   llm_kernels::utils::CreateAclTensorWithData(mul_output_shape, &silu_output_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &mul_output);
-  llm_kernels::ascend::Mul(gated_weight, silu_output, &mul_output, ws_addr_ptr, workspace_size,
-                           context_->GetComputeStreams()[rank_].Get());
+  llm_kernels::ascend::Mul(gated_weight, silu_output, &mul_output, context_->GetComputeStreams()[rank_].Get(),
+                           GetWorkSpaceFunc());
 
   ACL_CHECK(aclDestroyTensor(mul_output));
   ACL_CHECK(aclDestroyTensor(gated_weight));

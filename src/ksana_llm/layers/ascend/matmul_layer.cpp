@@ -33,13 +33,9 @@ Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   llm_kernels::utils::CreateAclTensorWithData(matmul_output_shape, &matmul_output_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &matmul_output);
 
-  constexpr uint64_t workspace_size = 1073741824ull;
-  WorkSpaceFunc f = GetWorkSpaceFunc();
-  void* ws_addr_ptr = nullptr;
-  f(workspace_size, &ws_addr_ptr);
   int mm_type = 0;
-  llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output, ws_addr_ptr, workspace_size,
-                              context_->GetComputeStreams()[rank_].Get());
+  llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output,
+                              context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
   ACL_CHECK(aclDestroyTensor(matmul_input));
   ACL_CHECK(aclDestroyTensor(matmul_weight));
