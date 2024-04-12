@@ -99,7 +99,6 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
 }
 
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
-
   if (rank_ == 0) {
     bool use_arg_max = true;
     bool use_top_p = false;

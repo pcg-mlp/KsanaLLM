@@ -79,7 +79,6 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
 
   NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
 
-#ifdef ENABLE_CUDA
   // 初始化各层实例
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   emb_lookup_layer_->Init({}, context_, rank_);
@@ -108,22 +107,29 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
 
   flash_attention_layers_.resize(num_layer_);
   paged_attention_layers_.resize(num_layer_);
-  half* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<half>();
+  float16* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<float16>();
   for (int idx = 0; idx < num_layer_; ++idx) {
     flash_attention_layers_[idx] = std::make_shared<FlashAttentionLayer>();
     paged_attention_layers_[idx] = std::make_shared<PagedAttentionLayer>();
-    flash_attention_layers_[idx]->Init(
-        {idx, max_position_embeddings, head_num_per_tp, num_key_value_heads, size_per_head, stride_size,
-         tensor_para_size, rotary_embedding, rope_theta, true, is_alibi, std::any(cos_sin_cache_ptr),
-         model_config_.rope_scaling_factor_config},
-        context_, rank_);
-    paged_attention_layers_[idx]->Init(
-        {idx, max_position_embeddings, head_num_per_tp, num_key_value_heads, size_per_head, stride_size,
-         tensor_para_size, rotary_embedding, rope_theta, true, is_alibi, std::any(cos_sin_cache_ptr),
-         model_config_.rope_scaling_factor_config},
-        context_, rank_);
+    // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert from ‘<brace-enclosed initializer list>’
+    // to ‘std::vector<std::any>’ so we use push back to make it work.
+    std::vector<std::any> attention_param;
+    attention_param.push_back(idx);
+    attention_param.push_back(max_position_embeddings);
+    attention_param.push_back(head_num_per_tp);
+    attention_param.push_back(num_key_value_heads);
+    attention_param.push_back(size_per_head);
+    attention_param.push_back(stride_size);
+    attention_param.push_back(tensor_para_size);
+    attention_param.push_back(rotary_embedding);
+    attention_param.push_back(rope_theta);
+    attention_param.push_back(true);
+    attention_param.push_back(is_alibi);
+    attention_param.push_back(std::any(cos_sin_cache_ptr));
+    attention_param.push_back(model_config_.rope_scaling_factor_config);
+    flash_attention_layers_[idx]->Init(attention_param, context_, rank_);
+    paged_attention_layers_[idx]->Init(attention_param, context_, rank_);
   }
-#endif
 }
 
 template <typename T>

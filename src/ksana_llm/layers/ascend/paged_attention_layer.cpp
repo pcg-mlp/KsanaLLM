@@ -3,7 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/paged_attention_layer.h"
-#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
 namespace ksana_llm {
 
@@ -47,21 +47,10 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   int max_tokens = input_tensors[6].shape[1];
   int batch_size = input_tensors[6].shape[0];
   int total_tokens = input_tensors[0].shape[0];
+
   auto stream = context_->GetComputeStreams()[rank_].Get();
-  void** k_list = (kv_list.GetPtr<void*>()) + (size_t)layer_index_ * layer_block_num * 2;
-  void** v_list = k_list + layer_block_num;
-  Tensor& out = output_tensors[0];
-  out.shape[0] = query.shape[0];
-  out.shape[1] = query.shape[1] / 3;
-  out.dtype = query.dtype;
-  out.dtype = query.dtype;
-  out.shape = {query.shape[0], query.shape[1] / 3};
-  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
-                            max_tokens, context_->GetComputeStreams()[rank_].Get(), cache_offset.GetPtr<void>(),
-                            batch_size, num_heads_, head_size_, num_kv_heads_, stride_size_, block_token_num_,
-                            batch_size, rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
-                            workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, alibi_slopes_,
-                            qkv_workspace.GetPtr<void>());
+
+  // TODO(karlluo): implement llm_kernels::ascend::IncFlashAttention
   return Status();
 }
 

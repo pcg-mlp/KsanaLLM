@@ -32,12 +32,15 @@
 
 namespace ksana_llm {
 
-void LookupEmbedding(const void* ids, const void* offset, const void* emb, const void* pos, void* output,
-                     int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream) {
+Status LookupEmbedding(const void* ids, const void* offset, const void* emb, const void* pos, void* output,
+                       int vocab_size, int hidden_size, int bs, int step, int vocab_id, Stream& stream,
+                       void* workspace_ptr) {
   llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<half>(
       reinterpret_cast<half*>(output), reinterpret_cast<const half*>(emb), reinterpret_cast<const half*>(pos), {},
       reinterpret_cast<const int32_t*>(ids), step, reinterpret_cast<const size_t*>(offset), bs, hidden_size, vocab_size,
-      vocab_id, stream);
+      vocab_id, stream.Get());
+
+  return Status();
 }
 
 void InvokeLayerNorm(const void* input, const void* weight, const float layernorm_eps, const int m, const int n,
