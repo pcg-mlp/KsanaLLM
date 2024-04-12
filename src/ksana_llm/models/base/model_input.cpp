@@ -113,7 +113,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 }
 
 void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs) {
-#ifdef ENABLE_CUDA
   kv_list.shape = {model_config_.num_layer, total_block_num * 2};
   std::vector<void*> cpu_kv_list(model_config_.num_layer * total_block_num * 2);
   for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
@@ -142,11 +141,9 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
   MemcpyAsync(kv_list.GetPtr<void>(), cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
   EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
-#endif
 }
 
 void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& forward_reqs) {
-#ifdef ENABLE_CUDA
   std::vector<int64_t> cpu_rotary_pos(total_seq_len);
   int cpu_rotary_pos_idx = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
@@ -157,11 +154,9 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
-#endif
 }
 
 void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& forward_reqs) {
-#ifdef ENABLE_CUDA
   std::vector<int64_t> cpu_rotary_pos(batch_size);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size() - 1;
@@ -169,11 +164,9 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * batch_size,
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
-#endif
 }
 
 void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs) {
-#ifdef ENABLE_CUDA
   input_ids.shape = {total_seq_len};
   size_t input_offset = 0;
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
@@ -195,11 +188,9 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
-#endif
 }
 
 void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forward_reqs) {
-#ifdef ENABLE_CUDA
   input_ids.shape = {batch_size};
   std::vector<int> input_ids_cpu(batch_size);
   size_t input_offset = 0;
@@ -228,7 +219,6 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
-#endif
 }
 
 }  // namespace ksana_llm

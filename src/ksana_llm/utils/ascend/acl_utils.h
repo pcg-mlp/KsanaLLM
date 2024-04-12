@@ -3,14 +3,20 @@
 ==============================================================================*/
 #pragma once
 
+#include <vector>
+
 #include <acl/acl.h>
 #include <acl/acl_base.h>
 #include <acl/acl_rt.h>
+#include "acl/acl_op_compiler.h"
+#include "aclnn/acl_meta.h"
 
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 
 namespace ksana_llm {
+
+std::vector<int64_t> GetAclTensorShape(aclTensor* tensor);
 
 // ref: https://www.hiascend.com/document/detail/zh/canncommercial/5046/windowsversion/windowsug/aclcppdevg_03_0516.html
 static const char* GetACLErrorString(aclError error) {

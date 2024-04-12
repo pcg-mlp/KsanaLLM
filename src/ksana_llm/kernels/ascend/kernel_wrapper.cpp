@@ -15,6 +15,8 @@ aclDataType CastDataTypeToAclDataType(const DataType dtype) {
   switch (dtype) {
     case DataType::TYPE_FP16:
       return aclDataType::ACL_FLOAT16;
+    case DataType::TYPE_FP32:
+      return aclDataType::ACL_FLOAT;
     default:
       return aclDataType::ACL_FLOAT;
   }
