@@ -21,7 +21,6 @@ ModelOutput::~ModelOutput() {
 
 void ModelOutput::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
                                      std::vector<Tensor>& logits_float) {
-#ifdef ENABLE_CUDA
   EventRecord(compute_ready_event, context_->GetComputeStreams()[rank_]);
   StreamWaitEvent(context_->GetD2DStreams()[rank_], compute_ready_event);
   // Copy to logits buf
@@ -30,7 +29,6 @@ void ModelOutput::CopyToLogistBuffer(const size_t batch_size, std::vector<Forwar
   MemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), MEMCPY_DEVICE_TO_DEVICE,
               context_->GetD2DStreams()[rank_]);
   StreamSynchronize(context_->GetD2DStreams()[rank_]);
-#endif
 }
 
 }  // namespace ksana_llm

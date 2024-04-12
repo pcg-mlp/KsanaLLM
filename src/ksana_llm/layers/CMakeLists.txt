@@ -22,7 +22,7 @@ set(layers_ascend_LIBS, "")
 
 if(WITH_ACL)
   file(GLOB_RECURSE layers_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/ascend/*.cpp)
-  list(APPEND layers_ascend_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_utils_common)
+  list(APPEND layers_ascend_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_utils_common llm_kernels_ascend_layernorm)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})
@@ -41,7 +41,6 @@ if(WITH_ACL)
 endif()
 
 file(GLOB_RECURSE layers_test_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/*test.cpp
-                                   ${layers_test_nvidia_SRCS} ${layers_test_ascend_SRCS})
+  ${layers_test_nvidia_SRCS} ${layers_test_ascend_SRCS})
 message(STATUS "layers_test_SRCS: ${layers_test_SRCS}")
 cpp_test(layers_test SRCS ${layers_test_SRCS} DEPS layers runtime utils)
-
