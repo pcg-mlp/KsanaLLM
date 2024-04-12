@@ -3,6 +3,7 @@
 ==============================================================================*/
 #include "ksana_llm/utils/ascend/ascend_device.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
+#include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 
@@ -51,11 +52,13 @@ void EventCreateT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND>* event) {
 
 template <>
 void EventCreateWithFlagsT(EventT<DEVICE_TYPE_ASCEND>* event, unsigned int flags) {
-  unsigned int acl_flags = ACL_EVENT_SYNC | ACL_EVENT_TIME_LINE;
-  if (flags & ACL_EVENT_TIME_LINE) {
+  unsigned int acl_flags = ACL_EVENT_TIME_LINE;
+  if (flags & EVENT_DISABLE_TIMING) {
     acl_flags = acl_flags ^ ACL_EVENT_TIME_LINE;
   }
 
+  // Enable sync between multiple streams.
+  acl_flags = acl_flags | ACL_EVENT_SYNC;
   ACL_CHECK(aclrtCreateEventWithFlag(&(event->Get()), acl_flags));
 }
 

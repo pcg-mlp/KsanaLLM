@@ -40,12 +40,8 @@ Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   llm_kernels::utils::CreateAclTensorWithData(lm_input_shape, &lm_output_tensor_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &lm_output_tensor_ptr);
 
-  uint64_t workspace_size = 0ull;
-  WorkSpaceFunc f = GetWorkSpaceFunc();
-  void* ws_addr_ptr = nullptr;
-  f(workspace_size, &ws_addr_ptr);
-  llm_kernels::ascend::RMSLayerNorm(lm_input_tensor_ptr, lm_weight_tensor_ptr, &lm_output_tensor_ptr, ws_addr_ptr,
-                                    workspace_size, context_->GetComputeStreams()[rank_].Get());
+  llm_kernels::ascend::RMSLayerNorm(lm_input_tensor_ptr, lm_weight_tensor_ptr, &lm_output_tensor_ptr,
+                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

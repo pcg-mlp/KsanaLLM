@@ -4,7 +4,7 @@
 
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
-#include "ksana_llm/kernels/lookup_embedding.h"
+#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 
 namespace ksana_llm {
 
@@ -27,11 +27,11 @@ Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   if (input_tensors.size() > 3) {
     LookupEmbedding(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
                     input_tensors[3].GetPtr<void>(), output_tensors[0].GetPtr<void>(), vocab_size, hidden_units, bs,
-                    step, vocab_id, context_->GetComputeStreams()[rank_]);
+                    step, vocab_id, context_->GetComputeStreams()[rank_].Get());
   } else {
     LookupEmbedding(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
                     nullptr, output_tensors[0].GetPtr<void>(), vocab_size, hidden_units, bs, step, vocab_id,
-                    context_->GetComputeStreams()[rank_]);
+                    context_->GetComputeStreams()[rank_].Get());
   }
   output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[2].dtype;
