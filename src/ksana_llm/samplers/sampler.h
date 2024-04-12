@@ -33,9 +33,7 @@ class Sampler {
   float* device_temperatures_;
   int** device_output_tokens_ptrs_;
   float* device_inv_repetition_penalties_;
-#ifdef ENABLE_CUDA
-  curandState_t* device_curandstates_{nullptr};
-#endif
+  RandState* device_curandstates_{nullptr};
 
   std::vector<int> host_output_tokens_;
   std::vector<uint32_t> host_offset_;
