@@ -3,8 +3,9 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/emb_lookup_layer.h"
-#include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 #include "ksana_llm/kernels/lookup_embedding.h"
+
+#include "csrc/kernels/ascend/embedding/embedding.h"
 
 namespace ksana_llm {
 

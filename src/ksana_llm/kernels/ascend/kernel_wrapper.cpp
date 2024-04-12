@@ -6,6 +6,7 @@
 #include "csrc/kernels/ascend/pointwise/pointwise.h"
 
 #include "ksana_llm/kernels/cast.h"
+#include "ksana_llm/kernels/lookup_embedding.h"
 #include "ksana_llm/kernels/permute.h"
 
 namespace ksana_llm {
@@ -38,6 +39,16 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
   void* input_workspace_ptr = nullptr;
   GetBlockManager()->GetContiguousPtr(input_tensor.GetBlockId(), input_workspace_ptr);
   llm_kernels::ascend::Permute(input_tensor.GetDeviceTensor(), input_workspace_ptr, &output, dims, stream.Get());
+  return Status();
+}
+
+Status LookupEmbedding(const void* ids, const void* offset, const void* emb, const void* pos, void* output,
+                       int vocab_size, int hidden_size, int bs, int step, int vocab_id, Stream& stream,
+                       void* workspace_ptr) {
+  // TODO(karlluo): compat ascend lookup
+  // void llm::ascend::LookupEmbedding(aclTensor** gatherOutput, const int64_t vocab_size, const int64_t hidden_size,
+  //                     const int64_t seq_len, void** embedding_table, void** input_ids, void** maxDev_a,
+  //                     aclOpExecutor& executor, aclrtStream& stream);
   return Status();
 }
 

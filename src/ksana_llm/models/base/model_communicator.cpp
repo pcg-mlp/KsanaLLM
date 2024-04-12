@@ -10,6 +10,7 @@ ModelCommunicator::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, st
     : rank_(rank), context_(context), buffer_(buffer), input_(input) {
   EventCreateWithFlags(&nccl_finish_event_, EVENT_DISABLE_TIMING);
 
+#ifdef ENABLE_CUDA
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   nccl_all_reduce_sum_layer_->Init({}, context_, rank_);
 
@@ -38,25 +39,31 @@ ModelCommunicator::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, st
                                          context_, rank_);
     EventDestroy(create_reduce_tensor_event);
   }
+#endif
 }
 ModelCommunicator::~ModelCommunicator() {
+#ifdef ENABLE_CUDA
   STATUS_CHECK_FAILURE(DestroyTensor(reduce_tensor_, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rank_tensor_0_, rank_));
+#endif
 
   EventDestroy(nccl_finish_event_);
 }
 
 Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+#ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
+#endif
   return Status();
 }
 
 Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
                                     bool is_context_stage, bool use_custom) {
+#ifdef ENABLE_CUDA
   if (is_context_stage) {
     STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
   } else {
@@ -70,6 +77,7 @@ Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, st
     EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
+#endif
   return Status();
 }
 
