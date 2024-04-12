@@ -44,4 +44,14 @@ Status GetDeviceMemoryInfo(MemoryDevice device, size_t* free, size_t* total);
 // Get free & total host memory in bytes.
 Status GetHostMemoryInfo(size_t* free, size_t* total);
 
+// Get workspace of size.
+// It maintain a global memory block, and reallocated if size is not enough.
+void GetWorkSpaceImpl(size_t size, void** ws_addr);
+
+// Define a function to create kernel workspace.
+typedef void (*WorkSpaceFunc)(size_t, void**);
+
+// Get the workspace function.
+WorkSpaceFunc GetWorkSpaceFunc();
+
 }  // namespace ksana_llm
