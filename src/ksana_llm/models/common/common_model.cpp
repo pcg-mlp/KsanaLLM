@@ -143,7 +143,6 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
                                       Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
                                       std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
                                       const bool is_context_stage) {
-#ifdef ENABLE_CUDA
   // Attn proj MatMul
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
@@ -191,7 +190,6 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
   // Attn NcclAllReduceSum
   std::vector<Tensor>& attn_all_reduce_sum_output = temp_buffer_1;
   model_communicator_->ReduceSum(attn_o_proj_output, attn_all_reduce_sum_output, is_context_stage, true);
-#endif
 
   return Status();
 }
@@ -200,7 +198,6 @@ template <typename T>
 Status CommonModel<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                 Tensor& post_layernorm_output, std::vector<Tensor>& temp_buffer_0,
                                 std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
-#ifdef ENABLE_CUDA
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
@@ -230,7 +227,6 @@ Status CommonModel<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::
   // Mlp NcclAllReduceSum
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
   model_communicator_->ReduceSum({down_proj_output[0]}, mlp_all_reduce_sum_output, false, false);
-#endif
 
   return Status();
 }
@@ -239,7 +235,6 @@ template <typename T>
 Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                     std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
                                     std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
-#ifdef ENABLE_CUDA
   // input layernorm
   Tensor input_layernorm_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
@@ -271,7 +266,6 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
   std::vector<Tensor>& mlp_add_output = temp_buffer_0;
   STATUS_CHECK_RETURN(add_layer_->Forward({mlp_all_reduce_sum_output[0], attn_add_output[0]}, mlp_add_output));
-#endif
   return Status();
 }
 
@@ -279,8 +273,6 @@ template <typename T>
 Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
-#ifdef ENABLE_CUDA
-
   model_input_->ParseFromRequests(forward_reqs, true);
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -344,7 +336,6 @@ Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& bas
   logits_float[0].dtype = TYPE_FP32;
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
   model_output_->CopyToLogistBuffer(model_input_->batch_size, forward_reqs, logits_float);
-#endif
   return Status();
 }
 
@@ -352,8 +343,6 @@ template <typename T>
 Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
-#ifdef ENABLE_CUDA
-
   model_input_->ParseFromRequests(forward_reqs, false);
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -418,7 +407,6 @@ Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weigh
   STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
 
   model_output_->CopyToLogistBuffer(model_input_->batch_size, forward_reqs, logits_float);
-#endif
   return Status();
 }
 
