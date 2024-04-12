@@ -3,4 +3,6 @@
 ==============================================================================*/
 #pragma once
 
-namespace ksana_llm {}  // namespace ksana_llm
+namespace ksana_llm {
+
+}  // namespace ksana_llm

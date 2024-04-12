@@ -16,7 +16,6 @@
 namespace ksana_llm {
 
 Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context) {
-#ifdef ENABLE_CUDA
   batch_schedule_config_ = batch_scheduler_config;
   context_ = context;
   rank_ = rank;
@@ -25,19 +24,19 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   GetBlockManager()->SetDeviceId(rank_);
 
   GetBlockManager()->AllocateContiguous(
-      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(curandState_t) + sizeof(int*)) * max_batch_size +
+      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(RandState) + sizeof(int*)) * max_batch_size +
           sizeof(float) * batch_schedule_config_.max_vocab_size,
       device_buffer_block_id_);
   GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
   NLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
-                 << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(curandState_t) + sizeof(int*)) * max_batch_size +
+                 << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(RandState) + sizeof(int*)) * max_batch_size +
                         sizeof(float) * batch_schedule_config_.max_vocab_size;
   device_output_tokens_ = static_cast<uint32_t*>(device_buffer_);
   device_offset_ = device_output_tokens_ + max_batch_size;
   device_topKs_ = reinterpret_cast<int*>(device_offset_ + max_batch_size);
   device_topPs_ = reinterpret_cast<float*>(device_topKs_ + max_batch_size);
   device_temperatures_ = reinterpret_cast<float*>(device_topPs_ + max_batch_size);
-  device_curandstates_ = reinterpret_cast<curandState_t*>(device_temperatures_ + max_batch_size);
+  device_curandstates_ = reinterpret_cast<RandState*>(device_temperatures_ + max_batch_size);
   device_output_tokens_ptrs_ = reinterpret_cast<int**>(device_curandstates_ + max_batch_size);
   device_inv_repetition_penalties_ = reinterpret_cast<float*>(device_output_tokens_ptrs_ + max_batch_size);
 
@@ -62,6 +61,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   host_temperatures_.resize(max_batch_size);
   host_output_tokens_.resize(max_batch_size);
 
+#ifdef ENABLE_CUDA
   topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
 #endif
 }
@@ -79,7 +79,6 @@ Sampler::~Sampler() {
 
 void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
                                      const int vocab_size, const float repetition_penalty, Stream& stream) {
-#ifdef ENABLE_CUDA
   // inv_repetition_penalties_ is filled with 1.0f
   std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
   // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
@@ -94,6 +93,7 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
   MemcpyAsync(device_inv_repetition_penalties_, inv_repetition_penalties_.data(), sizeof(float) * vocab_size,
               MEMCPY_HOST_TO_DEVICE, stream);
   // logits = mul(logits, device_inv_repetition_penalties_)
+#ifdef ENABLE_CUDA
   Mul(logits, device_inv_repetition_penalties_, logits, vocab_size, rank_);
 #endif
 }
@@ -153,9 +153,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
                   stream);
       sampling_devide_parameter.device_topKs = device_topKs_;
       sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
-#ifdef ENABLE_CUDA
       sampling_devide_parameter.device_curandstates = device_curandstates_;
-#endif
       if (use_top_p) {
         MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs,
                     MEMCPY_HOST_TO_DEVICE, stream);

@@ -9,15 +9,20 @@
 struct curandStateXORWOW;
 typedef struct curandStateXORWOW curandState_t;
 
+#ifdef ENABLE_CUDA
+  typedef curandState_t RandState;
+#else
+  // TODO(karlluo): need implement ascend random 
+  typedef int RandState;
+#endif
+
 namespace ksana_llm {
 struct SamplingDevideParameter {
   int* device_topKs = nullptr;
   float* device_topPs = nullptr;
   float* device_temperatures = nullptr;
   int** device_output_tokens_ptrs = nullptr;
-#ifdef ENABLE_CUDA
-  curandState_t* device_curandstates = nullptr;
-#endif
+  RandState* device_curandstates = nullptr;
   int vocab_size_padded = 0;
   int max_topK = 0;
   int bs = 0;
