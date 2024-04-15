@@ -50,9 +50,9 @@ Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
 
-  aclDestroyTensor(lm_input_tensor_ptr);
-  aclDestroyTensor(lm_weight_tensor_ptr);
-  aclDestroyTensor(lm_output_tensor_ptr);
+  ACL_CHECK(aclDestroyTensor(lm_input_tensor_ptr));
+  ACL_CHECK(aclDestroyTensor(lm_weight_tensor_ptr));
+  ACL_CHECK(aclDestroyTensor(lm_output_tensor_ptr));
 
   return Status();
 }
