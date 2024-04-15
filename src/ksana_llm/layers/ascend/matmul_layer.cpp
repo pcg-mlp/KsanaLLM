@@ -32,7 +32,7 @@ Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   llm_kernels::utils::CreateAclTensorWithData(matmul_output_shape, &matmul_output_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &matmul_output);
 
-  constexpr uint64_t workspace_size = 1073741824ull;;
+  constexpr uint64_t workspace_size = 1073741824ull;
   WorkSpaceFunc f = GetWorkSpaceFunc();
   void* ws_addr_ptr = nullptr;
   f(workspace_size, &ws_addr_ptr);
