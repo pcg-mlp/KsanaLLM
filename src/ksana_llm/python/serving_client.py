@@ -49,12 +49,12 @@ if __name__ == "__main__":
         prompt = "%s" % text_list[i]
 
         data = {
-            "model_name": "llama",
             "prompt": prompt,
             "sampling_config": {
                 "temperature": 0.0,
                 "topk": 1,
                 "topp": 0.0,
+                "max_new_tokens" : 1024,
                 "repetition_penalty": 1.0
             },
             "stream": False,

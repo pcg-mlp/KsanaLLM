@@ -26,24 +26,22 @@ std::vector<std::shared_ptr<BaseModel>> ModelInstance::models_;
 std::vector<std::shared_ptr<BaseWeight>> ModelInstance::weights_;
 
 void ModelInstance::Load() {
-  std::string unified_model_name = model_config_.name;
+  std::string unified_model_type = model_config_.type;
   // unify it to lower case
-  std::transform(unified_model_name.begin(), unified_model_name.end(), unified_model_name.begin(),
+  std::transform(unified_model_type.begin(), unified_model_type.end(), unified_model_type.begin(),
                  [](unsigned char c) { return std::tolower(c); });
 
-  if (unified_model_name.find("llama") != std::string::npos) {
-    name = "llama";
-    CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_name);
-  } else if (unified_model_name.find("qwen") != std::string::npos) {
-    name = "qwen";
-    CreateModelInstance<QwenModel, QwenWeight>(unified_model_name);
-  } else if (unified_model_name.find("baichuan") != std::string::npos) {
-    name = "baichuan";
-    CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_name);
+  if (unified_model_type.find("llama") != std::string::npos) {
+    type = "llama";
+    CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);
+  } else if (unified_model_type.find("qwen") != std::string::npos) {
+    type = "qwen";
+    CreateModelInstance<QwenModel, QwenWeight>(unified_model_type);
+  } else if (unified_model_type.find("baichuan") != std::string::npos) {
+    type = "baichuan";
+    CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_type);
   } else {
-    throw std::runtime_error(
-        "Unknown model type. Hint: if your model is llama, please let model name in config.ini contains 'llama' word "
-        "(ignore upper case or lower case)");
+    throw std::runtime_error(fmt::format("Unknown model type {}.", unified_model_type));
   }
 }
 

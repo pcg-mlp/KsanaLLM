@@ -18,7 +18,6 @@ setting:
     block_host_memory_factor: 10.0
 model_spec:
   base_model:
-    model_name: llama
     model_dir: /model/llama-hf/7B/
   lora_models:
     - model_name: lora_1
