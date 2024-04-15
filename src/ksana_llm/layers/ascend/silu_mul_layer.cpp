@@ -7,6 +7,7 @@
 #include "csrc/kernels/ascend/elementwise/elementwise.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+#include "ksana_llm/utils/ascend/acl_utils.h"
 
 namespace ksana_llm {
 
@@ -41,10 +42,10 @@ Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vect
   llm_kernels::ascend::Mul(gated_weight, silu_output, &mul_output, ws_addr_ptr, workspace_size,
                            context_->GetComputeStreams()[rank_].Get());
 
-  aclDestroyTensor(mul_output);
-  aclDestroyTensor(gated_weight);
-  aclDestroyTensor(silu_input);
-  aclDestroyTensor(silu_output);
+  ACL_CHECK(aclDestroyTensor(mul_output));
+  ACL_CHECK(aclDestroyTensor(gated_weight));
+  ACL_CHECK(aclDestroyTensor(silu_input));
+  ACL_CHECK(aclDestroyTensor(silu_output));
   return Status();
 }
 }  // namespace ksana_llm

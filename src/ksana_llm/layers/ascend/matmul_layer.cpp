@@ -7,6 +7,7 @@
 #include "csrc/kernels/ascend/matmul/matmul.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+#include "ksana_llm/utils/ascend/acl_utils.h"
 
 namespace ksana_llm {
 
@@ -40,9 +41,9 @@ Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output, ws_addr_ptr, workspace_size,
                               context_->GetComputeStreams()[rank_].Get());
 
-  aclDestroyTensor(matmul_input);
-  aclDestroyTensor(matmul_weight);
-  aclDestroyTensor(matmul_output);
+  ACL_CHECK(aclDestroyTensor(matmul_input));
+  ACL_CHECK(aclDestroyTensor(matmul_weight));
+  ACL_CHECK(aclDestroyTensor(matmul_output));
 
   return Status();
 }
