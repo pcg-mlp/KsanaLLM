@@ -46,7 +46,7 @@ class ModelInput {
   size_t max_tokens = 0;
 
   // The cache offset list.
-  std::vector<size_t> kv_cache_offset_list;
+  std::vector<int> kv_cache_offset_list;
 
   // The infer stage, context decode or decode.
   InferStage infer_stage;
