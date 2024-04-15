@@ -201,7 +201,7 @@ class Environment {
   Status ParseConfig(const std::string &config_file);
 
   // Parse model config from model dir.
-  Status ParseModelConfig(const std::string &model_name, const std::string &model_dir);
+  Status ParseModelConfig(const std::string &model_dir);
 
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);

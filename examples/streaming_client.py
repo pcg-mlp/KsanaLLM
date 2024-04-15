@@ -23,7 +23,6 @@ def get_streaming_response(response: requests.Response) -> Iterable[List[str]]:
 def test_http_chat(prompt, url):
 
     req = {
-        "model_name": "llama",
         "prompt": prompt,
         "sampling_config": {
             "temperature": 0.0,

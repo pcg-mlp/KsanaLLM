@@ -66,24 +66,12 @@ def args_config():
     return args
 
 
-def read_from_csv(csv_file, col_idx=0, remove_head=True, num: int = 0):
+def read_from_csv(csv_file, col_idx=0, remove_head=True):
     import csv
     csv_reader = csv.reader(open(csv_file))
     if remove_head:
         next(csv_reader)
-
-    input_lines = []
-    csv_lines = list(csv_reader)
-    if num > 0:
-        csv_num = len(csv_lines)
-        for _ in range(int(num / csv_num)):
-            input_lines += csv_lines
-        input_lines += csv_lines[0:(num % csv_num)]
-    else:
-        input_lines = csv_lines
-
-    for line in input_lines:
-        yield line[col_idx]
+    return [row[0] for row in csv_reader]
 
 
 async def generate_prompt_async(
@@ -125,7 +113,6 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     headers = {"User-Agent": "Benchmark Client"}
     if backend == "ksana":
         data = {
-            "model_name": "llama",
             "prompt": prompt,
             "sampling_config": {
                 "temperature": 0.0,
@@ -198,12 +185,12 @@ def send_request_sync(prompt: str, api_url: str, req_id: int,
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
     data = {
-        "model_name": "llama",
         "prompt": prompt,
         "sampling_config": {
             "temperature": 0.0,
             "topk": 1,
             "topp": 0.0,
+            "max_new_tokens" : 1024,
             "repetition_penalty" : 1.0
         },
         "stream": False,
@@ -247,6 +234,21 @@ def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
     pbar.close()
     return result_list
 
+def adjust_list_length(inputs, args):
+    if args.prompt_num == 0:
+        # 如果args.prompt_num为0，不做任何改变
+        return inputs
+    elif args.prompt_num > len(inputs):
+        # 如果args.prompt_num大于列表长度，尝试复制列表
+        repeat_times = args.prompt_num // len(inputs)
+        if len(inputs) * repeat_times != args.prompt_num:
+            # 如果无法通过整数倍复制达到指定长度，抛出错误
+            print(f"len = {len(inputs)}, prompt_num = {args.prompt_num}")
+            raise ValueError("无法通过整数倍复制达到指定长度")
+        return inputs * repeat_times
+    else:
+        # 如果args.prompt_num小于或等于列表长度，截断列表
+        return inputs[:args.prompt_num]
 
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
@@ -255,11 +257,10 @@ def main(args: argparse.Namespace):
     inputs = None
     if args.use_prefix_cache_prompts:
         _, inputs = prefix_cache_reader.load_prompts(input_csv=args.input_csv)
-        if args.prompt_num > 0: 
-            inputs = inputs[:args.prompt_num]
     else:
-        input_generator = read_from_csv(args.input_csv, num=args.prompt_num)
-        inputs = list(input_generator)
+        inputs = read_from_csv(args.input_csv)
+
+    inputs = adjust_list_length(inputs, args)
 
     benchmark_start_time = time.perf_counter()
     if args.mode == "async":

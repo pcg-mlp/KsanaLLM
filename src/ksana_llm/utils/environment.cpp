@@ -151,11 +151,9 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.report_threadpool_size", 4);
 
   // Read base model.
-  std::string base_model_name =
-      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_name", "");
   std::string base_model_dir =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
-  status = ParseModelConfig(base_model_name, base_model_dir);
+  status = ParseModelConfig(base_model_dir);
   if (!status.OK()) {
     return status;
   }
@@ -173,7 +171,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   return CheckEnvironment();
 }
 
-Status Environment::ParseModelConfig(const std::string &model_name, const std::string &model_dir) {
+Status Environment::ParseModelConfig(const std::string &model_dir) {
   std::string config_file = model_dir + "/config.json";
   if (!IsFileExists(config_file)) {
     return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Model config file: {} is not exists.", config_file));
@@ -190,7 +188,6 @@ Status Environment::ParseModelConfig(const std::string &model_name, const std::s
   }
 
   ModelConfig model_config;
-  model_config.name = model_name;
   model_config.path = model_dir;
   model_config.weight_data_type = GetModelDataType(config_json, model_config);
   model_config.tensor_para_size = tensor_parallel_size_;

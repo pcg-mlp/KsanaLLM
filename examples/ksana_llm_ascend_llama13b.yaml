@@ -59,8 +59,6 @@ setting:
 model_spec:
   # 基础模型配置，只能有一个
   base_model:
-    # 模型名称
-    model_name: llama
     # 模型路径
     model_dir: /model/llama-hf/13B/
   # lora模型配置，可以有多个

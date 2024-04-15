@@ -110,7 +110,7 @@ async def generate(request: Request) -> Response:
     """
 
     request_dict = await request.json()
-    model_name = request_dict.pop("model_name")
+    model_name = request_dict.pop("model_name", "")
     prompt_text = request_dict.pop("prompt")
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)

@@ -20,7 +20,6 @@ def post_http_request(prompt: str,
                       stream: bool = False) -> requests.Response:
     headers = {"User-Agent": "Test Client"}
     pload = {
-        "model_name": "llama",
         "prompt": prompt,
         "n": n,
         "stream": stream,

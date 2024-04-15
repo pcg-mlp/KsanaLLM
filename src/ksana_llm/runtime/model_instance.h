@@ -29,6 +29,7 @@ class ModelInstance {
 
   // The instance name.
   std::string name;
+  std::string type;
 
   std::vector<Status> Forward(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
                               std::vector<ForwardRequest>& forward_reqs);
