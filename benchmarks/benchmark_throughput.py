@@ -22,7 +22,11 @@ import prefix_cache_reader
 
 # (prompt len, output len, latency)
 REQUEST_LATENCY: List[Tuple[int, int, int, int, float]] = []
-
+PROMPT_AFFIX_DICT = {
+    "llama": "[INST]%s[/INST]",
+    "baichuan": "<reserved_106>%s<reserved_107>",
+    "qwen": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
+}
 
 def args_config():
     parser = argparse.ArgumentParser()
@@ -54,11 +58,17 @@ def args_config():
     parser.add_argument('--backend',
                         type=str,
                         default="ksana",
-                        help='serving backend, ksana or vllm or evart')
+                        choices=['ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm', 'evart'],
+                        help='serving backend, ksana or vllm or evart or online server')
     parser.add_argument('--prompt_num',
                         type=int,
                         default=0,
                         help='number of input prompts')
+    parser.add_argument('--model_type',
+                        type=str,
+                        default="llama",
+                        choices=['llama', 'baichuan', 'qwen'],
+                        help='serving model type, used to add prefixes and suffixes to the prompt.')
     parser.add_argument('--use_prefix_cache_prompts',
                         action='store_true',
                         help='test with prompts with very long prefix cache')
@@ -118,7 +128,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 "temperature": 0.0,
                 "topk": 1,
                 "topp": 0.0,
-                "repetition_penalty" : 1.0
+                "repetition_penalty" : 1.0,
+                "max_new_tokens": 1024,
             },
             "stream": False,
         }
@@ -139,6 +150,19 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "temperature": 0.00000001,
             "max_tokens": 1024,
             "repetition_penalty" : 1.0
+        }
+    elif backend in ["ksana-server", "vllm-server"]:
+        data = {
+            "model": "default_model",
+            "prompt": prompt,
+            "top_p": 1.0,
+            "temperature": 1,
+            "top_k": 1,
+            "num_beams": 1,
+            "repetition_penalty": 1.0,
+            "n": 1,
+            "task_id": time.time(),
+            "delete_prompt_from_output": 0,
         }
 
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
@@ -172,6 +196,14 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
         prompt_len = len(prompt)
         output_text = output["text"][0].strip()
         output_token_num = len(output.get("output_token_ids")[0])
+    elif backend == "ksana-server":
+        output_text = output['choices'][0]['message']['content']
+        input_token_num = output['usage']['prompt_tokens']
+        output_token_num = output['usage']['completion_tokens']
+    elif backend == "vllm-server":
+        prompt_len = len(prompt)
+        output_text = output['choices'][0]['message']['content'][prompt_len:].strip()
+
     output_len = len(output_text)
     result_list[req_id] = output_text
     print("", output_text)
@@ -213,8 +245,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
     result_list = [""] * len(inputs)
     async for req_id, prompt in generate_prompt_async(inputs,
                                                       args.request_rate):
-        prompt = "[INST]%s[/INST]" % prompt
-        #prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n" % prompt # qwen模型
+        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         task = asyncio.create_task(
             send_request_async(prompt, api_url, req_id, result_list, pbar,
                                args.backend))
@@ -234,6 +265,7 @@ def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
     pbar.close()
     return result_list
 
+
 def adjust_list_length(inputs, args):
     if args.prompt_num == 0:
         # 如果args.prompt_num为0，不做任何改变
@@ -250,10 +282,14 @@ def adjust_list_length(inputs, args):
         # 如果args.prompt_num小于或等于列表长度，截断列表
         return inputs[:args.prompt_num]
 
+
 def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(args.port) + "/v2/models/ensemble/generate"
+    elif args.backend == "server":
+        api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
+
     inputs = None
     if args.use_prefix_cache_prompts:
         _, inputs = prefix_cache_reader.load_prompts(input_csv=args.input_csv)
