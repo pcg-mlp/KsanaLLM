@@ -57,6 +57,13 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
   infer_req->block_size = GetBlockManager()->GetBlockSize();
 
+  if (model_instances_.find(req->model_name) == model_instances_.end()) {
+    NLLM_LOG_ERROR << "req->model_name=" << req->model_name << " not found!";
+    req->finish_status = Status(RET_INVALID_ARGUMENT, fmt::format("Model {} not found.", req->model_name));
+    req->waiter->Notify();
+    return req->finish_status;
+  }
+
   infer_req->model_instance = model_instances_[req->model_name];
   infer_req->infer_stage = InferStage::STAGE_CONTEXT;
   infer_req->step = 0;

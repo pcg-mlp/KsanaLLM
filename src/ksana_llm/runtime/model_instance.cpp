@@ -41,7 +41,7 @@ void ModelInstance::Load() {
     type = "baichuan";
     CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_type);
   } else {
-    throw std::runtime_error(fmt::format("Unknown model type {}.", unified_model_type));
+    throw std::runtime_error(fmt::format("Model type {} is not supported.", unified_model_type));
   }
 }
 
