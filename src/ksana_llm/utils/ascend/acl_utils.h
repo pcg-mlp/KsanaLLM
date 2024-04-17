@@ -15,10 +15,13 @@
 
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
+#include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 
 std::vector<int64_t> GetAclTensorShape(aclTensor* tensor);
+
+DataType GetAclTensorDataType(aclTensor* tensor);
 
 // ref: https://www.hiascend.com/document/detail/zh/canncommercial/5046/windowsversion/windowsug/aclcppdevg_03_0516.html
 static const char* GetACLErrorString(aclError error) {

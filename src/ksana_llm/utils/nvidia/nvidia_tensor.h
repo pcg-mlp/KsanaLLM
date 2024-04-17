@@ -19,4 +19,13 @@ void TensorT<DEVICE_TYPE_NVIDIA>::InitializeDeviceTensor();
 template <>
 void* TensorT<DEVICE_TYPE_NVIDIA>::GetDeviceTensor();
 
+template <>
+std::vector<int64_t> TensorT<DEVICE_TYPE_NVIDIA>::GetDeviceTensorShape() const;
+
+template <>
+DataType TensorT<DEVICE_TYPE_NVIDIA>::GetDeviceTensorDataType() const;
+
+template <>
+void TensorT<DEVICE_TYPE_NVIDIA>::ResetDeviceTensor(void* device_tensor);
+
 }  // namespace ksana_llm

@@ -299,6 +299,7 @@ Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& bas
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
   STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
       {model_input_->input_ids, model_input_->input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
+  emb_lookup_output[0].dtype = DataType::TYPE_FP16;
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false

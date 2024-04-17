@@ -58,8 +58,18 @@ class TensorT {
   typename DeviceTensorTypeTraits<T>::value_type ResetDeviceTensor(const DataType dtype,
                                                                    const std::vector<int64_t> shape);
 
-  // Save to numpy
+  // Get a new device tensor, with new dtype and shape.
+  void ResetDeviceTensor(typename DeviceTensorTypeTraits<T>::value_type device_tensor);
+
+  // Get device tensor shape.
+  std::vector<int64_t> GetDeviceTensorShape() const;
+
+  // Get device tensor data type.
+  DataType GetDeviceTensorDataType() const;
+
   std::string GetNumpyType() const;
+
+  // Save to npy format file
   void SaveToFile(const std::string& file_path);
 
   // Use block id instead of physical address, so that the blockmanager could do defragmentation easily.

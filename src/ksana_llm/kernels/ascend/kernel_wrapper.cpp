@@ -8,6 +8,7 @@
 
 #include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/kernels/permute.h"
+#include "ksana_llm/utils/ascend/acl_utils.h"
 
 namespace ksana_llm {
 
@@ -28,9 +29,19 @@ aclDataType CastDataTypeToAclDataType(const DataType dtype) {
 }
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
-  aclTensor* output = tensor.GetDeviceTensor();
-  llm_kernels::ascend::Cast(tensor.GetDeviceTensor(), CastDataTypeToAclDataType(target_dtype), &output, stream.Get(),
-                            GetWorkSpaceFunc());
+  Tensor* input_normal_tensor_ptr = reinterpret_cast<Tensor*>(&tensor);
+  aclTensor* input_tensor_ptr = input_normal_tensor_ptr->GetDeviceTensor();
+  std::vector<int64_t> input_shape = GetAclTensorShape(input_tensor_ptr);
+  void* output_buffer_space_ptr = tensor.GetPtr<void>();
+  aclTensor* reshaped_output_tensor = nullptr;
+  llm_kernels::utils::CreateAclTensorWithData(input_shape, &(output_buffer_space_ptr),
+                                              CastDataTypeToAclDataType(target_dtype), aclFormat::ACL_FORMAT_ND,
+                                              &reshaped_output_tensor);
+  llm_kernels::ascend::Cast(input_tensor_ptr, CastDataTypeToAclDataType(target_dtype), &reshaped_output_tensor,
+                            stream.Get(), GetWorkSpaceFunc());
+  tensor.ResetDeviceTensor(reshaped_output_tensor);
+  tensor.dtype = target_dtype;
+  ACL_CHECK(aclDestroyTensor(input_tensor_ptr));
   return Status();
 }
 
