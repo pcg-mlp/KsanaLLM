@@ -17,8 +17,5 @@ Tensor BaichuanWeight<T>::GetModelWeights(const std::string& weight_name) {
 
 template class BaichuanWeight<float>;
 template class BaichuanWeight<float16>;
-#ifdef ENABLE_BFLOAT16
-template class BaichuanWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

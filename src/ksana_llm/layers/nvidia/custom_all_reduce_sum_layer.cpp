@@ -9,8 +9,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
+Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
                                      int rank) {
   context_ = context;
   rank_ = rank;
@@ -49,8 +48,7 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
   return Status();
 }
 
-template <typename T>
-Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
@@ -63,11 +61,11 @@ Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tens
     int data_size = input_tensors[0].GetElementNumber();
     int tp_size = context_->GetTensorParallelSize();
     if (!is_init_) {
-      CustomAllReduceInit<T>(&reduce_op_, input, metas_, rank_data_, data_handles_, input_handles_, data_size,
+      CustomAllReduceInit(&reduce_op_, input, metas_, rank_data_, data_handles_, input_handles_, data_size,
                           rank_data_sz_, tp_size, rank_, *stream);
       is_init_ = true;
     }
-    CustomAllReduceRun<T>(reduce_op_, input, result, data_size, *stream);
+    CustomAllReduceRun(reduce_op_, input, result, data_size, *stream);
   } else {
     void* src = input_tensors[0].GetPtr<void>();
     void* dst = output_tensors[0].GetPtr<void>();
@@ -77,11 +75,4 @@ Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tens
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class CustomAllReduceSumLayer<float>;
-template class CustomAllReduceSumLayer<half>;
-#ifdef ENABLE_BFLOAT16
-template class CustomAllReduceSumLayer<__nv_bfloat16>;
-#endif
-
 }  // namespace ksana_llm

@@ -8,10 +8,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AssembleLastTokenLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   int batch_size = input_tensors[1].shape[0] - 1;
-  AssembleLastToken<T>(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
+  AssembleLastToken(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                     reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), batch_size,
                     input_tensors[0].shape[1], reinterpret_cast<void*>(output_tensors[0].GetPtr<void>()),
                     context_->GetComputeStreams()[rank_].Get());
@@ -20,11 +19,5 @@ Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tenso
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class AssembleLastTokenLayer<float>;
-template class AssembleLastTokenLayer<half>;
-#ifdef ENABLE_BFLOAT16
-template class AssembleLastTokenLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

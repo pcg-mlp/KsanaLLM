@@ -7,8 +7,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // input_tensors:
   //     0: qkv_tensor shape [max_token_num, hidden_units, 3], type same as weight
   //     1: input offset tensor shape [max_batch_size + 1], type uint64
@@ -26,7 +25,7 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   void** k_list = (input_tensors[2].GetPtr<void*>()) + layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
-  AttenVarlen<T>(input_tensors[0].GetPtr<void>(), input_tensors[4].GetPtr<void>(), output_tensors[0].GetPtr<void>(),
+  AttenVarlen(input_tensors[0].GetPtr<void>(), input_tensors[4].GetPtr<void>(), output_tensors[0].GetPtr<void>(),
               input_tensors[1].GetPtr<void>(), rotary_embedding_cuda_, total_tokens, max_tokens, batch_size, num_heads_,
               head_size_, stride_size_, tensor_para_size_, is_causal_, rank_, block_token_num_, k_list, v_list,
               input_tensors[3].GetPtr<void>(), alibi_slopes_, context_->GetComputeStreams()[rank_].Get());
@@ -35,11 +34,5 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class FlashAttentionLayer<float>;
-template class FlashAttentionLayer<half>;
-#ifdef ENABLE_BFLOAT16
-template class FlashAttentionLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

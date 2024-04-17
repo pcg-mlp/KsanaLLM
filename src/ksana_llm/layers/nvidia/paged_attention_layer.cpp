@@ -15,8 +15,7 @@ kv_list  [layers_num * (total_blocks * 2)]
 每个k,v代表一个指针,存储的数据个数为一个block块能存的token个数
 需要在model中将block按kv分开存储指针，方便后续计算
 */
-template <typename T>
-Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
@@ -57,7 +56,7 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   out.dtype = query.dtype;
   out.dtype = query.dtype;
   out.shape = {query.shape[0], query.shape[1] / 3};
-  run_paged_attention<T>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
+  run_paged_attention<half>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
                             max_tokens, context_->GetComputeStreams()[rank_].Get(), cache_offset.GetPtr<void>(),
                             batch_size, num_heads_, head_size_, num_kv_heads_, stride_size_, block_token_num_,
                             batch_size, rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
@@ -65,11 +64,5 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
                             qkv_workspace.GetPtr<void>());
   return Status();
 }
-
-template class PagedAttentionLayer<float>;
-template class PagedAttentionLayer<half>;
-#ifdef ENABLE_BFLOAT16
-template class PagedAttentionLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

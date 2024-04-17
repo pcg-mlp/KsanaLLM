@@ -17,8 +17,5 @@ Tensor LlamaWeight<T>::GetModelWeights(const std::string& weight_name) {
 
 template class LlamaWeight<float>;
 template class LlamaWeight<float16>;
-#ifdef ENABLE_BFLOAT16
-template class LlamaWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

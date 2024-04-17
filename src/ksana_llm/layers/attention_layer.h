@@ -14,7 +14,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class AttentionLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
@@ -32,7 +31,7 @@ class AttentionLayer : public BaseLayer {
   int tensor_para_size_;
   bool is_causal_{true};
 #ifdef ENABLE_CUDA
-  llm_kernels::nvidia::RotaryEmbeddingCuda<T> rotary_embedding_cuda_;
+  llm_kernels::nvidia::RotaryEmbeddingCuda<half> rotary_embedding_cuda_;
   std::optional<void*> alibi_slopes_ = {};
 #endif
 };

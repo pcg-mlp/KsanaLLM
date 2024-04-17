@@ -11,7 +11,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class CustomAllReduceSumLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;

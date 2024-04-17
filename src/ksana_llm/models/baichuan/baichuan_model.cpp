@@ -39,8 +39,5 @@ Status BaichuanModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_wei
 
 template class BaichuanModel<float>;
 template class BaichuanModel<float16>;
-#ifdef ENABLE_BFLOAT16
-template class BaichuanModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

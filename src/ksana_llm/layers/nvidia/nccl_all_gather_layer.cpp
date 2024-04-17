@@ -7,8 +7,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status NcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status NcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   size_t tp_size = context_->GetTensorParallelSize();
   if (tp_size == 1) {
     return Status();
@@ -29,21 +28,14 @@ Status NcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   ncclResult_t ncclError =
       ncclAllGather(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                     reinterpret_cast<void*>(input_tensors[1].GetPtr<void>()), input_tensors[0].GetElementNumber(),
-                    GetNcclDataType<T>(), context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
+                    ncclHalf, context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
   if (ncclError != ncclSuccess) {
     NLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
   }
   NCCL_CHECK(ncclGroupEnd());
-  InvokePermute<T>(input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), {tp_size, h, w_per}, {1, 0, 2},
+  InvokePermute(input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), {tp_size, h, w_per}, {1, 0, 2},
                 *stream);
   output_tensors[0].shape = {h, tp_size * w_per};
   return Status();
 }
-
-template class NcclAllGatherLayer<float>;
-template class NcclAllGatherLayer<half>;
-#ifdef ENABLE_BFLOAT16
-template class NcclAllGatherLayer<__nv_bfloat16>;
-#endif
-
 }  // namespace ksana_llm

@@ -322,43 +322,26 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
 
   PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
 
-  // Convert of BFP16 and FP16
-  if (model_config_.weight_data_type == TYPE_FP16 || model_config_.weight_data_type == TYPE_BF16) {
-    for (auto& data_type_iter : weights_data_type_map_) {
-      if (data_type_iter.second == TYPE_FP16 || data_type_iter.second == TYPE_BF16) {
-        Tensor& tensor = weights_map_[data_type_iter.first];
-        tensor.dtype = data_type_iter.second;
-        GetBlockManager()->SetDeviceId(rank_);
-        CastInplace(tensor, model_config_.weight_data_type, context_->GetMemoryManageStreams()[rank_]);
-        tensor.dtype = model_config_.weight_data_type;
-      }
-    }
-  }
-  // We use vocab_size to determine whether it is the Baichuan2 model.
-  // If vocab_size is equal to 125,696, then it is the Baichuan2 model.
-  // And Unlike Baichuan1, the Baichuan2 model requires normalizing the head weights. Refer to
-  // https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/84603cde5ebffb6084e476cfaeceaf0b8b91fe54/modeling_baichuan.py#L508
-  if (model_config_.type == "baichuan" && vocab_size == 125696) {
-    if (weights_data_type_map_.find("lm_head.weight") != weights_data_type_map_.end()) {
-      Tensor& tensor = weights_map_["lm_head.weight"];
+  // Convert BFP16 to FP16
+  for (auto& data_type_iter : weights_data_type_map_) {
+    if (data_type_iter.second == TYPE_BF16) {
+      Tensor& tensor = weights_map_[data_type_iter.first];
+      tensor.dtype = DataType::TYPE_BF16;
       GetBlockManager()->SetDeviceId(rank_);
-      StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
-      torch::ScalarType torch_dtype;
-      if (tensor.dtype == DataType::TYPE_FP32) {
-        torch_dtype = torch::kFloat32;
-      } else if (tensor.dtype == DataType::TYPE_FP16) {
-        torch_dtype = torch::kFloat16;
+      CastInplace(tensor, DataType::TYPE_FP16, context_->GetMemoryManageStreams()[rank_]);
+
+      // We use vocab_size to determine whether it is the Baichuan2 model.
+      // If vocab_size is equal to 125,696, then it is the Baichuan2 model.
+      // And Unlike Baichuan1, the Baichuan2 model requires normalizing the head weights. Refer to
+      // https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/84603cde5ebffb6084e476cfaeceaf0b8b91fe54/modeling_baichuan.py#L508
+      if (model_config_.type == "baichuan" && data_type_iter.first == "lm_head.weight" && vocab_size == 125696) {
+        StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+        auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch::kFloat16);
+        torch::Tensor in = torch::from_blob(tensor.GetPtr<void>(), {tensor.shape[0], tensor.shape[1]}, options);
+        auto out = torch::nn::functional::normalize(in, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+        MemcpyAsync(tensor.GetPtr<void>(), out.data_ptr(), sizeof(T) * tensor.shape[0] * tensor.shape[1],
+                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
       }
-#ifdef ENABLE_BFLOAT16
-      else if (tensor.dtype == DataType::TYPE_BF16) {
-        torch_dtype = torch::kBFloat16;
-      }
-#endif
-      auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
-      torch::Tensor in = torch::from_blob(tensor.GetPtr<void>(), {tensor.shape[0], tensor.shape[1]}, options);
-      auto out = torch::nn::functional::normalize(in, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
-      MemcpyAsync(tensor.GetPtr<void>(), out.data_ptr(), sizeof(T) * tensor.shape[0] * tensor.shape[1],
-                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     }
   }
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
@@ -415,8 +398,5 @@ Tensor CommonWeight<T>::GetModelWeights(const std::string& weight_name) {
 
 template class CommonWeight<float>;
 template class CommonWeight<float16>;
-#ifdef ENABLE_BFLOAT16
-template class CommonWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm
