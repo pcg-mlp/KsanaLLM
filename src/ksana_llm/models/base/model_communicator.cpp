@@ -6,20 +6,19 @@
 
 namespace ksana_llm {
 
-template <typename T>
-ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, std::shared_ptr<Context> context)
+ModelCommunicator::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, std::shared_ptr<Context> context)
     : rank_(rank), context_(context), buffer_(buffer), input_(input) {
   EventCreateWithFlags(&nccl_finish_event_, EVENT_DISABLE_TIMING);
 
 #ifdef ENABLE_CUDA
-  nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer<T>>();
+  nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   nccl_all_reduce_sum_layer_->Init({}, context_, rank_);
 
-  nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer<T>>();
+  nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer>();
   nccl_all_gather_layer_->Init({}, context_, rank_);
 
   if (enable_custom_all_reduce_) {
-    custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer<T>>();
+    custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer>();
 
     Event create_reduce_tensor_event;
     EventCreateWithFlags(&create_reduce_tensor_event, EVENT_DISABLE_TIMING);
@@ -42,8 +41,7 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
   }
 #endif
 }
-template <typename T>
-ModelCommunicator<T>::~ModelCommunicator() {
+ModelCommunicator::~ModelCommunicator() {
 #ifdef ENABLE_CUDA
   STATUS_CHECK_FAILURE(DestroyTensor(reduce_tensor_, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rank_tensor_0_, rank_));
@@ -52,10 +50,9 @@ ModelCommunicator<T>::~ModelCommunicator() {
   EventDestroy(nccl_finish_event_);
 }
 
-template <typename T>
-Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
+Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
 #ifdef ENABLE_CUDA
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
@@ -64,8 +61,7 @@ Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors,
   return Status();
 }
 
-template <typename T>
-Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
                                     bool is_context_stage, bool use_custom) {
 #ifdef ENABLE_CUDA
   if (is_context_stage) {
@@ -85,9 +81,4 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
   return Status();
 }
 
-template class ModelCommunicator<float>;
-template class ModelCommunicator<float16>;
-#ifdef ENABLE_BFLOAT16
-template class ModelCommunicator<bfloat16>;
-#endif
 }  // namespace ksana_llm

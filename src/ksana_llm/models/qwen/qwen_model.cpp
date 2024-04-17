@@ -35,8 +35,5 @@ Status QwenModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
 template class QwenModel<float>;
 template class QwenModel<float16>;
-#ifdef ENABLE_BFLOAT16
-template class QwenModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

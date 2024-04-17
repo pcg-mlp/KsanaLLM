@@ -178,7 +178,7 @@ size_t GetTypeSizeT<DEVICE_TYPE_NVIDIA>(DataType dtype) {
                                                              {TYPE_INT16, sizeof(int16_t)},
                                                              {TYPE_INT32, sizeof(int32_t)},
                                                              {TYPE_INT64, sizeof(int64_t)},
-#ifdef ENABLE_BFLOAT16
+#ifdef ENABLE_BF16
                                                              {TYPE_BF16, sizeof(__nv_bfloat16)},
 #endif
 #ifdef ENABLE_FP8
@@ -198,7 +198,7 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl() {
   } else if (std::is_same<U, half>::value || std::is_same<U, const half>::value) {
     return TYPE_FP16;
   }
-#ifdef ENABLE_BFLOAT16
+#ifdef ENABLE_BF16
   else if (std::is_same<U, __nv_bfloat16>::value || std::is_same<U, const __nv_bfloat16>::value) {
     return TYPE_BF16;
   }
@@ -239,7 +239,7 @@ template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<unsigned long>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<bool>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<char>();
 
-#ifdef ENABLE_BFLOAT16
+#ifdef ENABLE_BF16
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<__nv_bfloat16>();
 #endif
 #ifdef ENABLE_FP8

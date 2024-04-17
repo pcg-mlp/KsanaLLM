@@ -70,17 +70,17 @@ class CommonModel : public BaseModel {
   std::shared_ptr<ModelOutput> model_output_;
 
   // The model communicator.
-  std::shared_ptr<ModelCommunicator<T>> model_communicator_;
+  std::shared_ptr<ModelCommunicator> model_communicator_;
 
-  std::shared_ptr<EmbLookupLayer<T>> emb_lookup_layer_;
-  std::shared_ptr<LayernormLayer<T>> layernorm_layer_;
-  std::vector<std::shared_ptr<FlashAttentionLayer<T>>> flash_attention_layers_;
-  std::vector<std::shared_ptr<PagedAttentionLayer<T>>> paged_attention_layers_;
-  std::shared_ptr<AddLayer<T>> add_layer_;
-  std::shared_ptr<SiluMulLayer<T>> silu_mul_layer_;
-  std::shared_ptr<MatMulLayer<T>> matmul_layer_;
-  std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
-  std::shared_ptr<CastLayer<T>> cast_layer_;
+  std::shared_ptr<EmbLookupLayer> emb_lookup_layer_;
+  std::shared_ptr<LayernormLayer> layernorm_layer_;
+  std::vector<std::shared_ptr<FlashAttentionLayer>> flash_attention_layers_;
+  std::vector<std::shared_ptr<PagedAttentionLayer>> paged_attention_layers_;
+  std::shared_ptr<AddLayer> add_layer_;
+  std::shared_ptr<SiluMulLayer> silu_mul_layer_;
+  std::shared_ptr<MatMulLayer> matmul_layer_;
+  std::shared_ptr<AssembleLastTokenLayer> assemble_last_token_layer_;
+  std::shared_ptr<CastLayer> cast_layer_;
 
   int num_layer_;
   bool qkv_add_bias_;

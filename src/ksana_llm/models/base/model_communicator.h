@@ -11,7 +11,6 @@
 namespace ksana_llm {
 
 // The collective communicator library.
-template <typename T>
 class ModelCommunicator {
  public:
   ModelCommunicator(Tensor* buffer, Tensor* input, int rank, std::shared_ptr<Context> context);
@@ -29,13 +28,13 @@ class ModelCommunicator {
   bool enable_custom_all_reduce_ = true;
 
   // The default all reduce layer.
-  std::shared_ptr<NcclAllReduceSumLayer<T>> nccl_all_reduce_sum_layer_;
+  std::shared_ptr<NcclAllReduceSumLayer> nccl_all_reduce_sum_layer_;
 
   // The all gather layer
-  std::shared_ptr<NcclAllGatherLayer<T>> nccl_all_gather_layer_;
+  std::shared_ptr<NcclAllGatherLayer> nccl_all_gather_layer_;
 
   // The custom all reduce layer.
-  std::shared_ptr<CustomAllReduceSumLayer<T>> custom_all_reduce_sum_layer_0_;
+  std::shared_ptr<CustomAllReduceSumLayer> custom_all_reduce_sum_layer_0_;
 
  private:
   int rank_;

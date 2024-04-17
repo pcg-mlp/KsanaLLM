@@ -35,8 +35,5 @@ Status LlamaModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight
 
 template class LlamaModel<float>;
 template class LlamaModel<float16>;
-#ifdef ENABLE_BFLOAT16
-template class LlamaModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

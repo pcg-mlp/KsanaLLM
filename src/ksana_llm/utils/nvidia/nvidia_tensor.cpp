@@ -17,7 +17,7 @@ void* TensorT<DEVICE_TYPE_NVIDIA>::GetDeviceTensor() {
 
 template half* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<half>() const;
 
-#ifdef ENABLE_BFLOAT16
+#ifdef ENABLE_BF16
 template __nv_bfloat16* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<__nv_bfloat16>() const;
 #endif
 
