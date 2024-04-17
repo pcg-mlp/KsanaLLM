@@ -22,6 +22,7 @@ Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<
   llm_kernels::ascend::Cast(input_tensor_ptr, aclDataType::ACL_FLOAT, &reshaped_output_tensor,
                             context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   output_tensors[0].shape = input_tensors[0].shape;
+  output_tensors[0].dtype = DataType::TYPE_FP32;
   return Status();
 }
 }  // namespace ksana_llm

@@ -29,4 +29,13 @@ aclTensor* TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(const DataType dtype, 
 // Print acl tensor information.
 void PrintAclTensorMeta(const aclTensor* tensor, const std::string& name);
 
+template <>
+std::vector<int64_t> TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorShape() const;
+
+template <>
+DataType TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorDataType() const;
+
+template <>
+void TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(aclTensor* device_tensor);
+
 }  // namespace ksana_llm

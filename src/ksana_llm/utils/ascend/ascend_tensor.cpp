@@ -40,7 +40,7 @@ aclTensor* TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(const DataType new_dty
   }
 
   void* input_dev_addr = GetPtr<void>();
-  aclDestroyTensor(device_tensor_);
+  ACL_CHECK(aclDestroyTensor(device_tensor_));
   device_tensor_ =
       aclCreateTensor(new_shape.data(), new_shape.size(), static_cast<aclDataType>(new_dtype), new_strides.data(), 0,
                       static_cast<aclFormat>(data_format), new_shape.data(), new_shape.size(), input_dev_addr);
@@ -48,19 +48,19 @@ aclTensor* TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(const DataType new_dty
 }
 
 void PrintAclTensorMeta(const aclTensor* tensor, const std::string& name) {
-  int64_t* storageDims = nullptr;
-  uint64_t storageDimsNum;
-  ACL_CHECK(aclGetViewShape(tensor, &storageDims, &storageDimsNum));
+  int64_t* storage_dims = nullptr;
+  uint64_t storage_dims_num;
+  ACL_CHECK(aclGetViewShape(tensor, &storage_dims, &storage_dims_num));
 
-  aclDataType dataType;
-  ACL_CHECK(aclGetDataType(tensor, &dataType));
+  aclDataType data_type;
+  ACL_CHECK(aclGetDataType(tensor, &data_type));
 
   aclFormat format;
   ACL_CHECK(aclGetFormat(tensor, &format));
 
-  std::cout << name.c_str() << " dtype:" << dataType << ", shape:[";
-  for (size_t i = 0; i < storageDimsNum; ++i) {
-    int64_t dim = *(storageDims + i);
+  std::cout << name.c_str() << " dtype:" << data_type << ", shape:[";
+  for (size_t i = 0; i < storage_dims_num; ++i) {
+    int64_t dim = *(storage_dims + i);
     if (i == 0) {
       std::cout << dim;
     } else {
@@ -68,6 +68,59 @@ void PrintAclTensorMeta(const aclTensor* tensor, const std::string& name) {
     }
   }
   std::cout << "], format:" << format << std::endl;
+}
+
+template <>
+std::vector<int64_t> TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorShape() const {
+  int64_t* storage_dims = nullptr;
+  uint64_t storage_dims_num;
+  ACL_CHECK(aclGetViewShape(device_tensor_, &storage_dims, &storage_dims_num));
+  std::vector<int64_t> device_tensor_shape;
+  for (size_t i = 0; i < storage_dims_num; ++i) {
+    device_tensor_shape.push_back(*(storage_dims + i));
+  }
+  return device_tensor_shape;
+}
+
+template <>
+DataType TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorDataType() const {
+  aclDataType data_type;
+  ACL_CHECK(aclGetDataType(device_tensor_, &data_type));
+  switch (data_type) {
+    case aclDataType::ACL_BF16:
+      return DataType::TYPE_BF16;
+    case aclDataType::ACL_BOOL:
+      return DataType::TYPE_BOOL;
+    case aclDataType::ACL_UINT8:
+      return DataType::TYPE_UINT8;
+    case aclDataType::ACL_UINT16:
+      return DataType::TYPE_UINT16;
+    case aclDataType::ACL_UINT32:
+      return DataType::TYPE_UINT32;
+    case aclDataType::ACL_UINT64:
+      return DataType::TYPE_UINT64;
+    case aclDataType::ACL_INT8:
+      return DataType::TYPE_INT8;
+    case aclDataType::ACL_INT16:
+      return DataType::TYPE_INT16;
+    case aclDataType::ACL_INT32:
+      return DataType::TYPE_INT32;
+    case aclDataType::ACL_INT64:
+      return DataType::TYPE_INT64;
+    case aclDataType::ACL_FLOAT16:
+      return DataType::TYPE_FP16;
+    case aclDataType::ACL_FLOAT:
+      return DataType::TYPE_FP32;
+    case aclDataType::ACL_DOUBLE:
+      return DataType::TYPE_FP64;
+    default:
+      return DataType::TYPE_INVALID;
+  }
+}
+
+template <>
+void TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(aclTensor* device_tensor) {
+  device_tensor_ = device_tensor;
 }
 
 }  // namespace ksana_llm

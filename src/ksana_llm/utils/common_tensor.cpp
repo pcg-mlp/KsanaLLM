@@ -22,15 +22,24 @@ TensorT<T>::TensorT(const MemoryDevice device, const DataType dtype, const std::
 
 template <int T>
 size_t TensorT<T>::GetElementNumber() const {
-  if (shape.empty()) {
+  std::vector<int64_t> device_tensor_shape = GetDeviceTensorShape();
+  if (device_tensor_shape.empty() && shape.empty()) {
     return 0;
+  } else if (!device_tensor_shape.empty()) {
+    return std::accumulate(device_tensor_shape.begin(), device_tensor_shape.end(), static_cast<size_t>(1),
+                           std::multiplies<size_t>());
+  } else {
+    return std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
   }
-  return std::accumulate(shape.begin(), shape.end(), (size_t)1, std::multiplies<size_t>());
 }
 
 template <int T>
 size_t TensorT<T>::GetTotalBytes() const {
-  return GetElementNumber() * GetTypeSize(dtype);
+  DataType tensor_dtype = GetDeviceTensorDataType();
+  if (tensor_dtype == TYPE_INVALID) {
+    tensor_dtype = dtype;
+  }
+  return GetElementNumber() * GetTypeSize(tensor_dtype);
 }
 
 template <int T>
@@ -51,8 +60,15 @@ std::string TensorT<T>::ToString() const {
       {TYPE_FP64, "FP64"},     {TYPE_BYTES, "BYTES"},     {TYPE_INVALID, "INVALID"}, {TYPE_FP8_E4M3, "E4M3"},
       {TYPE_VOID, "VOID"},     {TYPE_POINTER, "POINTER"},
   };
+
+  DataType tensor_dtype = GetDeviceTensorDataType();
+  if (tensor_dtype == TYPE_INVALID) {
+    tensor_dtype = dtype;
+  }
+
   return FormatStr("Tensor[where=%s, dtype=%s, shape=%s, block=%s]", memtype_str.c_str(),
-                   type_to_string.at(dtype).c_str(), Vector2Str(shape).c_str(), std::to_string(block_id).c_str());
+                   type_to_string.at(tensor_dtype).c_str(), Vector2Str(shape).c_str(),
+                   std::to_string(block_id).c_str());
 }
 
 template <int T>
