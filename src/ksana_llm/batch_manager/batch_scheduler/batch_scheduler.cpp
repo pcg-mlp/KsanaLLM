@@ -235,7 +235,7 @@ bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req)
   return false;
 }
 
-void BatchScheduler::ResetSchedule() { schedule_time_in_ms_ = GetCurrentTimeInMs(); }
+void BatchScheduler::ResetInfoBeforeSchedule() { schedule_time_in_ms_ = GetCurrentTimeInMs(); }
 
 void BatchScheduler::PrepareRunningRequests(std::vector<size_t> &step_token_num_list,
                                             std::vector<size_t> &step_block_num_list,
@@ -244,7 +244,7 @@ void BatchScheduler::PrepareRunningRequests(std::vector<size_t> &step_token_num_
     auto &req = *it;
     NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in running_queue_";
 
-    req->ResetInferStage();
+    req->AdjustInferStage();
 
     // Check if finished.
     if (CheckRequestFinish(req)) {
@@ -337,13 +337,13 @@ void BatchScheduler::ProcessRunningRequests(const std::vector<size_t> &step_toke
                                             const std::vector<size_t> &step_block_num_list,
                                             const std::vector<size_t> &curr_block_num_list,
                                             std::vector<int> &swapped_indexes, size_t &step_token_num_sum) {
-  size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  size_t total_free_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
   size_t total_pending_block_num = GetSwapinPendingBlockNumber();
   if (total_free_block_num > total_pending_block_num) {
     total_free_block_num -= total_pending_block_num;
   } else {
     WaitPendingSwapinDone();
-    total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+    total_free_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
     total_pending_block_num = GetSwapinPendingBlockNumber();
     if (total_free_block_num > total_pending_block_num) {
       total_free_block_num -= total_pending_block_num;
@@ -382,13 +382,13 @@ void BatchScheduler::ProcessSwappedRequests(const std::vector<size_t> &step_toke
                                             const std::vector<size_t> &curr_block_num_list,
                                             std::vector<int> &running_indexes, size_t &step_token_num_sum,
                                             size_t &curr_block_num_sum) {
-  size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  size_t total_free_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
   size_t total_pending_block_num = GetSwapinPendingBlockNumber();
   if (total_free_block_num > total_pending_block_num) {
     total_free_block_num -= total_pending_block_num;
   } else {
     WaitPendingSwapinDone();
-    total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+    total_free_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
     total_pending_block_num = GetSwapinPendingBlockNumber();
     if (total_free_block_num > total_pending_block_num) {
       total_free_block_num -= total_pending_block_num;
@@ -426,13 +426,13 @@ void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_toke
                                             const std::vector<size_t> &total_block_num_list,
                                             std::vector<int> &running_indexes, size_t &step_token_num_sum,
                                             size_t &total_block_num_sum) {
-  size_t total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+  size_t total_free_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
   size_t total_pending_block_num = GetSwapinPendingBlockNumber();
   if (total_free_block_num > total_pending_block_num) {
     total_free_block_num -= total_pending_block_num;
   } else {
     WaitPendingSwapinDone();
-    total_free_block_num = GetBlockManager()->GetFreeBlockNumber();
+    total_free_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
     total_pending_block_num = GetSwapinPendingBlockNumber();
     if (total_free_block_num > total_pending_block_num) {
       total_free_block_num -= total_pending_block_num;
@@ -470,7 +470,7 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
     MergePendingSwapinRequests();
   }
   if (running_queue_.empty()) {
-    NLLM_LOG_DEBUG << "Empty running queue after merge swapin, skip.";
+    NLLM_LOG_DEBUG << "Empty running queue after MergePendingSwapinRequests, skip.";
     return;
   }
 
@@ -480,7 +480,7 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
   running_curr_block_num_list_.clear();
   PrepareRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_);
   if (running_queue_.empty()) {
-    NLLM_LOG_DEBUG << "Empty running queue after prepare, skip.";
+    NLLM_LOG_DEBUG << "Empty running queue after PrepareRunningRequests, skip.";
     return;
   }
 
@@ -714,7 +714,7 @@ void BatchScheduler::SchedulePending() {
 std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   NLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(queue_mutex_);
-  ResetSchedule();
+  ResetInfoBeforeSchedule();
 
   bool skip_other = false;
   size_t step_token_num_sum = 0;
@@ -734,8 +734,8 @@ std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
   REPORT_METRIC(batch_scheduler_pending_swapin, swapin_pending_queue_.size());
   REPORT_METRIC(batch_scheduler_pending_swapout, swapout_pending_queue_.size());
 
-  REPORT_METRIC(block_manager_free, GetBlockManager()->GetFreeBlockNumber());
-  REPORT_METRIC(block_manager_used, GetBlockManager()->GetUsedBlockNumber());
+  REPORT_METRIC(block_manager_free, GetBlockManager()->GetDeviceFreeBlockNumber());
+  REPORT_METRIC(block_manager_used, GetBlockManager()->GetDeviceUsedBlockNumber());
 
   NLLM_LOG_DEBUG << "batch scheduler result: " << running_queue_.size();
   return running_queue_;

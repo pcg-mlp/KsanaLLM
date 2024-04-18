@@ -80,10 +80,10 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
   enqueue_status = batch_scheduler_->AddInferRequest(infer_req);
   if (enqueue_status.OK()) {
-    NLLM_LOG_DEBUG << "batch schdule add req id " << req->req_id << " and " << infer_req->input_tokens.size()
+    NLLM_LOG_DEBUG << "batch scheduler: added req id " << req->req_id << " and " << infer_req->input_tokens.size()
                    << " input tokens";
   } else {
-    NLLM_LOG_ERROR << "batch schdule add req id " << req->req_id << " and " << infer_req->input_tokens.size()
+    NLLM_LOG_ERROR << "batch scheduler: add req id " << req->req_id << " and " << infer_req->input_tokens.size()
                    << " input tokens failed, message: " << enqueue_status.ToString();
   }
 
@@ -122,7 +122,7 @@ Status BatchManager::Process() {
 
 Status BatchManager::Start() {
   // Check config here, because the block number is determined after all models loaded.
-  NLLM_CHECK_WITH_INFO((GetBlockManager()->GetFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum()) >
+  NLLM_CHECK_WITH_INFO((GetBlockManager()->GetDeviceFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum()) >
                            (batch_manager_config_.batch_scheduler_config.max_token_len),
                        "Total device block_num * block_token_size must large than max_token_len.");
 

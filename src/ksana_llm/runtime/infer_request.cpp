@@ -89,7 +89,7 @@ std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() {
   return block_ptrs;
 }
 
-void InferRequest::ResetInferStage() {
+void InferRequest::AdjustInferStage() {
   if (input_tokens.size() < output_tokens.size()) {
     infer_stage = InferStage::STATE_DECODE;
   }

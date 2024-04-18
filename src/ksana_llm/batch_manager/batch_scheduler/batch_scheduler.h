@@ -47,7 +47,7 @@ class BatchScheduler {
   inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
 
   // Reset necessary informations for scheduling.
-  inline void ResetSchedule();
+  inline void ResetInfoBeforeSchedule();
 
   // Schedule the running/swapped/waiting queue.
   void ScheduleRunning(size_t &step_token_num_sum, bool &skip_other);

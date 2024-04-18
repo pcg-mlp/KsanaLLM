@@ -37,8 +37,8 @@ class InferRequest {
   // Get addr ptr of blocks.
   std::vector<std::vector<void *>> GetBlockPtrs();
 
-  // Reset the infer stage.
-  void ResetInferStage();
+  // Adjust the infer stage.
+  void AdjustInferStage();
 
   // Get the next token number for next step.
   // For all waiting queue's reqs(context decoding stage), it is 1 + input token number.

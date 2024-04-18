@@ -153,9 +153,9 @@ Status BlockManager::GetContiguousPtr(int block_id, void*& addr) {
   return GetDeviceAllocator()->GetContiguousPtr(block_id, addr);
 }
 
-size_t BlockManager::GetFreeBlockNumber() { return GetDeviceAllocator()->GetFreeBlockNumber(); }
+size_t BlockManager::GetDeviceFreeBlockNumber() { return GetDeviceAllocator()->GetFreeBlockNumber(); }
 
-size_t BlockManager::GetUsedBlockNumber() { return GetDeviceAllocator()->GetUsedBlockNumber(); }
+size_t BlockManager::GetDeviceUsedBlockNumber() { return GetDeviceAllocator()->GetUsedBlockNumber(); }
 
 Status BlockManager::AllocateHostBlocks(int64_t block_num, std::vector<int>& blocks) {
   return GetHostAllocator()->AllocateBlocks(block_num, blocks);
