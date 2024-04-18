@@ -33,7 +33,8 @@ if(WITH_ACL)
     llm_kernels_ascend_pointwise 
     llm_kernels_ascend_transpose 
     llm_kernels_ascend_permute
-    llm_kernels_ascend_embedding)
+    llm_kernels_ascend_embedding
+    llm_kernels_ascend_reshape)
 endif()
 
 message(STATUS "ascend_kernels_SRCS: ${ascend_kernels_SRCS}")
