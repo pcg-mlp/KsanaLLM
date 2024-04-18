@@ -10,7 +10,8 @@
 
 namespace ksana_llm {
 
-Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status CastLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   GetBlockManager()->SetDeviceId(rank_);
   Tensor* input_normal_tensor_ptr = (Tensor*)(&(input_tensors[0]));
   aclTensor* input_tensor_ptr = input_normal_tensor_ptr->GetDeviceTensor();
@@ -25,4 +26,6 @@ Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<
   output_tensors[0].dtype = DataType::TYPE_FP32;
   return Status();
 }
+template class CastLayer<float>;
+template class CastLayer<float16>;
 }  // namespace ksana_llm

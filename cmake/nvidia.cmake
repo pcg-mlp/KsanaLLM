@@ -44,3 +44,8 @@ set(CUDA_LIB_DIRS
 )
 
 add_definitions("-DENABLE_CUDA")
+if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
+  # enable BFloat16
+  add_definitions("-DENABLE_BFLOAT16")
+  message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
+endif()

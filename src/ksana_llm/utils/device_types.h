@@ -37,6 +37,9 @@ namespace ksana_llm {
 // The type define.
 #if defined(ENABLE_CUDA)
 typedef half float16;
+#ifdef ENABLE_BFLOAT16
+typedef __nv_bfloat16 bfloat16;
+#endif
 #elif defined(ENABLE_ACL)
 typedef aclFloat16 float16;
 #endif

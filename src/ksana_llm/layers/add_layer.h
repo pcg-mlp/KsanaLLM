@@ -7,6 +7,7 @@
 
 namespace ksana_llm {
 
+template <typename T>
 class AddLayer : public BaseLayer {
  public:
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;

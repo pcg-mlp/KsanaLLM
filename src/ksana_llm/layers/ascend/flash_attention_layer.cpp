@@ -7,7 +7,8 @@
 
 namespace ksana_llm {
 
-Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // input_tensors:
   //     0: qkv_tensor shape [max_token_num, hidden_units, 3], type same as weight
   //     1: input offset tensor shape [max_batch_size + 1], type uint64
@@ -21,5 +22,7 @@ Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   // TODO(karlluo): implement llm_kernels::ascend::FlashAttention
   return Status();
 }
+template class FlashAttentionLayer<float>;
+template class FlashAttentionLayer<float16>;
 
 }  // namespace ksana_llm

@@ -11,7 +11,8 @@
 
 namespace ksana_llm {
 
-Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // TODO(karlluo): implement llm_kernels::ascend::MatMul
   size_t k = input_tensors[1].shape[0];
   size_t n = input_tensors[1].shape[1];
@@ -46,4 +47,6 @@ Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   ACL_CHECK(aclDestroyTensor(matmul_weight));
   return Status();
 }
+template class MatMulLayer<float>;
+template class MatMulLayer<float16>;
 }  // namespace ksana_llm

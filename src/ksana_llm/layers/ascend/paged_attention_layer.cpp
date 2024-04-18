@@ -15,7 +15,8 @@ kv_list  [layers_num * (total_blocks * 2)]
 每个k,v代表一个指针,存储的数据个数为一个block块能存的token个数
 需要在model中将block按kv分开存储指针，方便后续计算
 */
-Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
@@ -53,5 +54,7 @@ Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, st
   // TODO(karlluo): implement llm_kernels::ascend::IncFlashAttention
   return Status();
 }
+template class PagedAttentionLayer<float>;
+template class PagedAttentionLayer<float16>;
 
 }  // namespace ksana_llm

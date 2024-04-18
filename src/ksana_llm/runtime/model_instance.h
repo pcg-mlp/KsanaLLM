@@ -63,6 +63,11 @@ class ModelInstance {
       case DataType::TYPE_FP16:
         model_obj = std::make_shared<ClassT<float16>>(model_config_, rank, context_);
         break;
+#ifdef ENABLE_BFLOAT16
+      case DataType::TYPE_BF16:
+        model_obj = std::make_shared<ClassT<bfloat16>>(model_config_, rank, context_);
+        break;
+#endif
       case DataType::TYPE_FP32:
         model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);
         break;

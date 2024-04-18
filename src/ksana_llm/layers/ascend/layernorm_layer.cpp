@@ -11,7 +11,8 @@
 
 namespace ksana_llm {
 
-Status LayernormLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+template <typename T>
+Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
   int parameter_index = 0;
@@ -20,7 +21,8 @@ Status LayernormLayer::Init(const std::vector<std::any>& parameters, std::shared
   return Status();
 }
 
-Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   size_t seq_len = input_tensors[0].shape[0];
   size_t hidden_size = input_tensors[0].shape[1];
   std::vector<int64_t> lm_input_shape = {1, seq_len, hidden_size};
@@ -52,4 +54,6 @@ Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
 
   return Status();
 }
+template class LayernormLayer<float>;
+template class LayernormLayer<float16>;
 }  // namespace ksana_llm
