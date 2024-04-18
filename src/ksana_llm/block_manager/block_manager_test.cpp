@@ -71,7 +71,7 @@ TEST_F(BlockManagerTest, AllocateAndFree) {
   EXPECT_TRUE(status.OK());
 
   // 检查释放后的空闲内存块数量是否正确
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 2);
 }
 
 // 测试 BlockManager 类的 AllocateAndFreeContiguousMemory 方法
@@ -134,7 +134,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   status = block_manager->SwapOut(blocks, host_blocks);
   EXPECT_TRUE(status.OK());
   EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 0);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 2);
 
   // 修改 block 中的数据
   string_a = "string_x";
@@ -147,7 +147,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   status = block_manager->SwapIn(host_blocks, device_blocks);
   EXPECT_TRUE(status.OK());
   EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 0);
+  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 0);
 
   // 获取 block 的指针
   block_manager->GetBlockPtrs(device_blocks, addrs);
@@ -167,7 +167,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
 TEST_F(BlockManagerTest, GetFreeBlockNumber) {
   // 检查 CPU 和 GPU 的空闲内存块数量是否正确
   EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 2);
+  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 2);
 
   // 创建一个整数向量，用于存储分配的内存块
   std::vector<int> blocks;
@@ -183,7 +183,7 @@ TEST_F(BlockManagerTest, GetFreeBlockNumber) {
 
   // 检查分配后的空闲内存块数量是否正确
   EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
-  EXPECT_EQ(block_manager->GetFreeBlockNumber(), 0);
+  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 0);
 
   EXPECT_TRUE(block_manager->FreeBlocks(blocks).OK());
 }
