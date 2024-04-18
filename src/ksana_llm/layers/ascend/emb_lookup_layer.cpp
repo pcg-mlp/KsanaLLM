@@ -9,7 +9,8 @@
 
 namespace ksana_llm {
 
-Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // weigth_shape = input_tensors[2].
   // input_tensors:
   //   0: input_ids
@@ -55,4 +56,6 @@ Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   output_tensors[0].dtype = input_tensors[2].dtype;
   return Status();
 }
+template class EmbLookupLayer<float>;
+template class EmbLookupLayer<float16>;
 }  // namespace ksana_llm

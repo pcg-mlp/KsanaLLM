@@ -11,7 +11,8 @@
 
 namespace ksana_llm {
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   int64_t seq_len = static_cast<int64_t>(input_tensors[0].shape[0]);
   int64_t ffn_size = static_cast<int64_t>(input_tensors[0].shape[1]);
   std::vector<int64_t> silu_output_shape = {1, seq_len, ffn_size};
@@ -43,4 +44,6 @@ Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vect
   ACL_CHECK(aclDestroyTensor(silu_output));
   return Status();
 }
+template class SiluMulLayer<float>;
+template class SiluMulLayer<float16>;
 }  // namespace ksana_llm

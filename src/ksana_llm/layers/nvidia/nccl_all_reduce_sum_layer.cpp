@@ -3,10 +3,12 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
+#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 
 namespace ksana_llm {
 
-Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
@@ -20,7 +22,7 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
     NCCL_CHECK(ncclGroupStart());
     ncclResult_t ncclError = ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                                            output_tensors[0].GetPtr<void>(), input_tensors[0].GetElementNumber(),
-                                           ncclHalf, ncclSum, context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
+                                           GetNcclDataType<T>(), ncclSum, context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       NLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
     }
@@ -34,4 +36,11 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
+
+template class NcclAllReduceSumLayer<float>;
+template class NcclAllReduceSumLayer<half>;
+#ifdef ENABLE_BFLOAT16
+template class NcclAllReduceSumLayer<__nv_bfloat16>;
+#endif
+
 }  // namespace ksana_llm

@@ -5,7 +5,8 @@
 #include "ksana_llm/layers/attention_layer.h"
 
 namespace ksana_llm {
-Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+template <typename T>
+Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, context, rank);
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
@@ -19,12 +20,14 @@ Status AttentionLayer::Init(const std::vector<std::any>& parameters, std::shared
   float base = std::any_cast<const float>(parameters[parameter_index++]);
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);
   bool is_alibi = std::any_cast<const bool>(parameters[parameter_index++]);
-  float16* cos_sin_cache_ptr = std::any_cast<float16*>(parameters[parameter_index++]);
+  void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
 
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
 
   return Status();
 }
+template class AttentionLayer<float>;
+template class AttentionLayer<float16>;
 
 }  // namespace ksana_llm

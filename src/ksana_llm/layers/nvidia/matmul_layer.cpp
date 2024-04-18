@@ -8,8 +8,9 @@
 
 namespace ksana_llm {
 
-Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  InvokeMatMul(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_],
+template <typename T>
+Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  InvokeMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_],
                static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
                static_cast<int>(input_tensors[0].shape[1]),
                reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
@@ -20,4 +21,11 @@ Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 
   return Status();
 }
+
+template class MatMulLayer<float>;
+template class MatMulLayer<half>;
+#ifdef ENABLE_BFLOAT16
+template class MatMulLayer<__nv_bfloat16>;
+#endif
+
 }  // namespace ksana_llm
