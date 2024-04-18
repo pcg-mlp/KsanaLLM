@@ -37,10 +37,13 @@ Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output,
                               context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
+  output_tensors[0].shape[0] = 1ul;
+  output_tensors[0].shape[1] = m;
+  output_tensors[0].shape[2] = n;
+  output_tensors[0].ResetDeviceTensor(matmul_output);
+
   ACL_CHECK(aclDestroyTensor(matmul_input));
   ACL_CHECK(aclDestroyTensor(matmul_weight));
-  ACL_CHECK(aclDestroyTensor(matmul_output));
-
   return Status();
 }
 }  // namespace ksana_llm
