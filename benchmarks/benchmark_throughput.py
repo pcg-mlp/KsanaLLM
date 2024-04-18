@@ -25,8 +25,7 @@ REQUEST_LATENCY: List[Tuple[int, int, int, int, float]] = []
 PROMPT_AFFIX_DICT = {
     "llama": "[INST]%s[/INST]",
     "baichuan": "<reserved_106>%s<reserved_107>",
-    "qwen": "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
-    "empty": "%s"
+    "qwen": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
 }
 
 def args_config():
@@ -68,13 +67,11 @@ def args_config():
     parser.add_argument('--model_type',
                         type=str,
                         default="llama",
-                        choices=['llama', 'baichuan', 'qwen', 'empty'],
+                        choices=['llama', 'baichuan', 'qwen'],
                         help='serving model type, used to add prefixes and suffixes to the prompt.')
     parser.add_argument('--use_prefix_cache_prompts',
                         action='store_true',
                         help='test with prompts with very long prefix cache')
-    parser.add_argument('--stream',
-                        action='store_true')
     args = parser.parse_args()
     return args
 
@@ -121,22 +118,20 @@ def generate_prompt_sync(
 
 
 async def send_request_async(prompt: str, api_url: str, req_id: int,
-                             result_list: List, pbar: tqdm, backend: str, stream = False):
+                             result_list: List, pbar: tqdm, backend: str):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
     if backend == "ksana":
-        prompt = prompt.replace("\\n", "\n")
         data = {
             "prompt": prompt,
             "sampling_config": {
-                "num_beams": 1,
                 "temperature": 0.0,
                 "topk": 1,
                 "topp": 0.0,
                 "repetition_penalty" : 1.0,
                 "max_new_tokens": 1024,
             },
-            "stream": stream,
+            "stream": False,
         }
     elif backend == "trt-llm":
         data = {
@@ -179,10 +174,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 async for chunk, _ in response.content.iter_chunks():
                     chunks.append(chunk)
             output = b"".join(chunks).decode("utf-8")
-            if stream:
-                output = {"texts": output.replace("{\"texts\": \"", "").replace("\"}", "").replace("\x00", "")}
-            else:
-                output = json.loads(output)
+            output = json.loads(output)
 
             # Re-send the request if it failed.
             if "error" not in output:
@@ -211,9 +203,6 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     elif backend == "vllm-server":
         prompt_len = len(prompt)
         output_text = output['choices'][0]['message']['content'][prompt_len:].strip()
-
-    print("input_token_ids:\n", output.get("input_token_ids", ""))
-    print("output_token_ids:\n", output.get("output_token_ids", ""))
 
     output_len = len(output_text)
     result_list[req_id] = output_text
@@ -259,7 +248,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         task = asyncio.create_task(
             send_request_async(prompt, api_url, req_id, result_list, pbar,
-                               args.backend, args.stream))
+                               args.backend))
         tasks.append(task)
     await asyncio.gather(*tasks)
     pbar.close()
@@ -298,7 +287,7 @@ def main(args: argparse.Namespace):
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(args.port) + "/v2/models/ensemble/generate"
-    elif args.backend in ["ksana-server", "vllm-server"]:
+    elif args.backend == "server":
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
 
     inputs = None

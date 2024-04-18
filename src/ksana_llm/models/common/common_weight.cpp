@@ -106,44 +106,10 @@ std::vector<std::string> CommonWeight<T>::SearchLocalPath(const std::string& mod
   return bin_file_list;
 }
 
-void TransWeightNameFromQwen1ToLlama(std::vector<std::string>& origin_tensor_name_list,
-                                     std::vector<std::string>& tensor_name_list) {
-  static std::unordered_map<std::string_view, std::string> qwen1_weights_map = {
-    {"ln_1.weight", "input_layernorm.weight"}, {"attn.c_attn.weight", "self_attn.W_pack.weight"},
-    {"attn.c_attn.bias", "self_attn.query_key_value.bias"}, {"attn.c_proj.weight", "self_attn.o_proj.weight"},
-    {"ln_2.weight", "post_attention_layernorm.weight"}, {"mlp.w2.weight", "mlp.gate_proj.weight"},
-    {"mlp.w1.weight", "mlp.up_proj.weight"}, {"mlp.c_proj.weight", "mlp.down_proj.weight"},
-    {"lm_head.weight", "lm_head.weight"}, {"transformer.ln_f.weight", "model.norm.weight"},
-    {"transformer.wte.weight", "model.embed_tokens.weight"}
-  };
-  static std::string_view qwen1_prefix = "transformer.h.";
-  for (size_t i = 0; i < origin_tensor_name_list.size(); ++i) {
-    std::string_view tensor_name = origin_tensor_name_list[i];
-    if (qwen1_weights_map.count(tensor_name)) {
-      tensor_name_list[i] = qwen1_weights_map[tensor_name];
-    } else if (tensor_name.substr(0, qwen1_prefix.length()) == qwen1_prefix) {
-      size_t tensor_suffix_idx = tensor_name.find(".", qwen1_prefix.length());
-      std::string_view tensor_suffix = tensor_name.substr(tensor_suffix_idx + 1);
-      if (qwen1_weights_map.count(tensor_suffix)) {
-        // Trans from transformer.h.xxx.suffix.weight to model.layers.xxx.suffix.weight
-        std::string_view layer_idx = tensor_name.substr(qwen1_prefix.length(),
-                                                        tensor_suffix_idx - qwen1_prefix.length());
-        tensor_name_list[i] = "model.layers." + std::string(layer_idx) + "." + qwen1_weights_map[tensor_suffix];
-      }
-    }
-  }
-}
-
 template <typename T>
 Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
   GetBlockManager()->SetDeviceId(rank_);
-
-  std::vector<std::string> origin_tensor_name_list = weights_loader->GetTensorNameList();
-  std::vector<std::string> tensor_name_list = origin_tensor_name_list;
-  if (model_config_.type == "qwen") {
-    TransWeightNameFromQwen1ToLlama(origin_tensor_name_list, tensor_name_list);
-  }
-
+  std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
   for (size_t idx = 0; idx < tensor_name_list.size(); ++idx) {
     // TODO: 扩展支持 bfp16
     /* tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
@@ -158,12 +124,11 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
      *     norm:                     不做分卡处理
      *     embedding:                不做分卡处理
      */
-    std::string& origin_tensor_name = origin_tensor_name_list[idx];
     std::string& tensor_name = tensor_name_list[idx];
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
-    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(origin_tensor_name);
-    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find(".bias") != std::string::npos ||
+    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(tensor_name);
+    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos ||
         tensor_name.find("self_attn.W_pack") != std::string::npos ||
         tensor_name.find("embed_tokens") != std::string::npos ||
         tensor_name.find("lm_head.weight") != std::string::npos) {
@@ -180,8 +145,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     // get weight's data ptr
     void* weight_ptr;
     size_t weight_size;
-    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(origin_tensor_name);
-    DataType weight_data_type = weights_loader->GetTensorDataType(origin_tensor_name);
+    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(tensor_name);
+    DataType weight_data_type = weights_loader->GetTensorDataType(tensor_name);
 
     // copy host data to device
     int qkv_offset;
@@ -200,10 +165,10 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       tensor_para_offset *= single_proj_size;
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-    } else if (tensor_name == "lm_head.weight" || tensor_name == "model.norm.weight" ||
-               tensor_name == "model.embed_tokens.weight" || tensor_name.find("_proj.weight") != std::string::npos ||
+    } else if (tensor_name.find("_proj.weight") != std::string::npos ||
                tensor_name.find("_proj.bias") != std::string::npos ||
-               tensor_name.find("_layernorm.weight") != std::string::npos) {
+               tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "lm_head.weight" ||
+               tensor_name == "model.norm.weight" || tensor_name == "model.embed_tokens.weight") {
       AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
       weights_data_type_map_[tensor_name] = weight_data_type;
       if (transpose_first) {
@@ -225,7 +190,9 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
                     context_->GetMemoryManageStreams()[rank_]);
       }
     } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {
-      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
+      bool is_bias = (tensor_name.find(".bias") != std::string::npos);
+      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
+                             (is_bias ? ".bias" : ".weight");
       weights_data_type_map_[qkv_name] = weight_data_type;
       if (!weights_map_.count(qkv_name)) {
         weight_shape.insert(weight_shape.begin(), 3);
@@ -238,15 +205,6 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       tensor_para_offset *= dst_pitch;
       Memcpy2DAsync(qkv_weight_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
                     weight_shape[0], MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-    } else if (tensor_name.find("query_key_value.bias") != std::string::npos) {
-      weights_data_type_map_[tensor_name] = weight_data_type;
-      AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
-      Tensor& qkv_bias_tensor = weights_map_[tensor_name];
-      size_t src_pitch = weight_shape[0] / 3 * tensor_para_size_ * sizeof(T);
-      size_t dst_pitch = weight_shape[0] / 3 * sizeof(T);
-      tensor_para_offset *= dst_pitch;
-      Memcpy2DAsync(qkv_bias_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
-                    3, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
