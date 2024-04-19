@@ -20,23 +20,27 @@ from transformers.generation.stopping_criteria import StoppingCriteriaList
 
 import libtorch_serving
 
+import asyncio
+from concurrent import futures
+model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
-class PyStreamingIterator(object):
+class PyAsyncStreamingIterator(object):
     """The streaming iterator.
     """
 
     def __init__(self, serving_iterator: libtorch_serving.StreamingIterator):
         self._serving_iterator = serving_iterator
 
-    def __iter__(self):
+    def __aiter__(self):
         return self
 
-    def __next__(self):
-        status, token_id = self._serving_iterator.GetNext()
+    async def __anext__(self):
+        loop = asyncio.get_event_loop()
+        status, token_id = await loop.run_in_executor(model_executor, self._serving_iterator.GetNext)
         if status.OK():
             return token_id
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
-            raise StopIteration(
+            raise StopAsyncIteration(
                 "Iterator finished, ret code {}, message {}.".format(
                     status.GetCode(), status.GetMessage()))
         else:
@@ -93,4 +97,4 @@ class ServingModel(object):
         else:
             _, streaming_iterator = self._serving.generate_streaming(
                 model_name, inputs, sampling_config)
-            return PyStreamingIterator(streaming_iterator)
+            return PyAsyncStreamingIterator(streaming_iterator)

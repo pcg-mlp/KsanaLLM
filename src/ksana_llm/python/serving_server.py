@@ -59,9 +59,9 @@ def streaming_generate(model_name, input_tokens, generation_config):
                                       generation_config=generation_config,
                                       streamer=True)
 
-    def stream_results():
+    async def stream_results():
         unfinished_token = []
-        for request_output in results_iterator:
+        async for request_output in results_iterator:
             if request_output is not None:
                 output_text = tokenizer.decode(
                     unfinished_token + [request_output],
