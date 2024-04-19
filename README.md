@@ -56,7 +56,7 @@ sudo docker run -itd --name xxx_container_name --network host --privileged \
 ### Clone source code
 
 ```bash
-git clone --recurse-submodules https://git.woa.com/RondaServing/LLM/KsanaLLM.git
+git clone --recurse-submodules https://xxx/KsanaLLM.git
 ```
 
 ### Compile and Test

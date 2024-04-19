@@ -62,8 +62,6 @@ compile_commands.json
 *~
 *.swp
 
-
-#http://km.oa.com/group/2000/articles/show/350497
 *.o
 *.lo
 *.la

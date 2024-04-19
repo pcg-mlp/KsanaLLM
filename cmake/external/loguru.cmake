@@ -1,4 +1,4 @@
-# Copyright 2023 Tencent Inc.  All rights reserved.
+# Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 
@@ -7,7 +7,7 @@ include(FetchContent)
 set(LOGURU_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/loguru)
 
 FetchContent_Populate(download_loguru
-    GIT_REPOSITORY https://git.woa.com/thirdsrc/emilk/loguru.git
+    GIT_REPOSITORY https://github.com/whitelok/loguru.git
     GIT_TAG f63653183f69c5b8987a4415773ca64d9f3fc2f4
     SOURCE_DIR ${LOGURU_INCLUDE_DIR}
     SUBBUILD_DIR ${THIRD_PARTY_PATH}/tmp

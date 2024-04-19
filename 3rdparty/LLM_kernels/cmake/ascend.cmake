@@ -1,0 +1,44 @@
+# Copyright 2024 Tencent Inc.  All rights reserved.
+if(NOT WITH_ACL)
+  return()
+endif()
+
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fPIC")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fPIC")
+
+# ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest
+if(NOT "$ENV{ASCEND_HOME_PATH}" STREQUAL "")
+  set(ASCEND_PATH $ENV{ASCEND_HOME_PATH})
+else()
+  set(ASCEND_PATH "/usr/local/Ascend/ascend-toolkit/latest")
+endif()
+
+if(NOT "$ENV{ASCEND_MAIN_PATH}" STREQUAL "")
+  set(ASCEND_MAIN_PATH $ENV{ASCEND_MAIN_PATH})
+else()
+  set(ASCEND_MAIN_PATH "/usr/local/Ascend/ascend-toolkit/7.0.0/x86_64-linux")
+endif()
+
+set(CCE_CMAKE_PATH ${PROJECT_SOURCE_DIR}/cmake/module)
+list(APPEND CMAKE_MODULE_PATH ${CCE_CMAKE_PATH})
+
+set(ACL_INC_DIRS
+  ${ASCEND_PATH}/include
+  ${ASCEND_PATH}/include/aclnn
+
+  # TODO(karlluo): need to optimize
+  ${ASCEND_MAIN_PATH} # needed for tikcpp
+  "${ASCEND_MAIN_PATH}/tikcpp/tikcfw/interface"
+  "${ASCEND_MAIN_PATH}/tikcpp/tikcfw/impl"
+  "${ASCEND_MAIN_PATH}/tikcpp/tikcfw"
+)
+
+set(ACL_LIB_DIRS
+  ${ASCEND_PATH}/lib64
+)
+
+set(ACL_SHARED_LIBS
+  ${ASCEND_PATH}/lib64/libascendcl.so
+  ${ASCEND_PATH}/lib64/libnnopbase.so
+  ${ASCEND_PATH}/lib64/libopapi.so
+)

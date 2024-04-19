@@ -1,0 +1,246 @@
+/*
+ * Copyright 2024 Tencent Inc.  All rights reserved.
+ */
+
+#pragma once
+
+#include <stdexcept>
+#include <string>
+
+#include <cublasLt.h>
+#include <cublas_v2.h>
+#include <cuda_runtime.h>
+#include <curand_kernel.h>
+
+#ifdef ENABLE_FP8
+#  include "cuda_fp8_utils.h"
+#endif
+
+namespace llm_kernels {
+namespace utils {
+
+constexpr int32_t NVIDIA_VOLTA_GPU_COMPUTE_CAPABILITY = 70;
+constexpr int32_t NVIDIA_AGX_XAVIER_GPU_COMPUTE_CAPABILITY = 72;
+constexpr int32_t NVIDIA_TURING_GPU_COMPUTE_CAPABILITY = 75;
+constexpr int32_t NVIDIA_AMPERE_GPU_COMPUTE_CAPABILITY = 80;
+constexpr int32_t NVIDIA_HOPPER_GPU_COMPUTE_CAPABILITY = 90;
+
+constexpr int32_t DEFAULT_CUDA_GPU_DEVICE_MAX_BLOCKS_NUM = 65536;
+constexpr int32_t DEFAULT_CUDA_BLOCK_THREADS_NUM = 512;
+constexpr int32_t DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM = 256;
+constexpr int32_t DEFAULT_CUDA_MAX_BLOCKS_NUM = 8192;
+constexpr int32_t DEFAULT_CUDA_WARP_SIZE = 32;
+constexpr int32_t DEFAULT_CUDA_HALF_WARP_SIZE = 16;
+constexpr int32_t DEFAULT_CUDA_QUARTER_WARP_SIZE = 8;
+constexpr int32_t DEFAULT_CUDA_ONE_EIGHTH_WARP_SIZE = 4;
+constexpr int32_t DEFAULT_CUDA_ONE_SIXTEENTH_WARP_SIZE = 2;
+constexpr int32_t DEFAULT_CUDA_ONE_THIRTY_TWO_WARP_SIZE = 1;
+
+static const char* GetErrorCode(cudaError_t error) { return cudaGetErrorString(error); }
+
+static const char* GetErrorCode(cublasStatus_t error) {
+  switch (error) {
+    case CUBLAS_STATUS_SUCCESS:
+      return "CUBLAS_STATUS_SUCCESS";
+
+    case CUBLAS_STATUS_NOT_INITIALIZED:
+      return "CUBLAS_STATUS_NOT_INITIALIZED";
+
+    case CUBLAS_STATUS_ALLOC_FAILED:
+      return "CUBLAS_STATUS_ALLOC_FAILED";
+
+    case CUBLAS_STATUS_INVALID_VALUE:
+      return "CUBLAS_STATUS_INVALID_VALUE";
+
+    case CUBLAS_STATUS_ARCH_MISMATCH:
+      return "CUBLAS_STATUS_ARCH_MISMATCH";
+
+    case CUBLAS_STATUS_MAPPING_ERROR:
+      return "CUBLAS_STATUS_MAPPING_ERROR";
+
+    case CUBLAS_STATUS_EXECUTION_FAILED:
+      return "CUBLAS_STATUS_EXECUTION_FAILED";
+
+    case CUBLAS_STATUS_INTERNAL_ERROR:
+      return "CUBLAS_STATUS_INTERNAL_ERROR";
+
+    case CUBLAS_STATUS_NOT_SUPPORTED:
+      return "CUBLAS_STATUS_NOT_SUPPORTED";
+
+    case CUBLAS_STATUS_LICENSE_ERROR:
+      return "CUBLAS_STATUS_LICENSE_ERROR";
+  }
+  return "<unknown>";
+}
+
+template <typename T>
+void CheckNvidiaCUDAError(T result, const char* func, const char* file, const int32_t line) {
+  if (result) {
+    throw std::runtime_error(std::string("[LLMKernels] CUDA runtime error: ") + (GetErrorCode(result)) + " " + file +
+                             ":" + std::to_string(line) + "@" + func + " \n");
+  }
+}
+
+#define CHECK_NVIDIA_CUDA_ERROR(val) CheckNvidiaCUDAError((val), #val, __FILE__, __LINE__)
+
+#define RETURN_NVIDIA_CUBLAS_ERROR(val) \
+  if ((val)) {                          \
+    return val;                         \
+  }
+
+template <typename T>
+void RandomGPUBuffer(T* data_ptr, size_t n_elems, const float max_val = 1.0f, const float min_val = -1.0f);
+
+template <typename T_INPUT, typename T_STEP>
+void InvokeRange(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step, cudaStream_t stream);
+
+typedef struct __align__(4) { half x, y, z, w; }
+half4;
+
+inline int32_t div_up(int32_t a, int32_t n) { return (a + n - 1) / n; }
+
+template <typename T>
+struct PackTypeAlign;
+template <>
+struct PackTypeAlign<float> {
+  // we don't need to pack float by default
+  using type = float;
+};
+template <>
+struct PackTypeAlign<half> {
+  using type = half2;
+};
+
+#ifdef ENABLE_BF16
+template <>
+struct PackTypeAlign<__nv_bfloat16> {
+  using type = __nv_bfloat162;
+};
+#endif
+
+template <typename T>
+struct ElemsNum;
+template <>
+struct ElemsNum<float> {
+  static constexpr int32_t value = 1;
+};
+template <>
+struct ElemsNum<float2> {
+  static constexpr int32_t value = 2;
+};
+template <>
+struct ElemsNum<float4> {
+  static constexpr int32_t value = 4;
+};
+template <>
+struct ElemsNum<half> {
+  static constexpr int32_t value = 1;
+};
+template <>
+struct ElemsNum<half2> {
+  static constexpr int32_t value = 2;
+};
+#ifdef ENABLE_BF16
+template <>
+struct ElemsNum<__nv_bfloat16> {
+  static constexpr int32_t value = 1;
+};
+template <>
+struct ElemsNum<__nv_bfloat162> {
+  static constexpr int32_t value = 2;
+};
+#endif
+
+template <typename T, int32_t PACK_SIZE>
+struct PackType;
+template <typename T>
+struct PackType<T, 1> {
+  using type = T;
+};
+
+template <>
+struct PackType<half, 2> {
+  using type = half2;
+};
+template <>
+struct PackType<float, 2> {
+  using type = float2;
+};
+template <>
+struct PackType<int8_t, 2> {
+  using type = int16_t;
+};
+template <>
+struct PackType<int32_t, 2> {
+  using type = int2;
+};
+
+template <>
+struct PackType<half2, 1> {
+  using type = half;
+};
+
+#ifdef ENABLE_BF16
+template <>
+struct PackType<__nv_bfloat16, 2> {
+  using type = __nv_bfloat162;
+};
+template <>
+struct PackType<__nv_bfloat16, 4> {
+  using type = __nv_bfloat164;
+};
+template <>
+struct PackType<__nv_bfloat16, 8> {
+  using type = __nv_bfloat168;
+};
+
+template <>
+struct PackType<__nv_bfloat162, 1> {
+  using type = __nv_bfloat16;
+};
+#endif
+
+#ifdef ENABLE_FP8
+template <>
+struct PackType<__nv_fp8_e4m3, 2> {
+  using type = __nv_fp8_2_e4m3;
+};
+
+template <>
+struct PackType<__nv_fp8_e4m3, 4> {
+  using type = __nv_fp8_4_e4m3;
+};
+
+template <>
+struct PackType<__nv_fp8_e4m3, 8> {
+  using type = __nv_fp8_8_e4m3;
+};
+#endif
+
+inline __device__ float2 operator*(float2 a, float2 b) { return make_float2(a.x * b.x, a.y * b.y); }
+inline __device__ float2 operator*(float2 a, float b) { return make_float2(a.x * b, a.y * b); }
+
+// CUDA: grid stride looping
+#define CUDA_1D_KERNEL_LOOP(i, n) \
+  for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x, step = blockDim.x * gridDim.x; i < (n); i += step)
+
+#define CUDA_1D_KERNEL_LOOP_T(type, i, n) \
+  for (type i = blockIdx.x * blockDim.x + threadIdx.x, step = blockDim.x * gridDim.x; i < (n); i += step)
+
+inline int64_t BlocksNum4ThreadsNum(const int64_t thread_num) {
+  return std::min((thread_num + DEFAULT_CUDA_BLOCK_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_THREADS_NUM,
+                  static_cast<int64_t>(DEFAULT_CUDA_MAX_BLOCKS_NUM));
+}
+
+inline int32_t GetSMVersion() {
+  int32_t device{-1};
+  CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device));
+  int32_t sm_major{0};
+  int32_t sm_minor{0};
+  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
+  return sm_major * 10 + sm_minor;
+}
+
+}  // namespace utils
+}  // namespace llm_kernels
