@@ -1,4 +1,4 @@
-# Copyright 2023 Tencent Inc.  All rights reserved.
+# Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 
@@ -11,7 +11,7 @@ set(FMT_INSTALL_DIR ${THIRD_PARTY_PATH}/install/fmt)
 
 if(NOT TARGET fmt)
   FetchContent_Populate(download_fmt
-    GIT_REPOSITORY https://git.woa.com/github-mirrors/fmtlib/fmt.git
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
     GIT_TAG 4ab01fb1988b70916d52dc1d30f176aebbd543f0
     SOURCE_DIR ${FMT_DOWNLOAD_DIR}
     SUBBUILD_DIR ${THIRD_PARTY_PATH}/tmp

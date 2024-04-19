@@ -72,7 +72,7 @@ setup(name='ksana_llm',
       author_email='ksana_llm@tencent.com',
       description='Ksana LLM inference server',
       platforms='python3',
-      url='https://git.woa.com/RondaServing/LLM/KsanaLLM/',
+      url='https://xxx/KsanaLLM/',
       packages=find_packages('src/ksana_llm/python'),
       package_dir={
           '': 'src/ksana_llm/python',

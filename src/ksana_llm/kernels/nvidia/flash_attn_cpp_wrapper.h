@@ -1,4 +1,4 @@
-/* Copyright 2023 Tencent Inc.  All rights reserved.
+/* Copyright 2024 Tencent Inc.  All rights reserved.
    modify from https://github.com/Dao-AILab/flash-attention/blob/main/csrc/flash_attn/flash_api.cpp
 
 ==============================================================================*/

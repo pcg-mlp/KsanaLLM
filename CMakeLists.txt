@@ -1,4 +1,4 @@
-# Copyright 2023 Tencent Inc.  All rights reserved.
+# Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 
@@ -10,7 +10,15 @@ option(WITH_TESTING "Enable testing" OFF)
 if(WITH_CUDA)
   project(ksana_llm LANGUAGES CXX CUDA)
 else()
-  project(ksana_llm LANGUAGES CXX)
+  set(ASCEND_PRODUCT_TYPE "ascend910")
+  set(ASCEND_CORE_TYPE "AiCore")
+  set(ASCEND_RUN_MODE "ONBOARD")
+  set(ASCEND_INSTALL_PATH "/usr/local/Ascend/ascend-toolkit/latest")
+  set(CCE_CMAKE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/module)
+  list(APPEND CMAKE_MODULE_PATH ${CCE_CMAKE_PATH})
+
+  # NOTE(karlluo): languages cce need configured cmake module before
+  project(LLMKernels LANGUAGES CCE CXX)
 endif()
 
 if(NOT WITH_CUDA AND NOT WITH_ACL)

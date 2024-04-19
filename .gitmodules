@@ -1,7 +1,3 @@
-[submodule "3rdparty/LLM_kernels"]
-	path = 3rdparty/LLM_kernels
-	url = https://git.woa.com/Numerous/LLM/LLM_kernels.git
-  branch = master
-[submodule "3rdparty/FlashAttention"]
-	path = 3rdparty/FlashAttention
-	url = https://git.woa.com/Numerous/LLM/FlashAttention.git
+[submodule "3rdparty/cutlass"]
+	path = 3rdparty/LLM_kernels/3rdparty/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

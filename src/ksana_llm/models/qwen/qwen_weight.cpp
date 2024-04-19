@@ -1,4 +1,4 @@
-/* Copyright 2023 Tencent Inc.  All rights reserved.
+/* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
 #include "ksana_llm/models/qwen/qwen_weight.h"

@@ -1,0 +1,93 @@
+/*
+ * Copyright 2024 Tencent Inc.  All rights reserved.
+ */
+
+#include "cuda_utils.h"
+
+namespace llm_kernels {
+namespace utils {
+
+template <typename T>
+__global__ void RunCUDARandomUniformKernel(T* buffer, const size_t size, const int32_t seq_offset) {
+  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t local_state;
+  curand_init(1337ul, idx + seq_offset, 0, &local_state);
+  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
+    // NOTE(karlluo): some cuda's kernel has not static_cast for half
+    buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
+  }
+}
+
+template <>
+__global__ void RunCUDARandomUniformKernel<int32_t>(int32_t* buffer, const size_t size, const int32_t seq_offset) {
+  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t local_state;
+  curand_init(1337.0f, idx + seq_offset, 0, &local_state);
+  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
+    buffer[index] = curand(&local_state);
+  }
+}
+
+template <>
+__global__ void RunCUDARandomUniformKernel<bool>(bool* buffer, const size_t size, const int32_t seq_offset) {
+  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t local_state;
+  curand_init(1337.f, idx + seq_offset, 0, &local_state);
+  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
+    buffer[index] = (curand(&local_state) % 2 == 0);
+  }
+}
+
+template <>
+__global__ void RunCUDARandomUniformKernel<char>(char* buffer, const size_t size, const int32_t seq_offset) {
+  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t local_state;
+  curand_init(1337.f, idx + seq_offset, 0, &local_state);
+  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
+    buffer[index] = curand(&local_state) % 0xFF;
+  }
+}
+
+template <typename T>
+void RandomGPUBuffer(T* data_ptr, size_t n_elems, const float max_val, const float min_val) {
+  static int32_t seq_offset = 0;
+  constexpr int32_t random_tile_size = DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM;
+  RunCUDARandomUniformKernel<T><<<random_tile_size, random_tile_size>>>(data_ptr, n_elems, seq_offset);
+}
+
+template void RandomGPUBuffer(float* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(half* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+#ifdef ENABLE_BF16
+template void RandomGPUBuffer(__nv_bfloat16* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+#endif
+template void RandomGPUBuffer(int32_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(bool* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(char* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+#ifdef ENABLE_FP8
+template void RandomGPUBuffer(__nv_fp8_e4m3* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+#endif
+template void RandomGPUBuffer(long* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(uint16_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(unsigned long* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(uint32_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+
+template <typename T_INPUT, typename T_STEP>
+__global__ void InvokeRangeKernel(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step) {
+  int32_t istep = blockIdx.x * blockDim.x + threadIdx.x;
+  if (istep < nstep) {
+    output[istep] = start + istep * step;
+  }
+}
+
+template <typename T_INPUT, typename T_STEP>
+void InvokeRange(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step, cudaStream_t stream) {
+  dim3 grid((nstep + DEFAULT_CUDA_BLOCK_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_THREADS_NUM);
+  dim3 block(DEFAULT_CUDA_BLOCK_THREADS_NUM);
+  InvokeRangeKernel<<<grid, block, 0, stream>>>(output, start, nstep, step);
+}
+
+template void InvokeRange(uint16_t** output, uint16_t* start, int32_t nstep, int32_t step, cudaStream_t stream);
+template void InvokeRange(int32_t* output, int32_t start, int32_t nstep, int32_t step, cudaStream_t stream);
+
+}  // namespace utils
+}  // namespace llm_kernels
