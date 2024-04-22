@@ -38,7 +38,6 @@ static const std::string GetACLErrorString(aclError error) {
       {ACL_ERROR_REPEAT_INITIALIZE, "ACL_ERROR_REPEAT_INITIALIZE"},
       {ACL_ERROR_UNINITIALIZE, "ACL_ERROR_UNINITIALIZE"},
       {ACL_ERROR_INVALID_PARAM, "ACL_ERROR_INVALID_PARAM"},
-
       {ACL_ERROR_MODEL_OUTPUT_NOT_MATCH, "ACL_ERROR_MODEL_OUTPUT_NOT_MATCH"},
       {ACL_ERROR_MODEL_INPUT_NOT_MATCH, "ACL_ERROR_MODEL_INPUT_NOT_MATCH"},
       {ACL_ERROR_MODEL_MISSING_ATTR, "ACL_ERROR_MODEL_MISSING_ATTR"},
@@ -90,11 +89,13 @@ static const std::string GetACLErrorString(aclError error) {
       {ACL_ERROR_KERNEL_ALREADY_REGISTERED, "ACL_ERROR_KERNEL_ALREADY_REGISTERED"},
       {ACL_ERROR_BIN_SELECTOR_ALREADY_REGISTERED, "ACL_ERROR_BIN_SELECTOR_ALREADY_REGISTERED"},
       {ACL_ERROR_KERNEL_NOT_FOUND, "ACL_ERROR_KERNEL_NOT_FOUND"}};
-  return error_to_string_map.count(error)
-             ? error_to_string_map.at(error)
-             : "UNKOWN, refer: "
-               "https://www.hiascend.com/document/detail/zh/canncommercial/700/inferapplicationdev/aclcppdevg/"
-               "aclcppdevg_03_1251.html for more information";
+  if (error_to_string_map.count(error) != 0ul) {
+    return error_to_string_map.at(error);
+  } else {
+    return "UNKOWN, refer: "
+           "https://www.hiascend.com/document/detail/zh/canncommercial/700/inferapplicationdev/aclcppdevg/"
+           "aclcppdevg_03_1251.html for more information";
+  }
 }
 
 template <typename T>

@@ -22,7 +22,9 @@ import libtorch_serving
 
 import asyncio
 from concurrent import futures
+
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
+
 
 class PyAsyncStreamingIterator(object):
     """The streaming iterator.
@@ -34,16 +36,28 @@ class PyAsyncStreamingIterator(object):
     def __aiter__(self):
         return self
 
+    # Define an asynchronous iterator method
     async def __anext__(self):
+        # Get the current event loop
         loop = asyncio.get_event_loop()
-        status, token_id = await loop.run_in_executor(model_executor, self._serving_iterator.GetNext)
+
+        # Run the GetNext method of the serving iterator in an executor to avoid blocking the event loop
+        status, token_id = await loop.run_in_executor(
+            model_executor,  # specify the executor to use
+            self._serving_iterator.GetNext  # method to call
+        )
+
+        # Check the status of the iteration
         if status.OK():
+            # If the iteration is successful, return the token ID
             return token_id
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
+            # If the iteration has finished, raise a StopAsyncIteration exception
             raise StopAsyncIteration(
                 "Iterator finished, ret code {}, message {}.".format(
                     status.GetCode(), status.GetMessage()))
         else:
+            # If an error occurred during iteration, raise a RuntimeError exception
             raise RuntimeError(
                 "Iterator error, ret code {}, message {}.".format(
                     status.GetCode(), status.GetMessage()))

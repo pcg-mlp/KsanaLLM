@@ -213,11 +213,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
 }
 
 template <typename T>
-Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size) {
+Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
-
-  // permute qkv_tensor: permute((2, 0, 1))
-  Tensor& last_qkv_tensor = weights_map_["empty_qkv_tensor"];
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& qkv_weight_tensor = weights_map_[qkv_name];
@@ -227,9 +224,12 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
     t.shape = {qkv_weight_tensor.shape[2], qkv_weight_tensor.shape[0] * qkv_weight_tensor.shape[1]};
     weights_map_[qkv_name] = t;
   }
+  return Status();
+}
 
-  // permute gate_proj, up_proj, down_proj: permute(1, 0)
-  Tensor& last_mlp_tensor = weights_map_["empty_mlp_tensor"];
+template <typename T>
+Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_layer) {
+  GetBlockManager()->SetDeviceId(rank_);
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string down_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.down_proj.weight";
     Tensor& down_weight_tensor = weights_map_[down_proj_name];
@@ -255,9 +255,12 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
     t.shape = {up_weight_tensor.shape[1], up_weight_tensor.shape[0]};
     weights_map_[up_proj_name] = t;
   }
+  return Status();
+}
 
-  // permute o_proj: permute(1, 0)
-  Tensor& last_o_proj_tensor = weights_map_["empty_o_proj_tensor"];
+template <typename T>
+Status CommonWeight<T>::PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer) {
+  GetBlockManager()->SetDeviceId(rank_);
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string o_proj_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.o_proj.weight";
     Tensor& o_proj_weight_tensor = weights_map_[o_proj_name];
@@ -267,6 +270,24 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
     t.shape = {o_proj_weight_tensor.shape[1], o_proj_weight_tensor.shape[0]};
     weights_map_[o_proj_name] = t;
   }
+  return Status();
+}
+
+template <typename T>
+Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size) {
+  GetBlockManager()->SetDeviceId(rank_);
+
+  // permute qkv_tensor: permute((2, 0, 1))
+  Tensor& last_qkv_tensor = weights_map_["empty_qkv_tensor"];
+  STATUS_CHECK_RETURN(PermuteQKVWeight(last_qkv_tensor, num_layer));
+
+  // permute gate_proj, up_proj, down_proj: permute(1, 0)
+  Tensor& last_mlp_tensor = weights_map_["empty_mlp_tensor"];
+  STATUS_CHECK_RETURN(PermuteMLPWeight(last_mlp_tensor, num_layer));
+
+  // permute o_proj: permute(1, 0)
+  Tensor& last_o_proj_tensor = weights_map_["empty_o_proj_tensor"];
+  STATUS_CHECK_RETURN(PermuteOutputProjectWeight(last_o_proj_tensor, num_layer));
 
   // permute lm_head: permute(1, 0)
   Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
