@@ -130,9 +130,9 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         host_topKs_[offset] = sampling_config->topk;
         host_topPs_[offset] = sampling_config->topp == 0.0f ? 1.0f : sampling_config->topp;
         host_temperatures_[offset] = sampling_config->temperature == 0.0f ? 1.0f : sampling_config->temperature;
-        sampling_devide_parameter.max_topK = sampling_devide_parameter.max_topK > sampling_config->topk
-                                                 ? sampling_devide_parameter.max_topK
-                                                 : sampling_config->topk;
+        if (sampling_devide_parameter.max_topK < sampling_config->topk) {
+          sampling_devide_parameter.max_topK = sampling_config->topk;
+        }
         use_arg_max = use_arg_max && sampling_config->topk == 1;
         use_top_p = use_top_p || !(host_topPs_[offset] == 1.0f);
         use_temperature = use_temperature || !(host_temperatures_[offset] == 1.0f);
