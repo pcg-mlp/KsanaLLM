@@ -6,6 +6,7 @@ import requests
 
 from typing import Iterable, List
 
+
 # Define a function to get streaming response from the server
 def get_streaming_response(response: requests.Response) -> Iterable[List[str]]:
     try:
@@ -20,6 +21,7 @@ def get_streaming_response(response: requests.Response) -> Iterable[List[str]]:
                 yield output
     except requests.exceptions.ChunkedEncodingError as ex:
         print(f"Invalid chunk encoding {str(ex)}")
+
 
 # Define a function to test the HTTP chat API
 def test_http_chat(prompt, url):
@@ -43,6 +45,7 @@ def test_http_chat(prompt, url):
     # Print the output from the streaming response
     for output in get_streaming_response(response):
         print(output, flush=True)
+
 
 # Main function to run the test
 if __name__ == '__main__':

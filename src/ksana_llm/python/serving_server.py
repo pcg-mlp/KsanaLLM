@@ -52,45 +52,68 @@ def args_config():
 
 
 def streaming_generate(model_name, input_tokens, generation_config):
-    """Do the streaming generate.
+    """Perform streaming generation.
     """
-    results_iterator = model.generate(model_name=model_name,
-                                      inputs=input_tokens,
-                                      generation_config=generation_config,
-                                      streamer=True)
+    # Create a results iterator for the model's generation
+    results_iterator = model.generate(
+        model_name=model_name,  # specify the model name
+        inputs=input_tokens,  # provide the input tokens
+        generation_config=generation_config,  # configure the generation
+        streamer=True  # enable streaming generation
+    )
 
+    # Define an asynchronous function to stream the results
     async def stream_results():
-        unfinished_token = []
-        async for request_output in results_iterator:
-            if request_output is not None:
+        unfinished_token = []  # store unfinished tokens
+        async for request_output in results_iterator:  # iterate over the results
+            if request_output is not None:  # if the output is not empty
+                # Decode the output tokens using the tokenizer
                 output_text = tokenizer.decode(
-                    unfinished_token + [request_output],
-                    skip_special_tokens=True)
+                    unfinished_token +
+                    [request_output
+                     ],  # combine unfinished tokens with the new output
+                    skip_special_tokens=True  # skip special tokens
+                )
+                # Check if the output ends with a special token (\uFFFD)
                 if output_text[-1:] == "\uFFFD":
+                    # If it does, add the output to the unfinished tokens and reset the output text
                     unfinished_token = unfinished_token + [request_output]
                     output_text = ""
                 else:
+                    # If it doesn't, reset the unfinished tokens
                     unfinished_token = []
+                # Create a response dictionary with the output text
                 ret = {"texts": output_text}
+                # Yield the response as a JSON-encoded string with a null character (\0) at the end
                 yield (json.dumps(ret) + "\0").encode("utf-8")
             else:
+                # If the output is empty, return from the function
                 return
 
+    # Return a StreamingResponse object with the streamed results
     return StreamingResponse(stream_results())
 
 
 def batch_generate(model_name, input_tokens, generation_config):
-    """Do the batch generate.
+    """Perform batch generation.
     """
-    results_tokens = model.generate(model_name=model_name,
-                                    inputs=input_tokens,
-                                    generation_config=generation_config,
-                                    streamer=None)
+    # Generate output tokens using the model
+    results_tokens = model.generate(
+        model_name=model_name,  # specify the model name
+        inputs=input_tokens,  # provide the input tokens
+        generation_config=generation_config,  # configure the generation
+        streamer=None  # disable streaming generation
+    )
 
+    # Decode the output tokens into a human-readable text using the tokenizer
     output_text = tokenizer.decode(results_tokens, skip_special_tokens=True)
-    return JSONResponse({"texts": output_text,
-                         "output_token_ids": results_tokens,
-                         "input_token_ids": input_tokens})
+
+    # Create a JSON response with the generated text and token IDs
+    return JSONResponse({
+        "texts": output_text,  # the generated text
+        "output_token_ids": results_tokens,  # the generated token IDs
+        "input_token_ids": input_tokens  # the input token IDs
+    })
 
 
 def get_sampling_value(sampling_config: dict, key: str, default_val=None):
@@ -121,31 +144,48 @@ async def generate(request: Request) -> Response:
         top_k=get_sampling_value(sampling_config, "topk", 1),
         top_p=get_sampling_value(sampling_config, "topp", 0.0),
         temperature=get_sampling_value(sampling_config, "temperature", 0.0),
-        max_new_tokens=get_sampling_value(sampling_config, "max_new_tokens", -1),
-        repetition_penalty=get_sampling_value(sampling_config, "repetition_penalty", 1.0))
+        max_new_tokens=get_sampling_value(sampling_config, "max_new_tokens",
+                                          -1),
+        repetition_penalty=get_sampling_value(sampling_config,
+                                              "repetition_penalty", 1.0))
 
+    # Get the current event loop
     loop = asyncio.get_event_loop()
+
+    # Determine whether to use streaming generation or batch generation
     if enable_streaming:
+        # Use streaming generation
+        # Run the streaming_generate function in an executor to avoid blocking the event loop
         results = await loop.run_in_executor(
-            model_executor,
-            partial(streaming_generate,
-                    model_name=model_name,
-                    input_tokens=input_tokens,
-                    generation_config=generation_config))
+            model_executor,  # specify the executor to use
+            partial(
+                streaming_generate,  # partial function to call
+                model_name=model_name,  # pass model name as an argument
+                input_tokens=input_tokens,  # pass input tokens as an argument
+                generation_config=generation_config
+            )  # pass generation config as an argument
+        )
     else:
+        # Use batch generation
+        # Run the batch_generate function in an executor to avoid blocking the event loop
         results = await loop.run_in_executor(
-            model_executor,
-            partial(batch_generate,
-                    model_name=model_name,
-                    input_tokens=input_tokens,
-                    generation_config=generation_config))
+            model_executor,  # specify the executor to use
+            partial(
+                batch_generate,  # partial function to call
+                model_name=model_name,  # pass model name as an argument
+                input_tokens=input_tokens,  # pass input tokens as an argument
+                generation_config=generation_config
+            )  # pass generation config as an argument
+        )
+
+    # Return the results of the generation
     return results
 
 
 if __name__ == "__main__":
     args = args_config()
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer_dir, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
+                                              trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.

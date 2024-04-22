@@ -44,34 +44,49 @@ if __name__ == "__main__":
     multi_proc_list = []
     multi_proc_queue = multiprocessing.Queue()
     start_time = time.time()
+    # Iterate over the list of text prompts
     for i in range(len(text_list)):
+        # Create a prompt string from the current text element
         prompt = "%s" % text_list[i]
 
+        # Create a data dictionary to pass to the post_request function
         data = {
+            # Set the prompt for the request
             "prompt": prompt,
+            # Configure the sampling parameters
             "sampling_config": {
-                "temperature": 0.0,
-                "topk": 1,
-                "topp": 0.0,
-                "max_new_tokens" : 1024,
-                "repetition_penalty": 1.0
+                "temperature": 0.0,  # temperature for sampling
+                "topk": 1,  # top-k sampling
+                "topp": 0.0,  # top-p sampling
+                "max_new_tokens":
+                1024,  # maximum number of new tokens to generate
+                "repetition_penalty": 1.0  # penalty for repetitive responses
             },
+            # Set stream mode to False
             "stream": False,
         }
 
-        proc = multiprocessing.Process(target=post_request,
-                                       args=(
-                                           serv,
-                                           data,
-                                           multi_proc_queue,
-                                       ))
+        # Create a new process to handle the post request
+        proc = multiprocessing.Process(
+            target=post_request,  # function to call
+            args=(  # arguments to pass
+                serv,  # server object
+                data,  # data dictionary
+                multi_proc_queue,  # queue for communication
+            ))
+        # Start the process
         proc.start()
+        # Add the process to the list of processes
         multi_proc_list.append(proc)
 
+    # Wait for the responses from the processes
     for i in range(len(text_list)):
+        # Get the response from the queue and display it
         show_response(text_list[i], multi_proc_queue.get())
 
+    # Wait for all processes to finish
     for proc in multi_proc_list:
+        # Join the process to ensure it has finished
         proc.join()
 
     end_time = time.time()

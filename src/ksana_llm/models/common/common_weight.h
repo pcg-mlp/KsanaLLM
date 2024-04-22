@@ -33,6 +33,12 @@ class CommonWeight : public BaseWeight {
 
     Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
+    Status PermuteQKVWeight(Tensor& last_qkv_tensor, const int num_layer);
+
+    Status PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_layer);
+
+    Status PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer);
+
     bool IsLoaded();
     bool weights_had_loaded_ = false;
 
