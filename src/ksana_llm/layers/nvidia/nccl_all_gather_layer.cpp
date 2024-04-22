@@ -35,7 +35,7 @@ Status NcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   }
   NCCL_CHECK(ncclGroupEnd());
   InvokePermute<T>(input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), {tp_size, h, w_per}, {1, 0, 2},
-                *stream);
+                   *stream);
   output_tensors[0].shape = {h, tp_size * w_per};
   return Status();
 }

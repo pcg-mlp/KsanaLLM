@@ -10,7 +10,7 @@ namespace ksana_llm {
 
 template <>
 struct DeviceTensorTypeTraits<DEVICE_TYPE_NVIDIA> {
-  typedef void* value_type;
+    typedef void* value_type;
 };
 
 template <>

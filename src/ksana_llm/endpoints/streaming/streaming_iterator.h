@@ -13,22 +13,22 @@ namespace ksana_llm {
 
 // The iterator used to return output token in streaming mode.
 class StreamingIterator {
- public:
-  StreamingIterator() {}
-  StreamingIterator(const std::shared_ptr<Request> request) : request_(request) {
-    cur_index_ = request->input_tokens.size();
-  }
-  ~StreamingIterator() {}
+  public:
+    StreamingIterator() {}
+    StreamingIterator(const std::shared_ptr<Request> request) : request_(request) {
+      cur_index_ = request->input_tokens.size();
+    }
+    ~StreamingIterator() {}
 
-  // Get the next token id, blocked if no token
-  Status GetNext(int& token_id);
+    // Get the next token id, blocked if no token
+    Status GetNext(int& token_id);
 
- private:
-  // The user request.
-  std::shared_ptr<Request> request_;
+  private:
+    // The user request.
+    std::shared_ptr<Request> request_;
 
-  // The current index, useful when notify event lost.
-  size_t cur_index_;
+    // The current index, useful when notify event lost.
+    size_t cur_index_;
 };
 
 }  // namespace ksana_llm

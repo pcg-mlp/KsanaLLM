@@ -20,69 +20,69 @@
 namespace ksana_llm {
 
 class LayerTest : public testing::Test {
- protected:
-  // 在每个测试用例执行之前调用的函数
-  void SetUp() override {
-    model_config.path = "/model/llama-hf/7B/";
-    model_config.weight_data_type = TYPE_FP16;
-    model_config.head_num = 32;
-    model_config.size_per_head = 128;
-    model_config.inter_size = 11008;
-    model_config.num_layer = 32;
-    model_config.vocab_size = 32000;
-    model_config.tensor_para_size = 1;
-    model_config.layernorm_eps = 1e-6;
-    model_config.max_batch_size = 4;
-    model_config.max_token_num = 1024;
-    model_config.rotary_embedding = 128;
-    model_config.max_position_embeddings = 2048;
-    model_config.rope_theta = 10000.0f;
-    model_config.num_key_value_heads = model_config.head_num;
+  protected:
+    // 在每个测试用例执行之前调用的函数
+    void SetUp() override {
+      model_config.path = "/model/llama-hf/7B/";
+      model_config.weight_data_type = TYPE_FP16;
+      model_config.head_num = 32;
+      model_config.size_per_head = 128;
+      model_config.inter_size = 11008;
+      model_config.num_layer = 32;
+      model_config.vocab_size = 32000;
+      model_config.tensor_para_size = 1;
+      model_config.layernorm_eps = 1e-6;
+      model_config.max_batch_size = 4;
+      model_config.max_token_num = 1024;
+      model_config.rotary_embedding = 128;
+      model_config.max_position_embeddings = 2048;
+      model_config.rope_theta = 10000.0f;
+      model_config.num_key_value_heads = model_config.head_num;
 
-    BlockManagerConfig block_manager_config;
-    block_manager_config.host_allocator_config.blocks_num = 2;
-    block_manager_config.host_allocator_config.block_token_num = 16;
-    block_manager_config.host_allocator_config.block_size = block_manager_config.host_allocator_config.block_token_num *
-                                                            2 * model_config.head_num * model_config.size_per_head *
-                                                            model_config.num_layer * sizeof(float16);
-    block_manager_config.host_allocator_config.device = MEMORY_HOST;
-    block_manager_config.device_allocator_config.blocks_num = 2;
-    block_manager_config.device_allocator_config.block_token_num = 16;
-    block_manager_config.device_allocator_config.block_size =
-        block_manager_config.host_allocator_config.block_token_num * 2 * model_config.head_num *
-        model_config.size_per_head * model_config.num_layer * sizeof(float16);
-    NLLM_LOG_INFO << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
-    block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
+      BlockManagerConfig block_manager_config;
+      block_manager_config.host_allocator_config.blocks_num = 2;
+      block_manager_config.host_allocator_config.block_token_num = 16;
+      block_manager_config.host_allocator_config.block_size =
+          block_manager_config.host_allocator_config.block_token_num * 2 * model_config.head_num *
+          model_config.size_per_head * model_config.num_layer * sizeof(float16);
+      block_manager_config.host_allocator_config.device = MEMORY_HOST;
+      block_manager_config.device_allocator_config.blocks_num = 2;
+      block_manager_config.device_allocator_config.block_token_num = 16;
+      block_manager_config.device_allocator_config.block_size =
+          block_manager_config.host_allocator_config.block_token_num * 2 * model_config.head_num *
+          model_config.size_per_head * model_config.num_layer * sizeof(float16);
+      NLLM_LOG_INFO << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
+      block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
-    context_ = std::make_shared<Context>(1, 1);
+      context_ = std::make_shared<Context>(1, 1);
 
-    // 使用配置创建一个 BlockManager 对象
-    block_manager = new BlockManager(block_manager_config, context_);
-    SetBlockManager(block_manager);
-  }
+      // 使用配置创建一个 BlockManager 对象
+      block_manager = new BlockManager(block_manager_config, context_);
+      SetBlockManager(block_manager);
+    }
 
-  // 在每个测试用例执行之后调用的函数
-  void TearDown() override {
-    // 删除 BlockManager 对象
-    delete block_manager;
-  }
+    // 在每个测试用例执行之后调用的函数
+    void TearDown() override {
+      // 删除 BlockManager 对象
+      delete block_manager;
+    }
 
-  Status CreateHalfDataTypeTensor(Tensor& tensor, const std::vector<size_t>& shape, const DataType data_type,
-                                  size_t dtype_size = 2) {
-    int idx;
-    GetBlockManager()->SetDeviceId(0);
-    size_t total_bytes =
-        std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) * dtype_size;
-    GetBlockManager()->AllocateContiguous(total_bytes, idx);
-    tensor = Tensor(MEMORY_DEVICE, data_type, shape, idx);
-    return Status();
-  }
+    Status CreateHalfDataTypeTensor(Tensor& tensor, const std::vector<size_t>& shape, const DataType data_type,
+                                    size_t dtype_size = 2) {
+      int idx;
+      GetBlockManager()->SetDeviceId(0);
+      size_t total_bytes =
+          std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) * dtype_size;
+      GetBlockManager()->AllocateContiguous(total_bytes, idx);
+      tensor = Tensor(MEMORY_DEVICE, data_type, shape, idx);
+      return Status();
+    }
 
- protected:
-  ModelConfig model_config;
-  BlockManager* block_manager = nullptr;
+  protected:
+    ModelConfig model_config;
+    BlockManager* block_manager = nullptr;
 
-  std::shared_ptr<Context> context_{nullptr};
+    std::shared_ptr<Context> context_{nullptr};
 };
 
 TEST_F(LayerTest, AttentionLayerTest) {

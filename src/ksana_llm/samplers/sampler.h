@@ -13,38 +13,38 @@
 namespace ksana_llm {
 
 class Sampler {
- public:
-  Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context);
-  ~Sampler();
-  Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
-  void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
-                              const int vocab_size, const float repetition_penalty, Stream& stream);
+  public:
+    Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context);
+    ~Sampler();
+    Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
+    void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
+                                const int vocab_size, const float repetition_penalty, Stream& stream);
 
- private:
-  BatchSchedulerConfig batch_schedule_config_;
-  int rank_;
-  TopkSampling* topk_sampling_{nullptr};
-  int device_buffer_block_id_{-1};
-  void* device_buffer_;
-  uint32_t* device_output_tokens_;
-  uint32_t* device_offset_;
-  int* device_topKs_;
-  float* device_topPs_;
-  float* device_temperatures_;
-  int** device_output_tokens_ptrs_;
-  float* device_inv_repetition_penalties_;
-  RandState* device_curandstates_{nullptr};
+  private:
+    BatchSchedulerConfig batch_schedule_config_;
+    int rank_;
+    TopkSampling* topk_sampling_{nullptr};
+    int device_buffer_block_id_{-1};
+    void* device_buffer_;
+    uint32_t* device_output_tokens_;
+    uint32_t* device_offset_;
+    int* device_topKs_;
+    float* device_topPs_;
+    float* device_temperatures_;
+    int** device_output_tokens_ptrs_;
+    float* device_inv_repetition_penalties_;
+    RandState* device_curandstates_{nullptr};
 
-  std::vector<int> host_output_tokens_;
-  std::vector<uint32_t> host_offset_;
-  std::vector<int> host_topKs_;
-  std::vector<float> host_topPs_;
-  std::vector<float> host_temperatures_;
-  std::vector<const float*> host_logits_;
+    std::vector<int> host_output_tokens_;
+    std::vector<uint32_t> host_offset_;
+    std::vector<int> host_topKs_;
+    std::vector<float> host_topPs_;
+    std::vector<float> host_temperatures_;
+    std::vector<const float*> host_logits_;
 
-  // The context
-  std::shared_ptr<Context> context_;
-  std::vector<float> inv_repetition_penalties_;
+    // The context
+    std::shared_ptr<Context> context_;
+    std::vector<float> inv_repetition_penalties_;
 };
 
 }  // namespace ksana_llm

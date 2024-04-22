@@ -10,20 +10,20 @@ namespace ksana_llm {
 
 // Faked type used for template
 struct FakedSingletonType {
-  int val = 8;
+    int val = 8;
 };
 
 // Facked normal class used for test
 class TestSingletonNormalClass {
- public:
-  int Fun() { return 1; }
+  public:
+    int Fun() { return 1; }
 };
 
 // Facked template class used for test
 template <typename T>
 class TestSingletonTemplateClass {
- public:
-  T Fun(T val) { return val; }
+  public:
+    T Fun(T val) { return val; }
 };
 
 TEST(Singleton, TestSingleton) {

@@ -6,9 +6,9 @@
 namespace ksana_llm {
 
 class SingleToken {
- public:
-  // Whether enable dynamic splitfuse
-  bool dynamic_split_fuse = false;
+  public:
+    // Whether enable dynamic splitfuse
+    bool dynamic_split_fuse = false;
 };
 
 }  // namespace ksana_llm

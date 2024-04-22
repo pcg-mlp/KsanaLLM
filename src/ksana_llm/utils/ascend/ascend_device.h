@@ -10,53 +10,53 @@
 namespace ksana_llm {
 
 class AscendDeviceContextManager {
- public:
-  AscendDeviceContextManager();
-  ~AscendDeviceContextManager();
+  public:
+    AscendDeviceContextManager();
+    ~AscendDeviceContextManager();
 
-  // Get device id of device_id
-  aclrtContext& GetDeviceContext(int device_id);
+    // Get device id of device_id
+    aclrtContext& GetDeviceContext(int device_id);
 
-  std::unordered_map<int, aclrtContext> acl_contexts_;
+    std::unordered_map<int, aclrtContext> acl_contexts_;
 };
 
 template <>
 struct StreamTypeTraits<DEVICE_TYPE_ASCEND> {
-  typedef aclrtStream value_type;
+    typedef aclrtStream value_type;
 };
 
 template <>
 class StreamT<DEVICE_TYPE_ASCEND> {
- public:
-  StreamT(int device_id);
+  public:
+    StreamT(int device_id);
 
-  aclrtStream& Get();
+    aclrtStream& Get();
 
-  // Destroy the stream.
-  void Destroy();
+    // Destroy the stream.
+    void Destroy();
 
- private:
-  // the related device with this stream.
-  int device_id_;
+  private:
+    // the related device with this stream.
+    int device_id_;
 
-  // The acl stream.
-  aclrtStream acl_stream_;
+    // The acl stream.
+    aclrtStream acl_stream_;
 };
 
 template <>
 struct EventTypeTraits<DEVICE_TYPE_ASCEND> {
-  typedef aclrtEvent value_type;
+    typedef aclrtEvent value_type;
 };
 
 template <>
 class EventT<DEVICE_TYPE_ASCEND> {
- public:
-  // Get the cuda event by reference.
-  aclrtEvent& Get();
+  public:
+    // Get the cuda event by reference.
+    aclrtEvent& Get();
 
- private:
-  // The cuda event.
-  aclrtEvent acl_event_;
+  private:
+    // The cuda event.
+    aclrtEvent acl_event_;
 };
 
 template <>
@@ -142,9 +142,9 @@ size_t GetTypeSizeT<DEVICE_TYPE_ASCEND>(DataType dtype);
 
 template <>
 class GetDataTypeT<DEVICE_TYPE_ASCEND> {
- public:
-  template <class U>
-  static DataType impl();
+  public:
+    template <class U>
+    static DataType impl();
 };
 
 }  // namespace ksana_llm

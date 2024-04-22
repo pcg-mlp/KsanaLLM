@@ -8,8 +8,8 @@
 namespace ksana_llm {
 
 class RequestBatching {
- public:
-  RequestBatching(const RequestBatchingConfig &request_batching_config);
+  public:
+    RequestBatching(const RequestBatchingConfig &request_batching_config);
 };
 
 }  // namespace ksana_llm

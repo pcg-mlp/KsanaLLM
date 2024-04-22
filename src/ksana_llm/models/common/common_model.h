@@ -31,85 +31,86 @@ enum PositionEncoding { ROPE = 0, ALIBI = 1 };
 
 // Describe the model architecture.
 struct ModelRunConfig {
-  // The model position embedding
-  PositionEncoding position_encoding = PositionEncoding::ROPE;
+    // The model position embedding
+    PositionEncoding position_encoding = PositionEncoding::ROPE;
 
-  // Whether add a bias on qkv output.
-  bool qkv_add_bias = false;
+    // Whether add a bias on qkv output.
+    bool qkv_add_bias = false;
 };
 
 // A common implement of transfer based model.
 template <typename T>
 class CommonModel : public BaseModel {
- public:
-  CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
-  ~CommonModel();
+  public:
+    CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
+    ~CommonModel();
 
-  // Initialize the run config.
-  void InitRunConfig(const ModelRunConfig& model_run_config);
+    // Initialize the run config.
+    void InitRunConfig(const ModelRunConfig& model_run_config);
 
-  float* GetLogitsPtr();
+    float* GetLogitsPtr();
 
-  // The prefill stage.
-  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+    // The prefill stage.
+    Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                         std::vector<ForwardRequest>& forward_reqs);
 
-  // The decode stage.
-  Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+    // The decode stage.
+    Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
- private:
-  using BaseModel::context_;
-  using BaseModel::rank_;
+  private:
+    using BaseModel::context_;
+    using BaseModel::rank_;
 
-  // The model config.
-  ModelConfig model_config_;
+    // The model config.
+    ModelConfig model_config_;
 
-  // The model input information.
-  std::shared_ptr<ModelInput> model_input_;
+    // The model input information.
+    std::shared_ptr<ModelInput> model_input_;
 
-  // The model output.
-  std::shared_ptr<ModelOutput> model_output_;
+    // The model output.
+    std::shared_ptr<ModelOutput> model_output_;
 
-  // The model communicator.
-  std::shared_ptr<ModelCommunicator<T>> model_communicator_;
+    // The model communicator.
+    std::shared_ptr<ModelCommunicator<T>> model_communicator_;
 
-  std::shared_ptr<EmbLookupLayer<T>> emb_lookup_layer_;
-  std::shared_ptr<LayernormLayer<T>> layernorm_layer_;
-  std::vector<std::shared_ptr<FlashAttentionLayer<T>>> flash_attention_layers_;
-  std::vector<std::shared_ptr<PagedAttentionLayer<T>>> paged_attention_layers_;
-  std::shared_ptr<AddLayer<T>> add_layer_;
-  std::shared_ptr<SiluMulLayer<T>> silu_mul_layer_;
-  std::shared_ptr<MatMulLayer<T>> matmul_layer_;
-  std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
-  std::shared_ptr<CastLayer<T>> cast_layer_;
+    std::shared_ptr<EmbLookupLayer<T>> emb_lookup_layer_;
+    std::shared_ptr<LayernormLayer<T>> layernorm_layer_;
+    std::vector<std::shared_ptr<FlashAttentionLayer<T>>> flash_attention_layers_;
+    std::vector<std::shared_ptr<PagedAttentionLayer<T>>> paged_attention_layers_;
+    std::shared_ptr<AddLayer<T>> add_layer_;
+    std::shared_ptr<SiluMulLayer<T>> silu_mul_layer_;
+    std::shared_ptr<MatMulLayer<T>> matmul_layer_;
+    std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
+    std::shared_ptr<CastLayer<T>> cast_layer_;
 
-  int num_layer_;
-  bool qkv_add_bias_;
+    int num_layer_;
+    bool qkv_add_bias_;
 
-  Tensor tensor_buffer_0_;
-  Tensor tensor_buffer_1_;
-  Tensor tensor_buffer_2_;
-  Tensor up_matmul_tensor_buffer_;
-  Tensor forward_shape_;
-  Tensor cos_sin_cache_tensor_;
+    Tensor tensor_buffer_0_;
+    Tensor tensor_buffer_1_;
+    Tensor tensor_buffer_2_;
+    Tensor up_matmul_tensor_buffer_;
+    Tensor forward_shape_;
+    Tensor cos_sin_cache_tensor_;
 
- private:
-  // refer to
-  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
-  Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight, Tensor& hidden_states,
-                        std::vector<Tensor>& output_0, std::vector<Tensor>& output_1, std::vector<Tensor>& output_2,
-                        const bool is_context_stage);
+  private:
+    // refer to
+    // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
+    Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                          Tensor& hidden_states, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
+                          std::vector<Tensor>& output_2, const bool is_context_stage);
 
-  // refer to
-  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L211
-  Status LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                  Tensor& post_layernorm_output, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
-                  std::vector<Tensor>& output_2);
+    // refer to
+    // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L211
+    Status LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                    Tensor& post_layernorm_output, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
+                    std::vector<Tensor>& output_2);
 
-  // refer to
-  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L694
-  Status LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                      std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
-                      std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
+    // refer to
+    // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L694
+    Status LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                        std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
+                        std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
 };
 
 }  // namespace ksana_llm

@@ -81,8 +81,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
       CreateBufferTensor(tensor_buffer_2_, {max_token_num, hidden_units, 3}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
       CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
+                                          model_config_.weight_data_type));
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 

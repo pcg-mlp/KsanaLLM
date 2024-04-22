@@ -11,37 +11,37 @@
 namespace ksana_llm {
 // Define a class named PytorchFileTensorLoader that inherits from BaseFileTensorLoader
 class PytorchFileTensorLoader : public BaseFileTensorLoader {
- public:
-  // Constructor that takes a file name as input
-  PytorchFileTensorLoader(const std::string& file_name);
+  public:
+    // Constructor that takes a file name as input
+    PytorchFileTensorLoader(const std::string& file_name);
 
-  // Get the list of tensor names
-  const std::vector<std::string>& GetTensorNameList() { return tensor_name_list_; }
+    // Get the list of tensor names
+    const std::vector<std::string>& GetTensorNameList() { return tensor_name_list_; }
 
-  // Get a tensor by its name
-  std::tuple<void*, size_t> GetTensor(const std::string& tensor_name);
+    // Get a tensor by its name
+    std::tuple<void*, size_t> GetTensor(const std::string& tensor_name);
 
-  DataType GetTensorDataType(const std::string& tensor_name);
+    DataType GetTensorDataType(const std::string& tensor_name);
 
-  std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
+    std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
 
- private:
-  // Load the PyTorch binary file
-  void LoadPytorchBin();
+  private:
+    // Load the PyTorch binary file
+    void LoadPytorchBin();
 
- private:
-  // Use unique_ptr to manage the PyTorchStreamReader object for reading PyTorch model files
-  std::unique_ptr<caffe2::serialize::PyTorchStreamReader> pytorch_reader_;
+  private:
+    // Use unique_ptr to manage the PyTorchStreamReader object for reading PyTorch model files
+    std::unique_ptr<caffe2::serialize::PyTorchStreamReader> pytorch_reader_;
 
-  // Use unordered_map to store the tensor names and their corresponding indices for easy lookup
-  std::unordered_map<std::string, int64_t> pytorch_tensor_index_map_;
-  std::unordered_map<std::string, torch::Tensor> pytorch_tensor_map_;
+    // Use unordered_map to store the tensor names and their corresponding indices for easy lookup
+    std::unordered_map<std::string, int64_t> pytorch_tensor_index_map_;
+    std::unordered_map<std::string, torch::Tensor> pytorch_tensor_map_;
 
-  // Use vector to store the DataPtr of tensors for easy management and access
-  std::vector<at::DataPtr> pytorch_tensor_list_;
+    // Use vector to store the DataPtr of tensors for easy management and access
+    std::vector<at::DataPtr> pytorch_tensor_list_;
 
-  // 是否采用异步读取,llama7B 模型可采用,llama13B 模型采用会 CoreDump(TODO)
-  bool fast_load_ = false;
+    // 是否采用异步读取,llama7B 模型可采用,llama13B 模型采用会 CoreDump(TODO)
+    bool fast_load_ = false;
 };
 
 }  // namespace ksana_llm

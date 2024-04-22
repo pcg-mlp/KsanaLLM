@@ -74,4 +74,3 @@ using Event = EventT<ACTIVE_DEVICE_TYPE>;
 // The get type size function
 #define GetTypeSize GetTypeSizeT<ACTIVE_DEVICE_TYPE>
 #define GetDataType GetDataTypeT<ACTIVE_DEVICE_TYPE>::impl
-

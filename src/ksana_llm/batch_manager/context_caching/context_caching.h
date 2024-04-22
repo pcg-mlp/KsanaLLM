@@ -8,8 +8,8 @@
 namespace ksana_llm {
 
 class ContextCaching {
- public:
-  ContextCaching(const ContextCachingConfig &context_caching_config);
+  public:
+    ContextCaching(const ContextCachingConfig &context_caching_config);
 };
 
 }  // namespace ksana_llm

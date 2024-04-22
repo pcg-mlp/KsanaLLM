@@ -13,37 +13,37 @@ namespace ksana_llm {
 
 // Denote success or failure of a call in ksana_llm.
 class Status {
- public:
-  // Create a success status.
-  Status() {}
+  public:
+    // Create a success status.
+    Status() {}
 
-  // Do nothing if code is RET_SUCCESS.
-  explicit Status(RetCode code, const std::string &message = "");
+    // Do nothing if code is RET_SUCCESS.
+    explicit Status(RetCode code, const std::string &message = "");
 
-  Status(const Status &status);
+    Status(const Status &status);
 
-  // Return true if the status indicates success.
-  bool OK() const { return (state_ == nullptr); }
+    // Return true if the status indicates success.
+    bool OK() const { return (state_ == nullptr); }
 
-  const std::string &GetMessage() const { return OK() ? GetEmptyString() : state_->message; }
+    const std::string &GetMessage() const { return OK() ? GetEmptyString() : state_->message; }
 
-  RetCode GetCode() const { return OK() ? RetCode::RET_SUCCESS : state_->code; }
+    RetCode GetCode() const { return OK() ? RetCode::RET_SUCCESS : state_->code; }
 
-  // Return a string representation of this status, return `OK` for success.
-  std::string ToString() const;
+    // Return a string representation of this status, return `OK` for success.
+    std::string ToString() const;
 
- private:
-  // Return this static object for better performance.
-  static const std::string &GetEmptyString();
+  private:
+    // Return this static object for better performance.
+    static const std::string &GetEmptyString();
 
-  struct State {
-    RetCode code;
-    std::string message;
-  };
+    struct State {
+        RetCode code;
+        std::string message;
+    };
 
-  // OK status has a `NULL` state_, Otherwise points to
-  // a `State` structure containing the error code and messages.
-  std::shared_ptr<State> state_ = nullptr;
+    // OK status has a `NULL` state_, Otherwise points to
+    // a `State` structure containing the error code and messages.
+    std::shared_ptr<State> state_ = nullptr;
 };
 
 #define STATUS_CHECK_RETURN(status)          \

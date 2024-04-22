@@ -39,8 +39,8 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
       throw std::invalid_argument(fmt::format("Unsupport rope scaling type: {}", rope_scaling_factor_config.type));
     }
 
-    rotary_embedding_cuda_.SetConfig(static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base, head_size_,
-                                     num_heads_, num_kv_heads_, stride_size_, is_neox,
+    rotary_embedding_cuda_.SetConfig(static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base,
+                                     head_size_, num_heads_, num_kv_heads_, stride_size_, is_neox,
                                      context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
   } else {
     llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr), num_heads_ * tensor_para_size_,

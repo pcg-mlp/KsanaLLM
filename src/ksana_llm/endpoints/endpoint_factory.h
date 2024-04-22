@@ -16,14 +16,14 @@
 namespace ksana_llm {
 
 class EndpointFactory {
- public:
-  // Create a rpc endpoint instance via the input config.
-  static std::shared_ptr<RpcEndpoint> CreateRpcEndpoint(
-      const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+  public:
+    // Create a rpc endpoint instance via the input config.
+    static std::shared_ptr<RpcEndpoint> CreateRpcEndpoint(
+        const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
 
-  // Create a local endpoint instance via the input config.
-  static std::shared_ptr<LocalEndpoint> CreateLocalEndpoint(
-      const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+    // Create a local endpoint instance via the input config.
+    static std::shared_ptr<LocalEndpoint> CreateLocalEndpoint(
+        const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
 };
 
 }  // namespace ksana_llm
