@@ -14,13 +14,13 @@
 namespace ksana_llm {
 
 // clang-format off
-#define NCCL_CHECK(cmd)                                                                                                 \
-    do {                                                                                                                \
-        ncclResult_t r = cmd;                                                                                           \
-        if (r != ncclSuccess) {                                                                                         \
-            NLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__);    \
-            exit(RetCode::RET_INVALID_ARGUMENT);                                                                        \
-        }                                                                                                               \
+#define NCCL_CHECK(cmd)                                                                                               \
+    do {                                                                                                              \
+        ncclResult_t r = cmd;                                                                                         \
+        if (r != ncclSuccess) {                                                                                       \
+            NLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__);  \
+            exit(RetCode::RET_INVALID_ARGUMENT);                                                                      \
+        }                                                                                                             \
     } while (0)
 // clang-format on
 

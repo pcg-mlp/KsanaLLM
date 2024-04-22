@@ -107,7 +107,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   EXPECT_TRUE(
       flash_attention_layer
           .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, int(1), rotary_embedding,
-                 rope_theta, is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
+                rope_theta, is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
                 context, 0)
           .OK());
 
@@ -148,8 +148,8 @@ TEST_F(LayerTest, AttentionLayerTest) {
   PagedAttentionLayer<half> attention_layer;
   EXPECT_TRUE(attention_layer
                   .Init({int(1), int(2048), static_cast<int>(head_num), kv_head_num, static_cast<int>(size_per_head),
-                         stride_size, int(1), rotary_embedding, rope_theta, is_neox, bool(false),
-                         std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
+                        stride_size, int(1), rotary_embedding, rope_theta, is_neox, bool(false),
+                        std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
                         context, 0)
                   .OK());
 #endif

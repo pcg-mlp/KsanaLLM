@@ -22,18 +22,17 @@
 
 namespace ksana_llm {
 
-/* weight_name 与存储的模型文件的关联映射关系
- * gather_embedding                   : model.wte.weight.bin
- * input_layernorm          + layer x : model.layers.x.input_layernorm.weight.bin
- * post_attention_layernorm + layer x : model.layers.x.post_attention_layernorm.weight.bin
- * attention.dense + rank r + layer x : model.layers.x.attention.dense.weight.r.bin
- * attention.query_key_value + r +  x : model.layers.x.attention.query_key_value.weight.r.bin
- * mlp.gate_proj +  rank r  + layer x : model.layers.x.mlp.gate_proj.weight.r.bin
- * mlp.up_proj   +  rank r  + layer x : model.layers.x.mlp.up_proj.weight.r.bin
- * mlp.down_proj +  rank r  + layer x : model.layers.x.mlp.down_proj.weight.r.bin
- * norm                               : model.final_layernorm.weight
- * lm_head                            : model.lm_head.weight
- */
+// weight_name 与存储的模型文件的关联映射关系
+// gather_embedding                   : model.wte.weight.bin
+// input_layernorm          + layer x : model.layers.x.input_layernorm.weight.bin
+// post_attention_layernorm + layer x : model.layers.x.post_attention_layernorm.weight.bin
+// attention.dense + rank r + layer x : model.layers.x.attention.dense.weight.r.bin
+// attention.query_key_value + r +  x : model.layers.x.attention.query_key_value.weight.r.bin
+// mlp.gate_proj +  rank r  + layer x : model.layers.x.mlp.gate_proj.weight.r.bin
+// mlp.up_proj   +  rank r  + layer x : model.layers.x.mlp.up_proj.weight.r.bin
+// mlp.down_proj +  rank r  + layer x : model.layers.x.mlp.down_proj.weight.r.bin
+// norm                               : model.final_layernorm.weight
+// lm_head                            : model.lm_head.weight
 template <typename T>
 CommonWeight<T>::~CommonWeight() {
   GetBlockManager()->SetDeviceId(rank_);
@@ -111,19 +110,17 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
   GetBlockManager()->SetDeviceId(rank_);
   std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
   for (size_t idx = 0; idx < tensor_name_list.size(); ++idx) {
-    // TODO: 扩展支持 bfp16
-    /* tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
-     *     input_layernorm:          不做分卡处理
-     *     post_attention_layernorm: 不做分卡处理
-     *     self_attn.o_proj:         先转置,再按 axis=0 切分
-     *     self_attn.qkv_proj:       先按 axis=0 切分, 再 permute((2, 0, 1))
-     *     mlp.down_proj:            先转置,再按 axis=0 切分
-     *     mlp.up_proj:              先按 axis=0 切分, 再转置
-     *     mlp.gate_proj:            先按 axis=0 切分, 再转置
-     *     lm_head:                  不做分卡处理, 需转置
-     *     norm:                     不做分卡处理
-     *     embedding:                不做分卡处理
-     */
+    // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
+    //     input_layernorm:          不做分卡处理
+    //     post_attention_layernorm: 不做分卡处理
+    //     self_attn.o_proj:         先转置,再按 axis=0 切分
+    //     self_attn.qkv_proj:       先按 axis=0 切分, 再 permute((2, 0, 1))
+    //     mlp.down_proj:            先转置,再按 axis=0 切分
+    //     mlp.up_proj:              先按 axis=0 切分, 再转置
+    //     mlp.gate_proj:            先按 axis=0 切分, 再转置
+    //     lm_head:                  不做分卡处理, 需转置
+    //     norm:                     不做分卡处理
+    //     embedding:                不做分卡处理
     std::string& tensor_name = tensor_name_list[idx];
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
@@ -358,7 +355,9 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   // We use vocab_size to determine whether it is the Baichuan2 model.
   // If vocab_size is equal to 125,696, then it is the Baichuan2 model.
   // And Unlike Baichuan1, the Baichuan2 model requires normalizing the head weights. Refer to
-  // https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/84603cde5ebffb6084e476cfaeceaf0b8b91fe54/modeling_baichuan.py#L508
+  // repo: https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat
+  // commit: 84603cde5ebffb6084e476cfaeceaf0b8b91fe54
+  // file: modeling_baichuan.py#L508
   if (model_config_.type == "baichuan" && vocab_size == 125696) {
     if (weights_data_type_map_.find("lm_head.weight") != weights_data_type_map_.end()) {
       Tensor& tensor = weights_map_["lm_head.weight"];

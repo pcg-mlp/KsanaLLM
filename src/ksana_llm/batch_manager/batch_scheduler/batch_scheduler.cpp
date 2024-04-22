@@ -228,7 +228,7 @@ bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req)
         (req->output_tokens.back() == req->model_instance->GetModelConfig().end_id ||
          (req->sampling_config.max_new_tokens > 0 &&
           req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
-         req->output_tokens.size() >= batch_scheduler_config_.max_token_len)) {
+          req->output_tokens.size() >= batch_scheduler_config_.max_token_len)) {
       return true;
     }
   }

@@ -45,7 +45,7 @@ size_t TensorT<T>::GetTotalBytes() const {
 template <int T>
 std::string TensorT<T>::DeviceToString() const {
   static const std::unordered_map<MemoryDevice, std::string> mem_to_string{{MEMORY_HOST, "host"},
-                                                                           {MEMORY_DEVICE, "device"}};
+    {MEMORY_DEVICE, "device"}};
   return mem_to_string.at(device);
 }
 

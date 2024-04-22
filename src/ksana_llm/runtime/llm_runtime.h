@@ -39,7 +39,7 @@ class LlmRuntime {
                               std::vector<SamplingRequest> &sampling_reqs);
 
     // Run context decode and decode serially in single thread.
-    Status RunContextDecodeAndDecodeRunSerially(
+    Status RunSerially(
         std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 
   private:
