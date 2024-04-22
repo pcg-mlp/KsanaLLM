@@ -37,7 +37,6 @@ if __name__ == "__main__":
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
 
     text_list = [
-        #"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n你是谁<|im_end|>\n<|im_start|>assistant\n", # qwen2
         "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]",
         "[INST]想象一下您是夏洛克·福尔摩斯，您被要求解开一个涉及失踪传家宝的谜团。请解释一下您找到该物品的策略。[/INST]"
     ]
