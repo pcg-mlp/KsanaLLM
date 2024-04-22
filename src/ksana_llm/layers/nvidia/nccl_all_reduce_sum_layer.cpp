@@ -8,7 +8,8 @@
 namespace ksana_llm {
 
 template <typename T>
-Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
+                                         std::vector<Tensor>& output_tensors) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
@@ -20,9 +21,10 @@ Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
 
   if (context_->GetTensorParallelSize() > 1) {
     NCCL_CHECK(ncclGroupStart());
-    ncclResult_t ncclError = ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                                           output_tensors[0].GetPtr<void>(), input_tensors[0].GetElementNumber(),
-                                           GetNcclDataType<T>(), ncclSum, context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
+    ncclResult_t ncclError =
+        ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
+                      input_tensors[0].GetElementNumber(), GetNcclDataType<T>(), ncclSum,
+                      context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       NLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
     }

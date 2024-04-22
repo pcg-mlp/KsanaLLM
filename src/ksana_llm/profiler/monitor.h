@@ -6,8 +6,8 @@ namespace ksana_llm {
 
 // The monitor of profiler.
 class ProfilerMonitor {
- public:
-  ProfilerMonitor();
+  public:
+    ProfilerMonitor();
 };
 
 }  // namespace ksana_llm

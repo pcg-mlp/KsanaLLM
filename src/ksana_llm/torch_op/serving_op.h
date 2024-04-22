@@ -15,25 +15,25 @@ namespace ksana_llm {
 
 // The torch OP for inference.
 class ServingOp : public torch::jit::CustomClassHolder {
- public:
-  ServingOp();
-  ~ServingOp();
+  public:
+    ServingOp();
+    ~ServingOp();
 
-  // Initialize the service implement.
-  void InitServing(const std::string &mode_dir);
+    // Initialize the service implement.
+    void InitServing(const std::string &mode_dir);
 
-  // Generate a response.
-  Status Generate(const std::string &model_name, const std::vector<int> &input_tokens,
-                  const SamplingConfig &sampling_config, std::vector<int> &output_tokens);
+    // Generate a response.
+    Status Generate(const std::string &model_name, const std::vector<int> &input_tokens,
+                    const SamplingConfig &sampling_config, std::vector<int> &output_tokens);
 
-  // Generate a response, in streaming mode.
-  Status GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config,
-                           std::shared_ptr<StreamingIterator> &streaming_iterator);
+    // Generate a response, in streaming mode.
+    Status GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
+                             const SamplingConfig &sampling_config,
+                             std::shared_ptr<StreamingIterator> &streaming_iterator);
 
- private:
-  // The inference implement.
-  std::shared_ptr<ServingImpl> serving_impl_ = nullptr;
+  private:
+    // The inference implement.
+    std::shared_ptr<ServingImpl> serving_impl_ = nullptr;
 };
 
 }  // namespace ksana_llm

@@ -11,12 +11,12 @@ namespace ksana_llm {
 using testing::ElementsAreArray;
 
 class ChannelTest : public testing::Test {
- protected:
-  void SetUp() override { chan_ = Channel<int32_t>(capacity_, "TestChan"); }
-  void TearDown() override {}
+  protected:
+    void SetUp() override { chan_ = Channel<int32_t>(capacity_, "TestChan"); }
+    void TearDown() override {}
 
-  Channel<int32_t> chan_;
-  size_t capacity_{100ul};
+    Channel<int32_t> chan_;
+    size_t capacity_{100ul};
 };
 
 TEST_F(ChannelTest, SingleWriteRead) {

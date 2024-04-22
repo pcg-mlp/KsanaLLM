@@ -14,12 +14,12 @@ Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   auto b = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());
   if (input_tensors[0].shape[0] == input_tensors[1].shape[0]) {
     InvokeAddBiasResidual<T>(a, b, nullptr, static_cast<int>(input_tensors[0].shape[0]),
-                          static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-                          context_->GetComputeStreams()[rank_].Get());
+                             static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
+                             context_->GetComputeStreams()[rank_].Get());
   } else {
     InvokeAddBiasResidual<T>(a, nullptr, b, static_cast<int>(input_tensors[0].shape[0]),
-                          static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-                          context_->GetComputeStreams()[rank_].Get());
+                             static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
+                             context_->GetComputeStreams()[rank_].Get());
   }
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

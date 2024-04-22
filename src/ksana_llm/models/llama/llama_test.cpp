@@ -14,35 +14,35 @@ using namespace ksana_llm;
 
 // 定义一个 LlamaTest 类,继承自 testing::Test
 class LlamaTest : public testing::Test {
- protected:
-  void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+  protected:
+    void SetUp() override {
+      context_ = std::make_shared<Context>(1, 1);
 
-    // 解析 config.json,初始化 ModelConfig 以及 BlockManager
-    std::filesystem::path current_path = __FILE__;
-    std::filesystem::path parent_path = current_path.parent_path();
-    std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
-    std::string config_path = std::filesystem::absolute(config_path_relate).string();
+      // 解析 config.json,初始化 ModelConfig 以及 BlockManager
+      std::filesystem::path current_path = __FILE__;
+      std::filesystem::path parent_path = current_path.parent_path();
+      std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
+      std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
-    Singleton<Environment>::GetInstance()->ParseConfig(config_path);
-    Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
+      Singleton<Environment>::GetInstance()->ParseConfig(config_path);
+      Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
 
-    BlockManagerConfig block_manager_config;
-    Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-    NLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
+      BlockManagerConfig block_manager_config;
+      Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
+      NLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
-    block_manager = new BlockManager(block_manager_config, context_);
-    block_manager->PreAllocateBlocks();
-    SetBlockManager(block_manager);
-  }
+      block_manager = new BlockManager(block_manager_config, context_);
+      block_manager->PreAllocateBlocks();
+      SetBlockManager(block_manager);
+    }
 
-  void TearDown() override { delete block_manager; }
+    void TearDown() override { delete block_manager; }
 
- protected:
-  ModelConfig model_config;
-  BlockManager *block_manager = nullptr;
+  protected:
+    ModelConfig model_config;
+    BlockManager *block_manager = nullptr;
 
-  std::shared_ptr<Context> context_{nullptr};
+    std::shared_ptr<Context> context_{nullptr};
 };
 
 TEST_F(LlamaTest, ForwardTest) {

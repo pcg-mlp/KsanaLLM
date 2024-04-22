@@ -10,33 +10,33 @@ namespace ksana_llm {
 
 template <int T>
 struct StreamTypeTraits {
-  typedef void value_type;
+    typedef void value_type;
 };
 
 template <int T>
 class StreamT {
- public:
-  typename StreamTypeTraits<T>::value_type& Get();
+  public:
+    typename StreamTypeTraits<T>::value_type& Get();
 };
 
 template <int T>
 struct EventTypeTraits {
-  typedef void value_type;
+    typedef void value_type;
 };
 
 template <int T>
 class EventT {
- public:
-  typename EventTypeTraits<T>::value_type& Get();
+  public:
+    typename EventTypeTraits<T>::value_type& Get();
 };
 
 // Create event
 template <int T>
 void EventCreateT(EventT<T>* event);
- 
+
 // Create event with flags.
 template <int T>
-void EventCreateWithFlagsT(EventT<T>* event, unsigned int  flags);
+void EventCreateWithFlagsT(EventT<T>* event, unsigned int flags);
 
 // Destroy event
 template <int T>
@@ -141,7 +141,7 @@ size_t GetTypeSizeT(DataType dtype);
 // Get the common data type from device data type.
 template <int T>
 class GetDataTypeT {
-public:
+  public:
     template <class U>
     static DataType impl();
 };

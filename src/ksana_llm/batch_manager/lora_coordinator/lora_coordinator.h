@@ -8,8 +8,8 @@
 namespace ksana_llm {
 
 class LoraCoordinator {
- public:
-  explicit LoraCoordinator(const LoraCoordinatorConfig &lora_coordinator_config);
+  public:
+    explicit LoraCoordinator(const LoraCoordinatorConfig &lora_coordinator_config);
 };
 
 }  // namespace ksana_llm

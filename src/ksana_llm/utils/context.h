@@ -20,4 +20,3 @@ namespace ksana_llm {
 using Context = ContextT<ACTIVE_DEVICE_TYPE>;
 
 }  // namespace ksana_llm
-

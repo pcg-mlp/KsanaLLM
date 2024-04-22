@@ -11,25 +11,23 @@ namespace ksana_llm {
 // The class used for ascend extension.
 template <int T>
 struct AscendContextExtension {
-  AscendContextExtension(ContextT<T>* base_ptr) {
-    base_ptr_ = base_ptr;
-  }
+    AscendContextExtension(ContextT<T>* base_ptr) { base_ptr_ = base_ptr; }
 
- private:
-  ContextT<T>* base_ptr_ = nullptr;
+  private:
+    ContextT<T>* base_ptr_ = nullptr;
 };
 
 template <>
 struct ExtensionTypeTraits<DEVICE_TYPE_ASCEND> {
-  typedef AscendContextExtension<DEVICE_TYPE_ASCEND> value_type;
+    typedef AscendContextExtension<DEVICE_TYPE_ASCEND> value_type;
 };
 
 // 构造扩展类对象
-template<>
+template <>
 void ContextT<DEVICE_TYPE_ASCEND>::InitializeExtension();
 
 // 销毁扩展类对象
-template<>
+template <>
 void ContextT<DEVICE_TYPE_ASCEND>::DestroyExtension();
 
-} // namespace ksana_llm
+}  // namespace ksana_llm

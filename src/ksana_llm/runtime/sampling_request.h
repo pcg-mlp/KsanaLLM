@@ -12,25 +12,25 @@ namespace ksana_llm {
 
 // The information used for sampling.
 struct SamplingRequest {
-  // The req id of the user's request.
-  int64_t req_id;
+    // The req id of the user's request.
+    int64_t req_id;
 
-  // The sampling config.
-  SamplingConfig* sampling_config;
+    // The sampling config.
+    SamplingConfig* sampling_config;
 
-  // The logitst buf and offset.
-  std::vector<float*> logits_buf;
-  size_t logits_offset;
+    // The logitst buf and offset.
+    std::vector<float*> logits_buf;
+    size_t logits_offset;
 
-  std::vector<int>* input_tokens;
-  // The output token will be appended here.
-  std::vector<int>* output_tokens;
+    std::vector<int>* input_tokens;
+    // The output token will be appended here.
+    std::vector<int>* output_tokens;
 
-  // The mutex used to protect output_tokens.
-  std::mutex* output_mutex;
+    // The mutex used to protect output_tokens.
+    std::mutex* output_mutex;
 
-  // Model config
-  const ModelConfig* model_config;
+    // Model config
+    const ModelConfig* model_config;
 };
 
 }  // namespace ksana_llm

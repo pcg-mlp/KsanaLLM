@@ -12,16 +12,16 @@ namespace ksana_llm {
 // The host allocator implement.
 // All the method must be thread-safe.
 class HostAllocator : public BaseAllocator {
- public:
-  HostAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context);
-  virtual ~HostAllocator() {}
+  public:
+    HostAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context);
+    virtual ~HostAllocator() {}
 
- private:
-  // allocate memory
-  virtual void AllocateMemory(void** memory_ptr, size_t bytes) override;
+  private:
+    // allocate memory
+    virtual void AllocateMemory(void** memory_ptr, size_t bytes) override;
 
-  // Free memory.
-  virtual void FreeMemory(void* memory_ptr) override;
+    // Free memory.
+    virtual void FreeMemory(void* memory_ptr) override;
 };
 
 }  // namespace ksana_llm

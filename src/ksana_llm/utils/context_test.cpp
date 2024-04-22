@@ -15,10 +15,10 @@
 namespace ksana_llm {
 
 class ContextTest : public testing::Test {
- protected:
-  void SetUp() override {}
+  protected:
+    void SetUp() override {}
 
-  void TearDown() override {}
+    void TearDown() override {}
 };
 
 TEST_F(ContextTest, NvidiaInitTest) {

@@ -11,7 +11,7 @@ namespace ksana_llm {
 
 template <typename T>
 Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                     int rank) {
+                                        int rank) {
   context_ = context;
   rank_ = rank;
   int parameter_index = 0;
@@ -50,7 +50,8 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
 }
 
 template <typename T>
-Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
+                                           std::vector<Tensor>& output_tensors) {
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
@@ -64,7 +65,7 @@ Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tens
     int tp_size = context_->GetTensorParallelSize();
     if (!is_init_) {
       CustomAllReduceInit<T>(&reduce_op_, input, metas_, rank_data_, data_handles_, input_handles_, data_size,
-                          rank_data_sz_, tp_size, rank_, *stream);
+                             rank_data_sz_, tp_size, rank_, *stream);
       is_init_ = true;
     }
     CustomAllReduceRun<T>(reduce_op_, input, result, data_size, *stream);
