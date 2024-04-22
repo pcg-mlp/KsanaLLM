@@ -174,13 +174,13 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
   if (is_context_stage) {
     STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
         {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
-         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_},
+        model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_},
         mmha_attention_output));
   } else {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
         {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
-         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
-         forward_shape_, up_matmul_tensor_buffer_},
+        model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
+        forward_shape_, up_matmul_tensor_buffer_},
         mmha_attention_output));
   }
 

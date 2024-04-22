@@ -47,7 +47,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
       CreateTensor(kv_cache_buffer,
                    {static_cast<unsigned long>(max_seq_len_), static_cast<unsigned long>((max_seq_len_ + 511) / 512),
                     static_cast<unsigned long>(head_num_per_tp), static_cast<unsigned long>(size_per_head) + 2},
-                   TYPE_FP32, rank_, MEMORY_DEVICE));
+                    TYPE_FP32, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(input_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));

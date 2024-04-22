@@ -27,3 +27,5 @@ ForEachMacros: ['']
 SpacesBeforeTrailingComments: 2
 
 IndentAccessModifiers: true
+
+ContinuationIndentWidth: 2

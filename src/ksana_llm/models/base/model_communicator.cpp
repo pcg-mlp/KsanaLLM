@@ -37,7 +37,7 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
 
     custom_all_reduce_sum_layer_0_->Init({reduce_tensor_.GetPtr<void>(), buffer_->GetPtr<void>(), reduce_buffer_size,
                                           rank_tensor_0_.GetPtr<void>(), rank_data_sz, input_->GetPtr<void>(), 0},
-                                         context_, rank_);
+                                          context_, rank_);
     EventDestroy(create_reduce_tensor_event);
   }
 #endif

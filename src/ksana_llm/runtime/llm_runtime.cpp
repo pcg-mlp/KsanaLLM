@@ -65,7 +65,7 @@ void LlmRuntime::BuildForwardRequests(
   }
 }
 
-Status LlmRuntime::RunContextDecodeAndDecodeRunSerially(
+Status LlmRuntime::RunSerially(
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   Status result_status = Status();
   for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
@@ -89,7 +89,7 @@ Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   // context decode and decode run serially in single thread
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     // Wait all instances done and check status.
-    return RunContextDecodeAndDecodeRunSerially(grouped_reqs);
+    return RunSerially(grouped_reqs);
   }
 
   std::vector<std::vector<std::future<Status>>> results;
