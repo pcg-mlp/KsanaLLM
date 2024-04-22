@@ -25,7 +25,8 @@ REQUEST_LATENCY: List[Tuple[int, int, int, int, float]] = []
 PROMPT_AFFIX_DICT = {
     "llama": "[INST]%s[/INST]",
     "baichuan": "<reserved_106>%s<reserved_107>",
-    "qwen": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
+    "qwen": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
 }
 
 def args_config():
