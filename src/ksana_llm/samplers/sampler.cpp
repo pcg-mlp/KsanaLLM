@@ -53,7 +53,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   }
 
   MemcpyAsync(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(), sizeof(uint32_t*) * max_batch_size,
-              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[0]);
+              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 
   host_offset_.resize(max_batch_size);
   host_topKs_.resize(max_batch_size);
