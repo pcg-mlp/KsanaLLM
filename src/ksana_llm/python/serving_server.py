@@ -5,7 +5,6 @@
 import ksana_llm
 import argparse
 import json
-import yaml
 import uvicorn
 import os
 
@@ -34,8 +33,8 @@ def args_config():
                         help='serving config file')
     parser.add_argument('--tokenizer_dir',
                         type=str,
-                        default="",
-                        help='the model tokenizer dir. By default, the YAML configuration will be used.')
+                        default="/model/llama-hf/13B",
+                        help='tokenizer dir')
     parser.add_argument('--host',
                         type=str,
                         default="0.0.0.0",
@@ -185,10 +184,6 @@ async def generate(request: Request) -> Response:
 
 if __name__ == "__main__":
     args = args_config()
-    if not args.tokenizer_dir:
-        with open(args.config_file, "r") as yaml_file:
-            yaml_data = yaml.safe_load(yaml_file)
-            args.tokenizer_dir = yaml_data["model_spec"]["base_model"]["model_dir"]
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)
