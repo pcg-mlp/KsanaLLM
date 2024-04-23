@@ -18,9 +18,9 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   size_t n = input_tensors[1].shape[1];
   size_t m = input_tensors[0].shape[0];
 
-  std::vector<int64_t> matmul_input_shape = {1ul, m, k};  /*m, k*/
+  std::vector<int64_t> matmul_input_shape = {m, k};  /*m, k*/
   std::vector<int64_t> matmul_weight_shape = {k, n};      /*k, n*/
-  std::vector<int64_t> matmul_output_shape = {1ul, m, n}; /*m, n*/
+  std::vector<int64_t> matmul_output_shape = {m, n}; /*m, n*/
   aclTensor* matmul_input = nullptr;
   aclTensor* matmul_weight = nullptr;
   aclTensor* matmul_output = nullptr;

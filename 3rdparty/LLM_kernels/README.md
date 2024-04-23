@@ -1,10 +1,5 @@
 # LLM Kernels
 
-## Models
-
-  - [Llama 7B/13B/33B/65B](https://ai.meta.com/blog/large-language-model-llama-meta-ai/)
-  - [Llama 2 7B/13B/70B](https://ai.meta.com/llama/)
-
 ## Devices
 
   - Nvidia GPU
