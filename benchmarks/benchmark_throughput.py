@@ -30,6 +30,8 @@ PROMPT_AFFIX_DICT = {
     "qwen":
     "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
     "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
+    "empty":
+    "%s",
 }
 
 
@@ -44,6 +46,10 @@ def args_config():
                         type=str,
                         default="benchmark_input.csv",
                         help='input data for benchmark')
+    parser.add_argument('--col_idx',
+                        type=int,
+                        default=0,
+                        help='col_idx to be read from the input csv')
     parser.add_argument('--output_csv',
                         type=str,
                         default="",
@@ -60,6 +66,9 @@ def args_config():
                         default="async",
                         choices=['async', 'sync'],
                         help="requests send with async mode or sync mode")
+    parser.add_argument('--stream',
+                        action='store_true',
+                        help='Whether to use stream mode for the request')
     parser.add_argument(
         '--backend',
         type=str,
@@ -76,7 +85,7 @@ def args_config():
         '--model_type',
         type=str,
         default="llama",
-        choices=['llama', 'baichuan', 'qwen'],
+        choices=['llama', 'baichuan', 'qwen', 'empty'],
         help=
         'serving model type, used to add prefixes and suffixes to the prompt.')
     parser.add_argument('--use_prefix_cache_prompts',
@@ -91,7 +100,7 @@ def read_from_csv(csv_file, col_idx=0, remove_head=True):
     csv_reader = csv.reader(open(csv_file))
     if remove_head:
         next(csv_reader)
-    return [row[0] for row in csv_reader]
+    return [row[col_idx] for row in csv_reader]
 
 
 async def generate_prompt_async(
@@ -111,29 +120,8 @@ async def generate_prompt_async(
         await asyncio.sleep(interval)
 
 
-# Define a synchronous function to generate prompts
-def generate_prompt_sync(
-    input_requests: List[str],
-    request_rate: float,
-):
-    # Enumerate the input requests to get a request ID for each one
-    input_requests = enumerate(input_requests)
-    # Iterate over the input requests
-    for req_id, request in input_requests:
-        # Yield the request ID and the request itself
-        yield req_id, request
-        # If the request rate is infinity, don't wait and proceed to the next request
-        if request_rate == float("inf"):
-            continue
-        # Sample the request interval from an exponential distribution
-        # with a rate parameter of 1.0 / request_rate
-        interval = np.random.exponential(1.0 / request_rate)
-        # Sleep for the sampled interval before sending the next request
-        time.sleep(interval)
-
-
 async def send_request_async(prompt: str, api_url: str, req_id: int,
-                             result_list: List, pbar: tqdm, backend: str):
+                             result_list: List, pbar: tqdm, backend: str, stream: bool):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
     if backend == "ksana":
@@ -146,7 +134,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 "repetition_penalty": 1.0,
                 "max_new_tokens": 1024,
             },
-            "stream": False,
+            "stream": stream,
         }
     elif backend == "trt-llm":
         data = {
@@ -170,14 +158,15 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
         data = {
             "model": "default_model",
             "prompt": prompt,
-            "top_p": 1.0,
-            "temperature": 1,
+            "top_p": 0.0,
+            "temperature": 0.0,
             "top_k": 1,
             "num_beams": 1,
             "repetition_penalty": 1.0,
             "n": 1,
             "task_id": time.time(),
             "delete_prompt_from_output": 0,
+            "stream": stream,
         }
 
     # Set a timeout of 3 hours for the aiohttp client
@@ -198,7 +187,21 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             # Join the chunks into a single byte string and decode it to UTF-8
             output = b"".join(chunks).decode("utf-8")
             # Parse the output as JSON
-            output = json.loads(output)
+            if "server" in backend and stream:
+                data_segments = output.strip().split("\n\n")
+                texts = ""
+                for segment in data_segments:
+                    json_string = segment.split(': ', 1)[1]
+                    data = json.loads(json_string)
+                    texts += data["choices"][0]["delta"]["content"]
+                output = json.loads(data_segments[-1].split(': ', 1)[1])
+                output["choices"][0]["delta"]["content"] = texts
+            elif stream:
+                output = {"texts": output.replace("{\"texts\": \"", "") \
+                                         .replace("\"}", "") \
+                                         .replace("\x00", "")}
+            else:
+                output = json.loads(output)
 
             # If the response does not contain an "error" key, break out of the loop
             if "error" not in output:
@@ -211,6 +214,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
 
     output_token_num = len(output.get("output_token_ids", ""))
     input_token_num = len(output.get("input_token_ids", ""))
+
+    server_map_idx = "delta" if stream else "message"
     if backend == "ksana":
         output_text = output.get("texts", "").strip()
     elif backend == "trt-llm":
@@ -224,12 +229,12 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
         output_text = output["text"][0].strip()
         output_token_num = len(output.get("output_token_ids")[0])
     elif backend == "ksana-server":
-        output_text = output['choices'][0]['message']['content']
+        output_text = output['choices'][0][server_map_idx]['content']
         input_token_num = output['usage']['prompt_tokens']
         output_token_num = output['usage']['completion_tokens']
     elif backend == "vllm-server":
         prompt_len = len(prompt)
-        output_text = output['choices'][0]['message']['content'][
+        output_text = output['choices'][0][server_map_idx]['content'][
             prompt_len:].strip()
 
     output_len = len(output_text)
@@ -238,45 +243,6 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     REQUEST_LATENCY.append(
         (len(prompt), output_len if output_len > 0 else 1, input_token_num,
          output_token_num, request_latency))
-    pbar.update(1)
-
-
-def send_request_sync(prompt: str, api_url: str, req_id: int,
-                      result_list: List, pbar: tqdm, backend: str):
-    # Record the start time of the request
-    request_start_time = time.perf_counter()
-    # Set the HTTP headers for the request
-    headers = {"User-Agent": "Benchmark Client"}
-
-    # Set the request data, including the prompt and sampling configuration
-    data = {
-        "prompt": prompt,
-        "sampling_config": {
-            "temperature": 0.0,
-            "topk": 1,
-            "topp": 0.0,
-            "max_new_tokens": 1024,
-            "repetition_penalty": 1.0
-        },
-        "stream": False,
-    }
-    # Set a timeout of 3 hours for the request
-    timeout = 3 * 3600
-    # Send a POST request to the API URL with the specified headers and data
-    resp = requests.post(api_url, headers=headers, data=data, timeout=timeout)
-    # Parse the response content as JSON
-    output = json.loads(resp.content)
-    # Record the end time of the request
-    request_end_time = time.perf_counter()
-    # Calculate the latency of the request
-    request_latency = request_end_time - request_start_time
-    # Get the length of the output text
-    output_len = len(output.get("texts", ""))
-    # Store the output text in the result list
-    result_list[req_id] = output.get("texts", "")
-    # Append the request latency and output length to the REQUEST_LATENCY list
-    REQUEST_LATENCY.append((len(prompt), output_len, request_latency))
-    # Update the progress bar
     pbar.update(1)
 
 
@@ -297,7 +263,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
             send_request_async(prompt, api_url, req_id, result_list, pbar,
-                               args.backend))
+                               args.backend, args.stream))
         # Add the task to the list of tasks
         tasks.append(task)
     # Wait for all tasks to complete
@@ -308,14 +274,23 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
     return result_list
 
 
-def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
+async def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
+    # Initialize a list to store the asynchronous tasks
+    tasks: List[asyncio.Task] = []
+    # Create a progress bar with a total count equal to the number of inputs
     pbar = tqdm(total=len(inputs))
+    # Initialize a result list with empty strings, one for each input
     result_list = [""] * len(inputs)
-    for req_id, prompt in generate_prompt_sync(inputs, args.request_rate):
-        prompt = "[INST]%s[/INST]" % prompt
-        send_request_sync(prompt, api_url, req_id, result_list, pbar,
-                          args.backend)
+    # Asynchronously generate prompts with the specified request rate
+    async for req_id, prompt in generate_prompt_async(inputs, args.request_rate):
+        # Format the prompt using the affix dictionary for the specified model type
+        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
+        # Await until last request finished
+        await send_request_async(prompt, api_url, req_id, result_list, pbar,
+                                 args.backend, args.stream)
+    # Close the progress bar
     pbar.close()
+    # Return the result list
     return result_list
 
 
@@ -341,8 +316,9 @@ def main(args: argparse.Namespace):
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(
             args.port) + "/v2/models/ensemble/generate"
-    elif args.backend == "server":
+    elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
+        args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
 
     # Initialize inputs to None
     inputs = None
@@ -352,7 +328,7 @@ def main(args: argparse.Namespace):
         _, inputs = prefix_cache_reader.load_prompts(input_csv=args.input_csv)
     else:
         # Otherwise, read inputs from the input CSV file
-        inputs = read_from_csv(args.input_csv)
+        inputs = read_from_csv(args.input_csv, args.col_idx)
     # Adjust the length of the input list based on the provided arguments
     inputs = adjust_list_length(inputs, args)
     # Record the start time of the benchmark
@@ -363,7 +339,7 @@ def main(args: argparse.Namespace):
         result_list = asyncio.run(benchmark_async(args, api_url, inputs))
     else:
         # Run the synchronous benchmark
-        result_list = benchmark_sync(args, api_url, inputs)
+        result_list = asyncio.run(benchmark_sync(args, api_url, inputs))
     # Record the end time of the benchmark
     benchmark_end_time = time.perf_counter()
     # Calculate the total benchmark time
