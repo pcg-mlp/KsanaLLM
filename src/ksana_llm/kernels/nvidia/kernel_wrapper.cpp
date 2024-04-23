@@ -37,9 +37,9 @@ void LookupEmbedding(const void* ids, const void* offset, const void* emb, const
                      int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,
                      void* workspace_ptr) {
   llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T>(
-      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), {},
-      reinterpret_cast<const int32_t*>(ids), step, reinterpret_cast<const size_t*>(offset), bs, hidden_size, vocab_size,
-      vocab_id, stream);
+    reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), {},
+    reinterpret_cast<const int32_t*>(ids), step, reinterpret_cast<const size_t*>(offset), bs, hidden_size, vocab_size,
+    vocab_id, stream);
 }
 #define LOOKUP_EMBEDDING(T)                                                                                       \
   template void LookupEmbedding<T>(const void* ids, const void* offset, const void* emb, const void* pos,         \
@@ -116,8 +116,8 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
   const float* activation_out = nullptr;
   CUDA_CHECK(cudaMemcpyAsync(output, input, sizeof(T) * m * n, cudaMemcpyDeviceToDevice, stream));
   llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, T, T>(
-      reinterpret_cast<T*>(output), bias, reinterpret_cast<const T*>(gated_weights), gated_bias, ia3_tasks, ia3_weights,
-      m, n, int8_mode, activation_in, activation_out, padding_offset, seq_len, stream);
+    reinterpret_cast<T*>(output), bias, reinterpret_cast<const T*>(gated_weights), gated_bias, ia3_tasks, ia3_weights,
+    m, n, int8_mode, activation_in, activation_out, padding_offset, seq_len, stream);
 }
 
 #define INVOKE_SILU_ACTIVATION(T)                                                                               \
@@ -197,12 +197,12 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
 #endif
 }
 
-#define ATTEN_VARLEN(T)                                                                                                \
-  template void AttenVarlen<T>(                                                                                        \
-      void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,                                              \
-      llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens, int batch, \
-      int num_heads, int head_size, int stride_size, int tensor_para_size, bool is_causal, int rank, int block_size,   \
-      void** k_list, void** v_list, void* block_offset, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
+#define ATTEN_VARLEN(T)                                                                                              \
+  template void AttenVarlen<T>(                                                                                      \
+    void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,                                              \
+    llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens, int batch, \
+    int num_heads, int head_size, int stride_size, int tensor_para_size, bool is_causal, int rank, int block_size,   \
+    void** k_list, void** v_list, void* block_offset, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
 ATTEN_VARLEN(float);
 ATTEN_VARLEN(half);
 #ifdef ENABLE_BFLOAT16
@@ -238,21 +238,16 @@ PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16);
 #undef PAGED_ATTENTION
 
 template <typename T>
-void run_paged_attention(void* out,                // [num_seqs, num_heads, head_size]
-                         void* query,              // [num_seqs, num_heads, head_size]
-                         void** key_cache_ptrs,    // num_seqs,[seq_blocks]
-                         void** value_cache_ptrs,  // num_seqs,[seq_blocks]
-                         void* context_lens_ptr,   // [num_seqs]
-                         int max_context_len, cudaStream_t stream,
-                         void* cache_offsets_ptr,  // num_seqs
-                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
-                         int batch, void* rotary_embedding_pos, int total_tokens,
-                         llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace,
-                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace) {
+void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, 
+                          void* context_lens_ptr, int max_context_len, cudaStream_t stream, void* cache_offsets_ptr,
+                          int seqs_num, int heads_num, int head_size, int kv_heads_num, int stride_size,
+                          int block_size, int batch, void* rotary_embedding_pos, int total_tokens,
+                          llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr,
+                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace) {
   const float* alibi_slopes_ptr =
-      reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
+    reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
-  torch::Tensor qkv_tensor = torch::from_blob(query, {total_tokens, num_heads * head_size * 3}, options);
+  torch::Tensor qkv_tensor = torch::from_blob(query_ptr, {total_tokens, heads_num * head_size * 3}, options);
   auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
 
   torch::Tensor q_tensor = tt[0];
@@ -270,22 +265,22 @@ void run_paged_attention(void* out,                // [num_seqs, num_heads, head
   }
 
   llm_kernels::nvidia::CachePosCopy<T>(
-      reinterpret_cast<T*>(k_tensor_ptr), reinterpret_cast<T*>(v_tensor_ptr), key_cache_ptrs, value_cache_ptrs,
-      rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
-      block_size, batch, total_tokens, num_heads, head_size, stride_size, stream);
+    reinterpret_cast<T*>(k_tensor_ptr), reinterpret_cast<T*>(v_tensor_ptr), key_cache_ptrs, value_cache_ptrs,
+    rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
+    block_size, batch, total_tokens, heads_num, head_size, stride_size, stream);
 
-  PagedAttention<T>(num_heads, head_size, num_kv_heads, stride_size, block_size, out, q_tensor_ptr, key_cache_ptrs,
-                    value_cache_ptrs, cache_offsets_ptr, context_lens_ptr, max_context_len, num_seqs, stream, workspace,
+  PagedAttention<T>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr, q_tensor_ptr, key_cache_ptrs,
+                    value_cache_ptrs, cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num, stream, workspace_ptr,
                     work_size, alibi_slopes_ptr);
 }
 
-#define RUN_PAGED_ATTENTION(T)                                                                                         \
-  template void run_paged_attention<T>(                                                                                \
-      void* out, void* query, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,                  \
-      int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int num_seqs, int num_heads, int head_size,   \
-      int num_kv_heads, int stride_size, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,      \
-      llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace, size_t work_size, int rank, \
-      const std::optional<void*>& alibi_slopes, void* qkv_workspace)
+#define RUN_PAGED_ATTENTION(T)                                                                                       \
+  template void InvokePagedAttention<T>(                                                                             \
+    void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,       \
+    int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int heads_num, int head_size,   \
+    int kv_heads_num, int stride_size, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,      \
+    llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr, size_t work_size,       \
+    int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace)
 RUN_PAGED_ATTENTION(float);
 RUN_PAGED_ATTENTION(half);
 #ifdef ENABLE_BFLOAT16
@@ -428,7 +423,7 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
     // No need to convert
   } else {
     throw std::runtime_error(
-        fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+      fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
   }
   tensor.dtype = DataType::TYPE_FP16;
   return Status();

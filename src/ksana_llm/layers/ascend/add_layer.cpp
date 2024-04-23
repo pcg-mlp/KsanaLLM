@@ -12,10 +12,9 @@ namespace ksana_llm {
 
 template <typename T>
 Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  auto a = reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>());
-  auto b = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());
-  if (input_tensors[0].shape[0] == input_tensors[1].shape[0]) {
-    size_t seq_len = input_tensors[0].shape[0];
+  size_t seq_len = input_tensors[0].shape[0];
+  size_t input_b_seq_len = input_tensors[1].shape[0];
+  if (seq_len == input_b_seq_len) {
     size_t hidden_size = input_tensors[0].shape[1];
     std::vector<int64_t> add_shape = {1, seq_len, hidden_size};
 

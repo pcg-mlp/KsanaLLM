@@ -106,6 +106,25 @@ std::vector<std::string> CommonWeight<T>::SearchLocalPath(const std::string& mod
 }
 
 template <typename T>
+Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape,
+                                          bool& transpose_first, const std::string& tensor_name) {
+  if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos ||
+      tensor_name.find("self_attn.W_pack") != std::string::npos ||
+      tensor_name.find("embed_tokens") != std::string::npos ||
+      tensor_name.find("lm_head.weight") != std::string::npos) {
+    tensor_para_offset = rank_;
+    if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos ||
+        tensor_name.find("embed_tokens") != std::string::npos) {
+      transpose_first = true;
+      weight_shape[1] /= tensor_para_size_;
+    } else {
+      weight_shape[0] = DivRoundUp(weight_shape[0], tensor_para_size_);
+    }
+  }
+  return Status();
+}
+
+template <typename T>
 Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
   GetBlockManager()->SetDeviceId(rank_);
   std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
@@ -125,19 +144,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(tensor_name);
-    if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find("_proj.bias") != std::string::npos ||
-        tensor_name.find("self_attn.W_pack") != std::string::npos ||
-        tensor_name.find("embed_tokens") != std::string::npos ||
-        tensor_name.find("lm_head.weight") != std::string::npos) {
-      tensor_para_offset = rank_;
-      if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos ||
-          tensor_name.find("embed_tokens") != std::string::npos) {
-        transpose_first = true;
-        weight_shape[1] /= tensor_para_size_;
-      } else {
-        weight_shape[0] = DivRoundUp(weight_shape[0], tensor_para_size_);
-      }
-    }
+    STATUS_CHECK_RETURN(PrepareLoadOpMeta(tensor_para_offset, weight_shape, transpose_first, tensor_name));
 
     // get weight's data ptr
     void* weight_ptr;
@@ -149,8 +156,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     int qkv_offset;
     if ((qkv_offset = CheckQKVWeight(tensor_name))) {
       bool is_bias = (tensor_name.find("_proj.bias") != std::string::npos);
-      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
-                             (is_bias ? ".bias" : ".weight");
+      std::string qkv_name =
+        tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" + (is_bias ? ".bias" : ".weight");
       if (!weights_map_.count(qkv_name)) {
         weight_shape.insert(weight_shape.begin(), 3);
         AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
@@ -188,8 +195,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       }
     } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {
       bool is_bias = (tensor_name.find(".bias") != std::string::npos);
-      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
-                             (is_bias ? ".bias" : ".weight");
+      std::string qkv_name =
+        tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" + (is_bias ? ".bias" : ".weight");
       weights_data_type_map_[qkv_name] = weight_data_type;
       if (!weights_map_.count(qkv_name)) {
         weight_shape.insert(weight_shape.begin(), 3);
@@ -420,7 +427,7 @@ Status CommonWeight<T>::CreateTensorWithSameShape(const std::string& origin_tens
 template <typename T>
 std::string CommonWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias) {
   std::string layer_name =
-      "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
+    "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
   return layer_name;
 }
 

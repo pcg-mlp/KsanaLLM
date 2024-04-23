@@ -126,13 +126,17 @@ template <>
 void MemcpyT<DEVICE_TYPE_NVIDIA>(void* dst, const void* src, size_t count, enum MemcpyKind kind);
 
 template <>
-size_t GetTypeSizeT<DEVICE_TYPE_NVIDIA>(DataType dtype);
-
-template <>
 class GetDataTypeT<DEVICE_TYPE_NVIDIA> {
   public:
     template <class U>
     static DataType impl();
+
+  private:
+    template <class U>
+    static DataType GetFloatType();
+
+    template <class U>
+    static DataType GetIntType();
 };
 
 }  // namespace ksana_llm

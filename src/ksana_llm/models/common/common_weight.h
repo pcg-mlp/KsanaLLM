@@ -39,6 +39,9 @@ class CommonWeight : public BaseWeight {
 
     Status PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer);
 
+    Status PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape, bool& transpose_first,
+                             const std::string& tensor_name);
+
     bool IsLoaded();
     bool weights_had_loaded_ = false;
 

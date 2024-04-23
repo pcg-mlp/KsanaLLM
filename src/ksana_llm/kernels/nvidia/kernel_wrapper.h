@@ -48,17 +48,17 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
                  const std::optional<void*>& alibi_slopes, cudaStream_t stream);
 
 template <typename T>
-void run_paged_attention(void* out,                // [num_seqs, num_heads, head_size]
-                         void* query,              // [num_seqs, num_heads, head_size]
-                         void** key_cache_ptrs,    // num_seqs,[seq_blocks]
-                         void** value_cache_ptrs,  // num_seqs,[seq_blocks]
-                         void* context_lens_ptr,   // [num_seqs]
-                         int max_context_len, cudaStream_t stream,
-                         void* cache_offsets_ptr,  // num_seqs
-                         int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
-                         int batch, void* rotary_embedding_pos, int total_tokens,
-                         llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace,
-                         size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
+void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]
+                          void* query,              // [num_seqs, num_heads, head_size]
+                          void** key_cache_ptrs,    // num_seqs,[seq_blocks]
+                          void** value_cache_ptrs,  // num_seqs,[seq_blocks]
+                          void* context_lens_ptr,   // [num_seqs]
+                          int max_context_len, cudaStream_t stream,
+                          void* cache_offsets_ptr,  // num_seqs
+                          int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
+                          int batch, void* rotary_embedding_pos, int total_tokens,
+                          llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace,
+                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
 
 template <typename T>
 void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,

@@ -166,36 +166,8 @@ void MemcpyT<DEVICE_TYPE_NVIDIA>(void* dst, const void* src, size_t count, enum 
   CUDA_CHECK(cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind)));
 }
 
-template <>
-size_t GetTypeSizeT<DEVICE_TYPE_NVIDIA>(DataType dtype) {
-  static const std::unordered_map<DataType, size_t> type_map{
-    {TYPE_BOOL, sizeof(bool)},
-    {TYPE_BYTES, sizeof(char)},
-    {TYPE_UINT8, sizeof(uint8_t)},
-    {TYPE_UINT16, sizeof(uint16_t)},
-    {TYPE_UINT32, sizeof(uint32_t)},
-    {TYPE_UINT64, sizeof(uint64_t)},
-    {TYPE_INT8, sizeof(int8_t)},
-    {TYPE_INT16, sizeof(int16_t)},
-    {TYPE_INT32, sizeof(int32_t)},
-    {TYPE_INT64, sizeof(int64_t)},
-    {TYPE_FP16, sizeof(half)},
-    {TYPE_FP32, sizeof(float)},
-    {TYPE_FP64, sizeof(double)},
-    {TYPE_POINTER, sizeof(void*)}
-#ifdef ENABLE_BFLOAT16
-    ,
-    {TYPE_BF16, sizeof(__nv_bfloat16)},
-#endif
-#ifdef ENABLE_FP8
-    {TYPE_FP8_E4M3, sizeof(__nv_fp8_e4m3)}
-#endif
-  };
-  return type_map.at(dtype);
-}
-
 template <class U>
-DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl() {
+DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetFloatType() {
   if (std::is_same<U, float>::value || std::is_same<U, const float>::value) {
     return TYPE_FP32;
   } else if (std::is_same<U, half>::value || std::is_same<U, const half>::value) {
@@ -211,7 +183,14 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl() {
     return TYPE_FP8_E4M3;
   }
 #endif
-  else if (std::is_same<U, int>::value || std::is_same<U, const int>::value) {
+  else {
+    return TYPE_INVALID;
+  }
+}
+
+template <class U>
+DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetIntType() {
+  if (std::is_same<U, int>::value || std::is_same<U, const int>::value) {
     return TYPE_INT32;
   } else if (std::is_same<U, int8_t>::value || std::is_same<U, const int8_t>::value) {
     return TYPE_INT8;
@@ -221,7 +200,26 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl() {
     return TYPE_UINT32;
   } else if (std::is_same<U, unsigned long>::value || std::is_same<U, const unsigned long>::value) {
     return TYPE_UINT64;
-  } else if (std::is_same<U, bool>::value || std::is_same<U, const bool>::value) {
+  } else {
+    return TYPE_INVALID;
+  }
+}
+
+template <class U>
+DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl() {
+  // NOTE(karlluo): in order to fullfill Tencent's cyclomatic complexity rule, 
+  // I have to seperate function.
+  DataType dtype = GetFloatType<U>();
+  if (dtype != TYPE_INVALID) {
+    return dtype;
+  } 
+  
+  dtype = GetIntType<U>();
+  if (dtype != TYPE_INVALID) {
+    return dtype;
+  }
+  
+  if (std::is_same<U, bool>::value || std::is_same<U, const bool>::value) {
     return TYPE_BOOL;
   } else if (std::is_same<U, char>::value || std::is_same<U, const char>::value) {
     return TYPE_BYTES;
