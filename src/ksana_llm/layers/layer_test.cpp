@@ -14,7 +14,6 @@
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
 #include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/device_types.h"
 #include "test.h"
 
 namespace ksana_llm {

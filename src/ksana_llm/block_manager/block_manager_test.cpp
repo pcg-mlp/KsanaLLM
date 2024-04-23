@@ -5,9 +5,7 @@
 #include "ksana_llm/block_manager/block_manager.h"
 
 #include <memory>
-#include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
 #include "test.h"
 

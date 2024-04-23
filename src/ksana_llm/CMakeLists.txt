@@ -53,9 +53,4 @@ target_link_libraries(ksana_llm_libs INTERFACE
   ${NCCL_LIBRARIES}
 )
 
-add_executable(ksana_llm main.cpp)
-target_link_libraries(ksana_llm PUBLIC
-  -lpthread -ldl ksana_llm_libs
-)
-
 add_subdirectory(torch_op)

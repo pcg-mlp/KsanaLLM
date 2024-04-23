@@ -199,17 +199,6 @@ void MemcpyT<DEVICE_TYPE_ASCEND>(void* dst, const void* src, size_t count, enum 
   ACL_CHECK(aclrtMemcpy(dst, count, src, count, GetAclMemcpyKind(kind)));
 }
 
-template <>
-size_t GetTypeSizeT<DEVICE_TYPE_ASCEND>(DataType dtype) {
-  static const std::unordered_map<DataType, size_t> type_map{
-      {TYPE_BOOL, sizeof(bool)},       {TYPE_BYTES, sizeof(char)},      {TYPE_UINT8, sizeof(uint8_t)},
-      {TYPE_UINT16, sizeof(uint16_t)}, {TYPE_UINT32, sizeof(uint32_t)}, {TYPE_UINT64, sizeof(uint64_t)},
-      {TYPE_INT8, sizeof(int8_t)},     {TYPE_INT16, sizeof(int16_t)},   {TYPE_INT32, sizeof(int32_t)},
-      {TYPE_INT64, sizeof(int64_t)},   {TYPE_FP16, sizeof(int16_t)},    {TYPE_FP32, sizeof(float)},
-      {TYPE_FP64, sizeof(double)},     {TYPE_POINTER, sizeof(void*)}};
-  return type_map.at(dtype);
-}
-
 template <class U>
 DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl() {
   if (std::is_same<U, float>::value || std::is_same<U, const float>::value) {

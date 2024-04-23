@@ -3,6 +3,8 @@
 ==============================================================================*/
 #pragma once
 
+#include <unordered_map>
+
 // All supported device type.
 #define DEVICE_TYPE_NVIDIA 0
 #define DEVICE_TYPE_ASCEND 1
@@ -95,6 +97,8 @@ enum DataType {
   TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED
 #endif
 };
+
+size_t GetTypeSize(DataType dtype);
 
 // The memory device.
 enum MemoryDevice { MEMORY_HOST, MEMORY_DEVICE };

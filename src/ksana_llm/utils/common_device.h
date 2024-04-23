@@ -134,10 +134,6 @@ void Memcpy2DAsyncT(void* dst, size_t dpitch, const void* src, size_t spitch, si
 template <int T>
 void MemcpyT(void* dst, const void* src, size_t count, enum MemcpyKind kind);
 
-// Get the size of data type.
-template <int T>
-size_t GetTypeSizeT(DataType dtype);
-
 // Get the common data type from device data type.
 template <int T>
 class GetDataTypeT {

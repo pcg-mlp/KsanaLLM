@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "ksana_llm/utils/common_context.h"
-#include "ksana_llm/utils/device_types.h"
 
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/nvidia/nccl_utils.h"

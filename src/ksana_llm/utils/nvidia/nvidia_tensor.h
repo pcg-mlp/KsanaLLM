@@ -4,7 +4,6 @@
 #pragma once
 
 #include "ksana_llm/utils/common_tensor.h"
-#include "ksana_llm/utils/device_types.h"
 
 namespace ksana_llm {
 

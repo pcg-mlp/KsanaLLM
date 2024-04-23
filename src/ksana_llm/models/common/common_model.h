@@ -111,6 +111,11 @@ class CommonModel : public BaseModel {
     Status LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                         std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
                         std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
+
+    // refer
+    // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
+    Status LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                              std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage);
 };
 
 }  // namespace ksana_llm

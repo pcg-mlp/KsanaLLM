@@ -138,9 +138,6 @@ template <>
 void MemcpyT<DEVICE_TYPE_ASCEND>(void* dst, const void* src, size_t count, enum MemcpyKind kind);
 
 template <>
-size_t GetTypeSizeT<DEVICE_TYPE_ASCEND>(DataType dtype);
-
-template <>
 class GetDataTypeT<DEVICE_TYPE_ASCEND> {
   public:
     template <class U>

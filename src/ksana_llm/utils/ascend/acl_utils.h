@@ -8,10 +8,8 @@
 #include <acl/acl.h>
 #include <acl/acl_base.h>
 #include <acl/acl_rt.h>
-#include "acl/acl_op_compiler.h"
-#include "aclnn/acl_meta.h"
-
-#include "aclnn/acl_meta.h"
+#include <acl/acl_op_compiler.h>
+#include <aclnn/acl_meta.h>
 
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
