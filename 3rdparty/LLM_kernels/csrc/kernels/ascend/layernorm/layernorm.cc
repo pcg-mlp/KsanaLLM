@@ -60,7 +60,7 @@ void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, aclTensor** o
   std::vector<int64_t> meanDimData = {-1};
   bool keepdim = true;
   Mean(powOutput, meanDimData, keepdim, dtype_fp32, &meanOutput, stream, ws_func);
-  aclDestroyTensor(powOutput);
+  ACL_CHECK_RET(aclDestroyTensor(powOutput));
 
   // meanOutput - > addOutput
   float addAlphaValue = 0.000001;
@@ -73,36 +73,35 @@ void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, aclTensor** o
   addConst = aclCreateScalar(&addConstValue, dtype_fp32);
   CreateAclTensorWithData(addOutputShape, &maxDev_b, dtype_fp32, fmt, &addOutput);
   Adds(meanOutput, addAlpha, addConst, &addOutput, stream, ws_func);
-  // here use Adds?
-  aclDestroyTensor(meanOutput);
-  aclDestroyScalar(addConst);
-  aclDestroyScalar(addAlpha);
+  ACL_CHECK_RET(aclDestroyTensor(meanOutput));
+  ACL_CHECK_RET(aclDestroyScalar(addConst));
+  ACL_CHECK_RET(aclDestroyScalar(addAlpha));
 
   // addOutput - > addOutput
   InplaceSqrt(&addOutput, stream, ws_func);
 
   // cast1Output / addOutput - > cast1Output
   InplaceDiv(addOutput, &cast1Output, stream, ws_func);
-  aclDestroyTensor(addOutput);
+  ACL_CHECK_RET(aclDestroyTensor(addOutput));
 
   // cast1Output - > cast2Output
   std::vector<int64_t> cast2OutputShape = {bs, seq_len, hidden_size};
   aclTensor* cast2Output = nullptr;
   CreateAclTensorWithData(cast2OutputShape, &maxDev_b, dtype_fp16, fmt, &cast2Output);
   Cast(cast1Output, dtype_fp16, &cast2Output, stream, ws_func);
-  aclDestroyTensor(cast1Output);
+  ACL_CHECK_RET(aclDestroyTensor(cast1Output));
 
   // cast2Output - > mulOutput
   // PrintTensor(cast2Output, stream, "cast2Output");
   Mul(cast2Output, weight, output, stream, ws_func);
-  aclDestroyTensor(cast2Output);
+  ACL_CHECK_RET(aclDestroyTensor(cast2Output));
 
   // release dev mem for infer
-  aclrtFree(maxDev_a);
+  ACL_CHECK_RET(aclrtFree(maxDev_a));
   maxDev_a = nullptr;
-  aclrtFree(maxDev_b);
+  ACL_CHECK_RET(aclrtFree(maxDev_b));
   maxDev_b = nullptr;
-  aclrtFree(maxDev_c);
+  ACL_CHECK_RET(aclrtFree(maxDev_c));
   maxDev_c = nullptr;
 }
 
