@@ -22,6 +22,10 @@ namespace test {
 
 class AscendTestSuitBase : public testing::Test {
  public:
+  static void SetUpTestCase() {
+    ACL_CHECK_RET(aclInit(nullptr));
+  }
+
   void SetUp() override {
     Init(&context, &stream);
   }
@@ -31,12 +35,12 @@ class AscendTestSuitBase : public testing::Test {
       ACL_CHECK_RET(aclrtSetDevice(device));
       ACL_CHECK_RET(aclrtSynchronizeStream(stream));
       ACL_CHECK_RET(aclrtDestroyStream(stream));
+      ACL_CHECK_RET(aclrtDestroyContext(context));
     }
   }
 
   void Init(aclrtContext* context, aclrtStream* stream) {
     // init acl resource
-    ACL_CHECK_RET(aclInit(nullptr));
     ACL_CHECK_RET(aclrtSetDevice(default_device));
     ACL_CHECK_RET(aclrtCreateContext(context, default_device));
     ACL_CHECK_RET(aclrtSetCurrentContext(*context));
