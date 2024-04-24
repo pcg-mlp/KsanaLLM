@@ -121,9 +121,9 @@ Status BatchManager::Process() {
 
 Status BatchManager::Start() {
   // Check config here, because the block number is determined after all models loaded.
-  NLLM_CHECK_WITH_INFO((GetBlockManager()->GetDeviceFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum()) >
+  NLLM_CHECK_WITH_INFO((GetBlockManager()->GetDeviceFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum()) >=
                           (batch_manager_config_.batch_scheduler_config.max_token_len),
-                        "Total device block_num * block_token_size must large than max_token_len.");
+                       "Total device block_num * block_token_size must large than max_token_len.");
 
   batch_manager_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::Process, this));
 

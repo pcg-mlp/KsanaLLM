@@ -10,6 +10,10 @@
 #  include "csrc/kernels/nvidia/alibi/alibi.h"
 #endif
 
+#ifdef ENABLE_ACL
+#  include "csrc/kernels/ascend/attention/attention.h"
+#endif
+
 #include "ksana_llm/layers/base_layer.h"
 
 namespace ksana_llm {
@@ -34,6 +38,11 @@ class AttentionLayer : public BaseLayer {
 #ifdef ENABLE_CUDA
     llm_kernels::nvidia::RotaryEmbeddingCuda<T> rotary_embedding_cuda_;
     std::optional<void*> alibi_slopes_ = {};
+#endif
+
+#ifdef ENABLE_ACL
+  // The attention implementation for ascend device.
+  std::shared_ptr<llm_kernels::ascend::FlashAttentionACL> ascend_flash_attn_= nullptr;
 #endif
 };
 

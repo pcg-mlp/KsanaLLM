@@ -17,7 +17,7 @@ setting:
     # 一个调度step处理的最大token个数，一次context decode视为多个token。
     max_step_tokens: 4096
     # 每一步推理时的最大batch_size
-    max_batch_size: 128
+    max_batch_size: 1
     # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
     max_token_len: 2048
     # 单个请求可用blck小于该值触发换出
@@ -35,7 +35,7 @@ setting:
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数
-    block_token_num: 16
+    block_token_num: 2048
     # 保留的显存占比，最大为1.0。
     # reserved_device_memory_ratio: 0.01
     reserved_device_memory_ratio: 0.1
@@ -46,7 +46,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 2.0
+    block_host_memory_factor: 1.0
   # 性能统计相关配置
   profiler:
     # 统计周期，每隔多少秒输出一次统计数据

@@ -54,13 +54,19 @@ ModelCommunicator<T>::~ModelCommunicator() {
 
 template <typename T>
 Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
 #ifdef ENABLE_CUDA
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
 #endif
+
+#ifdef ENABLE_ACL
+  Memcpy(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+         MEMCPY_DEVICE_TO_DEVICE);
+#endif
+
   return Status();
 }
 
@@ -82,6 +88,12 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
     StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
   }
 #endif
+
+#ifdef ENABLE_ACL
+  Memcpy(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+         MEMCPY_DEVICE_TO_DEVICE);
+#endif
+
   return Status();
 }
 

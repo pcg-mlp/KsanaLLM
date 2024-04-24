@@ -409,7 +409,7 @@ void BatchScheduler::ProcessSwappedRequests(const std::vector<size_t> &step_toke
     curr_block_num_sum += curr_block_num_list[i];
 
     if (step_token_num_sum < batch_scheduler_config_.max_step_tokens &&
-        step_batch_size < batch_scheduler_config_.max_batch_size &&
+        step_batch_size <= batch_scheduler_config_.max_batch_size &&
         curr_block_num_sum + swapin_block_threshold < total_free_block_num) {
       running_indexes.push_back(i);
       continue;
@@ -452,7 +452,7 @@ void BatchScheduler::ProcessWaitingRequests(const std::vector<size_t> &step_toke
     total_block_num_sum += total_block_num_list[i];
 
     if (step_token_num_sum < batch_scheduler_config_.max_step_tokens &&
-        step_batch_size < batch_scheduler_config_.max_batch_size &&
+        step_batch_size <= batch_scheduler_config_.max_batch_size &&
         total_block_num_sum + launch_block_threshold < total_free_block_num) {
       running_indexes.push_back(i);
       continue;

@@ -24,7 +24,9 @@ if(WITH_ACL)
   file(GLOB_RECURSE layers_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/ascend/*.cpp)
   list(APPEND layers_ascend_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_utils_common
     llm_kernels_ascend_layernorm llm_kernels_ascend_matmul
-    llm_kernels_ascend_activation)
+    llm_kernels_ascend_activation
+    llm_kernels_ascend_rotary_embedding
+    llm_kernels_ascend_attention)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})

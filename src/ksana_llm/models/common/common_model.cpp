@@ -4,6 +4,7 @@
 #include "ksana_llm/models/common/common_model.h"
 
 #include <memory>
+#include <vector>
 
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/logger.h"
@@ -81,8 +82,20 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
     CreateBufferTensor(tensor_buffer_2_, {max_token_num, hidden_units, 3}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
     CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
+#ifdef ENABLE_CUDA
   STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
                                           model_config_.weight_data_type));
+#elif defined(ENABLE_ACL)
+  // Need double memory for ascend implement.
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings, 2}, TYPE_FP16));
+
+  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_0_, {max_token_num, hidden_units}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_1_, {max_token_num, hidden_units}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_2_, {max_token_num, hidden_units}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_3_, {max_token_num, hidden_units}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_4_, {max_token_num, hidden_units}, TYPE_FP16));
+#endif
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 
@@ -136,6 +149,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
     attention_param.push_back(is_alibi);
     attention_param.push_back(std::any(cos_sin_cache_ptr));
     attention_param.push_back(model_config_.rope_scaling_factor_config);
+
     flash_attention_layers_[idx]->Init(attention_param, context_, rank_);
     paged_attention_layers_[idx]->Init(attention_param, context_, rank_);
   }
@@ -173,15 +187,25 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
 
   if (is_context_stage) {
     STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
-      {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
-      model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_},
-      mmha_attention_output));
+        {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
+         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
+#ifdef ENABLE_ACL
+         ,
+         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_
+#endif
+        },
+        mmha_attention_output));
   } else {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
-      {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
-      model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
-      forward_shape_, up_matmul_tensor_buffer_},
-      mmha_attention_output));
+        {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
+         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
+         forward_shape_, up_matmul_tensor_buffer_
+#ifdef ENABLE_ACL
+         ,
+         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_
+#endif
+        },
+        mmha_attention_output));
   }
 
   // Attn o_proj MatMul

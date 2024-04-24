@@ -19,7 +19,7 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   size_t m = input_tensors[0].shape[0];
 
   std::vector<int64_t> matmul_input_shape = {m, k};  /*m, k*/
-  std::vector<int64_t> matmul_weight_shape = {k, n};      /*k, n*/
+  std::vector<int64_t> matmul_weight_shape = {k, n}; /*k, n*/
   std::vector<int64_t> matmul_output_shape = {m, n}; /*m, n*/
   aclTensor* matmul_input = nullptr;
   aclTensor* matmul_weight = nullptr;
@@ -38,9 +38,7 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output,
                               context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
-  output_tensors[0].shape[0] = 1ul;
-  output_tensors[0].shape[1] = m;
-  output_tensors[0].shape[2] = n;
+  output_tensors[0].shape = {m, n};
   output_tensors[0].ResetDeviceTensor(matmul_output);
 
   ACL_CHECK(aclDestroyTensor(matmul_input));
