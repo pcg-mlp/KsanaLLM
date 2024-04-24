@@ -17,7 +17,7 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
   int64_t ffn_size = static_cast<int64_t>(input_tensors[0].shape[1]);
   std::vector<int64_t> silu_output_shape = {1, seq_len, ffn_size};
   aclTensor* silu_output = nullptr;
-  void* silu_output_buf_ptr = input_tensors[0].GetPtr<void>();
+  void* silu_output_buf_ptr = output_tensors[0].GetPtr<void>();
   llm_kernels::utils::CreateAclTensorWithData(silu_output_shape, &silu_output_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &silu_output);
   aclTensor* silu_input = nullptr;

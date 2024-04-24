@@ -111,6 +111,10 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
   size_t host_allocate_bytes = host_block_num * block_manager_config_.host_allocator_config.block_size;
   NLLM_CHECK_WITH_INFO(host_allocate_bytes < host_free,
                        FormatStr("Not enough host free memory, expect %d, free %d", host_allocate_bytes, host_free));
+#ifdef ENABLE_ACL
+  device_blocks_num = 4;
+  host_block_num = 4;
+#endif
 
   return Status();
 }

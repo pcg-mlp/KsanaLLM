@@ -93,12 +93,22 @@ class CommonModel : public BaseModel {
     Tensor forward_shape_;
     Tensor cos_sin_cache_tensor_;
 
-  private:
-    // refer to
-    // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L257
-    Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                          Tensor& hidden_states, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
-                          std::vector<Tensor>& output_2, const bool is_context_stage);
+#ifdef ENABLE_ACL
+  // Used for ascend attention.
+  Tensor ascend_buffer_0_;
+  Tensor ascend_buffer_1_;
+  Tensor ascend_buffer_2_;
+  Tensor ascend_buffer_3_;
+  Tensor ascend_buffer_4_;
+#endif
+
+
+ private:
+  // refer to
+  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
+  Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight, Tensor& hidden_states,
+                        std::vector<Tensor>& output_0, std::vector<Tensor>& output_1, std::vector<Tensor>& output_2,
+                        const bool is_context_stage);
 
     // refer to
     // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L211
