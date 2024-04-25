@@ -64,6 +64,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     return req->finish_status;
   }
   infer_req->model_instance = model_instances_[req->model_name];
+  infer_req->end_id = infer_req->model_instance->GetModelConfig().end_id;
   infer_req->infer_stage = InferStage::STAGE_CONTEXT;
   infer_req->step = 0;
 
