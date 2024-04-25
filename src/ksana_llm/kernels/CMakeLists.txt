@@ -17,7 +17,8 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_activation
     llm_kernels_nvidia_kernel_assemble_last_token llm_kernels_nvidia_kernel_cast
     llm_kernels_nvidia_kernel_rotary_embedding llm_kernels_nvidia_kernel_all_reduce
-    llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi)
+    llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi
+    llm_kernels_nvidia_kernel_greedy)
 endif()
 
 message(STATUS "nvidia_kernels_SRCS: ${nvidia_kernels_SRCS}")
@@ -29,12 +30,13 @@ if(WITH_ACL)
   file(GLOB_RECURSE ascend_kernels_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/ascend/*.cpp)
   list(FILTER ascend_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
-  list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS} 
-    llm_kernels_ascend_pointwise 
-    llm_kernels_ascend_transpose 
+  list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS}
+    llm_kernels_ascend_pointwise
+    llm_kernels_ascend_transpose
     llm_kernels_ascend_permute
     llm_kernels_ascend_embedding
-    llm_kernels_ascend_reshape)
+    llm_kernels_ascend_reshape
+    llm_kernels_ascend_argmax)
 endif()
 
 message(STATUS "ascend_kernels_SRCS: ${ascend_kernels_SRCS}")

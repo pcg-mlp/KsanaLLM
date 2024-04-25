@@ -24,7 +24,9 @@
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
+#include "csrc/kernels/nvidia/samplers/greedy.h"
 
+#include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
 
 #include "ksana_llm/utils/logger.h"
@@ -238,10 +240,10 @@ PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16);
 #undef PAGED_ATTENTION
 
 template <typename T>
-void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, 
+void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs,
                           void* context_lens_ptr, int max_context_len, cudaStream_t stream, void* cache_offsets_ptr,
-                          int seqs_num, int heads_num, int head_size, int kv_heads_num, int stride_size,
-                          int block_size, int batch, void* rotary_embedding_pos, int total_tokens,
+                          int seqs_num, int heads_num, int head_size, int kv_heads_num, int stride_size, int block_size,
+                          int batch, void* rotary_embedding_pos, int total_tokens,
                           llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr,
                           size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace) {
   const float* alibi_slopes_ptr =
@@ -269,17 +271,17 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
     block_size, batch, total_tokens, heads_num, head_size, stride_size, stream);
 
-  PagedAttention<T>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr, q_tensor_ptr, key_cache_ptrs,
-                    value_cache_ptrs, cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num, stream, workspace_ptr,
-                    work_size, alibi_slopes_ptr);
+  PagedAttention<T>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr, q_tensor_ptr,
+                    key_cache_ptrs, value_cache_ptrs, cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num,
+                    stream, workspace_ptr, work_size, alibi_slopes_ptr);
 }
 
-#define RUN_PAGED_ATTENTION(T)                                                                                       \
-  template void InvokePagedAttention<T>(                                                                             \
-    void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,       \
-    int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int heads_num, int head_size,   \
-    int kv_heads_num, int stride_size, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,      \
-    llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr, size_t work_size,       \
+#define RUN_PAGED_ATTENTION(T)                                                                                     \
+  template void InvokePagedAttention<T>(                                                                           \
+    void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,     \
+    int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int heads_num, int head_size, \
+    int kv_heads_num, int stride_size, int block_size, int batch, void* rotary_embedding_pos, int total_tokens,    \
+    llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr, size_t work_size,     \
     int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace)
 RUN_PAGED_ATTENTION(float);
 RUN_PAGED_ATTENTION(half);
@@ -458,5 +460,24 @@ void Mul(float* a, float* b, float* c, int n, int device_rank) {
   auto c_tensor = torch::from_blob(c, {n}, options);
   mul_out(c_tensor, a_tensor, b_tensor);
 }
+
+template <typename T>
+Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
+              uint32_t* result, Stream& stream, void* workspace_ptr) {
+  llm_kernels::nvidia::InvokeArgMaxReduce(input, ids_offset, batch_size, vocab_size, result, stream.Get());
+  return Status();
+}
+
+#define INSTANTIATE_ARG_MAX(T)                                                                 \
+  template Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, \
+                         const int32_t vocab_size, uint32_t* result, Stream& stream, void* workspace_ptr);
+
+INSTANTIATE_ARG_MAX(float);
+INSTANTIATE_ARG_MAX(half);
+#ifdef ENABLE_BF16
+INSTANTIATE_ARG_MAX(__nv_bfloat16);
+#endif
+
+#undef INSTANTIATE_ARG_MAX
 
 }  // namespace ksana_llm

@@ -9,7 +9,7 @@ namespace ksana_llm {
 
 class TopkSampling : public BaseSampling {
   public:
-    TopkSampling(size_t max_batch_size, size_t max_vocab_size, curandState_t* device_curandstates);
+    TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandState* device_curandstates = nullptr);
 
     ~TopkSampling();
 

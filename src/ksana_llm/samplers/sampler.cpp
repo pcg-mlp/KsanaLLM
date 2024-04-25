@@ -61,9 +61,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   host_temperatures_.resize(max_batch_size);
   host_output_tokens_.resize(max_batch_size);
 
-#ifdef ENABLE_CUDA
   topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
-#endif
 }
 
 Sampler::~Sampler() {
@@ -165,10 +163,8 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         sampling_devide_parameter.device_temperatures = device_temperatures_;
       }
     }
-#ifdef ENABLE_CUDA
     STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, nullptr, device_output_tokens_, nullptr,
                                                 sampling_devide_parameter, nullptr, stream));
-#endif
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
     StreamSynchronize(stream);

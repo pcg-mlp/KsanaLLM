@@ -2,12 +2,14 @@
 
 ==============================================================================*/
 
+#include "csrc/kernels/ascend/argmax/argmax.h"
 #include "csrc/kernels/ascend/embedding/embedding.h"
 #include "csrc/kernels/ascend/permute/permute.h"
 #include "csrc/kernels/ascend/pointwise/pointwise.h"
 #include "csrc/kernels/ascend/reshape/reshape.h"
 #include "csrc/kernels/ascend/transpose/transpose.h"
 
+#include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
@@ -77,5 +79,55 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
   ACL_CHECK(aclDestroyTensor(permute_output));
   return Status();
 }
+
+template <typename T>
+Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
+              uint32_t* result, Stream& stream, void* workspace_ptr) {
+  if (ids_offset != nullptr) {
+    throw std::runtime_error("Not supported ids offset");
+    return Status(RET_RUNTIME, "argmax not supported ids offset");
+  }
+  const std::vector<int64_t> input_shape = {batch_size, vocab_size};
+  aclTensor* input_tensor = nullptr;
+  void* input_workspace_ptr = (void*)input;
+  llm_kernels::utils::CreateAclTensorWithData(input_shape, &input_workspace_ptr,
+                                              CastDataTypeToAclDataType(GetDataType<T>()), aclFormat::ACL_FORMAT_ND,
+                                              &input_tensor);
+
+  const std::vector<int64_t> output_shape = {batch_size, 1};
+  aclTensor* inter_output_tensor = nullptr;
+  void* inter_output_workspace = nullptr;
+
+  llm_kernels::utils::CreateAclTensor(output_shape, &inter_output_workspace, aclDataType::ACL_INT64,
+                                      aclFormat::ACL_FORMAT_ND, &inter_output_tensor);
+  int64_t arg_max_dim = -1;
+  bool arg_max_keepdim = true;
+  llm_kernels::ascend::ArgMax(input_tensor, arg_max_dim, arg_max_keepdim, &inter_output_tensor, stream.Get(),
+                              llm_kernels::utils::GetTestWorkSpaceFunc);
+
+  std::vector<int64_t> host_inter_output(llm_kernels::utils::GetShapeSize(output_shape), 0);
+  std::vector<uint32_t> host_output(llm_kernels::utils::GetShapeSize(output_shape), 0);
+  Memcpy(host_inter_output.data(), inter_output_workspace,
+         llm_kernels::utils::GetShapeSize(output_shape) * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
+  for (size_t idx = 0; idx < host_inter_output.size(); ++idx) {
+    host_output[idx] = static_cast<uint32_t>(host_inter_output[idx]);
+  }
+  MemcpyAsync(result, host_output.data(), llm_kernels::utils::GetShapeSize(output_shape) * sizeof(uint32_t), MEMCPY_HOST_TO_DEVICE, stream);
+
+  ACL_CHECK_RET(aclrtFree(inter_output_workspace));
+  ACL_CHECK_RET(aclDestroyTensor(inter_output_tensor));
+  ACL_CHECK_RET(aclDestroyTensor(input_tensor));
+
+  return Status();
+}
+
+#define INSTANTIATE_ARG_MAX(T)                                                                 \
+  template Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, \
+                         const int32_t vocab_size, uint32_t* result, Stream& stream, void* workspace_ptr);
+
+INSTANTIATE_ARG_MAX(float);
+INSTANTIATE_ARG_MAX(float16);
+
+#undef INSTANTIATE_ARG_MAX
 
 }  // namespace ksana_llm

@@ -71,5 +71,4 @@ using Event = EventT<ACTIVE_DEVICE_TYPE>;
 #define Memcpy2D Memcpy2DT<ACTIVE_DEVICE_TYPE>
 #define Memcpy2DAsync Memcpy2DAsyncT<ACTIVE_DEVICE_TYPE>
 
-// The get type size function
 #define GetDataType GetDataTypeT<ACTIVE_DEVICE_TYPE>::impl
