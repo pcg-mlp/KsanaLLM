@@ -34,15 +34,6 @@ template <typename T>
 void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   GetBlockManager()->SetDeviceId(rank_);
 
-#ifdef ENABLE_ACL
-  // preallocate buffer
-  // TODO(karlluo): enhance by increasement
-  uint64_t workspace_size = 1073741824ull;
-  WorkSpaceFunc f = GetWorkSpaceFunc();
-  void* ws_addr_ptr = nullptr;
-  f(workspace_size, &ws_addr_ptr);
-#endif
-
   num_layer_ = model_config_.num_layer;
   size_t vocab_size_pad_ =
     DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
