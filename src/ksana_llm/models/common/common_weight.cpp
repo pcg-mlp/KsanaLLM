@@ -3,6 +3,10 @@
 ==============================================================================*/
 
 #include "ksana_llm/models/common/common_weight.h"
+
+#include <regex>
+#include "nlohmann/json.hpp"
+
 #include "ksana_llm/utils/common_device.h"
 
 #ifdef ENABLE_CUDA
@@ -13,6 +17,7 @@
 #include "ksana_llm/kernels/permute.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
+#include "ksana_llm/utils/optional_weight_map.h"
 
 #include <Python.h>
 #include <pybind11/embed.h>
@@ -105,32 +110,37 @@ std::vector<std::string> CommonWeight<T>::SearchLocalPath(const std::string& mod
   return bin_file_list;
 }
 
-void TransWeightNameFromQwen1ToLlama(std::vector<std::string>& origin_tensor_name_list,
-                                     std::vector<std::string>& tensor_name_list) {
-  static std::unordered_map<std::string_view, std::string> qwen1_weights_map = {
-    {"ln_1.weight", "input_layernorm.weight"}, {"attn.c_attn.weight", "self_attn.W_pack.weight"},
-    {"attn.c_attn.bias", "self_attn.query_key_value.bias"}, {"attn.c_proj.weight", "self_attn.o_proj.weight"},
-    {"ln_2.weight", "post_attention_layernorm.weight"}, {"mlp.w2.weight", "mlp.gate_proj.weight"},
-    {"mlp.w1.weight", "mlp.up_proj.weight"}, {"mlp.c_proj.weight", "mlp.down_proj.weight"},
-    {"lm_head.weight", "lm_head.weight"}, {"transformer.ln_f.weight", "model.norm.weight"},
-    {"transformer.wte.weight", "model.embed_tokens.weight"}
-  };
-  static std::string_view qwen1_prefix = "transformer.h.";
-  for (size_t i = 0; i < origin_tensor_name_list.size(); ++i) {
-    std::string_view tensor_name = origin_tensor_name_list[i];
-    if (qwen1_weights_map.count(tensor_name)) {
-      tensor_name_list[i] = qwen1_weights_map[tensor_name];
-    } else if (tensor_name.substr(0, qwen1_prefix.length()) == qwen1_prefix) {
-      size_t tensor_suffix_idx = tensor_name.find(".", qwen1_prefix.length());
-      std::string_view tensor_suffix = tensor_name.substr(tensor_suffix_idx + 1);
-      if (qwen1_weights_map.count(tensor_suffix)) {
-        // Trans from transformer.h.xxx.suffix.weight to model.layers.xxx.suffix.weight
-        std::string_view layer_idx = tensor_name.substr(qwen1_prefix.length(),
-                                                        tensor_suffix_idx - qwen1_prefix.length());
-        tensor_name_list[i] = "model.layers." + std::string(layer_idx) + "." + qwen1_weights_map[tensor_suffix];
+template <typename T>
+Status CommonWeight<T>::GetOptionalWeight(std::vector<std::string>& tensor_name_list,
+                                          std::vector<std::string>& optional_weight_list) {
+  // Search for the optional_weight_map.json file
+  auto optional_weight_map = Singleton<OptionalWeightMap>::GetInstance();
+  std::string& weight_path = optional_weight_map->GetOptionalWeightMap(model_config_.path, model_config_.type);
+  if (weight_path == "") {
+    return Status();
+  }
+
+  nlohmann::json weight_map_json;
+  std::ifstream file(weight_path);
+  if (!file.is_open()) {
+    NLLM_LOG_ERROR << fmt::format("Load weight map json: {} error.", weight_path) << std::endl;
+    return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load weight map json: {} error.", weight_path));
+  } else {
+    file >> weight_map_json;
+    file.close();
+  }
+  for (int idx = tensor_name_list.size() - 1; idx >= 0; --idx) {
+    std::string& tensor_name = tensor_name_list[idx];
+    for (auto it = weight_map_json.begin(); it != weight_map_json.end(); ++it) {
+      std::regex pattern(it.key());
+      std::string format = it.value();
+      if (std::regex_search(tensor_name, pattern)) {
+        optional_weight_list.push_back(tensor_name);
+        tensor_name_list.push_back(std::regex_replace(tensor_name, pattern, format));
       }
     }
   }
+  return Status();
 }
 
 template <typename T>
@@ -155,11 +165,10 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
 template <typename T>
 Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
   GetBlockManager()->SetDeviceId(rank_);
-  std::vector<std::string> origin_tensor_name_list = weights_loader->GetTensorNameList();
-  std::vector<std::string> tensor_name_list = origin_tensor_name_list;
-  if (model_config_.type == "qwen") {
-    TransWeightNameFromQwen1ToLlama(origin_tensor_name_list, tensor_name_list);
-  }
+  std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
+  std::vector<std::string> optional_weight_list;
+  size_t name_list_size = tensor_name_list.size();
+  STATUS_CHECK_RETURN(GetOptionalWeight(tensor_name_list, optional_weight_list));
   for (size_t idx = 0; idx < tensor_name_list.size(); ++idx) {
     // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
     //     input_layernorm:          不做分卡处理
@@ -172,18 +181,19 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     //     lm_head:                  不做分卡处理, 需转置
     //     norm:                     不做分卡处理
     //     embedding:                不做分卡处理
-    std::string& origin_tensor_name = origin_tensor_name_list[idx];
     std::string& tensor_name = tensor_name_list[idx];
+    std::string& weight_name = idx < name_list_size ?
+                                   tensor_name_list[idx] : optional_weight_list[idx - name_list_size];
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
-    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(origin_tensor_name);
+    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
     STATUS_CHECK_RETURN(PrepareLoadOpMeta(tensor_para_offset, weight_shape, transpose_first, tensor_name));
 
     // get weight's data ptr
     void* weight_ptr;
     size_t weight_size;
-    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(origin_tensor_name);
-    DataType weight_data_type = weights_loader->GetTensorDataType(origin_tensor_name);
+    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
+    DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
 
     // copy host data to device
     int qkv_offset;

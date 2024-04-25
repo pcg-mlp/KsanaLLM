@@ -167,3 +167,8 @@ python -c "import ksana_llm"
 #### Debug
 
 set environment variable `NLLM_LOG_LEVEL=DEBUG` to get more log info
+
+#### Optional Model Weight Map
+
+You can include an optional weight map JSON file for models that share the same structure as the Llama model but have different weight names.
+For more detailed information, please refer to the following link: [Optional Weigth Map Guide](src/ksana_llm/python/weight_map/README.md)

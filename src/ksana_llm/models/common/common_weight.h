@@ -39,6 +39,9 @@ class CommonWeight : public BaseWeight {
 
     Status PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer);
 
+    Status GetOptionalWeight(std::vector<std::string>& tensor_name_list,
+                             std::vector<std::string>& optional_weight_list);
+
     Status PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape, bool& transpose_first,
                              const std::string& tensor_name);
 
