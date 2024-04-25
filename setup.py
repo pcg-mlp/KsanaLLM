@@ -4,6 +4,7 @@
 
 import os
 import pathlib
+import shutil
 
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as build_ext_orig
@@ -64,7 +65,13 @@ class build_ext(build_ext_orig):
             # for wheel pacakge
             copy_file(str(build_temp_lib.joinpath(target_lib)),
                       str(extdir.parent.absolute()))
-
+        # copy optional weight map to cwd for wheel package
+        def ignore_files(dir, files):
+            return [file for file in files if not file.endswith('.json')]
+        optional_weight_maps = 'src/ksana_llm/python/weight_map'
+        ksana_llm_path = os.path.join(extdir.parent.absolute(), "ksana_llm/weight_map")
+        shutil.copytree(optional_weight_maps, ksana_llm_path, dirs_exist_ok=True,
+                        ignore=ignore_files)
 
 setup(name='ksana_llm',
       version='0.1',

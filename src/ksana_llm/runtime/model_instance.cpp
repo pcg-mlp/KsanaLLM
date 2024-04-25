@@ -11,6 +11,7 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/optional_weight_map.h"
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
 #include "ksana_llm/models/llama/llama_weight.h"
@@ -41,7 +42,15 @@ void ModelInstance::Load() {
     type = "baichuan";
     CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_type);
   } else {
-    throw std::runtime_error(fmt::format("Model type {} is not supported.", unified_model_type));
+    // Optional weights map
+    auto optional_weight_map = Singleton<OptionalWeightMap>::GetInstance();
+    std::string& weight_map = optional_weight_map->GetOptionalWeightMap(model_config_.path, unified_model_type, true);
+    if (weight_map != "") {
+      type = "llama";
+      CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);
+    } else {
+      throw std::runtime_error(fmt::format("Model type {} is not supported.", unified_model_type));
+    }
   }
 }
 
