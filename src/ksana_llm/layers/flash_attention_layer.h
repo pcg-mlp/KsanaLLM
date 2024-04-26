@@ -28,6 +28,11 @@ class FlashAttentionLayer : public AttentionLayer<T> {
     using AttentionLayer<T>::rotary_embedding_cuda_;
     using AttentionLayer<T>::alibi_slopes_;
 #endif
+
+#ifdef ENABLE_ACL
+    using AttentionLayer<T>::workspace_block_id_;
+    using AttentionLayer<T>::workspace_size_;
+#endif
 };
 
 }  // namespace ksana_llm

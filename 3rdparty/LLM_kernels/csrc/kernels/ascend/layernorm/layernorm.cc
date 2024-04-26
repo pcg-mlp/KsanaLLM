@@ -14,7 +14,7 @@ namespace llm_kernels {
 namespace ascend {
 
 void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, aclTensor** output, aclrtStream& stream,
-                  void (*ws_func)(size_t, void**)) {
+                  void (*ws_func)(size_t, void**), void* workspace_buf_ptr, float eps) {
   auto dtype_fp32 = aclDataType::ACL_FLOAT;
   auto dtype_fp16 = aclDataType::ACL_FLOAT16;
   auto fmt = aclFormat::ACL_FORMAT_ND;
@@ -31,78 +31,83 @@ void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, aclTensor** o
   auto hidden_size = input_shape[2];
 
   // malloc dev mem for infer
-  // TODO: alloc outside
-  auto maxDevSize = seq_len * hidden_size * sizeof(float);
-  void* maxDev_a = nullptr;
-  void* maxDev_b = nullptr;
-  void* maxDev_c = nullptr;
-  ACL_CHECK_RET(aclrtMalloc(&maxDev_a, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&maxDev_b, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&maxDev_c, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+  auto dev_buf_size = bs * seq_len * hidden_size * sizeof(float);
+  void* dev_buf_a = nullptr;
+  void* dev_buf_b = nullptr;
+  void* dev_buf_c = nullptr;
+  if (workspace_buf_ptr == nullptr) {
+    ACL_CHECK_RET(aclrtMalloc(&dev_buf_a, dev_buf_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&dev_buf_b, dev_buf_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&dev_buf_c, dev_buf_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+  } else {
+    dev_buf_a = workspace_buf_ptr;
+    dev_buf_b = workspace_buf_ptr + dev_buf_size;
+    dev_buf_c = workspace_buf_ptr + dev_buf_size * 2;
+  }
 
-  // input - > cast1Output
-  std::vector<int64_t> cast1OutputShape = {bs, seq_len, hidden_size};
-  aclTensor* cast1Output = nullptr;
-  CreateAclTensorWithData(cast1OutputShape, &maxDev_a, dtype_fp32, fmt, &cast1Output);
-  Cast(input, dtype_fp32, &cast1Output, stream, ws_func);
+  // input - > fp32_buf_tensor
+  std::vector<int64_t> fp16fp32_cast_shape = {bs, seq_len, hidden_size};
+  aclTensor* fp32_buf_tensor = nullptr;
+  CreateAclTensorWithData(fp16fp32_cast_shape, &dev_buf_a, dtype_fp32, fmt, &fp32_buf_tensor);
+  Cast(input, dtype_fp32, &fp32_buf_tensor, stream, ws_func);
 
-  // cast1Output - > powOutput
-  float powExponentValue = 2.0f;
-  std::vector<int64_t> powOutputShape = {bs, seq_len, hidden_size};
-  aclTensor* powOutput = nullptr;
-  CreateAclTensorWithData(powOutputShape, &maxDev_b, dtype_fp32, fmt, &powOutput);
-  Pow(cast1Output, powExponentValue, &powOutput, stream, ws_func);
+  // fp32_buf_tensor - > pow_output_tensor
+  constexpr float pow_exponent_v = 2.0f;
+  std::vector<int64_t> pow_output_shape = {bs, seq_len, hidden_size};
+  aclTensor* pow_output_tensor = nullptr;
+  CreateAclTensorWithData(pow_output_shape, &dev_buf_b, dtype_fp32, fmt, &pow_output_tensor);
+  Pow(fp32_buf_tensor, pow_exponent_v, &pow_output_tensor, stream, ws_func);
 
-  // powOutput - > meanOutput
-  aclTensor* meanOutput = nullptr;
-  std::vector<int64_t> meanOutputShape = {bs, seq_len, 1};
-  CreateAclTensorWithData(meanOutputShape, &maxDev_c, dtype_fp32, fmt, &meanOutput);
-  std::vector<int64_t> meanDimData = {-1};
+  // pow_output_tensor - > mean_output_tensor
+  aclTensor* mean_output_tensor = nullptr;
+  std::vector<int64_t> mean_output_shape = {bs, seq_len, 1};
+  CreateAclTensorWithData(mean_output_shape, &dev_buf_c, dtype_fp32, fmt, &mean_output_tensor);
+  std::vector<int64_t> mean_dim = {-1};
   bool keepdim = true;
-  Mean(powOutput, meanDimData, keepdim, dtype_fp32, &meanOutput, stream, ws_func);
-  ACL_CHECK_RET(aclDestroyTensor(powOutput));
+  Mean(pow_output_tensor, mean_dim, keepdim, dtype_fp32, &mean_output_tensor, stream, ws_func);
+  ACL_CHECK_RET(aclDestroyTensor(pow_output_tensor));
 
-  // meanOutput - > addOutput
-  float addAlphaValue = 0.000001;
-  float addConstValue = 1;
-  std::vector<int64_t> addOutputShape = {bs, seq_len, 1};
-  aclScalar* addConst = nullptr;
-  aclTensor* addOutput = nullptr;
-  aclScalar* addAlpha = nullptr;
-  addAlpha = aclCreateScalar(&addAlphaValue, dtype_fp32);
-  addConst = aclCreateScalar(&addConstValue, dtype_fp32);
-  CreateAclTensorWithData(addOutputShape, &maxDev_b, dtype_fp32, fmt, &addOutput);
-  Adds(meanOutput, addAlpha, addConst, &addOutput, stream, ws_func);
-  ACL_CHECK_RET(aclDestroyTensor(meanOutput));
-  ACL_CHECK_RET(aclDestroyScalar(addConst));
-  ACL_CHECK_RET(aclDestroyScalar(addAlpha));
+  // mean_output_tensor - > add_output_tensor
+  float add_const_v = 1;
+  std::vector<int64_t> add_output_shape = {bs, seq_len, 1};
+  aclScalar* add_const_scalar = nullptr;
+  aclTensor* add_output_tensor = nullptr;
+  aclScalar* add_alpha_scalar = nullptr;
+  add_alpha_scalar = aclCreateScalar(&eps, dtype_fp32);
+  add_const_scalar = aclCreateScalar(&add_const_v, dtype_fp32);
+  CreateAclTensorWithData(add_output_shape, &dev_buf_b, dtype_fp32, fmt, &add_output_tensor);
+  Adds(mean_output_tensor, add_alpha_scalar, add_const_scalar, &add_output_tensor, stream, ws_func);
+  ACL_CHECK_RET(aclDestroyTensor(mean_output_tensor));
+  ACL_CHECK_RET(aclDestroyScalar(add_const_scalar));
+  ACL_CHECK_RET(aclDestroyScalar(add_alpha_scalar));
 
-  // addOutput - > addOutput
-  InplaceSqrt(&addOutput, stream, ws_func);
+  // add_output_tensor - > add_output_tensor
+  InplaceSqrt(&add_output_tensor, stream, ws_func);
 
-  // cast1Output / addOutput - > cast1Output
-  InplaceDiv(addOutput, &cast1Output, stream, ws_func);
-  ACL_CHECK_RET(aclDestroyTensor(addOutput));
+  // fp32_buf_tensor / add_output_tensor - > fp32_buf_tensor
+  InplaceDiv(add_output_tensor, &fp32_buf_tensor, stream, ws_func);
+  ACL_CHECK_RET(aclDestroyTensor(add_output_tensor));
 
-  // cast1Output - > cast2Output
-  std::vector<int64_t> cast2OutputShape = {bs, seq_len, hidden_size};
-  aclTensor* cast2Output = nullptr;
-  CreateAclTensorWithData(cast2OutputShape, &maxDev_b, dtype_fp16, fmt, &cast2Output);
-  Cast(cast1Output, dtype_fp16, &cast2Output, stream, ws_func);
-  ACL_CHECK_RET(aclDestroyTensor(cast1Output));
+  // fp32_buf_tensor - > fp16_buf_tensor
+  std::vector<int64_t> fp32fp16_cast_shape = {bs, seq_len, hidden_size};
+  aclTensor* fp16_buf_tensor = nullptr;
+  CreateAclTensorWithData(fp32fp16_cast_shape, &dev_buf_b, dtype_fp16, fmt, &fp16_buf_tensor);
+  Cast(fp32_buf_tensor, dtype_fp16, &fp16_buf_tensor, stream, ws_func);
+  ACL_CHECK_RET(aclDestroyTensor(fp32_buf_tensor));
 
-  // cast2Output - > mulOutput
-  // PrintTensor(cast2Output, stream, "cast2Output");
-  Mul(cast2Output, weight, output, stream, ws_func);
-  ACL_CHECK_RET(aclDestroyTensor(cast2Output));
+  // fp16_buf_tensor - > muloutput
+  Mul(fp16_buf_tensor, weight, output, stream, ws_func);
+  ACL_CHECK_RET(aclDestroyTensor(fp16_buf_tensor));
 
-  // release dev mem for infer
-  ACL_CHECK_RET(aclrtFree(maxDev_a));
-  maxDev_a = nullptr;
-  ACL_CHECK_RET(aclrtFree(maxDev_b));
-  maxDev_b = nullptr;
-  ACL_CHECK_RET(aclrtFree(maxDev_c));
-  maxDev_c = nullptr;
+  if (workspace_buf_ptr == nullptr) {
+    // release dev mem for infer
+    ACL_CHECK_RET(aclrtFree(dev_buf_a));
+    dev_buf_a = nullptr;
+    ACL_CHECK_RET(aclrtFree(dev_buf_b));
+    dev_buf_b = nullptr;
+    ACL_CHECK_RET(aclrtFree(dev_buf_c));
+    dev_buf_c = nullptr;
+  }
 }
 
 }  // namespace ascend

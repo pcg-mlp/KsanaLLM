@@ -40,6 +40,10 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   int64_t hidden_units = input_tensors[0].shape[1] / 3;
 
+  size_t workspace_needed = seq_len * hidden_units * sizeof(uint16_t) * 3;
+  void* workspace_buf_ptr = nullptr;
+  AttentionLayer<T>::PrepareWorkspaceBuffer(workspace_needed, workspace_buf_ptr);
+
   // shape: [bs, seq_len, hidden_units, 3]
   Tensor qkv_input = input_tensors[0];
   aclTensor* input_tensor = qkv_input.ResetDeviceTensor(DataType::TYPE_FP16, {1, seq_len, hidden_units * 3});
@@ -56,7 +60,7 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   aclTensor* output;
   this->ascend_flash_attn_->Forward(input_tensor, token_pos, &key_cache, &val_cache, tmp_buffers, &output, false,
-                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
+                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr);
 
   size_t size = seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
   ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>(), size, tmp_buffers[1], size,

@@ -141,7 +141,7 @@ void RotaryEmbeddingACL::RotarySplit(const aclTensor* input, const int bs, const
 }
 
 void RotaryEmbeddingACL::Forward(const aclTensor* input, const aclTensor* ropeIndex, aclTensor** output,
-                                 aclrtStream& stream, void (*ws_func)(size_t, void**)) {
+                                 aclrtStream& stream, void (*ws_func)(size_t, void**), void* workspace_buf_ptr) {
   aclOpExecutor* executor;
   auto dtype_ = aclDataType::ACL_FLOAT16;
   auto fmt = aclFormat::ACL_FORMAT_ND;
@@ -161,9 +161,15 @@ void RotaryEmbeddingACL::Forward(const aclTensor* input, const aclTensor* ropeIn
   void* maxDev_a = nullptr;
   void* maxDev_b = nullptr;
   void* maxDev_c = nullptr;
-  ACL_CHECK_RET(aclrtMalloc(&maxDev_a, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&maxDev_b, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&maxDev_c, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+  if (workspace_buf_ptr == nullptr) {
+    ACL_CHECK_RET(aclrtMalloc(&maxDev_a, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&maxDev_b, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&maxDev_c, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+  } else {
+    maxDev_a = workspace_buf_ptr;
+    maxDev_b = workspace_buf_ptr + maxDevSize;
+    maxDev_c = workspace_buf_ptr + maxDevSize * 2;
+  }
 
   std::vector<int64_t> catOutputShape = {bs, num_heads, seq_len, head_dims};
   aclTensor* catOutput = nullptr;
@@ -222,12 +228,14 @@ void RotaryEmbeddingACL::Forward(const aclTensor* input, const aclTensor* ropeIn
   aclDestroyScalar(addAlpha);
 
   // release dev mem for infer
-  aclrtFree(maxDev_a);
-  maxDev_a = nullptr;
-  aclrtFree(maxDev_b);
-  maxDev_b = nullptr;
-  aclrtFree(maxDev_c);
-  maxDev_c = nullptr;
+  if (workspace_buf_ptr == nullptr) {
+    aclrtFree(maxDev_a);
+    maxDev_a = nullptr;
+    aclrtFree(maxDev_b);
+    maxDev_b = nullptr;
+    aclrtFree(maxDev_c);
+    maxDev_c = nullptr;
+  }
 }
 
 }  // namespace ascend

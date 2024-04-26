@@ -28,6 +28,10 @@ class PagedAttentionLayer : public AttentionLayer<T> {
 #endif
     using AttentionLayer<T>::rank_;
     using AttentionLayer<T>::context_;
+#ifdef ENABLE_ACL
+    using AttentionLayer<T>::workspace_block_id_;
+    using AttentionLayer<T>::workspace_size_;
+#endif
 };
 
 }  // namespace ksana_llm

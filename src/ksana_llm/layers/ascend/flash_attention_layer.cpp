@@ -43,9 +43,13 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   tmp_buffers2.push_back(input_tensors[9].GetPtr<void>());
   tmp_buffers2.push_back(input_tensors[10].GetPtr<void>());
 
+  size_t workspace_needed = seq_len * hidden_units * sizeof(uint16_t) * 3;
+  void* workspace_buf_ptr = nullptr;
+  AttentionLayer<T>::PrepareWorkspaceBuffer(workspace_needed, workspace_buf_ptr);
+
   aclTensor* output2;
   this->ascend_flash_attn_->Forward(input_tensor2, token_pos, &key_cache2, &val_cache2, tmp_buffers2, &output2, true,
-                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
+                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr);
 
   size_t size2 = seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
   ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>(), size2, tmp_buffers2[1], size2,

@@ -13,8 +13,10 @@ namespace ksana_llm {
 
 template <typename T>
 Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  int parameter_index = 0;
   context_ = context;
   rank_ = rank;
+  rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
   return Status();
 }
 
@@ -22,6 +24,21 @@ template <typename T>
 Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   size_t seq_len = input_tensors[0].shape[0];
   size_t hidden_size = input_tensors[0].shape[1];
+  size_t workspace_needed = seq_len * hidden_size * sizeof(float) * 3;
+  // NOTE(karlluo): allocate the workspace for float32
+  if (workspace_block_id_ == -1 || workspace_size_ == 0) {
+    workspace_size_ = workspace_needed;
+    GetBlockManager()->AllocateContiguous(workspace_size_, workspace_block_id_);
+  }
+  // NOTE(karlluo): not enough, reallocate
+  if (workspace_size_ < workspace_needed) {
+    GetBlockManager()->FreeContiguous(workspace_block_id_);
+    GetBlockManager()->AllocateContiguous(workspace_needed, workspace_block_id_);
+    workspace_size_ = workspace_needed;
+  }
+  void* workspace_buf_ptr;
+  GetBlockManager()->GetContiguousPtr(workspace_block_id_, workspace_buf_ptr);
+
   std::vector<int64_t> lm_input_shape = {1, seq_len, hidden_size};
   aclTensor* lm_input_tensor_ptr = nullptr;
   void* lm_input_tensor_buf_ptr = input_tensors[0].GetPtr<void>();
@@ -39,8 +56,11 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   llm_kernels::utils::CreateAclTensorWithData(lm_input_shape, &lm_output_tensor_buf_ptr, aclDataType::ACL_FLOAT16,
                                               aclFormat::ACL_FORMAT_ND, &lm_output_tensor_ptr);
 
+  ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
   llm_kernels::ascend::RMSLayerNorm(lm_input_tensor_ptr, lm_weight_tensor_ptr, &lm_output_tensor_ptr,
-                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
+                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr,
+                                    rms_norm_eps_);
+  ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
 
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

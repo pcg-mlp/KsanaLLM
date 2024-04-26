@@ -16,6 +16,9 @@ class LayernormLayer : public BaseLayer {
 
   protected:
     float rms_norm_eps_;
+    // NOTE(karlluo): only need by ascend
+    int workspace_block_id_{-1};
+    size_t workspace_size_{0ul};
 };
 
 }  // namespace ksana_llm
