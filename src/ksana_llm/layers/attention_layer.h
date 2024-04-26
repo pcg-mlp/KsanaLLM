@@ -41,8 +41,13 @@ class AttentionLayer : public BaseLayer {
 #endif
 
 #ifdef ENABLE_ACL
-  // The attention implementation for ascend device.
-  std::shared_ptr<llm_kernels::ascend::FlashAttentionACL> ascend_flash_attn_= nullptr;
+    // NOTE(karlluo): only need by ascend
+    int workspace_block_id_{-1};
+    size_t workspace_size_{0ul};
+    // The attention implementation for ascend device.
+    std::shared_ptr<llm_kernels::ascend::FlashAttentionACL> ascend_flash_attn_= nullptr;
+
+    void PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr);
 #endif
 };
 

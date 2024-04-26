@@ -11,7 +11,7 @@ setting:
   # 调度相关配置
   batch_scheduler:
     # 请求在队列中的超时时间，单位为毫秒
-    waiting_timeout_in_ms: 3600000
+    waiting_timeout_in_ms: 360000000
     # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
     max_waiting_queue_len: 1200
     # 一个调度step处理的最大token个数，一次context decode视为多个token。

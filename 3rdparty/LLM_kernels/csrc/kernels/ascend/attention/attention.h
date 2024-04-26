@@ -26,7 +26,7 @@ class FlashAttentionACL {
 
   void Forward(const aclTensor* matmulQKVOutput, const int64_t token_pos, void** key_cache, void** val_cache,
                std::vector<void*>& tmp_buffers, aclTensor** output, const bool is_context_stage, aclrtStream& stream,
-               void (*ws_func)(size_t, void**));
+               void (*ws_func)(size_t, void**), void* workspace_buf_ptr = nullptr);
 
  private:
   void InitAttnMask(int max_tokens_num, aclDataType dtype);

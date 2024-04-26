@@ -30,7 +30,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   if (ascend_flash_attn_ == nullptr) {
     // setting scaling factor and mode
     RoPEScalingFactor rope_scaling_factor_config =
-        std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
+      std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
     float scaling_factor = 1.0f;
     if (rope_scaling_factor_config.type == "dynamic") {
       scaling_factor = rope_scaling_factor_config.factor;
@@ -49,5 +49,22 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
 }
 template class AttentionLayer<float>;
 template class AttentionLayer<float16>;
+
+template <typename T>
+void AttentionLayer<T>::PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr) {
+  // NOTE(karlluo): allocate the workspace for float32
+  if (workspace_block_id_ == -1 || workspace_size_ == 0) {
+    workspace_size_ = workspace_needed;
+    GetBlockManager()->AllocateContiguous(workspace_size_, workspace_block_id_);
+  }
+  // NOTE(karlluo): not enough, reallocate
+  if (workspace_size_ < workspace_needed) {
+    GetBlockManager()->FreeContiguous(workspace_block_id_);
+    GetBlockManager()->AllocateContiguous(workspace_needed, workspace_block_id_);
+    workspace_size_ = workspace_needed;
+  }
+
+  GetBlockManager()->GetContiguousPtr(workspace_block_id_, workspace_buf_ptr);
+}
 
 }  // namespace ksana_llm

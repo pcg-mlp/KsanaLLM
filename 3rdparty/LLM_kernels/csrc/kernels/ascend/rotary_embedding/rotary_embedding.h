@@ -19,7 +19,7 @@ class RotaryEmbeddingACL {
             const float rope_scaling_factor, aclDataType dtype, aclrtStream& stream, void (*ws_func)(size_t, void**));
 
   void Forward(const aclTensor* input, const aclTensor* pos_index, aclTensor** output, aclrtStream& stream,
-               void (*ws_func)(size_t, void**) = nullptr);
+               void (*ws_func)(size_t, void**) = nullptr, void* workspace_buf_ptr = nullptr);
   ~RotaryEmbeddingACL();
 
  private:

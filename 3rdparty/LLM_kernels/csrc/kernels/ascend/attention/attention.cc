@@ -203,7 +203,8 @@ void FlashAttentionACL::PrepareRopeIndex(const int bs, const int seq_len, const 
 // output is tmp_buffers[1]
 void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t token_pos, void** key_cache,
                                 void** val_cache, std::vector<void*>& tmp_buffers, aclTensor** output,
-                                const bool is_context_stage, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
+                                const bool is_context_stage, aclrtStream& stream, void (*ws_func)(size_t, void**),
+                                void* workspace_buf_ptr) {
   auto fmt = aclFormat::ACL_FORMAT_ND;
 
   int64_t* input_shape = nullptr;
@@ -233,7 +234,7 @@ void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t 
                      ws_func);
   // PrintTensor(ropeQueryInput, stream, "ropeQueryInput");
   CreateAclTensorWithData(attnInputShape, &tmp_buffers[3], dtype_, fmt, &attnInputQ);
-  rope_ptr_->Forward(ropeQueryInput, ropeIndex, &attnInputQ, stream, ws_func);
+  rope_ptr_->Forward(ropeQueryInput, ropeIndex, &attnInputQ, stream, ws_func, workspace_buf_ptr);
   aclDestroyTensor(ropeQueryInput);
 
   // / Rope Key
@@ -245,12 +246,12 @@ void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t 
     // CreateAclTensorWithData(attnInputShape, &key_cache, dtype_, fmt, &attnInputK);
     attnInputK = aclCreateTensor(attnInputShape.data(), attnInputShape.size(), dtype_, kvStrides.data(), 0, fmt,
                                  attnInputShape.data(), attnInputShape.size(), *key_cache);
-    rope_ptr_->Forward(ropeKeyInput, ropeIndex, &attnInputK, stream, ws_func);
+    rope_ptr_->Forward(ropeKeyInput, ropeIndex, &attnInputK, stream, ws_func, workspace_buf_ptr);
     aclDestroyTensor(ropeKeyInput);
   } else {
     aclTensor* ropeKeyOutput = nullptr;
     CreateAclTensorWithData(attnInputShape, &tmp_buffers[1], dtype_, fmt, &ropeKeyOutput);
-    rope_ptr_->Forward(ropeKeyInput, ropeIndex, &ropeKeyOutput, stream, ws_func);
+    rope_ptr_->Forward(ropeKeyInput, ropeIndex, &ropeKeyOutput, stream, ws_func, workspace_buf_ptr);
     aclDestroyTensor(ropeKeyInput);
 
     // read last k

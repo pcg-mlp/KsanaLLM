@@ -14,7 +14,7 @@ namespace llm_kernels {
 namespace ascend {
 
 void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, aclTensor** output, aclrtStream& stream,
-                  void (*ws_func)(size_t, void**));
+                  void (*ws_func)(size_t, void**), void* workspace_buf_ptr = nullptr, float eps = 1e-6f);
 
 }  // namespace ascend
 }  // namespace llm_kernels
