@@ -28,6 +28,19 @@ CommonModel<T>::~CommonModel() {
   STATUS_CHECK_FAILURE(DestroyTensor(up_matmul_tensor_buffer_, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(cos_sin_cache_tensor_, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(forward_shape_, rank_));
+
+#ifdef ENABLE_ACL
+  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_0_, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_1_, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_2_, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_3_, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_4_, rank_));
+
+  for (int idx = 0; idx < num_layer_; ++idx) {
+    STATUS_CHECK_FAILURE(DestroyTensor(ascend_key_caches_[idx], rank_));
+    STATUS_CHECK_FAILURE(DestroyTensor(ascend_val_caches_[idx], rank_));
+  }
+#endif
 }
 
 template <typename T>
@@ -73,19 +86,25 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
     CreateBufferTensor(tensor_buffer_2_, {max_token_num, hidden_units, 3}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
     CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
-#ifdef ENABLE_CUDA
   STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
                                           model_config_.weight_data_type));
-#elif defined(ENABLE_ACL)
-  // Need double memory for ascend implement.
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings, 2}, TYPE_FP16));
-
+#ifdef ENABLE_ACL
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_0_, {max_token_num, hidden_units}, TYPE_FP16));
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_1_, {max_token_num, hidden_units}, TYPE_FP16));
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_2_, {max_token_num, hidden_units}, TYPE_FP16));
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_3_, {max_token_num, hidden_units}, TYPE_FP16));
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_4_, {max_token_num, hidden_units}, TYPE_FP16));
+
+  for (int idx = 0; idx < num_layer_; ++idx) {
+    Tensor key_cache;
+    Tensor val_cache;
+    STATUS_CHECK_FAILURE(CreateBufferTensor(key_cache, {max_token_num, hidden_units}, TYPE_FP16));
+    STATUS_CHECK_FAILURE(CreateBufferTensor(val_cache, {max_token_num, hidden_units}, TYPE_FP16));
+
+    ascend_key_caches_.push_back(key_cache);
+    ascend_val_caches_.push_back(val_cache);
+  }
+
 #endif
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
@@ -182,7 +201,8 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
          model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
 #ifdef ENABLE_ACL
          ,
-         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_
+         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
 #endif
         },
         mmha_attention_output));
@@ -193,7 +213,8 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
          forward_shape_, up_matmul_tensor_buffer_
 #ifdef ENABLE_ACL
          ,
-         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_
+         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
 #endif
         },
         mmha_attention_output));

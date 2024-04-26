@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/flash_attention_layer.h"
+#include <cstdlib>
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
 #include "csrc/kernels/ascend/attention/attention.h"
@@ -20,6 +21,7 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   //     4: rotary embedding pos tensor shape [max_token_num], type int64
   //     5: forward shape: [batch_size, max_tokens, kv_cache_offset_list.back()]
   //     6~10: ascend buffers: [max_token_num, hidden_units]
+  //     11~12: ascend kvcache buffers: [max_token_num, hidden_units]
   // output_tensors:
   //     0: flash_attention_output shape: [std::max(max_batch_size * vocab_size, max_token_num * hidden_units * 3)]
 
@@ -28,27 +30,25 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   int64_t hidden_units = input_tensors[0].shape[1] / 3;
 
   // shape: [bs, seq_len, hidden_units, 3]
-  aclTensor* qkv_tensor;
-  Tensor qkv_input = input_tensors[0];
-  aclTensor* input_tensor = qkv_input.ResetDeviceTensor(DataType::TYPE_FP16, {1, seq_len, hidden_units * 3});
+  Tensor qkv_input2 = input_tensors[0];
+  aclTensor* input_tensor2 = qkv_input2.ResetDeviceTensor(DataType::TYPE_FP16, {1, seq_len, hidden_units * 3});
 
-  Tensor kv_list = input_tensors[2];
-  void* key_cache = kv_list.GetPtr<void>();
-  void* val_cache = key_cache + kv_list.GetTotalBytes() / 2;
+  void* key_cache2 = input_tensors[11].GetPtr<void>();
+  void* val_cache2 = input_tensors[12].GetPtr<void>();
 
-  std::vector<void*> tmp_buffers;
-  tmp_buffers.push_back(input_tensors[6].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[7].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[8].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[9].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[10].GetPtr<void>());
+  std::vector<void*> tmp_buffers2;
+  tmp_buffers2.push_back(input_tensors[6].GetPtr<void>());
+  tmp_buffers2.push_back(input_tensors[7].GetPtr<void>());
+  tmp_buffers2.push_back(input_tensors[8].GetPtr<void>());
+  tmp_buffers2.push_back(input_tensors[9].GetPtr<void>());
+  tmp_buffers2.push_back(input_tensors[10].GetPtr<void>());
 
-  aclTensor* output;
-  this->ascend_flash_attn_->Forward(input_tensor, token_pos, &key_cache, &val_cache, tmp_buffers, &output, true,
+  aclTensor* output2;
+  this->ascend_flash_attn_->Forward(input_tensor2, token_pos, &key_cache2, &val_cache2, tmp_buffers2, &output2, true,
                                     context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
-  size_t size = seq_len * hidden_units;
-  ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>(), size, tmp_buffers[1], size,
+  size_t size2 = seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
+  ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>(), size2, tmp_buffers2[1], size2,
                         aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
 
   output_tensors[0].shape = {static_cast<unsigned long>(seq_len), static_cast<unsigned long>(hidden_units)};

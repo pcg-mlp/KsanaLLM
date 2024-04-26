@@ -112,7 +112,9 @@ Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_si
   for (size_t idx = 0; idx < host_inter_output.size(); ++idx) {
     host_output[idx] = static_cast<uint32_t>(host_inter_output[idx]);
   }
-  MemcpyAsync(result, host_output.data(), llm_kernels::utils::GetShapeSize(output_shape) * sizeof(uint32_t), MEMCPY_HOST_TO_DEVICE, stream);
+  MemcpyAsync(result, host_output.data(), llm_kernels::utils::GetShapeSize(output_shape) * sizeof(uint32_t),
+              MEMCPY_HOST_TO_DEVICE, stream);
+  StreamSynchronize(stream);
 
   ACL_CHECK_RET(aclrtFree(inter_output_workspace));
   ACL_CHECK_RET(aclDestroyTensor(inter_output_tensor));

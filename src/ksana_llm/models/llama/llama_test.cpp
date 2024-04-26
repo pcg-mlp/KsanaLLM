@@ -62,10 +62,10 @@ TEST_F(LlamaTest, ForwardTest) {
   EventCreate(&stop);
 
   Py_Initialize();
+#ifdef ENABLE_CUDA
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
   std::shared_ptr<LlamaModel<float16>> llama = std::make_shared<LlamaModel<float16>>(model_config, 0, context_);
 
-#ifdef ENABLE_CUDA
   // Weight Name Check
   // 正确的 weight 名称
   std::string weight_name = "lm_head.weight";
@@ -146,9 +146,9 @@ TEST_F(LlamaTest, ForwardTest) {
   EventElapsedTime(&milliseconds, start, stop);
 
   EXPECT_TRUE((milliseconds / 10) < 30);
-#endif
   llama.reset();
   llama_weight.reset();
+#endif
   StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   Py_Finalize();
   EventDestroy(stop);
