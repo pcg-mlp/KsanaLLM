@@ -100,12 +100,16 @@ class CommonModel : public BaseModel {
   Tensor ascend_buffer_2_;
   Tensor ascend_buffer_3_;
   Tensor ascend_buffer_4_;
+
+  std::vector<Tensor> ascend_key_caches_;
+  std::vector<Tensor> ascend_val_caches_;
 #endif
 
 
- private:
+  private:
   // refer to
-  // https://github.com/huggingface/transformers/blob/00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
+  // https://github.com/huggingface/transformers/blob/ \
+  // 00c1d87a7d5c8dfb4554370983b5a3f7c069edd7/src/transformers/models/llama/modeling_llama.py#L257
   Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight, Tensor& hidden_states,
                         std::vector<Tensor>& output_0, std::vector<Tensor>& output_1, std::vector<Tensor>& output_2,
                         const bool is_context_stage);

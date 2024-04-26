@@ -42,9 +42,9 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
                                  const SamplingConfig* sampling_config,
                                  SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
                                  Stream& stream) {
-
   if (sampling_devide_parameter.device_topKs == nullptr) {
-    ArgMax(logits, offsets, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token, stream);
+    ArgMax(logits, offsets, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token,
+           stream);
   } else {
 #ifdef ENABLE_CUDA
     bool logitHasProbs = false;
