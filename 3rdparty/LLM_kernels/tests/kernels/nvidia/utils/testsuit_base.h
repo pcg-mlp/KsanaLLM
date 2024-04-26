@@ -15,7 +15,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "3rdparty/half.hpp"
+#include "3rdparty/half/include/half.hpp"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
 using namespace llm_kernels::utils;

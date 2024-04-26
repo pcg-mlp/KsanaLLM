@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 
-#include "3rdparty/half.hpp"
+#include "3rdparty/half/include/half.hpp"
 #include "csrc/kernels/ascend/permute/permute.h"
 #include "csrc/kernels/ascend/transpose/transpose.h"
 #include "csrc/utils/ascend/common.h"

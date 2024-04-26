@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 
-#include "3rdparty/half.hpp"
+#include "3rdparty/half/include/half.hpp"
 #include "csrc/kernels/ascend/cat/cat.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"

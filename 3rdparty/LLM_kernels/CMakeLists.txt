@@ -53,6 +53,18 @@ include(base)
 include(nvidia)
 include(ascend)
 
+# fetch 3rdparty
+if(GIT_FOUND)
+  message(STATUS "Running submodule update to fetch half")
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/half
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE GIT_SUBMOD_RESULT)
+
+  if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+    message(FATAL_ERROR "git submodule update --init 3rdparty/half failed with ${GIT_SUBMOD_RESULT}, please checkout cutlass submodule")
+  endif()
+endif()
+
 # set headers
 include_directories(
   ${PROJECT_SOURCE_DIR}
