@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "3rdparty/half.hpp"
+#include "3rdparty/half/include/half.hpp"
 #include "csrc/kernels/ascend/reshape/reshape.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"

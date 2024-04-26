@@ -7,7 +7,7 @@
 
 #include <gtest/gtest.h>
 
-#include "3rdparty/half.hpp"
+#include "3rdparty/half/include/half.hpp"
 #include "cast.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
