@@ -81,4 +81,7 @@ void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, s
 // c = Mul(a, b)
 void Mul(float* a, float* b, float* c, int n, int device_rank);
 
+void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, int logprobs_num, float* logprobs,
+                  int64_t* token_ids);
+
 }  // namespace ksana_llm

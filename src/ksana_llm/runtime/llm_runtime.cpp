@@ -119,6 +119,7 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
     sampling_req.req_id = req_ptr->req_id;
     sampling_req.input_tokens = &(req_ptr->input_tokens);
     sampling_req.output_tokens = &(req_ptr->output_tokens);
+    sampling_req.logprobs = &(req_ptr->logprobs);
     sampling_req.output_mutex = &(req_ptr->output_mutex);
     sampling_req.logits_offset = req_ptr->logits_offset;
     sampling_req.logits_buf = req_ptr->GetLogitsPtr();

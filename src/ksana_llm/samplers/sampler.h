@@ -17,6 +17,8 @@ class Sampler {
     Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context);
     ~Sampler();
     Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
+    Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+                                   SamplingDevideParameter sampling_devide_parameter, Stream& stream);
     void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
                                 const int vocab_size, const float repetition_penalty, Stream& stream);
 

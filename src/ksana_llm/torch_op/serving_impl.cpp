@@ -30,8 +30,9 @@ ServingImpl::ServingImpl() {
 }
 
 Status ServingImpl::Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config, std::vector<int> &output_tokens) {
-  return endpoint_->Handle(model_name, input_tokens, sampling_config, output_tokens);
+                           const SamplingConfig &sampling_config, std::vector<int> &output_tokens,
+                           std::vector<std::vector<std::pair<int, float>>> &logprobs) {
+  return endpoint_->Handle(model_name, input_tokens, sampling_config, output_tokens, logprobs);
 }
 
 Status ServingImpl::HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,

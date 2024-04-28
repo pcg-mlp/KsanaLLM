@@ -42,7 +42,7 @@ class PyAsyncStreamingIterator(object):
         loop = asyncio.get_event_loop()
 
         # Run the GetNext method of the serving iterator in an executor to avoid blocking the event loop
-        status, token_id = await loop.run_in_executor(
+        status, token_id, logprobs = await loop.run_in_executor(
             model_executor,  # specify the executor to use
             self._serving_iterator.GetNext  # method to call
         )
@@ -50,7 +50,7 @@ class PyAsyncStreamingIterator(object):
         # Check the status of the iteration
         if status.OK():
             # If the iteration is successful, return the token ID
-            return token_id
+            return token_id, logprobs
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
             # If the iteration has finished, raise a StopAsyncIteration exception
             raise StopAsyncIteration(
@@ -102,12 +102,13 @@ class ServingModel(object):
         sampling_config.topp = generation_config.top_p
         sampling_config.temperature = generation_config.temperature
         sampling_config.max_new_tokens = generation_config.max_new_tokens
+        sampling_config.logprobs_num = generation_config.logprobs_num
         sampling_config.repetition_penalty = generation_config.repetition_penalty
 
         if streamer is None:
-            _, outputs = self._serving.generate(model_name, inputs,
-                                                sampling_config)
-            return outputs
+            _, outputs, logprobs = self._serving.generate(model_name, inputs,
+                                                          sampling_config)
+            return outputs, logprobs
         else:
             _, streaming_iterator = self._serving.generate_streaming(
                 model_name, inputs, sampling_config)

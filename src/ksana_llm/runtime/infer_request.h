@@ -97,6 +97,9 @@ class InferRequest {
     // The output tokens, always contain input tokens on the left.
     std::vector<int> &output_tokens;
 
+    // Store token and their corresponding float probability values.
+    std::vector<std::vector<std::pair<int, float>>> &logprobs;
+
     // The sampling config of this request.
     SamplingConfig &sampling_config;
 

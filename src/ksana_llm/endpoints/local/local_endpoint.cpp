@@ -16,7 +16,8 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
     : BaseEndpoint(endpoint_config, request_queue) {}
 
 Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                             const SamplingConfig &sampling_config, std::vector<int> &output_tokens) {
+                             const SamplingConfig &sampling_config, std::vector<int> &output_tokens,
+                             std::vector<std::vector<std::pair<int, float>>> &logprobs) {
   std::shared_ptr<Request> req = std::make_shared<Request>();
   req->model_name = model_name;
   req->input_tokens = input_tokens;
@@ -35,6 +36,7 @@ Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<in
 
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
   output_tokens = {req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end()};
+  logprobs = std::move(req->logprobs);
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
 }
