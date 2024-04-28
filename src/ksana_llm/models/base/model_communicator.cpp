@@ -92,6 +92,8 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
 #ifdef ENABLE_ACL
   Memcpy(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
          MEMCPY_DEVICE_TO_DEVICE);
+  output_tensors[0].shape = input_tensors[0].shape;
+  output_tensors[0].dtype = input_tensors[0].dtype;
 #endif
 
   return Status();

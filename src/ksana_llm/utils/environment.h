@@ -12,8 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
@@ -56,6 +56,7 @@ struct ModelConfig {
     uint32_t vocab_size;
     int start_id;
     int end_id;
+    int pad_id;
     size_t num_key_value_heads;
     int max_batch_size;
     int max_position_embeddings;
@@ -73,7 +74,12 @@ struct ContextCachingConfig {};
 
 enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
 
+enum ScheduleStrategy { CONTINUOUS_BATCHING = 0, AUTO_BATCHING = 1 };
+
 struct BatchSchedulerConfig {
+    // The batch schedule strategy.
+    ScheduleStrategy schedule_strategy = ScheduleStrategy::CONTINUOUS_BATCHING;
+
     // Max waiting time in millisecond.
     size_t waiting_timeout_in_ms = 600000;
 

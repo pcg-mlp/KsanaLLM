@@ -157,7 +157,7 @@ void RotaryEmbeddingACL::Forward(const aclTensor* input, const aclTensor* ropeIn
   auto head_dims = input_shape[3];
 
   // TODO: opt this mem
-  auto maxDevSize = seq_len * num_heads * head_dims * sizeof(uint16_t);
+  auto maxDevSize = bs * seq_len * num_heads * head_dims * sizeof(uint16_t);
   void* maxDev_a = nullptr;
   void* maxDev_b = nullptr;
   void* maxDev_c = nullptr;

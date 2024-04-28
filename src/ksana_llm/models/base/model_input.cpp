@@ -183,16 +183,17 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   }
   MemcpyAsync(input_ids.GetPtr<int>(), input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
-#ifdef ENABLE_ACL
-  // Event wait between streams seems not work, force sync here.
-  StreamSynchronize(context_->GetH2DStreams()[rank_]);
-#endif
 
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
+
+#ifdef ENABLE_ACL
+  // Event wait between streams seems not work, force sync here.
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
+#endif
 }
 
 void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forward_reqs) {
@@ -215,9 +216,6 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
 
   MemcpyAsync(input_ids.GetPtr<void>(), input_ids_cpu.data(), batch_size * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetH2DStreams()[rank_]);
-#endif
 
   // create input offset tensor int32 and uint64
   input_tokens_int32_tensor.shape = {static_cast<unsigned long>(batch_size)};
@@ -228,6 +226,10 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
+
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
+#endif
 }
 
 }  // namespace ksana_llm

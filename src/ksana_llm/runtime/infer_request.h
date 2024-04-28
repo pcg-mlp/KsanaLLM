@@ -124,6 +124,9 @@ class InferRequest {
     // End id of the model.
     int end_id;
 
+    // Padding token id of the model.
+    int pad_id;
+
     // The arrive time.
     unsigned long timestamp_in_ms;
 
