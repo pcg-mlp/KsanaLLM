@@ -63,7 +63,7 @@ class InferRequest {
 
     // Swap in/out this request asynchronous.
     Status SwapInAsync();
-    Status SwapOutAsync();
+    Status SwapOutAsync(const int host_block_num_to_add);
 
     // Drop this swapped request.
     Status DropSwappedAsync();

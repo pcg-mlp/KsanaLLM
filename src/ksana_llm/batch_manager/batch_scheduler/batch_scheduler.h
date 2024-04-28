@@ -56,7 +56,7 @@ class BatchScheduler {
     void SchedulePending();
 
     // Execute swap in separate threadpool.
-    void SwapOutAsync(std::shared_ptr<InferRequest> req);
+    void SwapOutAsync(std::shared_ptr<InferRequest> req, const int host_block_num_to_add);
     void SwapInAsync(std::shared_ptr<InferRequest> req);
 
     // Prepare the running/swapped/waiting queue.

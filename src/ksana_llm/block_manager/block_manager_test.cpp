@@ -129,7 +129,7 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
 
   // 将 block 从 device 交换到 host
   std::vector<int> host_blocks;
-  status = block_manager->SwapOut(blocks, host_blocks);
+  status = block_manager->SwapOut(blocks, host_blocks, 0);
   EXPECT_TRUE(status.OK());
   EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 0);
   EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 2);

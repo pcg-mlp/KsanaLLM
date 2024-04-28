@@ -154,7 +154,7 @@ Status InferRequest::SwapInAsync() {
   return Status();
 }
 
-Status InferRequest::SwapOutAsync() {
+Status InferRequest::SwapOutAsync(const int host_block_num_to_add) {
   for (size_t i = 0; i < kv_cache_blocks.size(); ++i) {
     std::vector<int> host_blocks;
     GetBlockManager()->SetDeviceId(i);
@@ -166,10 +166,10 @@ Status InferRequest::SwapOutAsync() {
       std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
       std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
                 private_kv_cache_blocks.begin());
-      GetBlockManager()->SwapOut(private_kv_cache_blocks, host_blocks);
-      std::copy(host_blocks.begin(), host_blocks.end(), kv_cache_blocks[i].begin() + prefix_cache_blocks_number);
+      GetBlockManager()->SwapOut(private_kv_cache_blocks, host_blocks, host_block_num_to_add);
+      std::copy(host_blocks.begin(), host_blocks.end() - host_block_num_to_add, kv_cache_blocks[i].begin() + prefix_cache_blocks_number);
     } else {
-      GetBlockManager()->SwapOut(kv_cache_blocks[i], host_blocks);
+      GetBlockManager()->SwapOut(kv_cache_blocks[i], host_blocks, host_block_num_to_add);
       kv_cache_blocks[i].swap(host_blocks);
     }
   }
