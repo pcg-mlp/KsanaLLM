@@ -62,6 +62,7 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.layernorm_eps = config_json.value("layer_norm_epsilon", model_config.layernorm_eps);
   model_config.start_id = config_json.value("bos_token_id", 1);
   model_config.end_id = config_json.value("eos_token_id", 2);
+  model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
 
   auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
@@ -98,6 +99,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
   }
 
   // Read batch scheduler config.
+  batch_manager_config_.batch_scheduler_config.schedule_strategy = static_cast<ScheduleStrategy>(
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.schedule_strategy", 0));
   batch_manager_config_.batch_scheduler_config.waiting_timeout_in_ms =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
   batch_manager_config_.batch_scheduler_config.max_waiting_queue_len =
@@ -116,7 +119,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
   batch_manager_config_.batch_scheduler_config.swap_threadpool_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 8);
-  batch_manager_config_.batch_scheduler_config.preempt_mode = static_cast<ksana_llm::PreemptMode>(
+  batch_manager_config_.batch_scheduler_config.preempt_mode = static_cast<PreemptMode>(
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
 
   // Read block manager config.

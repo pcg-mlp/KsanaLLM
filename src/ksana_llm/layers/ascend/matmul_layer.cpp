@@ -13,14 +13,14 @@ namespace ksana_llm {
 
 template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // TODO(karlluo): implement llm_kernels::ascend::MatMul
-  size_t k = input_tensors[1].shape[0];
-  size_t n = input_tensors[1].shape[1];
-  size_t m = input_tensors[0].shape[0];
+  int64_t b = input_tensors[0].shape[0];
+  int64_t m = input_tensors[0].shape[1];
+  int64_t k = input_tensors[0].shape[2];
+  int64_t n = input_tensors[1].shape[1];
 
-  std::vector<int64_t> matmul_input_shape = {m, k};  /*m, k*/
-  std::vector<int64_t> matmul_weight_shape = {k, n}; /*k, n*/
-  std::vector<int64_t> matmul_output_shape = {m, n}; /*m, n*/
+  std::vector<int64_t> matmul_input_shape = {b, m, k};
+  std::vector<int64_t> matmul_weight_shape = {k, n};
+  std::vector<int64_t> matmul_output_shape = {b, m, n}; 
   aclTensor* matmul_input = nullptr;
   aclTensor* matmul_weight = nullptr;
   aclTensor* matmul_output = nullptr;
@@ -38,7 +38,8 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output,
                               context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
-  output_tensors[0].shape = {m, n};
+  output_tensors[0].shape = {static_cast<unsigned long>(b), static_cast<unsigned long>(m),
+                             static_cast<unsigned long>(n)};
   output_tensors[0].ResetDeviceTensor(matmul_output);
 
   ACL_CHECK(aclDestroyTensor(matmul_input));

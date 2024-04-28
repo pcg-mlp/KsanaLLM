@@ -25,13 +25,15 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   // output_tensors:
   //     0: flash_attention_output shape: [std::max(max_batch_size * vocab_size, max_token_num * hidden_units * 3)]
 
-  int64_t seq_len = input_tensors[5].shape[1];
+  int64_t batch_size = input_tensors[0].shape[0];
+  int64_t seq_len = input_tensors[0].shape[1];
+  int64_t hidden_units = input_tensors[0].shape[2] / 3;
+
   int64_t token_pos = seq_len;
-  int64_t hidden_units = input_tensors[0].shape[1] / 3;
 
   // shape: [bs, seq_len, hidden_units, 3]
   Tensor qkv_input2 = input_tensors[0];
-  aclTensor* input_tensor2 = qkv_input2.ResetDeviceTensor(DataType::TYPE_FP16, {1, seq_len, hidden_units * 3});
+  aclTensor* input_tensor2 = qkv_input2.ResetDeviceTensor(DataType::TYPE_FP16, {batch_size, seq_len, hidden_units * 3});
 
   void* key_cache2 = input_tensors[11].GetPtr<void>();
   void* val_cache2 = input_tensors[12].GetPtr<void>();
@@ -51,11 +53,12 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   this->ascend_flash_attn_->Forward(input_tensor2, token_pos, &key_cache2, &val_cache2, tmp_buffers2, &output2, true,
                                     context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr);
 
-  size_t size2 = seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
+  size_t size2 = batch_size * seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
   ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>(), size2, tmp_buffers2[1], size2,
                         aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
 
-  output_tensors[0].shape = {static_cast<unsigned long>(seq_len), static_cast<unsigned long>(hidden_units)};
+  output_tensors[0].shape = {static_cast<unsigned long>(batch_size), static_cast<unsigned long>(seq_len),
+                             static_cast<unsigned long>(hidden_units)};
   output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();

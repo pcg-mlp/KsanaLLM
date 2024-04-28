@@ -28,12 +28,6 @@ BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::
 Status BatchManager::Initialize() {
   batch_scheduler_ = std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_);
 
-  context_caching_ = std::make_shared<ContextCaching>(batch_manager_config_.context_caching_config);
-
-  lora_coordinator_ = std::make_shared<LoraCoordinator>(batch_manager_config_.lora_coordinator_config);
-
-  request_batching_ = std::make_shared<RequestBatching>(batch_manager_config_.request_batching_config);
-
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_manager_config_.batch_scheduler_config, context_);
 
   queue_waiter_ = std::make_shared<Waiter>(1);
@@ -65,6 +59,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   }
   infer_req->model_instance = model_instances_[req->model_name];
   infer_req->end_id = infer_req->model_instance->GetModelConfig().end_id;
+  infer_req->pad_id = infer_req->model_instance->GetModelConfig().pad_id;
   infer_req->infer_stage = InferStage::STAGE_CONTEXT;
   infer_req->step = 0;
 
@@ -123,8 +118,10 @@ Status BatchManager::Process() {
 Status BatchManager::Start() {
   // Check config here, because the block number is determined after all models loaded.
   size_t total_token_num = GetBlockManager()->GetDeviceFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum();
+#ifdef ENABLE_CUDA
   NLLM_CHECK_WITH_INFO(total_token_num >= (batch_manager_config_.batch_scheduler_config.max_token_len),
                        "Total device block_num * block_token_size must large than max_token_len.");
+#endif
 
   batch_manager_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::Process, this));
 
