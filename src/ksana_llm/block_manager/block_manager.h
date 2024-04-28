@@ -86,7 +86,7 @@ class BlockManager {
 
     // Swap out blocks from device to host,
     // it could be swapped in later and keep block id not changed.
-    Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks);
+    Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks, const int host_block_num_to_swap);
 
     // Swap in blocks from host to device.
     Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks);

@@ -62,13 +62,13 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_confi
 
 BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
 
-void BatchScheduler::SwapOutAsync(std::shared_ptr<InferRequest> req) {
+void BatchScheduler::SwapOutAsync(std::shared_ptr<InferRequest> req, const int host_block_num_to_add) {
   req->swap_pending = true;
   req->swap_future = threadpool_->Submit([=]() {
     NLLM_LOG_DEBUG << "Start to async swapout req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
     {
       REPORT_TIME_US(batch_scheduler_swapout_us);
-      req->SwapOutAsync();
+      req->SwapOutAsync(host_block_num_to_add);
       req->swap_pending = false;
     }
     NLLM_LOG_DEBUG << "Finish to async swapout req " << req->req_id;
@@ -228,7 +228,7 @@ bool BatchScheduler::CheckRequestFinish(const std::shared_ptr<InferRequest> req)
         (req->output_tokens.back() == req->end_id ||
          (req->sampling_config.max_new_tokens > 0 &&
           req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
-          req->output_tokens.size() >= batch_scheduler_config_.max_token_len)) {
+         req->output_tokens.size() >= batch_scheduler_config_.max_token_len)) {
       return true;
     }
   }
@@ -509,9 +509,9 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
   size_t host_free_num = GetBlockManager()->GetHostFreeBlockNumber();
   for (size_t idx = 0; idx < running_queue_.size();) {
     auto &req = running_queue_[idx];
+    size_t step_block_num = running_step_block_num_list_[visit_idx];
     if (visit_idx < swapout_pos) {
       NLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
-      size_t step_block_num = running_step_block_num_list_[visit_idx];
       if (step_block_num > 0) {
         for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
           std::vector<int> blocks;
@@ -539,11 +539,18 @@ void BatchScheduler::ScheduleRunning(size_t &step_token_num_sum, bool &skip_othe
       bool swap_success = false;
       if (batch_scheduler_config_.preempt_mode == SWAP) {
         NLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
-        size_t swap_size = req->kv_cache_blocks[0].size();
+        size_t swap_size = req->kv_cache_blocks[0].size() + step_block_num;
         swap_success = host_free_num > swap_size;
         if (swap_success) {
           host_free_num -= swap_size;
-          SwapOutAsync(req);
+          // Assuming that a new block needs to be allocated when the request is going to infer the next token,
+          // but the request is SwapOut and happens to be SwapIn in the SchedulePending.
+          // In this case, No new blocks will be allocated before the next token infers,
+          // causing the block access to be out of bounds during inference.
+          // Therefore, in SwapOut, host blocks are allocated in advance, and during SwapIn,
+          // they are automatically swapped with device blocks to ensure sufficient block
+          // for requests after SwapIn in SchedulePending to infer next token.
+          SwapOutAsync(req, step_block_num);
           swapout_pending_queue_.insert(swapout_pending_queue_.begin(), req);
           running_queue_.erase(running_queue_.begin() + idx);
         }

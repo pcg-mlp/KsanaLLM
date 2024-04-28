@@ -189,9 +189,9 @@ size_t BlockManager::GetHostUsedBlockNumber() {
   return GetHostAllocator()->GetUsedBlockNumber() / context_->GetTensorParallelSize();
 }
 
-Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks) {
+Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks, const int host_block_num_to_add) {
   // Allocate memory on host.
-  STATUS_CHECK_FAILURE(host_allocator_->AllocateBlocks(device_blocks.size(), host_blocks));
+  STATUS_CHECK_FAILURE(host_allocator_->AllocateBlocks(device_blocks.size() + host_block_num_to_add, host_blocks));
 
   // Get host and device address.
   std::vector<void*> host_addrs;
