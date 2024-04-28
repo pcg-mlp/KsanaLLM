@@ -29,6 +29,9 @@ struct SamplingRequest {
     // The mutex used to protect output_tokens.
     std::mutex* output_mutex;
 
+    // Store token and their corresponding float probability values.
+    std::vector<std::vector<std::pair<int, float>>>* logprobs;
+
     // Model config
     const ModelConfig* model_config;
 };

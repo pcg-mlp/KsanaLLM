@@ -21,7 +21,7 @@ class StreamingIterator {
     ~StreamingIterator() {}
 
     // Get the next token id, blocked if no token
-    Status GetNext(int& token_id);
+    Status GetNext(int& token_id, std::vector<std::pair<int, float>>& logprobs);
 
   private:
     // The user request.

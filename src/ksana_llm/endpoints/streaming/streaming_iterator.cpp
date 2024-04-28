@@ -9,7 +9,7 @@
 
 namespace ksana_llm {
 
-Status StreamingIterator::GetNext(int& token_id) {
+Status StreamingIterator::GetNext(int& token_id, std::vector<std::pair<int, float>>& logprobs) {
   while (true) {
     if (request_->finished) {
       // failure, no token generated.
@@ -20,6 +20,7 @@ Status StreamingIterator::GetNext(int& token_id) {
       // Fetch next token util the last token is fetched.
       std::unique_lock<std::mutex> lock(request_->output_mutex);
       if (cur_index_ < request_->output_tokens.size()) {
+        logprobs = request_->logprobs[cur_index_ - request_->input_tokens.size()];
         token_id = request_->output_tokens[cur_index_++];
         return Status();
       }
@@ -31,6 +32,7 @@ Status StreamingIterator::GetNext(int& token_id) {
     {
       std::unique_lock<std::mutex> lock(request_->output_mutex);
       if (cur_index_ < request_->output_tokens.size()) {
+        logprobs = request_->logprobs[cur_index_ - request_->input_tokens.size()];
         token_id = request_->output_tokens[cur_index_++];
         return Status();
       }

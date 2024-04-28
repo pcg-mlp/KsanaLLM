@@ -24,6 +24,8 @@ struct SamplingConfig {
 
     // The maximum numbers of tokens to generate, ignoring the number of tokens in the prompt.
     int max_new_tokens = 1024;
+
+    int logprobs_num = 0;
 };
 
 class Request {
@@ -41,6 +43,9 @@ class Request {
 
     // The output tokens of this request.
     std::vector<int> output_tokens;
+
+    // Store token and their corresponding float probability values.
+    std::vector<std::vector<std::pair<int, float>>> logprobs;
 
     // The config of sampling.
     SamplingConfig sampling_config;

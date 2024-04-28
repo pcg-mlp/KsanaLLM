@@ -461,6 +461,25 @@ void Mul(float* a, float* b, float* c, int n, int device_rank) {
   mul_out(c_tensor, a_tensor, b_tensor);
 }
 
+void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, int logprobs_num, float* logprobs,
+                  int64_t* token_ids) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kFloat32);
+  auto logits_tensor = torch::from_blob(logits, {bs, vocab_size}, options);
+  auto temperatures_tensor = torch::from_blob(temperatures, {bs}, options);
+
+  torch::Tensor logits_sort, logits_idx;
+  std::tie(logits_sort, logits_idx) = logits_tensor.sort(-1, true);
+  logits_sort = logits_sort.narrow(1, 0, logprobs_num)
+                  .div_(temperatures_tensor.unsqueeze_(1))
+                  .log_softmax(-1)
+                  .to(torch::kCPU)
+                  .view({-1});
+  logits_idx = logits_idx.narrow(1, 0, logprobs_num).to(torch::kCPU).view({-1});
+
+  memcpy(logprobs, logits_sort.data_ptr<float>(), logprobs_num * bs * sizeof(float));
+  memcpy(token_ids, logits_idx.data_ptr<int64_t>(), logprobs_num * bs * sizeof(int64_t));
+}
+
 template <typename T>
 Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
               uint32_t* result, Stream& stream, void* workspace_ptr) {

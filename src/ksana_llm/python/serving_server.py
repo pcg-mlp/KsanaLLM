@@ -66,7 +66,8 @@ def streaming_generate(model_name, input_tokens, generation_config):
     # Define an asynchronous function to stream the results
     async def stream_results():
         unfinished_token = []  # store unfinished tokens
-        async for request_output in results_iterator:  # iterate over the results
+        unfinished_logprobs = []
+        async for request_output, logprobs in results_iterator:  # iterate over the results
             if request_output is not None:  # if the output is not empty
                 # Decode the output tokens using the tokenizer
                 output_text = tokenizer.decode(
@@ -75,16 +76,27 @@ def streaming_generate(model_name, input_tokens, generation_config):
                      ],  # combine unfinished tokens with the new output
                     skip_special_tokens=True  # skip special tokens
                 )
+                ret = {}
                 # Check if the output ends with a special token (\uFFFD)
                 if output_text[-1:] == "\uFFFD":
                     # If it does, add the output to the unfinished tokens and reset the output text
                     unfinished_token = unfinished_token + [request_output]
-                    output_text = ""
+                    unfinished_logprobs = unfinished_logprobs + [logprobs]
+                    ret = {
+                        "texts": "",
+                        "output_token_ids": [],
+                        "logprobs": []
+                    }
                 else:
+                    # Create a response dictionary with the output text
+                    ret = {
+                        "texts": output_text,
+                        "output_token_ids": unfinished_token + [request_output],
+                        "logprobs": unfinished_logprobs + [logprobs]
+                    }
                     # If it doesn't, reset the unfinished tokens
                     unfinished_token = []
-                # Create a response dictionary with the output text
-                ret = {"texts": output_text}
+                    unfinished_logprobs = []
                 # Yield the response as a JSON-encoded string with a null character (\0) at the end
                 yield (json.dumps(ret) + "\0").encode("utf-8")
             else:
@@ -99,7 +111,7 @@ def batch_generate(model_name, input_tokens, generation_config):
     """Perform batch generation.
     """
     # Generate output tokens using the model
-    results_tokens = model.generate(
+    results_tokens, logprobs = model.generate(
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
@@ -113,6 +125,7 @@ def batch_generate(model_name, input_tokens, generation_config):
     return JSONResponse({
         "texts": output_text,  # the generated text
         "output_token_ids": results_tokens,  # the generated token IDs
+        "logprobs": logprobs,
         "input_token_ids": input_tokens  # the input token IDs
     })
 
@@ -147,6 +160,7 @@ async def generate(request: Request) -> Response:
         temperature=get_sampling_value(sampling_config, "temperature", 0.0),
         max_new_tokens=get_sampling_value(sampling_config, "max_new_tokens",
                                           -1),
+        logprobs_num=get_sampling_value(sampling_config, "logprobs", 0),
         repetition_penalty=get_sampling_value(sampling_config,
                                               "repetition_penalty", 1.0))
 

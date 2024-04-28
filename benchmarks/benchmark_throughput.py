@@ -102,6 +102,31 @@ def read_from_csv(csv_file, col_idx=0, remove_head=True):
         next(csv_reader)
     return [row[col_idx] for row in csv_reader]
 
+def analyze_stream_jsons(data_str: str):
+    brace_count = 0
+    start_index = 0
+    result_json = {}
+    for i, char in enumerate(data_str):
+        if (char == '\x00'):
+            start_index = i+1
+            continue
+        if char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+
+        if brace_count == 0 and char == '}':
+            json_str = data_str[start_index:i+1]
+
+            json_data = json.loads(str(json_str), strict=False)
+            for key, value in json_data.items():
+                if  key in result_json:
+                    result_json[key] = result_json[key] + value
+                else:
+                    result_json[key] = value
+            start_index = i+1
+
+    return result_json
 
 async def generate_prompt_async(
     input_requests: List[str],
@@ -132,6 +157,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 "topk": 1,
                 "topp": 0.0,
                 "repetition_penalty": 1.0,
+                "logprobs": 0,
                 "max_new_tokens": 1024,
             },
             "stream": stream,
@@ -152,6 +178,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "n": 1,
             "temperature": 0.00000001,
             "max_tokens": 1024,
+            "logprobs": 0,
             "repetition_penalty": 1.0
         }
     elif backend in ["ksana-server", "vllm-server"]:
@@ -163,6 +190,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "top_k": 1,
             "num_beams": 1,
             "repetition_penalty": 1.0,
+            "logprobs": 0,
             "n": 1,
             "task_id": time.time(),
             "delete_prompt_from_output": 0,
@@ -197,9 +225,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 output = json.loads(data_segments[-1].split(': ', 1)[1])
                 output["choices"][0]["delta"]["content"] = texts
             elif stream:
-                output = {"texts": output.replace("{\"texts\": \"", "") \
-                                         .replace("\"}", "") \
-                                         .replace("\x00", "")}
+                output = analyze_stream_jsons(output)
             else:
                 output = json.loads(output)
 

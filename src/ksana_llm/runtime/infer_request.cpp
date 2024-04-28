@@ -23,6 +23,7 @@ InferRequest::InferRequest(std::shared_ptr<Request>& request)
       model_name(request->model_name),
       input_tokens(request->input_tokens),
       output_tokens(request->output_tokens),
+      logprobs(request->logprobs),
       sampling_config(request->sampling_config),
       waiter(request->waiter),
       step_waiter(request->step_waiter),

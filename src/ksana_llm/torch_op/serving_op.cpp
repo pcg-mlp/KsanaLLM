@@ -43,9 +43,10 @@ void ServingOp::InitServing(const std::string &config_file) {
 }
 
 Status ServingOp::Generate(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config, std::vector<int> &output_tokens) {
+                           const SamplingConfig &sampling_config, std::vector<int> &output_tokens,
+                           std::vector<std::vector<std::pair<int, float>>> &logprobs) {
   NLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
-  return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens);
+  return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens, logprobs);
 }
 
 Status ServingOp::GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
@@ -81,6 +82,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
     .def_readwrite("topp", &ksana_llm::SamplingConfig::topp)
     .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature)
     .def_readwrite("max_new_tokens", &ksana_llm::SamplingConfig::max_new_tokens)
+    .def_readwrite("logprobs_num", &ksana_llm::SamplingConfig::logprobs_num)
     .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty);
 
   // Export `StreamingIterator` to python.
@@ -89,9 +91,10 @@ PYBIND11_MODULE(libtorch_serving, m) {
     .def("GetNext", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
       pybind11::gil_scoped_release release;
       int token_id;
-      ksana_llm::Status status = self->GetNext(token_id);
+      std::vector<std::pair<int, float>> logprobs;
+      ksana_llm::Status status = self->GetNext(token_id, logprobs);
       pybind11::gil_scoped_acquire acquire;
-      return std::make_tuple(status, token_id);
+      return std::make_tuple(status, token_id, logprobs);
     });
 
   // Export `ServingOp` to python.
@@ -103,9 +106,11 @@ PYBIND11_MODULE(libtorch_serving, m) {
             const std::vector<int> &input_tokens, const ksana_llm::SamplingConfig &sampling_config) {
             pybind11::gil_scoped_release release;
             std::vector<int> output_tokens;
-            ksana_llm::Status status = self->Generate(model_name, input_tokens, sampling_config, output_tokens);
+            std::vector<std::vector<std::pair<int, float>>> logprobs;
+            ksana_llm::Status status =
+              self->Generate(model_name, input_tokens, sampling_config, output_tokens, logprobs);
             pybind11::gil_scoped_acquire acquire;
-            return std::make_tuple(status, output_tokens);
+            return std::make_tuple(status, output_tokens, logprobs);
           })
     .def("generate_streaming", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &model_name,
                                   const std::vector<int> &input_tokens,
