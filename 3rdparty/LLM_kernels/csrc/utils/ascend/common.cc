@@ -114,36 +114,13 @@ std::string GetNumpyTypeDesc(aclDataType dtype) {
   }
 }
 
-void SaveNpy(const aclTensor* tensor, const std::string& filename, aclrtStream& stream) {
-  aclDataType acl_dtype;
-  ACL_CHECK_RET(aclGetDataType(tensor, &acl_dtype));
-  int64_t* shape = nullptr;
-  uint64_t dims = 0;
-  ACL_CHECK_RET(aclGetViewShape(tensor, &shape, &dims));
-  size_t elem_nums = dims == 0ul ? 0ul : 1ul;
-  std::vector<int64_t> tensor_shape(dims);
-  for (uint64_t i = 0; i < dims; ++i) {
-    elem_nums *= shape[i];
-    tensor_shape[i] = shape[i];
+template <typename T>
+void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<T>& tensor_shape, const size_t dtype_size,
+                    void* data_ptr, const std::string& filename) {
+  size_t elem_nums = 1ul;
+  for (uint64_t i = 0; i < tensor_shape.size(); ++i) {
+    elem_nums *= tensor_shape[i];
   }
-  aclTensor* tmp_tensor;
-  void* tmp_tensor_ptr = nullptr;
-  CreateAclTensor(tensor_shape, &tmp_tensor_ptr, acl_dtype, aclFormat::ACL_FORMAT_ND, &tmp_tensor);
-  uint64_t new_workspace_size = 0ul;
-  aclOpExecutor* executor = nullptr;
-  ACL_CHECK_RET(aclnnInplaceCopyGetWorkspaceSize(tmp_tensor, tensor, &new_workspace_size, &executor));
-  void* workspace_ptr = nullptr;
-  if (new_workspace_size > 0) {
-    ACL_CHECK_RET(aclrtMalloc(&workspace_ptr, new_workspace_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-  }
-  ACL_CHECK_RET(aclnnInplaceCopy(workspace_ptr, new_workspace_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
-
-  // copy
-  void* host_buffer_ptr = nullptr;
-  ACL_CHECK_RET(aclrtMallocHost(&host_buffer_ptr, elem_nums * aclDataTypeSize(acl_dtype)));
-  ACL_CHECK_RET(aclrtMemcpy(tmp_tensor_ptr, elem_nums * aclDataTypeSize(acl_dtype), host_buffer_ptr,
-                            elem_nums * aclDataTypeSize(acl_dtype), ACL_MEMCPY_DEVICE_TO_HOST));
 
   const char magic[] =
       "\x93"
@@ -152,7 +129,7 @@ void SaveNpy(const aclTensor* tensor, const std::string& filename, aclrtStream& 
   const uint8_t npy_minor = 0;
 
   std::stringstream header_stream;
-  header_stream << "{'descr': '" << GetNumpyTypeDesc(acl_dtype) << "', 'fortran_order': False, 'shape': (";
+  header_stream << "{'descr': '" << numpy_type << "', 'fortran_order': False, 'shape': (";
   for (size_t i = 0; i < tensor_shape.size(); ++i) {
     header_stream << tensor_shape[i];
     if (i + 1 < tensor_shape.size() || tensor_shape.size() == 1) {
@@ -177,13 +154,43 @@ void SaveNpy(const aclTensor* tensor, const std::string& filename, aclrtStream& 
   fwrite(&npy_minor, sizeof(uint8_t), 1, f_ptr);
   fwrite(&header_len, sizeof(uint16_t), 1, f_ptr);
   fwrite(header.c_str(), sizeof(char), header_len, f_ptr);
-  fwrite(host_buffer_ptr, aclDataTypeSize(acl_dtype), elem_nums, f_ptr);
+  fwrite(data_ptr, dtype_size, elem_nums, f_ptr);
   fclose(f_ptr);
-  ACL_CHECK_RET(aclrtFreeHost(host_buffer_ptr));
-  ACL_CHECK_RET(aclDestroyTensor(tmp_tensor));
-  ACL_CHECK_RET(aclrtFree(tmp_tensor_ptr));
-  if (workspace_ptr != nullptr) {
-    ACL_CHECK_RET(aclrtFree(workspace_ptr));
+}
+
+template void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<int64_t>& tensor_shape,
+                             const size_t dtype_size, void* data_ptr, const std::string& filename);
+template void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<size_t>& tensor_shape,
+                             const size_t dtype_size, void* data_ptr, const std::string& filename);
+
+void SaveNpy(const aclTensor* tensor, const void* tensor_workspace_ptr, const std::string& filename,
+             aclrtStream& stream, bool is_on_device) {
+  aclDataType acl_dtype;
+  ACL_CHECK_RET(aclGetDataType(tensor, &acl_dtype));
+  int64_t* shape = nullptr;
+  uint64_t dims = 0;
+  ACL_CHECK_RET(aclGetViewShape(tensor, &shape, &dims));
+  size_t elem_nums = dims == 0ul ? 0ul : 1ul;
+  std::vector<int64_t> tensor_shape(dims);
+  for (uint64_t i = 0; i < dims; ++i) {
+    elem_nums *= shape[i];
+    tensor_shape[i] = shape[i];
+  }
+
+  // copy
+  void* host_buffer_ptr = nullptr;
+  if (is_on_device) {
+    ACL_CHECK_RET(aclrtMallocHost(&host_buffer_ptr, elem_nums * aclDataTypeSize(acl_dtype)));
+    ACL_CHECK_RET(aclrtMemcpy(host_buffer_ptr, elem_nums * aclDataTypeSize(acl_dtype), tensor_workspace_ptr,
+                              elem_nums * aclDataTypeSize(acl_dtype), ACL_MEMCPY_DEVICE_TO_HOST));
+  } else {
+    host_buffer_ptr = (void*)tensor_workspace_ptr;
+  }
+
+  std::string numpy_type_str = GetNumpyTypeDesc(acl_dtype);
+  SaveNpyFromPtr(numpy_type_str, tensor_shape, aclDataTypeSize(acl_dtype), host_buffer_ptr, filename);
+  if (is_on_device) {
+    ACL_CHECK_RET(aclrtFreeHost(host_buffer_ptr));
   }
 }
 
