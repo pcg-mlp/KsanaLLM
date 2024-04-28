@@ -81,7 +81,12 @@ void CreateAclTensor(const std::vector<int64_t>& shape, void** deviceAddr, aclDa
 void CreateAclTensorWithData(const std::vector<int64_t>& shape, void** deviceAddr, aclDataType dataType,
                              aclFormat dataFormat, aclTensor** tensor);
 
-void SaveNpy(const aclTensor* tensor, const std::string& filename, aclrtStream& stream);
+void SaveNpy(const aclTensor* tensor, const void* tensor_workspace_ptr, const std::string& filename,
+             aclrtStream& stream, bool is_on_device = true);
+
+template <typename T>
+void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<T>& tensor_shape, const size_t dtype_size,
+                    void* data_ptr, const std::string& filename);
 
 std::string GetNumpyTypeDesc(aclDataType dtype);
 

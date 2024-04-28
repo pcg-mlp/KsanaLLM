@@ -52,6 +52,12 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
           pytorch_tensor_index_map_[tensor_name] = *static_cast<int64_t*>(it.value().toTensor().data_ptr());
         } else {
           pytorch_tensor_map_[tensor_name] = it.value().toTensor();
+#ifdef ENABLE_ACL
+#ifndef ENABLE_BFLOAT16
+          // TODO(karlluo): will enhance after support bf16
+          pytorch_tensor_map_[tensor_name] = pytorch_tensor_map_[tensor_name].to(torch::kFloat16);
+#endif
+#endif
         }
       }
     }
