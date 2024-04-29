@@ -22,16 +22,7 @@ function(add_ascend_kernel_lib)
   set_property(TARGET ${kernel_lib_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
   if(KERNEL_SRCS)
-    set_source_files_properties(${KERNEL_SRCS} PROPERTIES LANGUAGE CCE)
     set(ascend_kernel_lib_name llm_kernels_ascend_raw_${add_ascend_kernel_lib_NAME})
-    add_library(${ascend_kernel_lib_name} SHARED ${KERNEL_SRCS})
-    target_compile_options(${ascend_kernel_lib_name} PRIVATE
-      -O2
-      -std=c++17
-    )
-    target_compile_definitions(${ascend_kernel_lib_name} PRIVATE
-      TILING_KEY_VAR=0
-    )
   endif()
 
   if(NOT "${add_ascend_kernel_lib_DEPS_KERNELS}" STREQUAL "")
@@ -40,10 +31,8 @@ function(add_ascend_kernel_lib)
     endforeach()
   endif()
 
-  if(NOT "${add_ascend_kernel_lib_NAME}" STREQUAL "pointwise")
-    set(llm_kernels_ascend_link_libs ${llm_kernels_ascend_link_libs})
-    set(llm_kernels_ascend_libs_deps ${llm_kernels_ascend_libs_deps})
-  endif()
+  set(llm_kernels_ascend_link_libs ${llm_kernels_ascend_link_libs})
+  set(llm_kernels_ascend_libs_deps ${llm_kernels_ascend_libs_deps})
 
   target_link_libraries(${kernel_lib_name} PUBLIC ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
   add_dependencies(${kernel_lib_name} ${llm_kernels_ascend_libs_deps})
@@ -76,6 +65,7 @@ add_subdirectory(reshape)
 add_subdirectory(rotary_embedding)
 add_subdirectory(slice)
 add_subdirectory(transpose)
+add_subdirectory(matmul_silu)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")
