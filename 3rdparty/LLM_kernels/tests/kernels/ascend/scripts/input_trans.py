@@ -6,7 +6,7 @@ from transformers import LlamaTokenizer, AutoTokenizer
 import sys
 import pdb
 
-MAX_PROMPT_LEN = 2048
+MAX_PROMPT_LEN = 1024
 
 model_type = "7b"
 if len(sys.argv) > 1 :

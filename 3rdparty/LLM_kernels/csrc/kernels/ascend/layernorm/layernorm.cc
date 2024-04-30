@@ -13,8 +13,8 @@ using namespace llm_kernels::utils;
 namespace llm_kernels {
 namespace ascend {
 
-void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, aclTensor** output, aclrtStream& stream,
-                  void (*ws_func)(size_t, void**), void* workspace_buf_ptr, float eps) {
+void RMSLayerNorm(const aclTensor* input, const aclTensor* weight, float eps, aclTensor** output, aclrtStream& stream,
+                  void (*ws_func)(size_t, void**), void* workspace_buf_ptr) {
   auto dtype_fp32 = aclDataType::ACL_FLOAT;
   auto dtype_fp16 = aclDataType::ACL_FLOAT16;
   auto fmt = aclFormat::ACL_FORMAT_ND;

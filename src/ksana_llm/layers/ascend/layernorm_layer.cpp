@@ -57,9 +57,8 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
                                               aclFormat::ACL_FORMAT_ND, &lm_output_tensor_ptr);
 
   ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
-  llm_kernels::ascend::RMSLayerNorm(lm_input_tensor_ptr, lm_weight_tensor_ptr, &lm_output_tensor_ptr,
-                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr,
-                                    rms_norm_eps_);
+  llm_kernels::ascend::RMSLayerNorm(lm_input_tensor_ptr, lm_weight_tensor_ptr, rms_norm_eps_, &lm_output_tensor_ptr,
+                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr);
   ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
 
   output_tensors[0].shape = input_tensors[0].shape;
