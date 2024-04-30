@@ -34,8 +34,7 @@
 
 using namespace AclnnLlama;
 int bs = 1;
-constexpr int max_prompt_len = 32;
-constexpr int max_ans_len = 32;
+constexpr int max_ans_len = 1024;
 
 const static std::unordered_map<std::string, ModelConfig> test_models = {{/*model name*/ "llama-7b",
                                                                           {/* model base path */ "../llama_weight",
@@ -88,15 +87,16 @@ TensorWeight::~TensorWeight() {
 
 void LmHead(aclTensor** gatherOutput, const int bs, const int64_t seq_len, const ModelConfig& model_config,
             const aclTensor* lm_head_rms_weight, const aclTensor* lm_head_weight, void** tmpDev1, void** tmpDev2,
-            void** outDev, aclrtStream& stream) {
+            void** norm_buf, void** outDev, aclrtStream& stream) {
   const auto& hidden_size = model_config.hidden_size;
   const auto& vocab_size = model_config.vocab_size;
   // gatherOutput - > rmsnormOutput
   aclTensor* rmsnormOutput = nullptr;
   std::vector<int64_t> rmsnormOutputShape = {bs, seq_len, hidden_size};
   CreateAclTensorWithData(rmsnormOutputShape, tmpDev1, dtype, fmt, &rmsnormOutput);
-  llm_kernels::ascend::RMSLayerNorm(*gatherOutput, lm_head_rms_weight, &rmsnormOutput, stream,
-                                    llm_kernels::utils::GetTestWorkSpaceFunc);
+  float eps = 1e-5f;
+  llm_kernels::ascend::RMSLayerNorm(*gatherOutput, lm_head_rms_weight, eps, &rmsnormOutput, stream,
+                                    llm_kernels::utils::GetTestWorkSpaceFunc, *norm_buf);
   aclDestroyTensor(*gatherOutput);
 
   // rmsnormOutput - > matmul_output
@@ -162,13 +162,13 @@ void LmHead(aclTensor** gatherOutput, const int bs, const int64_t seq_len, const
 
 // output, tmp[2]
 void LlamaAttn(aclTensor* rmsnormOutput, int seq_len, int posIndex, const int hidden_size,
-               DecoderLayerWeight& decoder_layer_weight, std::vector<void*>& tmp_buffers, aclTensor** oproj_output,
+               DecoderLayerWeight& decoder_layer_weight, std::vector<void*>& decode_bufs, aclTensor** oproj_output,
                const bool is_context_stage, std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn,
                aclrtStream& stream) {
   /// matmul
   aclTensor* matmulQKVOutput = nullptr;
   std::vector<int64_t> matmulQKVOutputShape = {bs, seq_len, 3 * hidden_size};
-  CreateAclTensorWithData(matmulQKVOutputShape, &tmp_buffers[0], dtype, fmt, &matmulQKVOutput);
+  CreateAclTensorWithData(matmulQKVOutputShape, &decode_bufs[0], dtype, fmt, &matmulQKVOutput);
   int mm_type = 0;
   llm_kernels::ascend::MatMul(rmsnormOutput, decoder_layer_weight.qkv_proj->GetAclTensor(), mm_type, &matmulQKVOutput,
                               stream, llm_kernels::utils::GetTestWorkSpaceFunc);
@@ -179,13 +179,13 @@ void LlamaAttn(aclTensor* rmsnormOutput, int seq_len, int posIndex, const int hi
   // TODO: generate sin and code, when rope init
   aclTensor* attnOutput = nullptr;
   flash_attn->Forward(matmulQKVOutput, posIndex, &decoder_layer_weight.total_key_cache,
-                      &decoder_layer_weight.total_val_cache, tmp_buffers, &attnOutput, is_context_stage, stream,
+                      &decoder_layer_weight.total_val_cache, decode_bufs, &attnOutput, is_context_stage, stream,
                       llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(matmulQKVOutput);
 
   // o_proj matmul: reshapeOutput -> oproj_output
   std::vector<int64_t> oproj_outputShape = {bs, seq_len, hidden_size};
-  CreateAclTensorWithData(oproj_outputShape, &tmp_buffers[2], dtype, fmt, oproj_output);
+  CreateAclTensorWithData(oproj_outputShape, &decode_bufs[2], dtype, fmt, oproj_output);
   llm_kernels::ascend::MatMul(attnOutput, decoder_layer_weight.o_proj->GetAclTensor(), mm_type, oproj_output, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(attnOutput);
@@ -237,37 +237,26 @@ void LlamaMLP(const aclTensor* post_norm_output, const int bs, const int64_t seq
   aclDestroyTensor(mul_output);
 }
 
-void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int seq_len, int posIndex,
-                 const ModelConfig& model_config, DecoderLayerWeight& decoder_layer_weight, const bool is_context_stage,
+void LlamaDecode(aclTensor* decoderLayerInput, std::vector<void*>& decode_bufs, void** norm_buf,
+                 void** decoderLayerOutputDev, int seq_len, int posIndex, const ModelConfig& model_config,
+                 DecoderLayerWeight& decoder_layer_weight, const bool is_context_stage,
                  std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn, aclrtStream& stream) {
   const auto& hidden_size = model_config.hidden_size;
   const auto& ffn_intermediate_size = model_config.ffn_intermediate_size;
-  size_t maxDevSize;
-  if (is_context_stage) {
-    maxDevSize = bs * seq_len * ffn_intermediate_size * sizeof(uint16_t);
-  } else {
-    maxDevSize = bs * hidden_size * (seq_len + max_ans_len) * sizeof(uint16_t);
-  }
-  auto qkvoutSize = bs * seq_len * 3 * hidden_size * sizeof(uint16_t);
-
-  std::vector<void*> tmp_buffers(5, nullptr);
-  ACL_CHECK_RET(aclrtMalloc(&(tmp_buffers[0]), std::max(maxDevSize, qkvoutSize), ACL_MEM_MALLOC_NORMAL_ONLY));
-  for (int i = 1; i < 5; ++i) {
-    ACL_CHECK_RET(aclrtMalloc(&(tmp_buffers[i]), maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-  }
-  PrintTensor(decoderLayerInput, stream, "decoderLayerInput");
+  // PrintTensor(decoderLayerInput, stream, "decoderLayerInput");
   // / step.1 input layernorm
   // input(bs, seq_len, hiddens) - >  rmsnormOutput(bs, seq_len, hiddens)
   aclTensor* rmsnormOutput = nullptr;
   std::vector<int64_t> rmsnormOutputShape = {bs, seq_len, hidden_size};
-  CreateAclTensorWithData(rmsnormOutputShape, &tmp_buffers[1], dtype, fmt, &rmsnormOutput);
-  llm_kernels::ascend::RMSLayerNorm(decoderLayerInput, decoder_layer_weight.attn_rms->GetAclTensor(), &rmsnormOutput,
-                                    stream, llm_kernels::utils::GetTestWorkSpaceFunc);
-  PrintTensor(rmsnormOutput, stream, "rmsnormOutput");
+  CreateAclTensorWithData(rmsnormOutputShape, &decode_bufs[1], dtype, fmt, &rmsnormOutput);
+  float eps = 1e-5f;
+  llm_kernels::ascend::RMSLayerNorm(decoderLayerInput, decoder_layer_weight.attn_rms->GetAclTensor(), eps,
+                                    &rmsnormOutput, stream, llm_kernels::utils::GetTestWorkSpaceFunc, *norm_buf);
+  // PrintTensor(rmsnormOutput, stream, "rmsnormOutput");
 
   // / step.2 llama attn
   aclTensor* oproj_output = nullptr;
-  LlamaAttn(rmsnormOutput, seq_len, posIndex, hidden_size, decoder_layer_weight, tmp_buffers, &oproj_output,
+  LlamaAttn(rmsnormOutput, seq_len, posIndex, hidden_size, decoder_layer_weight, decode_bufs, &oproj_output,
             is_context_stage, flash_attn, stream);
   // PrintTensor(oproj_output, stream, "oproj_output");
 
@@ -276,7 +265,7 @@ void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int
   uint16_t one_in_fp16 = 0b11110000000000;
   aclScalar* add_alpha = aclCreateScalar(&one_in_fp16, dtype);
   std::vector<int64_t> add_outputShape = {bs, seq_len, hidden_size};
-  CreateAclTensorWithData(add_outputShape, &tmp_buffers[0], dtype, fmt, &add_output);
+  CreateAclTensorWithData(add_outputShape, &decode_bufs[0], dtype, fmt, &add_output);
   llm_kernels::ascend::Add(decoderLayerInput, oproj_output, add_alpha, &add_output, stream,
                            llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(oproj_output);
@@ -284,15 +273,15 @@ void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int
   // 1-4 buffer can use
   // / step.4 post_attention_layernorm
   aclTensor* post_norm_output = nullptr;  // tmp[1]
-  CreateAclTensorWithData(rmsnormOutputShape, &tmp_buffers[1], dtype, fmt, &post_norm_output);
-  llm_kernels::ascend::RMSLayerNorm(add_output, decoder_layer_weight.attn_post_rms->GetAclTensor(), &post_norm_output,
-                                    stream, llm_kernels::utils::GetTestWorkSpaceFunc);
+  CreateAclTensorWithData(rmsnormOutputShape, &decode_bufs[1], dtype, fmt, &post_norm_output);
+  llm_kernels::ascend::RMSLayerNorm(add_output, decoder_layer_weight.attn_post_rms->GetAclTensor(), eps,
+                                    &post_norm_output, stream, llm_kernels::utils::GetTestWorkSpaceFunc, *norm_buf);
 
   // / step.5 MLP
   // 2-4 buffer can use
   aclTensor* down_output = nullptr;  // => tmp[2]
-  LlamaMLP(post_norm_output, bs, seq_len, hidden_size, ffn_intermediate_size, decoder_layer_weight, &tmp_buffers[2],
-           &tmp_buffers[3], &tmp_buffers[4], &down_output, stream);
+  LlamaMLP(post_norm_output, bs, seq_len, hidden_size, ffn_intermediate_size, decoder_layer_weight, &decode_bufs[2],
+           &decode_bufs[3], &decode_bufs[4], &down_output, stream);
   aclDestroyTensor(post_norm_output);
 
   // / step.6 add: down_output + add_output-> last_add_output
@@ -305,15 +294,10 @@ void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int
   aclDestroyTensor(add_output);
   aclDestroyTensor(down_output);
   // PrintTensor(last_add_output, stream, "last_add_output");
-
-  // release dev mem for infer
-  for (auto& tmp : tmp_buffers) {
-    aclrtFree(tmp);
-    tmp = nullptr;
-  }
 }
 
 void ExcuteLlamaInc(const ModelConfig& model_config, LlamaWeight& llama_weights, aclTensor* llama2ndInput,
+                    void** inc_buf_dev_a, void** inc_buf_dev_b, std::vector<void*>& decode_bufs, void** norm_buf,
                     void** llama2ndOutputDev, std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn,
                     aclrtStream& stream) {
   auto time_start = GetCurrentTimeInUs();
@@ -321,43 +305,31 @@ void ExcuteLlamaInc(const ModelConfig& model_config, LlamaWeight& llama_weights,
   const int seq_len = 1;
   const auto& num_layers = model_config.num_layers;
   const auto& hidden_size = model_config.hidden_size;
-  const auto& vocab_size = model_config.vocab_size;
-
-  aclOpExecutor* executor;
-  auto maxDevSize = seq_len * vocab_size * sizeof(float);
-  void* tmp_dev_a = nullptr;
-  void* tmp_dev_b = nullptr;
-  ACL_CHECK_RET(aclrtMalloc(&tmp_dev_a, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&tmp_dev_b, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
 
   std::vector<int64_t> gatherOutputShape = {bs, seq_len, hidden_size};
   aclTensor* gatherOutput = nullptr;
-  CreateAclTensorWithData(gatherOutputShape, &tmp_dev_a, dtype, fmt, &gatherOutput);
+  CreateAclTensorWithData(gatherOutputShape, inc_buf_dev_a, dtype, fmt, &gatherOutput);
   int64_t sinDim = 0;
   llm_kernels::ascend::Gather(llama_weights.emb_weights->GetAclTensor(), sinDim, llama2ndInput, &gatherOutput, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   for (int i = 0; i < num_layers; i++) {
-    std::cout << " layer :" << i << std::endl;
+    // std::cout << " layer :" << i << std::endl;
     // PrintTensor(gatherOutput, stream, "inc_gather ");
-    LlamaDecode(gatherOutput, &tmp_dev_a, seq_len, llama_weights.posIndex, model_config,
+    LlamaDecode(gatherOutput, decode_bufs, norm_buf, inc_buf_dev_a, seq_len, llama_weights.posIndex, model_config,
                 llama_weights.decoder_layer_weight[i], false, flash_attn, stream);
   }
   // PrintTensor(gatherOutput, stream, "last_inc_gather");
   LmHead(&gatherOutput, bs, seq_len, model_config, llama_weights.lm_head_rms->GetAclTensor(),
-         llama_weights.lm_head->GetAclTensor(), &tmp_dev_b, &tmp_dev_a, llama2ndOutputDev, stream);
+         llama_weights.lm_head->GetAclTensor(), inc_buf_dev_b, inc_buf_dev_a, norm_buf, llama2ndOutputDev, stream);
 
-  // release dev mem for infer
-  aclrtFree(tmp_dev_a);
-  tmp_dev_a = nullptr;
-  aclrtFree(tmp_dev_b);
-  tmp_dev_b = nullptr;
   auto time_end = GetCurrentTimeInUs();
   std::cout << "inc total time " << (time_end - time_start) / 1000.0 << " ms\n" << std::endl;
 }
 
 void ExcuteLlamaPrompt(const ModelConfig& model_config, LlamaWeight& llama_weights, int64_t prompt_len,
-                       void** llama1stOutDev, std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn,
-                       aclrtStream& stream) {
+                       void** prompt_buf_dev_a, void** prompt_buf_dev_b, std::vector<void*>& decode_bufs,
+                       void** norm_buf, void** llama1stOutDev,
+                       std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn, aclrtStream& stream) {
   auto time_start = GetCurrentTimeInUs();
   aclOpExecutor* executor;
   // malloc dev mem for infer
@@ -365,15 +337,6 @@ void ExcuteLlamaPrompt(const ModelConfig& model_config, LlamaWeight& llama_weigh
 
   const auto& num_layers = model_config.num_layers;
   const auto& hidden_size = model_config.hidden_size;
-  const auto& vocab_size = model_config.vocab_size;
-
-  auto buffer_size_hidden = bs * seq_len * hidden_size;
-  auto buffer_size_vocab = bs * seq_len * vocab_size;
-  auto buffer_size = std::max(buffer_size_hidden, buffer_size_vocab) * sizeof(float);
-  void* tmp_dev_a = nullptr;
-  void* tmp_dev_b = nullptr;
-  ACL_CHECK_RET(aclrtMalloc(&tmp_dev_a, buffer_size, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&tmp_dev_b, buffer_size, ACL_MEM_MALLOC_NORMAL_ONLY));
   // head
   // inputIds + embedTokens -> gatherOutput
   std::vector<int64_t> inputIdsShape = {bs, seq_len};
@@ -381,28 +344,23 @@ void ExcuteLlamaPrompt(const ModelConfig& model_config, LlamaWeight& llama_weigh
   aclTensor* inputIds = nullptr;
   aclTensor* gatherOutput = nullptr;
   CreateAclTensorWithData(inputIdsShape, &llama_weights.input_ids_dev, aclDataType::ACL_INT64, fmt, &inputIds);
-  CreateAclTensorWithData(gatherOutputShape, &tmp_dev_a, dtype, fmt, &gatherOutput);
+  CreateAclTensorWithData(gatherOutputShape, prompt_buf_dev_a, dtype, fmt, &gatherOutput);
   int64_t sinDim = 0;
-  PrintTensor(inputIds, stream, "inputIds ");
+  // PrintTensor(inputIds, stream, "inputIds ");
   llm_kernels::ascend::Gather(llama_weights.emb_weights->GetAclTensor(), sinDim, inputIds, &gatherOutput, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(inputIds);
-  PrintTensor(llama_weights.emb_weights->GetAclTensor(), stream, "emb_weights");
+  // PrintTensor(llama_weights.emb_weights->GetAclTensor(), stream, "emb_weights");
   for (int i = 0; i < num_layers; i++) {
     // std::cout << " layer :" << i << std::endl;
-    PrintTensor(gatherOutput, stream, "prompt_gather ");
+    // PrintTensor(gatherOutput, stream, "prompt_gather ");
     int posIndex = prompt_len - 1;
-    LlamaDecode(gatherOutput, &tmp_dev_a, prompt_len, posIndex, model_config, llama_weights.decoder_layer_weight[i],
-                true, flash_attn, stream);
+    LlamaDecode(gatherOutput, decode_bufs, norm_buf, prompt_buf_dev_a, prompt_len, posIndex, model_config,
+                llama_weights.decoder_layer_weight[i], true, flash_attn, stream);
   }
   // PrintTensor(gatherOutput, stream, "last_prompt_gather");
   LmHead(&gatherOutput, bs, seq_len, model_config, llama_weights.lm_head_rms->GetAclTensor(),
-         llama_weights.lm_head->GetAclTensor(), &tmp_dev_b, &tmp_dev_a, llama1stOutDev, stream);
-  // release dev mem for infer
-  aclrtFree(tmp_dev_a);
-  tmp_dev_a = nullptr;
-  aclrtFree(tmp_dev_b);
-  tmp_dev_b = nullptr;
+         llama_weights.lm_head->GetAclTensor(), prompt_buf_dev_b, prompt_buf_dev_a, norm_buf, llama1stOutDev, stream);
   auto time_end = GetCurrentTimeInUs();
   std::cout << "prompt total time " << (time_end - time_start) / 1000.0 << " ms\n" << std::endl;
 }
@@ -564,7 +522,7 @@ int main(int argc, char* argv[]) {
       continue;
     }
     // get real input sequence length, update
-    int64_t prompt_len = 32;
+    int64_t prompt_len = 0;
     size_t fileSize = 0;
     auto retRead = ReadFile("../input/prompt_len.bin", fileSize, &prompt_len, sizeof(int64_t));
     CHECK_RET(retRead == true, LOG_PRINT("ReadFile prompt_len failed. ERROR: %d\n", retRead); return !retRead);
@@ -583,22 +541,55 @@ int main(int argc, char* argv[]) {
     void* llama1stOutDev = nullptr;
     aclTensor* llama1stOut = nullptr;
     CreateAclTensor(llama1stOutShape, &llama1stOutDev, aclDataType::ACL_INT64, fmt, &llama1stOut);
-    ExcuteLlamaPrompt(model_config, llama_weights, prompt_len, &llama1stOutDev, flash_attn, stream);
-    std::cout << "[INFO] llama 1st run SUCCESS" << std::endl;
 
+    // prompt buf
+    auto buffer_size_hidden = bs * prompt_len * model_config.hidden_size;
+    auto buffer_size_vocab = bs * prompt_len * model_config.vocab_size;
+    auto prompt_buffer_size = std::max(buffer_size_hidden, buffer_size_vocab) * sizeof(float);
+    void* prompt_buf_dev_a = nullptr;
+    void* prompt_buf_dev_b = nullptr;
+    ACL_CHECK_RET(aclrtMalloc(&prompt_buf_dev_a, prompt_buffer_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&prompt_buf_dev_b, prompt_buffer_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+
+    // inc_buf
+    auto inc_buf_size = 1 * model_config.vocab_size * sizeof(float);
+    void* inc_buf_dev_a = nullptr;
+    void* inc_buf_dev_b = nullptr;
+    ACL_CHECK_RET(aclrtMalloc(&inc_buf_dev_a, inc_buf_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&inc_buf_dev_b, inc_buf_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+
+    // decode buf
+    std::vector<void*> decode_bufs(5, nullptr);
+    size_t decode_prompt_buf_size = bs * prompt_len * model_config.ffn_intermediate_size * sizeof(uint16_t);
+    size_t decode_inc_buf_size = bs * (1 + max_ans_len) * model_config.hidden_size * sizeof(uint16_t);
+    size_t decode_buf_size = std::max(decode_prompt_buf_size, decode_inc_buf_size);
+    auto qkv_out_buf_size = bs * prompt_len * 3 * model_config.hidden_size * sizeof(uint16_t);
+    ACL_CHECK_RET(
+        aclrtMalloc(&(decode_bufs[0]), std::max(decode_buf_size, qkv_out_buf_size), ACL_MEM_MALLOC_NORMAL_ONLY));
+    for (int i = 1; i < 5; ++i) {
+      ACL_CHECK_RET(aclrtMalloc(&(decode_bufs[i]), decode_buf_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+    }
+
+    // norm buf
+    auto norm_buf_size = bs * prompt_len * model_config.hidden_size * sizeof(float);
+    void* norm_buf = nullptr;
+    ACL_CHECK_RET(aclrtMalloc(&norm_buf, norm_buf_size * 3, ACL_MEM_MALLOC_NORMAL_ONLY));
+
+    ExcuteLlamaPrompt(model_config, llama_weights, prompt_len, &prompt_buf_dev_a, &prompt_buf_dev_b, decode_bufs,
+                      &norm_buf, &llama1stOutDev, flash_attn, stream);
     std::vector<int64_t> answerList;
     ACL_CHECK_RET(aclrtMemcpy(inferOutHostData, inferOutSize, llama1stOutDev, inferOutSize, ACL_MEMCPY_DEVICE_TO_HOST));
     int64_t inferOut = *(reinterpret_cast<int64_t*>(inferOutHostData));
     answerList.push_back(inferOut);
     int endcnt = 3;
     for (int i = 0; (i < max_ans_len) && endcnt; i++) {
-      ExcuteLlamaInc(model_config, llama_weights, llama1stOut, &llama1stOutDev, flash_attn, stream);
+      ExcuteLlamaInc(model_config, llama_weights, llama1stOut, &inc_buf_dev_a, &inc_buf_dev_b, decode_bufs, &norm_buf,
+                     &llama1stOutDev, flash_attn, stream);
       llama_weights.posIndex++;
-      std::cout << "[INFO] llama 2nd run " << i << " SUCCESS" << std::endl;
       ACL_CHECK_RET(
           aclrtMemcpy(inferOutHostData, inferOutSize, llama1stOutDev, inferOutSize, ACL_MEMCPY_DEVICE_TO_HOST));
       inferOut = *(reinterpret_cast<int64_t*>(inferOutHostData));
-      std::cout << "posIndex: " << llama_weights.posIndex << ", out: " << inferOut << std::endl;
+      std::cout << "token pos index: " << llama_weights.posIndex - 1 << ", out: " << inferOut << std::endl;
       answerList.push_back(inferOut);
       if (inferOut == 13) {
         endcnt--;
@@ -608,6 +599,24 @@ int main(int argc, char* argv[]) {
     aclDestroyTensor(llama1stOut);
     aclrtFree(llama1stOutDev);
     llama1stOutDev = nullptr;
+
+    ACL_CHECK_RET(aclrtFree(prompt_buf_dev_a));
+    prompt_buf_dev_a = nullptr;
+    ACL_CHECK_RET(aclrtFree(prompt_buf_dev_b));
+    prompt_buf_dev_b = nullptr;
+    
+    ACL_CHECK_RET(aclrtFree(inc_buf_dev_a));
+    inc_buf_dev_a = nullptr;
+    ACL_CHECK_RET(aclrtFree(inc_buf_dev_b));
+    inc_buf_dev_b = nullptr;
+
+    // release dev mem for infer
+    for (auto& tmp : decode_bufs) {
+      aclrtFree(tmp);
+      tmp = nullptr;
+    }
+    ACL_CHECK_RET(aclrtFree(norm_buf));
+    norm_buf = nullptr;
 
     std::string outputPath = "";
     sstream.str("");
