@@ -33,28 +33,35 @@
 #define FAILED 1
 
 using namespace AclnnLlama;
-constexpr int64_t max_tokens_num = 2048;
+int bs = 1;
 constexpr int max_prompt_len = 32;
 constexpr int max_ans_len = 32;
-const float rope_theta = 10000.0;
-const float rope_scaling_factor = 1.0;
 
-int bs = 1;
-int hidden_size = 32 * 128;
-constexpr int num_heads = 32;
-constexpr int num_layers = 32;
-constexpr int head_dims = 128;
-constexpr int vocab_size = 32001;
-constexpr int64_t ffn_intermediate_size = 11008;
+const static std::unordered_map<std::string, ModelConfig> test_models = {{/*model name*/ "llama-7b",
+                                                                          {/* model base path */ "../llama_weight",
+                                                                           /* num_layers */ 32,
+                                                                           /* num_heads */ 32,
+                                                                           /* head_dims */ 128,
+                                                                           /* hidden_size */ 4096,
+                                                                           /* vocab_size*/ 32001,
+                                                                           /* ffn_intermediate_size */ 11008,
+                                                                           /* max_tokens_num */ 2048,
+                                                                           /* rope_theta */ 10000.0f,
+                                                                           /* rope_scaling_factor */ 1.0f}},
+                                                                         {/*model name*/ "llama-13b",
+                                                                          {/* model base path */ "../acl_llama13b",
+                                                                           /* num_layers */ 40,
+                                                                           /* num_heads */ 40,
+                                                                           /* head_dims */ 128,
+                                                                           /* hidden_size */ 5120,
+                                                                           /* vocab_size */ 32001,
+                                                                           /* ffn_intermediate_size */ 13824,
+                                                                           /* max_tokens_num */ 2048,
+                                                                           /* rope_theta */ 10000.0f,
+                                                                           /* rope_scaling_factor */ 1.0f}}};
 
 aclDataType dtype = aclDataType::ACL_FLOAT16;
 aclFormat fmt = aclFormat::ACL_FORMAT_ND;
-
-static std::unordered_map<int, std::string> INT2STR = {
-    {0, "0"},   {1, "1"},   {2, "2"},   {3, "3"},   {4, "4"},   {5, "5"},   {6, "6"},   {7, "7"},
-    {8, "8"},   {9, "9"},   {10, "10"}, {11, "11"}, {12, "12"}, {13, "13"}, {14, "14"}, {15, "15"},
-    {16, "16"}, {17, "17"}, {18, "18"}, {19, "19"}, {20, "20"}, {21, "21"}, {22, "22"}, {23, "23"},
-    {24, "24"}, {25, "25"}, {26, "26"}, {27, "27"}, {28, "28"}, {29, "29"}, {30, "30"}, {31, "31"}};
 
 using namespace llm_kernels::utils;
 
@@ -79,9 +86,11 @@ TensorWeight::~TensorWeight() {
   }
 }
 
-void LmHead(aclTensor** gatherOutput, const int bs, const int64_t seq_len, const int64_t hidden_size,
+void LmHead(aclTensor** gatherOutput, const int bs, const int64_t seq_len, const ModelConfig& model_config,
             const aclTensor* lm_head_rms_weight, const aclTensor* lm_head_weight, void** tmpDev1, void** tmpDev2,
             void** outDev, aclrtStream& stream) {
+  const auto& hidden_size = model_config.hidden_size;
+  const auto& vocab_size = model_config.vocab_size;
   // gatherOutput - > rmsnormOutput
   aclTensor* rmsnormOutput = nullptr;
   std::vector<int64_t> rmsnormOutputShape = {bs, seq_len, hidden_size};
@@ -152,15 +161,16 @@ void LmHead(aclTensor** gatherOutput, const int bs, const int64_t seq_len, const
 }
 
 // output, tmp[2]
-void LlamaAttn(aclTensor* rmsnormOutput, int seq_len, int posIndex, DecoderLayerInfo& decoderLayerInfo,
-               std::vector<void*>& tmp_buffers, aclTensor** oproj_output, const bool is_context_stage,
-               std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn, aclrtStream& stream) {
+void LlamaAttn(aclTensor* rmsnormOutput, int seq_len, int posIndex, const int hidden_size,
+               DecoderLayerWeight& decoder_layer_weight, std::vector<void*>& tmp_buffers, aclTensor** oproj_output,
+               const bool is_context_stage, std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn,
+               aclrtStream& stream) {
   /// matmul
   aclTensor* matmulQKVOutput = nullptr;
   std::vector<int64_t> matmulQKVOutputShape = {bs, seq_len, 3 * hidden_size};
   CreateAclTensorWithData(matmulQKVOutputShape, &tmp_buffers[0], dtype, fmt, &matmulQKVOutput);
   int mm_type = 0;
-  llm_kernels::ascend::MatMul(rmsnormOutput, decoderLayerInfo.qkv_proj->GetAclTensor(), mm_type, &matmulQKVOutput,
+  llm_kernels::ascend::MatMul(rmsnormOutput, decoder_layer_weight.qkv_proj->GetAclTensor(), mm_type, &matmulQKVOutput,
                               stream, llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(rmsnormOutput);
 
@@ -168,21 +178,21 @@ void LlamaAttn(aclTensor* rmsnormOutput, int seq_len, int posIndex, DecoderLayer
   // 1-4
   // TODO: generate sin and code, when rope init
   aclTensor* attnOutput = nullptr;
-  flash_attn->Forward(matmulQKVOutput, posIndex, &decoderLayerInfo.total_key_cache, &decoderLayerInfo.total_val_cache,
-                      tmp_buffers, &attnOutput, is_context_stage, stream, llm_kernels::utils::GetTestWorkSpaceFunc);
+  flash_attn->Forward(matmulQKVOutput, posIndex, &decoder_layer_weight.total_key_cache,
+                      &decoder_layer_weight.total_val_cache, tmp_buffers, &attnOutput, is_context_stage, stream,
+                      llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(matmulQKVOutput);
 
   // o_proj matmul: reshapeOutput -> oproj_output
-  auto hidden_size = num_heads * head_dims;
   std::vector<int64_t> oproj_outputShape = {bs, seq_len, hidden_size};
   CreateAclTensorWithData(oproj_outputShape, &tmp_buffers[2], dtype, fmt, oproj_output);
-  llm_kernels::ascend::MatMul(attnOutput, decoderLayerInfo.o_proj->GetAclTensor(), mm_type, oproj_output, stream,
+  llm_kernels::ascend::MatMul(attnOutput, decoder_layer_weight.o_proj->GetAclTensor(), mm_type, oproj_output, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(attnOutput);
 }
 
 void LlamaMLP(const aclTensor* post_norm_output, const int bs, const int64_t seq_len, const int64_t hidden_size,
-              const int64_t ffn_size, DecoderLayerInfo& decoderLayerInfo, void** tmp_buffer_vocab1,
+              const int64_t ffn_size, DecoderLayerWeight& decoder_layer_weight, void** tmp_buffer_vocab1,
               void** tmp_buffer_vocab2, void** tmp_buffer_vocab3, aclTensor** down_output, aclrtStream& stream) {
   // need 3 tmp bufers
   auto dtype = aclDataType::ACL_FLOAT16;
@@ -194,7 +204,7 @@ void LlamaMLP(const aclTensor* post_norm_output, const int bs, const int64_t seq
   aclTensor* gate_output = nullptr;
   std::vector<int64_t> gate_output_shape = {bs, seq_len, ffn_size};
   CreateAclTensorWithData(gate_output_shape, tmp_buffer_vocab1, dtype, fmt, &gate_output);
-  llm_kernels::ascend::MatMul(post_norm_output, decoderLayerInfo.gate_proj->GetAclTensor(), mm_type, &gate_output,
+  llm_kernels::ascend::MatMul(post_norm_output, decoder_layer_weight.gate_proj->GetAclTensor(), mm_type, &gate_output,
                               stream, llm_kernels::utils::GetTestWorkSpaceFunc);
 
   // gate_output -> silu_output
@@ -208,8 +218,8 @@ void LlamaMLP(const aclTensor* post_norm_output, const int bs, const int64_t seq
   aclTensor* up_output = nullptr;
   std::vector<int64_t> up_output_shape = {bs, seq_len, ffn_size};
   CreateAclTensorWithData(up_output_shape, tmp_buffer_vocab1, dtype, fmt, &up_output);
-  llm_kernels::ascend::MatMul(post_norm_output, decoderLayerInfo.up_proj->GetAclTensor(), mm_type, &up_output, stream,
-                              llm_kernels::utils::GetTestWorkSpaceFunc);
+  llm_kernels::ascend::MatMul(post_norm_output, decoder_layer_weight.up_proj->GetAclTensor(), mm_type, &up_output,
+                              stream, llm_kernels::utils::GetTestWorkSpaceFunc);
 
   // up_output * silu_output -> mul_output
   aclTensor* mul_output = nullptr;
@@ -222,14 +232,16 @@ void LlamaMLP(const aclTensor* post_norm_output, const int bs, const int64_t seq
   // mul_output -> down_output
   std::vector<int64_t> down_output_shape = {bs, seq_len, hidden_size};
   CreateAclTensorWithData(down_output_shape, tmp_buffer_vocab1, dtype, fmt, down_output);
-  llm_kernels::ascend::MatMul(mul_output, decoderLayerInfo.down_proj->GetAclTensor(), mm_type, down_output, stream,
+  llm_kernels::ascend::MatMul(mul_output, decoder_layer_weight.down_proj->GetAclTensor(), mm_type, down_output, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(mul_output);
 }
 
 void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int seq_len, int posIndex,
-                 DecoderLayerInfo& decoderLayerInfo, const bool is_context_stage,
+                 const ModelConfig& model_config, DecoderLayerWeight& decoder_layer_weight, const bool is_context_stage,
                  std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn, aclrtStream& stream) {
+  const auto& hidden_size = model_config.hidden_size;
+  const auto& ffn_intermediate_size = model_config.ffn_intermediate_size;
   size_t maxDevSize;
   if (is_context_stage) {
     maxDevSize = bs * seq_len * ffn_intermediate_size * sizeof(uint16_t);
@@ -243,20 +255,20 @@ void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int
   for (int i = 1; i < 5; ++i) {
     ACL_CHECK_RET(aclrtMalloc(&(tmp_buffers[i]), maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
   }
-
+  PrintTensor(decoderLayerInput, stream, "decoderLayerInput");
   // / step.1 input layernorm
   // input(bs, seq_len, hiddens) - >  rmsnormOutput(bs, seq_len, hiddens)
   aclTensor* rmsnormOutput = nullptr;
   std::vector<int64_t> rmsnormOutputShape = {bs, seq_len, hidden_size};
   CreateAclTensorWithData(rmsnormOutputShape, &tmp_buffers[1], dtype, fmt, &rmsnormOutput);
-  llm_kernels::ascend::RMSLayerNorm(decoderLayerInput, decoderLayerInfo.attn_rms->GetAclTensor(), &rmsnormOutput,
+  llm_kernels::ascend::RMSLayerNorm(decoderLayerInput, decoder_layer_weight.attn_rms->GetAclTensor(), &rmsnormOutput,
                                     stream, llm_kernels::utils::GetTestWorkSpaceFunc);
-  // PrintTensor(rmsnormOutput, stream, "rmsnormOutput");
+  PrintTensor(rmsnormOutput, stream, "rmsnormOutput");
 
   // / step.2 llama attn
   aclTensor* oproj_output = nullptr;
-  LlamaAttn(rmsnormOutput, seq_len, posIndex, decoderLayerInfo, tmp_buffers, &oproj_output, is_context_stage,
-            flash_attn, stream);
+  LlamaAttn(rmsnormOutput, seq_len, posIndex, hidden_size, decoder_layer_weight, tmp_buffers, &oproj_output,
+            is_context_stage, flash_attn, stream);
   // PrintTensor(oproj_output, stream, "oproj_output");
 
   // / step.3 add: decoderLayerInput + oproj_output -> add_output
@@ -273,13 +285,13 @@ void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int
   // / step.4 post_attention_layernorm
   aclTensor* post_norm_output = nullptr;  // tmp[1]
   CreateAclTensorWithData(rmsnormOutputShape, &tmp_buffers[1], dtype, fmt, &post_norm_output);
-  llm_kernels::ascend::RMSLayerNorm(add_output, decoderLayerInfo.attn_post_rms->GetAclTensor(), &post_norm_output,
+  llm_kernels::ascend::RMSLayerNorm(add_output, decoder_layer_weight.attn_post_rms->GetAclTensor(), &post_norm_output,
                                     stream, llm_kernels::utils::GetTestWorkSpaceFunc);
 
   // / step.5 MLP
   // 2-4 buffer can use
   aclTensor* down_output = nullptr;  // => tmp[2]
-  LlamaMLP(post_norm_output, bs, seq_len, hidden_size, ffn_intermediate_size, decoderLayerInfo, &tmp_buffers[2],
+  LlamaMLP(post_norm_output, bs, seq_len, hidden_size, ffn_intermediate_size, decoder_layer_weight, &tmp_buffers[2],
            &tmp_buffers[3], &tmp_buffers[4], &down_output, stream);
   aclDestroyTensor(post_norm_output);
 
@@ -301,11 +313,17 @@ void LlamaDecode(aclTensor* decoderLayerInput, void** decoderLayerOutputDev, int
   }
 }
 
-void ExcuteLlamaInc(aclTensor* llama2ndInput, void** llama2ndOutputDev, LlamaInfo& llamaInfo,
-                    std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn, aclrtStream& stream) {
+void ExcuteLlamaInc(const ModelConfig& model_config, LlamaWeight& llama_weights, aclTensor* llama2ndInput,
+                    void** llama2ndOutputDev, std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn,
+                    aclrtStream& stream) {
   auto time_start = GetCurrentTimeInUs();
+
+  const int seq_len = 1;
+  const auto& num_layers = model_config.num_layers;
+  const auto& hidden_size = model_config.hidden_size;
+  const auto& vocab_size = model_config.vocab_size;
+
   aclOpExecutor* executor;
-  int seq_len = 1;
   auto maxDevSize = seq_len * vocab_size * sizeof(float);
   void* tmp_dev_a = nullptr;
   void* tmp_dev_b = nullptr;
@@ -316,17 +334,17 @@ void ExcuteLlamaInc(aclTensor* llama2ndInput, void** llama2ndOutputDev, LlamaInf
   aclTensor* gatherOutput = nullptr;
   CreateAclTensorWithData(gatherOutputShape, &tmp_dev_a, dtype, fmt, &gatherOutput);
   int64_t sinDim = 0;
-  llm_kernels::ascend::Gather(llamaInfo.emb_weights->GetAclTensor(), sinDim, llama2ndInput, &gatherOutput, stream,
+  llm_kernels::ascend::Gather(llama_weights.emb_weights->GetAclTensor(), sinDim, llama2ndInput, &gatherOutput, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   for (int i = 0; i < num_layers; i++) {
     std::cout << " layer :" << i << std::endl;
     // PrintTensor(gatherOutput, stream, "inc_gather ");
-    LlamaDecode(gatherOutput, &tmp_dev_a, seq_len, llamaInfo.posIndex, llamaInfo.decoderLayerInfo[i], false, flash_attn,
-                stream);
+    LlamaDecode(gatherOutput, &tmp_dev_a, seq_len, llama_weights.posIndex, model_config,
+                llama_weights.decoder_layer_weight[i], false, flash_attn, stream);
   }
   // PrintTensor(gatherOutput, stream, "last_inc_gather");
-  LmHead(&gatherOutput, bs, seq_len, hidden_size, llamaInfo.lm_head_rms->GetAclTensor(),
-         llamaInfo.lm_head->GetAclTensor(), &tmp_dev_b, &tmp_dev_a, llama2ndOutputDev, stream);
+  LmHead(&gatherOutput, bs, seq_len, model_config, llama_weights.lm_head_rms->GetAclTensor(),
+         llama_weights.lm_head->GetAclTensor(), &tmp_dev_b, &tmp_dev_a, llama2ndOutputDev, stream);
 
   // release dev mem for infer
   aclrtFree(tmp_dev_a);
@@ -337,12 +355,17 @@ void ExcuteLlamaInc(aclTensor* llama2ndInput, void** llama2ndOutputDev, LlamaInf
   std::cout << "inc total time " << (time_end - time_start) / 1000.0 << " ms\n" << std::endl;
 }
 
-void ExcuteLlamaPrompt(LlamaInfo& llamaInfo, int64_t prompt_len, void** llama1stOutDev,
-                       std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn, aclrtStream& stream) {
+void ExcuteLlamaPrompt(const ModelConfig& model_config, LlamaWeight& llama_weights, int64_t prompt_len,
+                       void** llama1stOutDev, std::unique_ptr<llm_kernels::ascend::FlashAttentionACL>& flash_attn,
+                       aclrtStream& stream) {
   auto time_start = GetCurrentTimeInUs();
   aclOpExecutor* executor;
   // malloc dev mem for infer
   int64_t seq_len = prompt_len;
+
+  const auto& num_layers = model_config.num_layers;
+  const auto& hidden_size = model_config.hidden_size;
+  const auto& vocab_size = model_config.vocab_size;
 
   auto buffer_size_hidden = bs * seq_len * hidden_size;
   auto buffer_size_vocab = bs * seq_len * vocab_size;
@@ -357,23 +380,24 @@ void ExcuteLlamaPrompt(LlamaInfo& llamaInfo, int64_t prompt_len, void** llama1st
   std::vector<int64_t> gatherOutputShape = {bs, seq_len, hidden_size};
   aclTensor* inputIds = nullptr;
   aclTensor* gatherOutput = nullptr;
-  CreateAclTensorWithData(inputIdsShape, &llamaInfo.inputIdsDev, aclDataType::ACL_INT64, fmt, &inputIds);
+  CreateAclTensorWithData(inputIdsShape, &llama_weights.input_ids_dev, aclDataType::ACL_INT64, fmt, &inputIds);
   CreateAclTensorWithData(gatherOutputShape, &tmp_dev_a, dtype, fmt, &gatherOutput);
   int64_t sinDim = 0;
-  llm_kernels::ascend::Gather(llamaInfo.emb_weights->GetAclTensor(), sinDim, inputIds, &gatherOutput, stream,
+  PrintTensor(inputIds, stream, "inputIds ");
+  llm_kernels::ascend::Gather(llama_weights.emb_weights->GetAclTensor(), sinDim, inputIds, &gatherOutput, stream,
                               llm_kernels::utils::GetTestWorkSpaceFunc);
   aclDestroyTensor(inputIds);
-
+  PrintTensor(llama_weights.emb_weights->GetAclTensor(), stream, "emb_weights");
   for (int i = 0; i < num_layers; i++) {
     // std::cout << " layer :" << i << std::endl;
-    // PrintTensor(gatherOutput, stream, "prompt_gather ");
+    PrintTensor(gatherOutput, stream, "prompt_gather ");
     int posIndex = prompt_len - 1;
-    LlamaDecode(gatherOutput, &tmp_dev_a, prompt_len, posIndex, llamaInfo.decoderLayerInfo[i], true, flash_attn,
-                stream);
+    LlamaDecode(gatherOutput, &tmp_dev_a, prompt_len, posIndex, model_config, llama_weights.decoder_layer_weight[i],
+                true, flash_attn, stream);
   }
   // PrintTensor(gatherOutput, stream, "last_prompt_gather");
-  LmHead(&gatherOutput, bs, seq_len, hidden_size, llamaInfo.lm_head_rms->GetAclTensor(),
-         llamaInfo.lm_head->GetAclTensor(), &tmp_dev_b, &tmp_dev_a, llama1stOutDev, stream);
+  LmHead(&gatherOutput, bs, seq_len, model_config, llama_weights.lm_head_rms->GetAclTensor(),
+         llama_weights.lm_head->GetAclTensor(), &tmp_dev_b, &tmp_dev_a, llama1stOutDev, stream);
   // release dev mem for infer
   aclrtFree(tmp_dev_a);
   tmp_dev_a = nullptr;
@@ -396,97 +420,103 @@ int Init(int32_t deviceId, aclrtContext* context, aclrtStream* stream) {
   return 0;
 }
 
-void MergeQKVWeight(aclTensor* qWeight, aclTensor* kWeight, aclTensor* vWeight, DecoderLayerInfo& dlInfo,
-                    aclrtStream& stream) {
+void MergeQKVWeight(const int hidden_size, aclTensor* qWeight, aclTensor* kWeight, aclTensor* vWeight,
+                    DecoderLayerWeight& dl_weight, aclrtStream& stream) {
   std::vector<int64_t> qkv_weight_shape = {hidden_size, 3 * hidden_size};
   auto size = GetShapeSize(qkv_weight_shape) * DT2LONG.at(dtype);
-  dlInfo.qkv_proj = std::make_unique<TensorWeight>(qkv_weight_shape, dtype, fmt);
-  dlInfo.qkv_proj->CreateAclTensor();
+  dl_weight.qkv_proj = std::make_unique<TensorWeight>(qkv_weight_shape, dtype, fmt);
+  dl_weight.qkv_proj->CreateAclTensor();
   std::vector<const aclTensor*> inputs{qWeight, kWeight, vWeight};
   int64_t catDim = -1;
-  llm_kernels::ascend::Cat(inputs, catDim, &(dlInfo.qkv_proj->acl_tensor_), stream,
+  llm_kernels::ascend::Cat(inputs, catDim, &(dl_weight.qkv_proj->acl_tensor_), stream,
                            llm_kernels::utils::GetTestWorkSpaceFunc);
 }
 
-void PrepareWeight(LlamaInfo& llamaInfo, int num_layers, std::unordered_map<std::string, aclTensor*>& weight,
-                   aclrtStream& stream) {
+void PrepareLlamaWeight(const ModelConfig& model_config, LlamaWeight& llama_weights, aclrtStream& stream) {
   std::cout << "[INFO] weight preparing..." << std::endl;
   aclDataType dtype = aclDataType::ACL_FLOAT16;
   aclFormat fmt = aclFormat::ACL_FORMAT_ND;
 
+  const auto& model_path = model_config.model_path;
+  const auto& num_layers = model_config.num_layers;
+  const auto& num_heads = model_config.num_heads;
+  const auto& head_dims = model_config.head_dims;
+  const auto& hidden_size = model_config.hidden_size;
+  const auto& max_tokens_num = model_config.max_tokens_num;
+  const auto& vocab_size = model_config.vocab_size;
+  const auto& ffn_intermediate_size = model_config.ffn_intermediate_size;
+
   std::vector<int64_t> embedTokensWeightShape = {vocab_size, hidden_size};
-  std::string embedTokensWeightPath = "../llama_weight/model.embed_tokens.weight.bin";
-  llamaInfo.emb_weights = std::make_unique<TensorWeight>(embedTokensWeightShape, dtype, fmt);
-  ACL_CHECK_RET(
-      ReadDataToDevice(embedTokensWeightPath, embedTokensWeightShape, &(llamaInfo.emb_weights->data_dev_), dtype, fmt));
+  llama_weights.emb_weights = std::make_unique<TensorWeight>(embedTokensWeightShape, dtype, fmt);
+  ACL_CHECK_RET(ReadDataToDevice(model_path + "/model.embed_tokens.weight.bin", embedTokensWeightShape,
+                                 &(llama_weights.emb_weights->data_dev_), dtype, fmt));
 
-  std::vector<int64_t> stateMemShape = {bs, num_layers, max_prompt_len + max_ans_len, head_dims};
+  std::vector<int64_t> stateMemShape = {bs, num_layers, max_tokens_num, head_dims};
   size_t stateMemSize = GetShapeSize(stateMemShape) * sizeof(uint16_t);
-  llamaInfo.decoderLayerInfo.resize(num_layers);
+  llama_weights.decoder_layer_weight.resize(num_layers);
   for (int i = 0; i < num_layers; i++) {
-    DecoderLayerInfo& dlInfo = llamaInfo.decoderLayerInfo[i];
-    ACL_CHECK_RET(aclrtMalloc(&(dlInfo.total_key_cache), stateMemSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-    ACL_CHECK_RET(aclrtMalloc(&(dlInfo.total_val_cache), stateMemSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+    DecoderLayerWeight& dl_weight = llama_weights.decoder_layer_weight[i];
+    ACL_CHECK_RET(aclrtMalloc(&(dl_weight.total_key_cache), stateMemSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+    ACL_CHECK_RET(aclrtMalloc(&(dl_weight.total_val_cache), stateMemSize, ACL_MEM_MALLOC_NORMAL_ONLY));
 
-    std::string head = "../llama_weight/model.layers." + INT2STR[i];
-    // std::string dst_layer_name = "model.layers." + INT2STR[i];
+    std::string model_path_base = model_path + "/model.layers." + std::to_string(i);
 
     std::vector<int64_t> attn_weight_shape = {hidden_size, hidden_size};
-    std::string matmul1WeightPath = head + ".self_attn.q_proj.weight.bin";
-    dlInfo.q_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmul1WeightPath, attn_weight_shape, &(dlInfo.q_proj->data_dev_), dtype, fmt));
+    dl_weight.q_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".self_attn.q_proj.weight.bin", attn_weight_shape,
+                                   &(dl_weight.q_proj->data_dev_), dtype, fmt));
 
-    std::string matmul2WeightPath = head + ".self_attn.k_proj.weight.bin";
-    dlInfo.k_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmul2WeightPath, attn_weight_shape, &(dlInfo.k_proj->data_dev_), dtype, fmt));
+    dl_weight.k_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".self_attn.k_proj.weight.bin", attn_weight_shape,
+                                   &(dl_weight.k_proj->data_dev_), dtype, fmt));
 
-    std::string matmul3WeightPath = head + ".self_attn.v_proj.weight.bin";
-    dlInfo.v_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmul3WeightPath, attn_weight_shape, &(dlInfo.v_proj->data_dev_), dtype, fmt));
-    MergeQKVWeight(dlInfo.q_proj->GetAclTensor(), dlInfo.k_proj->GetAclTensor(), dlInfo.v_proj->GetAclTensor(), dlInfo,
-                   stream);
+    dl_weight.v_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".self_attn.v_proj.weight.bin", attn_weight_shape,
+                                   &(dl_weight.v_proj->data_dev_), dtype, fmt));
+    MergeQKVWeight(hidden_size, dl_weight.q_proj->GetAclTensor(), dl_weight.k_proj->GetAclTensor(),
+                   dl_weight.v_proj->GetAclTensor(), dl_weight, stream);
 
-    std::string matmulOWeightPath = head + ".self_attn.o_proj.weight.bin";
-    dlInfo.o_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmulOWeightPath, attn_weight_shape, &(dlInfo.o_proj->data_dev_), dtype, fmt));
+    dl_weight.o_proj = std::make_unique<TensorWeight>(attn_weight_shape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".self_attn.o_proj.weight.bin", attn_weight_shape,
+                                   &(dl_weight.o_proj->data_dev_), dtype, fmt));
 
     std::vector<int64_t> matmul5WeightShape = {hidden_size, ffn_intermediate_size};
-    std::string matmul5WeightPath = head + ".mlp.gate_proj.weight.bin";
-    dlInfo.gate_proj = std::make_unique<TensorWeight>(matmul5WeightShape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmul5WeightPath, matmul5WeightShape, &(dlInfo.gate_proj->data_dev_), dtype, fmt));
+    dl_weight.gate_proj = std::make_unique<TensorWeight>(matmul5WeightShape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".mlp.gate_proj.weight.bin", matmul5WeightShape,
+                                   &(dl_weight.gate_proj->data_dev_), dtype, fmt));
 
     std::vector<int64_t> matmul6WeightShape = {hidden_size, ffn_intermediate_size};
-    std::string matmul6WeightPath = head + ".mlp.up_proj.weight.bin";
-    dlInfo.up_proj = std::make_unique<TensorWeight>(matmul6WeightShape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmul6WeightPath, matmul6WeightShape, &(dlInfo.up_proj->data_dev_), dtype, fmt));
+    dl_weight.up_proj = std::make_unique<TensorWeight>(matmul6WeightShape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".mlp.up_proj.weight.bin", matmul6WeightShape,
+                                   &(dl_weight.up_proj->data_dev_), dtype, fmt));
 
     std::vector<int64_t> matmul7WeightShape = {ffn_intermediate_size, hidden_size};
-    std::string matmul7WeightPath = head + ".mlp.down_proj.weight.bin";
-    dlInfo.down_proj = std::make_unique<TensorWeight>(matmul7WeightShape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(matmul7WeightPath, matmul7WeightShape, &(dlInfo.down_proj->data_dev_), dtype, fmt));
+    dl_weight.down_proj = std::make_unique<TensorWeight>(matmul7WeightShape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".mlp.down_proj.weight.bin", matmul7WeightShape,
+                                   &(dl_weight.down_proj->data_dev_), dtype, fmt));
 
     std::vector<int64_t> rms_weight_shape = {1, 1, hidden_size};
-    std::string rm1mulWeightPath = head + ".input_layernorm.weight.bin";
-    dlInfo.attn_rms = std::make_unique<TensorWeight>(rms_weight_shape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(rm1mulWeightPath, rms_weight_shape, &(dlInfo.attn_rms->data_dev_), dtype, fmt));
+    dl_weight.attn_rms = std::make_unique<TensorWeight>(rms_weight_shape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".input_layernorm.weight.bin", rms_weight_shape,
+                                   &(dl_weight.attn_rms->data_dev_), dtype, fmt));
 
-    std::string rm2mulWeightPath = head + ".post_attention_layernorm.weight.bin";
-    dlInfo.attn_post_rms = std::make_unique<TensorWeight>(rms_weight_shape, dtype, fmt);
-    ACL_CHECK_RET(ReadDataToDevice(rm2mulWeightPath, rms_weight_shape, &(dlInfo.attn_post_rms->data_dev_), dtype, fmt));
+    dl_weight.attn_post_rms = std::make_unique<TensorWeight>(rms_weight_shape, dtype, fmt);
+    ACL_CHECK_RET(ReadDataToDevice(model_path_base + ".post_attention_layernorm.weight.bin", rms_weight_shape,
+                                   &(dl_weight.attn_post_rms->data_dev_), dtype, fmt));
   }
 
-  std::string rmmulWeightPath = "../llama_weight/model.norm.weight.bin";
   std::vector<int64_t> mulWeightShape = {1, 1, hidden_size};
-  llamaInfo.lm_head_rms = std::make_unique<TensorWeight>(mulWeightShape, dtype, fmt);
-  ACL_CHECK_RET(ReadDataToDevice(rmmulWeightPath, mulWeightShape, &(llamaInfo.lm_head_rms->data_dev_), dtype, fmt));
+  llama_weights.lm_head_rms = std::make_unique<TensorWeight>(mulWeightShape, dtype, fmt);
+  ACL_CHECK_RET(ReadDataToDevice(model_path + "/model.norm.weight.bin", mulWeightShape,
+                                 &(llama_weights.lm_head_rms->data_dev_), dtype, fmt));
 
-  std::string lmHeadWeight = "../llama_weight/lm_head.weight.bin";
   std::vector<int64_t> lmHeadWeightShape = {hidden_size, vocab_size};
-  llamaInfo.lm_head = std::make_unique<TensorWeight>(lmHeadWeightShape, dtype, fmt);
-  ACL_CHECK_RET(ReadDataToDevice(lmHeadWeight, lmHeadWeightShape, &(llamaInfo.lm_head->data_dev_), dtype, fmt));
+  llama_weights.lm_head = std::make_unique<TensorWeight>(lmHeadWeightShape, dtype, fmt);
+  ACL_CHECK_RET(ReadDataToDevice(model_path + "/lm_head.weight.bin", lmHeadWeightShape,
+                                 &(llama_weights.lm_head->data_dev_), dtype, fmt));
 }
 
-int main() {
+int main(int argc, char* argv[]) {
   int32_t deviceId = 0;
   aclrtContext context;
   aclrtStream stream;
@@ -498,10 +528,15 @@ int main() {
   ACL_CHECK_RET(aclrtGetVersion(&majorVersion, &minorVersion, &patchVersion));
   std::cout << "[INFO] ACL version " << majorVersion << "." << minorVersion << "." << patchVersion << std::endl;
 
+  std::string model_type("7b");  // 7b or 13b
+  if (argc > 1) {
+    model_type = std::string(argv[1]);
+  }
+
   // prepare input data & weight
-  LlamaInfo llamaInfo;
-  std::unordered_map<std::string, aclTensor*> weight;
-  PrepareWeight(llamaInfo, num_layers, weight, stream);
+  LlamaWeight llama_weights;
+  const auto& model_config = test_models.at("llama-" + model_type);
+  PrepareLlamaWeight(model_config, llama_weights, stream);
   std::cout << "[INFO] data prepared, ready to infer llama." << std::endl;
 
   auto inferOutSize = sizeof(int64_t);
@@ -535,18 +570,20 @@ int main() {
     CHECK_RET(retRead == true, LOG_PRINT("ReadFile prompt_len failed. ERROR: %d\n", retRead); return !retRead);
 
     std::vector<int64_t> inputIdsShape = {1, prompt_len};
-    ACL_CHECK_RET(ReadDataToDevice(inputIdsPath, inputIdsShape, &llamaInfo.inputIdsDev, aclDataType::ACL_INT64, fmt));
-    llamaInfo.posIndex = prompt_len;
+    ACL_CHECK_RET(
+        ReadDataToDevice(inputIdsPath, inputIdsShape, &llama_weights.input_ids_dev, aclDataType::ACL_INT64, fmt));
+    llama_weights.posIndex = prompt_len;
 
     std::unique_ptr<llm_kernels::ascend::FlashAttentionACL> flash_attn(new llm_kernels::ascend::FlashAttentionACL());
-    flash_attn->Init(max_tokens_num, head_dims, num_heads, num_heads, rope_theta, rope_scaling_factor, dtype, stream,
+    flash_attn->Init(model_config.max_tokens_num, model_config.head_dims, model_config.num_heads,
+                     model_config.num_heads, model_config.rope_theta, model_config.rope_scaling_factor, dtype, stream,
                      llm_kernels::utils::GetTestWorkSpaceFunc);
 
     std::vector<int64_t> llama1stOutShape = {1, 1};
     void* llama1stOutDev = nullptr;
     aclTensor* llama1stOut = nullptr;
     CreateAclTensor(llama1stOutShape, &llama1stOutDev, aclDataType::ACL_INT64, fmt, &llama1stOut);
-    ExcuteLlamaPrompt(llamaInfo, prompt_len, &llama1stOutDev, flash_attn, stream);
+    ExcuteLlamaPrompt(model_config, llama_weights, prompt_len, &llama1stOutDev, flash_attn, stream);
     std::cout << "[INFO] llama 1st run SUCCESS" << std::endl;
 
     std::vector<int64_t> answerList;
@@ -555,13 +592,13 @@ int main() {
     answerList.push_back(inferOut);
     int endcnt = 3;
     for (int i = 0; (i < max_ans_len) && endcnt; i++) {
-      ExcuteLlamaInc(llama1stOut, &llama1stOutDev, llamaInfo, flash_attn, stream);
-      llamaInfo.posIndex++;
+      ExcuteLlamaInc(model_config, llama_weights, llama1stOut, &llama1stOutDev, flash_attn, stream);
+      llama_weights.posIndex++;
       std::cout << "[INFO] llama 2nd run " << i << " SUCCESS" << std::endl;
       ACL_CHECK_RET(
           aclrtMemcpy(inferOutHostData, inferOutSize, llama1stOutDev, inferOutSize, ACL_MEMCPY_DEVICE_TO_HOST));
       inferOut = *(reinterpret_cast<int64_t*>(inferOutHostData));
-      std::cout << "posIndex: " << llamaInfo.posIndex << ", out: " << inferOut << std::endl;
+      std::cout << "posIndex: " << llama_weights.posIndex << ", out: " << inferOut << std::endl;
       answerList.push_back(inferOut);
       if (inferOut == 13) {
         endcnt--;

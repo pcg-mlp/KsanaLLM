@@ -234,10 +234,14 @@ void PrintTensor(const aclTensor* src, aclrtStream& stream, const char* name) {
     aclrtFree(ws_dev);
     ws_dev = nullptr;
   }
-  size_t n = 10;
-  LOG_PRINT("%s last seq, first %d:", name, n);
-  for (size_t i = 0; i < std::min(n, fp32.size()); ++i) {
-    std::cout << fp32[fp32.size() - 1 - n + i] << ",";
+  size_t show_n = std::min(5ul, fp32.size());
+  LOG_PRINT("%s first %d:", name, show_n);
+  for (size_t i = 0; i < show_n; ++i) {
+    std::cout << fp32[i] << ",";
+  }
+  LOG_PRINT(" ... last %d:", show_n);
+  for (size_t i = 0; i < show_n; ++i) {
+    std::cout << fp32[fp32.size() - 1 - show_n + 1 + i] << ",";
   }
   std::cout << std::endl;
 }
