@@ -128,7 +128,7 @@ void FlashAttentionACL::PromptFlashAttention(const aclTensor* query, const aclTe
   aclTensor* quantScale2 = nullptr;
   aclTensor* quantOffset2 = nullptr;
 
-  double scaleValue = 1.0 / sqrt(128.0);
+  double scaleValue = 1.0 / sqrt((double)head_dims_);
   int64_t preTokens = 214748647;
   int64_t nextTokens = 0;
   char inputLayout[] = "BNSD";
@@ -137,7 +137,6 @@ void FlashAttentionACL::PromptFlashAttention(const aclTensor* query, const aclTe
   uint64_t ws_size = 0ull;
   void* workspace = nullptr;
   aclOpExecutor* executor = nullptr;
-
   ACL_CHECK_RET(aclnnPromptFlashAttentionV2GetWorkspaceSize(
       query, key, attnInputV, paddingMask, attn_mask_, actualSeqLengths, actualSeqLengthsKv, deqScale1, quantScale1,
       deqScale2, quantScale2, quantOffset2, q_heads_, scaleValue, preTokens, nextTokens, inputLayout, kv_heads_,
@@ -163,7 +162,7 @@ void FlashAttentionACL::IncFlashAttention(const aclTensor* query, const aclTenso
   aclTensor* dequantScale2 = nullptr;
   aclTensor* quantScale2 = nullptr;
   aclTensor* quantOffset2 = nullptr;
-  double scaleValue = 1.0 / sqrt(128.0);
+  double scaleValue = 1.0 / sqrt((double)head_dims_);
   char inputLayout[] = "BNSD";
 
   uint64_t ws_size = 0ull;
