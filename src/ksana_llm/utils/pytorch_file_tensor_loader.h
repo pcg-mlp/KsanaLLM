@@ -3,16 +3,10 @@
 
 #include "base_file_tensor_loader.h"
 
-#include <Python.h>
 #include <caffe2/serialize/inline_container.h>
-#include <pybind11/embed.h>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
 #include <torch/csrc/jit/serialization/import_read.h>
 #include <torch/csrc/jit/serialization/storage_context.h>
 #include <torch/script.h>
-
-namespace py = pybind11;
 
 namespace ksana_llm {
 // Define a class named PytorchFileTensorLoader that inherits from BaseFileTensorLoader
@@ -36,10 +30,18 @@ class PytorchFileTensorLoader : public BaseFileTensorLoader {
     void LoadPytorchBin();
 
   private:
-    py::object model_;
+    // Use unique_ptr to manage the PyTorchStreamReader object for reading PyTorch model files
+    std::unique_ptr<caffe2::serialize::PyTorchStreamReader> pytorch_reader_;
 
     // Use unordered_map to store the tensor names and their corresponding indices for easy lookup
+    std::unordered_map<std::string, int64_t> pytorch_tensor_index_map_;
     std::unordered_map<std::string, torch::Tensor> pytorch_tensor_map_;
+
+    // Use vector to store the DataPtr of tensors for easy management and access
+    std::vector<at::DataPtr> pytorch_tensor_list_;
+
+    // 是否采用异步读取,llama7B 模型可采用,llama13B 模型采用会 CoreDump(TODO)
+    bool fast_load_ = false;
 };
 
 }  // namespace ksana_llm

@@ -1,7 +1,7 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #include "pytorch_file_tensor_loader.h"
 #include "logger.h"
-#include "torch/csrc/autograd/python_variable.h"
+
 // #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 namespace ksana_llm {
@@ -17,56 +17,90 @@ PytorchFileTensorLoader::PytorchFileTensorLoader(const std::string& file_name) :
 
 // Function to load the PyTorch binary file
 void PytorchFileTensorLoader::LoadPytorchBin() {
-  py::module torch = py::module::import("torch");
-  try {
-    model_ = torch.attr("load")(file_name_);
-  } catch (const py::error_already_set& e) {
-    PyErr_Clear();
-    NLLM_LOG_ERROR << fmt::format("Failed to load file {}", file_name_);
-    return;
+  // Create a PyTorchStreamReader object to read the model file
+  pytorch_reader_ = std::make_unique<caffe2::serialize::PyTorchStreamReader>(file_name_);
+  auto records = pytorch_reader_->getAllRecords();
+  char* storage_indexs = nullptr;
+  size_t max_tensor_size = 80 * 1024 * 1024;
+  std::vector<char> storage_indexs_vector(max_tensor_size * records.size());
+  storage_indexs = storage_indexs_vector.data();
+  // When storage_context is nullptr, it indicates that the actual data of the torch tensor should be read directly.
+  // Otherwise, it temporarily skips the reading process and waits until it is actually used before reading.
+  std::shared_ptr<torch::jit::DeserializationStorageContext> storage_context = nullptr;
+  if (fast_load_) {
+    storage_context = std::make_shared<torch::jit::DeserializationStorageContext>();
+    // Add fictional storage context
+    for (int i = 0; i < records.size(); i++) {
+      storage_indexs[i * max_tensor_size] = i;
+      auto storage =
+          at::Storage(c10::Storage::use_byte_size_t(), max_tensor_size,
+                      at::DataPtr((void*)(storage_indexs + i * max_tensor_size), c10::DeviceType::CPU), nullptr, false);
+      storage_context->addStorage(std::to_string(i), storage);
+    }
   }
-  py::dict state_dict;
-  if (py::hasattr(model_, "state_dict")) {
-    state_dict = model_.attr("state_dict")();
-  } else {
-    state_dict = model_;
-  }
-
-  for (auto& item : state_dict) {
-    std::string tensor_name = py::str(item.first);
-    tensor_name_list_.push_back(tensor_name);
-    NLLM_LOG_ERROR << tensor_name << std::endl;
-    py::object value_obj = py::reinterpret_borrow<py::object>(item.second);
-    pytorch_tensor_map_[tensor_name] = THPVariable_Unpack(value_obj.ptr());
+  auto pytorch_value =
+      torch::jit::readArchiveAndTensors("data", "", "", c10::nullopt, c10::nullopt, c10::DeviceType::CPU,
+                                        *pytorch_reader_, torch::jit::Unpickler::defaultTypeParser, storage_context);
+  // If the value is a generic dictionary, process the tensors in the dictionary
+  if (pytorch_value.isGenericDict()) {
+    auto value_dict = pytorch_value.toGenericDict();
+    for (auto& it : value_dict) {
+      std::string tensor_name = it.key().toStringRef();
+      tensor_name_list_.push_back(tensor_name);
+      if (it.value().isTensor()) {
+        if (fast_load_) {
+          pytorch_tensor_index_map_[tensor_name] = *static_cast<int64_t*>(it.value().toTensor().data_ptr());
+        } else {
+          pytorch_tensor_map_[tensor_name] = it.value().toTensor();
 #ifdef ENABLE_ACL
 #ifndef ENABLE_BFLOAT16
-    // TODO(karlluo): will enhance after support bf16
-    pytorch_tensor_map_[tensor_name] = pytorch_tensor_map_[tensor_name].to(torch::kFloat16);
+          // TODO(karlluo): will enhance after support bf16
+          pytorch_tensor_map_[tensor_name] = pytorch_tensor_map_[tensor_name].to(torch::kFloat16);
 #endif
 #endif
+        }
+      }
+    }
   }
 }
 
 DataType PytorchFileTensorLoader::GetTensorDataType(const std::string& tensor_name) {
   DataType data_type = TYPE_INVALID;
-  c10::ScalarType dtype = pytorch_tensor_map_[tensor_name].scalar_type();
-  switch (dtype) {
-    case c10::kBFloat16:
-      data_type = TYPE_BF16;
-      break;
-    case torch::kFloat16:
-      data_type = TYPE_FP16;
-      break;
-    case torch::kFloat32:
-      data_type = TYPE_FP32;
-      break;
-    default:
-      break;
+  if (fast_load_) {
+    data_type = TYPE_FP16;  // TODO
+  } else {
+    c10::ScalarType dtype = pytorch_tensor_map_[tensor_name].scalar_type();
+    switch (dtype) {
+      case c10::kBFloat16:
+        data_type = TYPE_BF16;
+        break;
+      case torch::kFloat16:
+        data_type = TYPE_FP16;
+        break;
+      case torch::kFloat32:
+        data_type = TYPE_FP32;
+        break;
+      default:
+        break;
+    }
   }
   return data_type;
 }
 
 std::tuple<void*, size_t> PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
+  if (fast_load_) {
+    if (pytorch_tensor_index_map_.find(tensor_name) == pytorch_tensor_index_map_.end()) {
+      return std::make_tuple(nullptr, 0);
+    }
+    int64_t index = pytorch_tensor_index_map_[tensor_name];
+    auto data_pair = pytorch_reader_->getRecord("data/" + std::to_string(index));
+    // Get the data pointer and size of the tensor
+    at::DataPtr at_data_ptr = std::move(std::get<0>(data_pair));
+    void* data_ptr = std::get<0>(data_pair).get();
+    pytorch_tensor_list_.push_back(std::move(at_data_ptr));
+    int64_t data_size = std::get<1>(data_pair);
+    return std::make_tuple(data_ptr, data_size);
+  }
   if (!pytorch_tensor_map_.count(tensor_name)) {
     return std::make_tuple(nullptr, 0);
   }
