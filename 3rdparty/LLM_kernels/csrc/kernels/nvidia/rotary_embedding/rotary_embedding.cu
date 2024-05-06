@@ -112,12 +112,11 @@ template void LaunchRotaryEmbedding<__nv_bfloat16>(const RotaryEmbeddingParam<__
 
 template <typename T>
 __global__ void InvokeComputeCosSinWithCacheKernel(T* __restrict__ cos_sin_cache, const int rotary_dim,
-                                                   const int max_position_embeddings, const float base,
-                                                   const float scaling) {
+                                                   const int max_position_embeddings, const float base) {
   int pos = blockIdx.x;
   for (int rid = threadIdx.x; rid < rotary_dim / 2; rid += blockDim.x) {
     float inv_freq = 1.0 / pow(base, rid * 2 / (float)rotary_dim);
-    float freq = pos * inv_freq / scaling;
+    float freq = pos * inv_freq;
     cos_sin_cache[pos * rotary_dim + rid] = (T)cos(freq);
     cos_sin_cache[pos * rotary_dim + rotary_dim / 2 + rid] = (T)sin(freq);
   }
@@ -129,7 +128,6 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam<T>& params) {
   dim3 block(std::min(params.rotary_dim / 2, DEFAULT_CUDA_BLOCK_THREADS_NUM));
 
   float base = params.base;
-  float scaling = 1.0f;
   // https://github.com/vllm-project/vllm/blob/523e30ea0c5abcb447763dcd9a77b54d5c5f3239/vllm/model_executor/layers/rotary_embedding.py#L219
   if (params.rotary_embedding_type == RotaryEmbeddingType::DYNAMIC_NTK_SCALING) {
     extend_max_len = params.max_position_embeddings * params.scaling_factor;
@@ -137,13 +135,9 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam<T>& params) {
                                    (params.scaling_factor - 1)),
                     (params.rotary_dim / (params.rotary_dim - 2)));
   }
-  if (params.rotary_embedding_type == RotaryEmbeddingType::LINEAR_SCALING) {
-    extend_max_len = params.max_position_embeddings * params.scaling_factor;
-    scaling = params.scaling_factor;
-  }
   dim3 grid(extend_max_len);
   InvokeComputeCosSinWithCacheKernel<T>
-      <<<grid, block, 0, params.stream>>>(params.cos_sin_cache, params.rotary_dim, extend_max_len, base, scaling);
+      <<<grid, block, 0, params.stream>>>(params.cos_sin_cache, params.rotary_dim, extend_max_len, base);
 }
 
 template void ComputeCosSinWithCache<float>(const RotaryEmbeddingParam<float>& params);
@@ -198,6 +192,9 @@ void RotaryEmbeddingCuda<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, c
   params_.key_stride = stride_size;
   params_.rotary_embedding_type = rotary_embedding_type;
   params_.scaling_factor = scaling_factor;
+  if (params_.rotary_embedding_type == RotaryEmbeddingType::LINEAR_SCALING) {
+    throw std::invalid_argument("Linear scaling rotary embedding is not support.");
+  }
   ComputeCosSinWithCache(params_);
 }
 
