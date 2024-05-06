@@ -1,5 +1,4 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 
-ascendc_library(llm_kernels_ascend_matmul_silu STATIC
-  matmul_silu.cpp
-)
+add_ascend_kernel_lib(NAME matmul_silu)
+set(llm_kernels_ascend_libs "${llm_kernels_ascend_libs}" PARENT_SCOPE)
