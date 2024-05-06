@@ -35,4 +35,9 @@ set(ACL_SHARED_LIBS
   ${ASCEND_PATH}/lib64/libascendcl.so
   ${ASCEND_PATH}/lib64/libnnopbase.so
   ${ASCEND_PATH}/lib64/libopapi.so
+  ${ASCEND_PATH}/lib64/libascendc_runtime.a
+  ${ASCEND_PATH}/lib64/libruntime.so
+  ${ASCEND_PATH}/lib64/libtiling_api.a
+  ${ASCEND_PATH}/x86_64-linux/lib64/libregister.so
+  ${ASCEND_PATH}/x86_64-linux/lib64/libplatform.so
 )

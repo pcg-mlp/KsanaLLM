@@ -93,7 +93,7 @@ __aicore__ inline void MatmulSiluKernel<aType, bType, cType, biasType>::Process(
   matmul_obj.SetTensorB(b_global);
   matmul_obj.SetBias(bias_global);
 
-  while (matmul_obj.template Iterate<true>()) {
+  while (matmul_obj.template Iterate<true>(true)) {
     MamtulCompute();
     SiluCompute();
     CopyOut(compute_round);
