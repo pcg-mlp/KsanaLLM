@@ -58,6 +58,8 @@ class AscendTestSuitBase : public testing::Test {
   bool is_inited = false;
 };
 
+static const float HALF_FLT_MAX = 65504.F;
+
 }  // namespace test
 }  // namespace ascend
 }  // namespace llm_kernels

@@ -25,6 +25,7 @@ list(APPEND CMAKE_MODULE_PATH ${CCE_CMAKE_PATH})
 set(ACL_INC_DIRS
   ${ASCEND_PATH}/include
   ${ASCEND_PATH}/include/aclnn
+  ${ASCEND_MAIN_PATH}/tikcpp/tikcfw
 )
 
 set(ACL_LIB_DIRS

@@ -45,6 +45,8 @@ endif()
 find_package(Git QUIET)
 execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD OUTPUT_VARIABLE COMMIT_ID OUTPUT_STRIP_TRAILING_WHITESPACE)
 
+link_directories(/usr/lib64)
+
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
 
