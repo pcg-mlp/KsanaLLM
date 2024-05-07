@@ -18,6 +18,8 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
   nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer<T>>();
   nccl_all_gather_layer_->Init({}, context_, rank_);
 
+  // TODO(catheywang): CustomAllReduceSum not supported on more than two PCIe-only GPUs.
+  enable_custom_all_reduce_ = enable_custom_all_reduce_ && (context->GetTensorParallelSize() <= 2);
   if (enable_custom_all_reduce_) {
     custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer<T>>();
 
