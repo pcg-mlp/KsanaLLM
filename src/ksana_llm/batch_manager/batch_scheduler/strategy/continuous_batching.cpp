@@ -429,7 +429,8 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
   size_t host_free_num = GetBlockManager()->GetHostFreeBlockNumber();
   for (size_t idx = 0; idx < batch_state_->running_queue.size();) {
     auto &req = batch_state_->running_queue[idx];
-    size_t step_block_num = running_step_block_num_list_[visit_idx];
+    // Allocate blocks according to actual needs to avoid duplicate allocation of hosts and devices.
+    size_t step_block_num = req->GetTotalBlockNumber() - req->GetCurrentBlockNumber();
     if (visit_idx < swapout_pos) {
       NLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
       if (step_block_num > 0) {
