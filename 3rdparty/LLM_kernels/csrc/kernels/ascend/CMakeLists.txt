@@ -67,6 +67,7 @@ add_subdirectory(rotary_embedding)
 add_subdirectory(slice)
 add_subdirectory(transpose)
 add_subdirectory(matmul_silu)
+add_subdirectory(rmsnorm)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")
