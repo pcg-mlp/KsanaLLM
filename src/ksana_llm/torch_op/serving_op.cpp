@@ -83,7 +83,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
     .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature)
     .def_readwrite("max_new_tokens", &ksana_llm::SamplingConfig::max_new_tokens)
     .def_readwrite("logprobs_num", &ksana_llm::SamplingConfig::logprobs_num)
-    .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty);
+    .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty)
+    .def_readwrite("stop_token_ids", &ksana_llm::SamplingConfig::stop_token_ids);
 
   // Export `StreamingIterator` to python.
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")
@@ -104,14 +105,14 @@ PYBIND11_MODULE(libtorch_serving, m) {
     .def("generate",
          [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &model_name,
             const std::vector<int> &input_tokens, const ksana_llm::SamplingConfig &sampling_config) {
-            pybind11::gil_scoped_release release;
-            std::vector<int> output_tokens;
-            std::vector<std::vector<std::pair<int, float>>> logprobs;
-            ksana_llm::Status status =
-              self->Generate(model_name, input_tokens, sampling_config, output_tokens, logprobs);
-            pybind11::gil_scoped_acquire acquire;
-            return std::make_tuple(status, output_tokens, logprobs);
-          })
+           pybind11::gil_scoped_release release;
+           std::vector<int> output_tokens;
+           std::vector<std::vector<std::pair<int, float>>> logprobs;
+           ksana_llm::Status status =
+             self->Generate(model_name, input_tokens, sampling_config, output_tokens, logprobs);
+           pybind11::gil_scoped_acquire acquire;
+           return std::make_tuple(status, output_tokens, logprobs);
+         })
     .def("generate_streaming", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &model_name,
                                   const std::vector<int> &input_tokens,
                                   const ksana_llm::SamplingConfig &sampling_config) {

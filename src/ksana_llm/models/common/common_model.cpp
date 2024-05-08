@@ -57,8 +57,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   int tensor_para_size = model_config_.tensor_para_size;
   int rotary_embedding = model_config_.rotary_embedding;
   int head_num_per_tp = head_num / tensor_para_size;
-  int num_key_value_heads = model_config_.num_key_value_heads / tensor_para_size;
-  int stride_size = head_num_per_tp * size_per_head * 3;
+  int num_kv_heads_per_tp = model_config_.num_key_value_heads / tensor_para_size;
+  int stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
   int max_position_embeddings = model_config_.max_position_embeddings;
   float rope_theta = model_config_.rope_theta;
 
@@ -149,7 +149,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
     attention_param.push_back(idx);
     attention_param.push_back(max_position_embeddings);
     attention_param.push_back(head_num_per_tp);
-    attention_param.push_back(num_key_value_heads);
+    attention_param.push_back(num_kv_heads_per_tp);
     attention_param.push_back(size_per_head);
     attention_param.push_back(stride_size);
     attention_param.push_back(tensor_para_size);
@@ -197,27 +197,27 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
 
   if (is_context_stage) {
     STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
-        {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
-         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
+      {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
+       model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
 #ifdef ENABLE_ACL
-         ,
-         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
+       ,
+       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
 #endif
-        },
-        mmha_attention_output));
+      },
+      mmha_attention_output));
   } else {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
-        {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
-         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
-         forward_shape_, up_matmul_tensor_buffer_
+      {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
+       model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
+       forward_shape_, up_matmul_tensor_buffer_
 #ifdef ENABLE_ACL
-         ,
-         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
+       ,
+       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
 #endif
-        },
-        mmha_attention_output));
+      },
+      mmha_attention_output));
   }
 
   // Attn o_proj MatMul

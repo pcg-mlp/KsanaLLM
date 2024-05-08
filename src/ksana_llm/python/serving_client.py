@@ -62,7 +62,8 @@ if __name__ == "__main__":
                 "logprobs": 0, # Return the n token log probabilities for each position.
                 "max_new_tokens":
                 32,  # maximum number of new tokens to generate
-                "repetition_penalty": 1.0  # penalty for repetitive responses
+                "repetition_penalty": 1.0,  # penalty for repetitive responses
+                "stop_token_ids": [] # list of tokens that stop the generation
             },
             # Set stream mode to False
             "stream": False,

@@ -22,6 +22,10 @@ struct SamplingConfig {
     // The parameter for repetition penalty. 1.0 means no penalty
     float repetition_penalty = 1.0f;
 
+    // Tokens that stop the generation when they are generated.
+    // The returned tokens will contain the stop tokens.
+    std::vector<int> stop_token_ids;
+
     // The maximum numbers of tokens to generate, ignoring the number of tokens in the prompt.
     int max_new_tokens = 1024;
 

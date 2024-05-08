@@ -58,21 +58,22 @@ CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::sh
   }
 }
 
-int CheckQKVWeight(const std::string& str) {
+int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_heads) {
   std::string suffix = "_proj.weight";
   if (str.find("_proj.bias") != std::string::npos) {
     suffix = "_proj.bias";
   }
   if (str.length() < suffix.length() + 1 || str.compare(str.length() - suffix.length(), suffix.length(), suffix)) {
-    return 0;
+    return -1;
   }
   std::vector<char> qkv_list = {'q', 'k', 'v'};
+  std::vector<int> qkv_offset = {0, head_num / num_kv_heads, head_num / num_kv_heads + 1};
   for (int i = 0; i < 3; ++i) {
     if (str[str.length() - suffix.length() - 1] == qkv_list[i]) {
-      return i + 1;
+      return qkv_offset[i];
     }
   }
-  return 0;
+  return -1;
 }
 
 template <typename T>
@@ -195,20 +196,25 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
 
+    int head_num = model_config_.head_num;
+    int num_kv_heads = model_config_.num_key_value_heads;
     // copy host data to device
-    int qkv_offset;
-    if ((qkv_offset = CheckQKVWeight(tensor_name))) {
+    int qkv_offset = CheckQKVWeight(tensor_name, head_num, num_kv_heads);
+    if (qkv_offset >= 0) {
       bool is_bias = (tensor_name.find("_proj.bias") != std::string::npos);
       std::string qkv_name =
         tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" + (is_bias ? ".bias" : ".weight");
       if (!weights_map_.count(qkv_name)) {
-        weight_shape.insert(weight_shape.begin(), 3);
+        weight_shape.insert(weight_shape.begin(), ((head_num / num_kv_heads) + 2));
         AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
       }
       weights_data_type_map_[qkv_name] = weight_data_type;
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
-      size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / 3;
-      size_t saved_offset = (qkv_offset - 1) * single_proj_size;
+      size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / (head_num / num_kv_heads + 2);
+      size_t saved_offset = qkv_offset * single_proj_size;
+      if (qkv_offset == 0) {
+        single_proj_size *= head_num / num_kv_heads;
+      }
       tensor_para_offset *= single_proj_size;
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
@@ -257,8 +263,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       size_t src_pitch = weight_shape[0] / 3 * tensor_para_size_ * sizeof(T);
       size_t dst_pitch = weight_shape[0] / 3 * sizeof(T);
       tensor_para_offset *= dst_pitch;
-      Memcpy2DAsync(qkv_bias_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
-                    3, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      Memcpy2DAsync(qkv_bias_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch, 3,
+                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
@@ -267,15 +273,56 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
 }
 
 template <typename T>
-Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, const int num_layer) {
+Status CommonWeight<T>::PermuteSingleTensorOfQKVWeight(void* qkv_src, void* qkv_dst, Tensor& q_in_tensor,
+                                                       Tensor& q_out_tensor, std::vector<size_t>& data_shape,
+                                                       std::vector<size_t>& qkv_dst_shape) {
+  q_in_tensor.shape = data_shape;
+  q_out_tensor.shape = data_shape;
+  MemcpyAsync(q_in_tensor.GetPtr<void>(), qkv_src, q_in_tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+              context_->GetMemoryManageStreams()[rank_]);
+  Permute(q_in_tensor, q_out_tensor, {2, 0, 1}, context_->GetMemoryManageStreams()[rank_]);
+  Memcpy2DAsync(qkv_dst, qkv_dst_shape[1] * sizeof(T), q_out_tensor.GetPtr<void>(), data_shape[1] * sizeof(T),
+                data_shape[1] * sizeof(T), data_shape[2], MEMCPY_DEVICE_TO_DEVICE,
+                context_->GetMemoryManageStreams()[rank_]);
+  return Status();
+}
+
+template <typename T>
+Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_tensor, Tensor& q_out_tensor,
+                                         const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
+
+  // src tensor: qkv_weight_tensor[head_num / num_kv_heads + 2, d1, d2]
+  // after split: q[head_num / num_kv_heads, d1, d2], k[1, d1, d2], v[1, d1, d2]
+  // after permute: q[d2, head_num / num_kv_heads, d1], k[d2, 1, d1], v[d2, 1, d1]
+  // dst tensor: last_kv_tensor[d2, head_num / num_kv_heads * d1 + d1 + d1]
+  int head_num = model_config_.head_num;
+  int num_kv_heads = model_config_.num_key_value_heads;
   for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& qkv_weight_tensor = weights_map_[qkv_name];
-    Permute(qkv_weight_tensor, last_qkv_tensor, {2, 0, 1}, context_->GetMemoryManageStreams()[rank_]);
+    auto qkv_shape = qkv_weight_tensor.shape;
+    std::vector<size_t> q_shape = {1, head_num / num_kv_heads * qkv_shape[1], qkv_shape[2]};
+    std::vector<size_t> kv_shape = {1, qkv_shape[1], qkv_shape[2]};
+    size_t q_size = q_shape[1] * q_shape[2] * sizeof(T);
+    size_t kv_size = kv_shape[1] * kv_shape[2] * sizeof(T);
+    std::vector<size_t> qkv_dst_shape = {qkv_shape[2], qkv_shape[0] * qkv_shape[1]};
+    last_qkv_tensor.shape = qkv_dst_shape;
+
+    void* qkv_src = qkv_weight_tensor.GetPtr<void>();
+    void* qkv_dst = last_qkv_tensor.GetPtr<void>();
+    PermuteSingleTensorOfQKVWeight(qkv_src, qkv_dst, q_in_tensor, q_out_tensor, q_shape, qkv_dst_shape);
+
+    qkv_src = qkv_src + q_size;
+    qkv_dst = qkv_dst + q_shape[1] * sizeof(T);
+    PermuteSingleTensorOfQKVWeight(qkv_src, qkv_dst, q_in_tensor, q_out_tensor, kv_shape, qkv_dst_shape);
+
+    qkv_src = qkv_src + kv_size;
+    qkv_dst = qkv_dst + kv_shape[1] * sizeof(T);
+    PermuteSingleTensorOfQKVWeight(qkv_src, qkv_dst, q_in_tensor, q_out_tensor, kv_shape, qkv_dst_shape);
+
     Tensor t = last_qkv_tensor;
     last_qkv_tensor = qkv_weight_tensor;
-    t.shape = {qkv_weight_tensor.shape[2], qkv_weight_tensor.shape[0] * qkv_weight_tensor.shape[1]};
     weights_map_[qkv_name] = t;
   }
   return Status();
@@ -333,7 +380,9 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
 
   // permute qkv_tensor: permute((2, 0, 1))
   Tensor& last_qkv_tensor = weights_map_["empty_qkv_tensor"];
-  STATUS_CHECK_RETURN(PermuteQKVWeight(last_qkv_tensor, num_layer));
+  Tensor& q_in_tensor = weights_map_["empty_q_in_tensor"];
+  Tensor& q_out_tensor = weights_map_["empty_q_out_tensor"];
+  STATUS_CHECK_RETURN(PermuteQKVWeight(last_qkv_tensor, q_in_tensor, q_out_tensor, num_layer));
 
   // permute gate_proj, up_proj, down_proj: permute(1, 0)
   Tensor& last_mlp_tensor = weights_map_["empty_mlp_tensor"];
@@ -357,8 +406,12 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
   GetBlockManager()->FreeContiguous(last_mlp_tensor.GetBlockId());
   GetBlockManager()->FreeContiguous(last_o_proj_tensor.GetBlockId());
   GetBlockManager()->FreeContiguous(last_qkv_tensor.GetBlockId());
+  GetBlockManager()->FreeContiguous(q_in_tensor.GetBlockId());
+  GetBlockManager()->FreeContiguous(q_out_tensor.GetBlockId());
   GetBlockManager()->FreeContiguous(lm_head_transpose_tensor.GetBlockId());
   weights_map_.erase("empty_qkv_tensor");
+  weights_map_.erase("empty_q_in_tensor");
+  weights_map_.erase("empty_q_out_tensor");
   weights_map_.erase("empty_mlp_tensor");
   weights_map_.erase("empty_lm_head_tensor");
   weights_map_.erase("empty_o_proj_tensor");
@@ -369,6 +422,7 @@ template <typename T>
 Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   weight_data_type_ = model_config.weight_data_type;
   int head_num = model_config.head_num;
+  int num_kv_heads = model_config.num_key_value_heads;
   int hidden_units = model_config.hidden_units;
   int inter_size = model_config.inter_size;
   int num_layer = model_config.num_layer;
@@ -392,6 +446,11 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
 
   CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
   CreateTensorWithSameShape("model.layers.0.self_attn.query_key_value.weight", "empty_qkv_tensor");
+  auto shape = weights_map_["model.layers.0.self_attn.query_key_value.weight"].shape;
+  auto dtype = weights_map_["model.layers.0.self_attn.query_key_value.weight"].dtype;
+  shape[0] = shape[0] * head_num / (head_num + 2 * num_kv_heads);
+  AddWeightTensor("empty_q_in_tensor", shape, dtype);
+  AddWeightTensor("empty_q_out_tensor", shape, dtype);
   CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
   CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
 

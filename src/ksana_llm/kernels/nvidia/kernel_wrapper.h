@@ -43,8 +43,8 @@ void AssembleLastToken(const void* input, const void* offset, const int batch_si
 template <typename T>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens,
-                 int batch, int num_heads, int head_size, int stride_size, int tensor_para_size, bool is_causal,
-                 int rank, int block_size, void** k_list, void** v_list, void* block_offset,
+                 int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, int tensor_para_size,
+                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* block_offset,
                  const std::optional<void*>& alibi_slopes, cudaStream_t stream);
 
 template <typename T>
