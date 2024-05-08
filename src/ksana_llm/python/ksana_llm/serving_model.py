@@ -104,6 +104,7 @@ class ServingModel(object):
         sampling_config.max_new_tokens = generation_config.max_new_tokens
         sampling_config.logprobs_num = generation_config.logprobs_num
         sampling_config.repetition_penalty = generation_config.repetition_penalty
+        sampling_config.stop_token_ids = generation_config.stop_token_ids
 
         if streamer is None:
             _, outputs, logprobs = self._serving.generate(model_name, inputs,

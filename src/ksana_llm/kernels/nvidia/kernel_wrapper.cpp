@@ -149,12 +149,13 @@ GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
 template <typename T>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens,
-                 int batch, int num_heads, int head_size, int stride_size, int tensor_para_size, bool is_causal,
-                 int rank, int block_size, void** k_list, void** v_list, void* block_offset,
+                 int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, int tensor_para_size,
+                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* block_offset,
                  const std::optional<void*>& alibi_slopes, cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
-  torch::Tensor qkv_tensor = torch::from_blob(qkv_ptr, {total_tokens, num_heads * head_size * 3}, options);
-  auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
+  torch::Tensor qkv_tensor =
+    torch::from_blob(qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
+  auto tt = qkv_tensor.split({num_heads * head_size, num_kv_heads * head_size, num_kv_heads * head_size}, -1);
 
   c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
   auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
@@ -175,7 +176,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   llm_kernels::nvidia::CacheCopy<T>(reinterpret_cast<T*>(k_tensor.data_ptr()),
                                     reinterpret_cast<T*>(v_tensor.data_ptr()), k_list, v_list,
                                     reinterpret_cast<size_t*>(seqlen), reinterpret_cast<int*>(block_offset), block_size,
-                                    batch, total_tokens, num_heads, head_size, stride_size, stream);
+                                    batch, total_tokens, num_kv_heads, head_size, stride_size, stream);
 
 // flash attention 2 or flash attention 1
 #ifdef ENABLE_FLASH_ATTN_2
@@ -186,25 +187,26 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   if (alibi_slopes.has_value()) {
     alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
   }
-  mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
-                 torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor,
+  mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
+                 torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
                  seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
                  max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
 #else
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
-                             torch::reshape(k_tensor, {total_tokens, num_heads, head_size}),
-                             torch::reshape(tt[2], {total_tokens, num_heads, head_size}), out_tensor,
+                             torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
+                             torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
                              seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens, max_tokens,
                              0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
 #endif
 }
 
 #define ATTEN_VARLEN(T)                                                                                              \
-  template void AttenVarlen<T>(                                                                                      \
-    void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,                                              \
-    llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens, int batch, \
-    int num_heads, int head_size, int stride_size, int tensor_para_size, bool is_causal, int rank, int block_size,   \
-    void** k_list, void** v_list, void* block_offset, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
+  template void AttenVarlen<T>(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,                   \
+                               llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, \
+                               int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,            \
+                               int stride_size, int tensor_para_size, bool is_causal, int rank, int block_size,      \
+                               void** k_list, void** v_list, void* block_offset,                                     \
+                               const std::optional<void*>& alibi_slopes, cudaStream_t stream)
 ATTEN_VARLEN(float);
 ATTEN_VARLEN(half);
 #ifdef ENABLE_BFLOAT16
@@ -249,8 +251,9 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   const float* alibi_slopes_ptr =
     reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
-  torch::Tensor qkv_tensor = torch::from_blob(query_ptr, {total_tokens, heads_num * head_size * 3}, options);
-  auto tt = qkv_tensor.split(qkv_tensor.size(-1) / 3, -1);
+  torch::Tensor qkv_tensor =
+    torch::from_blob(query_ptr, {total_tokens, (heads_num + kv_heads_num * 2) * head_size}, options);
+  auto tt = qkv_tensor.split({heads_num * head_size, kv_heads_num * head_size, kv_heads_num * head_size}, -1);
 
   torch::Tensor q_tensor = tt[0];
   torch::Tensor k_tensor = tt[1];
@@ -269,7 +272,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   llm_kernels::nvidia::CachePosCopy<T>(
     reinterpret_cast<T*>(k_tensor_ptr), reinterpret_cast<T*>(v_tensor_ptr), key_cache_ptrs, value_cache_ptrs,
     rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
-    block_size, batch, total_tokens, heads_num, head_size, stride_size, stream);
+    block_size, batch, total_tokens, kv_heads_num, head_size, stride_size, stream);
 
   PagedAttention<T>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr, q_tensor_ptr,
                     key_cache_ptrs, value_cache_ptrs, cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num,

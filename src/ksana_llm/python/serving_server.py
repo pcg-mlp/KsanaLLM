@@ -162,7 +162,9 @@ async def generate(request: Request) -> Response:
                                           -1),
         logprobs_num=get_sampling_value(sampling_config, "logprobs", 0),
         repetition_penalty=get_sampling_value(sampling_config,
-                                              "repetition_penalty", 1.0))
+                                              "repetition_penalty", 1.0),
+        stop_token_ids=get_sampling_value(sampling_config,
+                                          "stop_token_ids", []))
 
     # Get the current event loop
     loop = asyncio.get_event_loop()

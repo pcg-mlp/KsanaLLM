@@ -25,6 +25,9 @@ REQUEST_LATENCY: List[Tuple[int, int, int, int, float]] = []
 PROMPT_AFFIX_DICT = {
     "llama":
     "[INST]%s[/INST]",
+    "llama-3":
+    "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
+    "%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
     "baichuan":
     "<reserved_106>%s<reserved_107>",
     "qwen":
@@ -85,7 +88,7 @@ def args_config():
         '--model_type',
         type=str,
         default="llama",
-        choices=['llama', 'baichuan', 'qwen', 'empty'],
+        choices=['llama', 'llama-3', 'baichuan', 'qwen', 'empty'],
         help=
         'serving model type, used to add prefixes and suffixes to the prompt.')
     parser.add_argument('--use_prefix_cache_prompts',
@@ -146,9 +149,12 @@ async def generate_prompt_async(
 
 
 async def send_request_async(prompt: str, api_url: str, req_id: int,
-                             result_list: List, pbar: tqdm, backend: str, stream: bool):
+                             result_list: List, pbar: tqdm, backend: str, stream: bool, model_type: str):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
+    stop_token_ids = []
+    if model_type == "llama-3":
+       stop_token_ids = [128009]
     if backend == "ksana":
         data = {
             "prompt": prompt,
@@ -159,6 +165,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 "repetition_penalty": 1.0,
                 "logprobs": 0,
                 "max_new_tokens": 1024,
+                "stop_token_ids": stop_token_ids
             },
             "stream": stream,
         }
@@ -179,7 +186,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "temperature": 0.00000001,
             "max_tokens": 1024,
             "logprobs": 0,
-            "repetition_penalty": 1.0
+            "repetition_penalty": 1.0,
+            "stop_token_ids": stop_token_ids
         }
     elif backend in ["ksana-server", "vllm-server"]:
         data = {
@@ -195,6 +203,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             "task_id": time.time(),
             "delete_prompt_from_output": 0,
             "stream": stream,
+            "stop_token_ids": stop_token_ids
         }
 
     # Set a timeout of 3 hours for the aiohttp client
@@ -289,7 +298,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
             send_request_async(prompt, api_url, req_id, result_list, pbar,
-                               args.backend, args.stream))
+                               args.backend, args.stream, args.model_type))
         # Add the task to the list of tasks
         tasks.append(task)
     # Wait for all tasks to complete
@@ -313,7 +322,7 @@ async def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[st
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Await until last request finished
         await send_request_async(prompt, api_url, req_id, result_list, pbar,
-                                 args.backend, args.stream)
+                                 args.backend, args.stream, args.model_type)
     # Close the progress bar
     pbar.close()
     # Return the result list

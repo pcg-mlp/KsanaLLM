@@ -52,11 +52,8 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   void** k_list = (kv_list.GetPtr<void*>()) + (size_t)layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
   Tensor& out = output_tensors[0];
-  out.shape[0] = query.shape[0];
-  out.shape[1] = query.shape[1] / 3;
   out.dtype = query.dtype;
-  out.dtype = query.dtype;
-  out.shape = {query.shape[0], query.shape[1] / 3};
+  out.shape = {query.shape[0], num_heads_ * head_size_};
   InvokePagedAttention<T>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
                           max_tokens, context_->GetComputeStreams()[rank_].Get(), cache_offset.GetPtr<void>(),
                           batch_size, num_heads_, head_size_, num_kv_heads_, stride_size_, block_token_num_, batch_size,
