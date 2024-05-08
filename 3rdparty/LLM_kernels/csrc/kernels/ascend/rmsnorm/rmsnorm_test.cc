@@ -54,12 +54,10 @@ void RmsNormRef(const T *input, const T *gamma, const float eps, const size_t m,
 }
 
 TEST_F(LlamaAscendRmsNormTestSuit, RmsNormKernelTest) {
-  size_t m = 128;
-  size_t n = 5120;
+  size_t m = 2;
+  size_t n = 1024;
 
   using dtype = half_float::half;
-
-  size_t block_dim = 32ul;
 
   size_t input_size = m * n * sizeof(dtype);
   uint8_t *input_host;
@@ -97,17 +95,50 @@ TEST_F(LlamaAscendRmsNormTestSuit, RmsNormKernelTest) {
 
   // NOTE(karlluo): m is seq length, n is hidden units number
   RmsNormTilingConfig tiling;
+  tiling.bLength = 1;
   tiling.sLength = m;
   tiling.hLength = n;
+  tiling.originalHLength = n;
+  tiling.loopRound = 1;
+  tiling.eps = 1e-6;
+  // NOTE(karlluo): relate to reduce sum buffer size
+  tiling.mainBsLengthAlign = n * sizeof(float);
+  // NOTE(karlluo): relate to x² fp32 buffer size
+  tiling.mainBshLength = n * sizeof(float);
+  tiling.mainBsLength = 1;
+  tiling.reciprocalOfHLength = float(1.0f) / float(n);
   RmsNormTilingConfig *buf = &tiling;
   size_t tiling_size = sizeof(RmsNormTilingConfig);
   uint8_t *tiling_device;
   ACL_CHECK_RET(aclrtMalloc((void **)&tiling_device, tiling_size, ACL_MEM_MALLOC_HUGE_FIRST));
   ACL_CHECK_RET(aclrtMemcpy(tiling_device, tiling_size, (void *)buf, tiling_size, ACL_MEMCPY_HOST_TO_DEVICE));
-  ACL_CHECK_RET(
-      ACLRT_LAUNCH_KERNEL(InvokeRmsNormKernel)(m, stream, input_device, gamma_device, output_device, tiling_device));
+
+  // reduce space
+  uint32_t workspace_buffer_len = tiling.mainBsLengthAlign;
+  if constexpr (sizeof(dtype) == sizeof(half_float::half)) {
+    // tmp space
+    workspace_buffer_len += tiling.mainBshLength;
+  }
+  // fp32 tmp space
+  workspace_buffer_len += tiling.hLength;
+  workspace_buffer_len *= m;
+  uint8_t *workspace_device;
+  ACL_CHECK_RET(aclrtMalloc((void **)&workspace_device, workspace_buffer_len, ACL_MEM_MALLOC_HUGE_FIRST));
+
+  ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeRmsNormKernel)(m, stream, input_device, gamma_device, output_device,
+                                                         tiling_device, workspace_device));
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
+  ACL_CHECK_RET(aclrtMemcpy(output_host, output_size, output_device, output_size, ACL_MEMCPY_DEVICE_TO_HOST));
+
+  for (size_t i = 0; i < m; ++i) {
+    dtype* output_ptr = ((dtype *)output_host) + (i * n);
+    for (size_t j = 0; j < n; ++j) {
+      EXPECT_NEAR(output_ptr[j], output_ref[i * n + j], 1e-3);
+    }
+  }
+
+  ACL_CHECK_RET(aclrtFree(workspace_device));
   ACL_CHECK_RET(aclrtFree(tiling_device));
   ACL_CHECK_RET(aclrtFree(output_device));
   ACL_CHECK_RET(aclrtFreeHost(output_host));

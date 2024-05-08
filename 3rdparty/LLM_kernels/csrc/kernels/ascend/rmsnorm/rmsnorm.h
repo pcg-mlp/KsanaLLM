@@ -15,7 +15,7 @@ struct RmsNormTilingConfig {
   uint32_t sLength = 0;
   uint32_t hLength = 0;
   uint32_t originalHLength = 0;
-  uint32_t reciprocalOfHLength = 0;
+  float reciprocalOfHLength = 0;
   uint32_t mainBshLength = 0;
   uint32_t mainBsLength = 0;
   uint32_t mainBsLengthAlign = 0;
@@ -23,6 +23,7 @@ struct RmsNormTilingConfig {
   uint32_t inputTailPos = 0;
   uint32_t tailBshLength = 0;
   uint32_t tailBsLength = 0;
+  float eps = 1e-6;
 };
 
 }  // namespace ascend
