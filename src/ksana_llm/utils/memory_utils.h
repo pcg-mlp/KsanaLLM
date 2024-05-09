@@ -38,6 +38,14 @@ T* GetContiguousPtr(int block_id) {
   return reinterpret_cast<T*>(addr);
 }
 
+// Get host block pointer.
+template <typename T>
+T* GetHostContiguousPtr(int block_id) {
+  void* addr;
+  GetBlockManager()->GetHostContiguousPtr(block_id, addr);
+  return reinterpret_cast<T*>(addr);
+}
+
 // Get free & total memory in bytes of current selected device.
 Status GetDeviceMemoryInfo(MemoryDevice device, size_t* free, size_t* total);
 

@@ -8,6 +8,8 @@ setting:
     pipeline_para_size: 1
     # 是否启用lora适配，false表示不启用，true表示启用
     enable_lora_adapter: false
+    # 是否使用cpu保存embed_tokens
+    embed_tokens_use_cpu: false
   # 调度相关配置
   batch_scheduler:
     # 调度策略，0表示continuous_batching，1表示auto_batchin，默认为0

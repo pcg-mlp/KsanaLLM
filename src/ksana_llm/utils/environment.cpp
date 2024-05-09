@@ -93,6 +93,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.pipeline_para_size", 1);
   enable_lora_adapter_ =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
+  embed_tokens_use_cpu_ =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.embed_tokens_use_cpu", false);
 
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
     throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");

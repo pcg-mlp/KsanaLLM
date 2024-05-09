@@ -33,7 +33,11 @@ Status CreateTensor(Tensor& tensor, const std::vector<size_t> shape, const DataT
 
   int block_id;
   GetBlockManager()->SetDeviceId(rank);
-  GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+  if (memory_device == MemoryDevice::MEMORY_DEVICE) {
+    GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+  } else {
+    GetBlockManager()->AllocateHostContiguous(total_bytes, block_id);
+  }
   tensor = Tensor(memory_device, dtype, shape, block_id);
   return Status();
 }

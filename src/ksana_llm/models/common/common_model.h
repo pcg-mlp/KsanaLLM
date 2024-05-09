@@ -74,6 +74,7 @@ class CommonModel : public BaseModel {
     std::shared_ptr<ModelCommunicator<T>> model_communicator_;
 
     std::shared_ptr<EmbLookupLayer<T>> emb_lookup_layer_;
+    std::shared_ptr<CpuEmbLookupLayer<T>> cpu_emb_lookup_layer_;
     std::shared_ptr<LayernormLayer<T>> layernorm_layer_;
     std::vector<std::shared_ptr<FlashAttentionLayer<T>>> flash_attention_layers_;
     std::vector<std::shared_ptr<PagedAttentionLayer<T>>> paged_attention_layers_;
@@ -92,6 +93,8 @@ class CommonModel : public BaseModel {
     Tensor up_matmul_tensor_buffer_;
     Tensor forward_shape_;
     Tensor cos_sin_cache_tensor_;
+    Tensor cpu_input_tokens_tensor_;
+    Tensor cpu_tokens_emb_tensor_;
 
 #ifdef ENABLE_ACL
   // Used for ascend attention.
@@ -129,6 +132,9 @@ class CommonModel : public BaseModel {
     // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
     Status LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage);
+
+    Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
+                             const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);
 };
 
 }  // namespace ksana_llm
