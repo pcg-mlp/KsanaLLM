@@ -25,7 +25,7 @@ stream_handler.setFormatter(formatter)
 # Add the StreamHandler to the root logger
 logging.getLogger().addHandler(stream_handler)
 
-from transformers import GenerationConfig, LlamaTokenizer
+from transformers import GenerationConfig, AutoTokenizer
 
 
 # Define a function to parse command line arguments
@@ -52,20 +52,24 @@ def infer(prompt, tokenizer, generation_config, model, queue=None, idx=0):
     generation_config = GenerationConfig(num_beams=1,
                                          top_k=1,
                                          top_p=0.0,
-                                         temperature=0.0)
+                                         temperature=0.0,
+                                         max_new_tokens=1024,
+                                         logprobs_num=0,
+                                         stop_token_ids=[])
 
     # Generate text using the model
-    result = model.generate(model_name="llama",
-                            inputs=input_tokens,
-                            generation_config=generation_config,
-                            streamer=None)
+    result, logprobs = model.generate(model_name="",
+                                      inputs=input_tokens,
+                                      generation_config=generation_config,
+                                      streamer=None)
 
     # Check if a queue is provided for storing results
     if queue is None:
         # If no queue is provided, return the decoded result
         return tokenizer.decode(result)
     else:
-        # If a queue is provided, put the result in the queue along with the index
+        # If a queue is provided, put the result in the queue along with the
+        # index
         queue.put((idx, tokenizer.decode(result)))
         return
 
@@ -77,7 +81,8 @@ if __name__ == "__main__":
 
     # Start loading the tokenizer
     logging.info("start load tokenizer")
-    tokenizer = LlamaTokenizer.from_pretrained(args.tokenizer_dir)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
+                                              trust_remote_code=True)
     # Finish loading the tokenizer
     logging.info("finish load tokenizer")
 
@@ -97,21 +102,23 @@ if __name__ == "__main__":
     ]
 
     ref_result = [
-        """如果我是国际空间站上的宇航员，目睹了外星实体接近空间站，我会立即向地面控制团队发出紧急通信。我会使用空间站上的通信设备，
-向地面控制团队报告我的观察结果和建议。首先，我会向地面控制团队报告我所看到的外星实体的位置、形状、大小和颜色等详细信息。我会尽可能提
-供准确的描述，以便地面控制团队能够更好地了解外星实体的情况。其次，我会向地面控制团队建议采取适当的措施来保护空间站和宇航员的安全。这
-可能包括减速空间站的速度，改变空间站的方向，或者采取其他措施来避免与外星实体发生碰撞。最后，我会向地面控制团队提供任何其他有用的信息
-，以便他们能够更好地了解外星实体的情况。这可能包括外星实体的运动轨迹、速度和方向等信息。总之，如果我是国际空间站上的宇航员，目睹了外
-星实体接近空间站，我会立即向地面控制团队发出紧急通信，并提供尽可能详细的观察结果和建议，以便地面控制团队能够采取适当的措施来保护空间
-站和宇航员的安全。</s>""",
-        """作为一名国际空间站上的宇航员，如果我意外地目睹了外星实体接近空间站，我的第一反应可能是惊恐和惊讶。但是，我们的训练和准
-备使我们能够在任何情况下保持冷静和专业。在太空中吃饭是一项非常重要的任务，因为我们需要保持身体健康和精神状态良好，以便完成我们的任务
-。在太空中，我们使用特殊的食品和餐具，以确保我们的食物和饮料不会漂浮到空间站的其他部分或飘出太空舱。我们的食物通常是预包装的，并且在
-太空中使用特殊的加热器和冷却器进行加热和冷却。我们还使用特殊的餐具，例如吸管和勺子，以避免食物和液体漂浮到空间站的其他部分。在太空中
-，我们通常会吃固体食物，例如面包、饼干和坚果，以及液体食物，例如果汁和牛奶。我们还会吃一些特殊的食物，例如蛋白质棒和能量棒，以帮助我
-们保持身体健康和精神状态良好。在太空中，我们通常会在特殊的餐桌上吃饭，这些餐桌可以固定在空间站的墙壁上，以避免食物和餐具漂浮到空间站
-的其他部分。我们还会在特殊的食品袋中储存食物和饮料，以便在需要时使用。总之，在太空中吃饭需要特殊的准备和技巧，以确保我们的食物和饮料
-不会漂浮到空间站的其他部分或飘出太空舱。我们的训练和准备使我们能够在任何情况下保持冷静和专业，以确保我们的身体健康和精神状态良好。</s>"""
+        "如果我是国际空间站上的宇航员，目睹了外星实体接近空间站，我会立即向地面控制团队发出紧急通信。我会使用空间站上的通信设备，"
+        "向地面控制团队报告我的观察结果和建议。首先，我会向地面控制团队报告我所看到的外星实体的位置、形状、大小和颜色等详细信息。"
+        "我会尽可能提供准确的描述，以便地面控制团队能够更好地了解外星实体的情况。其次，我会向地面控制团队建议采取适当的措施来保护"
+        "空间站和宇航员的安全。这可能包括减速空间站的速度、改变空间站的方向、启动空间站的防御系统等。我会尽可能提供详细的建议，以"
+        "便地面控制团队能够做出正确的决策。最后，我会向地面控制团队提供任何其他有用的信息，以便他们能够更好地了解外星实体的情况。"
+        "这可能包括外星实体的运动轨迹、速度、方向等信息。我会尽可能提供准确的信息，以便地面控制团队能够更好地了解外星实体的情况。"
+        "总之，如果我是国际空间站上的宇航员，目睹了外星实体接近空间站，我会立即向地面控制团队发出紧急通信，并提供尽可能详细的观察"
+        "结果和建议，以便地面控制团队能够采取适当的措施来保护空间站和宇航员的安全。</s>",
+        "作为一名国际空间站上的宇航员，如果我意外地目睹了外星实体接近空间站，我的第一反应可能是惊恐和惊讶。但是，我们的训练和准备"
+        "使我们能够在任何情况下保持冷静和专业。在太空中吃饭是一项非常重要的任务，因为我们需要保持身体健康和精神状态良好，以便完成"
+        "我们的任务。在太空中，我们使用特殊的食品和餐具，以确保我们的食物和饮料不会漂浮到空间站的其他部分或飘出太空舱。我们的食物"
+        "通常是预包装的，并且在太空中使用特殊的加热器和冷却器进行加热和冷却。我们还使用特殊的餐具，例如吸管和勺子，以避免食物和液"
+        "体漂浮到空间站的其他部分。在太空中，我们通常会吃固体食物，例如面包、饼干和坚果，以及液体食物，例如果汁和牛奶。我们还会吃"
+        "一些特殊的食物，例如蛋白质棒和能量棒，以帮助我们保持身体健康和精神状态良好。在太空中，我们通常会在特殊的餐桌上吃饭，这些"
+        "餐桌可以固定在空间站的墙壁上，以避免食物和餐具漂浮到空间站的其他部分。我们还会在特殊的食品袋中储存食物和饮料，以便在需要"
+        "时使用。总之，在太空中吃饭需要特殊的准备和技巧，以确保我们的食物和饮料不会漂浮到空间站的其他部分或飘出太空舱。我们的训练"
+        "和准备使我们能够在任何情况下保持冷静和专业，以确保我们的身体健康和精神状态良好。</s>"
     ]
 
     none_prefix_prompt = ["[INST]你好。[/INST]"]
@@ -136,8 +143,8 @@ if __name__ == "__main__":
     # Perform warmup by generating results for each warmup prompt
     for idx, prompt in enumerate(warmup_prompts):
         result = infer(prompt, tokenizer, generation_config, model)
-        assert result.replace("\n", "") == ref_result[
-            idx]  # Ensure the generated result matches the reference
+        # Ensure the generated result matches the reference
+        assert result.replace("\n", "") == ref_result[idx].replace("\n", "")
     end_time = time.perf_counter()
     warmup_time = end_time - start_time  # Calculate the warmup time
     logging.info("finish warmup")  # Log a message indicating the end of warmup
@@ -167,7 +174,8 @@ if __name__ == "__main__":
     total_infer_time = end_time - start_time  # Calculate the total inference time
     logging.info(
         "finish infer")  # Log a message indicating the end of inference
-    assert total_infer_time < warmup_time  # Ensure the total inference time is less than the warmup time
+    # Ensure the total inference time is less than the warmup time
+    assert total_infer_time < warmup_time
 
     # Check the results from the multi-threaded inference
     while not multi_thread_queue.empty():
@@ -181,3 +189,4 @@ if __name__ == "__main__":
 
     result = infer(none_prefix_prompt[0], tokenizer, generation_config, model)
     assert result.replace("\n", "") == none_prefix_prompt_ref[0]
+    print("Integration test PASS")

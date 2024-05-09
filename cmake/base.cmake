@@ -33,6 +33,7 @@ function(python_test TARGET_NAME)
     add_test(NAME ${TARGET_NAME}
       COMMAND ${PYTHON_EXECUTABLE} ${python_test_SRCS} ${python_test_ARGS}
       WORKING_DIRECTORY ${working_dir})
+    set_tests_properties(${TARGET_NAME} PROPERTIES PASS_REGULAR_EXPRESSION ".*test PASS")
     message(STATUS "test added ${TARGET_NAME} ${working_dir}/${python_test_SRCS}")
   endif()
 endfunction()
