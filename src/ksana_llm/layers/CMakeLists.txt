@@ -3,7 +3,9 @@
 # ==============================================================================
 cmake_minimum_required(VERSION 3.8)
 
-file(GLOB_RECURSE layers_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/*.cpp)
+file(GLOB_RECURSE layers_SRCS 
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/cpu/*.cpp
+     ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/*.cpp)
 list(FILTER layers_SRCS EXCLUDE REGEX ".*test.cpp")
 list(FILTER layers_SRCS EXCLUDE REGEX ".*/nvidia/.*.cpp")
 list(FILTER layers_SRCS EXCLUDE REGEX ".*/ascend/.*.cpp")

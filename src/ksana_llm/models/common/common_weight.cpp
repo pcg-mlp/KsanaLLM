@@ -147,6 +147,11 @@ Status CommonWeight<T>::GetOptionalWeight(std::vector<std::string>& tensor_name_
 template <typename T>
 Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape,
                                           bool& transpose_first, const std::string& tensor_name) {
+  // EmbedTokensUseCpu does not require slicing
+  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu() &&
+      tensor_name.find("embed_tokens") != std::string::npos) {
+    return Status();
+  }
   if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find(".bias") != std::string::npos ||
       tensor_name.find("self_attn.W_pack") != std::string::npos ||
       tensor_name.find("embed_tokens") != std::string::npos ||
@@ -391,20 +396,34 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
   GetBlockManager()->SetDeviceId(rank_);
 
   // permute qkv_tensor: permute((2, 0, 1))
+  CreateTensorWithSameShape("model.layers.0.self_attn.query_key_value.weight", "empty_qkv_tensor");
+  auto shape = weights_map_["model.layers.0.self_attn.query_key_value.weight"].shape;
+  auto dtype = weights_map_["model.layers.0.self_attn.query_key_value.weight"].dtype;
+  shape[0] = shape[0] * model_config_.head_num / (model_config_.head_num + 2 * model_config_.num_key_value_heads);
+  AddWeightTensor("empty_q_in_tensor", shape, dtype);
+  AddWeightTensor("empty_q_out_tensor", shape, dtype);
   Tensor& last_qkv_tensor = weights_map_["empty_qkv_tensor"];
   Tensor& q_in_tensor = weights_map_["empty_q_in_tensor"];
   Tensor& q_out_tensor = weights_map_["empty_q_out_tensor"];
   STATUS_CHECK_RETURN(PermuteQKVWeight(last_qkv_tensor, q_in_tensor, q_out_tensor, num_layer));
+  GetBlockManager()->FreeContiguous(last_qkv_tensor.GetBlockId());
+  GetBlockManager()->FreeContiguous(q_in_tensor.GetBlockId());
+  GetBlockManager()->FreeContiguous(q_out_tensor.GetBlockId());
 
   // permute gate_proj, up_proj, down_proj: permute(1, 0)
+  CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
   Tensor& last_mlp_tensor = weights_map_["empty_mlp_tensor"];
   STATUS_CHECK_RETURN(PermuteMLPWeight(last_mlp_tensor, num_layer));
+  GetBlockManager()->FreeContiguous(last_mlp_tensor.GetBlockId());
 
   // permute o_proj: permute(1, 0)
+  CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
   Tensor& last_o_proj_tensor = weights_map_["empty_o_proj_tensor"];
   STATUS_CHECK_RETURN(PermuteOutputProjectWeight(last_o_proj_tensor, num_layer));
+  GetBlockManager()->FreeContiguous(last_o_proj_tensor.GetBlockId());
 
   // permute lm_head: permute(1, 0)
+  CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
   Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
   Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
   Permute(lm_head_tensor, lm_head_transpose_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
@@ -412,15 +431,8 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
   lm_head_transpose_tensor = lm_head_tensor;
   t.shape = {lm_head_tensor.shape[1], lm_head_tensor.shape[0]};
   weights_map_["lm_head.weight"] = t;
-
-  // Free useless tensor
-  GetBlockManager()->SetDeviceId(rank_);
-  GetBlockManager()->FreeContiguous(last_mlp_tensor.GetBlockId());
-  GetBlockManager()->FreeContiguous(last_o_proj_tensor.GetBlockId());
-  GetBlockManager()->FreeContiguous(last_qkv_tensor.GetBlockId());
-  GetBlockManager()->FreeContiguous(q_in_tensor.GetBlockId());
-  GetBlockManager()->FreeContiguous(q_out_tensor.GetBlockId());
   GetBlockManager()->FreeContiguous(lm_head_transpose_tensor.GetBlockId());
+
   weights_map_.erase("empty_qkv_tensor");
   weights_map_.erase("empty_q_in_tensor");
   weights_map_.erase("empty_q_out_tensor");
@@ -455,18 +467,6 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     LoadWeightsFromFile(weights_loader);
     StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   }
-
-  CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
-  CreateTensorWithSameShape("model.layers.0.self_attn.query_key_value.weight", "empty_qkv_tensor");
-  auto shape = weights_map_["model.layers.0.self_attn.query_key_value.weight"].shape;
-  auto dtype = weights_map_["model.layers.0.self_attn.query_key_value.weight"].dtype;
-  shape[0] = shape[0] * head_num / (head_num + 2 * num_kv_heads);
-  AddWeightTensor("empty_q_in_tensor", shape, dtype);
-  AddWeightTensor("empty_q_out_tensor", shape, dtype);
-  CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
-  CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
-
-  PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
 
   // Convert of BFP16 and FP16
   if (model_config_.weight_data_type == TYPE_FP16 || model_config_.weight_data_type == TYPE_BF16) {
@@ -509,6 +509,23 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     }
   }
+  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+    NLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
+    auto weight_name = "model.embed_tokens.weight";
+    Tensor& tensor = weights_map_[weight_name];
+    int block_id = 0;
+    size_t length = tensor.GetTotalBytes();
+    GetBlockManager()->AllocateHostContiguous(length, block_id);
+    Tensor cpu_tensor(MemoryDevice::MEMORY_HOST, tensor.dtype, tensor.shape, block_id);
+    MemcpyAsync(cpu_tensor.GetPtr<void>(), tensor.GetPtr<void>(), length, MEMCPY_DEVICE_TO_HOST,
+                context_->GetMemoryManageStreams()[rank_]);
+    GetBlockManager()->FreeContiguous(tensor.GetBlockId());
+    weights_map_.insert_or_assign(weight_name, cpu_tensor);
+    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+  }
+
+  PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
+
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   return Status();
 }

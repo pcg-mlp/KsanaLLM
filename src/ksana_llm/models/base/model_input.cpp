@@ -29,6 +29,16 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config));
+
+  size_t device_total, device_free;
+  Status status =
+      GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
+  if (status.OK()) {
+    size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
+    max_block_num = std::min(max_block_num, (device_free - reserved_memory_size) / GetBlockManager()->GetBlockSize());
+  }
+  NLLM_LOG_INFO << "max_block_num " << max_block_num;
+
   size_t extra_token_number = 0;
   int prefix_cache_tokens_number =
       block_manager_config.prefix_cache_len > 0 ? block_manager_config.prefix_cache_len : 0;
@@ -45,7 +55,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 
   STATUS_CHECK_FAILURE(
       CreateTensor(kv_cache_buffer,
-                   {static_cast<unsigned long>(max_seq_len_), static_cast<unsigned long>((max_seq_len_ + 511) / 512),
+                   {static_cast<unsigned long>(max_batch_size_), static_cast<unsigned long>((max_seq_len_ + 511) / 512),
                     static_cast<unsigned long>(head_num_per_tp), static_cast<unsigned long>(size_per_head) + 2},
                     TYPE_FP32, rank_, MEMORY_DEVICE));
 

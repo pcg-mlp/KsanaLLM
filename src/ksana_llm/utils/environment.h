@@ -234,6 +234,8 @@ class Environment {
 
     size_t GetPipeLineParallelSize() { return pipeline_parallel_size_; }
 
+    bool EmbedTokensUseCpu() { return embed_tokens_use_cpu_; }
+
   private:
     // Calculate block size via model configs.
     void InitializeBlockManagerConfig();
@@ -262,6 +264,9 @@ class Environment {
 
     // Whether lora is enabled.
     bool enable_lora_adapter_ = false;
+
+    // Embed_tokens gather operation is processed on the CPU.
+    bool embed_tokens_use_cpu_ = false;
 };
 
 }  // namespace ksana_llm

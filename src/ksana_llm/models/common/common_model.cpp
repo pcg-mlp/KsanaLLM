@@ -115,6 +115,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
   emb_lookup_layer_->Init({}, context_, rank_);
 
+  cpu_emb_lookup_layer_ = std::make_shared<CpuEmbLookupLayer<T>>();
+  cpu_emb_lookup_layer_->Init({}, context_, rank_);
+
   layernorm_layer_ = std::make_shared<LayernormLayer<T>>();
   layernorm_layer_->Init({model_config_.layernorm_eps}, context_, rank_);
 
@@ -134,6 +137,13 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   cast_layer_->Init({}, context_, rank_);
 
   model_input_ = std::make_shared<ModelInput>(model_config_, rank_, context_);
+
+  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+    CreateTensor(cpu_input_tokens_tensor_, model_input_->input_ids.shape, model_input_->input_ids.dtype, rank_,
+                 MemoryDevice::MEMORY_HOST);
+    CreateTensor(cpu_tokens_emb_tensor_, {model_input_->input_ids.shape[0] * hidden_units},
+                 model_input_->input_ids.dtype, rank_, MemoryDevice::MEMORY_HOST);
+  }
   model_output_ = std::make_shared<ModelOutput>(model_config_.max_batch_size, vocab_size_pad_, rank_, context_);
   model_communicator_ = std::make_shared<ModelCommunicator<T>>(&tensor_buffer_0_, &tensor_buffer_2_, rank_, context_);
 
@@ -315,35 +325,62 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
 }
 
 template <typename T>
+Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
+                                         const bool is_context_stage, std::vector<Tensor>& temp_buffer_0) {
+  auto batch_size = forward_reqs.size();
+  void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
+  size_t index = 0;
+  for (size_t idx = 0; idx < batch_size; ++idx) {
+    std::vector<int>* req_input = forward_reqs[idx].output_tokens;
+    if (is_context_stage) {
+      size_t copy_len = req_input->size() * sizeof(int);
+      memcpy(input_tokens_ptr + index, req_input->data(), copy_len);
+      index += copy_len;
+    } else {
+      memcpy(input_tokens_ptr + index, &req_input->back(), sizeof(int));
+      index += sizeof(int);
+    }
+  }
+  cpu_input_tokens_tensor_.shape = {index / sizeof(int)};
+  cpu_emb_lookup_layer_->Forward({cpu_input_tokens_tensor_, cpu_tokens_emb_tensor_, embedding_weight}, temp_buffer_0);
+  return Status();
+}
+
+template <typename T>
 Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                     std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage) {
   GetBlockManager()->SetDeviceId(rank_);
-  model_input_->ParseFromRequests(forward_reqs, is_context_stage);
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
   std::vector<Tensor> temp_buffer_0{tensor_buffer_0_};
   std::vector<Tensor> temp_buffer_1{tensor_buffer_1_};
   std::vector<Tensor> temp_buffer_2{tensor_buffer_2_};
+  Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
+  if (embedding_weight.device == MemoryDevice::MEMORY_HOST) {
+    EmbedTokensUseCpu(embedding_weight, forward_reqs, is_context_stage, temp_buffer_0);
+  }
+
+  model_input_->ParseFromRequests(forward_reqs, is_context_stage);
 
   // create forward shape tensor
   forward_shape_.shape = {model_input_->batch_size, model_input_->max_tokens,
                           model_input_->kv_cache_offset_list.back()};
 
-  Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
   std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
-  STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-    {model_input_->input_ids, model_input_->input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
+  if (embedding_weight.device == MemoryDevice::MEMORY_DEVICE) {
+    STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
+      {model_input_->input_ids, model_input_->input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
 
-  // NOTE(karlluo): multiple event in nccl will cause preformance regression
-  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
-  if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    EventRecord(model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
-    StreamWaitEvent(context_->GetNCCLStreams()[rank_], model_output_->compute_ready_event);
+    // NOTE(karlluo): multiple event in nccl will cause preformance regression
+    // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+      EventRecord(model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
+      StreamWaitEvent(context_->GetNCCLStreams()[rank_], model_output_->compute_ready_event);
+    }
+
+    model_communicator_->AllGather({emb_lookup_output[0], temp_buffer_1[0]}, emb_lookup_output);
   }
-
-  model_communicator_->AllGather({emb_lookup_output[0], temp_buffer_1[0]}, emb_lookup_output);
-
   // LlamaDecoder
   for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     STATUS_CHECK_RETURN(
