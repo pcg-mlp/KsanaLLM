@@ -16,9 +16,6 @@ void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_tabl
   ACL_CHECK_RET(aclnnEmbeddingGetWorkspaceSize(embedding_table, input_ids, output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnEmbedding(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
-
-  // TODO: Support position.
 }
 
 }  // namespace ascend

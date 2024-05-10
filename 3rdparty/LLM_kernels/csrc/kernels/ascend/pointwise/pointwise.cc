@@ -39,7 +39,6 @@ void Pow(const aclTensor* input, float powExponentValue, aclTensor** output, acl
   ACL_CHECK_RET(aclnnPowTensorScalarGetWorkspaceSize(input, powExponent, *output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnPowTensorScalar(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   ACL_CHECK_RET(aclDestroyScalar(powExponent));
 }
 
@@ -54,7 +53,6 @@ void Mean(const aclTensor* input, std::vector<int64_t>& meanDimData, const bool 
   ACL_CHECK_RET(aclnnMeanGetWorkspaceSize(input, meanDim, keepdim, dtype, *output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnMean(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   ACL_CHECK_RET(aclDestroyIntArray(meanDim));
 }
 
@@ -66,7 +64,6 @@ void Neg(const aclTensor* input, aclTensor** output, aclrtStream& stream, void (
   ACL_CHECK_RET(aclnnNegGetWorkspaceSize(input, *output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnNeg(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 void InplaceDiv(const aclTensor* input, aclTensor** output, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
@@ -77,7 +74,6 @@ void InplaceDiv(const aclTensor* input, aclTensor** output, aclrtStream& stream,
   ACL_CHECK_RET(aclnnInplaceDivGetWorkspaceSize(*output, input, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnInplaceDiv(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 void InplaceSqrt(aclTensor** output, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
@@ -88,7 +84,6 @@ void InplaceSqrt(aclTensor** output, aclrtStream& stream, void (*ws_func)(size_t
   ACL_CHECK_RET(aclnnInplaceSqrtGetWorkspaceSize(*output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnInplaceSqrt(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 }  // namespace ascend
