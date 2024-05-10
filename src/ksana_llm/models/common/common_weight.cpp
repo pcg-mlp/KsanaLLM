@@ -480,6 +480,24 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       }
     }
   }
+
+  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+    NLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
+    auto weight_name = "model.embed_tokens.weight";
+    Tensor& tensor = weights_map_[weight_name];
+    int block_id = 0;
+    size_t length = tensor.GetTotalBytes();
+    GetBlockManager()->AllocateHostContiguous(length, block_id);
+    Tensor cpu_tensor(MemoryDevice::MEMORY_HOST, tensor.dtype, tensor.shape, block_id);
+    MemcpyAsync(cpu_tensor.GetPtr<void>(), tensor.GetPtr<void>(), length, MEMCPY_DEVICE_TO_HOST,
+                context_->GetMemoryManageStreams()[rank_]);
+    GetBlockManager()->FreeContiguous(tensor.GetBlockId());
+    weights_map_.insert_or_assign(weight_name, cpu_tensor);
+    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+  }
+
+  PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
+
   // We use vocab_size to determine whether it is the Baichuan2 model.
   // If vocab_size is equal to 125,696, then it is the Baichuan2 model.
   // And Unlike Baichuan1, the Baichuan2 model requires normalizing the head weights. Refer to
@@ -509,22 +527,6 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     }
   }
-  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
-    NLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
-    auto weight_name = "model.embed_tokens.weight";
-    Tensor& tensor = weights_map_[weight_name];
-    int block_id = 0;
-    size_t length = tensor.GetTotalBytes();
-    GetBlockManager()->AllocateHostContiguous(length, block_id);
-    Tensor cpu_tensor(MemoryDevice::MEMORY_HOST, tensor.dtype, tensor.shape, block_id);
-    MemcpyAsync(cpu_tensor.GetPtr<void>(), tensor.GetPtr<void>(), length, MEMCPY_DEVICE_TO_HOST,
-                context_->GetMemoryManageStreams()[rank_]);
-    GetBlockManager()->FreeContiguous(tensor.GetBlockId());
-    weights_map_.insert_or_assign(weight_name, cpu_tensor);
-    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
-  }
-
-  PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
 
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   return Status();
