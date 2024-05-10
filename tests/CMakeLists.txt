@@ -8,8 +8,18 @@ execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/src/ksana_llm/python/ksana_l
 # copy python script for standalone test
 execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/src/ksana_llm/python/ksana_llm ${CMAKE_BINARY_DIR})
 
+set(INTEGRATION_TEST_CONFIG "")
+
 if(WITH_CUDA)
+  set(INTEGRATION_TEST_CONFIG ${PROJECT_SOURCE_DIR}/tests/model/llama_test.yaml)
+endif()
+
+if(WITH_ACL)
+  set(INTEGRATION_TEST_CONFIG ${PROJECT_SOURCE_DIR}/examples/ksana_llm_ascend_llama13b.yaml)
+endif()
+
+if(NOT INTEGRATION_TEST_CONFIG STREQUAL "")
   python_test(model_llama_integration_test SRCS ${PROJECT_SOURCE_DIR}/tests/model/llama_integration_test.py
-    ARGS --config_file ${PROJECT_SOURCE_DIR}/tests/model/llama_test.yaml
+    ARGS --config_file ${INTEGRATION_TEST_CONFIG}
     --tokenizer_dir /model/llama-hf/13B)
 endif()

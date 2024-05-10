@@ -132,7 +132,7 @@ TEST_F(LlamaAscendRmsNormTestSuit, RmsNormKernelTest) {
   ACL_CHECK_RET(aclrtMemcpy(output_host, output_size, output_device, output_size, ACL_MEMCPY_DEVICE_TO_HOST));
 
   for (size_t i = 0; i < m; ++i) {
-    dtype* output_ptr = ((dtype *)output_host) + (i * n);
+    dtype *output_ptr = ((dtype *)output_host) + (i * n);
     for (size_t j = 0; j < n; ++j) {
       EXPECT_NEAR(output_ptr[j], output_ref[i * n + j], 1e-3);
     }
