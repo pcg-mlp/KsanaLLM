@@ -19,7 +19,6 @@ void Slice(const aclTensor* input, const int sliceDim, const int sliceStart, con
       aclnnSliceGetWorkspaceSize(input, sliceDim, sliceStart, sliceEnd, sliceStep, *output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnSlice(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 }  // namespace ascend
