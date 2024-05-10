@@ -183,8 +183,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     //     norm:                     不做分卡处理
     //     embedding:                不做分卡处理
     std::string& tensor_name = tensor_name_list[idx];
-    std::string& weight_name = idx < name_list_size ?
-                                   tensor_name_list[idx] : optional_weight_list[idx - name_list_size];
+    std::string& weight_name =
+      idx < name_list_size ? tensor_name_list[idx] : optional_weight_list[idx - name_list_size];
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
@@ -281,9 +281,21 @@ Status CommonWeight<T>::PermuteSingleTensorOfQKVWeight(void* qkv_src, void* qkv_
   MemcpyAsync(q_in_tensor.GetPtr<void>(), qkv_src, q_in_tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
               context_->GetMemoryManageStreams()[rank_]);
   Permute(q_in_tensor, q_out_tensor, {2, 0, 1}, context_->GetMemoryManageStreams()[rank_]);
+
+#ifdef ENALBE_CUDA
   Memcpy2DAsync(qkv_dst, qkv_dst_shape[1] * sizeof(T), q_out_tensor.GetPtr<void>(), data_shape[1] * sizeof(T),
                 data_shape[1] * sizeof(T), data_shape[2], MEMCPY_DEVICE_TO_DEVICE,
                 context_->GetMemoryManageStreams()[rank_]);
+#else
+  // NOTE(karlluo): for ascend, there is a issue that can not use Memcpy2DAsync.
+  // will fix it when it work.
+  for (size_t row_idx = 0; row_idx < data_shape[2]; ++row_idx) {
+    MemcpyAsync(qkv_dst + row_idx * qkv_dst_shape[1] * sizeof(T),
+                q_out_tensor.GetPtr<void>() + row_idx * data_shape[1] * sizeof(T), data_shape[1] * sizeof(T),
+                MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+  }
+#endif
+
   return Status();
 }
 
