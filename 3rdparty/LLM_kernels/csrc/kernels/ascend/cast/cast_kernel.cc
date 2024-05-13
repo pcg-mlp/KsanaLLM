@@ -108,3 +108,9 @@ extern "C" __global__ __aicore__ void InvokeCastFloatToHalfKernel(GM_ADDR input,
   cast_kernel.Init(input, output, tiling_gm);
   cast_kernel.Process();
 }
+
+extern "C" __global__ __aicore__ void InvokeCastHalfToFloatKernel(GM_ADDR input, GM_ADDR output, GM_ADDR tiling_gm) {
+  CastKernel<half, float> cast_kernel;
+  cast_kernel.Init(input, output, tiling_gm);
+  cast_kernel.Process();
+}

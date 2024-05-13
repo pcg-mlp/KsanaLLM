@@ -6,14 +6,16 @@
 
 #include <stdint.h>
 
+#include "acl/acl.h"
+
+#include "csrc/utils/ascend/common.h"
+
 namespace llm_kernels {
 namespace ascend {
 
-struct SiluMulTilingConfig {
-  uint32_t total_elem_num = 0;
-  uint32_t block_elem_num = 0;
-  uint32_t tile_num = 0;
-};
+template <typename T>
+void InvokeSiluMul(const T* input, const T* weight, const size_t m, const size_t n, T* output, aclrtStream stream,
+                   llm_kernels::utils::WorkSpaceFunc ws_func);
 
 }  // namespace ascend
 }  // namespace llm_kernels

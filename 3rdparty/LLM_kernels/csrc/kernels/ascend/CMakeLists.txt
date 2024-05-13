@@ -21,6 +21,8 @@ function(add_ascend_kernel_lib)
   add_library(${kernel_lib_name} STATIC ${ACL_SRCS})
   set_property(TARGET ${kernel_lib_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+  set(aicore_kernel_lib_name "")
+
   if(KERNEL_SRCS AND NOT KERNEL_SRCS STREQUAL "")
     set(aicore_kernel_lib_name llm_kernels_ascend_core_${add_ascend_kernel_lib_NAME})
     ascendc_library(${aicore_kernel_lib_name} STATIC ${KERNEL_SRCS})
@@ -35,7 +37,15 @@ function(add_ascend_kernel_lib)
   set(llm_kernels_ascend_link_libs ${llm_kernels_ascend_link_libs})
   set(llm_kernels_ascend_libs_deps ${llm_kernels_ascend_libs_deps})
 
-  target_link_libraries(${kernel_lib_name} PUBLIC ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
+  if(${add_ascend_kernel_lib_NAME} STREQUAL "silu_mul")
+    target_link_libraries(${kernel_lib_name} PUBLIC
+      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs}
+      ${aicore_kernel_lib_name})
+  else()
+    target_link_libraries(${kernel_lib_name} PUBLIC
+      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
+  endif()
+
   add_dependencies(${kernel_lib_name} ${llm_kernels_ascend_libs_deps})
   set(llm_kernels_ascend_libs "${llm_kernels_ascend_libs} ${kernel_lib_name}" PARENT_SCOPE)
   message(STATUS "Ascend kernel added ${add_ascend_kernel_lib_NAME}")
