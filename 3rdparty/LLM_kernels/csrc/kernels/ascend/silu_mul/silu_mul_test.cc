@@ -7,7 +7,7 @@
 
 #include "3rdparty/half/include/half.hpp"
 #include "aclrtlaunch_InvokeSiluMulHalfKernel.h"
-#include "csrc/kernels/ascend/silu_mul/silu_mul.h"
+#include "csrc/kernels/ascend/silu_mul/silu_mul_kernel.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
 
