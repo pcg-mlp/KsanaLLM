@@ -7,6 +7,10 @@
 #include <iterator>
 #include <vector>
 
+#ifdef ENABLE_ACL
+#  include "ksana_llm/utils/ascend/acl_utils.h"
+#endif
+
 namespace ksana_llm {
 
 AutoBatchingStrategy::AutoBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
@@ -58,6 +62,11 @@ void AutoBatchingStrategy::PaddingRequests() {
     }
   }
 
+#ifdef ENABLE_ACL
+  std::vector<int> &padded_token_size = GetPaddedTokenSize();
+  padded_token_size.clear();
+#endif
+
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end(); ++it) {
     auto &req = *it;
 
@@ -65,8 +74,13 @@ void AutoBatchingStrategy::PaddingRequests() {
     if (padded_num > 0) {
       std::vector<int> tmp(padded_num, req->pad_id);
       tmp.insert(tmp.end(), req->output_tokens.begin(), req->output_tokens.end());
+      req->padded_size = padded_num;
       req->output_tokens.swap(tmp);
     }
+
+#ifdef ENABLE_ACL
+    padded_token_size.push_back(padded_num);
+#endif
 
     // For compatible with model input.
     for (int i = 0; i < context_->GetTensorParallelSize(); ++i) {

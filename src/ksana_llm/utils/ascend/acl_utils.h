@@ -108,4 +108,6 @@ void CheckACLError(T result, const char* func, const char* file, const int line)
 
 #define ACL_CHECK(val) CheckACLError((val), #val, __FILE__, __LINE__)
 
+std::vector<int>& GetPaddedTokenSize();
+
 }  // namespace ksana_llm

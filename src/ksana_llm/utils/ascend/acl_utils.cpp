@@ -31,4 +31,9 @@ DataType GetAclTensorDataType(aclTensor* tensor) {
   return acl_type_map.count(data_type) ? acl_type_map.at(data_type) : DataType::TYPE_INVALID;
 }
 
+std::vector<int>& GetPaddedTokenSize() {
+  static std::vector<int> s_padded_tokens;
+  return s_padded_tokens;
+}
+
 }  // namespace ksana_llm

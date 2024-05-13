@@ -118,6 +118,9 @@ class InferRequest {
     // Protect parallel access for output token.
     std::mutex &output_mutex;
 
+    // The padded token num.
+    int &padded_size;
+
     // The model instance pointer.
     std::shared_ptr<ModelInstance> model_instance;
 

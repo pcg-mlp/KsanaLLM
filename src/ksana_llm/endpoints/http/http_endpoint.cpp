@@ -32,7 +32,8 @@ Status HttpEndpoint::Send(const Status infer_status, const std::shared_ptr<Reque
   nlohmann::json_abi_v3_11_2::json result_json;
 
   if (infer_status.OK()) {
-    std::vector<int> output_tokens = {req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end()};
+    std::vector<int> output_tokens = {req->output_tokens.begin() + (req->input_tokens.size() + req->padded_size),
+                                      req->output_tokens.end()};
     result_json["output_tokens"] = output_tokens;
     result_json["tokens_len"] = output_tokens.size();
     http_rsp.set_content(result_json.dump(), "text/plain");

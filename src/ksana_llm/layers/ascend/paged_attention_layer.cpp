@@ -7,6 +7,7 @@
 
 #include "csrc/kernels/ascend/attention/attention.h"
 #include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
+#include "csrc/utils/ascend/common.h"
 
 namespace ksana_llm {
 
@@ -41,31 +42,50 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   int64_t batch_size = input_tensors[0].shape[0];
   int64_t hidden_units = input_tensors[0].shape[2] / 3;
 
-  size_t workspace_needed = seq_len * hidden_units * sizeof(uint16_t) * 3;
-  void* workspace_buf_ptr = nullptr;
-  AttentionLayer<T>::PrepareWorkspaceBuffer(workspace_needed, workspace_buf_ptr);
+  std::vector<int>& padded_token_size = GetPaddedTokenSize();
 
-  // shape: [bs, seq_len, hidden_units, 3]
-  Tensor qkv_input = input_tensors[0];
-  aclTensor* input_tensor = qkv_input.ResetDeviceTensor(DataType::TYPE_FP16, {batch_size, seq_len, hidden_units * 3});
+  void* qkv_ptr = input_tensors[0].GetPtr<void>();
+  for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
+    int padded_size = padded_token_size[b_idx];
 
-  void* key_cache = input_tensors[13].GetPtr<void>();
-  void* val_cache = input_tensors[14].GetPtr<void>();
+    void* b_qkv_ptr = qkv_ptr + (b_idx * hidden_units * 3 * GetTypeSize(input_tensors[0].dtype));
 
-  std::vector<void*> tmp_buffers;
-  tmp_buffers.push_back(input_tensors[8].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[9].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[10].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[11].GetPtr<void>());
-  tmp_buffers.push_back(input_tensors[12].GetPtr<void>());
+    std::vector<int64_t> b_shape = {1, 1, hidden_units * 3};
 
-  aclTensor* output;
-  this->ascend_flash_attn_->Forward(input_tensor, token_pos, &key_cache, &val_cache, tmp_buffers, &output, false,
-                                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(), workspace_buf_ptr);
+    aclTensor* b_input_tensor;
+    llm_kernels::utils::CreateAclTensorWithData(b_shape, &b_qkv_ptr, aclDataType::ACL_FLOAT16, aclFormat::ACL_FORMAT_ND,
+                                                &b_input_tensor);
 
-  size_t size = batch_size * seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
-  ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>(), size, tmp_buffers[1], size,
-                        aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
+    int b_kvcache_size = input_tensors[13].GetTotalBytes() / batch_size;
+    void* b_key_cache = input_tensors[13].GetPtr<void>() + (b_idx * b_kvcache_size);
+    void* b_val_cache = input_tensors[14].GetPtr<void>() + (b_idx * b_kvcache_size);
+
+    std::vector<void*> b_tmp_buffers;
+    int b_tmp_buffer_size = input_tensors[8].GetTotalBytes() / batch_size;
+    b_tmp_buffers.push_back(input_tensors[8].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers.push_back(input_tensors[9].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers.push_back(input_tensors[10].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers.push_back(input_tensors[11].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers.push_back(input_tensors[12].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+
+    size_t b_workspace_needed = hidden_units * sizeof(uint16_t) * 3;
+    void* b_workspace_buf_ptr = nullptr;
+    AttentionLayer<T>::PrepareWorkspaceBuffer(b_workspace_needed, b_workspace_buf_ptr);
+
+    int64_t b_token_pos = max_tokens - 1 - padded_size;
+
+    aclTensor* b_output;
+    this->ascend_flash_attn_->Forward(b_input_tensor, b_token_pos, &b_key_cache, &b_val_cache, b_tmp_buffers, &b_output,
+                                      false, context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc(),
+                                      b_workspace_buf_ptr);
+
+    size_t b_size = hidden_units * GetTypeSize(input_tensors[0].dtype);
+    ACL_CHECK(
+      aclrtMemcpy(output_tensors[0].GetPtr<void>() + (b_idx * hidden_units * GetTypeSize(input_tensors[0].dtype)),
+                  b_size, b_tmp_buffers[1], b_size, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
+
+    ACL_CHECK(aclDestroyTensor(b_input_tensor));
+  }
 
   output_tensors[0].shape = {static_cast<unsigned long>(batch_size), static_cast<unsigned long>(seq_len),
                              static_cast<unsigned long>(hidden_units)};

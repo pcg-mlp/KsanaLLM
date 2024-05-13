@@ -48,6 +48,9 @@ class Request {
     // The output tokens of this request.
     std::vector<int> output_tokens;
 
+    // The padded token num.
+    int padded_size = 0;
+
     // Store token and their corresponding float probability values.
     std::vector<std::vector<std::pair<int, float>>> logprobs;
 

@@ -35,7 +35,8 @@ Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<in
   waiter->Wait();
 
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
-  output_tokens = {req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end()};
+  output_tokens = {req->output_tokens.begin() + (req->input_tokens.size() + req->padded_size),
+                   req->output_tokens.end()};
   logprobs = std::move(req->logprobs);
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
