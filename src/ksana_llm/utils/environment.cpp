@@ -237,7 +237,7 @@ void Environment::InitializeBlockManagerConfig() {
   const ModelConfig &model_config = model_configs_.begin()->second;
 
   size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *
-                      (model_config.head_num / GetTensorParallelSize()) * model_config.size_per_head;
+                      (model_config.num_key_value_heads / GetTensorParallelSize()) * model_config.size_per_head;
   size_t block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   size_t block_dtype_size = 0ul;
 
