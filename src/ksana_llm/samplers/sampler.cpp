@@ -104,6 +104,7 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
     auto& vocab_size = sampling_devide_parameter.vocab_size_padded;
 
     if (logprobs_num == 0) {
+      std::unique_lock<std::mutex> lock(*sampling_req.output_mutex);
       sampling_req.logprobs->push_back({});
       continue;
     }
@@ -117,6 +118,7 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
     for (int logprobs_index = 0; logprobs_index < sampling_req.sampling_config->logprobs_num; logprobs_index++) {
       logprobs_output.push_back({token_ids[logprobs_index], logprobs[logprobs_index]});
     }
+    std::unique_lock<std::mutex> lock(*sampling_req.output_mutex);
     sampling_req.logprobs->emplace_back(logprobs_output);
   }
   return Status();
@@ -200,6 +202,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
                 MEMCPY_DEVICE_TO_HOST, stream);
     StreamSynchronize(stream);
     for (int i = 0; i < sampling_devide_parameter.bs; i++) {
+      std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
     }
   }

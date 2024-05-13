@@ -112,6 +112,8 @@ TEST_F(LlamaTest, ForwardTest) {
   sample_req.logits_offset = forward_reqs[0].logits_offset;
   sample_req.output_tokens = forward_reqs[0].output_tokens;
   sample_req.logprobs = &logprobs;
+  std::mutex output_mutex;
+  sample_req.output_mutex = &output_mutex;
   sample_req.logits_buf = forward_reqs[0].logits_buf;
   sample_req.model_config = &model_config;
   SamplingConfig sample_config;
