@@ -71,19 +71,18 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   NLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}",
                                 model_config_.max_batch_size, model_config_.max_token_num, max_token_num);
 
-  size_t tensor_buffer_1_size =
-    std::max(model_config_.max_batch_size * vocab_size_pad_ * sizeof(float),
-             max_token_num * hidden_units * 3 * GetTypeSize(model_config_.weight_data_type)) /
-    GetTypeSize(model_config_.weight_data_type);
-  size_t up_matmul_tensor_buffer_size =
-    max_token_num * std::max(static_cast<int>(model_config_.inter_size), hidden_units * 2);
+  int inter_size_per_tp = model_config_.inter_size / tensor_para_size;
+  int max_dim =
+    std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units), inter_size_per_tp);
+  size_t tensor_buffer_1_size = std::max(model_config_.max_batch_size * vocab_size_pad_ * sizeof(float),
+                                         max_token_num * max_dim * GetTypeSize(model_config_.weight_data_type)) /
+                                GetTypeSize(model_config_.weight_data_type);
+  size_t up_matmul_tensor_buffer_size = max_token_num * std::max(static_cast<int>(inter_size_per_tp), hidden_units * 2);
 
   // TODO(karlluo): all create tensor used dynamic memory pool
-  STATUS_CHECK_FAILURE(
-    CreateBufferTensor(tensor_buffer_0_, {max_token_num, hidden_units, 3}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {max_token_num, max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_1_size}, model_config_.weight_data_type))
-  STATUS_CHECK_FAILURE(
-    CreateBufferTensor(tensor_buffer_2_, {max_token_num, hidden_units, 3}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
     CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
