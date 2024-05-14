@@ -20,6 +20,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   int head_num = model_config.head_num;
   int tensor_para_size = model_config.tensor_para_size;
   int head_num_per_tp = head_num / tensor_para_size;
+  int kv_head_num_per_tp = model_config.num_key_value_heads / tensor_para_size;
   int size_per_head = model_config.size_per_head;
 
   int max_seq_len_;
@@ -56,7 +57,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(
       CreateTensor(kv_cache_buffer,
                    {static_cast<unsigned long>(max_batch_size_), static_cast<unsigned long>((max_seq_len_ + 511) / 512),
-                    static_cast<unsigned long>(head_num_per_tp), static_cast<unsigned long>(size_per_head) + 2},
+                    static_cast<unsigned long>(kv_head_num_per_tp), static_cast<unsigned long>(size_per_head) + 2},
                     TYPE_FP32, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
