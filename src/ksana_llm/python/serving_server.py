@@ -65,43 +65,26 @@ def streaming_generate(model_name, input_tokens, generation_config):
 
     # Define an asynchronous function to stream the results
     async def stream_results():
-        unfinished_token = []  # store unfinished tokens
-        unfinished_logprobs = []
-        async for request_output, logprobs in results_iterator:  # iterate over the results
-            if request_output is not None:  # if the output is not empty
-                # Decode the output tokens using the tokenizer
-                output_text = tokenizer.decode(
-                    unfinished_token +
-                    [request_output
-                     ],  # combine unfinished tokens with the new output
-                    skip_special_tokens=True  # skip special tokens
-                )
-                ret = {}
-                # Check if the output ends with a special token (\uFFFD)
-                if output_text[-1:] == "\uFFFD":
-                    # If it does, add the output to the unfinished tokens and reset the output text
-                    unfinished_token = unfinished_token + [request_output]
-                    unfinished_logprobs = unfinished_logprobs + [logprobs]
-                    ret = {
-                        "texts": "",
-                        "output_token_ids": [],
-                        "logprobs": []
-                    }
-                else:
-                    # Create a response dictionary with the output text
-                    ret = {
-                        "texts": output_text,
-                        "output_token_ids": unfinished_token + [request_output],
-                        "logprobs": unfinished_logprobs + [logprobs]
-                    }
-                    # If it doesn't, reset the unfinished tokens
-                    unfinished_token = []
-                    unfinished_logprobs = []
-                # Yield the response as a JSON-encoded string with a null character (\0) at the end
-                yield (json.dumps(ret) + "\0").encode("utf-8")
-            else:
-                # If the output is empty, return from the function
+        async for request_outputs, logprobs in results_iterator:  # iterate over the results
+            if request_outputs is None:
                 return
+            output_texts = []
+            output_token_ids = []
+            for request_output in request_outputs:
+                # Decode the output tokens using the tokenizer
+                request_output = request_output[len(input_tokens):]
+                output_token_ids.append(request_output)
+                output_text = tokenizer.decode(
+                    request_output,  
+                    skip_special_tokens=True  # skip special tokens
+                ).rstrip('\ufffd')
+                output_texts.append(output_text)
+            ret = {
+                "texts": output_texts,
+                "output_token_ids": output_token_ids,
+                "logprobs": logprobs
+            }
+            yield (json.dumps(ret) + "\0").encode("utf-8")
 
     # Return a StreamingResponse object with the streamed results
     return StreamingResponse(stream_results())
@@ -119,7 +102,9 @@ def batch_generate(model_name, input_tokens, generation_config):
     )
 
     # Decode the output tokens into a human-readable text using the tokenizer
-    output_text = tokenizer.decode(results_tokens, skip_special_tokens=True)
+    output_text = []
+    for tokens in results_tokens:
+        output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
 
     # Create a JSON response with the generated text and token IDs
     return JSONResponse({
@@ -154,8 +139,8 @@ async def generate(request: Request) -> Response:
 
     input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
     generation_config = GenerationConfig(
-        num_beams=1,
         top_k=get_sampling_value(sampling_config, "topk", 1),
+        do_sample=get_sampling_value(sampling_config, "topk", 1) != 1,
         top_p=get_sampling_value(sampling_config, "topp", 0.0),
         temperature=get_sampling_value(sampling_config, "temperature", 0.0),
         max_new_tokens=get_sampling_value(sampling_config, "max_new_tokens",
@@ -163,6 +148,12 @@ async def generate(request: Request) -> Response:
         logprobs_num=get_sampling_value(sampling_config, "logprobs", 0),
         repetition_penalty=get_sampling_value(sampling_config,
                                               "repetition_penalty", 1.0),
+        num_beams=get_sampling_value(sampling_config,
+                                              "num_beams", 1),
+        num_return_sequences=get_sampling_value(sampling_config,
+                                              "num_return_sequences", 1),
+        length_penalty=get_sampling_value(sampling_config,
+                                              "length_penalty", 1.0),
         stop_token_ids=get_sampling_value(sampling_config,
                                           "stop_token_ids", []))
 

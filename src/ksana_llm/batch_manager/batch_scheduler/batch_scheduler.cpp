@@ -38,14 +38,17 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_confi
   schedule_strategy_ = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, context_, batch_state_);
 }
 
-Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_request) {
+Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
+  std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
   NLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
                  << infer_request->sampling_config.max_new_tokens;
-  if (CheckWaitingQueueFull()) {
+  if (CheckWaitingQueueFull(infer_request_group.size())) {
     NLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
 
     infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
-    infer_request->finished = true;
+    for (auto& infer_request : infer_request_group) {
+      infer_request->finished = true;
+    }
     infer_request->Notify();
 
     return infer_request->finish_status;
@@ -55,14 +58,18 @@ Status BatchScheduler::AddInferRequest(std::shared_ptr<InferRequest> infer_reque
     NLLM_LOG_DEBUG << "input len is too long, req " << infer_request->req_id << " failed.";
 
     infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length exceed max_token_len.");
-    infer_request->finished = true;
+    for (auto& infer_request : infer_request_group) {
+      infer_request->finished = true;
+    }
     infer_request->Notify();
 
     return infer_request->finish_status;
   }
 
   std::lock_guard<std::mutex> guard(batch_state_->queue_buffer_mutex);
-  batch_state_->waiting_buffer_queue.push_back(infer_request);
+  for (auto& infer_request : infer_request_group){
+    batch_state_->waiting_buffer_queue.push_back(infer_request);
+  }
   return Status();
 }
 
@@ -76,8 +83,8 @@ bool BatchScheduler::SwappedQueueEmtpy() {
   return batch_state_->swapped_queue.empty();
 }
 
-bool BatchScheduler::CheckWaitingQueueFull() {
-  return batch_state_->waiting_queue.size() >= batch_scheduler_config_.max_waiting_queue_len;
+bool BatchScheduler::CheckWaitingQueueFull(int num) {
+  return batch_state_->waiting_queue.size() + num >= batch_scheduler_config_.max_waiting_queue_len;
 }
 
 inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {

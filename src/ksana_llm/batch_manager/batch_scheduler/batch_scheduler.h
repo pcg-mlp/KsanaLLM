@@ -25,7 +25,7 @@ class BatchScheduler {
     std::vector<std::shared_ptr<InferRequest>> &Schedule();
 
     // Add infer request to waiting list.
-    Status AddInferRequest(std::shared_ptr<InferRequest> infer_request);
+    Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
 
     // Check whether the waiting buffer is empty.
     bool WaitingBufferEmpty();
@@ -35,7 +35,7 @@ class BatchScheduler {
 
   private:
     // True if waiting queue is already full.
-    inline bool CheckWaitingQueueFull();
+    inline bool CheckWaitingQueueFull(int num);
 
     // True if request length exceed the max input length.
     inline bool CheckRequestExceedLength(const std::shared_ptr<InferRequest> req);

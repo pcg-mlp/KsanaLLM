@@ -16,12 +16,15 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
     : BaseEndpoint(endpoint_config, request_queue) {}
 
 Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                             const SamplingConfig &sampling_config, std::vector<int> &output_tokens,
-                             std::vector<std::vector<std::pair<int, float>>> &logprobs) {
-  std::shared_ptr<Request> req = std::make_shared<Request>();
+                             const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                             std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs) {
+  bool return_logprobs = sampling_config.logprobs_num > 0;
+  std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config);
   req->model_name = model_name;
   req->input_tokens = input_tokens;
-  req->output_tokens = input_tokens;
+  for (auto &[output, req_logprobs, total_score] : req->output_group) {
+    output = input_tokens;
+  }
   req->sampling_config = sampling_config;
 
   req->waiter = std::make_shared<Waiter>(1);
@@ -35,9 +38,11 @@ Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<in
   waiter->Wait();
 
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
-  output_tokens = {req->output_tokens.begin() + (req->input_tokens.size() + req->padded_size),
-                   req->output_tokens.end()};
-  logprobs = std::move(req->logprobs);
+  for (auto &[output, req_logprobs, total_score] : req->output_group) {
+    std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
+    output_tokens.emplace_back(req_output);
+    if (return_logprobs) logprobs.emplace_back(req_logprobs);
+  }
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
 }
@@ -45,15 +50,18 @@ Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<in
 Status LocalEndpoint::HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
                                       const SamplingConfig &sampling_config,
                                       std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  std::shared_ptr<Request> req = std::make_shared<Request>();
+  bool return_logprobs = sampling_config.logprobs_num > 0;
+  std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config);
   req->model_name = model_name;
   req->input_tokens = input_tokens;
-  req->output_tokens = input_tokens;
+  for (auto &[output, req_logprobs, total_score] : req->output_group) {
+    output = input_tokens;
+  }
   req->sampling_config = sampling_config;
 
   req->step_waiter = std::make_shared<Waiter>(1);
 
-  streaming_iterator = std::make_shared<StreamingIterator>(req);
+  streaming_iterator = std::make_shared<StreamingIterator>(req, return_logprobs);
 
   Status status = Status();
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));

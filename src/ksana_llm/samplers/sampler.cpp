@@ -153,7 +153,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= sampling_devide_parameter.bs");
       }
       host_offset_[req_index] = offset;
-      if (sampling_config->beam_width == 1) {
+      if (sampling_config->num_beams == 1) {
         if (sampling_config->topk > 1024) {
           return Status(RET_INVALID_ARGUMENT, "topk > 1024.");
         }
@@ -168,7 +168,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         use_temperature = use_temperature || !(host_temperatures_[offset] == 1.0f);
 
       } else {
-        return Status(RET_INVALID_ARGUMENT, "sampling for beam_width > 1 not implemented");
+        return Status(RET_INVALID_ARGUMENT, "sampling for num_beams > 1 not implemented");
       }
       if (sampling_config->repetition_penalty != 1.0f) {
         int vocab_size = batch_schedule_config_.max_vocab_size;

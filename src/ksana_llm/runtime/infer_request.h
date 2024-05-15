@@ -22,8 +22,14 @@ namespace ksana_llm {
 // The infer request, it is the unit of batch manager's scheduler.
 class InferRequest {
   public:
-    InferRequest(std::shared_ptr<Request> &request);
+    InferRequest(std::shared_ptr<Request> &request, int index);
     ~InferRequest();
+
+    void SetReqGroup(const std::vector<std::shared_ptr<InferRequest>> &beam_search_infer_group) {
+      req_group = beam_search_infer_group;
+    }
+
+    void ClearReqGroup() { req_group.clear(); }
 
     // Notify after request finished.
     void Notify();
@@ -120,6 +126,8 @@ class InferRequest {
 
     // The padded token num.
     int &padded_size;
+
+    std::vector<std::shared_ptr<InferRequest>> req_group;
 
     // The model instance pointer.
     std::shared_ptr<ModelInstance> model_instance;

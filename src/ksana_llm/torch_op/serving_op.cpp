@@ -43,8 +43,8 @@ void ServingOp::InitServing(const std::string &config_file) {
 }
 
 Status ServingOp::Generate(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config, std::vector<int> &output_tokens,
-                           std::vector<std::vector<std::pair<int, float>>> &logprobs) {
+                           const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                           std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs) {
   NLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
   return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens, logprobs);
 }
@@ -77,13 +77,15 @@ PYBIND11_MODULE(libtorch_serving, m) {
   // Export `SamplingConfig` to python.
   pybind11::class_<ksana_llm::SamplingConfig, std::shared_ptr<ksana_llm::SamplingConfig>>(m, "SamplingConfig")
     .def(pybind11::init<>())
-    .def_readwrite("beam_width", &ksana_llm::SamplingConfig::beam_width)
     .def_readwrite("topk", &ksana_llm::SamplingConfig::topk)
     .def_readwrite("topp", &ksana_llm::SamplingConfig::topp)
     .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature)
     .def_readwrite("max_new_tokens", &ksana_llm::SamplingConfig::max_new_tokens)
     .def_readwrite("logprobs_num", &ksana_llm::SamplingConfig::logprobs_num)
     .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty)
+    .def_readwrite("num_beams", &ksana_llm::SamplingConfig::num_beams)
+    .def_readwrite("num_return_sequences", &ksana_llm::SamplingConfig::num_return_sequences)
+    .def_readwrite("length_penalty", &ksana_llm::SamplingConfig::length_penalty)
     .def_readwrite("stop_token_ids", &ksana_llm::SamplingConfig::stop_token_ids);
 
   // Export `StreamingIterator` to python.
@@ -91,11 +93,11 @@ PYBIND11_MODULE(libtorch_serving, m) {
     .def(pybind11::init<>())
     .def("GetNext", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
       pybind11::gil_scoped_release release;
-      int token_id;
-      std::vector<std::pair<int, float>> logprobs;
-      ksana_llm::Status status = self->GetNext(token_id, logprobs);
+      std::vector<std::vector<int>> output_tokens;
+      std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
+      ksana_llm::Status status = self->GetNext(output_tokens, logprobs);
       pybind11::gil_scoped_acquire acquire;
-      return std::make_tuple(status, token_id, logprobs);
+      return std::make_tuple(status, output_tokens, logprobs);
     });
 
   // Export `ServingOp` to python.
@@ -106,8 +108,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
          [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &model_name,
             const std::vector<int> &input_tokens, const ksana_llm::SamplingConfig &sampling_config) {
            pybind11::gil_scoped_release release;
-           std::vector<int> output_tokens;
-           std::vector<std::vector<std::pair<int, float>>> logprobs;
+           std::vector<std::vector<int>> output_tokens;
+           std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
            ksana_llm::Status status =
              self->Generate(model_name, input_tokens, sampling_config, output_tokens, logprobs);
            pybind11::gil_scoped_acquire acquire;

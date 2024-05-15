@@ -15,20 +15,27 @@ namespace ksana_llm {
 class StreamingIterator {
   public:
     StreamingIterator() {}
-    StreamingIterator(const std::shared_ptr<Request> request) : request_(request) {
-      cur_index_ = request->input_tokens.size();
-    }
+    StreamingIterator(const std::shared_ptr<Request> request, bool return_logprobs)
+        : request_(request),
+          return_logprobs_(return_logprobs),
+          all_finished(false),
+          total_token_nums_(0) {}
     ~StreamingIterator() {}
 
     // Get the next token id, blocked if no token
-    Status GetNext(int& token_id, std::vector<std::pair<int, float>>& logprobs);
+    Status GetNext(std::vector<std::vector<int>>& token_id,
+                   std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs);
+    bool AddOutput(std::vector<std::vector<int>>& token_id,
+                   std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs);
 
   private:
     // The user request.
     std::shared_ptr<Request> request_;
+    bool return_logprobs_;
+    bool all_finished;
 
-    // The current index, useful when notify event lost.
-    size_t cur_index_;
+    // The total_token_nums, useful when notify event lost.
+    size_t total_token_nums_;
 };
 
 }  // namespace ksana_llm

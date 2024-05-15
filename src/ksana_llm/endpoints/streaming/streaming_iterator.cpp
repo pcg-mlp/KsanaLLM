@@ -9,40 +9,48 @@
 
 namespace ksana_llm {
 
-Status StreamingIterator::GetNext(int& token_id, std::vector<std::pair<int, float>>& logprobs) {
-  while (true) {
-    if (request_->finished) {
+bool StreamingIterator::AddOutput(std::vector<std::vector<int>>& token_id,
+                                  std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs) {
+  size_t total_token_nums = 0;
+  for (int i = 0; i < request_->output_group.size(); i++) {
+    OutputTuple& output = request_->output_group[i];
+    total_token_nums += std::get<0>(output).size();
+  }
+  if (total_token_nums == total_token_nums_) return false;
+  total_token_nums_ = total_token_nums;
+
+  for (int i = 0; i < request_->output_group.size(); i++) {
+    OutputTuple& output = request_->output_group[i];
+    token_id.push_back(std::get<0>(output));
+    if (return_logprobs_) logprobs.push_back(std::get<1>(output));
+  }
+  return true;
+}
+
+Status StreamingIterator::GetNext(std::vector<std::vector<int>>& token_id,
+                                  std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs) {
+  while(true){
+    if (all_finished)  {
       // failure, no token generated.
       if (!request_->finish_status.OK()) {
         return request_->finish_status;
       }
-
-      // Fetch next token util the last token is fetched.
-      std::unique_lock<std::mutex> lock(request_->output_mutex);
-      if (cur_index_ < request_->output_tokens.size()) {
-        logprobs = request_->logprobs[cur_index_ - request_->input_tokens.size()];
-        token_id = request_->output_tokens[cur_index_++];
-        return Status();
-      }
-
       return Status(RET_STOP_ITERATION);
     }
-
-    // Have more token that not fetched.
-    {
-      std::unique_lock<std::mutex> lock(request_->output_mutex);
-      if (cur_index_ < request_->output_tokens.size()) {
-        logprobs = request_->logprobs[cur_index_ - request_->input_tokens.size()];
-        token_id = request_->output_tokens[cur_index_++];
-        return Status();
-      }
-    }
-
     // Waiting util next token generated.
     request_->step_waiter->Wait();
     request_->step_waiter->Reset(1);
+    all_finished = true;
+    for (bool req_finished : request_->finisheds) {
+      all_finished = all_finished && req_finished;
+    }
+    {
+      // Fetch next token util the last token is fetched.
+      std::unique_lock<std::mutex> lock(request_->output_mutex);
+      if (!AddOutput(token_id, logprobs)) continue;
+    }
+    return Status();
   }
-
   return Status();
 }
 

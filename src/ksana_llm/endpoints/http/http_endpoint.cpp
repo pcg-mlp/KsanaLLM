@@ -46,7 +46,8 @@ Status HttpEndpoint::Send(const Status infer_status, const std::shared_ptr<Reque
 
 Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Response &http_rsp) {
   if (http_req.has_param("input_tokens")) {
-    std::shared_ptr<Request> req = std::make_shared<Request>();
+    SamplingConfig sampling_config;
+    std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config);
     req->model_name = http_req.get_param_value("model_name");
 
     int input_tokens_length = std::stoi(http_req.get_param_value("tokens_len", 0));

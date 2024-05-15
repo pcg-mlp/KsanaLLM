@@ -12,6 +12,7 @@
 #include "ksana_llm/kernels/argmax.h"
 
 #include <cstdint>
+#include <random>
 
 namespace ksana_llm {
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandState* device_curandstates)
@@ -27,6 +28,14 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandSta
 
   GetBlockManager()->AllocateContiguous(workspace_size_ + sizeof(uint64_t) * max_batch_size, workspace_block_id_);
   GetBlockManager()->GetContiguousPtr(workspace_block_id_, workspace_);
+  std::random_device rd;
+  std::mt19937_64 gen(rd());
+  std::uniform_int_distribution<uint64_t> dis;
+  std::vector<uint64_t> host_random_seeds(max_batch_size);
+  for (auto& i : host_random_seeds) i = dis(gen);
+  Memcpy(workspace_ + workspace_size_, host_random_seeds.data(), sizeof(uint64_t) * max_batch_size,
+         MEMCPY_HOST_TO_DEVICE);
+
   tensorrt_llm::kernels::invokeCurandBatchInitialize(device_curandstates, nullptr, max_batch_size,
                                                      static_cast<uint64_t*>(workspace_ + workspace_size_), 0);
 #endif
