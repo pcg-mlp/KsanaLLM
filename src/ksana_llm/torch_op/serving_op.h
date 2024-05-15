@@ -24,8 +24,8 @@ class ServingOp : public torch::jit::CustomClassHolder {
 
     // Generate a response.
     Status Generate(const std::string &model_name, const std::vector<int> &input_tokens,
-                    const SamplingConfig &sampling_config, std::vector<int> &output_tokens,
-                    std::vector<std::vector<std::pair<int, float>>> &logprobs);
+                    const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                    std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs);
 
     // Generate a response, in streaming mode.
     Status GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,

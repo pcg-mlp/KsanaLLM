@@ -97,22 +97,37 @@ class ServingModel(object):
         """The model generate interface, invoked by venus.
         """
         sampling_config = libtorch_serving.SamplingConfig()
-        sampling_config.beam_width = generation_config.num_beams \
-            if hasattr(generation_config, 'num_beams') else 1
-        sampling_config.topk = generation_config.top_k \
-            if hasattr(generation_config, 'top_k') else 1
-        sampling_config.topp = generation_config.top_p \
-            if hasattr(generation_config, 'top_p') else 0.0
-        sampling_config.temperature = generation_config.temperature \
-            if hasattr(generation_config, 'temperature') else 0.0
-        sampling_config.max_new_tokens = generation_config.max_new_tokens \
-            if hasattr(generation_config, 'max_new_tokens') else -1
-        sampling_config.logprobs_num = generation_config.logprobs_num \
-            if hasattr(generation_config, 'logprobs_num') else 0
-        sampling_config.repetition_penalty = generation_config.repetition_penalty \
-            if hasattr(generation_config, 'repetition_penalty') else 1.0
-        sampling_config.stop_token_ids = generation_config.stop_token_ids \
-            if hasattr(generation_config, 'stop_token_ids') else []
+
+        def get_generation_value(generation_config: GenerationConfig, key: str, default_val):
+            """Get value from generation_config, return default if key not exists.
+            """
+            value = getattr(generation_config, key, default_val)
+            return default_val if value is None else value
+        sampling_config.num_beams = \
+            get_generation_value(generation_config, 'num_beams', 1)
+        sampling_config.topk = \
+            get_generation_value(generation_config, 'top_k', 1)
+        sampling_config.topp = \
+            get_generation_value(generation_config, 'top_p', 0.0)
+        sampling_config.temperature = \
+            get_generation_value(generation_config, 'temperature', 0.0)
+        sampling_config.max_new_tokens = \
+            get_generation_value(generation_config, 'max_new_tokens', -1)
+        sampling_config.logprobs_num = \
+            get_generation_value(generation_config, 'logprobs_num', 0)
+        sampling_config.num_return_sequences = \
+            get_generation_value(generation_config, 'num_return_sequences', 1)
+        sampling_config.repetition_penalty = \
+            get_generation_value(generation_config, 'repetition_penalty', 1.0)
+        sampling_config.length_penalty = \
+            get_generation_value(generation_config, 'length_penalty', 1.0)
+        sampling_config.stop_token_ids = \
+            get_generation_value(generation_config, 'stop_token_ids', [])
+
+        if sampling_config.num_beams > 1:
+            raise RuntimeError(
+                "Not supported for sampling_config.num_beams > 1. Current value {}.".format(
+                    sampling_config.num_beams))
 
         if streamer is None:
             _, outputs, logprobs = self._serving.generate(model_name, inputs,

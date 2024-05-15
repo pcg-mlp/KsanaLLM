@@ -117,7 +117,7 @@ TEST_F(LlamaTest, ForwardTest) {
   sample_req.logits_buf = forward_reqs[0].logits_buf;
   sample_req.model_config = &model_config;
   SamplingConfig sample_config;
-  sample_config.beam_width = 1;
+  sample_config.num_beams = 1;
   sample_config.topk = 1;
   sample_config.topp = 0;
   sample_config.temperature = 0;

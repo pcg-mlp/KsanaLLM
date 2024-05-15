@@ -62,7 +62,7 @@ def infer(prompt, tokenizer, generation_config, model, queue=None, idx=0):
                                       inputs=input_tokens,
                                       generation_config=generation_config,
                                       streamer=None)
-
+    result = result[0]
     # Check if a queue is provided for storing results
     if queue is None:
         # If no queue is provided, return the decoded result

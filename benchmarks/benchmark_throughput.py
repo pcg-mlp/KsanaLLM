@@ -109,6 +109,7 @@ def analyze_stream_jsons(data_str: str):
     brace_count = 0
     start_index = 0
     result_json = {}
+    json_str = ""
     for i, char in enumerate(data_str):
         if (char == '\x00'):
             start_index = i+1
@@ -120,16 +121,10 @@ def analyze_stream_jsons(data_str: str):
 
         if brace_count == 0 and char == '}':
             json_str = data_str[start_index:i+1]
-
-            json_data = json.loads(str(json_str), strict=False)
-            for key, value in json_data.items():
-                if  key in result_json:
-                    result_json[key] = result_json[key] + value
-                else:
-                    result_json[key] = value
+            print(json_str)
             start_index = i+1
 
-    return result_json
+    return json.loads(str(json_str), strict=False)
 
 async def generate_prompt_async(
     input_requests: List[str],
@@ -162,6 +157,9 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                 "temperature": 0.0,
                 "topk": 1,
                 "topp": 0.0,
+                "num_beams": 1,
+                "num_return_sequences": 1,
+                "length_penalty": 1.0,
                 "repetition_penalty": 1.0,
                 "logprobs": 0,
                 "max_new_tokens": 1024,
@@ -247,12 +245,12 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     # Calculate the latency of the request
     request_latency = request_end_time - request_start_time
 
-    output_token_num = len(output.get("output_token_ids", ""))
+    output_token_num = len(output.get("output_token_ids", [""])[0])
     input_token_num = len(output.get("input_token_ids", ""))
 
     server_map_idx = "delta" if stream else "message"
     if backend == "ksana":
-        output_text = output.get("texts", "").strip()
+        output_text = output.get("texts", [""])[0].strip()
     elif backend == "trt-llm":
         output_text = output.get("text_output", "").strip()
     elif backend == "vllm":

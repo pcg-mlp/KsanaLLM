@@ -46,40 +46,54 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
   Status enqueue_status = Status(RetCode::RET_SUCCESS);
 
-  std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req);
-
-  infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
-  infer_req->block_size = GetBlockManager()->GetBlockSize();
-
   if (model_instances_.find(req->model_name) == model_instances_.end()) {
     NLLM_LOG_ERROR << "req->model_name=" << req->model_name << " not found!";
     req->finish_status = Status(RET_INVALID_ARGUMENT, fmt::format("Model {} not found.", req->model_name));
     req->waiter->Notify();
     return req->finish_status;
   }
-  infer_req->model_instance = model_instances_[req->model_name];
-  infer_req->end_id = infer_req->model_instance->GetModelConfig().end_id;
-  infer_req->pad_id = infer_req->model_instance->GetModelConfig().pad_id;
-  infer_req->infer_stage = InferStage::STAGE_CONTEXT;
-  infer_req->step = 0;
+  std::vector<std::shared_ptr<InferRequest>> infer_request_group;
+  for (int i = 0; i < req->output_group.size(); i++) {
+    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
+    infer_request_group.push_back(infer_req);
 
-  // check if this request qualify to use prefix cache
-  if (GetBlockManager()->GetPrefixCacheBlocksNumber() > 0) {
-    infer_req->is_use_prefix_cache = GetBlockManager()->CheckReqIsValidForPrefixCache(infer_req->input_tokens);
-    infer_req->prefix_cache_len = GetBlockManager()->GetPrefixCacheTokensNumber();
-    infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
-    GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
-    // NOTE(karlluo): preallocate prefix kv cache for infer request
-    NLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
+    infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
+    infer_req->block_size = GetBlockManager()->GetBlockSize();
+    infer_req->model_instance = model_instances_[req->model_name];
+    infer_req->end_id = infer_req->model_instance->GetModelConfig().end_id;
+    infer_req->pad_id = infer_req->model_instance->GetModelConfig().pad_id;
+    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+    infer_req->step = 0;
+
+    // check if this request qualify to use prefix cache
+    if (GetBlockManager()->GetPrefixCacheBlocksNumber() > 0) {
+      infer_req->is_use_prefix_cache = GetBlockManager()->CheckReqIsValidForPrefixCache(infer_req->input_tokens);
+      infer_req->prefix_cache_len = GetBlockManager()->GetPrefixCacheTokensNumber();
+      infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
+      GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
+      // NOTE(karlluo): preallocate prefix kv cache for infer request
+      NLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
+    }
   }
 
-  enqueue_status = batch_scheduler_->AddInferRequest(infer_req);
+  for (auto &infer_req : infer_request_group) {
+    infer_req->SetReqGroup(infer_request_group);
+  }
+
+  enqueue_status = batch_scheduler_->AddInferRequest(infer_request_group);
   if (enqueue_status.OK()) {
-    NLLM_LOG_DEBUG << "batch scheduler: added req id " << req->req_id << " and " << infer_req->input_tokens.size()
-                   << " input tokens";
+    NLLM_LOG_DEBUG << "batch scheduler: added req id " << req->req_id << " and "
+                   << infer_request_group[0]->input_tokens.size() << " input tokens";
   } else {
-    NLLM_LOG_ERROR << "batch scheduler: add req id " << req->req_id << " and " << infer_req->input_tokens.size()
+    NLLM_LOG_ERROR << "batch scheduler: add req id " << req->req_id << " and "
+                   << infer_request_group[0]->input_tokens.size()
                    << " input tokens failed, message: " << enqueue_status.ToString();
+    if (req->sampling_config.num_beams > 1) {
+      for (auto &infer_req : infer_request_group) {
+        infer_req->ClearReqGroup();
+      }
+    }
+    return enqueue_status;
   }
 
   queue_waiter_->Notify();

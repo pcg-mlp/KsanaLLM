@@ -18,16 +18,16 @@
 
 namespace ksana_llm {
 
-InferRequest::InferRequest(std::shared_ptr<Request>& request)
-    : req_id(request->req_id),
+InferRequest::InferRequest(std::shared_ptr<Request>& request, int index)
+    : req_id(request->req_ids[index]),
       model_name(request->model_name),
       input_tokens(request->input_tokens),
-      output_tokens(request->output_tokens),
-      logprobs(request->logprobs),
+      output_tokens(std::get<0>(request->output_group[index])),
+      logprobs(std::get<1>(request->output_group[index])),
       sampling_config(request->sampling_config),
       waiter(request->waiter),
       step_waiter(request->step_waiter),
-      finished(request->finished),
+      finished(request->finisheds[index]),
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
       padded_size(request->padded_size) {
@@ -64,6 +64,12 @@ Status InferRequest::FreeBlocks() {
 }
 
 void InferRequest::Notify() {
+  for (int i = 0; i < req_group.size(); i++) {
+    if (!req_group[i]->finished) return;
+  }
+  for (int i = 0; i < req_group.size(); i++) {
+    req_group[i]->ClearReqGroup();
+  }
   if (waiter) {
     waiter->Notify();
   }
@@ -73,6 +79,15 @@ void InferRequest::Notify() {
 }
 
 void InferRequest::NotifyStep() {
+  if (sampling_config.num_beams > 1) {
+    int output_tokens_len = -1;
+    for (int i = 0; i < req_group.size(); i++) {
+      if (req_group[i]->finished) continue;
+      output_tokens_len = output_tokens_len == -1 ? req_group[i]->output_tokens.size() : output_tokens_len;
+      if (req_group[i]->output_tokens.size() != output_tokens_len) return;
+    }
+  }
+
   if (step_waiter) {
     step_waiter->Notify();
   }
