@@ -201,6 +201,25 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
 
+    torch::Tensor weight_cpu_tensor;
+    if (weight_data_type == TYPE_FP32) {
+      // cast TYPE_FP32 to weight_data_type_.
+      auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
+      torch::Tensor in = torch::from_blob(weight_ptr, {weight_size / sizeof(float)}, options);
+      if (weight_data_type_ == TYPE_FP16) {
+        weight_cpu_tensor = in.to(torch::kFloat16);
+        weight_ptr = weight_cpu_tensor.data_ptr();
+      } else if (weight_data_type_ == TYPE_BF16) {
+        weight_cpu_tensor = in.to(torch::kBFloat16);
+        weight_ptr = weight_cpu_tensor.data_ptr();
+      } else {
+        NLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
+                         << weight_data_type_;
+      }
+    } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16) {
+      NLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
+    }
+
     int head_num = model_config_.head_num;
     int num_kv_heads = model_config_.num_key_value_heads;
     // copy host data to device
