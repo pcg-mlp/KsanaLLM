@@ -443,7 +443,7 @@ __device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val) {
 #  else
 template <>
 __device__ inline __nv_bfloat16 cuda_abs(__nv_bfloat16 val) {
-  return fabs(val);
+  return val > 0 ? val : -val;
 }
 template <>
 __device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val) {

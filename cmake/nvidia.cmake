@@ -24,15 +24,29 @@ set(SM_SETS 80 86 89 90)
 # check if custom define SM
 if(NOT DEFINED SM)
   foreach(SM_NUM IN LISTS SM_SETS)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM_NUM},code=\\\"sm_${SM_NUM},compute_${SM_NUM}\\\"")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
+    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM}")
+    list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
+    # set(TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
+    list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
   endforeach()
 else()
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\"")
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM},code=sm_${SM}")
   list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM})
   message(STATUS "Assign GPU architecture (sm=${SM})")
+  string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM}")
+  list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
+  # set(TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
+  list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
 endif()
+
+
+
+
+# TORCH_CUDA_ARCH_LIST
+# cuda_select_nvcc_arch_flags
 
 set(CUDA_INC_DIRS
   ${CUDA_PATH}/include
