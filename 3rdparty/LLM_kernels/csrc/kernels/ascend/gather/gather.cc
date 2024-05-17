@@ -19,7 +19,6 @@ void Gather(const aclTensor* gatherInput, const int gatherDim, const aclTensor* 
   ACL_CHECK_RET(aclnnGatherV2GetWorkspaceSize(gatherInput, gatherDim, gatherIndex, *gatherOutput, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnGatherV2(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 }  // namespace ascend

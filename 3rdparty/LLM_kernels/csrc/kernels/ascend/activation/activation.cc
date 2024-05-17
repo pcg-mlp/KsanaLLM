@@ -17,7 +17,6 @@ void Silu(const aclTensor* input, aclTensor** output, aclrtStream& stream, void 
   ACL_CHECK_RET(aclnnSiluGetWorkspaceSize(input, *output, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnSilu(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 }  // namespace ascend
