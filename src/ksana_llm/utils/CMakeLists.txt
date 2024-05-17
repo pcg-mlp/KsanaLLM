@@ -33,7 +33,7 @@ target_link_libraries(utils PUBLIC
 )
 
 # for test
-if(WITH_CUDA)
+if(WITH_CUDA AND WITH_STANDALONE_TEST)
   file(GLOB_RECURSE utils_test_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/*test.cpp)
   message(STATUS "utils_test_SRCS: ${utils_test_SRCS}")

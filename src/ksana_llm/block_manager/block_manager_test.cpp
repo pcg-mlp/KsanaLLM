@@ -29,8 +29,12 @@ class BlockManagerTest : public testing::Test {
       GetDeviceCount(&device_num);
       NLLM_LOG_INFO << "Device number: " << device_num;
 
+      if (device_num > 2) {
+        NLLM_LOG_WARNING << "Device number " << device_num << " bigger than 2 will cause failed";
+      }
+
       std::shared_ptr<Context> context =
-          std::make_shared<Context>(/*tensor_parallel_size*/ device_num, /*pipeline_parallel_size*/ 1);
+        std::make_shared<Context>(/*tensor_parallel_size*/ device_num, /*pipeline_parallel_size*/ 1);
 
       // 使用配置创建一个 BlockManager 对象
       block_manager = new BlockManager(block_manager_config, context);

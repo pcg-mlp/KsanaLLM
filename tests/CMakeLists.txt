@@ -18,7 +18,7 @@ if(WITH_ACL)
   set(INTEGRATION_TEST_CONFIG ${PROJECT_SOURCE_DIR}/examples/ksana_llm_ascend_llama13b.yaml)
 endif()
 
-if(NOT INTEGRATION_TEST_CONFIG STREQUAL "")
+if(NOT INTEGRATION_TEST_CONFIG STREQUAL "" AND WITH_STANDALONE_TEST)
   python_test(model_llama_integration_test SRCS ${PROJECT_SOURCE_DIR}/tests/model/llama_integration_test.py
     ARGS --config_file ${INTEGRATION_TEST_CONFIG}
     --tokenizer_dir /model/llama-hf/13B)

@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 option(WITH_CUDA "Enable CUDA" ON)
 option(WITH_ACL "Enable Ascend" OFF)
 option(WITH_TESTING "Enable testing" OFF)
+option(WITH_STANDALONE_TEST "Enable testing" ON)
 
 if(WITH_CUDA)
   project(ksana_llm LANGUAGES CXX CUDA)

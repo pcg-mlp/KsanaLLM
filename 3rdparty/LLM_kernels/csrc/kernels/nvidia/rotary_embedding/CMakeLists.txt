@@ -11,6 +11,9 @@ set_property(TARGET llm_kernels_nvidia_kernel_rotary_embedding PROPERTY CUDA_RES
 # for test
 file(GLOB_RECURSE ROTARY_EMBEDDING_TEST_SRCS *test.cu)
 message(STATUS "ROTARY_EMBEDDING_TEST_SRCS : ${ROTARY_EMBEDDING_TEST_SRCS}")
-cc_test(llm_kernels_nvidia_kernel_rotary_embedding_test SRCS ${ROTARY_EMBEDDING_TEST_SRCS} DEPS
-  llm_kernels_nvidia_utils
-  llm_kernels_nvidia_kernel_rotary_embedding)
+
+if(WITH_STANDALONE_TEST)
+  cc_test(llm_kernels_nvidia_kernel_rotary_embedding_test SRCS ${ROTARY_EMBEDDING_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils
+    llm_kernels_nvidia_kernel_rotary_embedding)
+endif()
