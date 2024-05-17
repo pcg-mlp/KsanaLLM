@@ -53,7 +53,6 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
     LookupEmbedding(input_tensor, embedding_tensor, nullptr, output_tensor, context_->GetComputeStreams()[rank_].Get(),
                     GetWorkSpaceFunc());
   }
-  ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
 
   output_tensors[0].shape = {static_cast<size_t>(batch_size), static_cast<size_t>(seq_len),
                              static_cast<size_t>(hidden_units)};

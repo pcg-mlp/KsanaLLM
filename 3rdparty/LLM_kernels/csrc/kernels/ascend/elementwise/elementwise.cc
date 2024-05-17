@@ -21,7 +21,6 @@ void Add(const aclTensor* input, const aclTensor* other, const aclScalar* alpha,
   ACL_CHECK_RET(aclnnAddGetWorkspaceSize(input, other, alpha, *addOutput, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnAdd(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 void Adds(const aclTensor* input, const aclScalar* scalar1, const aclScalar* scalar2, aclTensor** addOutput,
@@ -33,7 +32,6 @@ void Adds(const aclTensor* input, const aclScalar* scalar1, const aclScalar* sca
   ACL_CHECK_RET(aclnnAddsGetWorkspaceSize(input, scalar1, scalar2, *addOutput, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnAdds(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 void Mul(const aclTensor* mulInput1, const aclTensor* mulInput2, aclTensor** mulOutput, aclrtStream& stream,
@@ -45,7 +43,6 @@ void Mul(const aclTensor* mulInput1, const aclTensor* mulInput2, aclTensor** mul
   ACL_CHECK_RET(aclnnMulGetWorkspaceSize(mulInput1, mulInput2, *mulOutput, &ws_size, &executor));
   ws_func(ws_size, &workspace);
   ACL_CHECK_RET(aclnnMul(workspace, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 }  // namespace ascend

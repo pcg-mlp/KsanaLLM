@@ -21,9 +21,9 @@ Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tenso
   for (size_t i = 0; i < batch_size; ++i) {
     size_t batch_offset = i * seq_len * hidden_size * sizeof(T);
 
-    size_t offset = batch_offset  + (seq_len - 1) * hidden_size * sizeof(T);
-    Memcpy(output_ptr + (i * hidden_size * sizeof(T)), input_ptr + offset, hidden_size * sizeof(T),
-           MEMCPY_DEVICE_TO_DEVICE);
+    size_t offset = batch_offset + (seq_len - 1) * hidden_size * sizeof(T);
+    MemcpyAsync(output_ptr + (i * hidden_size * sizeof(T)), input_ptr + offset, hidden_size * sizeof(T),
+                MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
   }
 
   output_tensors[0].shape = {batch_size, 1, hidden_size};
