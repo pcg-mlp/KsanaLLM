@@ -39,7 +39,7 @@ Notes: Replace ```xxx_container_name``` with real container name.
 Option 1: Create and set container for tencent image:
 ```bash
 
-sudo docker run -itd --name xxx_container_name --network host --privileged \
+sudo docker run -itd --name xxx_container_name --network host --shm-size=10g --privileged \
     --device /dev/nvidiaxxx --device /dev/nvidiactl \
     -v /usr/local/nvidia:/usr/local/nvidia mirrors.tencent.com/todacc/venus-numerous-llm:0.1.19 bash
 
@@ -58,8 +58,8 @@ Notes: Replace xxx in ```/dev/nvidiaxxx``` with GPU card index. For multiple car
 
 #### For Huawei Ascend NPU
 ```bash
-sudo docker run -itd --name xxx_container_name --network host --privileged \
-    mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.1 bash
+sudo docker run -itd --name xxx_container_name --network host --shm-size=10g --privileged \
+    mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
 ```
 
 ### Clone source code
@@ -77,14 +77,14 @@ cd build
 For Nvidia
 ```bash
 # SM for A10 is 86， change it when using other gpus. refer to: https://developer.nvidia.cn/cuda-gpus
-cmake -DSM=86 -DWITH_TESTING=ON ..
+cmake -DSM=86 -DWITH_TESTING=ON -DWITH_STANDALONE_TEST=OFF ..
 # Set visible devices
 export CUDA_VISIBLE_DEVICES=14,15
 ```
 
 For Huawei Ascend NPU
 ```bash
-cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON ..
+cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON -DWITH_STANDALONE_TEST=OFF ..
 ```
 
 Build and test
