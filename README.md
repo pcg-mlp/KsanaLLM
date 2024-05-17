@@ -77,14 +77,14 @@ cd build
 For Nvidia
 ```bash
 # SM for A10 is 86， change it when using other gpus. refer to: https://developer.nvidia.cn/cuda-gpus
-cmake -DSM=86 -DWITH_TESTING=ON -DWITH_STANDALONE_TEST=OFF ..
+cmake -DSM=86 -DWITH_TESTING=ON ..
 # Set visible devices
 export CUDA_VISIBLE_DEVICES=14,15
 ```
 
 For Huawei Ascend NPU
 ```bash
-cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON -DWITH_STANDALONE_TEST=OFF ..
+cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON ..
 ```
 
 Build and test
