@@ -18,11 +18,13 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   //     0: qkv_tensor shape [max_token_num, hidden_units, 3], type same as weight
   //     1: input offset tensor shape [max_batch_size + 1], type uint64
   //     2: kv_list shape [num_layer, max_block_num, 2], type pointer
-  //     3: kv_cache_offset_tensor shape [max_batch_size + 1], type int32
-  //     4: rotary embedding pos tensor shape [max_token_num], type int64
-  //     5: forward shape: [batch_size, max_tokens, kv_cache_offset_list.back()]
-  //     6~10: ascend buffers: [max_token_num, hidden_units]
-  //     11~12: ascend kvcache buffers: [max_token_num, hidden_units]
+  //     3: prefix_offset_tensor shape [max_batch_size + 1], type int32
+  //     4: kv_cache_offset_tensor shape [max_batch_size + 1], type int32
+  //     5: rotary embedding pos tensor shape [max_token_num], type int64
+  //     6: rotary embedding mask tensor shape [max_token_num], type int64
+  //     7: forward shape: [batch_size, max_tokens, kv_cache_offset_list.back()]
+  //     8~12: ascend buffers: [max_token_num, hidden_units]
+  //     13~14: ascend kvcache buffers: [max_token_num, hidden_units]
   // output_tensors:
   //     0: flash_attention_output shape: [std::max(max_batch_size * vocab_size, max_token_num * hidden_units * 3)]
 
@@ -48,17 +50,17 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
     llm_kernels::utils::CreateAclTensorWithData(b_shape, &b_qkv_ptr, aclDataType::ACL_FLOAT16, aclFormat::ACL_FORMAT_ND,
                                                 &b_input_tensor2);
 
-    int b_kvcache_size = input_tensors[11].GetTotalBytes() / batch_size;
-    void* b_key_cache2 = input_tensors[11].GetPtr<void>() + (b_idx * b_kvcache_size);
-    void* b_val_cache2 = input_tensors[12].GetPtr<void>() + (b_idx * b_kvcache_size);
+    int b_kvcache_size = input_tensors[13].GetTotalBytes() / batch_size;
+    void* b_key_cache2 = input_tensors[13].GetPtr<void>() + (b_idx * b_kvcache_size);
+    void* b_val_cache2 = input_tensors[14].GetPtr<void>() + (b_idx * b_kvcache_size);
 
     std::vector<void*> b_tmp_buffers2;
-    int b_tmp_buffer_size = input_tensors[6].GetTotalBytes() / batch_size;
-    b_tmp_buffers2.push_back(input_tensors[6].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
-    b_tmp_buffers2.push_back(input_tensors[7].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    int b_tmp_buffer_size = input_tensors[8].GetTotalBytes() / batch_size;
     b_tmp_buffers2.push_back(input_tensors[8].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
     b_tmp_buffers2.push_back(input_tensors[9].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
     b_tmp_buffers2.push_back(input_tensors[10].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers2.push_back(input_tensors[11].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers2.push_back(input_tensors[12].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
 
     size_t b_workspace_needed = b_seq_len * hidden_units * sizeof(uint16_t) * 3;
     void* b_workspace_buf_ptr = nullptr;

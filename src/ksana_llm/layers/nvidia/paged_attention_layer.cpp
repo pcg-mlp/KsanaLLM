@@ -24,9 +24,10 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   //   2: kv_list
   //   3: kv_cache_offset_tensor
   //   4: rotary_embedding_pos
-  //   5: workspace 空间
-  //   6: forward_shape
-  //   7: 用于存储 qk 的临时空间(TODO:)
+  //   5: rotary_embedding_mask
+  //   6: workspace 空间
+  //   7: forward_shape
+  //   8: 用于存储 qk 的临时空间(TODO:)
   // output_tensors:
   //   0: paged attention output
   // NLLM_LOG_WARNING <<"";
@@ -41,12 +42,13 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   const Tensor& kv_list = input_tensors[2];
   const Tensor& cache_offset = input_tensors[3];
   const Tensor& rotary_embedding_pos = input_tensors[4];
-  const Tensor& workspace = input_tensors[5];
-  const Tensor& forward_shape = input_tensors[6];
-  const Tensor& qkv_workspace = input_tensors[7];
-  int layer_block_num = input_tensors[6].shape[2];
-  int max_tokens = input_tensors[6].shape[1];
-  int batch_size = input_tensors[6].shape[0];
+  const Tensor& rotary_embedding_mask = input_tensors[5];
+  const Tensor& workspace = input_tensors[6];
+  const Tensor& forward_shape = input_tensors[7];
+  const Tensor& qkv_workspace = input_tensors[8];
+  int layer_block_num = input_tensors[7].shape[2];
+  int max_tokens = input_tensors[7].shape[1];
+  int batch_size = input_tensors[7].shape[0];
   int total_tokens = input_tensors[0].shape[0];
   auto stream = context_->GetComputeStreams()[rank_].Get();
   void** k_list = (kv_list.GetPtr<void*>()) + (size_t)layer_index_ * layer_block_num * 2;
@@ -57,9 +59,9 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   InvokePagedAttention<T>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
                           max_tokens, context_->GetComputeStreams()[rank_].Get(), cache_offset.GetPtr<void>(),
                           batch_size, num_heads_, head_size_, num_kv_heads_, stride_size_, block_token_num_, batch_size,
-                          rotary_embedding_pos.GetPtr<void>(), total_tokens, rotary_embedding_cuda_,
-                          workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_, alibi_slopes_,
-                          qkv_workspace.GetPtr<void>());
+                          rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), total_tokens,
+                          rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(), rank_,
+                          alibi_slopes_, qkv_workspace.GetPtr<void>());
   return Status();
 }
 

@@ -59,6 +59,7 @@ inline __device__ void ApplyRotaryEmbedding(T* __restrict__ arr, const T* __rest
 template <typename T, bool IS_NEOX>
 __global__ void InvokeRotaryEmbeddingKernel(
     const int64_t* __restrict__ positions,  // [batch_size, seq_len] or [num_tokens]
+    const int64_t* __restrict__ mask,       // [batch_size, seq_len] or [num_tokens]
     T* __restrict__ query,  // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
     T* __restrict__ key,    // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads,
                             // head_size]
@@ -68,6 +69,10 @@ __global__ void InvokeRotaryEmbeddingKernel(
   // Each thread block is responsible for one token.
   const int token_idx = blockIdx.x;
   int64_t pos = positions[token_idx];
+  int64_t mask_i = mask[token_idx];
+  if (mask_i == 0) {
+    return;
+  }
   const T* cache_ptr = cos_sin_cache + pos * rotary_dim;
 
   const int embed_dim = rotary_dim / 2;
@@ -97,12 +102,12 @@ void LaunchRotaryEmbedding(const RotaryEmbeddingParam<T>& params) {
   dim3 block(std::min(params.num_heads * params.rotary_dim / 2, 512));
   if (params.is_neox) {
     InvokeRotaryEmbeddingKernel<T, true><<<grid, block, 0, params.stream>>>(
-        params.positions, params.query_, params.key_, params.cos_sin_cache, params.rotary_dim, params.query_stride,
-        params.key_stride, params.num_heads, params.num_kv_heads, params.head_size);
+        params.positions, params.mask, params.query_, params.key_, params.cos_sin_cache, params.rotary_dim,
+        params.query_stride, params.key_stride, params.num_heads, params.num_kv_heads, params.head_size);
   } else {
     InvokeRotaryEmbeddingKernel<T, false><<<grid, block, 0, params.stream>>>(
-        params.positions, params.query_, params.key_, params.cos_sin_cache, params.rotary_dim, params.query_stride,
-        params.key_stride, params.num_heads, params.num_kv_heads, params.head_size);
+        params.positions, params.mask, params.query_, params.key_, params.cos_sin_cache, params.rotary_dim,
+        params.query_stride, params.key_stride, params.num_heads, params.num_kv_heads, params.head_size);
   }
 }
 
@@ -153,22 +158,25 @@ template void ComputeCosSinWithCache<__nv_bfloat16>(const RotaryEmbeddingParam<_
 template <typename T>
 void RotaryEmbeddingCuda<T>::SetInput(
     const int64_t* positions,  // [batch_size, seq_len] or [num_tokens]
-    T* query,                  // [batch_size, seq_len, num_heads * head_size] or [num_tokens, num_heads * head_size]
-    T* key,  // [batch_size, seq_len, num_kv_heads * head_size] or [num_tokens, num_kv_heads * head_size]
+    const int64_t* mask,
+    T* query,  // [batch_size, seq_len, num_heads * head_size] or [num_tokens, num_heads * head_size]
+    T* key,    // [batch_size, seq_len, num_kv_heads * head_size] or [num_tokens, num_kv_heads * head_size]
     int num_tokens, cudaStream_t& stream) {
   params_.positions = positions;
+  params_.mask = mask;
   params_.query_ = query;
   params_.key_ = key;
   params_.num_tokens_ = num_tokens;
   params_.stream = stream;
 }
 
-template void RotaryEmbeddingCuda<float>::SetInput(const int64_t* positions, float* query, float* key, int num_tokens,
-                                                   cudaStream_t& stream);
-template void RotaryEmbeddingCuda<half>::SetInput(const int64_t* positions, half* query, half* key, int num_tokens,
-                                                  cudaStream_t& stream);
-template void RotaryEmbeddingCuda<__nv_bfloat16>::SetInput(const int64_t* positions, __nv_bfloat16* query,
-                                                           __nv_bfloat16* key, int num_tokens, cudaStream_t& stream);
+template void RotaryEmbeddingCuda<float>::SetInput(const int64_t* positions, const int64_t* mask, float* query,
+                                                   float* key, int num_tokens, cudaStream_t& stream);
+template void RotaryEmbeddingCuda<half>::SetInput(const int64_t* positions, const int64_t* mask, half* query, half* key,
+                                                  int num_tokens, cudaStream_t& stream);
+template void RotaryEmbeddingCuda<__nv_bfloat16>::SetInput(const int64_t* positions, const int64_t* mask,
+                                                           __nv_bfloat16* query, __nv_bfloat16* key, int num_tokens,
+                                                           cudaStream_t& stream);
 
 template <typename T>
 void RotaryEmbeddingCuda<T>::Forward() {

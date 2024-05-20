@@ -47,7 +47,7 @@ class LlamaNvidiaRotaryEmbeddingTestSuit : public NvidiaTestSuitBase {
       }
     }
     BufferMeta positions_meta = CopyToDevice<int64_t>(positions_cpu_meta);
-
+    BufferMeta mask_meta = CreateBuffer<int64_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(num_tokens)}, true, 1);
     // [num_tokens, num_heads * head_size]
     BufferMeta query_meta = CreateBuffer<DataType>(
         MemoryType::MEMORY_GPU, {static_cast<size_t>(num_tokens), static_cast<size_t>(query_stride)}, true, 0, 1);
@@ -63,8 +63,9 @@ class LlamaNvidiaRotaryEmbeddingTestSuit : public NvidiaTestSuitBase {
                  head_size, num_heads, num_kv_heads, query_stride, is_neox, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
-    op.SetInput(static_cast<int64_t*>(positions_meta.data_ptr), static_cast<DataType*>(query_meta.data_ptr),
-                static_cast<DataType*>(key_meta.data_ptr), num_tokens, stream);
+    op.SetInput(static_cast<int64_t*>(positions_meta.data_ptr), static_cast<int64_t*>(mask_meta.data_ptr),
+                static_cast<DataType*>(query_meta.data_ptr), static_cast<DataType*>(key_meta.data_ptr), num_tokens,
+                stream);
     op.Forward();
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 

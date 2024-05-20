@@ -107,9 +107,11 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
 
   int32_t* input_ids;
   size_t* ids_offsets;
+  size_t* prefix_offsets;
   half* output_hidden_units;
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&input_ids, sizeof(int32_t) * total_ids_num));
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&ids_offsets, sizeof(size_t) * (batch_size + 1)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&prefix_offsets, sizeof(size_t) * (batch_size + 1)));
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&output_hidden_units, sizeof(float) * total_ids_num * hidden_units));
   for (size_t tokens_idx = 0; tokens_idx < input_prompt_token_ids.size(); ++tokens_idx) {
     CHECK_NVIDIA_CUDA_ERROR(
@@ -118,13 +120,14 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
   }
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(ids_offsets, ids_offsets_host.data(), sizeof(size_t) * ids_offsets_host.size(),
                                      cudaMemcpyHostToDevice));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemset(prefix_offsets, 0x0, sizeof(size_t) * ids_offsets_host.size()));
   CHECK_NVIDIA_CUDA_ERROR(cudaMemset(output_hidden_units, 0x0, total_ids_num * hidden_units));
   CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
   LookupFusedEmbeddingWithCSRInputs(
       reinterpret_cast<half*>(output_hidden_units), reinterpret_cast<const half*>(emb_table_meta.data_ptr),
       reinterpret_cast<const half*>(pos_table_meta.data_ptr), InvokeInputIdsEmbeddingLookupPosEncodingParam<half>{},
-      input_ids, start_step, ids_offsets, batch_size, hidden_units, vocab_size, vocab_id, stream);
+      input_ids, start_step, ids_offsets, prefix_offsets, batch_size, hidden_units, vocab_size, vocab_id, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
   for (int32_t prompt_id = 0; prompt_id < input_prompt_num; ++prompt_id) {
@@ -162,6 +165,7 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
 
   CHECK_NVIDIA_CUDA_ERROR(cudaFree(output_hidden_units));
   CHECK_NVIDIA_CUDA_ERROR(cudaFree(ids_offsets));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(prefix_offsets));
   CHECK_NVIDIA_CUDA_ERROR(cudaFree(input_ids));
 }
 

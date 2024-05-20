@@ -228,9 +228,12 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_host_memory_factor", 10.0);
   block_manager_config_.block_host_memory_factor =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
+
+#ifdef ENABLE_CUDA
+  // NPU device does not currently support prefix caching for computation reuse.
   int prefix_cache_len =
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.prefix_cache_len", 0);
-  if (prefix_cache_len > 0 && prefix_cache_len % block_manager_config_.device_allocator_config.block_token_num != 0) {
+  if (prefix_cache_len % block_manager_config_.device_allocator_config.block_token_num != 0) {
     int retrieve_prefix_ceche_len =
         std::floor(prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num) *
         block_manager_config_.device_allocator_config.block_token_num;
@@ -240,6 +243,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
     prefix_cache_len = retrieve_prefix_ceche_len;
   }
   block_manager_config_.prefix_cache_len = prefix_cache_len;
+#endif
 
   // Read profiler config.
   profiler_config_.stat_interval_second =
@@ -291,6 +295,11 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(config_json, model_config);
   UpdateEndIdFromGeneration(model_dir, model_config);
+
+  // TODO: Model with GQA not supported prefix caching currently.
+  if (model_config.head_num != model_config.num_key_value_heads) {
+    block_manager_config_.prefix_cache_len = 0;
+  }
 
   if (batch_manager_config_.batch_scheduler_config.max_token_len > 0) {
     if (batch_manager_config_.batch_scheduler_config.max_token_len > model_config.max_token_num) {

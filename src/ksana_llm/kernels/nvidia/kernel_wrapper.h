@@ -16,8 +16,8 @@ namespace ksana_llm {
 
 // Invoke the lookup embedding.
 template <typename T>
-void LookupEmbedding(const void* ids, const void* offset, const void* emb, const void* pos, void* output,
-                     int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,
+void LookupEmbedding(const void* ids, const void* offsets, const void* emb, const void* pos, const void* prefix_offsets,
+                     void* output, int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,
                      void* workspace_ptr = nullptr);
 
 template <typename T>
@@ -37,15 +37,15 @@ void InvokeSiluActivation(const void* input, const void* bias, const int m, cons
                           cudaStream_t stream);
 
 template <typename T>
-void AssembleLastToken(const void* input, const void* offset, const int batch_size, const int hidden_units_num,
-                       void* output, cudaStream_t& stream);
+void AssembleLastToken(const void* inputs, const void* offsets, const void* prefix_offsets, const int batch_size,
+                       const int hidden_units_num, void* output, cudaStream_t& stream);
 
 template <typename T>
-void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seqlen,
+void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens,
                  int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, int tensor_para_size,
-                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* block_offset,
-                 const std::optional<void*>& alibi_slopes, cudaStream_t stream);
+                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* prefix_offsets,
+                 void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream);
 
 template <typename T>
 void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]
@@ -56,7 +56,7 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           int max_context_len, cudaStream_t stream,
                           void* cache_offsets_ptr,  // num_seqs
                           int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
-                          int batch, void* rotary_embedding_pos, int total_tokens,
+                          int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,
                           llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace,
                           size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
 

@@ -14,14 +14,15 @@ __global__ void LookupFusedEmbeddingKernelWithCSRKernel(T* output_hidden_units, 
                                                         const T* pos_table,
                                                         InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param,
                                                         const int32_t* input_ids, const int32_t start_step,
-                                                        const size_t* ids_offset, const int32_t batch_size,
-                                                        const uint32_t hidden_units, const size_t vocab_size,
-                                                        const size_t vocab_id) {
+                                                        const size_t* ids_offsets, const size_t* prefix_offsets,
+                                                        const int32_t batch_size, const uint32_t hidden_units,
+                                                        const size_t vocab_size, const size_t vocab_id) {
   // NOTE(karlluo): config of grid and block
   // grid: (min(batch_size, 65536), 32);
   // block: (min(hidden_units, 512));
-  size_t input_ids_idx_offset = ids_offset[blockIdx.x];
-  size_t ids_num = ids_offset[blockIdx.x + 1] - input_ids_idx_offset;
+  size_t input_ids_idx_offset = ids_offsets[blockIdx.x] - prefix_offsets[blockIdx.x];
+  size_t next_ids_offset = ids_offsets[blockIdx.x + 1] - prefix_offsets[blockIdx.x + 1];
+  size_t ids_num = next_ids_offset - input_ids_idx_offset;
   int32_t step = start_step + blockIdx.y;
 
   // TODO(karlluo): optimization unroll ?
@@ -51,8 +52,9 @@ template <typename T>
 void LookupFusedEmbeddingWithCSRInputs(T* output_hidden_units, const T* embedding_table, const T* pos_table,
                                        InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param,
                                        const int32_t* input_ids, const int32_t start_step, const size_t* ids_offsets,
-                                       const int32_t batch_size, const uint32_t hidden_units, const size_t vocab_size,
-                                       const size_t vocab_id, cudaStream_t stream) {
+                                       const size_t* prefix_offsets, const int32_t batch_size,
+                                       const uint32_t hidden_units, const size_t vocab_size, const size_t vocab_id,
+                                       cudaStream_t stream) {
   // each block handle one sample among batch's token last hidden units
   constexpr int32_t tokens_stride = 32;
   dim3 grid(min(static_cast<int32_t>(batch_size), DEFAULT_CUDA_GPU_DEVICE_MAX_BLOCKS_NUM), tokens_stride);
@@ -60,15 +62,15 @@ void LookupFusedEmbeddingWithCSRInputs(T* output_hidden_units, const T* embeddin
 
   LookupFusedEmbeddingKernelWithCSRKernel<T>
       <<<grid, block, 0, stream>>>(output_hidden_units, embedding_table, pos_table, prompt_param, input_ids, start_step,
-                                   ids_offsets, batch_size, hidden_units, vocab_size, vocab_id);
+                                   ids_offsets, prefix_offsets, batch_size, hidden_units, vocab_size, vocab_id);
 }
 
-#define INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(T)                                                     \
-  template void LookupFusedEmbeddingWithCSRInputs(                                                                \
-      T* output_hidden_units, const T* embedding_table, const T* pos_table,                                       \
-      InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param, const int32_t* input_ids,                    \
-      const int32_t start_step, const size_t* ids_offsets, const int32_t batch_size, const uint32_t hidden_units, \
-      const size_t vocab_size, const size_t vocab_id, cudaStream_t stream);
+#define INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(T)                                                      \
+  template void LookupFusedEmbeddingWithCSRInputs(                                                                 \
+      T* output_hidden_units, const T* embedding_table, const T* pos_table,                                        \
+      InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param, const int32_t* input_ids,                     \
+      const int32_t start_step, const size_t* ids_offsets, const size_t* prefix_offsets, const int32_t batch_size, \
+      const uint32_t hidden_units, const size_t vocab_size, const size_t vocab_id, cudaStream_t stream);
 
 INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(float);
 INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(half);

@@ -20,11 +20,12 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   //   2: kv_list
   //   3: kv_cache_offset_tensor
   //   4: rotary_embedding_pos
-  //   5: workspace 空间
-  //   6: forward_shape
-  //   7: 用于存储 qk 的临时空间(TODO:)
-  //   8~12: ascend buffers: [max_token_num, hidden_units]
-  //   13~14: ascend kvcache buffers: [max_token_num, hidden_units]
+  //   5: rotary_embedding_mask
+  //   6: workspace 空间
+  //   7: forward_shape
+  //   8: 用于存储 qk 的临时空间(TODO:)
+  //   9~13: ascend buffers: [max_token_num, hidden_units]
+  //   14~15: ascend kvcache buffers: [max_token_num, hidden_units]
   // output_tensors:
   //   0: paged attention output
   // NLLM_LOG_WARNING <<"";
@@ -34,7 +35,7 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   // context_lens是17,41
   // input_offse是0,17,58
   // cache_offset是0,3,9
-  int max_tokens = input_tensors[6].shape[1];
+  int max_tokens = input_tensors[7].shape[1];
 
   int64_t seq_len = 1;
   int64_t token_pos = max_tokens - 1;
@@ -56,17 +57,17 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
     llm_kernels::utils::CreateAclTensorWithData(b_shape, &b_qkv_ptr, aclDataType::ACL_FLOAT16, aclFormat::ACL_FORMAT_ND,
                                                 &b_input_tensor);
 
-    int b_kvcache_size = input_tensors[13].GetTotalBytes() / batch_size;
-    void* b_key_cache = input_tensors[13].GetPtr<void>() + (b_idx * b_kvcache_size);
-    void* b_val_cache = input_tensors[14].GetPtr<void>() + (b_idx * b_kvcache_size);
+    int b_kvcache_size = input_tensors[14].GetTotalBytes() / batch_size;
+    void* b_key_cache = input_tensors[14].GetPtr<void>() + (b_idx * b_kvcache_size);
+    void* b_val_cache = input_tensors[15].GetPtr<void>() + (b_idx * b_kvcache_size);
 
     std::vector<void*> b_tmp_buffers;
-    int b_tmp_buffer_size = input_tensors[8].GetTotalBytes() / batch_size;
-    b_tmp_buffers.push_back(input_tensors[8].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    int b_tmp_buffer_size = input_tensors[9].GetTotalBytes() / batch_size;
     b_tmp_buffers.push_back(input_tensors[9].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
     b_tmp_buffers.push_back(input_tensors[10].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
     b_tmp_buffers.push_back(input_tensors[11].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
     b_tmp_buffers.push_back(input_tensors[12].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
+    b_tmp_buffers.push_back(input_tensors[13].GetPtr<void>() + (b_idx * b_tmp_buffer_size));
 
     size_t b_workspace_needed = hidden_units * sizeof(uint16_t) * 3;
     void* b_workspace_buf_ptr = nullptr;

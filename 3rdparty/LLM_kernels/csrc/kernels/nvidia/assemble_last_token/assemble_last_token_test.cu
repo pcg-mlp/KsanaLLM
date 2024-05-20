@@ -81,6 +81,9 @@ TEST_F(LlamaNvidiaAssembleLastTokenTestSuit, HalfCommonTest) {
 
   BufferMeta ids_offsets =
       CreateBuffer<size_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size + 1), hidden_units});
+  BufferMeta prefix_offsets =
+      CreateBuffer<size_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size + 1), hidden_units}, true, 0);
+
   size_t total_ids_num = 0ul;
   for (int32_t prompt_id = 0; prompt_id < input_prompt_num; ++prompt_id) {
     ids_lens[prompt_id + 1] = ids_lens[prompt_id] + input_prompt_token_ids[prompt_id].size();
@@ -92,7 +95,8 @@ TEST_F(LlamaNvidiaAssembleLastTokenTestSuit, HalfCommonTest) {
   CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
   AssembleLastToken(reinterpret_cast<const half*>(input_meta.data_ptr),
-                    reinterpret_cast<const size_t*>(ids_offsets.data_ptr), batch_size, hidden_units,
+                    reinterpret_cast<const size_t*>(ids_offsets.data_ptr),
+                    reinterpret_cast<const size_t*>(prefix_offsets.data_ptr), batch_size, hidden_units,
                     reinterpret_cast<half*>(output_meta.data_ptr), stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 

@@ -110,39 +110,47 @@ TEST_F(LayerTest, AttentionLayerTest) {
                 context, 0)
           .OK());
 
-  Tensor qkv, input_len, pos, forward_shape;
+  Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
   CreateHalfDataTypeTensor(qkv, input_shape, GetDataType<half>());
   CreateHalfDataTypeTensor(input_len, {2}, GetDataType<uint64_t>(), sizeof(uint64_t));
+  CreateHalfDataTypeTensor(prefix_offsets, {2}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(pos, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
+  CreateHalfDataTypeTensor(mask, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
   forward_shape.shape = {1, 2, 1};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
   Memcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
+  void* mask_ptr = mask.GetPtr<void>();
+  std::vector<uint64_t> mask_cpu({1, 1});
+  Memcpy(mask_ptr, mask_cpu.data(), mask_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
   void* input_len_ptr = input_len.GetPtr<void>();
   std::vector<uint64_t> input_len_cpu({0, 2});
   Memcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
+  Memset(prefix_offsets.GetPtr<void>(), 0, 2 * sizeof(int));
   Tensor output_tensor;
   CreateHalfDataTypeTensor(output_tensor, input_shape, GetDataType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
 
   int block_size = GetBlockManager()->GetBlockSize();
-  std::vector<int> h_block_offset = {0, 1};
-  Tensor block_offset;
-  CreateHalfDataTypeTensor(block_offset, {h_block_offset.size()}, GetDataType<int>(), sizeof(int));
-  Memcpy(block_offset.GetPtr<void>(), h_block_offset.data(), h_block_offset.size() * sizeof(int),
+  std::vector<int> h_block_offsets = {0, 1};
+  Tensor block_offsets;
+  CreateHalfDataTypeTensor(block_offsets, {h_block_offsets.size()}, GetDataType<int>(), sizeof(int));
+  Memcpy(block_offsets.GetPtr<void>(), h_block_offsets.data(), h_block_offsets.size() * sizeof(int),
          MEMCPY_HOST_TO_DEVICE);
   // 为 kv_list 分配内存并初始化
   Tensor kv_list;
-  CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetDataType<uint64_t>());
-  std::vector<void*> h_kv_list_ptrs(h_block_offset.back() * 2);
+  CreateHalfDataTypeTensor(kv_list, {h_block_offsets.back() * 20}, GetDataType<uint64_t>());
+  std::vector<void*> h_kv_list_ptrs(h_block_offsets.back() * 2);
   for (int i = 0; i < h_kv_list_ptrs.size(); i++) {
     Malloc(&h_kv_list_ptrs[i], block_size);
   }
   Memcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE);
 
   EXPECT_TRUE(
-      flash_attention_layer.Forward({qkv, input_len, kv_list, block_offset, pos, forward_shape}, output_tensors).OK());
+      flash_attention_layer
+          .Forward({qkv, input_len, kv_list, prefix_offsets, block_offsets, pos, mask, forward_shape}, output_tensors)
+          .OK());
 
   PagedAttentionLayer<half> attention_layer;
   EXPECT_TRUE(attention_layer

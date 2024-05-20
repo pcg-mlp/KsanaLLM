@@ -15,20 +15,21 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   // input_tensors:
   //   0: input_ids
   //   1: offset
-  //   2: emb_weight
-  //   3: pos
+  //   2: prefix (not be used)
+  //   3: emb_weight
+  //   4: pos
   // output_tensors:
   //   0: emb_output
   SetDevice(rank_);
 
   int total_seq_len = input_tensors[0].shape[0];
-  int hidden_units = input_tensors[2].shape[1];
+  int hidden_units = input_tensors[3].shape[1];
 
   int batch_size = input_tensors[1].shape[0] - 1;
   int seq_len = total_seq_len / batch_size;
 
   Tensor input_ids = input_tensors[0];
-  Tensor embedding_table = input_tensors[2];
+  Tensor embedding_table = input_tensors[3];
 
   aclTensor* input_tensor = input_ids.ResetDeviceTensor(DataType::TYPE_INT32, {static_cast<int64_t>(total_seq_len)});
 
@@ -39,8 +40,8 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   aclTensor* output_tensor = output_tensors[0].ResetDeviceTensor(
       DataType::TYPE_FP16, {static_cast<int64_t>(total_seq_len), static_cast<int64_t>(hidden_units)});
 
-  if (input_tensors.size() > 3) {
-    Tensor position_table = input_tensors[3];
+  if (input_tensors.size() > 4) {
+    Tensor position_table = input_tensors[4];
     aclTensor* position_tensor = position_table.ResetDeviceTensor(
         DataType::TYPE_FP16,
         {static_cast<int64_t>(position_table.shape[0]), static_cast<int64_t>(position_table.shape[1])});
@@ -53,7 +54,7 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
 
   output_tensors[0].shape = {static_cast<size_t>(batch_size), static_cast<size_t>(seq_len),
                              static_cast<size_t>(hidden_units)};
-  output_tensors[0].dtype = input_tensors[2].dtype;
+  output_tensors[0].dtype = input_tensors[3].dtype;
   return Status();
 }
 template class EmbLookupLayer<float>;

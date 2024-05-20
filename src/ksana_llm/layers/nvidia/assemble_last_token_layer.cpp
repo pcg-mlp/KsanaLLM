@@ -13,7 +13,8 @@ Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tenso
                                           std::vector<Tensor>& output_tensors) {
   int batch_size = input_tensors[1].shape[0] - 1;
   AssembleLastToken<T>(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                       reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), batch_size,
+                       reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()),
+                       reinterpret_cast<const void*>(input_tensors[2].GetPtr<void>()), batch_size,
                        input_tensors[0].shape[1], reinterpret_cast<void*>(output_tensors[0].GetPtr<void>()),
                        context_->GetComputeStreams()[rank_].Get());
   output_tensors[0].shape = input_tensors[0].shape;
