@@ -4,6 +4,7 @@
 
 #include "ksana_llm/utils/environment.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -88,13 +89,13 @@ Status Environment::ParseConfig(const std::string &config_file) {
 
   // Read global setting.
   tensor_parallel_size_ =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.tensor_para_size", 1);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.tensor_para_size", 1);
   pipeline_parallel_size_ =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.pipeline_para_size", 1);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.pipeline_para_size", 1);
   enable_lora_adapter_ =
-      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
+    yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
   embed_tokens_use_cpu_ =
-      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.embed_tokens_use_cpu", false);
+    yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.embed_tokens_use_cpu", false);
 
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
     throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");
@@ -102,49 +103,49 @@ Status Environment::ParseConfig(const std::string &config_file) {
 
   // Read batch scheduler config.
   batch_manager_config_.batch_scheduler_config.schedule_strategy = static_cast<ScheduleStrategy>(
-      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.schedule_strategy", 0));
+    yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.schedule_strategy", 0));
   batch_manager_config_.batch_scheduler_config.waiting_timeout_in_ms =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
   batch_manager_config_.batch_scheduler_config.max_waiting_queue_len =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 256);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 256);
   batch_manager_config_.batch_scheduler_config.max_step_tokens =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
   batch_manager_config_.batch_scheduler_config.max_batch_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 8);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 8);
   batch_manager_config_.batch_scheduler_config.max_token_len =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 1024);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 1024);
   batch_manager_config_.batch_scheduler_config.swapout_block_threshold =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
   batch_manager_config_.batch_scheduler_config.swapin_block_threshold =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapin_block_threshold", 2.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapin_block_threshold", 2.0);
   batch_manager_config_.batch_scheduler_config.launch_block_threshold =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
   batch_manager_config_.batch_scheduler_config.swap_threadpool_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 8);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 8);
   batch_manager_config_.batch_scheduler_config.preempt_mode = static_cast<PreemptMode>(
-      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
+    yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
 
   // Read block manager config.
   block_manager_config_.host_allocator_config.block_token_num =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.device_allocator_config.block_token_num =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
-  block_manager_config_.reserved_device_memory_ratio = yaml_reader.GetScalar<float>(
-      yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.05);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
+  block_manager_config_.reserved_device_memory_ratio =
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.05);
   block_manager_config_.lora_deivce_memory_ratio =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_deivce_memory_ratio", 0.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_deivce_memory_ratio", 0.0);
   block_manager_config_.block_device_memory_ratio =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_device_memory_ratio", -1.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_device_memory_ratio", -1.0);
   block_manager_config_.lora_host_memory_factor =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_host_memory_factor", 10.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_host_memory_factor", 10.0);
   block_manager_config_.block_host_memory_factor =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
+    yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
   int prefix_cache_len =
-      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.prefix_cache_len", 0);
+    yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.prefix_cache_len", 0);
   if (prefix_cache_len > 0 && prefix_cache_len % block_manager_config_.device_allocator_config.block_token_num != 0) {
     int retrieve_prefix_ceche_len =
-        std::floor(prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num) *
-        block_manager_config_.device_allocator_config.block_token_num;
+      std::floor(prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num) *
+      block_manager_config_.device_allocator_config.block_token_num;
     NLLM_LOG_WARNING << "prefix_cache_len " << prefix_cache_len << " cannot round up block token num "
                      << block_manager_config_.device_allocator_config.block_token_num
                      << " retrieve the prefix cache num to " << retrieve_prefix_ceche_len;
@@ -154,15 +155,15 @@ Status Environment::ParseConfig(const std::string &config_file) {
 
   // Read profiler config.
   profiler_config_.stat_interval_second =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_interval_second", 60);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_interval_second", 60);
   profiler_config_.stat_buffer_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_buffer_size", 1024);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_buffer_size", 1024);
   profiler_config_.report_threadpool_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.report_threadpool_size", 4);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.report_threadpool_size", 4);
 
   // Read base model.
   std::string base_model_dir =
-      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+    yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
   status = ParseModelConfig(base_model_dir);
   if (!status.OK()) {
     return status;
@@ -182,7 +183,9 @@ Status Environment::ParseConfig(const std::string &config_file) {
 }
 
 Status Environment::ParseModelConfig(const std::string &model_dir) {
-  std::string config_file = model_dir + "/config.json";
+  std::filesystem::path raw_model_dir_path = model_dir;
+  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(raw_model_dir_path);
+  std::string config_file = abs_model_dir_path.u8string() + "/config.json";
   if (!IsFileExists(config_file)) {
     return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Model config file: {} is not exists.", config_file));
   }
@@ -198,7 +201,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   }
 
   ModelConfig model_config;
-  model_config.path = model_dir;
+  model_config.path = abs_model_dir_path.u8string();
   model_config.weight_data_type = GetModelDataType(config_json, model_config);
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(config_json, model_config);

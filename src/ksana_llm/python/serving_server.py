@@ -195,7 +195,7 @@ if __name__ == "__main__":
     if not args.tokenizer_dir:
         with open(args.config_file, "r") as yaml_file:
             yaml_data = yaml.safe_load(yaml_file)
-            args.tokenizer_dir = yaml_data["model_spec"]["base_model"]["model_dir"]
+            args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)
