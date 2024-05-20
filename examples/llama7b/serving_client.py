@@ -29,7 +29,7 @@ def post_request(serv, data, queue=None):
 
 
 def show_response(data, result):
-    print("result:", result)
+    print("agent:", result.get("texts", [""])[0])
 
 
 if __name__ == "__main__":
@@ -66,6 +66,8 @@ if __name__ == "__main__":
             # Set stream mode to False
             "stream": False,
         }
+
+        print(f"client: {prompt}")
 
         # Create a new process to handle the post request
         proc = multiprocessing.Process(

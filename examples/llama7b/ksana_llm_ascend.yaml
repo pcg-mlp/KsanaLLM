@@ -19,6 +19,3 @@ setting:
 model_spec:
   base_model:
     model_dir: /model/llama-hf/7B/
-  lora_models:
-    - model_name: lora_1
-      model_dir: /model/lora/lora_1/13B/2-gpu

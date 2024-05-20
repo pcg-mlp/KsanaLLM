@@ -140,14 +140,14 @@ cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 # download huggingface model for example:
 git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
 
-# change the model_dir in ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm.yaml
+# change the model_dir in ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml if needed
 
 # launch server
 # using model default tokenizer
-python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm.yaml
+python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml
 # or using different tokenizer
-python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm.yaml \
-    --tokenizer_dir ${DIR_PATH_TO_MODEL}/Llama-2-7b-chat-hf
+python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml \
+    --tokenizer_dir ./Llama-2-7b-chat-hf
 
 # open another session, request client
 cd ${GIT_PROJECT_REPO_ROOT}/examples/llama7b
@@ -172,7 +172,7 @@ python -c "import ksana_llm"
 
 #### Debug
 
-set environment variable `NLLM_LOG_LEVEL=DEBUG` to get more log info
+set environment variable `NLLM_LOG_LEVEL=DEBUG` before run to get more log info
 
 #### Optional Model Weight Map
 

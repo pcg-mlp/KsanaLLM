@@ -25,16 +25,10 @@ class BlockManagerTest : public testing::Test {
       block_manager_config.device_allocator_config.block_size = 1024;
       block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
-      int device_num = 0;
-      GetDeviceCount(&device_num);
-      NLLM_LOG_INFO << "Device number: " << device_num;
-
-      if (device_num > 2) {
-        NLLM_LOG_WARNING << "Device number " << device_num << " bigger than 2 will cause failed";
-      }
+      GetDeviceCount(&device_num_);
 
       std::shared_ptr<Context> context =
-        std::make_shared<Context>(/*tensor_parallel_size*/ device_num, /*pipeline_parallel_size*/ 1);
+        std::make_shared<Context>(/*tensor_parallel_size*/ device_num_, /*pipeline_parallel_size*/ 1);
 
       // 使用配置创建一个 BlockManager 对象
       block_manager = new BlockManager(block_manager_config, context);
@@ -50,10 +44,16 @@ class BlockManagerTest : public testing::Test {
   protected:
     // 定义一个 BlockManager 指针，用于在测试用例中使用
     BlockManager* block_manager;
+
+    int device_num_ = -1;
 };
 
 // 定义一个测试用例，继承自 BlockManagerTest
 TEST_F(BlockManagerTest, AllocateAndFree) {
+  if (device_num_ != 2) {
+    GTEST_SKIP_("This test is just for 2 GPUs");
+  }
+
   // 创建一个整数向量，用于存储分配的内存块
   std::vector<int> blocks;
 
@@ -115,6 +115,9 @@ TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
 }
 
 TEST_F(BlockManagerTest, SwapInAndSwapOut) {
+  if (device_num_ != 2) {
+    GTEST_SKIP_("This test is just for 2 GPUs");
+  }
   // 在 device 上分配两个 block
   std::vector<int> blocks;
   Status status = block_manager->AllocateBlocks(2, blocks);
@@ -167,6 +170,9 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
 
 // 定义一个测试用例，继承自 BlockManagerTest
 TEST_F(BlockManagerTest, GetFreeBlockNumber) {
+  if (device_num_ != 2) {
+    GTEST_SKIP_("This test is just for 2 GPUs");
+  }
   // 检查 CPU 和 GPU 的空闲内存块数量是否正确
   EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
   EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 2);
