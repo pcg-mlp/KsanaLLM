@@ -183,6 +183,7 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
 
     EXPECT_TRUE(CheckResult<T>("custom_all_reduce_" + type_str + "_size_" + std::to_string(data_size * sizeof(T)),
                                self_data_copy_meta, result_meta, 1e-5f, 1e-5f));
+    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
     DeleteBuffer(result_meta);
     DeleteBuffer(self_data_copy_meta);
     DeleteBuffer(rank_data_meta);
@@ -221,10 +222,17 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
 
   template <typename T>
   void TestCustomAllReduce() {
+
+    int device_count = -1;
+    CHECK_NVIDIA_CUDA_ERROR(cudaGetDeviceCount(&device_count));
+    if (device_count != 2) {
+      GTEST_SKIP_("This test is just for 2 GPUs");
+    }
+
     int nRanks = 2;
     ncclUniqueId nccl_id;
     ncclGetUniqueId(&nccl_id);
-    cudaProfilerStart();
+    CHECK_NVIDIA_CUDA_ERROR(cudaProfilerStart());
     std::vector<std::shared_ptr<std::thread>> run_threads;
     std::atomic<int> counter(0);
     std::vector<void *> metas(8);
@@ -239,7 +247,7 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     for (int myRank = 0; myRank < nRanks; ++myRank) {
       run_threads[myRank]->join();
     }
-    cudaProfilerStop();
+    CHECK_NVIDIA_CUDA_ERROR(cudaProfilerStop());
   }
 };
 
