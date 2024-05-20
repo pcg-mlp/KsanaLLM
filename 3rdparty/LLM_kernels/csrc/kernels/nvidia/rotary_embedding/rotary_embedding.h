@@ -43,6 +43,10 @@ struct RotaryEmbeddingParam {
   cudaStream_t stream;
 
   const int64_t* positions;
+
+  // Due to the optimization of PrefixCaching for computation reuse, a mask is used during rotary_embedding
+  // kernel forward to avoid multiple executions of rotary_embedding on the prefix portion.
+  const int64_t* mask;
   T* query_;
   T* key_;
   int num_tokens_;
@@ -61,6 +65,7 @@ class RotaryEmbeddingCuda {
                  const float scaling_factor = 1.0f);
 
   void SetInput(const int64_t* positions,  // [batch_size, seq_len] or [num_tokens]
+                const int64_t* mask,       // [batch_size, seq_len] or [num_tokens]
                 T* query,  // [batch_size, seq_len, num_heads * head_size] or [num_tokens, num_heads * head_size]
                 T* key,    // [batch_size, seq_len, num_kv_heads * head_size] or [num_tokens, num_kv_heads * head_size]
                 int num_tokens, cudaStream_t& stream);

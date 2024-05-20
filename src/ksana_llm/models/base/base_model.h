@@ -42,7 +42,7 @@ class BaseModel {
   size_t total_buffer_size_{0ul};
 
   // Record all buffer used
-  std::vector<Tensor*> buffer_tensor_heap_;
+  std::vector<Tensor> buffer_tensor_heap_;
 
   // Whether cuda graph is enabled.
   bool enable_cuda_graph_ = true;

@@ -41,6 +41,9 @@ class ModelInput {
   // The total sequence length.
   size_t total_seq_len = 0;
 
+  // The total prefix length.
+  size_t total_prefix_len = 0;
+
   // The total block numbe.
   size_t total_block_num = 0;
 
@@ -63,11 +66,25 @@ class ModelInput {
   Tensor prompt_probs_offset_uint64_tensor;
   bool use_prompt_probs_offset = false;
   Tensor input_tokens_int32_tensor;
+
+  // Indicate the corresponding index position of the input during rotary_embedding kernel.
   Tensor rotary_embedding_pos;
+
+  // Due to the optimization of PrefixCaching for computation reuse, a mask is used during
+  // rotary_embedding computation to avoid multiple executions of rotary_embedding on the prefix block.
+  Tensor rotary_embedding_mask;
+
+  // The input's prefix length
+  Tensor input_prefix_uint64_tensor;
+
+  // Input offset sequence and input prefix sequence on the CPU
+  std::vector<int> input_offset_list;
+  std::vector<int> input_prefix_list;
 
   Tensor kv_cache_buffer;
   Tensor kv_cache_offset_tensor;
   Tensor kv_list;
+  std::vector<void*> cpu_kv_list;
 
   // Tensor to hold pairs(pos, data_length) of positions for subinputs on the CPU.
   Tensor cpu_subinput_pos_pair_tensor;

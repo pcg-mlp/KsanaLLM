@@ -13,6 +13,9 @@ namespace ksana_llm {
 
 // The information used for forward.
 struct ForwardRequest {
+  // The request id.
+  size_t req_id;
+
   // The infer stage, context decode or decode.
   InferStage infer_stage;
 

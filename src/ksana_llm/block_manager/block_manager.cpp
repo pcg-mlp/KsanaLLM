@@ -249,7 +249,7 @@ size_t BlockManager::GetBlockTokenNum() const { return block_manager_config_.dev
 
 Status BlockManager::PreparePrefixCacheBlocks() {
   if (block_manager_config_.prefix_cache_len == 0) {
-    NLLM_LOG_DEBUG << "Disalbe prefix cache";
+    NLLM_LOG_DEBUG << "Disable prefix cache";
     return Status();
   } else if (block_manager_config_.prefix_cache_len > 0) {
     NLLM_LOG_DEBUG << "Prefix cache token number " << block_manager_config_.prefix_cache_len;

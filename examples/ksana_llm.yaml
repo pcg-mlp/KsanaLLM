@@ -32,8 +32,6 @@ setting:
     launch_block_threshold: 2.0
     # 用于执行异步swap的线程池大小
     swap_threadpool_size: 8
-    # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
-    prefix_cache_len: 0
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
     preempt_mode: 0
   # 显存块相关配置
@@ -50,6 +48,8 @@ setting:
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
     block_host_memory_factor: 2.0
+    # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
+    prefix_cache_len: 0
   # 性能统计相关配置
   profiler:
     # 统计周期，每隔多少秒输出一次统计数据

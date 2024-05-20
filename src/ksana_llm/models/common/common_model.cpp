@@ -9,8 +9,8 @@
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
-#include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -22,27 +22,7 @@ CommonModel<T>::CommonModel(const ModelConfig& model_config, const int rank, std
 }
 
 template <typename T>
-CommonModel<T>::~CommonModel() {
-  STATUS_CHECK_FAILURE(DestroyTensor(tensor_buffer_0_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(tensor_buffer_1_, rank_))
-  STATUS_CHECK_FAILURE(DestroyTensor(tensor_buffer_2_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(up_matmul_tensor_buffer_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(cos_sin_cache_tensor_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(forward_shape_, rank_));
-
-#ifdef ENABLE_ACL
-  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_0_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_1_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_2_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_3_, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(ascend_buffer_4_, rank_));
-
-  for (int idx = 0; idx < num_layer_; ++idx) {
-    STATUS_CHECK_FAILURE(DestroyTensor(ascend_key_caches_[idx], rank_));
-    STATUS_CHECK_FAILURE(DestroyTensor(ascend_val_caches_[idx], rank_));
-  }
-#endif
-}
+CommonModel<T>::~CommonModel() {}
 
 template <typename T>
 void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
@@ -60,6 +40,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   int head_num_per_tp = head_num / tensor_para_size;
   int num_kv_heads_per_tp = model_config_.num_key_value_heads / tensor_para_size;
   int stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
+  is_gqa_ = (num_kv_heads_per_tp != head_num_per_tp);
   int max_position_embeddings = model_config_.max_position_embeddings;
   float rope_theta = model_config_.rope_theta;
 
@@ -109,7 +90,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
 
   NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
 
-  // 初始化各层实例
+  // Initialize instances for each layer.
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
   emb_lookup_layer_->Init({}, context_, rank_);
 
@@ -206,6 +187,83 @@ float* CommonModel<T>::GetLogitsPtr() {
 }
 
 template <typename T>
+Status CommonModel<T>::AddPrefixCache(std::vector<Tensor>& mmha_origin_input, std::vector<Tensor>& mmha_prefix_input) {
+  // Before MMHA inference, retrieve the key-value pairs (k, v) from the Prefix Cache Block
+  // and populate them into the mmha prefix input tensor.
+  size_t total_token_num = 0;
+  size_t dtype_size = GetTypeSize(mmha_origin_input[0].dtype);
+  size_t per_size = mmha_origin_input[0].shape[1] / 3 * dtype_size;
+  for (int idx = 0; idx < model_input_->batch_size; ++idx) {
+    size_t src_offset = (model_input_->input_offset_list[idx] - model_input_->input_prefix_list[idx]) * per_size * 3;
+    size_t input_token_num = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
+    size_t prefix_token_num = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
+    size_t copy_size = (input_token_num - prefix_token_num) * per_size * 3;
+    size_t dst_offset = (model_input_->input_offset_list[idx] + prefix_token_num) * per_size * 3;
+    MemcpyAsync(mmha_prefix_input[0].GetPtr<void>() + dst_offset, mmha_origin_input[0].GetPtr<void>() + src_offset,
+                copy_size, MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+    total_token_num += input_token_num;
+  }
+  mmha_prefix_input[0].shape = {total_token_num, mmha_origin_input[0].shape[1]};
+  mmha_prefix_input[0].dtype = mmha_origin_input[0].dtype;
+  StreamSynchronize(context_->GetComputeStreams()[rank_]);
+  return Status();
+}
+
+template <typename T>
+Status CommonModel<T>::RemovePrefixCache(std::vector<Tensor>& mmha_prefix_output, std::vector<Tensor>& mmha_output) {
+  // After the completion of MMHA inference, copy the data from the MMHA output results,
+  // excluding the Prefix Cache section, and continue with the subsequent inference.
+  size_t dst_offset = 0;
+  size_t src_offset = 0;
+  size_t dtype_size = GetTypeSize(mmha_prefix_output[0].dtype);
+  size_t per_size = mmha_prefix_output[0].shape[1] * dtype_size;
+  for (int idx = 0; idx < model_input_->batch_size; ++idx) {
+    size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
+    size_t input_length = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
+    src_offset += prefix_length * per_size;
+    size_t copy_size = per_size * (input_length - prefix_length);
+
+    MemcpyAsync(mmha_output[0].GetPtr<void>() + dst_offset, mmha_prefix_output[0].GetPtr<void>() + src_offset,
+                copy_size, MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+    src_offset += copy_size;
+    dst_offset += copy_size;
+  }
+  StreamSynchronize(context_->GetComputeStreams()[rank_]);
+  return Status();
+}
+
+template <typename T>
+bool CommonModel<T>::IsPrefixCachingComputationReuse() {
+#ifdef ENABLE_ACL
+  // NPU device does not currently support prefix caching for computation reuse.
+  return false;
+#endif
+
+  // When the model uses GQA, the PrefixCaching computation reuse optimization is not currently supported.
+  if (GetBlockManager()->GetPrefixCacheBlocksNumber() == 0 || is_gqa_) {
+    return false;
+  }
+  return true;
+}
+
+template <typename T>
+Status CommonModel<T>::FlashAttentionForward(std::vector<Tensor>& flash_attention_input,
+                                             std::vector<Tensor>& flash_attention_output, int layer_idx) {
+  STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
+      {flash_attention_input[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
+       model_input_->input_prefix_uint64_tensor, model_input_->kv_cache_offset_tensor,
+       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask, forward_shape_
+#ifdef ENABLE_ACL
+       ,
+       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
+#endif
+      },
+      flash_attention_output));
+  return Status();
+}
+
+template <typename T>
 Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                       Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
                                       std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
@@ -230,21 +288,25 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
   }
 
   if (is_context_stage) {
-    STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
-        {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
-         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
-#ifdef ENABLE_ACL
-         ,
-         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
-#endif
-        },
-        mmha_attention_output));
+    if (IsPrefixCachingComputationReuse()) {
+      size_t input_tokens_num = attn_proj_output[0].shape[0];
+      std::vector<Tensor>& mmha_prefix_input = temp_buffer_1;
+      AddPrefixCache(attn_proj_output, mmha_prefix_input);
+
+      std::vector<Tensor>& mmha_prefix_output = temp_buffer_2;
+      FlashAttentionForward(mmha_prefix_input, mmha_prefix_output, layer_idx);
+
+      RemovePrefixCache(mmha_prefix_output, mmha_attention_output);
+      mmha_attention_output[0].shape[0] = input_tokens_num;
+      mmha_attention_output[0].shape[1] = mmha_prefix_output[0].shape[1];
+    } else {
+      FlashAttentionForward(attn_proj_output, mmha_attention_output, layer_idx);
+    }
   } else {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
         {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
-         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
-         forward_shape_, up_matmul_tensor_buffer_
+         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
+         model_input_->kv_cache_buffer, forward_shape_, up_matmul_tensor_buffer_
 #ifdef ENABLE_ACL
          ,
          ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
@@ -321,6 +383,7 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
   // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
   std::vector<Tensor>& input_layernorm_input = temp_buffer_0;
   std::vector<Tensor>& input_layernorm_output = temp_buffer_1;
+
   STATUS_CHECK_RETURN(
       layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
 
@@ -393,8 +456,9 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
   std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
   if (embedding_weight.device == MemoryDevice::MEMORY_DEVICE) {
-    STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-        {model_input_->input_ids, model_input_->input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
+    STATUS_CHECK_RETURN(emb_lookup_layer_->Forward({model_input_->input_ids, model_input_->input_offset_uint64_tensor,
+                                                    model_input_->input_prefix_uint64_tensor, embedding_weight},
+                                                   emb_lookup_output));
 
     // NOTE(karlluo): multiple event in nccl will cause preformance regression
     // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
@@ -429,11 +493,14 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
   // assemble last token
   std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;
   if (model_input_->use_prompt_probs_offset) {
-    STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
-        {final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor}, assemble_last_token_output));
+    STATUS_CHECK_RETURN(
+        assemble_last_token_layer_->Forward({final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor,
+                                             model_input_->input_prefix_uint64_tensor},
+                                            assemble_last_token_output));
   } else {
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
-        {final_layernorm_output[0], model_input_->input_offset_uint64_tensor}, assemble_last_token_output));
+        {final_layernorm_output[0], model_input_->input_offset_uint64_tensor, model_input_->input_prefix_uint64_tensor},
+        assemble_last_token_output));
   }
 
   // lm_head

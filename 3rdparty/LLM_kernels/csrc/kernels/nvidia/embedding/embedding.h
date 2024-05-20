@@ -32,8 +32,9 @@ template <typename T>
 void LookupFusedEmbeddingWithCSRInputs(T* output_hidden_units, const T* embedding_table, const T* pos_table,
                                        InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param,
                                        const int32_t* input_ids, const int32_t start_step, const size_t* ids_offsets,
-                                       const int32_t batch_size, const uint32_t hidden_units, const size_t vocab_size,
-                                       const size_t vocab_id, cudaStream_t stream);
+                                       const size_t* prefix_offsets, const int32_t batch_size,
+                                       const uint32_t hidden_units, const size_t vocab_size, const size_t vocab_id,
+                                       cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

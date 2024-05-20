@@ -96,6 +96,9 @@ class CommonModel : public BaseModel {
   // Whether to add bias values during the QKV calculation.
   bool qkv_add_bias_;
 
+  // Whether or not the model use GQA
+  bool is_gqa_;
+
   Tensor tensor_buffer_0_;
   Tensor tensor_buffer_1_;
   Tensor tensor_buffer_2_;
@@ -118,6 +121,15 @@ class CommonModel : public BaseModel {
 #endif
 
  private:
+  Status AddPrefixCache(std::vector<Tensor>& mmha_origin_input, std::vector<Tensor>& mmha_prefix_input);
+
+  Status RemovePrefixCache(std::vector<Tensor>& mmha_prefix_output, std::vector<Tensor>& mmha_output);
+
+  bool IsPrefixCachingComputationReuse();
+
+  Status FlashAttentionForward(std::vector<Tensor>& flash_attention_input, std::vector<Tensor>& flash_attention_output,
+                               int layer_idx);
+
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L257
   Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight, Tensor& hidden_states,
@@ -142,7 +154,7 @@ class CommonModel : public BaseModel {
                       const bool is_context_stage);
 
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                            const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);
+                           const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);
 
   Status PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs);
 };

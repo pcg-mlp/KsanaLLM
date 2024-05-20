@@ -53,6 +53,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     req->waiter->Notify();
     return req->finish_status;
   }
+
   std::vector<std::shared_ptr<InferRequest>> infer_request_group;
   for (int i = 0; i < req->output_group.size(); i++) {
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
@@ -76,11 +77,13 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     // check if this request qualify to use prefix cache
     if (GetBlockManager()->GetPrefixCacheBlocksNumber() > 0) {
       infer_req->is_use_prefix_cache = GetBlockManager()->CheckReqIsValidForPrefixCache(infer_req->input_tokens);
-      infer_req->prefix_cache_len = GetBlockManager()->GetPrefixCacheTokensNumber();
-      infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
-      GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
-      // NOTE(karlluo): preallocate prefix kv cache for infer request
-      NLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
+      if (infer_req->is_use_prefix_cache) {
+        infer_req->prefix_cache_len = GetBlockManager()->GetPrefixCacheTokensNumber();
+        infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
+        GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
+        // NOTE(karlluo): preallocate prefix kv cache for infer request
+        NLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
+      }
     }
   }
 
