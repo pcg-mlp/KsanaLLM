@@ -37,14 +37,8 @@ function(add_ascend_kernel_lib)
   set(llm_kernels_ascend_link_libs ${llm_kernels_ascend_link_libs})
   set(llm_kernels_ascend_libs_deps ${llm_kernels_ascend_libs_deps})
 
-  if(${add_ascend_kernel_lib_NAME} STREQUAL "silu_mul")
-    target_link_libraries(${kernel_lib_name} PUBLIC
-      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs}
-      ${aicore_kernel_lib_name})
-  else()
-    target_link_libraries(${kernel_lib_name} PUBLIC
-      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
-  endif()
+  target_link_libraries(${kernel_lib_name} PUBLIC
+    ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
 
   add_dependencies(${kernel_lib_name} ${llm_kernels_ascend_libs_deps})
   set(llm_kernels_ascend_libs "${llm_kernels_ascend_libs} ${kernel_lib_name}" PARENT_SCOPE)
@@ -80,7 +74,6 @@ add_subdirectory(matmul_silu)
 add_subdirectory(rmsnorm)
 add_subdirectory(cast)
 add_subdirectory(silu)
-add_subdirectory(silu_mul)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")

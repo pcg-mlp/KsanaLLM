@@ -18,6 +18,14 @@ class CMakeExtension(Extension):
         super().__init__(name, sources=[])
 
 
+def is_run_on_npu_device() -> bool:
+    try:
+        import torch_npu
+        return True
+    except:
+        return False
+
+
 class build_ext(build_ext_orig):
 
     def run(self):
@@ -38,11 +46,22 @@ class build_ext(build_ext_orig):
 
         # example of cmake args
         config = 'Debug' if self.debug else 'Release'
-        cmake_args = [
-            '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' +
-            str(extdir.parent.absolute()), '-DCMAKE_BUILD_TYPE=' + config,
-            '-DWITH_TESTING=OFF'
-        ]
+        cmake_args = []
+        if is_run_on_npu_device():
+            cmake_args = [
+                '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' +
+                str(extdir.parent.absolute()),
+                '-DCMAKE_BUILD_TYPE=' + config,
+                '-DWITH_TESTING=OFF',
+                '-DWITH_CUDA=OFF',
+                '-DWITH_ACL=ON',
+            ]
+        else:
+            cmake_args = [
+                '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' +
+                str(extdir.parent.absolute()), '-DCMAKE_BUILD_TYPE=' + config,
+                '-DWITH_TESTING=OFF'
+            ]
 
         # example of build args
         build_args = ['--config', config, '--', '-j']
@@ -68,10 +87,15 @@ class build_ext(build_ext_orig):
         # copy optional weight map to cwd for wheel package
         def ignore_files(dir, files):
             return [file for file in files if not file.endswith('.json')]
+
         optional_weight_maps = 'src/ksana_llm/python/weight_map'
-        ksana_llm_path = os.path.join(extdir.parent.absolute(), "ksana_llm/weight_map")
-        shutil.copytree(optional_weight_maps, ksana_llm_path, dirs_exist_ok=True,
+        ksana_llm_path = os.path.join(extdir.parent.absolute(),
+                                      "ksana_llm/weight_map")
+        shutil.copytree(optional_weight_maps,
+                        ksana_llm_path,
+                        dirs_exist_ok=True,
                         ignore=ignore_files)
+
 
 setup(name='ksana_llm',
       version='0.1',
