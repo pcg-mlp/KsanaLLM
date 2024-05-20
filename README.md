@@ -137,14 +137,20 @@ then you can go to 3 to launch local serving server
 ```bash
 cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 
-# download huggingface model for example
-wget https://mirrors.tencent.com/repository/generic/pcg-numerous/dependency/numerous_llm_models/llama2_7b_hf.tgz
-tar vzxf llama2_7b_hf.tgz
+# download huggingface model for example:
+git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
+
+# change the model_dir in ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm.yaml
 
 # launch server
-python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm.yaml --tokenizer_dir llama2_7b_hf
+# using model default tokenizer
+python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm.yaml
+# or using different tokenizer
+python serving_server.py --config_file ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm.yaml \
+    --tokenizer_dir ${DIR_PATH_TO_MODEL}/Llama-2-7b-chat-hf
 
 # open another session, request client
+cd ${GIT_PROJECT_REPO_ROOT}/examples/llama7b
 python serving_client.py
 ```
 
@@ -157,7 +163,7 @@ cd ${GIT_PROJECT_REPO_ROOT}
 # for distribute wheel
 python setup.py bdist_wheel
 # install wheel
-pip install dist/ksana_llm-0.1-cp39-cp39-linux_x86_64.whl
+pip install dist/ksana_llm-0.1-*-linux_x86_64.whl
 
 # check install success
 pip show -f ksana_llm
