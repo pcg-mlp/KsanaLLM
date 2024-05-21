@@ -12,6 +12,8 @@ template <typename T>
 Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   auto a = reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>());
   auto b = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());
+  // The Add-Bias-Residual Kernel uses the shape[0] of the input tensor to determine whether
+  // broadcasting is required.
   if (input_tensors[0].shape[0] == input_tensors[1].shape[0]) {
     InvokeAddBiasResidual<T>(a, b, nullptr, static_cast<int>(input_tensors[0].shape[0]),
                              static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
