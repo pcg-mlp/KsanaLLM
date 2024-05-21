@@ -1,6 +1,6 @@
 # 一念LLM (KsanaLLM)
 
-
+[English](README.md) [中文](README_cn.md)
 
 ## 介绍
 
@@ -45,8 +45,6 @@
 ### 1. 创建 docker 容器和运行时环境
 
 #### 1.1 英伟达GPU
-
-方案 1: 基于**英伟达官方镜像**创建容器
 
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
@@ -115,7 +113,7 @@ python serving_server.py \
     --port 8080
 ```
 
-基于one shot对华的推理测试 
+基于one shot对话的推理测试 
 
 ```bash
 # open another session
