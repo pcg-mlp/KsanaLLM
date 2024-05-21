@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/runtime/infer_request.h"
 
 namespace ksana_llm {
 
@@ -31,6 +32,9 @@ struct SamplingRequest {
 
     // Store token and their corresponding float probability values.
     std::vector<std::vector<std::pair<int, float>>>* logprobs;
+
+    // Beam Search Group
+    std::vector<std::shared_ptr<InferRequest>>* req_group;
 
     // Model config
     const ModelConfig* model_config;

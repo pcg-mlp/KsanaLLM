@@ -83,6 +83,7 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
             ret = {
                 "texts": output_texts,
                 "output_token_ids": output_token_ids,
+                "input_token_ids": input_tokens,  # the input token IDs
                 "logprobs": logprobs
             }
             yield (json.dumps(ret) + "\0").encode("utf-8")

@@ -18,7 +18,7 @@
 
 namespace ksana_llm {
 
-InferRequest::InferRequest(std::shared_ptr<Request>& request, int index)
+InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
     : req_id(request->req_ids[index]),
       model_name(request->model_name),
       input_tokens(request->input_tokens),
@@ -26,7 +26,9 @@ InferRequest::InferRequest(std::shared_ptr<Request>& request, int index)
       subinput_embedding(request->subinput_embedding),
       output_tokens(std::get<0>(request->output_group[index])),
       logprobs(std::get<1>(request->output_group[index])),
+      cumulative_score(0),
       sampling_config(request->sampling_config),
+      beam_search_group(request->beam_search_group),
       waiter(request->waiter),
       step_waiter(request->step_waiter),
       finished(request->finisheds[index]),
@@ -69,6 +71,17 @@ void InferRequest::Notify() {
   for (int i = 0; i < req_group.size(); i++) {
     if (!req_group[i]->finished) return;
   }
+
+  if (sampling_config.num_beams > 1) {
+    std::sort(beam_search_group.begin(), beam_search_group.end(),
+              [](const OutputTuple &a, const OutputTuple &b) { return std::get<2>(a) > std::get<2>(b); });
+
+    for (int i = 0; i < req_group.size() && i < beam_search_group.size(); i++) {
+      req_group[i]->output_tokens = std::move(std::get<0>(beam_search_group[i]));
+      req_group[i]->logprobs = std::move(std::get<1>(beam_search_group[i]));
+    }
+  }
+
   for (int i = 0; i < req_group.size(); i++) {
     req_group[i]->ClearReqGroup();
   }

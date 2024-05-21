@@ -66,6 +66,20 @@ bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<Infer
   return batch_state_->schedule_time_in_ms >= req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms;
 }
 
+bool ContinuousBatchingStrategy::CheckBeamSearchRequestFinish(const std::shared_ptr<InferRequest> req) {
+  bool req_finish = CheckRequestFinish(req);
+  if (req->sampling_config.num_beams > 1) {
+    if (req_finish) {
+      // Add a minimum value to avoid continuing calculations on completed requests.
+      req->cumulative_score += (std::numeric_limits<float>::max() / -2.0);
+    }
+    for (auto &beam_req : req->req_group) {
+      if (!CheckRequestFinish(beam_req)) return false;
+    }
+  }
+  return req_finish;
+}
+
 bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
   if (req->infer_stage == InferStage::STATE_DECODE) {
     std::vector<int> &stop_token_ids = req->sampling_config.stop_token_ids;
@@ -91,7 +105,7 @@ void ContinuousBatchingStrategy::PrepareRunningRequests(std::vector<size_t> &ste
     req->AdjustInferStage();
 
     // Check if finished.
-    if (CheckRequestFinish(req)) {
+    if (CheckBeamSearchRequestFinish(req)) {
       NLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
 
       req->finish_status = Status(RET_SUCCESS);
@@ -197,7 +211,7 @@ void ContinuousBatchingStrategy::MergePendingSwapinRequests() {
     auto &req = *it;
     if (!req->swap_pending) {
       NLLM_LOG_DEBUG << "Merge swapin req " << req->req_id << " to running.";
-      batch_state_->running_queue.push_back(req);
+      if (CheckBeamSearch(req)) batch_state_->running_queue.push_back(req);
       it = swapin_pending_queue_.erase(it);
       continue;
     }
@@ -387,6 +401,19 @@ void ContinuousBatchingStrategy::ProcessWaitingRequests(const std::vector<size_t
   }
 }
 
+bool ContinuousBatchingStrategy::CheckBeamSearch(std::shared_ptr<InferRequest> req) {
+  if (req->sampling_config.num_beams > 1) {
+    for (auto &beam_req : req->req_group) {
+      if (req->output_tokens.size() > beam_req->output_tokens.size()) {
+        NLLM_LOG_DEBUG << "CheckBeamSearch false";
+        return false;
+      }
+    }
+  }
+  NLLM_LOG_DEBUG << "CheckBeamSearch true";
+  return true;
+}
+
 void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, bool &skip_other) {
   if (batch_scheduler_config_.preempt_mode == SWAP) {
     MergePendingSwapinRequests();
@@ -433,7 +460,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     auto &req = batch_state_->running_queue[idx];
     // Allocate blocks according to actual needs to avoid duplicate allocation of hosts and devices.
     size_t step_block_num = req->GetTotalBlockNumber() - req->GetCurrentBlockNumber();
-    if (visit_idx < swapout_pos) {
+    if (visit_idx < swapout_pos && CheckBeamSearch(req)) {
       NLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
       if (step_block_num > 0) {
         for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
@@ -593,6 +620,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
   size_t launch_pos = waiting_running_indexes_.empty() ? 0 : waiting_running_indexes_.back() + 1;
   for (size_t idx = 0; idx < batch_state_->waiting_queue.size();) {
     auto &req = batch_state_->waiting_queue[idx];
+    if (!CheckBeamSearch(req)) continue;
     if (visit_idx < launch_pos) {
       NLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch.";
       size_t total_block_num = waiting_total_block_num_list_[visit_idx];

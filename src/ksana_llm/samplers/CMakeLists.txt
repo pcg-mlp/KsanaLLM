@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.8)
 file(GLOB_RECURSE samplers_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/samplers/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/samplers/base/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/samplers/beam_search/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/samplers/topk/*.cpp)
 list(FILTER samplers_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "samplers_SRCS: ${samplers_SRCS}")

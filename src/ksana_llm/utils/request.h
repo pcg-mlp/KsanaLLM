@@ -61,6 +61,9 @@ class Request {
     // TODO(zakwang): Replace output_tokens
     std::vector<OutputTuple> output_group;
 
+    // The intermediate result of beam_search 
+    std::vector<OutputTuple> beam_search_group;
+
     // The output tokens of this request.
     std::vector<int>& output_tokens;
 

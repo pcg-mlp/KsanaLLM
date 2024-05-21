@@ -5,6 +5,7 @@
 
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/samplers/base/base_sampling.h"
+#include "ksana_llm/samplers/beam_search/beam_search_sampling.h"
 #include "ksana_llm/samplers/topk/topk_sampling.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
@@ -26,6 +27,7 @@ class Sampler {
     BatchSchedulerConfig batch_schedule_config_;
     int rank_;
     TopkSampling* topk_sampling_{nullptr};
+    BeamSearchSampling beam_search_sampling_;
     int device_buffer_block_id_{-1};
     void* device_buffer_;
     uint32_t* device_output_tokens_;

@@ -124,10 +124,6 @@ class ServingModel(object):
         sampling_config.stop_token_ids = \
             get_generation_value(generation_config, 'stop_token_ids', [])
 
-        if sampling_config.num_beams > 1:
-            raise RuntimeError(
-                "Not supported for sampling_config.num_beams > 1. Current value {}.".format(
-                    sampling_config.num_beams))
 
         subinput_pos = []
         if 'subinput_pos' in kwargs:
