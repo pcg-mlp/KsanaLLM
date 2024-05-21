@@ -229,7 +229,16 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       std::string qkv_name =
         tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" + (is_bias ? ".bias" : ".weight");
       if (!weights_map_.count(qkv_name)) {
+        if (qkv_offset == 0) {
+          // For q_proj in the GQA scenario, the weight_shape is first transformed into k_proj.
+          weight_shape[0] /= head_num / num_kv_heads;
+        }
         weight_shape.insert(weight_shape.begin(), ((head_num / num_kv_heads) + 2));
+        if (is_bias) {
+          // The Add-Bias-Residual Kernel uses the shape[0] of the input tensor to determine whether
+          // broadcasting is required.
+          weight_shape.insert(weight_shape.begin(), 1);
+        }
         AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
       }
       weights_data_type_map_[qkv_name] = weight_data_type;
