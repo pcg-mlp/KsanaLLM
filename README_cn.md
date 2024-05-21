@@ -1,6 +1,6 @@
 # 一念LLM (KsanaLLM)
 
-
+[English](README.md) [中文](README_cn.md)
 
 ## 介绍
 
