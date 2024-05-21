@@ -26,6 +26,9 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
     // True if request finished, that is, arrive max output len or encounter eos.
     inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
 
+    // True if all request finished, that is, arrive max output len or encounter eos.
+    inline bool CheckBeamSearchRequestFinish(const std::shared_ptr<InferRequest> req);
+
   private:
     // Schedule the running/swapped/waiting queue.
     void ScheduleRunning(size_t &step_token_num_sum, bool &skip_other);
@@ -36,6 +39,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
     // Execute swap in separate threadpool.
     void SwapOutAsync(std::shared_ptr<InferRequest> req, const int host_block_num_to_add);
     void SwapInAsync(std::shared_ptr<InferRequest> req);
+
+    bool CheckBeamSearch(std::shared_ptr<InferRequest> req);
 
     // Prepare the running/swapped/waiting queue.
     void PrepareRunningRequests(std::vector<size_t> &step_token_num_list, std::vector<size_t> &step_block_num_list,

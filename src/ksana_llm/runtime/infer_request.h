@@ -112,6 +112,8 @@ class InferRequest {
     // Store token and their corresponding float probability values.
     std::vector<std::vector<std::pair<int, float>>> &logprobs;
 
+    float cumulative_score;
+
     // The sampling config of this request.
     SamplingConfig &sampling_config;
 
@@ -134,6 +136,9 @@ class InferRequest {
     int &padded_size;
 
     std::vector<std::shared_ptr<InferRequest>> req_group;
+
+    // The intermediate result of beam_search 
+    std::vector<OutputTuple>& beam_search_group;
 
     // The model instance pointer.
     std::shared_ptr<ModelInstance> model_instance;
