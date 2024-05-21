@@ -33,6 +33,8 @@ class CommonWeight : public BaseWeight {
 
     Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
+    Status TieWordEmbeddings();
+
     Status PermuteSingleTensorOfQKVWeight(void* src, void* dst, Tensor& q_in_tensor, Tensor& q_out_tensor,
                                           std::vector<size_t>& data_shape, std::vector<size_t>& qkv_dst_shape);
     Status PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_tensor, Tensor& q_out_tensor, const int num_layer);
@@ -41,8 +43,8 @@ class CommonWeight : public BaseWeight {
 
     Status PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer);
 
-    Status GetOptionalWeight(std::vector<std::string>& tensor_name_list,
-                             std::vector<std::string>& optional_weight_list);
+    Status GetCustomNameList(std::vector<std::string>& weight_name_list,
+                             std::vector<std::string>& custom_name_list);
 
     Status PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape, bool& transpose_first,
                              const std::string& tensor_name);

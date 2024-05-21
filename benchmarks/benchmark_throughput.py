@@ -150,6 +150,8 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     stop_token_ids = []
     if model_type == "llama-3":
        stop_token_ids = [128009]
+    elif model_type == "qwen":
+       stop_token_ids = [151643, 151645]
     if backend == "ksana":
         data = {
             "prompt": prompt,

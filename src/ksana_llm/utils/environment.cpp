@@ -65,6 +65,7 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.end_id = config_json.value("eos_token_id", 2);
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
+  model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
 
   auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
   if (!rope_scaling_setting.is_null()) {
