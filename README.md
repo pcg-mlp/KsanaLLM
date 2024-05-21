@@ -1,33 +1,42 @@
 # KsanaLLM
 
+[English](README.md) [中文](README_cn.md)
+
 ## About
 
-KsanaLLM is a fast and easy-to-use library for LLM inference and serving.
+KsanaLLM is a high performance and easy-to-use engine for LLM inference and serving.
 
-KsanaLLM is fast with:
+**High Performance and Throughput:**
 
-- State-of-the-art serving throughput.
-- Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180).
-- Continuous batching of incoming requests.
-- Optimized CUDA kernels.
-- Introduce high performance kernel from [vllm](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer).
+- Utilizes optimized CUDA kernels, including high performance kernels from [vllm](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer)
+- Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180)
+- Detailed optimization of task-scheduling and memory-uitlization for dynamic batching 
+- (Experimental) Prefix caching support
+- Sufficient testing has been conducted on GPU cards such as A10, A100, etc
 
-KsanaLLM is flexible and easy to use with:
+**Flexibility and easy to use:**
 
-- Seamless integration with popular Hugging Face models.
-- High-throughput serving with various decoding algorithms, including parallel sampling, beam search, and more.
-- Tensor parallelism support for distributed inference.
-- Streaming outputs.
-- OpenAI-compatible API server.
-- Compatible with **NVIDIA GPUs** and **Huawei Ascend NPU**.
-- (Experimental) Prefix caching support.
+- Seamless integration with popular Hugging Face models, and support multiple wight formats, such as pytorch and SafeTensors
 
-KsanaLLM seamlessly supports many Hugging Face models, including the following architectures:
+- High-throughput serving with various decoding algorithms, including parallel sampling, beam search, and more
 
-- LLaMA & LLaMA-2 (`meta-llama/Llama-2-70b-hf`, `lmsys/vicuna-13b-v1.3`, `young-geng/koala`, `openlm-research/open_llama_13b`, etc.)
-- Qwen (`Qwen1.5-14B-Chat`)
+- Enables multi-gpu tensor parallelism 
 
-Supported Hardware
+- Streaming outputs
+
+- OpenAI-compatible API server
+
+- Support NVIDIA GPUs and Huawei Ascend NPU
+
+  
+
+**KsanaLLM seamlessly supports many Hugging Face models, including the below models that have been verified:**
+
+- LLaMA 7B/13B & LLaMA-2 7B/13B & LLaMA3 8B/70B
+- Baichuan1 7B/13B & Baichuan2 7B/13B
+- Qwen 7B/14B & QWen1.5 7B/14B/72B
+
+**Supported Hardware**
 
  - Nvidia GPUs: A10, A100
  - Huawei Ascend NPUs: 910B
@@ -39,6 +48,7 @@ Supported Hardware
 #### 1.1 For Nvidia GPU
 
 Option 1: Create and set container for **NVIDIA official image**
+
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
 sudo nvidia-docker run -itd --network host --privileged \
@@ -49,6 +59,7 @@ apt update && apt install git-lfs -y
 ```
 
 Option 2: Create and set container for **Tencent image**:
+
 ```bash
 sudo docker run -it --network host --shm-size=10g --privileged \
     --device /dev/nvidia0 --device /dev/nvidiactl \
@@ -56,6 +67,7 @@ sudo docker run -it --network host --shm-size=10g --privileged \
 ```
 
 #### 1.2 For Huawei Ascend NPU
+
 ```bash
 sudo docker run -it --network host --shm-size=10g --privileged \
     mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
@@ -69,12 +81,14 @@ export GIT_PROJECT_REPO_ROOT=`pwd`/KsanaLLM
 ```
 
 ### 3. Compile
+
 ```bash
 cd ${GIT_PROJECT_REPO_ROOT}
 mkdir build && cd build
 ```
 
 #### 3.1 For Nvidia
+
 ```bash
 # SM for A10 is 86， change it when using other gpus.
 # refer to: https://developer.nvidia.cn/cuda-gpus
@@ -82,6 +96,7 @@ cmake -DSM=86 -DWITH_TESTING=ON .. && make -j32
 ```
 
 #### 3.2 For Huawei Ascend NPU
+
 ```bash
 cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 ```
@@ -110,6 +125,7 @@ python serving_server.py \
 ```
 
 Inference test with one shot conversation
+
 ```bash
 # open another session
 cd ${GIT_PROJECT_REPO_ROOT}/examples/llama7b
@@ -119,7 +135,6 @@ python serving_client.py --port 8080
 ### 5. Distribute
 
 ```bash
-
 cd ${GIT_PROJECT_REPO_ROOT}
 
 # for distribute wheel
