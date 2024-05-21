@@ -112,8 +112,11 @@ std::vector<std::string> CommonWeight<T>::SearchLocalPath(const std::string& mod
 }
 
 template <typename T>
-Status CommonWeight<T>::GetOptionalWeight(std::vector<std::string>& tensor_name_list,
-                                          std::vector<std::string>& optional_weight_list) {
+Status CommonWeight<T>::GetCustomNameList(std::vector<std::string>& weight_name_list,
+                                          std::vector<std::string>& custom_name_list) {
+  // In the default case, the tensor name is consistent with the weight name.
+  custom_name_list.assign(weight_name_list.begin(), weight_name_list.end());
+
   // Search for the optional_weight_map.json file
   auto optional_weight_map = Singleton<OptionalWeightMap>::GetInstance();
   std::string& weight_path = optional_weight_map->GetOptionalWeightMap(model_config_.path, model_config_.type);
@@ -130,14 +133,14 @@ Status CommonWeight<T>::GetOptionalWeight(std::vector<std::string>& tensor_name_
     file >> weight_map_json;
     file.close();
   }
-  for (int idx = tensor_name_list.size() - 1; idx >= 0; --idx) {
-    std::string& tensor_name = tensor_name_list[idx];
+  for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
+    std::string weight_name = weight_name_list[idx];
     for (auto it = weight_map_json.begin(); it != weight_map_json.end(); ++it) {
       std::regex pattern(it.key());
       std::string format = it.value();
-      if (std::regex_search(tensor_name, pattern)) {
-        optional_weight_list.push_back(tensor_name);
-        tensor_name_list.push_back(std::regex_replace(tensor_name, pattern, format));
+      if (std::regex_search(weight_name, pattern)) {
+        custom_name_list[idx] = std::regex_replace(weight_name, pattern, format);
+        break;
       }
     }
   }
@@ -171,11 +174,11 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
 template <typename T>
 Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
   GetBlockManager()->SetDeviceId(rank_);
-  std::vector<std::string> tensor_name_list = weights_loader->GetTensorNameList();
-  std::vector<std::string> optional_weight_list;
-  size_t name_list_size = tensor_name_list.size();
-  STATUS_CHECK_RETURN(GetOptionalWeight(tensor_name_list, optional_weight_list));
-  for (size_t idx = 0; idx < tensor_name_list.size(); ++idx) {
+  std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
+  std::vector<std::string> custom_name_list;
+  size_t name_list_size = weight_name_list.size();
+  STATUS_CHECK_RETURN(GetCustomNameList(weight_name_list, custom_name_list));
+  for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
     // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
     //     input_layernorm:          不做分卡处理
     //     post_attention_layernorm: 不做分卡处理
@@ -187,9 +190,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     //     lm_head:                  不做分卡处理, 需转置
     //     norm:                     不做分卡处理
     //     embedding:                不做分卡处理
-    std::string& tensor_name = tensor_name_list[idx];
-    std::string& weight_name =
-      idx < name_list_size ? tensor_name_list[idx] : optional_weight_list[idx - name_list_size];
+    std::string& tensor_name = custom_name_list[idx];
+    std::string& weight_name = weight_name_list[idx];
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
@@ -420,6 +422,20 @@ Status CommonWeight<T>::PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, c
 }
 
 template <typename T>
+Status CommonWeight<T>::TieWordEmbeddings() {
+  NLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.T";
+  if (!weights_map_.count("lm_head.weight")) {
+    CreateTensorWithSameShape("model.embed_tokens.weight", "lm_head.weight");
+  }
+  Tensor& embed_tokens = weights_map_["model.embed_tokens.weight"];
+  Tensor& lm_head = weights_map_["lm_head.weight"];
+  MemcpyAsync(lm_head.GetPtr<void>(), embed_tokens.GetPtr<void>(), embed_tokens.GetTotalBytes(),
+              MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+  StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+  return Status();
+}
+
+template <typename T>
 Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size) {
   GetBlockManager()->SetDeviceId(rank_);
 
@@ -522,6 +538,10 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     GetBlockManager()->FreeContiguous(tensor.GetBlockId());
     weights_map_.insert_or_assign(weight_name, cpu_tensor);
     StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+  }
+
+  if (model_config_.tie_word_embeddings) {
+    TieWordEmbeddings();
   }
 
   PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);

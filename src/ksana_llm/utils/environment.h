@@ -64,6 +64,8 @@ struct ModelConfig {
 
     RoPEScalingFactor rope_scaling_factor_config;
 
+    bool tie_word_embeddings;
+
     // others attributes
     std::unordered_map<std::string, std::string> model_attributes;
 };
