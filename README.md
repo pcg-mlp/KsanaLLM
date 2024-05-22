@@ -47,8 +47,6 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 #### 1.1 For Nvidia GPU
 
-Option 1: Create and set container for **NVIDIA official image**
-
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
 sudo nvidia-docker run -itd --network host --privileged \
@@ -58,20 +56,9 @@ pip install -r requirements.txt
 apt update && apt install git-lfs -y
 ```
 
-Option 2: Create and set container for **Tencent image**:
-
-```bash
-sudo docker run -it --network host --shm-size=10g --privileged \
-    --device /dev/nvidia0 --device /dev/nvidiactl \
-    -v /usr/local/nvidia:/usr/local/nvidia mirrors.tencent.com/todacc/venus-numerous-llm:0.1.19 bash
-```
-
 #### 1.2 For Huawei Ascend NPU
 
-```bash
-sudo docker run -it --network host --shm-size=10g --privileged \
-    mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
-```
+Note: Image for Huawei Cloud is in progress.
 
 ### 2. Clone source code
 
