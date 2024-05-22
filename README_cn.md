@@ -46,8 +46,6 @@
 
 #### 1.1 英伟达GPU
 
-方案 1: 基于**英伟达官方镜像**创建容器
-
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
 sudo nvidia-docker run -itd --network host --privileged \
@@ -59,10 +57,7 @@ apt update && apt install git-lfs -y
 
 #### 1.2 华为昇腾NPU
 
-```bash
-sudo docker run -it --network host --shm-size=10g --privileged \
-    mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
-```
+提示：当前代码暂时仅在腾讯内部的定制机型上适配，华为云机型的适配工作正在进行中
 
 ### 2. 下载源码
 
