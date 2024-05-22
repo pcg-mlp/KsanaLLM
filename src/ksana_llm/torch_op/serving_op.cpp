@@ -43,17 +43,20 @@ void ServingOp::InitServing(const std::string &config_file) {
 }
 
 Status ServingOp::Generate(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                           const SamplingConfig &sampling_config, 
+                           const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
+                           std::vector<std::vector<int>> &output_tokens,
                            std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs) {
   NLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
-  return serving_impl_->Handle(model_name, input_tokens, sampling_config, output_tokens, logprobs);
+  return serving_impl_->Handle(model_name, input_tokens, sampling_config, subinput_pos, subinput_embedding, output_tokens, logprobs);
 }
 
 Status ServingOp::GenerateStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
                                     const SamplingConfig &sampling_config,
+                                    const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
   NLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
-  return serving_impl_->HandleStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
+  return serving_impl_->HandleStreaming(model_name, input_tokens, sampling_config, subinput_pos, subinput_embedding, streaming_iterator);
 }
 
 }  // namespace ksana_llm
@@ -106,21 +109,23 @@ PYBIND11_MODULE(libtorch_serving, m) {
     .def("init_serving", &ksana_llm::ServingOp::InitServing)
     .def("generate",
          [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &model_name,
-            const std::vector<int> &input_tokens, const ksana_llm::SamplingConfig &sampling_config) {
+            const std::vector<int> &input_tokens, const ksana_llm::SamplingConfig &sampling_config,
+            const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding) {
            pybind11::gil_scoped_release release;
            std::vector<std::vector<int>> output_tokens;
            std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
            ksana_llm::Status status =
-             self->Generate(model_name, input_tokens, sampling_config, output_tokens, logprobs);
+             self->Generate(model_name, input_tokens, sampling_config, subinput_pos, subinput_embedding, output_tokens, logprobs);
            pybind11::gil_scoped_acquire acquire;
            return std::make_tuple(status, output_tokens, logprobs);
          })
     .def("generate_streaming", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &model_name,
                                   const std::vector<int> &input_tokens,
-                                  const ksana_llm::SamplingConfig &sampling_config) {
+                                  const ksana_llm::SamplingConfig &sampling_config,
+                                  const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding) {
       pybind11::gil_scoped_release release;
       std::shared_ptr<ksana_llm::StreamingIterator> streaming_iterator;
-      ksana_llm::Status status = self->GenerateStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
+      ksana_llm::Status status = self->GenerateStreaming(model_name, input_tokens, sampling_config, subinput_pos, subinput_embedding, streaming_iterator);
       pybind11::gil_scoped_acquire acquire;
       return std::make_tuple(status, streaming_iterator);
     });

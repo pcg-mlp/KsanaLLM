@@ -21,12 +21,15 @@ class LocalEndpoint : public BaseEndpoint {
 
     // Handle a request.
     virtual Status Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                          const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                          const SamplingConfig &sampling_config, 
+                          const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
+                          std::vector<std::vector<int>> &output_tokens,
                           std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs);
 
     // handle a streaming request.
     virtual Status HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
                                    const SamplingConfig &sampling_config,
+                                   const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
                                    std::shared_ptr<StreamingIterator> &streaming_iterator);
 };
 

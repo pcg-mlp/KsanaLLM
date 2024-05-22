@@ -21,6 +21,12 @@ struct ForwardRequest {
     // The input tokens.
     std::vector<int>* output_tokens;
 
+    // The subinput_pos indicates the start position of the embedding to be replaced.
+    std::vector<int>* subinput_pos;
+
+    // The subinput_embedding is the embedding value to be used for the replacement, from the request.
+    std::vector<std::vector<float>>* subinput_embedding;
+
     // The output logits buf and offset.
     std::vector<float*> logits_buf;
     size_t logits_offset;
