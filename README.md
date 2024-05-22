@@ -76,7 +76,7 @@ sudo docker run -it --network host --shm-size=10g --privileged \
 ### 2. Clone source code
 
 ```bash
-git clone --recurse-submodules https://github.com/Tencent/KsanaLLM
+git clone --recurse-submodules https://github.com/pcg-mlp/KsanaLLM
 export GIT_PROJECT_REPO_ROOT=`pwd`/KsanaLLM
 ```
 
