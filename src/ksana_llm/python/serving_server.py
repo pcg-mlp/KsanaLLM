@@ -52,7 +52,7 @@ def args_config():
     return args
 
 
-def streaming_generate(model_name, input_tokens, generation_config):
+def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform streaming generation.
     """
     # Create a results iterator for the model's generation
@@ -60,7 +60,8 @@ def streaming_generate(model_name, input_tokens, generation_config):
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
-        streamer=True  # enable streaming generation
+        streamer=True,  # enable streaming generation
+        **kwargs,
     )
 
     # Define an asynchronous function to stream the results
@@ -90,7 +91,7 @@ def streaming_generate(model_name, input_tokens, generation_config):
     return StreamingResponse(stream_results())
 
 
-def batch_generate(model_name, input_tokens, generation_config):
+def batch_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform batch generation.
     """
     # Generate output tokens using the model
@@ -98,7 +99,8 @@ def batch_generate(model_name, input_tokens, generation_config):
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
-        streamer=None  # disable streaming generation
+        streamer=None,  # disable streaming generation
+        **kwargs,
     )
 
     # Decode the output tokens into a human-readable text using the tokenizer
@@ -137,7 +139,17 @@ async def generate(request: Request) -> Response:
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
 
+    subinput_pos = request_dict.pop("subinput_pos", None)
+    subinput_embedding = request_dict.pop("subinput_embedding", None)
+
     input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+
+    kwargs = {}
+    if subinput_pos is not None:
+        kwargs['subinput_pos'] = subinput_pos
+    if subinput_pos is not None:
+        kwargs['subinput_embedding'] = subinput_embedding
+
     generation_config = GenerationConfig(
         top_k=get_sampling_value(sampling_config, "topk", 1),
         do_sample=get_sampling_value(sampling_config, "topk", 1) != 1,
@@ -170,7 +182,8 @@ async def generate(request: Request) -> Response:
                 streaming_generate,  # partial function to call
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
-                generation_config=generation_config
+                generation_config=generation_config,
+                **kwargs,
             )  # pass generation config as an argument
         )
     else:
@@ -182,7 +195,8 @@ async def generate(request: Request) -> Response:
                 batch_generate,  # partial function to call
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
-                generation_config=generation_config
+                generation_config=generation_config,
+                **kwargs,
             )  # pass generation config as an argument
         )
 

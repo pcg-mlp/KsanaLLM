@@ -8,12 +8,13 @@ namespace ksana_llm {
 
 IdGenerator Request::id_generator_;
 
-Request::Request(const SamplingConfig& sampling_config)
+Request::Request(const SamplingConfig& sampling_config, const std::vector<std::vector<float>> &subinput_embedding)
     : output_group(std::max(std::max(sampling_config.num_beams, sampling_config.num_return_sequences), 1)),
       finisheds(output_group.size(), false),
       finished(finisheds[0]),
       output_tokens(std::get<0>(output_group[0])),
-      logprobs(std::get<1>(output_group[0])) {
+      logprobs(std::get<1>(output_group[0])),
+      subinput_embedding(subinput_embedding) {
   for (auto output : output_group) {
     req_ids.push_back(id_generator_.Gen());
   }

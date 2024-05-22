@@ -54,6 +54,8 @@ if __name__ == "__main__":
         data = {
             # Set the prompt for the request
             "prompt": prompt,
+            # "subinput_pos": [6,6,6],
+            # "subinput_embedding": [[1.0,2.0],[3.0,4.0]],
             # Configure the sampling parameters
             "sampling_config": {
                 "temperature": 0.0,  # temperature for sampling

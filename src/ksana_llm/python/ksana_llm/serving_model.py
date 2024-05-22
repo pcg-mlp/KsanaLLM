@@ -129,11 +129,21 @@ class ServingModel(object):
                 "Not supported for sampling_config.num_beams > 1. Current value {}.".format(
                     sampling_config.num_beams))
 
+        subinput_pos = []
+        if 'subinput_pos' in kwargs:
+            subinput_pos = kwargs['subinput_pos']
+
+        subinput_embedding = []
+        if 'subinput_embedding' in kwargs:
+            subinput_embedding = kwargs['subinput_embedding']
+
         if streamer is None:
             _, outputs, logprobs = self._serving.generate(model_name, inputs,
-                                                          sampling_config)
+                                                          sampling_config,
+                                                          subinput_pos, subinput_embedding)
             return outputs, logprobs
         else:
             _, streaming_iterator = self._serving.generate_streaming(
-                model_name, inputs, sampling_config)
+                model_name, inputs, sampling_config,
+                subinput_pos, subinput_embedding)
             return PyAsyncStreamingIterator(streaming_iterator)

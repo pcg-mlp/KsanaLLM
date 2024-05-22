@@ -38,7 +38,7 @@ typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, floa
 
 class Request {
   public:
-    Request(const SamplingConfig& sampling_config);
+    Request(const SamplingConfig& sampling_config, const std::vector<std::vector<float>> &subinput_embedding);
 
     // The unique id of a request.
     int64_t req_id;
@@ -51,6 +51,12 @@ class Request {
 
     // The tokens of this request.
     std::vector<int> input_tokens;
+
+    // The subinput_pos indicates the start position of the embedding to be replaced.
+    std::vector<int> subinput_pos;
+
+    // The subinput_embedding is the embedding value to be used for the replacement, from the request.
+    std::vector<std::vector<float>> subinput_embedding;
 
     // TODO(zakwang): Replace output_tokens
     std::vector<OutputTuple> output_group;

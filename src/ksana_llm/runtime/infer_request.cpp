@@ -22,6 +22,8 @@ InferRequest::InferRequest(std::shared_ptr<Request>& request, int index)
     : req_id(request->req_ids[index]),
       model_name(request->model_name),
       input_tokens(request->input_tokens),
+      subinput_pos(request->subinput_pos),
+      subinput_embedding(request->subinput_embedding),
       output_tokens(std::get<0>(request->output_group[index])),
       logprobs(std::get<1>(request->output_group[index])),
       sampling_config(request->sampling_config),

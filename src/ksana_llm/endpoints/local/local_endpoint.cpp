@@ -16,16 +16,20 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
     : BaseEndpoint(endpoint_config, request_queue) {}
 
 Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                             const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                             const SamplingConfig &sampling_config, 
+                             const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
+                             std::vector<std::vector<int>> &output_tokens,
                              std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs) {
   bool return_logprobs = sampling_config.logprobs_num > 0;
-  std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config);
+  std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config, subinput_embedding);
   req->model_name = model_name;
   req->input_tokens = input_tokens;
   for (auto &[output, req_logprobs, total_score] : req->output_group) {
     output = input_tokens;
   }
   req->sampling_config = sampling_config;
+
+  req->subinput_pos = subinput_pos;
 
   req->waiter = std::make_shared<Waiter>(1);
 
@@ -49,15 +53,18 @@ Status LocalEndpoint::Handle(const std::string &model_name, const std::vector<in
 
 Status LocalEndpoint::HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
                                       const SamplingConfig &sampling_config,
+                                      const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
                                       std::shared_ptr<StreamingIterator> &streaming_iterator) {
   bool return_logprobs = sampling_config.logprobs_num > 0;
-  std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config);
+  std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config, subinput_embedding);
   req->model_name = model_name;
   req->input_tokens = input_tokens;
   for (auto &[output, req_logprobs, total_score] : req->output_group) {
     output = input_tokens;
   }
   req->sampling_config = sampling_config;
+
+  req->subinput_pos = subinput_pos;
 
   req->step_waiter = std::make_shared<Waiter>(1);
 

@@ -30,15 +30,21 @@ ServingImpl::ServingImpl() {
 }
 
 Status ServingImpl::Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config, std::vector<std::vector<int>> &output_tokens,
+                           const SamplingConfig &sampling_config, 
+                           const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
+                           std::vector<std::vector<int>> &output_tokens,
                            std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs) {
-  return endpoint_->Handle(model_name, input_tokens, sampling_config, output_tokens, logprobs);
+  // TODO(jinxcwu): 
+  // combine input_tokens, subinput_pos, subinput_embedding for Struct input
+  // combine output_tokens, logprobs for Struct output
+  return endpoint_->Handle(model_name, input_tokens, sampling_config, subinput_pos, subinput_embedding, output_tokens, logprobs);
 }
 
 Status ServingImpl::HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
                                     const SamplingConfig &sampling_config,
+                                    const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  return endpoint_->HandleStreaming(model_name, input_tokens, sampling_config, streaming_iterator);
+  return endpoint_->HandleStreaming(model_name, input_tokens, sampling_config, subinput_pos, subinput_embedding, streaming_iterator);
 }
 
 Status ServingImpl::Start() {
