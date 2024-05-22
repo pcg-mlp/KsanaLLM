@@ -33,7 +33,9 @@ class CommonWeight : public BaseWeight {
 
     Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
-    Status TieWordEmbeddings();
+    Status LoadRegularTensor(void* weight_ptr, std::string tensor_name, std::vector<size_t>& weight_shape,
+                             DataType& weight_data_type, bool transpose_first, size_t tensor_para_offset,
+                             size_t& weight_size);
 
     Status PermuteSingleTensorOfQKVWeight(void* src, void* dst, Tensor& q_in_tensor, Tensor& q_out_tensor,
                                           std::vector<size_t>& data_shape, std::vector<size_t>& qkv_dst_shape);

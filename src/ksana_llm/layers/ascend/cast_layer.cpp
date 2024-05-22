@@ -18,11 +18,19 @@ Status CastLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vect
   std::vector<int64_t> input_shape = GetAclTensorShape(input_tensor_ptr);
   aclTensor* reshaped_output_tensor = nullptr;
   void* output_buffer_space_ptr = output_tensors[0].GetPtr<void>();
+  if (input_tensors.size() > 1) {
+    // When the number of input_tensors is greater than 1, perform a cast operation with an offset.
+    // Set output_offset to the value of the first dimension of input_tensors[1].
+    size_t output_offset = input_tensors[1].shape[0];
+    output_buffer_space_ptr += output_offset;
+  }
   llm_kernels::utils::CreateAclTensorWithData(input_shape, &(output_buffer_space_ptr), aclDataType::ACL_FLOAT,
                                               aclFormat::ACL_FORMAT_ND, &reshaped_output_tensor);
   llm_kernels::ascend::Cast(input_tensor_ptr, aclDataType::ACL_FLOAT, &reshaped_output_tensor,
                             context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
-  output_tensors[0].shape = input_tensors[0].shape;
+  if (input_tensors.size() == 1) {
+    output_tensors[0].shape = input_tensors[0].shape;
+  }
   output_tensors[0].dtype = DataType::TYPE_FP32;
   return Status();
 }

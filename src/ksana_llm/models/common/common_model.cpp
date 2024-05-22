@@ -48,8 +48,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   GetBlockManager()->SetDeviceId(rank_);
 
   num_layer_ = model_config_.num_layer;
-  size_t vocab_size_pad_ =
-    DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
+  vocab_size_pad_ = DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
 
   int head_num = model_config_.head_num;
   int size_per_head = model_config_.size_per_head;
@@ -74,14 +73,12 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   int inter_size_per_tp = model_config_.inter_size / tensor_para_size;
   int max_dim =
     std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units), inter_size_per_tp);
-  size_t tensor_buffer_1_size = std::max(model_config_.max_batch_size * vocab_size_pad_ * sizeof(float),
-                                         max_token_num * max_dim * GetTypeSize(model_config_.weight_data_type)) /
-                                GetTypeSize(model_config_.weight_data_type);
+  size_t tensor_buffer_size = std::max(model_config_.max_batch_size * vocab_size_pad_, max_token_num * max_dim);
   size_t up_matmul_tensor_buffer_size = max_token_num * std::max(static_cast<int>(inter_size_per_tp), hidden_units * 2);
 
   // TODO(karlluo): all create tensor used dynamic memory pool
-  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {max_token_num, max_dim}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_1_size}, model_config_.weight_data_type))
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {tensor_buffer_size}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
     CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
@@ -412,11 +409,11 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
 
   model_communicator_->AllGather({lm_head_output[0], temp_buffer_1[0]}, lm_head_output);
 
-  // Cast to float
-  std::vector<Tensor>& logits_float = temp_buffer_1;
-  logits_float[0].dtype = TYPE_FP32;
-  STATUS_CHECK_RETURN(cast_layer_->Forward(lm_head_output, logits_float));
-  model_output_->CopyToLogistBuffer(model_input_->batch_size, forward_reqs, logits_float);
+  // Cast to float & Copy to logits buffer
+  forward_shape_.shape = {forward_reqs[0].logits_offset * vocab_size_pad_ * sizeof(float)};
+  std::vector<Tensor> logits_buffer{model_output_->logits_tensor};
+  STATUS_CHECK_RETURN(cast_layer_->Forward({lm_head_output[0], forward_shape_}, logits_buffer));
+  StreamSynchronize(context_->GetComputeStreams()[rank_]);
   return Status();
 }
 

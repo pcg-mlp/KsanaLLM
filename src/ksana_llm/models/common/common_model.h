@@ -84,7 +84,13 @@ class CommonModel : public BaseModel {
     std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
     std::shared_ptr<CastLayer<T>> cast_layer_;
 
+    // The layer number of the model
     int num_layer_;
+
+    // Vocab size aligned and padded with tensor_para_size
+    size_t vocab_size_pad_;
+
+    // Whether to add bias values during the QKV calculation.
     bool qkv_add_bias_;
 
     Tensor tensor_buffer_0_;

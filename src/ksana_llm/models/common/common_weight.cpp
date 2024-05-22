@@ -255,28 +255,25 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else if (tensor_name.find("_proj.weight") != std::string::npos ||
                tensor_name.find("_proj.bias") != std::string::npos ||
-               tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "lm_head.weight" ||
-               tensor_name == "model.norm.weight" || tensor_name == "model.embed_tokens.weight") {
-      AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
-      weights_data_type_map_[tensor_name] = weight_data_type;
-      if (transpose_first) {
-        size_t src_pitch = weights_map_[tensor_name].shape[1] * tensor_para_size_ * sizeof(T);
-        size_t dst_pitch = weights_map_[tensor_name].shape[1] * sizeof(T);
-        tensor_para_offset *= dst_pitch;
-        Memcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch,
-                      dst_pitch, weights_map_[tensor_name].shape[0], MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
-      } else {
-        tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
-        GetBlockManager()->SetDeviceId(rank_);
-        size_t sub_bytes = 0;
-        if (rank_ == (tensor_para_size_ - 1) && tensor_name.find("lm_head.weight") != std::string::npos) {
-          sub_bytes = weights_map_[tensor_name].GetTotalBytes() * tensor_para_size_ - weight_size;
-        }
-        MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                    weights_map_[tensor_name].GetTotalBytes() - sub_bytes, MEMCPY_HOST_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[rank_]);
-      }
+               tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "model.norm.weight" ||
+               (tensor_name == "lm_head.weight" && !model_config_.tie_word_embeddings)) {
+      LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
+                        weight_size);
+    } else if (tensor_name == "model.embed_tokens.weight") {
+      LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
+                        weight_size);
+      if (model_config_.tie_word_embeddings) {
+        /* When the "tie-word-embeddings" is set to True in the model's config.json, the model's
+         * "model.embed_tokens.weight" and "lm_head.weight" share the same data space. Therefore, it is necessary
+         * to load the data from "weight_ptr" twice and store it in the corresponding device spaces of the two weights.
+         */
+        NLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
+        std::vector<size_t> embed_tokens_shape = weights_map_["model.embed_tokens.weight"].shape;
+        std::vector<size_t> lm_head_shape = {DivRoundUp(embed_tokens_shape[0], tensor_para_size_),
+                                             embed_tokens_shape[1] * tensor_para_size_};
+        LoadRegularTensor(weight_ptr, "lm_head.weight", lm_head_shape, weight_data_type, /*transpose_first*/ false,
+                          tensor_para_offset, weight_size);
+      } 
     } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
       weights_data_type_map_[qkv_name] = weight_data_type;
@@ -422,16 +419,29 @@ Status CommonWeight<T>::PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, c
 }
 
 template <typename T>
-Status CommonWeight<T>::TieWordEmbeddings() {
-  NLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.T";
-  if (!weights_map_.count("lm_head.weight")) {
-    CreateTensorWithSameShape("model.embed_tokens.weight", "lm_head.weight");
+Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_name, std::vector<size_t>& weight_shape,
+                                          DataType& weight_data_type, bool transpose_first, size_t tensor_para_offset,
+                                          size_t& weight_size) {
+  AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
+  weights_data_type_map_[tensor_name] = weight_data_type;
+  if (transpose_first) {
+    size_t src_pitch = weights_map_[tensor_name].shape[1] * tensor_para_size_ * sizeof(T);
+    size_t dst_pitch = weights_map_[tensor_name].shape[1] * sizeof(T);
+    tensor_para_offset *= dst_pitch;
+    Memcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch,
+                  dst_pitch, weights_map_[tensor_name].shape[0], MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+  } else {
+    tensor_para_offset *= weights_map_[tensor_name].GetTotalBytes();
+    GetBlockManager()->SetDeviceId(rank_);
+    size_t sub_bytes = 0;
+    if (rank_ == (tensor_para_size_ - 1) && tensor_name == "lm_head.weight") {
+      sub_bytes = weights_map_[tensor_name].GetTotalBytes() * tensor_para_size_ - weight_size;
+    }
+    MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
+                weights_map_[tensor_name].GetTotalBytes() - sub_bytes, MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[rank_]);
   }
-  Tensor& embed_tokens = weights_map_["model.embed_tokens.weight"];
-  Tensor& lm_head = weights_map_["lm_head.weight"];
-  MemcpyAsync(lm_head.GetPtr<void>(), embed_tokens.GetPtr<void>(), embed_tokens.GetTotalBytes(),
-              MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-  StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   return Status();
 }
 
@@ -540,10 +550,6 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
     StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   }
 
-  if (model_config_.tie_word_embeddings) {
-    TieWordEmbeddings();
-  }
-
   PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
 
   // We use vocab_size to determine whether it is the Baichuan2 model.
@@ -587,6 +593,11 @@ bool CommonWeight<T>::IsLoaded() {
 
 template <typename T>
 Status CommonWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
+  if (weights_map_.count(weight_name)) {
+    NLLM_LOG_WARNING << fmt::format("The weight named {} has already been created. Skip creating the weight tensor.",
+                                    weight_name);
+    return Status();
+  }
   size_t length = GetTypeSize(dtype);
   for (auto& dim : shapes) {
     length *= dim;
