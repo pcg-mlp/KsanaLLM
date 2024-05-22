@@ -16,7 +16,7 @@
 
 **灵活易用:**
 
-- 能够无缝集成流行的Hugging Face格式模型，支持pytorch和SafeTensor两种权重格式
+- 能够无缝集成流行的Hugging Face格式模型，支持PyTorch和SafeTensor两种权重格式
 
 - 能够实现高吞吐服务，支持多种解码算法，包括并行采样、beam search等
 
@@ -115,7 +115,7 @@ python serving_server.py \
     --port 8080
 ```
 
-基于one shot对华的推理测试 
+基于Ksana 华为卡的推理测试 
 
 ```bash
 # open another session
