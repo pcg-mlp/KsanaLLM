@@ -72,6 +72,7 @@ sudo docker run -it --network host --shm-size=10g --privileged \
 sudo docker run -it --network host --shm-size=10g --privileged \
     mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
 ```
+Note: image for Huawei cloud is in progress.
 
 ### 2. Clone source code
 

@@ -26,6 +26,9 @@ function(add_ascend_kernel_lib)
   if(KERNEL_SRCS AND NOT KERNEL_SRCS STREQUAL "")
     set(aicore_kernel_lib_name llm_kernels_ascend_core_${add_ascend_kernel_lib_NAME})
     ascendc_library(${aicore_kernel_lib_name} STATIC ${KERNEL_SRCS})
+    ascendc_include_directories(${aicore_kernel_lib_name} PRIVATE
+      ${PROJECT_SOURCE_DIR} ${ACL_INC_DIRS}
+    )
   endif()
 
   if(NOT "${add_ascend_kernel_lib_DEPS_KERNELS}" STREQUAL "")
@@ -37,8 +40,13 @@ function(add_ascend_kernel_lib)
   set(llm_kernels_ascend_link_libs ${llm_kernels_ascend_link_libs})
   set(llm_kernels_ascend_libs_deps ${llm_kernels_ascend_libs_deps})
 
-  target_link_libraries(${kernel_lib_name} PUBLIC
-    ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
+  if("${add_ascend_kernel_lib_NAME}" STREQUAL "fused_rotary_embedding")
+    target_link_libraries(${kernel_lib_name} PUBLIC
+      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs} ${aicore_kernel_lib_name})
+  else()
+    target_link_libraries(${kernel_lib_name} PUBLIC
+      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
+  endif()
 
   add_dependencies(${kernel_lib_name} ${llm_kernels_ascend_libs_deps})
   set(llm_kernels_ascend_libs "${llm_kernels_ascend_libs} ${kernel_lib_name}" PARENT_SCOPE)
@@ -46,11 +54,16 @@ function(add_ascend_kernel_lib)
 
   # for test
   if(WITH_TESTING)
-    file(GLOB_RECURSE KERNEL_TEST_SRCS *test.cc)
+    if(NOT WITH_STANDALONE_TEST AND ${add_ascend_kernel_lib_NAME} STREQUAL "fused_rotary_embedding")
+      message(STATUS "Skip test ${add_ascend_kernel_lib_NAME} when WITH_STANDALONE_TEST=OFF")
+    else()
+      file(GLOB_RECURSE KERNEL_TEST_SRCS *test.cc)
 
-    if(KERNEL_TEST_SRCS AND NOT KERNEL_TEST_SRCS STREQUAL "")
-      message(STATUS "${kernel_lib_name}_test src: ${KERNEL_TEST_SRCS}")
-      cc_test(${kernel_lib_name}_test SRCS ${KERNEL_TEST_SRCS} DEPS ${kernel_lib_name} ${aicore_kernel_lib_name})
+      if(KERNEL_TEST_SRCS AND NOT KERNEL_TEST_SRCS STREQUAL "")
+        message(STATUS "${kernel_lib_name}_test src: ${KERNEL_TEST_SRCS}")
+        cc_test(${kernel_lib_name}_test SRCS ${KERNEL_TEST_SRCS} DEPS ${kernel_lib_name}
+          ${aicore_kernel_lib_name} llm_kernels_ascend_utils_common)
+      endif()
     endif()
   endif()
 endfunction()
@@ -74,6 +87,7 @@ add_subdirectory(matmul_silu)
 add_subdirectory(rmsnorm)
 add_subdirectory(cast)
 add_subdirectory(silu)
+add_subdirectory(fused_rotary_embedding)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")
