@@ -88,6 +88,9 @@ template <typename T>
 void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<T>& tensor_shape, const size_t dtype_size,
                     void* data_ptr, const std::string& filename);
 
+template <typename T>
+void LoadNpyToPtr(const std::string& filename, T* data_ptr, std::vector<size_t>& tensor_shape, bool is_on_host = true);
+
 std::string GetNumpyTypeDesc(aclDataType dtype);
 
 void PrintTensor(const aclTensor* src, aclrtStream& stream, const char* name = "");
