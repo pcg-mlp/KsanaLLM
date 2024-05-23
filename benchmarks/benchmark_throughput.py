@@ -36,7 +36,10 @@ PROMPT_AFFIX_DICT = {
     "empty":
     "%s",
 }
-
+DEFAULT_STOP_TOKEN_IDS = {
+    "llama-3": [128009],
+    "qwen": [151643, 151645],
+}
 
 def args_config():
     parser = argparse.ArgumentParser()
@@ -94,6 +97,60 @@ def args_config():
     parser.add_argument('--use_prefix_cache_prompts',
                         action='store_true',
                         help='test with prompts with very long prefix cache')
+    parser.add_argument('--max_new_tokens',
+                        type=int,
+                        default=1024,
+                        help="The maximum numbers of tokens to generate, ignoring"
+                             " the number of tokens in the prompt.")
+    parser.add_argument('--temperature',
+                        type=float,
+                        default=0.0,
+                        help="The value used to modulate the next token probabilities.")
+    parser.add_argument('--topk',
+                        type=int,
+                        default=1,
+                        help="The number of highest probability vocabulary tokens"
+                             " to keep for top-k-filtering.")
+    parser.add_argument('--topp',
+                        type=float,
+                        default=1.0,
+                        help="If set to float < 1, only the smallest set of most"
+                             " probable tokens with probabilities that add up to"
+                             " top_p or higher are kept for generation.")
+    parser.add_argument('--repetition_penalty',
+                        type=float,
+                        default=1.0,
+                        help="The parameter for repetition penalty. 1.0 means no penalty.")
+    parser.add_argument('--length_penalty',
+                        type=float,
+                        default=1.0,
+                        help="Exponential penalty to the length that is used with" 
+                             " beam-based generation.")
+    parser.add_argument('--num_beams',
+                        type=int,
+                        default=1,
+                        help="Number of beams for beam search. 1 means no beam search.")
+    parser.add_argument('--num_return_sequences',
+                        type=int,
+                        default=1,
+                        help="The number of independently computed returned sequences"
+                             " for each element in the batch.")
+    parser.add_argument('--logprobs',
+                        type=int,
+                        default=0,
+                        help="Whether to return log probabilities of the output tokens"
+                             " or not. ")
+    parser.add_argument('--stop_token_ids',
+                        nargs='+',
+                        type=int,
+                        default=[],
+                        help="A list of token id that should terminate generation if the"
+                             " model outputs them.")
+    parser.add_argument('--client_timeout',
+                        type=int,
+                        default=3*3600,
+                        help="The timeout limit for the aiohttp client,"
+                             "(default is 3 hour).")
     args = parser.parse_args()
     return args
 
@@ -143,71 +200,73 @@ async def generate_prompt_async(
         await asyncio.sleep(interval)
 
 
-async def send_request_async(prompt: str, api_url: str, req_id: int,
-                             result_list: List, pbar: tqdm, backend: str, stream: bool, model_type: str):
+async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str,
+                             req_id: int, result_list: List, pbar: tqdm):
     request_start_time = time.perf_counter()
     headers = {"User-Agent": "Benchmark Client"}
-    stop_token_ids = []
-    if model_type == "llama-3":
-       stop_token_ids = [128009]
-    elif model_type == "qwen":
-       stop_token_ids = [151643, 151645]
-    if backend == "ksana":
+    if not args.stop_token_ids:
+        args.stop_token_ids = DEFAULT_STOP_TOKEN_IDS.get(args.model_type, [])
+    if args.backend == "ksana":
         data = {
             "prompt": prompt,
             "sampling_config": {
-                "temperature": 0.0,
-                "topk": 1,
-                "topp": 0.0,
-                "num_beams": 1,
-                "num_return_sequences": 1,
-                "length_penalty": 1.0,
-                "repetition_penalty": 1.0,
-                "logprobs": 0,
-                "max_new_tokens": 1024,
-                "stop_token_ids": stop_token_ids
+                "temperature": args.temperature,
+                "topk": args.topk,
+                "topp": args.topp,
+                "num_beams": args.num_beams,
+                "num_return_sequences": args.num_return_sequences,
+                "length_penalty": args.length_penalty,
+                "repetition_penalty": args.repetition_penalty,
+                "logprobs": args.logprobs,
+                "max_new_tokens": args.max_new_tokens,
+                "stop_token_ids": args.stop_token_ids
             },
-            "stream": stream,
+            "stream": args.stream,
         }
-    elif backend == "trt-llm":
+    elif args.backend == "trt-llm":
         data = {
             "text_input": prompt,
-            "max_tokens": 1024,
+            "max_tokens": args.max_new_tokens,
             "bad_words": "",
             "stop_words": "",
-            "top_k": 1,
+            "top_k": args.topk,
         }
-    elif backend in ["vllm", "evart"]:
+    elif args.backend in ["vllm", "evart"]:
         # max outputlen is 1024.
         data = {
             "prompt": prompt,
             "use_beam_search": False,
             "n": 1,
-            "temperature": 0.00000001,
-            "max_tokens": 1024,
-            "logprobs": 0,
-            "repetition_penalty": 1.0,
-            "stop_token_ids": stop_token_ids
+            "temperature": args.temperature,
+            "max_tokens": args.max_new_tokens,
+            "prompt_logprobs": args.logprobs,
+            "logprobs": args.logprobs,
+            "repetition_penalty": args.repetition_penalty,
+            "stop_token_ids": args.stop_token_ids,
+            "skip_special_tokens": False,
+            "spaces_between_special_tokens": False,
+            "top_p": args.topp,
+            "top_k": args.topk,
         }
-    elif backend in ["ksana-server", "vllm-server"]:
+    elif args.backend in ["ksana-server", "vllm-server"]:
         data = {
             "model": "default_model",
             "prompt": prompt,
-            "top_p": 0.0,
-            "temperature": 0.0,
-            "top_k": 1,
-            "num_beams": 1,
-            "repetition_penalty": 1.0,
-            "logprobs": 0,
+            "top_p": args.topp,
+            "temperature": args.temperature,
+            "top_k": args.topk,
+            "num_beams": args.num_beams,
+            "repetition_penalty": args.repetition_penalty,
+            "logprobs": args.logprobs,
             "n": 1,
             "task_id": time.time(),
             "delete_prompt_from_output": 0,
-            "stream": stream,
-            "stop_token_ids": stop_token_ids
+            "stream": args.stream,
+            "stop_token_ids": args.stop_token_ids
         }
 
     # Set a timeout of 3 hours for the aiohttp client
-    timeout = aiohttp.ClientTimeout(total=3 * 3600)
+    timeout = aiohttp.ClientTimeout(total=args.client_timeout)
 
     # Create an asynchronous client session with the specified timeout
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -224,7 +283,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
             # Join the chunks into a single byte string and decode it to UTF-8
             output = b"".join(chunks).decode("utf-8")
             # Parse the output as JSON
-            if "server" in backend and stream:
+            if "server" in args.backend and args.stream:
                 data_segments = output.strip().split("\n\n")
                 texts = ""
                 for segment in data_segments:
@@ -233,7 +292,7 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
                     texts += data["choices"][0]["delta"]["content"]
                 output = json.loads(data_segments[-1].split(': ', 1)[1])
                 output["choices"][0]["delta"]["content"] = texts
-            elif stream:
+            elif args.stream:
                 output = analyze_stream_jsons(output)
             else:
                 output = json.loads(output)
@@ -250,24 +309,24 @@ async def send_request_async(prompt: str, api_url: str, req_id: int,
     output_token_num = len(output.get("output_token_ids", [""])[0])
     input_token_num = len(output.get("input_token_ids", ""))
 
-    server_map_idx = "delta" if stream else "message"
-    if backend == "ksana":
+    server_map_idx = "delta" if args.stream else "message"
+    if args.backend == "ksana":
         output_text = output.get("texts", [""])[0].strip()
-    elif backend == "trt-llm":
+    elif args.backend == "trt-llm":
         output_text = output.get("text_output", "").strip()
-    elif backend == "vllm":
+    elif args.backend == "vllm":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
-        output_token_num = len(output.get("output_token_ids")[0])
-    elif backend == "evart":
+        output_token_num = len(output.get("output_token_ids", [[0]])[0])
+    elif args.backend == "evart":
         prompt_len = len(prompt)
         output_text = output["text"][0].strip()
         output_token_num = len(output.get("output_token_ids")[0])
-    elif backend == "ksana-server":
+    elif args.backend == "ksana-server":
         output_text = output['choices'][0][server_map_idx]['content']
         input_token_num = output['usage']['prompt_tokens']
         output_token_num = output['usage']['completion_tokens']
-    elif backend == "vllm-server":
+    elif args.backend == "vllm-server":
         prompt_len = len(prompt)
         output_text = output['choices'][0][server_map_idx]['content'][
             prompt_len:].strip()
@@ -297,8 +356,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
-            send_request_async(prompt, api_url, req_id, result_list, pbar,
-                               args.backend, args.stream, args.model_type))
+            send_request_async(args, prompt, api_url, req_id, result_list, pbar))
         # Add the task to the list of tasks
         tasks.append(task)
     # Wait for all tasks to complete
@@ -321,8 +379,7 @@ async def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[st
         # Format the prompt using the affix dictionary for the specified model type
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Await until last request finished
-        await send_request_async(prompt, api_url, req_id, result_list, pbar,
-                                 args.backend, args.stream, args.model_type)
+        await send_request_async(args, prompt, api_url, req_id, result_list, pbar)
     # Close the progress bar
     pbar.close()
     # Return the result list
