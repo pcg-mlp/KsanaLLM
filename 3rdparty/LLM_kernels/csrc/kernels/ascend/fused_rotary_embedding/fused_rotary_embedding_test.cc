@@ -108,14 +108,10 @@ class LlamaAscendRotaryEmbeddingTestSuit : public AscendTestSuitBase {
     }
     ACL_CHECK_RET(aclrtMemcpy(key_device, key_size, key_host, key_size, ACL_MEMCPY_HOST_TO_DEVICE));
 
-    // setting workspace
-    uint8_t *workspace_device;
-    size_t workspace_size = num_tokens * rotary_dim * sizeof(T) * 2;
-    ACL_CHECK_RET(aclrtMalloc((void **)&workspace_device, workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
-
     rope_ptr->SetInput(reinterpret_cast<int64_t *>(pos_device), reinterpret_cast<T *>(query_device),
-                       reinterpret_cast<T *>(key_device), reinterpret_cast<T *>(workspace_device), num_tokens, stream);
+                       reinterpret_cast<T *>(key_device), num_tokens, stream);
     rope_ptr->Forward();
+    ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
     if (rotary_embedding_type == RotaryEmbeddingType::DEFAULT) {
       llm_kernels::utils::LoadNpyToPtr<T>("/tmp/tests/kernels/data/rotary_embedding/cos_sin_cache_meta.npy",
@@ -144,11 +140,22 @@ class LlamaAscendRotaryEmbeddingTestSuit : public AscendTestSuitBase {
           throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");
         }
       }
+
+      llm_kernels::utils::LoadNpyToPtr<T>("/tmp/tests/kernels/data/rotary_embedding/key_meta.npy", key_ref.data(),
+                                          tensor_shape, true);
+      for (size_t i = 0; i < num_tokens * key_stride; ++i) {
+        if (std::is_same<T, aclFloat16>::value) {
+          EXPECT_NEAR(aclFloat16ToFloat(key_ref[i]), aclFloat16ToFloat(((T *)key_host)[i]), 1e-2);
+        } else if (std::is_same<T, float>::value) {
+          EXPECT_NEAR(key_ref[i], ((T *)key_host)[i], 1e-2);
+        } else {
+          throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");
+        }
+      }
     } else if (rotary_embedding_type == RotaryEmbeddingType::DYNAMIC_NTK_SCALING) {
       throw std::invalid_argument("Invalid rope scaling type, only support default mode.");
     }
 
-    ACL_CHECK_RET(aclrtFree(workspace_device));
     ACL_CHECK_RET(aclrtFree(key_device));
     ACL_CHECK_RET(aclrtFreeHost(key_host));
     ACL_CHECK_RET(aclrtFree(query_device));

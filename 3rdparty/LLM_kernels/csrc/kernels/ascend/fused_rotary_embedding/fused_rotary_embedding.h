@@ -54,7 +54,6 @@ class RotaryEmbeddingAscendC {
   void SetInput(int64_t* positions,  // [num_tokens]
                 T* query,            // [num_tokens, num_heads * head_size]
                 T* key,              // [num_tokens, num_kv_heads * head_size]
-                T* workspace,        // [num_tokens, rotary_dim]
                 int num_tokens, aclrtStream& stream);
 
   void Forward();
