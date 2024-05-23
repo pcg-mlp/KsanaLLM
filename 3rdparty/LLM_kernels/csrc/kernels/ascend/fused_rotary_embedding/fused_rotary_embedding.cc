@@ -99,45 +99,31 @@ template <typename T>
 void RotaryEmbeddingAscendC<T>::SetInput(int64_t* positions,  // [num_tokens]
                                          T* query,            // [num_tokens, num_heads * head_size]
                                          T* key,              // [num_tokens, num_kv_heads * head_size]
-                                         T* workspace,        // [num_tokens, rotary_dim]
                                          int num_tokens, aclrtStream& stream) {
   params_.positions = positions;
   params_.query_ = query;
   params_.key_ = key;
-  params_.workspace = workspace;
   params_.num_tokens_ = num_tokens;
   params_.stream = stream;
 
   params_.tiling_config.seq_len = num_tokens;
 }
 
-template void RotaryEmbeddingAscendC<float>::SetInput(int64_t* positions, float* query, float* key, float* workspace,
-                                                      int num_tokens, aclrtStream& stream);
+template void RotaryEmbeddingAscendC<float>::SetInput(int64_t* positions, float* query, float* key, int num_tokens,
+                                                      aclrtStream& stream);
 template void RotaryEmbeddingAscendC<aclFloat16>::SetInput(int64_t* positions, aclFloat16* query, aclFloat16* key,
-                                                           aclFloat16* workspace, int num_tokens, aclrtStream& stream);
+                                                           int num_tokens, aclrtStream& stream);
 
 template <typename T>
 void RotaryEmbeddingAscendC<T>::Forward() {
+  RotaryEmbeddingTilingConfig* buf = &(params_.tiling_config);
+  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_config_device_ptr, sizeof(RotaryEmbeddingTilingConfig), buf,
+                                 sizeof(RotaryEmbeddingTilingConfig), ACL_MEMCPY_HOST_TO_DEVICE, params_.stream));
   if (std::is_same<T, aclFloat16>::value) {
-    // NOTE(karlluo): for npu ub is too small to handle q and k, so we have to handle it launch kernel twice.
-    // 0: for query, 1:for key
-    params_.tiling_config.mode = 0;
-    RotaryEmbeddingTilingConfig* buf = &(params_.tiling_config);
-    ACL_CHECK_RET(aclrtMemcpyAsync(tiling_config_device_ptr, sizeof(RotaryEmbeddingTilingConfig), buf,
-                                   sizeof(RotaryEmbeddingTilingConfig), ACL_MEMCPY_HOST_TO_DEVICE, params_.stream));
     // NOTE(karlluo): each token handle by one ai core
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeRotaryEmbeddingHalfKernel)(
-        params_.num_tokens_, params_.stream, params_.positions, params_.query_, params_.cos_sin_cache,
-        tiling_config_device_ptr, params_.query_, params_.workspace));
-    // 0: for query, 1:for key
-    params_.tiling_config.mode = 1;
-    buf = &(params_.tiling_config);
-    ACL_CHECK_RET(aclrtMemcpyAsync(tiling_config_device_ptr, sizeof(RotaryEmbeddingTilingConfig), buf,
-                                   sizeof(RotaryEmbeddingTilingConfig), ACL_MEMCPY_HOST_TO_DEVICE, params_.stream));
-    // NOTE(karlluo): each token handle by one ai core
-    ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeRotaryEmbeddingHalfKernel)(
-        params_.num_tokens_, params_.stream, params_.positions, params_.key_, params_.cos_sin_cache,
-        tiling_config_device_ptr, params_.key_, params_.workspace));
+        params_.num_tokens_, params_.stream, params_.positions, params_.query_, params_.key_, params_.cos_sin_cache,
+        tiling_config_device_ptr, params_.query_, params_.key_));
   } else if (std::is_same<T, float>::value) {
   } else {
     throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");

@@ -19,8 +19,6 @@ struct RotaryEmbeddingTilingConfig {
   int num_heads = 0;
   int num_kv_heads = 0;
   int head_size = 0;
-  // 0: for query, 1:for key
-  int mode = 0;
 };
 
 }  // namespace ascend
