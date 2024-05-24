@@ -16,7 +16,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 **Flexibility and easy to use:**
 
-- Seamless integration with popular Hugging Face models, and support multiple wight formats, such as pytorch and SafeTensors
+- Seamless integration with popular Hugging Face models, and support multiple weight formats, such as pytorch and SafeTensors
 
 - High-throughput serving with various decoding algorithms, including parallel sampling, beam search, and more
 
