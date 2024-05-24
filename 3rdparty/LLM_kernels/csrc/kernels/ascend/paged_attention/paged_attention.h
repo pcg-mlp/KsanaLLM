@@ -26,11 +26,14 @@ class PagedAttention {
 
   // Invoke paged attention.
   void Forward(void* output, void* qkv_tensor, void* seq_offset, void** kv_list, void* block_offset, void* rope_pos,
-               int batch_size, int total_token_num, int total_block_num, bool is_context_stage, aclrtStream stream);
+               int batch_size, int total_token_num, int total_block_num, int layer_index, bool is_context_stage,
+               aclrtStream stream);
 
   // Initialize some necessary information.
   void Initialize(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx,
-                  uint32_t block_token_num, aclrtStream stream);
+                  uint32_t block_token_num, aclrtStream stream,
+                  const RotaryEmbeddingType scaling_type = RotaryEmbeddingType::DEFAULT,
+                  const float scaling_factor = 1.0f);
 
   // private:
   void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos);
@@ -61,7 +64,6 @@ class PagedAttention {
   size_t kv_head_size_;
 
   size_t head_dim_;
-  size_t layer_idx_;
   size_t layer_num_;
   size_t block_token_num_;
 
@@ -71,6 +73,9 @@ class PagedAttention {
   size_t stride_size_;
   size_t rope_base_ = 10000;
   bool is_neox_ = true;
+
+  RotaryEmbeddingType scaling_type_ = RotaryEmbeddingType::DEFAULT;
+  float scaling_factor_ = 1.0f;
 
   // The slice & permute & rope instantiation.
   Slice2<T> slice_;

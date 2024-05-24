@@ -13,14 +13,13 @@ namespace ksana_llm {
 
 template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int64_t b = input_tensors[0].shape[0];
-  int64_t m = input_tensors[0].shape[1];
-  int64_t k = input_tensors[0].shape[2];
+  int64_t m = input_tensors[0].shape[0];
+  int64_t k = input_tensors[0].shape[1];
   int64_t n = input_tensors[1].shape[1];
 
-  std::vector<int64_t> matmul_input_shape = {b, m, k};
+  std::vector<int64_t> matmul_input_shape = {m, k};
   std::vector<int64_t> matmul_weight_shape = {k, n};
-  std::vector<int64_t> matmul_output_shape = {b, m, n};
+  std::vector<int64_t> matmul_output_shape = {m, n};
   aclTensor* matmul_input = nullptr;
   aclTensor* matmul_weight = nullptr;
   aclTensor* matmul_output = nullptr;
@@ -37,7 +36,7 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   // TODO(karlluo): our kernel is more efficient when big n
   if (k < CUBE_CORE_NUM) {
     T* bias_device = nullptr;
-    llm_kernels::ascend::InvokeMatMul<T>(b * m, n, k, (T*)matmul_input_buf_ptr, (T*)matmul_weight, bias_device,
+    llm_kernels::ascend::InvokeMatMul<T>(m, n, k, (T*)matmul_input_buf_ptr, (T*)matmul_weight, bias_device,
                                          (T*)matmul_output_buf_ptr, context_->GetComputeStreams()[rank_].Get(),
                                          GetWorkSpaceFunc());
   } else {
@@ -46,8 +45,9 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
                                 context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   }
 
-  output_tensors[0].shape = {static_cast<unsigned long>(b), static_cast<unsigned long>(m),
-                             static_cast<unsigned long>(n)};
+  output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
+  output_tensors[0].dtype = input_tensors[0].dtype;
+
   output_tensors[0].ResetDeviceTensor(matmul_output);
 
   ACL_CHECK(aclDestroyTensor(matmul_input));

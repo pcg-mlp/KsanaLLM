@@ -11,7 +11,7 @@
 #endif
 
 #ifdef ENABLE_ACL
-#  include "csrc/kernels/ascend/attention/attention.h"
+#  include "csrc/kernels/ascend/paged_attention/paged_attention.h"
 #endif
 
 #include "ksana_llm/layers/base_layer.h"
@@ -25,7 +25,14 @@ class AttentionLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
+#ifdef ENABLE_ACL
+ public:
+  // The attention implementation for ascend device.
+  static std::shared_ptr<llm_kernels::ascend::PagedAttention<T>> ascend_paged_attn_;
+#endif
+
  protected:
+  int layer_num_;
   int layer_index_;
   int block_size_;
   int block_token_num_;
@@ -44,8 +51,6 @@ class AttentionLayer : public BaseLayer {
   // NOTE(karlluo): only need by ascend
   int workspace_block_id_{-1};
   size_t workspace_size_{0ul};
-  // The attention implementation for ascend device.
-  std::shared_ptr<llm_kernels::ascend::FlashAttentionACL> ascend_flash_attn_ = nullptr;
 
   void PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr);
 #endif

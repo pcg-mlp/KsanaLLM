@@ -25,9 +25,6 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   int total_seq_len = input_tensors[0].shape[0];
   int hidden_units = input_tensors[3].shape[1];
 
-  int batch_size = input_tensors[1].shape[0] - 1;
-  int seq_len = total_seq_len / batch_size;
-
   Tensor input_ids = input_tensors[0];
   Tensor embedding_table = input_tensors[3];
 
@@ -52,8 +49,7 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
                     GetWorkSpaceFunc());
   }
 
-  output_tensors[0].shape = {static_cast<size_t>(batch_size), static_cast<size_t>(seq_len),
-                             static_cast<size_t>(hidden_units)};
+  output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[3].dtype;
   return Status();
 }

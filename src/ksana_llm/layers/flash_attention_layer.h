@@ -21,6 +21,7 @@ class FlashAttentionLayer : public AttentionLayer<T> {
   using AttentionLayer<T>::tensor_para_size_;
   using AttentionLayer<T>::is_causal_;
   using AttentionLayer<T>::layer_index_;
+  using AttentionLayer<T>::layer_num_;
   using AttentionLayer<T>::block_size_;
   using AttentionLayer<T>::num_kv_heads_;
   using AttentionLayer<T>::head_size_;

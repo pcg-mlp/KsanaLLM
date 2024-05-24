@@ -122,10 +122,6 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
 
   device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
   host_block_num = host_block_memory_size / block_manager_config_.host_allocator_config.block_size;
-#ifdef ENABLE_ACL
-  device_blocks_num = 4;
-  host_block_num = 4;
-#endif
 
   return Status();
 }

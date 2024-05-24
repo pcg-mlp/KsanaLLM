@@ -151,6 +151,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     // to ‘std::vector<std::any>’ so we use push back to make it work.
     std::vector<std::any> attention_param;
     attention_param.push_back(idx);
+#ifdef ENABLE_ACL
+    attention_param.push_back(num_layer_);
+#endif
     attention_param.push_back(max_position_embeddings);
     attention_param.push_back(head_num_per_tp);
     attention_param.push_back(num_kv_heads_per_tp);

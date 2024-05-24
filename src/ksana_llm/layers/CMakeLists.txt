@@ -27,7 +27,7 @@ if(WITH_ACL)
   list(APPEND layers_ascend_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_utils_common
     llm_kernels_ascend_matmul
     llm_kernels_ascend_rotary_embedding
-    llm_kernels_ascend_attention
+    llm_kernels_ascend_paged_attention
     llm_kernels_ascend_cast
     llm_kernels_ascend_silu_mul
     llm_kernels_ascend_rmsnorm)

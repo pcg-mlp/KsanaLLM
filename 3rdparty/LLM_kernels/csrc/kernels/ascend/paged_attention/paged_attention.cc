@@ -26,7 +26,7 @@
 #define MAX_BATCH_SIZE 256
 
 // The max possible block num for one batch.
-#define MAX_SEQ_BLOCK_NUM 256
+#define MAX_SEQ_BLOCK_NUM 2048
 
 // The max total seq len of all prompts in one batch.
 #define MAX_TOTAL_SEQ_LEN 4096
@@ -45,18 +45,21 @@ PagedAttention<T>::~PagedAttention() {
   free(prefill_token_offset_);
   free(decode_tokens_len_);
 
+  free(kv_list_);
+  free(kv_cache_offset_);
+
   ACL_CHECK_RET(aclrtFree(tiling_buffer_gm_));
   ACL_CHECK_RET(aclrtFree(workspace_gm_));
 }
 
 template <typename T>
 void PagedAttention<T>::Initialize(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim, uint32_t layer_num,
-                                   uint32_t layer_idx, uint32_t block_token_num, aclrtStream stream) {
+                                   uint32_t layer_idx, uint32_t block_token_num, aclrtStream stream,
+                                   const RotaryEmbeddingType scaling_type, const float scaling_factor) {
   head_size_ = head_size;
   kv_head_size_ = kv_head_size;
 
   head_dim_ = head_dim;
-  layer_idx_ = layer_idx;
   layer_num_ = layer_num;
   block_token_num_ = block_token_num;
 
@@ -67,16 +70,18 @@ void PagedAttention<T>::Initialize(uint32_t head_size, uint32_t kv_head_size, ui
   prefill_token_offset_ = (uint64_t*)malloc(MAX_BATCH_SIZE * sizeof(uint64_t));
   decode_tokens_len_ = (int32_t*)malloc(MAX_BATCH_SIZE * sizeof(int32_t));
 
-  kv_list_ = (void**)malloc(layer_num_ * MAX_SEQ_BLOCK_NUM * 2);
+  kv_list_ = (void**)malloc(layer_num_ * MAX_SEQ_BLOCK_NUM * 2 * sizeof(void*));
   kv_cache_offset_ = (int32_t*)malloc(MAX_BATCH_SIZE * sizeof(int32_t));
 
-  // stride_size_ = (head_size_ + kv_head_size_ * 2) * head_dim_;
   stride_size_ = head_size_ * head_dim_;
+
+  scaling_type_ = scaling_type;
+  scaling_factor_ = scaling_factor;
 
   ACL_CHECK_RET(
       aclrtMalloc(&cos_sin_cache_, max_position_embeddings_ * rotary_dim_ * sizeof(T), ACL_MEM_TYPE_HIGH_BAND_WIDTH));
   rope_.SetConfig(reinterpret_cast<T*>(cos_sin_cache_), rotary_dim_, max_position_embeddings_, rope_base_, head_dim_,
-                  head_size_, kv_head_size_, stride_size_, is_neox_, stream);
+                  head_size_, kv_head_size_, stride_size_, is_neox_, stream, scaling_type_, scaling_factor_);
 
   size_t usr_workspace_size = MAX_SEQ_LEN * MAX_SEQ_LEN * sizeof(T);
   size_t sys_workspace_size = 1024 * 1024 * 1024;
@@ -269,8 +274,9 @@ void PagedAttention<T>::CopyTilingToDevice(aclrtStream stream) {
 template <typename T>
 void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset, void** kv_list, void* block_offset,
                                 void* rope_pos, int batch_size, int total_token_num, int total_block_num,
-                                bool is_context_stage, aclrtStream stream) {
-  ACL_CHECK_RET(aclrtMemcpyAsync(kv_list_, layer_num_ * total_block_num * 2, kv_list, layer_num_ * total_block_num * 2,
+                                int layer_index, bool is_context_stage, aclrtStream stream) {
+  ACL_CHECK_RET(aclrtMemcpyAsync(kv_list_, layer_num_ * total_block_num * 2 * sizeof(void*), kv_list,
+                                 layer_num_ * total_block_num * 2 * sizeof(void*),
                                  aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST, stream));
 
   ACL_CHECK_RET(aclrtMemcpyAsync(kv_cache_offset_, (batch_size + 1) * sizeof(int32_t), block_offset,
@@ -315,7 +321,7 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       rope_.Forward();
 
       // Cache KV
-      void** k_list = kv_list_ + layer_idx_ * total_block_num * 2 + total_block_num_idx;
+      void** k_list = kv_list_ + layer_index * total_block_num * 2 + total_block_num_idx;
       void** v_list = k_list + total_block_num;
       for (size_t token_idx = 0; token_idx < cur_seq_len; ++token_idx) {
         int b_block_index = token_idx / block_token_num_;
@@ -372,7 +378,7 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
   } else {
     // Decode.
     ACL_CHECK_RET(aclrtMemcpy(decode_tokens_len_, batch_size * sizeof(int32_t), seq_offset,
-                                   batch_size * sizeof(int32_t), aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST));
+                              batch_size * sizeof(int32_t), aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST));
 
     // Loop every sequence.
     size_t total_block_num_idx = 0;
@@ -403,10 +409,10 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       rope_.Forward();
 
       // Cache KV
-      void** k_list = kv_list_ + layer_idx_ * total_block_num * 2 + total_block_num_idx;
+      void** k_list = kv_list_ + layer_index * total_block_num * 2 + total_block_num_idx;
       void** v_list = k_list + total_block_num;
 
-      void** k_list_dev = kv_list + layer_idx_ * total_block_num * 2 + total_block_num_idx;
+      void** k_list_dev = kv_list + layer_index * total_block_num * 2 + total_block_num_idx;
       void** v_list_dev = k_list_dev + total_block_num;
       {
         size_t token_idx = cur_seq_len - 1;
@@ -442,14 +448,10 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       GenerateTilingData(false, cur_seq_len, cur_block_num, cur_seq_len - 1);
       CopyTilingToDevice(stream);
 
-      void* workspace_gm;
-      size_t usr_workspace_size = 16 * 1024 * 1024;
-      size_t sys_workspace_size = 64 * 1024 * 1024;
-      ACL_CHECK_RET(aclrtMalloc(&workspace_gm, usr_workspace_size + sys_workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
 
       ACLRT_LAUNCH_KERNEL(InvokePagedAttentionKernel)
       (tiling_data_.used_core_num, stream, q_buffer_2, k_buffer_2, v_buffer_2, attn_mask_gm_, k_list_dev, v_list_dev,
-       o_buffer, workspace_gm, tiling_buffer_gm_);
+       o_buffer, workspace_gm_, tiling_buffer_gm_);
 
       size_t output_offset = b_idx * head_size_ * head_dim_ * sizeof(T);
       permute_.Forward(output + output_offset, o_buffer, {head_size_, 1, head_dim_}, {1, 0, 2}, stream);

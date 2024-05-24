@@ -123,7 +123,6 @@ __aicore__ void PagedAttentionKernel<T>::Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, G
   scale_ = *reinterpret_cast<half*>(&scale);
 
   padded_seq_len_ = ((tiling_->seq_len + (32 / sizeof(T)) - 1) & ~((32 / sizeof(T)) - 1));
-  printf("Padded seq_len: %d\n", padded_seq_len_);
 
   block_idx_ = GetBlockIdx();
 
@@ -208,13 +207,6 @@ __aicore__ void PagedAttentionKernel<T>::ProcessPrefill() {
 template <typename T>
 __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
   REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &qk_tiling_, mm2_, &wv_tiling_);
-
-  if (GetBlockIdx() == 0) {
-    int32_t x = k_list_gm_.GetValue(0);
-    int32_t y = k_list_gm_.GetValue(1);
-    printf("%x\n", x);
-    printf("%x\n", y);
-  }
 
   for (uint32_t head_idx = 0; head_idx < tiling_->head_size; ++head_idx) {
     if (head_idx % tiling_->head_size == block_idx_) {

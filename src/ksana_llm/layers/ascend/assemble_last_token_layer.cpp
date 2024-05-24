@@ -3,30 +3,41 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/assemble_last_token_layer.h"
+#include <cstdlib>
 
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+#include "ksana_llm/utils/common_device.h"
+#include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 
 template <typename T>
 Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
                                           std::vector<Tensor>& output_tensors) {
-  size_t batch_size = input_tensors[0].shape[0];
-  size_t seq_len = input_tensors[0].shape[1];
-  size_t hidden_size = input_tensors[0].shape[2];
+  size_t batch_size = input_tensors[1].shape[0] - 1;
+  size_t hidden_size = input_tensors[0].shape[1];
 
   void* input_ptr = input_tensors[0].GetPtr<void>();
   void* output_ptr = output_tensors[0].GetPtr<void>();
 
-  for (size_t i = 0; i < batch_size; ++i) {
-    size_t batch_offset = i * seq_len * hidden_size * sizeof(T);
+  void* seq_len_offset = malloc((batch_size + 1) * sizeof(uint64_t));
+  Memcpy(seq_len_offset, input_tensors[1].GetPtr<void>(), (batch_size + 1) * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST);
 
-    size_t offset = batch_offset + (seq_len - 1) * hidden_size * sizeof(T);
+  size_t total_batch_offset = 0;
+  for (size_t i = 0; i < batch_size; ++i) {
+    size_t cur_seq_len = *((uint64_t*)seq_len_offset + i + 1) - *((uint64_t*)seq_len_offset + i);
+    size_t batch_offset = total_batch_offset * hidden_size * sizeof(T);
+
+    size_t offset = batch_offset + (cur_seq_len - 1) * hidden_size * sizeof(T);
     MemcpyAsync(output_ptr + (i * hidden_size * sizeof(T)), input_ptr + offset, hidden_size * sizeof(T),
                 MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+
+    total_batch_offset += cur_seq_len;
   }
 
-  output_tensors[0].shape = {batch_size, 1, hidden_size};
+  output_tensors[0].shape = input_tensors[0].shape;
+  output_tensors[0].shape[0] = batch_size;
+  output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();
 }

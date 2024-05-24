@@ -13,10 +13,9 @@ namespace ksana_llm {
 template <typename T>
 Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   if (input_tensors[0].shape[0] == input_tensors[1].shape[0]) {
-    int64_t batch_size = input_tensors[0].shape[0];
-    int64_t seq_len = input_tensors[0].shape[1];
-    int64_t hidden_size = input_tensors[0].shape[2];
-    std::vector<int64_t> add_shape = {batch_size, seq_len, hidden_size};
+    int64_t total_seq_len = input_tensors[0].shape[0];
+    int64_t hidden_size = input_tensors[0].shape[1];
+    std::vector<int64_t> add_shape = {total_seq_len, hidden_size};
 
     uint16_t one_in_fp16 = 0b11110000000000;
     aclScalar* add_alpha = aclCreateScalar(reinterpret_cast<void*>(&one_in_fp16), aclDataType::ACL_FLOAT16);

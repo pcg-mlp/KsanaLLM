@@ -124,7 +124,7 @@ TEST_F(AscendPagedAttentionTestSuit, PrefillTest) {
 
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   paged_attention.Forward(output, qkv_tensor, seq_offset, (void**)kv_list, block_offset, rope_pos, batch_size,
-                          total_token_num, total_block_num, is_context_stage, stream);
+                          total_token_num, total_block_num, layer_idx, is_context_stage, stream);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
   std::vector<aclFloat16> result_host(total_token_num * hidden_units, 0);
@@ -194,7 +194,7 @@ TEST_F(AscendPagedAttentionTestSuit, DecodeTest) {
 
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   paged_attention.Forward(output, qkv_tensor, seq_offset, (void**)kv_list, block_offset, rope_pos, batch_size,
-                          total_token_num, total_block_num, is_context_stage, stream);
+                          total_token_num, total_block_num, layer_idx, is_context_stage, stream);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
   std::vector<aclFloat16> result_host(batch_size * hidden_units, 0);

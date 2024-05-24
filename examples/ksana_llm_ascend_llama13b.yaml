@@ -10,10 +10,10 @@ setting:
     enable_lora_adapter: false
   # 调度相关配置
   batch_scheduler:
-    # 调度策略g，0表示continuous_batching，1表示auto_batchin，默认为0
-    schedule_strategy: 1
+    # 调度策略，0表示continuous_batching，1表示auto_batchin，默认为0
+    schedule_strategy: 0
     # 请求在队列中的超时时间，单位为毫秒
-    waiting_timeout_in_ms: 360000000
+    waiting_timeout_in_ms: 3600000
     # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
     max_waiting_queue_len: 1200
     # 一个调度step处理的最大token个数，一次context decode视为多个token。
@@ -35,10 +35,9 @@ setting:
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数
-    block_token_num: 2048
+    block_token_num: 16
     # 保留的显存占比，最大为1.0。
-    # reserved_device_memory_ratio: 0.01
-    reserved_device_memory_ratio: 0.1
+    reserved_device_memory_ratio: 0.2
     # Lora权重的显存占比
     lora_deivce_memory_ratio: 0.0
     # Lora权重在host上的预分配大小，相比device上的倍数

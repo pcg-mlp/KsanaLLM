@@ -174,6 +174,9 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
   }
   MemcpyAsync(kv_list.GetPtr<void>(), cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+#endif
   EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
 }
 
@@ -192,6 +195,9 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
   }
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+#endif
   MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * total_seq_len,
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
@@ -231,6 +237,9 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * batch_size,
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+#endif
   EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
 }
 

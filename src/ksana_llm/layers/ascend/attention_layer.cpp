@@ -7,11 +7,16 @@
 #include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 
 namespace ksana_llm {
+
+template <typename T>
+std::shared_ptr<llm_kernels::ascend::PagedAttention<T>> AttentionLayer<T>::ascend_paged_attn_ = nullptr;
+
 template <typename T>
 Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, context, rank);
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
+  layer_num_ = std::any_cast<const int>(parameters[parameter_index++]);
   int max_position_embeddings = std::any_cast<const int>(parameters[parameter_index++]);
   num_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
   num_kv_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
@@ -27,26 +32,29 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
 
-  if (ascend_flash_attn_ == nullptr) {
+  float scaling_factor = 1.0f;
+  llm_kernels::ascend::RotaryEmbeddingType scaling_type = llm_kernels::ascend::RotaryEmbeddingType::DEFAULT;
+
+  if (ascend_paged_attn_ == nullptr) {
     // setting scaling factor and mode
     RoPEScalingFactor rope_scaling_factor_config =
         std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
-    float scaling_factor = 1.0f;
     if (rope_scaling_factor_config.type == "dynamic") {
+      scaling_type = llm_kernels::ascend::RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
+      scaling_factor = rope_scaling_factor_config.factor;
+    } else if ("liner") {
+      scaling_type = llm_kernels::ascend::RotaryEmbeddingType::LINEAR_SCALING;
       scaling_factor = rope_scaling_factor_config.factor;
     }
 
-    aclDataType dtype = aclDataType::ACL_FLOAT16;
-
-    const float rope_theta = 10000.0;
-    ascend_flash_attn_ = std::make_shared<llm_kernels::ascend::FlashAttentionACL>();
-
-    ascend_flash_attn_->Init(max_position_embeddings, head_size_, num_heads_, num_heads_, rope_theta, scaling_factor,
-                             dtype, context->GetComputeStreams()[rank].Get(), GetWorkSpaceFunc());
+    ascend_paged_attn_ = std::make_shared<llm_kernels::ascend::PagedAttention<T>>();
+    ascend_paged_attn_->Initialize(num_heads_, num_kv_heads_, head_size_, layer_num_, layer_index_, block_token_num_,
+                                   context->GetComputeStreams()[rank].Get(), scaling_type, scaling_factor);
   }
 
   return Status();
 }
+
 template class AttentionLayer<float>;
 template class AttentionLayer<float16>;
 
