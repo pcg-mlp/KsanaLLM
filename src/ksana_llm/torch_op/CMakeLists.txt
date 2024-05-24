@@ -8,5 +8,5 @@ file(GLOB_RECURSE torch_op_SRCS
 list(FILTER torch_op_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "torch_op_SRCS: ${torch_op_SRCS}")
 
-add_library(torch_serving SHARED ${torch_op_SRCS})
+add_library(torch_serving SHARED ${torch_op_SRCS} ${host_stub_SRCS})
 target_link_libraries(torch_serving PRIVATE "${TORCH_LIBRARIES}" ksana_llm_libs)

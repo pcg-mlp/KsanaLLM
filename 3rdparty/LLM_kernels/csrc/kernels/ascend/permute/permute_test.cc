@@ -61,6 +61,37 @@ TEST_F(LlamaAscendPermuteTestSuit, CommonTest) {
   ACL_CHECK_RET(aclrtFree(input_workspace));
 }
 
+TEST_F(LlamaAscendPermuteTestSuit, PermuteKernelTest) {
+  std::vector<float> data(24, 0.0);
+  for (int i = 0; i < 24; ++i) {
+    data[i] = (float)i;
+  }
+
+  void* input_data_dev;
+  size_t input_size = 24 * sizeof(float);
+  ACL_CHECK_RET(aclrtMalloc(&input_data_dev, input_size + 32, ACL_MEM_MALLOC_HUGE_FIRST));
+  ACL_CHECK_RET(aclrtMemcpy(input_data_dev, input_size, data.data(), input_size, ACL_MEMCPY_HOST_TO_DEVICE));
+
+  void* output_data_dev;
+  size_t output_size = 24 * sizeof(float);
+  ACL_CHECK_RET(aclrtMalloc(&output_data_dev, output_size + 32, ACL_MEM_MALLOC_HUGE_FIRST));
+
+  Permute2<float> permute;
+  permute.Forward(output_data_dev, input_data_dev, {2, 3, 4}, {1, 0, 2}, stream);
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+
+  std::vector<float> result(24, 0);
+  ACL_CHECK_RET(aclrtMemcpy(result.data(), result.size() * sizeof(float), output_data_dev, 24 * sizeof(float),
+                            ACL_MEMCPY_DEVICE_TO_HOST));
+
+  std::vector<float> wanted = {0.0,  1.0,  2.0,  3.0,  12.0, 13.0, 14.0, 15.0, 4.0,  5.0,  6.0,  7.0,
+                               16.0, 17.0, 18.0, 19.0, 8.0,  9.0,  10.0, 11.0, 20.0, 21.0, 22.0, 23.0};
+
+  for (int i = 0; i < 24; ++i) {
+    EXPECT_FLOAT_EQ(result[i], wanted[i]);
+  }
+}
+
 }  // namespace test
 }  // namespace ascend
 }  // namespace llm_kernels

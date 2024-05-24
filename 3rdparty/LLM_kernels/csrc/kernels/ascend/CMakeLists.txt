@@ -48,6 +48,12 @@ function(add_ascend_kernel_lib)
       ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
   endif()
 
+  target_link_libraries(${kernel_lib_name} PUBLIC
+    /usr/local/Ascend/ascend-toolkit/latest/lib64/libnnopbase.so
+    /usr/local/Ascend/ascend-toolkit/latest/lib64/libprofapi.so
+    /usr/local/Ascend/ascend-toolkit/latest/lib64/libmmpa.so
+  )
+
   add_dependencies(${kernel_lib_name} ${llm_kernels_ascend_libs_deps})
   set(llm_kernels_ascend_libs "${llm_kernels_ascend_libs} ${kernel_lib_name}" PARENT_SCOPE)
   message(STATUS "Ascend kernel added ${add_ascend_kernel_lib_NAME}")
