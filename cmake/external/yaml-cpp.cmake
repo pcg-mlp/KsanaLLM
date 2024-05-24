@@ -12,7 +12,7 @@ option(YAML_CPP_BUILD_TESTS "Enable yaml testing" OFF)
 
 # Keep the same yaml version with trpc
 set(YAML_VER 0.6.2)
-set(YAML_URL https://mirrors.tencent.com/github.com/jbeder/yaml-cpp/archive/yaml-cpp-${YAML_VER}.tar.gz)
+set(YAML_URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-${YAML_VER}.tar.gz)
 FetchContent_Declare(
     yaml_cpp
     URL ${YAML_URL}
