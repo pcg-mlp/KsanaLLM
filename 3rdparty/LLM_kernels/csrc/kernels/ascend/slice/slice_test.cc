@@ -67,6 +67,51 @@ TEST_F(LlamaAscendSliceTestSuit, SliceTest) {
   ACL_CHECK_RET(aclrtFree(output_workspace));
 }
 
+TEST_F(LlamaAscendSliceTestSuit, SliceKernelTest) {
+  // A [10, 10] matrix.
+  int row = 10;
+  int col = 10;
+
+  std::vector<float> data(row * col, 0.0);
+  for (int i = 0; i < row; ++i) {
+    for (int j = 0; j < col; ++j) {
+      data[i * row + j] = i + (0.001 * j);
+    }
+  }
+
+  void* input_data_dev;
+  size_t input_size = row * col * sizeof(float);
+  ACL_CHECK_RET(aclrtMalloc(&input_data_dev, input_size + 32, ACL_MEM_MALLOC_HUGE_FIRST));
+  ACL_CHECK_RET(aclrtMemcpy(input_data_dev, input_size, data.data(), input_size, ACL_MEMCPY_HOST_TO_DEVICE));
+
+  // A [10, 3] matrix
+  int output_row = 10;
+  int output_col = 3;
+
+  void* output_data_dev;
+  size_t output_size = output_row * output_col * sizeof(float);
+  ACL_CHECK_RET(aclrtMalloc(&output_data_dev, output_size + 32, ACL_MEM_MALLOC_HUGE_FIRST));
+
+  Slice2 slice;
+  uint32_t start_offset = 3 * sizeof(float);
+  uint32_t slice_length = 3 * sizeof(float);
+  uint32_t slice_step = 10 * sizeof(float);
+  uint32_t slice_times = 10;
+  slice.Forward(output_data_dev, input_data_dev, start_offset, slice_length, slice_step, slice_times, stream);
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+
+  std::vector<float> result(output_row * output_col, 0);
+  ACL_CHECK_RET(aclrtMemcpy(result.data(), result.size() * sizeof(float), output_data_dev,
+                            output_row * output_col * sizeof(float), ACL_MEMCPY_DEVICE_TO_HOST));
+
+  size_t idx = 0;
+  for (int i = 0; i < output_row; ++i) {
+    for (int j = 0; j < output_col; ++j) {
+      EXPECT_FLOAT_EQ(i + (0.001 * (3 + j)), result[idx++]);
+    }
+  }
+}
+
 }  // namespace test
 }  // namespace ascend
 }  // namespace llm_kernels
