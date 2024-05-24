@@ -36,7 +36,7 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   void* qkv_ptr = input_tensors[0].GetPtr<void>();
   for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
-    int padded_size = padded_token_size[b_idx];
+    int padded_size = padded_token_size.empty() ? 0 : padded_token_size[b_idx];
     int64_t b_seq_len = seq_len - padded_size;
 
     void* b_qkv_ptr =
