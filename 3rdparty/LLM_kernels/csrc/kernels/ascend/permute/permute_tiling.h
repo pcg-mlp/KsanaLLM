@@ -8,9 +8,6 @@
 namespace llm_kernels {
 namespace ascend {
 
-// The data type definitions.
-enum PermuteDataType { FLOAT16 = 0, FLOAT32 = 1 };
-
 // The permute tiling define, support at most 6 dimensions.
 struct PermuteTilingData {
   // The input dims.

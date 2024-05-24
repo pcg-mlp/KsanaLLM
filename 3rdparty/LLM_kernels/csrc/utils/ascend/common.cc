@@ -272,6 +272,12 @@ template void LoadNpyToPtr(const std::string& filename, aclFloat16* data_ptr, st
                            bool is_on_host);
 template void LoadNpyToPtr(const std::string& filename, float* data_ptr, std::vector<size_t>& tensor_shape,
                            bool is_on_host);
+template void LoadNpyToPtr(const std::string& filename, int32_t* data_ptr, std::vector<size_t>& tensor_shape,
+                           bool is_on_host);
+template void LoadNpyToPtr(const std::string& filename, int64_t* data_ptr, std::vector<size_t>& tensor_shape,
+                           bool is_on_host);
+template void LoadNpyToPtr(const std::string& filename, uint64_t* data_ptr, std::vector<size_t>& tensor_shape,
+                           bool is_on_host);
 
 void SaveNpy(const aclTensor* tensor, const void* tensor_workspace_ptr, const std::string& filename,
              aclrtStream& stream, bool is_on_device) {

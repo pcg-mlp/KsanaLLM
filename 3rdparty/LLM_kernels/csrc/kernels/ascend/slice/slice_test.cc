@@ -92,10 +92,10 @@ TEST_F(LlamaAscendSliceTestSuit, SliceKernelTest) {
   size_t output_size = output_row * output_col * sizeof(float);
   ACL_CHECK_RET(aclrtMalloc(&output_data_dev, output_size + 32, ACL_MEM_MALLOC_HUGE_FIRST));
 
-  Slice2 slice;
-  uint32_t start_offset = 3 * sizeof(float);
-  uint32_t slice_length = 3 * sizeof(float);
-  uint32_t slice_step = 10 * sizeof(float);
+  Slice2<float> slice;
+  uint32_t start_offset = 3;
+  uint32_t slice_length = 3;
+  uint32_t slice_step = 10;
   uint32_t slice_times = 10;
   slice.Forward(output_data_dev, input_data_dev, start_offset, slice_length, slice_step, slice_times, stream);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));

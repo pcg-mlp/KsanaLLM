@@ -31,7 +31,8 @@ void Slice(const aclTensor* input, const int sliceDim, const int sliceStart, con
   ACL_CHECK_RET(aclnnSlice(workspace, ws_size, executor, stream));
 }
 
-Slice2::Slice2() {
+template <typename T>
+Slice2<T>::Slice2() {
   tiling_size_ = sizeof(SliceTilingData);
   ACL_CHECK_RET(aclrtMalloc(&tiling_buffer_gm_, tiling_size_, ACL_MEM_MALLOC_HUGE_FIRST));
 
@@ -43,31 +44,39 @@ Slice2::Slice2() {
   ACL_CHECK_RET(aclrtMalloc(&workspace_gm_, usr_workspace_size + sys_workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
-Slice2::~Slice2() {
+template <typename T>
+Slice2<T>::~Slice2() {
   ACL_CHECK_RET(aclrtFree(tiling_buffer_gm_));
   ACL_CHECK_RET(aclrtFree(workspace_gm_));
 }
 
-void Slice2::CopyTilingToDevice(aclrtStream stream) {
+template <typename T>
+void Slice2<T>::CopyTilingToDevice(aclrtStream stream) {
   ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, &tiling_data_, tiling_size_,
                                  aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
-void Slice2::Forward(void* output, void* input, int start, int length, int step, int times, aclrtStream stream) {
-  tiling_data_.start = start;
-  tiling_data_.length = length;
-  tiling_data_.step = step;
+template <typename T>
+void Slice2<T>::Forward(void* output, void* input, int start, int length, int step, int times, aclrtStream stream) {
+  tiling_data_.start = start * sizeof(T);
+  tiling_data_.length = length * sizeof(T);
+  tiling_data_.step = step * sizeof(T);
   tiling_data_.times = times;
 
-  if (length < MAX_SLICE_BLOCK_SIZE) {
-    tiling_data_.block_size = length;
-    tiling_data_.tail_block_size = length;
+  if (tiling_data_.length < MAX_SLICE_BLOCK_SIZE) {
+    tiling_data_.block_size = tiling_data_.length;
+    tiling_data_.tail_block_size = tiling_data_.length;
     tiling_data_.step_block_num = 1;
   } else {
     tiling_data_.block_size = MAX_SLICE_BLOCK_SIZE;
-    tiling_data_.tail_block_size = length % MAX_SLICE_BLOCK_SIZE;
-    tiling_data_.step_block_num = (length + MAX_SLICE_BLOCK_SIZE - 1) / MAX_SLICE_BLOCK_SIZE;
+    uint32_t tail_size = tiling_data_.length % MAX_SLICE_BLOCK_SIZE;
+    if (tail_size != 0) {
+      tiling_data_.tail_block_size = tail_size;
+    } else {
+      tiling_data_.tail_block_size = tiling_data_.block_size;
+    }
+    tiling_data_.step_block_num = (tiling_data_.length + MAX_SLICE_BLOCK_SIZE - 1) / MAX_SLICE_BLOCK_SIZE;
   }
 
   if (tiling_data_.times * tiling_data_.step_block_num < MAX_USED_CORE_NUM) {
@@ -81,6 +90,9 @@ void Slice2::Forward(void* output, void* input, int start, int length, int step,
   ACLRT_LAUNCH_KERNEL(InvokeSliceKernel)
   (tiling_data_.used_core_num, stream, input, output, workspace_gm_, tiling_buffer_gm_);
 }
+
+template class Slice2<aclFloat16>;
+template class Slice2<float>;
 
 }  // namespace ascend
 }  // namespace llm_kernels

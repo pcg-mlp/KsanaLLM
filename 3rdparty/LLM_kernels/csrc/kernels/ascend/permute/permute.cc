@@ -8,6 +8,7 @@
 #include "aclrtlaunch_InvokePermuteKernel.h"
 
 #include "csrc/utils/ascend/common.h"
+#include "csrc/utils/ascend/tiling_data_types.h"
 
 namespace llm_kernels {
 namespace ascend {
@@ -157,12 +158,13 @@ void PermuteKernelWrapper<T>::Forward(void* output, void* input, const std::vect
     tiling_data_.used_core_num = (shape_size + MIN_PERMUTE_BLOCK_SIZE - 1) / MIN_PERMUTE_BLOCK_SIZE;
   }
 
+  tiling_data_.used_core_num = 1;
   tiling_data_.block_length = (shape_size + tiling_data_.used_core_num - 1) / tiling_data_.used_core_num;
 
   if (sizeof(T) == 2) {
-    tiling_data_.tiling_key = static_cast<uint32_t>(PermuteDataType::FLOAT16);
+    tiling_data_.tiling_key = static_cast<uint32_t>(TilingDataType::FLOAT16);
   } else if (sizeof(T) == 4) {
-    tiling_data_.tiling_key = static_cast<uint32_t>(PermuteDataType::FLOAT32);
+    tiling_data_.tiling_key = static_cast<uint32_t>(TilingDataType::FLOAT32);
   }
 
   CopyTilingToDevice(stream);

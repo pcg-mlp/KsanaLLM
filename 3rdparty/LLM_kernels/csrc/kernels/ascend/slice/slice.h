@@ -16,6 +16,7 @@ namespace ascend {
 void Slice(const aclTensor* input, const int sliceDim, const int sliceStart, const int sliceEnd, const int sliceStep,
            aclTensor** output, aclrtStream& stream, void (*ws_func)(size_t, void**));
 
+template <typename T>
 class Slice2 {
  public:
   Slice2();

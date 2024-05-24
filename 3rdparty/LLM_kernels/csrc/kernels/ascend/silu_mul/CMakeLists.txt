@@ -6,7 +6,7 @@ set(llm_kernels_ascend_libs "${llm_kernels_ascend_libs}" PARENT_SCOPE)
 include_directories(${PROJECT_BINARY_DIR}/../../include/llm_kernels_ascend_core_silu_mul)
 file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/../../auto_gen/llm_kernels_ascend_core_silu_mul)
 execute_process(COMMAND 
-  touch ${PROJECT_BINARY_DIR}/../../auto_gen/llm_kernels_ascend_core_silu_mul/host_stub.cpp)
+  /bin/sh ${PROJECT_SOURCE_DIR}/tools/touch_host_stub.sh ${PROJECT_BINARY_DIR}/../../auto_gen/llm_kernels_ascend_core_silu_mul/host_stub.cpp)
 
 file(GLOB_RECURSE silu_mul_host_stub_SRCS
 	${PROJECT_BINARY_DIR}/../../auto_gen/llm_kernels_ascend_core_silu_mul/host_stub.cpp)

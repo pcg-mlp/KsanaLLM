@@ -53,6 +53,10 @@ function(add_ascend_kernel_lib)
     /usr/local/Ascend/ascend-toolkit/latest/lib64/libnnopbase.so
     /usr/local/Ascend/ascend-toolkit/latest/lib64/libprofapi.so
     /usr/local/Ascend/ascend-toolkit/latest/lib64/libmmpa.so
+    /usr/local/Ascend/ascend-toolkit/latest/lib64/libc_sec.so
+    /usr/local/Ascend/ascend-toolkit/latest/lib64/libgraph.so
+    /usr/local/Ascend/ascend-toolkit/latest/lib64/libgraph_base.so
+    ${CMAKE_DL_LIBS}
   )
 
   add_dependencies(${kernel_lib_name} ${llm_kernels_ascend_libs_deps})
@@ -83,6 +87,7 @@ add_subdirectory(embedding)
 add_subdirectory(gather)
 add_subdirectory(matmul)
 add_subdirectory(permute)
+add_subdirectory(paged_attention)
 add_subdirectory(pointwise)
 add_subdirectory(reshape)
 add_subdirectory(rotary_embedding)
