@@ -19,6 +19,7 @@
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/yaml_reader.h"
+#include "ksana_llm/utils/string_utils.h"
 
 DEFINE_string(config_file, "examples/ksana_llm.yaml", "The config file path");
 DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
@@ -50,6 +51,44 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
   }
 }
 
+void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_config) {
+  // refer to
+  // github vllm-project/vllm/blob vllm/config.py#L1116
+  float derived_max_model_len = std::numeric_limits<float>::infinity();
+  std::vector<std::string> possible_keys = {/* OPT */ "max_position_embeddings", /* GPT-2 */ "n_positions",
+                                            /* MPT */ "max_seq_len", /* ChatGLM2 */ "seq_length",
+                                            /* Command-R */ "model_max_length",
+                                            /* Others */ "max_sequence_length", "max_seq_length", "seq_len"};
+  for (std::string& key : possible_keys) {
+    float max_len = config_json.value(key, std::numeric_limits<float>::infinity());
+    derived_max_model_len = std::min(derived_max_model_len, max_len);
+  }
+  if (derived_max_model_len == std::numeric_limits<float>::infinity()) {
+    std::string possible_keys_str = Vector2Str<std::string>(possible_keys);
+    NLLM_LOG_ERROR << fmt::format("The model's config.json does not contain any of the following keys to determine"
+                                  " the original maximum length of the model: {}", possible_keys_str);
+    throw std::runtime_error("The model's config.json does not contain the maximum length of the model");
+  }
+
+  auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
+  if (!rope_scaling_setting.is_null()) {
+    model_config.rope_scaling_factor_config.type = rope_scaling_setting.value("type", "default");
+    model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
+    NLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
+                                  model_config.rope_scaling_factor_config.factor);
+ 
+    if (model_config.rope_scaling_factor_config.type != "su") {
+      if (model_config.rope_scaling_factor_config.type == "yarn") {
+        derived_max_model_len = rope_scaling_setting.value("original_max_position_embeddings", derived_max_model_len);
+      }
+      derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
+    }
+  }
+
+  model_config.max_token_num = int(derived_max_model_len);
+  NLLM_LOG_DEBUG << "Model Max Token Num = " << model_config.max_token_num;
+}
+
 void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
   model_config.type = config_json.at("model_type");
   model_config.head_num = config_json.at("num_attention_heads");
@@ -67,13 +106,7 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
 
-  auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
-  if (!rope_scaling_setting.is_null()) {
-    model_config.rope_scaling_factor_config.type = rope_scaling_setting.value("type", "default");
-    model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
-    NLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
-                                  model_config.rope_scaling_factor_config.factor);
-  }
+  ParseModelMaxLength(config_json, model_config);
 
   size_t size_per_head = model_config.hidden_units / model_config.head_num;
   model_config.size_per_head = size_per_head;
@@ -90,15 +123,22 @@ Status Environment::ParseConfig(const std::string &config_file) {
 
   // Read global setting.
   tensor_parallel_size_ =
-    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.tensor_para_size", 1);
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.tensor_para_size", 0);
   pipeline_parallel_size_ =
     yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.pipeline_para_size", 1);
   enable_lora_adapter_ =
     yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
   embed_tokens_use_cpu_ =
     yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.embed_tokens_use_cpu", false);
+  if (tensor_parallel_size_ == 0) {
+    int device_size = -1;
+    GetDeviceCount(&device_size);
+    tensor_parallel_size_ = static_cast<size_t>(device_size);
+  }
 
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
+    NLLM_LOG_ERROR << fmt::format("Tensor Para Size {} and Pipeline Para Size {} should > 0",
+                                  tensor_parallel_size_, pipeline_parallel_size_);
     throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");
   }
 
@@ -109,12 +149,12 @@ Status Environment::ParseConfig(const std::string &config_file) {
     yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
   batch_manager_config_.batch_scheduler_config.max_waiting_queue_len =
     yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 256);
+  batch_manager_config_.batch_scheduler_config.max_token_len =
+    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 0);
   batch_manager_config_.batch_scheduler_config.max_step_tokens =
     yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
   batch_manager_config_.batch_scheduler_config.max_batch_size =
     yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 8);
-  batch_manager_config_.batch_scheduler_config.max_token_len =
-    yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 1024);
   batch_manager_config_.batch_scheduler_config.swapout_block_threshold =
     yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
   batch_manager_config_.batch_scheduler_config.swapin_block_threshold =
@@ -207,10 +247,24 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(config_json, model_config);
 
+  if (batch_manager_config_.batch_scheduler_config.max_token_len > 0) {
+    if (batch_manager_config_.batch_scheduler_config.max_token_len > model_config.max_token_num) {
+      NLLM_LOG_ERROR << fmt::format("The max_token_num configured in the model's config.json is less than the "
+                                    "max_token_len configured in the ksana yaml file. {} < {}",
+                                    batch_manager_config_.batch_scheduler_config.max_token_len,
+                                    model_config.max_token_num);
+      return Status(RetCode::RET_INVALID_ARGUMENT,
+                    fmt::format("Load model config file: {} error. The max_token_num configured in the model's "
+                                "config.json is less than the max_token_len configured in the ksana yaml file."
+                                " {} < {}", config_file, batch_manager_config_.batch_scheduler_config.max_token_len,
+                                model_config.max_token_num));
+    }
+    model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_token_len;
+  }
+  batch_manager_config_.batch_scheduler_config.max_token_len = model_config.max_token_num;
   model_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   model_config.max_batch_size = batch_manager_config_.batch_scheduler_config.max_batch_size;
   model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_step_tokens;
-  model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_token_len;
   model_configs_[model_config.name] = model_config;
 
   NLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
