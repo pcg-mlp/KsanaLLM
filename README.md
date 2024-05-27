@@ -1,6 +1,6 @@
 # KsanaLLM
 
-[English](README.md) [中文](README_cn.md)
+[English](README.md) | [中文](README_cn.md)
 
 ## About
 
@@ -8,7 +8,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 **High Performance and Throughput:**
 
-- Utilizes optimized CUDA kernels, including high performance kernels from [vllm](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer)
+- Utilizes optimized CUDA kernels, including high performance kernels from [vLLM](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer)
 - Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180)
 - Detailed optimization of task-scheduling and memory-uitlization for dynamic batching 
 - (Experimental) Prefix caching support
@@ -43,7 +43,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 ## Usage
 
-### 1. Create docker container and runtime environment
+### 1. Create Docker container and runtime environment
 
 #### 1.1 For Nvidia GPU
 
@@ -58,7 +58,8 @@ apt update && apt install git-lfs -y
 
 #### 1.2 For Huawei Ascend NPU
 
-Note: Image for Huawei Cloud is in progress.
+> [!NOTE]  
+> Image for Huawei Cloud is in progress.
 
 ### 2. Clone source code
 
@@ -139,4 +140,5 @@ python -c "import ksana_llm"
 #### 6.1 Model Weight Map
 
 You can include an optional weight map JSON file for models that share the same structure as the Llama model but have different weight names.
-For more detailed information, please refer to the following link: [Optional Weigth Map Guide](src/ksana_llm/python/weight_map/README.md)
+
+For more detailed information, please refer to the following link: [Optional Weight Map Guide](src/ksana_llm/python/weight_map/README.md)
