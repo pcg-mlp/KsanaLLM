@@ -23,7 +23,7 @@ class BlockManager {
     // Preallocate blocks.
     Status PreAllocateBlocks();
 
-    // Reset the preallocated blocks for device & hosg.
+    // Reset the preallocated blocks for device & host.
     Status ResetPreAllocatedBlocks();
 
     // This function maybe called concurrently from different threads.
