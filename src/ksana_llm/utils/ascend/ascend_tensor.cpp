@@ -22,8 +22,8 @@ void TensorT<DEVICE_TYPE_ASCEND>::InitializeDeviceTensor() {
   void* device_addr;
   GetBlockManager()->GetContiguousPtr(block_id, device_addr);
   device_tensor_ =
-      aclCreateTensor(acl_type_shape.data(), acl_type_shape.size(), static_cast<aclDataType>(dtype), strides.data(), 0,
-                      static_cast<aclFormat>(data_format), acl_type_shape.data(), acl_type_shape.size(), device_addr);
+    aclCreateTensor(acl_type_shape.data(), acl_type_shape.size(), static_cast<aclDataType>(dtype), strides.data(), 0,
+                    static_cast<aclFormat>(data_format), acl_type_shape.data(), acl_type_shape.size(), device_addr);
 }
 
 template <>
@@ -42,8 +42,8 @@ aclTensor* TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(const DataType new_dty
   void* input_dev_addr = GetPtr<void>();
   ACL_CHECK(aclDestroyTensor(device_tensor_));
   device_tensor_ =
-      aclCreateTensor(new_shape.data(), new_shape.size(), static_cast<aclDataType>(new_dtype), new_strides.data(), 0,
-                      static_cast<aclFormat>(data_format), new_shape.data(), new_shape.size(), input_dev_addr);
+    aclCreateTensor(new_shape.data(), new_shape.size(), static_cast<aclDataType>(new_dtype), new_strides.data(), 0,
+                    static_cast<aclFormat>(data_format), new_shape.data(), new_shape.size(), input_dev_addr);
   return device_tensor_;
 }
 
@@ -74,10 +74,13 @@ template <>
 std::vector<int64_t> TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorShape() const {
   int64_t* storage_dims = nullptr;
   uint64_t storage_dims_num;
-  ACL_CHECK(aclGetViewShape(device_tensor_, &storage_dims, &storage_dims_num));
   std::vector<int64_t> device_tensor_shape;
-  for (size_t i = 0; i < storage_dims_num; ++i) {
-    device_tensor_shape.push_back(*(storage_dims + i));
+  if (device_tensor_ != nullptr) {
+    ACL_CHECK(aclGetViewShape(device_tensor_, &storage_dims, &storage_dims_num));
+
+    for (size_t i = 0; i < storage_dims_num; ++i) {
+      device_tensor_shape.push_back(*(storage_dims + i));
+    }
   }
   return device_tensor_shape;
 }

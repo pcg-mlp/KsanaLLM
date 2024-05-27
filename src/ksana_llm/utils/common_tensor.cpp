@@ -29,7 +29,12 @@ size_t TensorT<T>::GetElementNumber() const {
     return std::accumulate(device_tensor_shape.begin(), device_tensor_shape.end(), static_cast<size_t>(1),
                            std::multiplies<size_t>());
   } else {
+#ifdef ENABLE_CUDA
     return std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
+#else
+    // NOTE(karlluo): seems tensor in acl is destory before here
+    return 0ul;
+#endif
   }
 }
 
@@ -45,7 +50,7 @@ size_t TensorT<T>::GetTotalBytes() const {
 template <int T>
 std::string TensorT<T>::DeviceToString() const {
   static const std::unordered_map<MemoryDevice, std::string> mem_to_string{{MEMORY_HOST, "host"},
-    {MEMORY_DEVICE, "device"}};
+                                                                           {MEMORY_DEVICE, "device"}};
   return mem_to_string.at(device);
 }
 
@@ -54,11 +59,11 @@ std::string TensorT<T>::ToString() const {
   std::string memtype_str = DeviceToString();
 
   static const std::unordered_map<DataType, std::string> type_to_string{
-      {TYPE_BOOL, "BOOL"},     {TYPE_UINT8, "UINT8"},     {TYPE_UINT16, "UINT16"},   {TYPE_UINT32, "UINT32"},
-      {TYPE_UINT64, "UINT64"}, {TYPE_INT8, "INT8"},       {TYPE_INT16, "INT16"},     {TYPE_INT32, "INT32"},
-      {TYPE_INT64, "INT64"},   {TYPE_BF16, "BF16"},       {TYPE_FP16, "FP16"},       {TYPE_FP32, "FP32"},
-      {TYPE_FP64, "FP64"},     {TYPE_BYTES, "BYTES"},     {TYPE_INVALID, "INVALID"}, {TYPE_FP8_E4M3, "E4M3"},
-      {TYPE_VOID, "VOID"},     {TYPE_POINTER, "POINTER"},
+    {TYPE_BOOL, "BOOL"},     {TYPE_UINT8, "UINT8"},     {TYPE_UINT16, "UINT16"},   {TYPE_UINT32, "UINT32"},
+    {TYPE_UINT64, "UINT64"}, {TYPE_INT8, "INT8"},       {TYPE_INT16, "INT16"},     {TYPE_INT32, "INT32"},
+    {TYPE_INT64, "INT64"},   {TYPE_BF16, "BF16"},       {TYPE_FP16, "FP16"},       {TYPE_FP32, "FP32"},
+    {TYPE_FP64, "FP64"},     {TYPE_BYTES, "BYTES"},     {TYPE_INVALID, "INVALID"}, {TYPE_FP8_E4M3, "E4M3"},
+    {TYPE_VOID, "VOID"},     {TYPE_POINTER, "POINTER"},
   };
 
   DataType tensor_dtype = GetDeviceTensorDataType();
@@ -79,9 +84,9 @@ const int TensorT<T>::GetBlockId() const {
 template <int T>
 std::string TensorT<T>::GetNumpyType() const {
   static const std::unordered_map<DataType, std::string> type_map{
-      {TYPE_INVALID, "x"}, {TYPE_BOOL, "?"},    {TYPE_BYTES, "b"}, {TYPE_UINT8, "u1"}, {TYPE_UINT16, "u2"},
-      {TYPE_UINT32, "u4"}, {TYPE_UINT64, "u8"}, {TYPE_INT8, "i1"}, {TYPE_INT16, "i2"}, {TYPE_INT32, "i4"},
-      {TYPE_INT64, "i8"},  {TYPE_FP16, "f2"},   {TYPE_FP32, "f4"}, {TYPE_FP64, "f8"}};
+    {TYPE_INVALID, "x"}, {TYPE_BOOL, "?"},    {TYPE_BYTES, "b"}, {TYPE_UINT8, "u1"}, {TYPE_UINT16, "u2"},
+    {TYPE_UINT32, "u4"}, {TYPE_UINT64, "u8"}, {TYPE_INT8, "i1"}, {TYPE_INT16, "i2"}, {TYPE_INT32, "i4"},
+    {TYPE_INT64, "i8"},  {TYPE_FP16, "f2"},   {TYPE_FP32, "f4"}, {TYPE_FP64, "f8"}};
   return type_map.count(dtype) ? type_map.at(dtype) : "x";
 }
 

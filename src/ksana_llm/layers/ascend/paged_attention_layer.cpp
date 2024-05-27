@@ -46,7 +46,7 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   void* qkv_ptr = input_tensors[0].GetPtr<void>();
   for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
-    int padded_size = padded_token_size[b_idx];
+    int padded_size = padded_token_size.empty() ? 0 : padded_token_size[b_idx];
 
     void* b_qkv_ptr = qkv_ptr + (b_idx * hidden_units * 3 * GetTypeSize(input_tensors[0].dtype));
 

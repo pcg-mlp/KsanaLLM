@@ -62,7 +62,7 @@ TEST_F(LlamaTest, ForwardTest) {
   EventCreate(&stop);
 
   Py_Initialize();
-#ifdef ENABLE_CUDA
+
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
   std::shared_ptr<LlamaModel<float16>> llama = std::make_shared<LlamaModel<float16>>(model_config, 0, context_);
 
@@ -104,7 +104,13 @@ TEST_F(LlamaTest, ForwardTest) {
   EventRecord(stop, context_->GetComputeStreams()[device_id]);
   EventSynchronize(stop);
   EventElapsedTime(&milliseconds, start, stop);
+
+#ifdef ENABLE_CUDA
   EXPECT_TRUE((milliseconds / 10) < 35);
+#else
+  // NOTE(karlluo): ACL inference is slower than CUDA
+  EXPECT_TRUE((milliseconds / 10) < 190);
+#endif
 
   // Sampling
   SamplingRequest sample_req;
@@ -128,7 +134,7 @@ TEST_F(LlamaTest, ForwardTest) {
 
   std::vector<SamplingRequest> sample_reqs = {sample_req};
   std::shared_ptr<Sampler> sampler =
-      std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
+    std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
   sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
 
@@ -149,10 +155,16 @@ TEST_F(LlamaTest, ForwardTest) {
   EventSynchronize(stop);
   EventElapsedTime(&milliseconds, start, stop);
 
+#ifdef ENABLE_CUDA
   EXPECT_TRUE((milliseconds / 10) < 30);
+#else
+  // NOTE(karlluo): ACL inference is slower than CUDA
+  EXPECT_TRUE((milliseconds / 10) < 210);
+#endif
+
   llama.reset();
   llama_weight.reset();
-#endif
+
   StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   Py_Finalize();
   EventDestroy(stop);
