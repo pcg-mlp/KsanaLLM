@@ -27,9 +27,19 @@ if(NOT DEFINED SM)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
-    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM}")
+    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
     list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-    # set(TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
+    list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
+  endforeach()
+elseif("${SM}" MATCHES ",")
+  # Multiple SM values
+  string(REPLACE "," ";" SM_LIST ${SM})
+  foreach(SM_NUM IN LISTS SM_LIST)
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
+    list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
+    message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
+    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
+    list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
     list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
   endforeach()
 else()
@@ -41,9 +51,6 @@ else()
   # set(TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
   list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
 endif()
-
-
-
 
 # TORCH_CUDA_ARCH_LIST
 # cuda_select_nvcc_arch_flags
