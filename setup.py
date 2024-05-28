@@ -60,7 +60,8 @@ class build_ext(build_ext_orig):
             cmake_args = [
                 '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' +
                 str(extdir.parent.absolute()), '-DCMAKE_BUILD_TYPE=' + config,
-                '-DWITH_TESTING=OFF'
+                '-DWITH_TESTING=OFF',
+                '-DSM=80,86,89'
             ]
 
         # example of build args
