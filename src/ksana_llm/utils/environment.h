@@ -55,7 +55,7 @@ struct ModelConfig {
   float layernorm_eps;
   uint32_t vocab_size;
   int start_id;
-  int end_id;
+  std::vector<int> end_ids;
   int pad_id;
   size_t num_key_value_heads;
   int max_batch_size;

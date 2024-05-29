@@ -482,7 +482,7 @@ class BatchSchedulerEvironmentSimulator {
     std::vector<std::shared_ptr<InferRequest>> infer_req_list;
     for (size_t i = 0; i < req->output_group.size(); i++) {
       std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
-      infer_req->end_id = GetEndId();
+      infer_req->sampling_config.stop_token_ids.push_back(GetEndId());
       infer_req->kv_cache_blocks.resize(tp_num_);
       SetRequestOutputTokenNum(infer_req, expected_output_token_num);
       infer_req_list.push_back(infer_req);

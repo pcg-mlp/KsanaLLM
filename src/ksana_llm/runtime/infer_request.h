@@ -152,9 +152,6 @@ class InferRequest {
   // The model instance pointer.
   std::shared_ptr<ModelInstance> model_instance;
 
-  // End id of the model.
-  int end_id;
-
   // Padding token id of the model.
   int pad_id;
 
