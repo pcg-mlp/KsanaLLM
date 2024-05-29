@@ -238,7 +238,6 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
             "n": 1,
             "temperature": args.temperature,
             "max_tokens": args.max_new_tokens,
-            "prompt_logprobs": args.logprobs,
             "logprobs": args.logprobs,
             "repetition_penalty": args.repetition_penalty,
             "stop_token_ids": args.stop_token_ids,

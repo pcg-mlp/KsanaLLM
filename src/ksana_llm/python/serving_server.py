@@ -77,7 +77,7 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
                 request_output = request_output[len(input_tokens):]
                 output_token_ids.append(request_output)
                 output_text = tokenizer.decode(
-                    request_output,  
+                    request_output,
                     skip_special_tokens=True  # skip special tokens
                 ).rstrip('\ufffd')
                 output_texts.append(output_text)
@@ -203,7 +203,9 @@ async def generate(request: Request) -> Response:
         length_penalty=get_sampling_value(sampling_config,
                                               "length_penalty", 1.0),
         stop_token_ids=get_sampling_value(sampling_config,
-                                          "stop_token_ids", []))
+                                          "stop_token_ids", []),
+        ignore_eos=get_sampling_value(sampling_config, "ignore_eos", False)
+    )
 
     # Get the current event loop
     loop = asyncio.get_event_loop()
@@ -246,8 +248,6 @@ if __name__ == "__main__":
         with open(args.config_file, "r") as yaml_file:
             yaml_data = yaml.safe_load(yaml_file)
             args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
-    model_config = AutoConfig.from_pretrained(args.tokenizer_dir, 
-                                              trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)

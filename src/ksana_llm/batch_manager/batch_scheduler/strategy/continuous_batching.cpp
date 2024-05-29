@@ -83,8 +83,7 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
   if (req->infer_stage == InferStage::STATE_DECODE) {
     std::vector<int> &stop_token_ids = req->sampling_config.stop_token_ids;
     if (req->output_tokens.size() > req->input_tokens.size() &&
-        (req->output_tokens.back() == req->end_id ||
-         std::find(stop_token_ids.begin(), stop_token_ids.end(), req->output_tokens.back()) != stop_token_ids.end() ||
+        (std::find(stop_token_ids.begin(), stop_token_ids.end(), req->output_tokens.back()) != stop_token_ids.end() ||
          (req->sampling_config.max_new_tokens > 0 &&
           req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
          req->output_tokens.size() >= batch_scheduler_config_.max_token_len)) {

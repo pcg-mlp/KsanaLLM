@@ -88,7 +88,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("num_beams", &ksana_llm::SamplingConfig::num_beams)
       .def_readwrite("num_return_sequences", &ksana_llm::SamplingConfig::num_return_sequences)
       .def_readwrite("length_penalty", &ksana_llm::SamplingConfig::length_penalty)
-      .def_readwrite("stop_token_ids", &ksana_llm::SamplingConfig::stop_token_ids);
+      .def_readwrite("stop_token_ids", &ksana_llm::SamplingConfig::stop_token_ids)
+      .def_readwrite("ignore_eos", &ksana_llm::SamplingConfig::ignore_eos);
 
   // Export `KsanaPythonInput` to python.
   pybind11::class_<ksana_llm::KsanaPythonInput, std::shared_ptr<ksana_llm::KsanaPythonInput>>(m, "KsanaPythonInput")

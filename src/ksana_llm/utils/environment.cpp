@@ -107,7 +107,7 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.layernorm_eps = config_json.value("rms_norm_eps", 1e-6);
   model_config.layernorm_eps = config_json.value("layer_norm_epsilon", model_config.layernorm_eps);
   model_config.start_id = config_json.value("bos_token_id", 1);
-  model_config.end_id = config_json.value("eos_token_id", 2);
+  model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 2)};
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
@@ -117,6 +117,47 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   size_t size_per_head = model_config.hidden_units / model_config.head_num;
   model_config.size_per_head = size_per_head;
   model_config.rotary_embedding = size_per_head;
+}
+
+void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_config) {
+  // Priority: `generation_config` argument > `model.generation_config`
+  // It is recommended to set all generation parameters in `generation_config`
+  // Refer to
+  // https://github.com/huggingface/transformers/blob/main/src/transformers/generation/utils.py#L1300
+  std::filesystem::path raw_model_dir_path = model_dir;
+  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(raw_model_dir_path);
+  std::string config_file = abs_model_dir_path.u8string() + "/generation_config.json";
+
+  nlohmann::json config_json;
+  std::ifstream file(config_file);
+  if (!file.is_open()) {
+    NLLM_LOG_WARNING << fmt::format("Load generation config file: {} error.", config_file) << std::endl;
+    return;
+  } else {
+    file >> config_json;
+    file.close();
+  }
+
+  if (!config_json.contains("eos_token_id")) {
+    return;
+  }
+
+  std::vector<int> end_ids;
+  if (config_json.at("eos_token_id").is_array()) {
+    for (int end_id : config_json.at("eos_token_id")) {
+      if (std::find(end_ids.begin(), end_ids.end(), end_id) == end_ids.end()) {
+        end_ids.push_back(end_id);
+      }
+    }
+  } else {
+    end_ids.push_back(config_json.at("eos_token_id"));
+  }
+  if (end_ids != model_config.end_ids) {
+    NLLM_LOG_WARNING << fmt::format("eos_token_id: {} in model config is ignored by {} in generation config",
+                                    model_config.end_ids.front(), fmt::join(end_ids, ", "))
+                     << std::endl;
+    model_config.end_ids = end_ids;
+  }
 }
 
 Status Environment::ParseConfig(const std::string &config_file) {
@@ -233,9 +274,6 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   std::filesystem::path raw_model_dir_path = model_dir;
   std::filesystem::path abs_model_dir_path = std::filesystem::absolute(raw_model_dir_path);
   std::string config_file = abs_model_dir_path.u8string() + "/config.json";
-  if (!IsFileExists(config_file)) {
-    return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Model config file: {} is not exists.", config_file));
-  }
 
   nlohmann::json config_json;
   std::ifstream file(config_file);
@@ -252,6 +290,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   model_config.weight_data_type = GetModelDataType(config_json, model_config);
   model_config.tensor_para_size = tensor_parallel_size_;
   PrepareModeAttirbutes(config_json, model_config);
+  UpdateEndIdFromGeneration(model_dir, model_config);
 
   if (batch_manager_config_.batch_scheduler_config.max_token_len > 0) {
     if (batch_manager_config_.batch_scheduler_config.max_token_len > model_config.max_token_num) {

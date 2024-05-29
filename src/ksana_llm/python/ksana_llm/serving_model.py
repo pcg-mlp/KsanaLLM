@@ -198,6 +198,8 @@ class ServingModel(object):
             get_generation_value(generation_config, 'length_penalty', 1.0)
         sampling_config.stop_token_ids = \
             get_generation_value(generation_config, 'stop_token_ids', [])
+        sampling_config.ignore_eos = \
+            get_generation_value(generation_config, 'ignore_eos', False)
 
 
         if 'subinput_pos' in kwargs:
