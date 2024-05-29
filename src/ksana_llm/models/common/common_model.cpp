@@ -134,6 +134,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   cast_layer_ = std::make_shared<CastLayer<T>>();
   cast_layer_->Init({}, context_, rank_);
 
+  subinput_layer_ = std::make_shared<SubinputLayer<T>>();
+  subinput_layer_->Init({}, context_, rank_);
+
   model_input_ = std::make_shared<ModelInput>(model_config_, rank_, context_);
 
   if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
@@ -379,6 +382,13 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
 
     model_communicator_->AllGather({emb_lookup_output[0], temp_buffer_1[0]}, emb_lookup_output);
   }
+
+  // Subinput needs to be processed only in the context stage.
+  if (is_context_stage) {
+    subinput_layer_->Forward(
+      {model_input_->cpu_subinput_pos_pair_tensor, model_input_->cpu_subinput_emb_fp32_ptr_tensor}, emb_lookup_output);
+  }
+
   // LlamaDecoder
   for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     STATUS_CHECK_RETURN(
@@ -394,8 +404,13 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
 
   // assemble last token
   std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;
-  STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
-    {final_layernorm_output[0], model_input_->input_offset_uint64_tensor}, assemble_last_token_output));
+  if (model_input_->use_prompt_probs_offset) {
+    STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
+      {final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor}, assemble_last_token_output));
+  } else {
+    STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
+      {final_layernorm_output[0], model_input_->input_offset_uint64_tensor}, assemble_last_token_output));
+  }
 
   // lm_head
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
@@ -416,6 +431,7 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
   std::vector<Tensor> logits_buffer{model_output_->logits_tensor};
   STATUS_CHECK_RETURN(cast_layer_->Forward({lm_head_output[0], forward_shape_}, logits_buffer));
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
+  subinput_layer_->Clear();
   return Status();
 }
 

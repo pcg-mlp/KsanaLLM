@@ -22,6 +22,8 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
     : req_id(request->req_ids[index]),
       model_name(request->model_name),
       input_tokens(request->input_tokens),
+      prompt_probs_offset(request->prompt_probs_offset),
+      prompt_probs(request->prompt_probs),
       subinput_pos(request->subinput_pos),
       subinput_embedding(request->subinput_embedding),
       output_tokens(std::get<0>(request->output_group[index])),

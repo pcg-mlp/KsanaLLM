@@ -46,9 +46,8 @@ Status HttpEndpoint::Send(const Status infer_status, const std::shared_ptr<Reque
 
 Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Response &http_rsp) {
   if (http_req.has_param("input_tokens")) {
-    SamplingConfig sampling_config;
-    std::vector<std::vector<float>> subinput_embedding;
-    std::shared_ptr<Request> req = std::make_shared<Request>(sampling_config, subinput_embedding);
+    ksana_llm::KsanaPythonInput ksana_python_input;
+    std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input);
     req->model_name = http_req.get_param_value("model_name");
 
     req->subinput_pos = {};

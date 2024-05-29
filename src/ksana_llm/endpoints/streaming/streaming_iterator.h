@@ -23,10 +23,8 @@ class StreamingIterator {
     ~StreamingIterator() {}
 
     // Get the next token id, blocked if no token
-    Status GetNext(std::vector<std::vector<int>>& token_id,
-                   std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs);
-    bool AddOutput(std::vector<std::vector<int>>& token_id,
-                   std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs);
+    Status GetNext(ksana_llm::KsanaPythonOutput &ksana_python_output);
+    bool AddOutput(ksana_llm::KsanaPythonOutput &ksana_python_output);
 
   private:
     // The user request.

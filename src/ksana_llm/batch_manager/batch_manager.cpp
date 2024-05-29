@@ -123,7 +123,10 @@ Status BatchManager::Process() {
 
     {
       REPORT_TIME_US(batch_manager_step_us);
-      llm_runtime_->Step(scheduled_reqs);
+      Status status = llm_runtime_->Step(scheduled_reqs);
+      if (!status.OK()) {
+        NLLM_LOG_ERROR << status.ToString();
+      }
     }
   }
 

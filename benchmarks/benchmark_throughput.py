@@ -178,7 +178,6 @@ def analyze_stream_jsons(data_str: str):
 
         if brace_count == 0 and char == '}':
             json_str = data_str[start_index:i+1]
-            print(json_str)
             start_index = i+1
 
     return json.loads(str(json_str), strict=False)

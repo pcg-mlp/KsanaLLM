@@ -35,11 +35,18 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::
 void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
+  int logits_offset = 0;
   for (size_t i = 0; i < reqs.size(); ++i) {
     std::shared_ptr<InferRequest>& req_ptr = reqs[i];
 
     req_ptr->step += 1;
-    req_ptr->logits_offset = i;
+    req_ptr->logits_offset = logits_offset;
+    // When the prompt_probs_offset is greater than 0, the size of logits to be calculated is prompt_probs_offset.
+    if (req_ptr->prompt_probs_offset > 0) {
+      logits_offset += req_ptr->prompt_probs_offset;
+    } else {
+      logits_offset++;
+    }
     ModelInstance* key = req_ptr->model_instance.get();
     InferStage stage = req_ptr->infer_stage;
     if (grouped_reqs.find(key) == grouped_reqs.end()) {
@@ -53,6 +60,7 @@ void LlmRuntime::BuildForwardRequests(
     ForwardRequest forward_req;
     forward_req.infer_stage = req_ptr->infer_stage;
     forward_req.step = req_ptr->step;
+    forward_req.prompt_probs_offset = req_ptr->prompt_probs_offset;
     forward_req.block_size = req_ptr->block_size;
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
@@ -119,6 +127,8 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
     SamplingRequest sampling_req;
     sampling_req.req_id = req_ptr->req_id;
+    sampling_req.prompt_probs_offset = req_ptr->prompt_probs_offset;
+    sampling_req.prompt_probs = &(req_ptr->prompt_probs);
     sampling_req.input_tokens = &(req_ptr->input_tokens);
     sampling_req.output_tokens = &(req_ptr->output_tokens);
     sampling_req.logprobs = &(req_ptr->logprobs);

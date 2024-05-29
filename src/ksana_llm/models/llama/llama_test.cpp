@@ -87,6 +87,10 @@ TEST_F(LlamaTest, ForwardTest) {
   forward.logits_buf.resize(1);
   forward.logits_buf[0] = llama->GetLogitsPtr();
   forward.logits_offset = 0;
+  std::vector<int> subinput_pos;
+  std::vector<std::vector<float>> subinput_embedding;
+  forward.subinput_pos = &subinput_pos;
+  forward.subinput_embedding = &subinput_embedding;
   std::vector<int> block_ids;
   GetBlockManager()->AllocateBlocks(1, block_ids);
   forward.kv_cache_ptrs.resize(1);
@@ -117,9 +121,11 @@ TEST_F(LlamaTest, ForwardTest) {
   // Sampling
   SamplingRequest sample_req;
   std::vector<std::vector<std::pair<int, float>>> logprobs;
+  std::vector<float> prompt_probs;
   sample_req.logits_offset = forward_reqs[0].logits_offset;
   sample_req.output_tokens = forward_reqs[0].output_tokens;
   sample_req.logprobs = &logprobs;
+  sample_req.prompt_probs = &prompt_probs;
   std::mutex output_mutex;
   sample_req.output_mutex = &output_mutex;
   sample_req.logits_buf = forward_reqs[0].logits_buf;

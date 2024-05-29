@@ -469,11 +469,10 @@ class BatchSchedulerEvironmentSimulator {
                                                          int expected_output_token_num, std::shared_ptr<Request>& req,
                                                          int num_ret_seq = 1) {
     NLLM_LOG_INFO << "Init req " << req_id << ", seed=" << seed << ", input_token_num=" << input_token_num;
-    SamplingConfig sample_config;
-    sample_config.num_beams = 0;
-    sample_config.num_return_sequences = num_ret_seq;
-    std::vector<std::vector<float>> dummy_emb;
-    req = std::make_shared<Request>(sample_config, dummy_emb);
+    ksana_llm::KsanaPythonInput ksana_python_input;
+    ksana_python_input.sampling_config.num_beams = 0;
+    ksana_python_input.sampling_config.num_return_sequences = num_ret_seq;
+    req = std::make_shared<Request>(ksana_python_input);
     req->req_id = req_id;
     req->model_name = "llama";
     std::vector<int> seed_tokens;

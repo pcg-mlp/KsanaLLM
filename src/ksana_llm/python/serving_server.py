@@ -66,12 +66,12 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
 
     # Define an asynchronous function to stream the results
     async def stream_results():
-        async for request_outputs, logprobs in results_iterator:  # iterate over the results
-            if request_outputs is None:
+        async for ksana_python_output in results_iterator:  # iterate over the results
+            if ksana_python_output is None:
                 return
             output_texts = []
             output_token_ids = []
-            for request_output in request_outputs:
+            for request_output in ksana_python_output.output_tokens:
                 # Decode the output tokens using the tokenizer
                 request_output = request_output[len(input_tokens):]
                 output_token_ids.append(request_output)
@@ -83,8 +83,9 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
             ret = {
                 "texts": output_texts,
                 "output_token_ids": output_token_ids,
-                "input_token_ids": input_tokens,  # the input token IDs
-                "logprobs": logprobs
+                "prompt_probs": ksana_python_output.prompt_probs,
+                "logprobs": ksana_python_output.logprobs,
+                "input_token_ids": input_tokens
             }
             yield (json.dumps(ret) + "\0").encode("utf-8")
 
@@ -96,7 +97,7 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform batch generation.
     """
     # Generate output tokens using the model
-    results_tokens, logprobs = model.generate(
+    ksana_python_output = model.generate(
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
@@ -106,14 +107,15 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
 
     # Decode the output tokens into a human-readable text using the tokenizer
     output_text = []
-    for tokens in results_tokens:
+    for tokens in ksana_python_output.output_tokens:
         output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
 
     # Create a JSON response with the generated text and token IDs
     return JSONResponse({
         "texts": output_text,  # the generated text
-        "output_token_ids": results_tokens,  # the generated token IDs
-        "logprobs": logprobs,
+        "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
+        "logprobs": ksana_python_output.logprobs,
+        "prompt_probs": ksana_python_output.prompt_probs,
         "input_token_ids": input_tokens  # the input token IDs
     })
 
@@ -142,14 +144,19 @@ async def generate(request: Request) -> Response:
 
     subinput_pos = request_dict.pop("subinput_pos", None)
     subinput_embedding = request_dict.pop("subinput_embedding", None)
+    prompt_probs_offset = request_dict.pop("prompt_probs_offset", None)
 
-    input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+    input_tokens = request_dict.pop("input_tokens", None)
+    if input_tokens is None:
+       input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
     kwargs = {}
     if subinput_pos is not None:
         kwargs['subinput_pos'] = subinput_pos
-    if subinput_pos is not None:
+    if subinput_embedding is not None:
         kwargs['subinput_embedding'] = subinput_embedding
+    if prompt_probs_offset is not None:
+        kwargs['prompt_probs_offset'] = prompt_probs_offset
 
     generation_config = GenerationConfig(
         top_k=get_sampling_value(sampling_config, "topk", 1),

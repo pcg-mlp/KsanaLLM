@@ -42,7 +42,7 @@ class PyAsyncStreamingIterator(object):
         loop = asyncio.get_event_loop()
 
         # Run the GetNext method of the serving iterator in an executor to avoid blocking the event loop
-        status, token_id, logprobs = await loop.run_in_executor(
+        status, ksana_python_output = await loop.run_in_executor(
             model_executor,  # specify the executor to use
             self._serving_iterator.GetNext  # method to call
         )
@@ -50,7 +50,7 @@ class PyAsyncStreamingIterator(object):
         # Check the status of the iteration
         if status.OK():
             # If the iteration is successful, return the token ID
-            return token_id, logprobs
+            return ksana_python_output
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
             # If the iteration has finished, raise a StopAsyncIteration exception
             raise StopAsyncIteration(
@@ -96,7 +96,11 @@ class ServingModel(object):
     ) -> list[List[int]]:
         """The model generate interface, invoked by venus.
         """
-        sampling_config = libtorch_serving.SamplingConfig()
+
+        ksana_python_input = libtorch_serving.KsanaPythonInput()
+        ksana_python_input.model_name = model_name
+        ksana_python_input.input_tokens = inputs
+        sampling_config = ksana_python_input.sampling_config
 
         def get_generation_value(generation_config: GenerationConfig, key: str, default_val):
             """Get value from generation_config, return default if key not exists.
@@ -125,21 +129,20 @@ class ServingModel(object):
             get_generation_value(generation_config, 'stop_token_ids', [])
 
 
-        subinput_pos = []
         if 'subinput_pos' in kwargs:
-            subinput_pos = kwargs['subinput_pos']
+            ksana_python_input.subinput_pos = kwargs['subinput_pos']
 
-        subinput_embedding = []
         if 'subinput_embedding' in kwargs:
-            subinput_embedding = kwargs['subinput_embedding']
+            ksana_python_input.subinput_embedding = kwargs['subinput_embedding']
+
+        if 'prompt_probs_offset' in kwargs:
+            ksana_python_input.prompt_probs_offset = kwargs['prompt_probs_offset']
+            sampling_config.max_new_tokens = 1
+            sampling_config.return_prompt_probs = True
 
         if streamer is None:
-            _, outputs, logprobs = self._serving.generate(model_name, inputs,
-                                                          sampling_config,
-                                                          subinput_pos, subinput_embedding)
-            return outputs, logprobs
+            _, ksana_python_output = self._serving.generate(ksana_python_input)
+            return ksana_python_output
         else:
-            _, streaming_iterator = self._serving.generate_streaming(
-                model_name, inputs, sampling_config,
-                subinput_pos, subinput_embedding)
+            _, streaming_iterator = self._serving.generate_streaming(ksana_python_input)
             return PyAsyncStreamingIterator(streaming_iterator)
