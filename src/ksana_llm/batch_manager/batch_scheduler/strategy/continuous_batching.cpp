@@ -10,9 +10,9 @@
 namespace ksana_llm {
 
 ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
-                                                       std::shared_ptr<Context> context,
+                                                       int tp_num,
                                                        std::shared_ptr<BatchState> batch_state)
-    : BaseScheduleStrategy(batch_scheduler_config, context, batch_state) {
+    : BaseScheduleStrategy(batch_scheduler_config, tp_num, batch_state) {
   threadpool_ = std::make_shared<ThreadPool>(batch_scheduler_config.swap_threadpool_size);
   threadpool_->Start();
 
@@ -463,7 +463,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     if (visit_idx < swapout_pos && CheckBeamSearch(req)) {
       NLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
       if (step_block_num > 0) {
-        for (size_t i = 0; i < context_->GetTensorParallelSize(); ++i) {
+        for (int i = 0; i < tp_num_; ++i) {
           std::vector<int> blocks;
           GetBlockManager()->SetDeviceId(i);
           Status status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
@@ -509,7 +509,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
       if (!swap_success || batch_scheduler_config_.preempt_mode == RECOMPUTE) {
         NLLM_LOG_DEBUG << "running req " << req->req_id << " recompute.";
         req->FreeBlocks();
-        req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
+        req->kv_cache_blocks.resize(tp_num_);
         req->infer_stage = InferStage::STAGE_CONTEXT;
         req->step = 0;
         recompute_queue_.push_back(req);
@@ -625,7 +625,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
       NLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch.";
       size_t total_block_num = waiting_total_block_num_list_[visit_idx];
       if (total_block_num > 0) {
-        for (int i = 0; i < context_->GetTensorParallelSize(); ++i) {
+        for (int i = 0; i < tp_num_; ++i) {
           std::vector<int> blocks;
           GetBlockManager()->SetDeviceId(i);
           GetBlockManager()->AllocateBlocks(total_block_num, blocks);

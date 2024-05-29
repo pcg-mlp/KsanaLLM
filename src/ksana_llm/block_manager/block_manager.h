@@ -6,15 +6,15 @@
 #include <memory>
 #include <vector>
 
+#include "ksana_llm/block_manager/block_manager_interface.h"
+
 #include "ksana_llm/block_manager/device_allocator.h"
 #include "ksana_llm/block_manager/host_allocator.h"
-#include "ksana_llm/utils/context.h"
-#include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
 
 // The memory pool management.
-class BlockManager {
+class BlockManager: public BlockManagerInterface {
   public:
     BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context);
 

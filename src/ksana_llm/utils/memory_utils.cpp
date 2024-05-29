@@ -12,11 +12,11 @@
 
 namespace ksana_llm {
 
-static BlockManager* g_block_manager = nullptr;
+static BlockManagerInterface* g_block_manager = nullptr;
 
-void SetBlockManager(BlockManager* block_manager) { g_block_manager = block_manager; }
+void SetBlockManager(BlockManagerInterface* block_manager) { g_block_manager = block_manager; }
 
-BlockManager* GetBlockManager() { return g_block_manager; }
+BlockManagerInterface* GetBlockManager() { return g_block_manager; }
 
 Status GetDeviceMemoryInfo(MemoryDevice device, size_t* free, size_t* total) {
   MemGetInfo(free, total);

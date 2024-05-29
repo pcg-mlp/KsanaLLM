@@ -26,7 +26,8 @@ BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::
 }
 
 Status BatchManager::Initialize() {
-  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_);
+  batch_scheduler_ =
+    std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_->GetTensorParallelSize());
 
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_manager_config_.batch_scheduler_config, context_);
 

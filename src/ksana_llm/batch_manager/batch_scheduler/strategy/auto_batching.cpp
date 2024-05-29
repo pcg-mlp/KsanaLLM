@@ -14,8 +14,8 @@
 namespace ksana_llm {
 
 AutoBatchingStrategy::AutoBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
-                                           std::shared_ptr<Context> context, std::shared_ptr<BatchState> batch_state)
-    : BaseScheduleStrategy(batch_scheduler_config, context, batch_state) {}
+                                           int tp_num, std::shared_ptr<BatchState> batch_state)
+    : BaseScheduleStrategy(batch_scheduler_config, tp_num, batch_state) {}
 
 bool AutoBatchingStrategy::CheckBatchFinished() {
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end(); ++it) {
@@ -83,7 +83,7 @@ void AutoBatchingStrategy::PaddingRequests() {
 #endif
 
     // For compatible with model input.
-    for (int i = 0; i < context_->GetTensorParallelSize(); ++i) {
+    for (int i = 0; i < tp_num_; ++i) {
       std::vector<int> blocks;
       GetBlockManager()->SetDeviceId(i);
       GetBlockManager()->AllocateBlocks(1, blocks);
