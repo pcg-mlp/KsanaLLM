@@ -382,7 +382,12 @@ void ContinuousBatchingStrategy::ProcessWaitingRequests(const std::vector<size_t
 
   running_indexes.clear();
   for (size_t i = 0; i < batch_state_->waiting_queue.size(); ++i) {
-    ++step_batch_size;
+    // When the prompt_probs_offset is greater than 0, the size of logits to be calculated is prompt_probs_offset.
+    if (batch_state_->waiting_queue[i]->prompt_probs_offset > 0) {
+      step_batch_size += batch_state_->waiting_queue[i]->prompt_probs_offset;
+    } else {
+      ++step_batch_size;
+    }
     launch_block_threshold = step_batch_size * batch_scheduler_config_.launch_block_threshold;
     step_token_num_sum += step_token_num_list[i];
     total_block_num_sum += total_block_num_list[i];

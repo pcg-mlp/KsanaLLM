@@ -12,6 +12,7 @@
 #include "ksana_llm/layers/matmul_layer.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
+#include "ksana_llm/layers/subinput_layer.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 
@@ -83,6 +84,7 @@ class CommonModel : public BaseModel {
     std::shared_ptr<MatMulLayer<T>> matmul_layer_;
     std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
     std::shared_ptr<CastLayer<T>> cast_layer_;
+    std::shared_ptr<SubinputLayer<T>> subinput_layer_;
 
     // The layer number of the model
     int num_layer_;

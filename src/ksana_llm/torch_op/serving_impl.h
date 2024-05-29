@@ -25,16 +25,11 @@ class ServingImpl {
     Status Stop();
 
     // Handle serving request.
-    Status Handle(const std::string &model_name, const std::vector<int> &input_tokens,
-                  const SamplingConfig &sampling_config, 
-                  const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
-                  std::vector<std::vector<int>> &output_tokens,
-                  std::vector<std::vector<std::vector<std::pair<int, float>>>> &logprobs);
+    Status Handle(const ksana_llm::KsanaPythonInput &ksana_python_input,
+                  ksana_llm::KsanaPythonOutput &ksana_python_output);
 
     // Handle serving request, in streaming mode.
-    Status HandleStreaming(const std::string &model_name, const std::vector<int> &input_tokens,
-                           const SamplingConfig &sampling_config,
-                           const std::vector<int> &subinput_pos, const std::vector<std::vector<float>> &subinput_embedding,
+    Status HandleStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
                            std::shared_ptr<StreamingIterator> &streaming_iterator);
 
   private:

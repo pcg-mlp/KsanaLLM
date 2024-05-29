@@ -125,6 +125,19 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
   return Status();
 }
 
+void Sampler::CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+                                    std::vector<std::vector<float>>& prompt_probs_output) {
+  for (int i = 0; i < sampling_reqs.size(); i++) {
+    if (sampling_reqs[i].sampling_config->return_prompt_probs) {
+      prompt_probs_output[i].resize(batch_schedule_config_.max_vocab_size * sampling_reqs[i].prompt_probs_offset);
+      MemcpyAsync(
+        prompt_probs_output[i].data(),
+        sampling_reqs[i].logits_buf[rank_] + sampling_reqs[i].logits_offset * batch_schedule_config_.max_vocab_size,
+        sizeof(float) * prompt_probs_output[i].size(), MEMCPY_DEVICE_TO_HOST, stream);
+    }
+  }
+}
+
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
   if (rank_ == 0) {
     bool use_arg_max = true;
@@ -135,8 +148,8 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     SamplingDevideParameter sampling_devide_parameter;
     sampling_devide_parameter.bs = sampling_reqs.size();
     sampling_devide_parameter.max_logprobs_num = 0;
-
-
+    std::vector<std::vector<float>> prompt_probs_output(sampling_reqs.size());
+    CopyPromptProbsOutput(sampling_reqs, stream, prompt_probs_output);
     for (auto& sampling_req : sampling_reqs) {
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
       sampling_devide_parameter.max_logprobs_num =
@@ -149,8 +162,8 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
       }
       int offset = sampling_req.logits_offset;
-      if (offset >= sampling_devide_parameter.bs) {
-        return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= sampling_devide_parameter.bs");
+      if (offset >= batch_schedule_config_.max_batch_size) {
+        return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= max_batch_size");
       }
       host_offset_[req_index] = offset;
       if (sampling_config->topk > 1024) {
@@ -201,6 +214,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
       beam_search_sampling_.Sampling(sampling_reqs[i]);
+      (*sampling_reqs[i].prompt_probs) = std::move(prompt_probs_output[i]);
     }
   }
   return Status();

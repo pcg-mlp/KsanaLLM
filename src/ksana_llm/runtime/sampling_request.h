@@ -16,6 +16,12 @@ struct SamplingRequest {
     // The req id of the user's request.
     int64_t req_id;
 
+    // The offsets of the tokens for the prompt_probs that need to be returned.
+    size_t prompt_probs_offset = 0;
+
+    // Probs of specific tokens at certain positions in the prompt.
+    std::vector<float>* prompt_probs;
+
     // The sampling config.
     SamplingConfig* sampling_config;
 
