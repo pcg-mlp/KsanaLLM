@@ -90,6 +90,9 @@ TEST_F(LlamaAscendPermuteTestSuit, PermuteKernelTest) {
   for (int i = 0; i < 24; ++i) {
     EXPECT_FLOAT_EQ(result[i], wanted[i]);
   }
+
+  ACL_CHECK_RET(aclrtFree(input_data_dev));
+  ACL_CHECK_RET(aclrtFree(output_data_dev));
 }
 
 }  // namespace test

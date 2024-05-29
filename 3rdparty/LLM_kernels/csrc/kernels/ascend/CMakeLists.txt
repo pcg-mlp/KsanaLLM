@@ -40,13 +40,8 @@ function(add_ascend_kernel_lib)
   set(llm_kernels_ascend_link_libs ${llm_kernels_ascend_link_libs})
   set(llm_kernels_ascend_libs_deps ${llm_kernels_ascend_libs_deps})
 
-  if("${add_ascend_kernel_lib_NAME}" STREQUAL "fused_rotary_embedding")
-    target_link_libraries(${kernel_lib_name} PUBLIC
-      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs} ${aicore_kernel_lib_name})
-  else()
-    target_link_libraries(${kernel_lib_name} PUBLIC
-      ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs})
-  endif()
+  target_link_libraries(${kernel_lib_name} PRIVATE
+    ${llm_kernels_ascend_libs_deps} ${llm_kernels_ascend_link_libs} ${aicore_kernel_lib_name})
 
   target_link_libraries(${kernel_lib_name} PUBLIC
     /usr/local/Ascend/ascend-toolkit/latest/lib64/libnnopbase.so
@@ -89,11 +84,13 @@ add_subdirectory(reshape)
 add_subdirectory(rotary_embedding)
 add_subdirectory(slice)
 add_subdirectory(transpose)
-add_subdirectory(matmul_silu)
-add_subdirectory(rmsnorm)
 add_subdirectory(cast)
-add_subdirectory(silu)
-add_subdirectory(fused_rotary_embedding)
+add_subdirectory(silu_mul)
+
+# add_subdirectory(matmul_silu)
+# add_subdirectory(rmsnorm)
+# add_subdirectory(silu)
+# add_subdirectory(fused_rotary_embedding)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")

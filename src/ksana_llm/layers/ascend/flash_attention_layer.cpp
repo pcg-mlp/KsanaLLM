@@ -72,9 +72,11 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
                                       b_workspace_buf_ptr);
 
     size_t b_size2 = b_seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
-    ACL_CHECK(aclrtMemcpy(output_tensors[0].GetPtr<void>() +
-                            ((b_idx * seq_len + padded_size) * (hidden_units * GetTypeSize(input_tensors[0].dtype))),
-                          b_size2, b_tmp_buffers2[1], b_size2, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
+    ACL_CHECK(
+      aclrtMemcpyAsync(output_tensors[0].GetPtr<void>() +
+                         ((b_idx * seq_len + padded_size) * (hidden_units * GetTypeSize(input_tensors[0].dtype))),
+                       b_size2, b_tmp_buffers2[1], b_size2, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE,
+                       context_->GetComputeStreams()[rank_].Get()));
 
     ACL_CHECK(aclDestroyTensor(b_input_tensor2));
   }

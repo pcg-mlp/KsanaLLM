@@ -28,7 +28,9 @@ if(WITH_ACL)
     llm_kernels_ascend_layernorm llm_kernels_ascend_matmul
     llm_kernels_ascend_activation
     llm_kernels_ascend_rotary_embedding
-    llm_kernels_ascend_attention)
+    llm_kernels_ascend_attention
+    llm_kernels_ascend_cast
+    llm_kernels_ascend_silu_mul)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})
@@ -44,6 +46,7 @@ endif()
 
 if(WITH_ACL)
   file(GLOB_RECURSE layers_test_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/ascend/*test.cpp)
+  add_library(extra_deps SHARED ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})
 endif()
 
 file(GLOB_RECURSE layers_test_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/*test.cpp
