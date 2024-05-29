@@ -10,7 +10,7 @@ namespace ksana_llm {
 // The auto-batching scheduler implementation.
 class AutoBatchingStrategy : public BaseScheduleStrategy {
   public:
-    AutoBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context,
+    AutoBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num,
                          std::shared_ptr<BatchState> batch_state);
 
     virtual void Schedule() override;

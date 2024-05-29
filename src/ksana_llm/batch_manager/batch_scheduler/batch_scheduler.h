@@ -18,7 +18,7 @@ namespace ksana_llm {
 
 class BatchScheduler {
   public:
-    BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context);
+    BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, int tp_num);
     ~BatchScheduler() {}
 
     // Get the next infer reqs that ready to run.
@@ -42,7 +42,6 @@ class BatchScheduler {
 
   private:
     BatchSchedulerConfig batch_scheduler_config_;
-    std::shared_ptr<Context> context_;
 
     // The batch state informations, include some queues and mutexes.
     std::shared_ptr<BatchState> batch_state_ = nullptr;

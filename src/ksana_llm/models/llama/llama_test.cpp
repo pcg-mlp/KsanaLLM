@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/block_manager/block_manager.h"
 
 #include <Python.h>
 #include <filesystem>

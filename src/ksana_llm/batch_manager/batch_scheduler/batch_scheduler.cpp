@@ -27,15 +27,15 @@
 
 namespace ksana_llm {
 
-BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context)
-    : batch_scheduler_config_(batch_scheduler_config), context_(context) {
+BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, int tp_num)
+    : batch_scheduler_config_(batch_scheduler_config) {
   // Config validation.
   NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens > batch_scheduler_config_.max_token_len,
                        FormatStr("The max_step_tokens must large than max_token_len, %d vs %d.",
                                  batch_scheduler_config_.max_step_tokens, batch_scheduler_config_.max_token_len));
 
   batch_state_ = std::make_shared<BatchState>(batch_scheduler_config_);
-  schedule_strategy_ = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, context_, batch_state_);
+  schedule_strategy_ = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, tp_num, batch_state_);
 }
 
 Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {

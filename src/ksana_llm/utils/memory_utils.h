@@ -8,17 +8,17 @@
 #include <queue>
 #include <vector>
 
-#include "ksana_llm/block_manager/block_manager.h"
+#include "ksana_llm/block_manager/block_manager_interface.h"
 
 namespace ksana_llm {
 
 static int64_t DivRoundUp(int64_t dividend, int64_t divisor) { return (dividend + divisor - 1) / divisor; }
 
 // Set a global block manager
-void SetBlockManager(BlockManager* block_manager);
+void SetBlockManager(BlockManagerInterface* block_manager);
 
 // Get the global block manager
-BlockManager* GetBlockManager();
+BlockManagerInterface* GetBlockManager();
 
 // Get block pointer.
 template <typename T>

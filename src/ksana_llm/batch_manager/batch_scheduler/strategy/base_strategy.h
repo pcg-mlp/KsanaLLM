@@ -13,9 +13,9 @@ namespace ksana_llm {
 
 class BaseScheduleStrategy {
   public:
-    BaseScheduleStrategy(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context,
+    BaseScheduleStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num,
                          std::shared_ptr<BatchState> batch_state)
-        : batch_state_(batch_state), batch_scheduler_config_(batch_scheduler_config), context_(context) {}
+        : batch_state_(batch_state), batch_scheduler_config_(batch_scheduler_config), tp_num_(tp_num) {}
 
     // Get the next infer reqs that ready to run.
     virtual void Schedule() = 0;
@@ -26,7 +26,7 @@ class BaseScheduleStrategy {
 
     // the config and context.
     BatchSchedulerConfig batch_scheduler_config_;
-    std::shared_ptr<Context> context_;
+    int tp_num_;
 };
 
 }  // namespace ksana_llm
