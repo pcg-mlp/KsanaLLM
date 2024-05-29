@@ -7,7 +7,7 @@
 
 #include "3rdparty/half/include/half.hpp"
 #include "aclrtlaunch_InvokeCastFloatToHalfKernel.h"
-#include "csrc/kernels/ascend/cast/cast.h"
+#include "csrc/kernels/ascend/cast/cast_tiling.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
 

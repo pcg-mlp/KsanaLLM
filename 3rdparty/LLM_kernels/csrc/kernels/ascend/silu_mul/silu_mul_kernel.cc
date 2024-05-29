@@ -2,9 +2,9 @@
  * Copyright 2024 Tencent Inc.  All rights reserved.
  */
 
+#include "silu_mul_kernel.h"
 #include "interface/kernel_type.h"
 #include "kernel_operator.h"
-#include "silu_mul_kernel.h"
 using namespace AscendC;
 
 constexpr int32_t BUFFER_NUM = 1;  // tensor num for each queue
@@ -118,6 +118,13 @@ __aicore__ inline void SiluMulKernel<DTYPE>::CopyOut(uint32_t loop_idx) {
 extern "C" __global__ __aicore__ void InvokeSiluMulHalfKernel(GM_ADDR input, GM_ADDR weight, GM_ADDR output,
                                                               GM_ADDR tiling_gm) {
   SiluMulKernel<half> silu_mul_kernel;
+  silu_mul_kernel.Init(input, weight, output, tiling_gm);
+  silu_mul_kernel.Process();
+}
+
+extern "C" __global__ __aicore__ void InvokeSiluMulFloatKernel(GM_ADDR input, GM_ADDR weight, GM_ADDR output,
+                                                               GM_ADDR tiling_gm) {
+  SiluMulKernel<float> silu_mul_kernel;
   silu_mul_kernel.Init(input, weight, output, tiling_gm);
   silu_mul_kernel.Process();
 }

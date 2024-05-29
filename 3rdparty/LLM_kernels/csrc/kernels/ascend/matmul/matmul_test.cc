@@ -48,13 +48,13 @@ TEST_F(LlamaAscendMatmulTestSuit, AclNNMatmulTest) {
   size_t m = 1;
   size_t n = 1;
   size_t k = 2;
-  const std::vector<int64_t> input_shape = {m, k};
+  const std::vector<int64_t> input_shape = {static_cast<int64_t>(m), static_cast<int64_t>(k)};
   aclTensor *input_tensor = nullptr;
   void *input_workspace = nullptr;
-  const std::vector<int64_t> other_shape = {k, n};
+  const std::vector<int64_t> other_shape = {static_cast<int64_t>(k), static_cast<int64_t>(n)};
   aclTensor *other_tensor = nullptr;
   void *other_workspace = nullptr;
-  const std::vector<int64_t> output_shape = {m, n};
+  const std::vector<int64_t> output_shape = {static_cast<int64_t>(m), static_cast<int64_t>(n)};
   aclTensor *output_tensor = nullptr;
   void *output_workspace = nullptr;
   CreateAclTensor(input_shape, &input_workspace, aclDataType::ACL_FLOAT16, aclFormat::ACL_FORMAT_ND, &input_tensor);

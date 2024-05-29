@@ -32,19 +32,15 @@ aclDataType CastDataTypeToAclDataType(const DataType dtype) {
 }
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
-  Tensor* input_normal_tensor_ptr = reinterpret_cast<Tensor*>(&tensor);
-  aclTensor* input_tensor_ptr = input_normal_tensor_ptr->GetDeviceTensor();
-  std::vector<int64_t> input_shape = GetAclTensorShape(input_tensor_ptr);
-  void* output_buffer_space_ptr = tensor.GetPtr<void>();
-  aclTensor* reshaped_output_tensor = nullptr;
-  llm_kernels::utils::CreateAclTensorWithData(input_shape, &(output_buffer_space_ptr),
-                                              CastDataTypeToAclDataType(target_dtype), aclFormat::ACL_FORMAT_ND,
-                                              &reshaped_output_tensor);
-  llm_kernels::ascend::Cast(input_tensor_ptr, CastDataTypeToAclDataType(target_dtype), &reshaped_output_tensor,
-                            stream.Get(), GetWorkSpaceFunc());
-  tensor.ResetDeviceTensor(reshaped_output_tensor);
+  if (tensor.dtype == DataType::TYPE_BF16 || target_dtype == DataType::TYPE_BF16) {
+    throw std::invalid_argument("Invalid cast compute type, only support float16 to float32 or float32 to float16.");
+  } else if (tensor.dtype == target_dtype) {
+    // No need to convert
+  } else {
+    throw std::runtime_error(
+      fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+  }
   tensor.dtype = target_dtype;
-  ACL_CHECK(aclDestroyTensor(input_tensor_ptr));
   return Status();
 }
 

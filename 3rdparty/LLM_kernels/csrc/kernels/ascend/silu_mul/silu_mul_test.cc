@@ -36,7 +36,7 @@ class LlamaAscendSiluMulTestSuit : public AscendTestSuitBase {
     SiluMulTilingConfig tiling;
     tiling.total_elem_num = total_elem_num;
     tiling.block_elem_num = block_elem_num;
-    tiling.tile_num = 2;
+    tiling.tile_num = 1;
 
     size_t input_size = total_elem_num * sizeof(DTYPE);
     uint8_t *input_host;

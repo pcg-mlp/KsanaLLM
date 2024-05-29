@@ -4,16 +4,20 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <vector>
+
+#include "acl/acl.h"
+#include "acl/acl_op_compiler.h"
+#include "aclnn/acl_meta.h"
+
+#include "csrc/kernels/ascend/cast/cast_tiling.h"
 
 namespace llm_kernels {
 namespace ascend {
 
-struct CastTilingConfig {
-  uint32_t total_elem_num = 0;
-  uint32_t block_elem_num = 0;
-  uint32_t tile_num = 0;
-};
+template <typename SRC_DTYPE, typename DST_DTYPE>
+void InvokeCast(SRC_DTYPE* input, DST_DTYPE* output, uint32_t seq_len, uint32_t hidden_units_num, aclrtStream& stream,
+                void (*ws_func)(size_t, void**));
 
 }  // namespace ascend
 }  // namespace llm_kernels

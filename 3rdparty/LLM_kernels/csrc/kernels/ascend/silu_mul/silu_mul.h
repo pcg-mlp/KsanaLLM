@@ -14,7 +14,7 @@ namespace llm_kernels {
 namespace ascend {
 
 template <typename T>
-void InvokeSiluMul(const T* input, const T* weight, const size_t m, const size_t n, T* output, aclrtStream stream,
+void InvokeSiluMul(T* input, T* weight, const size_t m, const size_t n, T* output, aclrtStream stream,
                    llm_kernels::utils::WorkSpaceFunc ws_func);
 
 }  // namespace ascend

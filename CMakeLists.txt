@@ -27,6 +27,7 @@ if(NOT WITH_CUDA AND NOT WITH_ACL)
 endif()
 
 set(USE_CXX11_ABI, "False")
+
 # according prepare ABI version
 execute_process(COMMAND python "-c" "import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   RESULT_VARIABLE _PYTHON_SUCCESS

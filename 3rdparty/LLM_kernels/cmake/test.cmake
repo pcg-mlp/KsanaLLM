@@ -52,7 +52,3 @@ find_package(PythonLibs REQUIRED)
 include_directories(${PYTHON_INCLUDE_DIRS})
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
-
-# copy test data to /tmp/
-execute_process(COMMAND mkdir -p /tmp/)
-execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/tests /tmp/)
