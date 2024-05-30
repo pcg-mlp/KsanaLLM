@@ -38,7 +38,7 @@ class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
     int block_token_num = block_manager_config.device_allocator_config.block_token_num;
     int total_block_num = (req->input_tokens.size() + output_token_num + block_token_num - 1) / block_token_num;
     NLLM_LOG_INFO << "Start init req " << req->req_id << ", block num =" << total_block_num;
-    NLLM_CHECK_WITH_INFO(req->kv_cache_blocks.size() == (size_t)device_num,
+    NLLM_CHECK_WITH_INFO(req->kv_cache_blocks.size() == device_num,
                          FormatStr("req->kv_cache_blocks.size()=%d", req->kv_cache_blocks.size()));
     for (int i = 0; i < device_num; i++) {
       std::vector<int> blocks;

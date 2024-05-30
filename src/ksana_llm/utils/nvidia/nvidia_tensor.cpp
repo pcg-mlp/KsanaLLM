@@ -28,7 +28,7 @@ template __nv_fp8_e4m3* TensorT<DEVICE_TYPE_NVIDIA>::GetPtr<__nv_fp8_e4m3>() con
 template <>
 std::vector<int64_t> TensorT<DEVICE_TYPE_NVIDIA>::GetDeviceTensorShape() const {
   std::vector<int64_t> device_tensor_shape;
-  return device_tensor_shape;
+  return std::move(device_tensor_shape);
 }
 
 template <>

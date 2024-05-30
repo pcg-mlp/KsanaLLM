@@ -16,7 +16,7 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
                   reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                   reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
                   context_->GetComputeStreams()[rank_].Get());
-  output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
+  output_tensors[0].shape = {static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1])};
   output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();

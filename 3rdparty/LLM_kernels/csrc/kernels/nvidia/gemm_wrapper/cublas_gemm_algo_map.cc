@@ -125,8 +125,9 @@ cublasLtMatmulAlgo_t HeuristicSearchCublasAlgo(cublasLtHandle_t cublaslt_handle,
                                                          &heuristic_result, &returned_result));
   if (returned_result == 0) {
     CHECK_NVIDIA_CUDA_ERROR(CUBLAS_STATUS_NOT_SUPPORTED);
+  } else {
+    return heuristic_result.algo;
   }
-  return heuristic_result.algo;
 }
 
 }  // namespace nvidia

@@ -263,7 +263,7 @@ Status BlockManager::PreparePrefixCacheBlocks() {
 
   // TODO(karlluo): support pipeline parallel
   // prepare prefixed cache blocks
-  for (int device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
+  for (size_t device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
     SetDeviceId(device_id);
     std::vector<int> prefix_cache_block_tmp;
     AllocateBlocks(block_num, prefix_cache_block_tmp);

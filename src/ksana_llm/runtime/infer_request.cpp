@@ -70,7 +70,7 @@ Status InferRequest::FreeBlocks() {
 }
 
 void InferRequest::Notify() {
-  for (size_t i = 0; i < req_group.size(); i++) {
+  for (int i = 0; i < req_group.size(); i++) {
     if (!req_group[i]->finished) return;
   }
 
@@ -78,13 +78,13 @@ void InferRequest::Notify() {
     std::sort(beam_search_group.begin(), beam_search_group.end(),
               [](const OutputTuple &a, const OutputTuple &b) { return std::get<2>(a) > std::get<2>(b); });
 
-    for (size_t i = 0; i < req_group.size() && i < beam_search_group.size(); i++) {
+    for (int i = 0; i < req_group.size() && i < beam_search_group.size(); i++) {
       req_group[i]->output_tokens = std::move(std::get<0>(beam_search_group[i]));
       req_group[i]->logprobs = std::move(std::get<1>(beam_search_group[i]));
     }
   }
 
-  for (size_t i = 0; i < req_group.size(); i++) {
+  for (int i = 0; i < req_group.size(); i++) {
     req_group[i]->ClearReqGroup();
   }
   if (waiter) {
@@ -98,10 +98,10 @@ void InferRequest::Notify() {
 void InferRequest::NotifyStep() {
   if (sampling_config.num_beams > 1) {
     int output_tokens_len = -1;
-    for (size_t i = 0; i < req_group.size(); i++) {
+    for (int i = 0; i < req_group.size(); i++) {
       if (req_group[i]->finished) continue;
       output_tokens_len = output_tokens_len == -1 ? req_group[i]->output_tokens.size() : output_tokens_len;
-      if (req_group[i]->output_tokens.size() != (size_t)output_tokens_len) return;
+      if (req_group[i]->output_tokens.size() != output_tokens_len) return;
     }
   }
 
@@ -114,7 +114,7 @@ std::vector<float*> InferRequest::GetLogitsPtr() { return model_instance->GetLog
 
 std::vector<std::vector<void*>> InferRequest::GetBlockPtrs() {
   std::vector<std::vector<void*>> block_ptrs;
-  for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
+  for (int rank = 0; rank < kv_cache_blocks.size(); ++rank) {
     std::vector<void*> block_ptr(kv_cache_blocks[rank].size());
     GetBlockManager()->SetDeviceId(rank);
     GetBlockManager()->GetBlockPtrs(kv_cache_blocks[rank], block_ptr);

@@ -42,7 +42,7 @@ class TensorT {
     std::string ToString() const;
 
     // Get the block ids.
-    inline const int GetBlockId() const { return block_id; }
+    inline const int GetBlockId() const;
 
     // Get pointer of block
     template <typename TP>

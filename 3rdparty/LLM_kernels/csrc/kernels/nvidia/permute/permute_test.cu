@@ -36,10 +36,10 @@ TEST_F(LlamaNvidiaPermuteTestSuit, PermuteKernelTest) {
 
   float* input_h = reinterpret_cast<float*>(input_host.data_ptr);
   float* output_h = reinterpret_cast<float*>(output_host.data_ptr);
-  for (int i = 0; i < 20; i++) {
+  for (size_t i = 0; i < 20; i++) {
     printf("Input  Num %d = %f\n", i, input_h[i]);
   }
-  for (int i = 0; i < 20; i++) {
+  for (size_t i = 0; i < 20; i++) {
     printf("Output  Num %d = %f\n", i, output_h[i]);
   }
 }

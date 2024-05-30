@@ -79,12 +79,10 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   // TODO(karlluo): all create tensor used dynamic memory pool
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(
-    CreateBufferTensor(tensor_buffer_2_, {max_token_num, (size_t)max_dim}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
     CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_,
-                                          {(size_t)rotary_embedding, (size_t)max_position_embeddings},
+  STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
                                           model_config_.weight_data_type));
 #ifdef ENABLE_ACL
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_0_, {max_token_num, hidden_units}, TYPE_FP16));
@@ -365,7 +363,7 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
 
   // create forward shape tensor
   forward_shape_.shape = {model_input_->batch_size, model_input_->max_tokens,
-                          (size_t)model_input_->kv_cache_offset_list.back()};
+                          model_input_->kv_cache_offset_list.back()};
 
   std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);

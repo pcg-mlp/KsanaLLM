@@ -42,16 +42,18 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   const Tensor& cache_offset = input_tensors[3];
   const Tensor& rotary_embedding_pos = input_tensors[4];
   const Tensor& workspace = input_tensors[5];
+  const Tensor& forward_shape = input_tensors[6];
   const Tensor& qkv_workspace = input_tensors[7];
   int layer_block_num = input_tensors[6].shape[2];
   int max_tokens = input_tensors[6].shape[1];
   int batch_size = input_tensors[6].shape[0];
   int total_tokens = input_tensors[0].shape[0];
+  auto stream = context_->GetComputeStreams()[rank_].Get();
   void** k_list = (kv_list.GetPtr<void*>()) + (size_t)layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
   Tensor& out = output_tensors[0];
   out.dtype = query.dtype;
-  out.shape = {query.shape[0], num_heads_ * (size_t)head_size_};
+  out.shape = {query.shape[0], num_heads_ * head_size_};
   InvokePagedAttention<T>(out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(),
                           max_tokens, context_->GetComputeStreams()[rank_].Get(), cache_offset.GetPtr<void>(),
                           batch_size, num_heads_, head_size_, num_kv_heads_, stride_size_, block_token_num_, batch_size,

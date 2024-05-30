@@ -16,6 +16,10 @@ namespace ksana_llm {
 // Log level.
 enum Level { DEBUG = 0, INFO = 1, WARNING = 2, ERROR = 3, FATAL = 4 };
 
+// Log name to level.
+static std::unordered_map<Level, std::string> log_level_to_name = {
+    {DEBUG, "DEBUG"}, {INFO, "INFO"}, {WARNING, "WARNING"}, {ERROR, "ERROR"}, {FATAL, "FATAL"}};
+
 // Get log level from environment, this function called only once.
 static Level GetLogLevel() {
   const char* default_log_level = "INFO";
@@ -40,16 +44,7 @@ static std::string GetLogFile() {
 }
 
 // Get name from log level.
-inline std::string GetLevelName(const Level level) { 
-  switch(level){
-    case DEBUG: return "DEBUG";
-    case INFO: return "INFO";
-    case WARNING: return "WARNING";
-    case ERROR: return "ERROR";
-    case FATAL: return "FATAL";
-    default: return "Invalid: "+std::to_string(level);
-  }
-}
+static std::string GetLevelName(const Level level) { return log_level_to_name[level]; }
 
 // Init logrun instance.
 inline void InitLoguru() {
