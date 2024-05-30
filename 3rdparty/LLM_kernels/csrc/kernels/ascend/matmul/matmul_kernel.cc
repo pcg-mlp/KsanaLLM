@@ -56,13 +56,60 @@ __aicore__ inline void CalcGMOffset(int blockIdx, int usedCoreNum, TCubeTiling& 
   param.singleCoreK = gmUseK < param.singleCoreK ? gmUseK : param.singleCoreK;
 }
 
-extern "C" __global__ __aicore__ void InvokeMatmulKernel(GM_ADDR a, GM_ADDR b, GM_ADDR c,  GM_ADDR tiling_gm) {
+extern "C" __global__ __aicore__ void InvokeMatmulHalfKernel(GM_ADDR a, GM_ADDR b, GM_ADDR c, GM_ADDR tiling_gm) {
   // cube core cases, ignore vector core
   if (g_coreType == AIV) {
     return;
   }
   using A_T = half;
   using B_T = half;
+  using C_T = half;
+  using BiasT = half;
+
+  TPipe que;
+  TCubeTiling tiling;
+  CopyTiling(&tiling, tiling_gm);
+
+  if (GetBlockIdx() >= tiling.usedCoreNum) {
+    return;
+  }
+
+  GlobalTensor<A_T> a_global;
+  GlobalTensor<B_T> b_global;
+  GlobalTensor<C_T> c_global;
+
+  a_global.SetGlobalBuffer(reinterpret_cast<__gm__ A_T*>(a), tiling.M * tiling.Ka);
+  b_global.SetGlobalBuffer(reinterpret_cast<__gm__ B_T*>(b), tiling.Kb * tiling.N);
+  c_global.SetGlobalBuffer(reinterpret_cast<__gm__ C_T*>(c), tiling.M * tiling.N);
+
+  int offset_a = 0;
+  int offset_b = 0;
+  int offset_c = 0;
+
+  auto gm_a = a_global[offset_a];
+  auto gm_b = b_global[offset_b];
+  auto gm_c = c_global[offset_c];
+
+  typedef MatmulType<AscendC::TPosition::GM, CubeFormat::ND, A_T> AType;
+  typedef MatmulType<AscendC::TPosition::GM, CubeFormat::ND, B_T> BType;
+  typedef MatmulType<AscendC::TPosition::GM, CubeFormat::ND, C_T> CType;
+  typedef MatmulType<AscendC::TPosition::GM, CubeFormat::ND, BiasT> BiasType;
+  MatmulImpl<AType, BType, CType, BiasType> mm;
+  mm.SetSubBlockIdx(0);
+  mm.Init(&tiling, &que);
+
+  mm.SetTensorA(gm_a);
+  mm.SetTensorB(gm_b);
+  mm.IterateAll(gm_c);
+}
+
+extern "C" __global__ __aicore__ void InvokeMatmulFloatKernel(GM_ADDR a, GM_ADDR b, GM_ADDR c, GM_ADDR tiling_gm) {
+  // cube core cases, ignore vector core
+  if (g_coreType == AIV) {
+    return;
+  }
+  using A_T = float;
+  using B_T = float;
   using C_T = float;
   using BiasT = float;
 
