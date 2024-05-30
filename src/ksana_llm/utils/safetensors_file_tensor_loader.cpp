@@ -19,6 +19,7 @@ SafeTensorsLoader::SafeTensorsLoader(const std::string& file_name) : BaseFileTen
 SafeTensorsLoader::~SafeTensorsLoader() { delete[] weights_buffer_; }
 
 DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensors_dtype) {
+  DataType data_type = TYPE_INVALID;
   if (safetensors_dtype == "F16") {
     return TYPE_FP16;
   } else if (safetensors_dtype == "F32") {
@@ -35,7 +36,7 @@ void SafeTensorsLoader::LoadSafeTensors() {
   if (!safetensors_file.is_open()) {
     NLLM_LOG_ERROR << fmt::format("Can't open safetensors file: {}", file_name_);
   }
-  int file_size = safetensors_file.tellg();
+  size_t file_size = safetensors_file.tellg();
   if (file_size == -1) {
     NLLM_LOG_ERROR << fmt::format("Invalid safetensors file size: -1, filename: {}", file_name_);
   }

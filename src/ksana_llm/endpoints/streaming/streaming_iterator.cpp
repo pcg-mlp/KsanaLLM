@@ -11,14 +11,14 @@ namespace ksana_llm {
 
 bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_output) {
   size_t total_token_nums = 0;
-  for (size_t i = 0; i < request_->output_group.size(); i++) {
+  for (int i = 0; i < request_->output_group.size(); i++) {
     OutputTuple& output = request_->output_group[i];
     total_token_nums += std::get<0>(output).size();
   }
   if (total_token_nums == total_token_nums_) return false;
   total_token_nums_ = total_token_nums;
 
-  for (size_t i = 0; i < request_->output_group.size(); i++) {
+  for (int i = 0; i < request_->output_group.size(); i++) {
     OutputTuple& output = request_->output_group[i];
     ksana_python_output.output_tokens.push_back(std::get<0>(output));
     if (return_logprobs_) ksana_python_output.logprobs.push_back(std::get<1>(output));

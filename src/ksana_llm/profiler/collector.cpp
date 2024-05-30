@@ -49,7 +49,7 @@ void ProfileCollector::Process() {
   time_t last_stat_time = ProfileTimer::GetCurrentTime();
   while (!terminated_) {
     current_time = ProfileTimer::GetCurrentTime();
-    if (last_stat_time + (time_t)profiler_config_.stat_interval_second > current_time) {
+    if (last_stat_time + profiler_config_.stat_interval_second > current_time) {
       std::this_thread::sleep_for(
           std::chrono::seconds(last_stat_time + profiler_config_.stat_interval_second - current_time));
     }

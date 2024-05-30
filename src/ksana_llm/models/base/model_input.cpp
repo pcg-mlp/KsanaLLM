@@ -102,7 +102,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   NLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
     std::invalid_argument(fmt::format("ModelInput empty forward requests."));
-  } else if (batch_size > (size_t)model_config_.max_batch_size) {
+  } else if (batch_size > model_config_.max_batch_size) {
     std::invalid_argument(
         fmt::format("ModelInput bs exceed max bs. {} > {}", batch_size, model_config_.max_batch_size));
   }
@@ -220,7 +220,7 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   std::vector<size_t> prompt_probs_offset_list_uint64(max_batch_size_ + 1, 0ul);
   int prompt_probs_offset_list_uint64_index = 1;
   std::vector<int> input_ids_cpu(0);
-  for (size_t idx = 0; idx < batch_size; ++idx) {
+  for (int idx = 0; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
     input_ids_cpu.insert(input_ids_cpu.end(), req_input->begin(), req_input->end());

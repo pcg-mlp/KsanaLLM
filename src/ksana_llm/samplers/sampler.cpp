@@ -49,7 +49,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
     exit(RetCode::RET_SEGMENT_FAULT);
   }
   std::vector<uint32_t*> host_device_output_tokens_ptrs(max_batch_size);
-  for (size_t i = 0; i < max_batch_size; i++) {
+  for (int i = 0; i < max_batch_size; i++) {
     host_device_output_tokens_ptrs[i] = device_output_tokens_ + i;
   }
 
@@ -82,10 +82,10 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
   std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
   // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
   float inv_repetition_penalty = 1.0f / repetition_penalty;
-  for (size_t i = 0; i < input_tokens->size(); ++i) {
+  for (int i = 0; i < input_tokens->size(); ++i) {
     inv_repetition_penalties_[input_tokens->at(i)] = inv_repetition_penalty;
   }
-  for (size_t i = 0; i < output_tokens->size(); ++i) {
+  for (int i = 0; i < output_tokens->size(); ++i) {
     inv_repetition_penalties_[output_tokens->at(i)] = inv_repetition_penalty;
   }
   // copy inv_repetition_penalties_ to device
@@ -151,6 +151,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     std::vector<std::vector<float>> prompt_probs_output(sampling_reqs.size());
     CopyPromptProbsOutput(sampling_reqs, stream, prompt_probs_output);
     for (auto& sampling_req : sampling_reqs) {
+      const ModelConfig* model_config = sampling_req.model_config;
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
       sampling_devide_parameter.max_logprobs_num =
         std::max(sampling_devide_parameter.max_logprobs_num, sampling_req.sampling_config->logprobs_num);

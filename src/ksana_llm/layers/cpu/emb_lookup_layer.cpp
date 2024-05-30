@@ -21,7 +21,7 @@ Status CpuEmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, s
   int* cpu_input_tokens = reinterpret_cast<int*>(input_tensors[0].GetPtr<void>());
   T* cpu_data_ptr = reinterpret_cast<T*>(input_tensors[1].GetPtr<void>());
   T* emb_weight_ptr = reinterpret_cast<T*>(input_tensors[2].GetPtr<void>());
-  for (size_t i = 0; i < token_num; i++) {
+  for (int i = 0; i < token_num; i++) {
     memcpy(cpu_data_ptr + i * hidden_units, emb_weight_ptr + cpu_input_tokens[i] * hidden_units,
            hidden_units * sizeof(T));
   }

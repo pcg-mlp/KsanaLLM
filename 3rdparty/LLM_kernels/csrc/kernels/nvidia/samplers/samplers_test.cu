@@ -253,7 +253,7 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeRepetitionPenaltyTest) {
     DataType* logits_ptr = reinterpret_cast<DataType*>(logits_host.data_ptr);
     DataType* repetition_penalties_ptr = reinterpret_cast<DataType*>(repetition_penalties_host.data_ptr);
     DataType* output_ptr = reinterpret_cast<DataType*>(output_ref.data_ptr);
-    for (size_t i = 0; i < vocab_size; ++i) {
+    for (int i = 0; i < vocab_size; ++i) {
       output_ptr[i] = logits_ptr[i] > 0 ? (logits_ptr[i] / repetition_penalties_ptr[i])
                                         : (logits_ptr[i] * repetition_penalties_ptr[i]);
     }
