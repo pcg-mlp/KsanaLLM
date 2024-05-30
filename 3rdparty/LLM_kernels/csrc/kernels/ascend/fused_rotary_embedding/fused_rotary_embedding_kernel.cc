@@ -37,7 +37,6 @@ class RotaryEmbeddingKernel {
   // create queues for input, in this case depth is equal to buffer num
   AscendC::TQue<AscendC::QuePosition::VECIN, ROPE_EMBEDDING_BUFFER_NUM> input_queue;
   AscendC::TQue<AscendC::QuePosition::VECIN, ROPE_EMBEDDING_BUFFER_NUM> cos_sin_cache_queue;
-  AscendC::TQue<AscendC::QuePosition::VECIN, ROPE_EMBEDDING_BUFFER_NUM> workspace_queue;
   // create queue for output, in this case depth is equal to buffer num
   AscendC::TQue<AscendC::QuePosition::VECOUT, ROPE_EMBEDDING_BUFFER_NUM> output_queue;
 };

@@ -30,7 +30,8 @@ if(WITH_ACL)
     llm_kernels_ascend_rotary_embedding
     llm_kernels_ascend_attention
     llm_kernels_ascend_cast
-    llm_kernels_ascend_silu_mul)
+    llm_kernels_ascend_silu_mul
+    llm_kernels_ascend_rmsnorm)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})

@@ -16,3 +16,4 @@ if(NOT WITH_ACL)
 endif()
 
 add_subdirectory(kernels)
+add_subdirectory(references)
