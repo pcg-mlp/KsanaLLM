@@ -17,7 +17,7 @@ void BeamSearchSampling::Update(std::vector<std::shared_ptr<InferRequest>>& req_
 
     // 复制kv cache
     int block_token_num = GetBlockManager()->GetBlockTokenNum();
-    int block_nums = (src_req->output_tokens.size() + block_token_num - 1) / block_token_num;
+    size_t block_nums = (src_req->output_tokens.size() + block_token_num - 1) / block_token_num;
 
     int origin_device_id = GetBlockManager()->GetDeviceId();
     size_t block_size = GetBlockManager()->GetBlockSize();
@@ -29,7 +29,7 @@ void BeamSearchSampling::Update(std::vector<std::shared_ptr<InferRequest>>& req_
       NLLM_LOG_DEBUG << " device_id " << device_id << " src_addrs size " << src_addrs.size() << " dst_addrs size "
                      << dst_addrs.size() << " src step " << src_req->step;
       // TODO(zakwang): Exception handling
-      for (int block_idx = 0; block_idx < block_nums && block_idx < src_addrs.size() && block_idx < dst_addrs.size();
+      for (size_t block_idx = 0; block_idx < block_nums && block_idx < src_addrs.size() && block_idx < dst_addrs.size();
            block_idx++) {
         MemcpyAsync(dst_addrs[block_idx], src_addrs[block_idx], block_size, MEMCPY_DEVICE_TO_DEVICE,
                     context_->GetD2DStreams()[device_id]);
@@ -89,7 +89,7 @@ Status BeamSearchSampling::Sampling(SamplingRequest& sampling_req) {
     std::sort(output_source.rbegin(), output_source.rend());
     // Processing beam-req that does not require copying.
     std::set<int> finished_set;
-    for (i = 0; i < num_beams && i < output_source.size(); i++) {
+    for (i = 0; i < num_beams && i < (int)output_source.size(); i++) {
       int req_idx = output_source[i].second / num_beams;
       int token_idx = output_source[i].second % num_beams;
       if (token_idx == 0) {
@@ -99,7 +99,7 @@ Status BeamSearchSampling::Sampling(SamplingRequest& sampling_req) {
     }
     // Processing that needs to be replicated.
     int dst_idx = 0;
-    for (i = 0; i < num_beams && i < output_source.size(); i++) {
+    for (i = 0; i < num_beams && i < (int)output_source.size(); i++) {
       int req_idx = output_source[i].second / num_beams;
       int token_idx = output_source[i].second % num_beams;
       if (token_idx != 0) {

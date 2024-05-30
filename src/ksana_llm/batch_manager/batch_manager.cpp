@@ -54,7 +54,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     return req->finish_status;
   }
   std::vector<std::shared_ptr<InferRequest>> infer_request_group;
-  for (int i = 0; i < req->output_group.size(); i++) {
+  for (size_t i = 0; i < req->output_group.size(); i++) {
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
     infer_request_group.push_back(infer_req);
 

@@ -57,7 +57,7 @@ WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pipeline_parallel_s
   threadpool_->Start();
 
   workers_.resize(tensor_parallel_size_ * pipeline_parallel_size_);
-  for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
+  for (size_t worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     workers_[worker_id].reset(new Worker(worker_id, threadpool_, context));
   }
 }
@@ -65,7 +65,7 @@ WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pipeline_parallel_s
 WorkerGroup::~WorkerGroup() { threadpool_->Stop(); }
 
 std::shared_ptr<Worker> WorkerGroup::GetWorker(int rank) {
-  if (rank < 0 || rank >= workers_.size()) {
+  if (rank < 0 || rank >= (int)workers_.size()) {
     NLLM_LOG_FATAL << "The worker rank " << rank << " exceed worker size " << workers_.size();
   }
   return workers_[rank];

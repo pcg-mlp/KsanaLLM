@@ -16,7 +16,7 @@ namespace py = pybind11;
 
 namespace ksana_llm {
 // Define a class named PytorchFileTensorLoader that inherits from BaseFileTensorLoader
-class PytorchFileTensorLoader : public BaseFileTensorLoader {
+class __attribute__ ((visibility("hidden"))) PytorchFileTensorLoader : public BaseFileTensorLoader {
   public:
     // Constructor that takes a file name as input
     PytorchFileTensorLoader(const std::string& file_name);

@@ -102,13 +102,14 @@ TEST_F(LayerTest, AttentionLayerTest) {
   bool is_neox = true;
   Tensor cos_sin_cache_tensor;
   RoPEScalingFactor rope_scaling_factor;
-  CreateHalfDataTypeTensor(cos_sin_cache_tensor, {rotary_embedding, max_position_embeddings}, GetDataType<half>());
+  CreateHalfDataTypeTensor(cos_sin_cache_tensor, {(size_t)rotary_embedding, (size_t)max_position_embeddings},
+                           GetDataType<half>());
   EXPECT_TRUE(
-      flash_attention_layer
-          .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, int(1), rotary_embedding,
-                rope_theta, is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
-                context, 0)
-          .OK());
+    flash_attention_layer
+      .Init({int(0), int(2048), head_num, kv_head_num, size_per_head, stride_size, int(1), rotary_embedding, rope_theta,
+             is_neox, bool(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
+            context, 0)
+      .OK());
 
   Tensor qkv, input_len, pos, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
@@ -134,9 +135,9 @@ TEST_F(LayerTest, AttentionLayerTest) {
          MEMCPY_HOST_TO_DEVICE);
   // 为 kv_list 分配内存并初始化
   Tensor kv_list;
-  CreateHalfDataTypeTensor(kv_list, {h_block_offset.back() * 20}, GetDataType<uint64_t>());
+  CreateHalfDataTypeTensor(kv_list, {(size_t)h_block_offset.back() * 20}, GetDataType<uint64_t>());
   std::vector<void*> h_kv_list_ptrs(h_block_offset.back() * 2);
-  for (int i = 0; i < h_kv_list_ptrs.size(); i++) {
+  for (size_t i = 0; i < h_kv_list_ptrs.size(); i++) {
     Malloc(&h_kv_list_ptrs[i], block_size);
   }
   Memcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE);
