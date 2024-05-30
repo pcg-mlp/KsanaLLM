@@ -90,7 +90,7 @@ class ModelInstance {
     template <template <class> class ModelType, template <class> class WeightType>
     void CreateModelInstance(const std::string model_name) {
       NLLM_LOG_INFO << "Start to init model instance " << model_name;
-      for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      for (size_t worker_id = 0; worker_id < (size_t)context_->GetTensorParallelSize(); ++worker_id) {
         NLLM_LOG_INFO << "Start to create model weight on device " << worker_id;
         weights_.push_back(CreateModelWeight<WeightType>(worker_id));
 

@@ -25,7 +25,7 @@ class ThreadPool {
 
     ~ThreadPool() {}
 
-    int Idle() { return idle_; }
+    size_t Idle() { return idle_; }
 
     void Stop() {
       {
@@ -88,7 +88,7 @@ class ThreadPool {
     std::condition_variable cv_;
     std::mutex mutex_;
 
-    std::atomic<int> idle_;
+    std::atomic<size_t> idle_;
     std::atomic<bool> stopped_;
 
     std::vector<std::thread> pool_;

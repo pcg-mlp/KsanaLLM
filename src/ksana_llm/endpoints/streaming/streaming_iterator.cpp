@@ -12,14 +12,14 @@ namespace ksana_llm {
 bool StreamingIterator::AddOutput(std::vector<std::vector<int>>& token_id,
                                   std::vector<std::vector<std::vector<std::pair<int, float>>>>& logprobs) {
   size_t total_token_nums = 0;
-  for (int i = 0; i < request_->output_group.size(); i++) {
+  for (size_t i = 0; i < request_->output_group.size(); i++) {
     OutputTuple& output = request_->output_group[i];
     total_token_nums += std::get<0>(output).size();
   }
   if (total_token_nums == total_token_nums_) return false;
   total_token_nums_ = total_token_nums;
 
-  for (int i = 0; i < request_->output_group.size(); i++) {
+  for (size_t i = 0; i < request_->output_group.size(); i++) {
     OutputTuple& output = request_->output_group[i];
     token_id.push_back(std::get<0>(output));
     if (return_logprobs_) logprobs.push_back(std::get<1>(output));
