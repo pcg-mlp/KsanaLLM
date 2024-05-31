@@ -14,33 +14,33 @@ namespace ksana_llm {
 
 // The serving implementation.
 class ServingImpl {
-  public:
-    ServingImpl();
-    ~ServingImpl() {}
+ public:
+  ServingImpl();
+  ~ServingImpl() {}
 
-    // Start the inference server.
-    Status Start();
+  // Start the inference server.
+  Status Start();
 
-    // Stop the inference server.
-    Status Stop();
+  // Stop the inference server.
+  Status Stop();
 
-    // Handle serving request.
-    Status Handle(const ksana_llm::KsanaPythonInput &ksana_python_input,
-                  ksana_llm::KsanaPythonOutput &ksana_python_output);
+  // Handle serving request.
+  Status Handle(const ksana_llm::KsanaPythonInput &ksana_python_input,
+                ksana_llm::KsanaPythonOutput &ksana_python_output);
 
-    // Handle serving request, in streaming mode.
-    Status HandleStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
-                           std::shared_ptr<StreamingIterator> &streaming_iterator);
+  // Handle serving request, in streaming mode.
+  Status HandleStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
+                         std::shared_ptr<StreamingIterator> &streaming_iterator);
 
-  private:
-    // The inference engine.
-    std::shared_ptr<InferenceEngine> inference_engine_ = nullptr;
+ private:
+  // The inference engine.
+  std::shared_ptr<InferenceEngine> inference_engine_ = nullptr;
 
-    // The rpc endpoint of this service.
-    std::shared_ptr<LocalEndpoint> endpoint_ = nullptr;
+  // The rpc endpoint of this service.
+  std::shared_ptr<LocalEndpoint> endpoint_ = nullptr;
 
-    // channel for endpoint and inference server
-    Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue_;
+  // channel for endpoint and inference server
+  Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue_;
 };
 
 }  // namespace ksana_llm

@@ -751,8 +751,8 @@ void PagedAttentionCuda<T>::SetConfig(const int num_kv_heads, int num_heads, int
   params_.block_size_ = block_size;
 }
 
-template void PagedAttentionCuda<float>::SetConfig(const int num_kv_heads, int num_heads, int head_size,
-                                                   int block_size, int stride_size);
+template void PagedAttentionCuda<float>::SetConfig(const int num_kv_heads, int num_heads, int head_size, int block_size,
+                                                   int stride_size);
 template void PagedAttentionCuda<uint16_t>::SetConfig(const int num_kv_heads, int num_heads, int head_size,
                                                       int block_size, int stride_size);
 template void PagedAttentionCuda<__nv_bfloat16>::SetConfig(const int num_kv_heads, int num_heads, int head_size,

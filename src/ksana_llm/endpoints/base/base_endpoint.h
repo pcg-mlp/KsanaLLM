@@ -15,33 +15,33 @@ namespace ksana_llm {
 
 // The base class of all endpoints.
 class BaseEndpoint {
-  public:
-    BaseEndpoint(const EndpointConfig &endpoint_config,
-                 Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+ public:
+  BaseEndpoint(const EndpointConfig &endpoint_config,
+               Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
 
-    virtual ~BaseEndpoint() {}
+  virtual ~BaseEndpoint() {}
 
-  protected:
-    // The channel used to pass request from endpoint.
-    Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue_;
+ protected:
+  // The channel used to pass request from endpoint.
+  Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue_;
 
-    // The endpoint config.
-    EndpointConfig endpoint_config_;
+  // The endpoint config.
+  EndpointConfig endpoint_config_;
 };
 
 // The base class of rpc endpoints, such as http/trpc.
 class RpcEndpoint : public BaseEndpoint {
-  public:
-    RpcEndpoint(const EndpointConfig &endpoint_config,
-                Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+ public:
+  RpcEndpoint(const EndpointConfig &endpoint_config,
+              Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
 
-    virtual ~RpcEndpoint() override {}
+  virtual ~RpcEndpoint() override {}
 
-    // Listen at specific socket.
-    virtual Status Start() = 0;
+  // Listen at specific socket.
+  virtual Status Start() = 0;
 
-    // Close the listening socket.
-    virtual Status Stop() = 0;
+  // Close the listening socket.
+  virtual Status Stop() = 0;
 };
 
 }  // namespace ksana_llm

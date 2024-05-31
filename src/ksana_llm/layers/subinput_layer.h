@@ -10,12 +10,12 @@ namespace ksana_llm {
 
 template <typename T>
 class SubinputLayer : public BaseLayer {
-  public:
-    virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
-    void Clear() { cast_tensor_vec_.clear(); }
+ public:
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  void Clear() { cast_tensor_vec_.clear(); }
 
-  public:
-    std::vector<torch::Tensor> cast_tensor_vec_;
+ public:
+  std::vector<torch::Tensor> cast_tensor_vec_;
 };
 
 }  // namespace ksana_llm

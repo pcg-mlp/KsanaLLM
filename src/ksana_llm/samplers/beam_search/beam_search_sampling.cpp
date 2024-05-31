@@ -72,8 +72,8 @@ Status BeamSearchSampling::Sampling(SamplingRequest& sampling_req) {
         float now_cumulative_score = beam_req->cumulative_score + beam_search_token_logprob;
         std::vector<int>& stop_token_ids = beam_req->sampling_config.stop_token_ids;
         bool req_finish =
-          beam_search_token == beam_req->end_id ||
-          std::find(stop_token_ids.begin(), stop_token_ids.end(), beam_search_token) != stop_token_ids.end();
+            beam_search_token == beam_req->end_id ||
+            std::find(stop_token_ids.begin(), stop_token_ids.end(), beam_search_token) != stop_token_ids.end();
         if (req_finish) {
           size_t len = beam_req->output_tokens.size() - beam_req->input_tokens.size();
           auto cumulative_score = now_cumulative_score / pow(len, beam_req->sampling_config.length_penalty);

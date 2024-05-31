@@ -13,39 +13,39 @@ using namespace ksana_llm;
 
 // 定义一个 BlockManagerTest 类，继承自 testing::Test
 class BlockManagerTest : public testing::Test {
-  protected:
-    // 在每个测试用例执行之前调用的函数
-    void SetUp() override {
-      // 创建一个 BlockManagerConfig 对象，用于配置 BlockManager
-      BlockManagerConfig block_manager_config;
-      block_manager_config.host_allocator_config.blocks_num = 2;
-      block_manager_config.host_allocator_config.block_size = 1024;
-      block_manager_config.host_allocator_config.device = MEMORY_HOST;
-      block_manager_config.device_allocator_config.blocks_num = 2;
-      block_manager_config.device_allocator_config.block_size = 1024;
-      block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
+ protected:
+  // 在每个测试用例执行之前调用的函数
+  void SetUp() override {
+    // 创建一个 BlockManagerConfig 对象，用于配置 BlockManager
+    BlockManagerConfig block_manager_config;
+    block_manager_config.host_allocator_config.blocks_num = 2;
+    block_manager_config.host_allocator_config.block_size = 1024;
+    block_manager_config.host_allocator_config.device = MEMORY_HOST;
+    block_manager_config.device_allocator_config.blocks_num = 2;
+    block_manager_config.device_allocator_config.block_size = 1024;
+    block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
-      GetDeviceCount(&device_num_);
+    GetDeviceCount(&device_num_);
 
-      std::shared_ptr<Context> context =
+    std::shared_ptr<Context> context =
         std::make_shared<Context>(/*tensor_parallel_size*/ device_num_, /*pipeline_parallel_size*/ 1);
 
-      // 使用配置创建一个 BlockManager 对象
-      block_manager = new BlockManager(block_manager_config, context);
-      block_manager->PreAllocateBlocks();
-    }
+    // 使用配置创建一个 BlockManager 对象
+    block_manager = new BlockManager(block_manager_config, context);
+    block_manager->PreAllocateBlocks();
+  }
 
-    // 在每个测试用例执行之后调用的函数
-    void TearDown() override {
-      // 删除 BlockManager 对象
-      delete block_manager;
-    }
+  // 在每个测试用例执行之后调用的函数
+  void TearDown() override {
+    // 删除 BlockManager 对象
+    delete block_manager;
+  }
 
-  protected:
-    // 定义一个 BlockManager 指针，用于在测试用例中使用
-    BlockManager* block_manager;
+ protected:
+  // 定义一个 BlockManager 指针，用于在测试用例中使用
+  BlockManager* block_manager;
 
-    int device_num_ = -1;
+  int device_num_ = -1;
 };
 
 // 定义一个测试用例，继承自 BlockManagerTest

@@ -604,7 +604,7 @@ int main(int argc, char* argv[]) {
     prompt_buf_dev_a = nullptr;
     ACL_CHECK_RET(aclrtFree(prompt_buf_dev_b));
     prompt_buf_dev_b = nullptr;
-    
+
     ACL_CHECK_RET(aclrtFree(inc_buf_dev_a));
     inc_buf_dev_a = nullptr;
     ACL_CHECK_RET(aclrtFree(inc_buf_dev_b));

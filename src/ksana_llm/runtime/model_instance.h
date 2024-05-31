@@ -20,97 +20,97 @@ class Worker;
 class WorkerGroup;
 
 class ModelInstance {
-  public:
-    ModelInstance(const ModelConfig& model_config, std::shared_ptr<Context> context)
-        : model_config_(model_config), context_(context) {}
+ public:
+  ModelInstance(const ModelConfig& model_config, std::shared_ptr<Context> context)
+      : model_config_(model_config), context_(context) {}
 
-    // Load model with specified model config.
-    void Load();
+  // Load model with specified model config.
+  void Load();
 
-    // The instance name.
-    std::string name;
-    std::string type;
+  // The instance name.
+  std::string name;
+  std::string type;
 
-    std::vector<Status> Forward(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                                std::vector<ForwardRequest>& forward_reqs);
+  std::vector<Status> Forward(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
+                              std::vector<ForwardRequest>& forward_reqs);
 
-    std::vector<std::future<Status>> ForwardAsync(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                                                  std::vector<ForwardRequest>& forward_reqs);
+  std::vector<std::future<Status>> ForwardAsync(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
+                                                std::vector<ForwardRequest>& forward_reqs);
 
-    // Get the kv cache size per token needed, its size is:
-    //   (num_layer / pipeline_para) * (head_num / tensor_para) * size_per_head;
-    int GetTokenCacheSize() {
-      return (model_config_.num_layer / context_->GetPipeLineParallelSize()) *
-             (model_config_.head_num / context_->GetTensorParallelSize()) * model_config_.size_per_head;
-    }
+  // Get the kv cache size per token needed, its size is:
+  //   (num_layer / pipeline_para) * (head_num / tensor_para) * size_per_head;
+  int GetTokenCacheSize() {
+    return (model_config_.num_layer / context_->GetPipeLineParallelSize()) *
+           (model_config_.head_num / context_->GetTensorParallelSize()) * model_config_.size_per_head;
+  }
 
-    // Get  the data type.
-    DataType GetWeightDataType() { return model_config_.weight_data_type; }
+  // Get  the data type.
+  DataType GetWeightDataType() { return model_config_.weight_data_type; }
 
-    // Get the base ptr of model's logits buf.
-    std::vector<float*> GetLogitsPtr();
+  // Get the base ptr of model's logits buf.
+  std::vector<float*> GetLogitsPtr();
 
-    const ModelConfig& GetModelConfig() { return model_config_; }
+  const ModelConfig& GetModelConfig() { return model_config_; }
 
-    size_t GetMaxTokenNum() { return model_config_.max_token_num; }
+  size_t GetMaxTokenNum() { return model_config_.max_token_num; }
 
-  private:
-    // Create the object and return a shared pointer.
-    template <template <class> class ClassT, class BaseT>
-    std::shared_ptr<BaseT> CreatetModelObject(int rank) {
-      std::shared_ptr<BaseT> model_obj = nullptr;
-      switch (model_config_.weight_data_type) {
-        case DataType::TYPE_FP16:
-          model_obj = std::make_shared<ClassT<float16>>(model_config_, rank, context_);
-          break;
+ private:
+  // Create the object and return a shared pointer.
+  template <template <class> class ClassT, class BaseT>
+  std::shared_ptr<BaseT> CreatetModelObject(int rank) {
+    std::shared_ptr<BaseT> model_obj = nullptr;
+    switch (model_config_.weight_data_type) {
+      case DataType::TYPE_FP16:
+        model_obj = std::make_shared<ClassT<float16>>(model_config_, rank, context_);
+        break;
 #ifdef ENABLE_BFLOAT16
-        case DataType::TYPE_BF16:
-          model_obj = std::make_shared<ClassT<bfloat16>>(model_config_, rank, context_);
-          break;
+      case DataType::TYPE_BF16:
+        model_obj = std::make_shared<ClassT<bfloat16>>(model_config_, rank, context_);
+        break;
 #endif
-        case DataType::TYPE_FP32:
-          model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);
-          break;
-        default:
-          throw std::runtime_error("Unsupported Tensor type.");
-      };
-      return model_obj;
+      case DataType::TYPE_FP32:
+        model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);
+        break;
+      default:
+        throw std::runtime_error("Unsupported Tensor type.");
+    };
+    return model_obj;
+  }
+
+  template <template <class> class ClassT>
+  std::shared_ptr<BaseModel> CreateModel(int rank) {
+    return CreatetModelObject<ClassT, BaseModel>(rank);
+  }
+
+  template <template <class> class ClassT>
+  std::shared_ptr<BaseWeight> CreateModelWeight(int rank) {
+    return CreatetModelObject<ClassT, BaseWeight>(rank);
+  }
+
+  template <template <class> class ModelType, template <class> class WeightType>
+  void CreateModelInstance(const std::string model_name) {
+    NLLM_LOG_INFO << "Start to init model instance " << model_name;
+    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      NLLM_LOG_INFO << "Start to create model weight on device " << worker_id;
+      weights_.push_back(CreateModelWeight<WeightType>(worker_id));
+
+      NLLM_LOG_INFO << "Start to create model on device " << worker_id;
+      models_.push_back(CreateModel<ModelType>(worker_id));
+
+      NLLM_LOG_INFO << "Finish to load model on device " << worker_id;
     }
+  }
 
-    template <template <class> class ClassT>
-    std::shared_ptr<BaseModel> CreateModel(int rank) {
-      return CreatetModelObject<ClassT, BaseModel>(rank);
-    }
+ private:
+  // The model config.
+  ModelConfig model_config_;
 
-    template <template <class> class ClassT>
-    std::shared_ptr<BaseWeight> CreateModelWeight(int rank) {
-      return CreatetModelObject<ClassT, BaseWeight>(rank);
-    }
+  // The global context.
+  std::shared_ptr<Context> context_ = nullptr;
 
-    template <template <class> class ModelType, template <class> class WeightType>
-    void CreateModelInstance(const std::string model_name) {
-      NLLM_LOG_INFO << "Start to init model instance " << model_name;
-      for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-        NLLM_LOG_INFO << "Start to create model weight on device " << worker_id;
-        weights_.push_back(CreateModelWeight<WeightType>(worker_id));
-
-        NLLM_LOG_INFO << "Start to create model on device " << worker_id;
-        models_.push_back(CreateModel<ModelType>(worker_id));
-
-        NLLM_LOG_INFO << "Finish to load model on device " << worker_id;
-      }
-    }
-
-  private:
-    // The model config.
-    ModelConfig model_config_;
-
-    // The global context.
-    std::shared_ptr<Context> context_ = nullptr;
-
-    // The base model and weight, shared by all model instances.
-    static std::vector<std::shared_ptr<BaseModel>> models_;
-    static std::vector<std::shared_ptr<BaseWeight>> weights_;
+  // The base model and weight, shared by all model instances.
+  static std::vector<std::shared_ptr<BaseModel>> models_;
+  static std::vector<std::shared_ptr<BaseWeight>> weights_;
 };
 
 }  // namespace ksana_llm

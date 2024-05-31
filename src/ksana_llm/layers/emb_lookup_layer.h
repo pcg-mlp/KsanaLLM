@@ -8,14 +8,14 @@ namespace ksana_llm {
 
 template <typename T>
 class EmbLookupLayer : public BaseLayer {
-  public:
-    virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+ public:
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 };
 
 template <typename T>
 class CpuEmbLookupLayer : public BaseLayer {
-  public:
-    virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+ public:
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 };
 
 }  // namespace ksana_llm

@@ -13,8 +13,8 @@
 
 namespace ksana_llm {
 
-AutoBatchingStrategy::AutoBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
-                                           int tp_num, std::shared_ptr<BatchState> batch_state)
+AutoBatchingStrategy::AutoBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num,
+                                           std::shared_ptr<BatchState> batch_state)
     : BaseScheduleStrategy(batch_scheduler_config, tp_num, batch_state) {}
 
 bool AutoBatchingStrategy::CheckBatchFinished() {

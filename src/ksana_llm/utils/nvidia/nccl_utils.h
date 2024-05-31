@@ -25,20 +25,20 @@ namespace ksana_llm {
 // clang-format on
 
 struct NCCLParam {
-    int rank{0};
-    int world_size{1};
+  int rank{0};
+  int world_size{1};
 
-    ncclUniqueId nccl_uid;
-    ncclComm_t nccl_comm{nullptr};
+  ncclUniqueId nccl_uid;
+  ncclComm_t nccl_comm{nullptr};
 
-    NCCLParam() : rank(0), world_size(1), nccl_comm(nullptr){};
-    NCCLParam(int rank, int world_size) : rank(rank), world_size(world_size){};
-    NCCLParam(NCCLParam const& param)
-        : rank(param.rank), world_size(param.world_size), nccl_uid(param.nccl_uid), nccl_comm(param.nccl_comm){};
-    std::string toString() {
-      return fmt::format("NCCLParam: rank={}, world_size=%{}, nccl_comm={}", rank, world_size,
-                         reinterpret_cast<uintptr_t>(nccl_comm));
-    }
+  NCCLParam() : rank(0), world_size(1), nccl_comm(nullptr){};
+  NCCLParam(int rank, int world_size) : rank(rank), world_size(world_size){};
+  NCCLParam(NCCLParam const& param)
+      : rank(param.rank), world_size(param.world_size), nccl_uid(param.nccl_uid), nccl_comm(param.nccl_comm){};
+  std::string toString() {
+    return fmt::format("NCCLParam: rank={}, world_size=%{}, nccl_comm={}", rank, world_size,
+                       reinterpret_cast<uintptr_t>(nccl_comm));
+  }
 };
 
 template <typename T>

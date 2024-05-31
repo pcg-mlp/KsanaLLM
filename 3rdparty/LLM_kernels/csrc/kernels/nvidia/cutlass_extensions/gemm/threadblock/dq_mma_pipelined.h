@@ -185,9 +185,9 @@ class DqMmaPipelined : public DqMmaBase<Shape_, Policy_, typename SmemIteratorSc
       const int32_t group_size,  ///< Will not be used, just to adapt to finegrained modifications and make the
                                  ///< compilation successful. Because DqMmaPipelined is only enabled for sm<80, so even
                                  ///< if this argument is not added, it does not affect compilation for sm>=80.
-      int32_t thread_idx,  ///< ID within the threadblock
-      int32_t warp_idx,    ///< ID of warp
-      int32_t lane_idx     ///< ID of each thread within a warp
+      int32_t thread_idx,        ///< ID within the threadblock
+      int32_t warp_idx,          ///< ID of warp
+      int32_t lane_idx           ///< ID of each thread within a warp
       )
       : Base(shared_storage, thread_idx, warp_idx, lane_idx),
         warp_dequantizer_({shared_storage.operand_scale.data(), LayoutScale(Shape::kN)},

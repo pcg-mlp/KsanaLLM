@@ -139,9 +139,9 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
     sampling_req.req_group = &(req_ptr->req_group);
     if (sampling_req.sampling_config->num_beams > 1) {
       sampling_req.sampling_config->logprobs_num =
-        std::max(sampling_req.sampling_config->logprobs_num, sampling_req.sampling_config->num_beams);
+          std::max(sampling_req.sampling_config->logprobs_num, sampling_req.sampling_config->num_beams);
       sampling_req.sampling_config->topk =
-        std::max(sampling_req.sampling_config->topk, sampling_req.sampling_config->num_beams);
+          std::max(sampling_req.sampling_config->topk, sampling_req.sampling_config->num_beams);
     }
     sampling_req.model_config = &(req_ptr->model_instance->GetModelConfig());
     sampling_reqs.push_back(sampling_req);

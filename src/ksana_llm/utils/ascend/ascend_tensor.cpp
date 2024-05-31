@@ -22,8 +22,8 @@ void TensorT<DEVICE_TYPE_ASCEND>::InitializeDeviceTensor() {
   void* device_addr;
   GetBlockManager()->GetContiguousPtr(block_id, device_addr);
   device_tensor_ =
-    aclCreateTensor(acl_type_shape.data(), acl_type_shape.size(), static_cast<aclDataType>(dtype), strides.data(), 0,
-                    static_cast<aclFormat>(data_format), acl_type_shape.data(), acl_type_shape.size(), device_addr);
+      aclCreateTensor(acl_type_shape.data(), acl_type_shape.size(), static_cast<aclDataType>(dtype), strides.data(), 0,
+                      static_cast<aclFormat>(data_format), acl_type_shape.data(), acl_type_shape.size(), device_addr);
 }
 
 template <>
@@ -42,8 +42,8 @@ aclTensor* TensorT<DEVICE_TYPE_ASCEND>::ResetDeviceTensor(const DataType new_dty
   void* input_dev_addr = GetPtr<void>();
   ACL_CHECK(aclDestroyTensor(device_tensor_));
   device_tensor_ =
-    aclCreateTensor(new_shape.data(), new_shape.size(), static_cast<aclDataType>(new_dtype), new_strides.data(), 0,
-                    static_cast<aclFormat>(data_format), new_shape.data(), new_shape.size(), input_dev_addr);
+      aclCreateTensor(new_shape.data(), new_shape.size(), static_cast<aclDataType>(new_dtype), new_strides.data(), 0,
+                      static_cast<aclFormat>(data_format), new_shape.data(), new_shape.size(), input_dev_addr);
   return device_tensor_;
 }
 

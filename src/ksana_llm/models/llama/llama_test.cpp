@@ -142,7 +142,7 @@ TEST_F(LlamaTest, ForwardTest) {
 
   std::vector<SamplingRequest> sample_reqs = {sample_req};
   std::shared_ptr<Sampler> sampler =
-    std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
+      std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
   sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
   EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
 

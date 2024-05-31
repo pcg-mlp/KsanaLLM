@@ -67,9 +67,9 @@ TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
   int input_token_num2 = 30;
   std::shared_ptr<Request> req1, req2;
   std::vector<std::shared_ptr<InferRequest>> infer_req_list1 =
-    env_simulator->InitRequest(1, 1, input_token_num1, expected_output_token_num1, req1);
+      env_simulator->InitRequest(1, 1, input_token_num1, expected_output_token_num1, req1);
   std::vector<std::shared_ptr<InferRequest>> infer_req_list2 =
-    env_simulator->InitRequest(2, 2, input_token_num2, expected_output_token_num2, req2);
+      env_simulator->InitRequest(2, 2, input_token_num2, expected_output_token_num2, req2);
   std::shared_ptr<InferRequest> infer_req1 = infer_req_list1[0];
   std::shared_ptr<InferRequest> infer_req2 = infer_req_list2[0];
 

@@ -9,9 +9,9 @@ namespace ksana_llm {
 IdGenerator Request::id_generator_;
 
 Request::Request(const ksana_llm::KsanaPythonInput &ksana_python_input)
-    : output_group(std::max(
-        std::max(ksana_python_input.sampling_config.num_beams, ksana_python_input.sampling_config.num_return_sequences),
-        1)),
+    : output_group(std::max(std::max(ksana_python_input.sampling_config.num_beams,
+                                     ksana_python_input.sampling_config.num_return_sequences),
+                            1)),
       finisheds(output_group.size(), false),
       finished(finisheds[0]),
       output_tokens(std::get<0>(output_group[0])),

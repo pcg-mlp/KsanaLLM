@@ -19,123 +19,66 @@
 
 #pragma once
 
-#include <cstdint>
 #include <curand_kernel.h>
+#include <cstdint>
 
-namespace tensorrt_llm
-{
-namespace kernels
-{
+namespace tensorrt_llm {
+namespace kernels {
 
-class FinishedState
-{
-public:
-    static auto constexpr empty()
-    {
-        return FinishedState{0};
-    }
+class FinishedState {
+ public:
+  static auto constexpr empty() { return FinishedState{0}; }
 
-    static auto constexpr finished()
-    {
-        return FinishedState{kFinished};
-    }
+  static auto constexpr finished() { return FinishedState{kFinished}; }
 
-    static auto constexpr skipDecoding()
-    {
-        return FinishedState{kSkipDecoding};
-    }
+  static auto constexpr skipDecoding() { return FinishedState{kSkipDecoding}; }
 
-    static auto constexpr finishedEOS()
-    {
-        return FinishedState{kFinishedEos};
-    }
+  static auto constexpr finishedEOS() { return FinishedState{kFinishedEos}; }
 
-    static auto constexpr finishedMaxLength()
-    {
-        return FinishedState{kFinishedMaxLength};
-    }
+  static auto constexpr finishedMaxLength() { return FinishedState{kFinishedMaxLength}; }
 
-    static auto constexpr finishedStopWords()
-    {
-        return FinishedState{kFinishedStopWords};
-    }
+  static auto constexpr finishedStopWords() { return FinishedState{kFinishedStopWords}; }
 
-    __host__ __device__ void constexpr setFinishedEOS()
-    {
-        mState |= kFinishedEos;
-    }
+  __host__ __device__ void constexpr setFinishedEOS() { mState |= kFinishedEos; }
 
-    __host__ __device__ bool constexpr isFinishedEOS()
-    {
-        return anyBitSet(kFinishedEos);
-    }
+  __host__ __device__ bool constexpr isFinishedEOS() { return anyBitSet(kFinishedEos); }
 
-    __host__ __device__ void constexpr setFinishedStopWords()
-    {
-        mState |= kFinishedStopWords;
-    }
+  __host__ __device__ void constexpr setFinishedStopWords() { mState |= kFinishedStopWords; }
 
-    __host__ __device__ bool constexpr isFinishedStopWords()
-    {
-        return anyBitSet(kFinishedStopWords);
-    }
+  __host__ __device__ bool constexpr isFinishedStopWords() { return anyBitSet(kFinishedStopWords); }
 
-    __host__ __device__ void constexpr setFinishedMaxLength()
-    {
-        mState |= kFinishedMaxLength;
-    }
+  __host__ __device__ void constexpr setFinishedMaxLength() { mState |= kFinishedMaxLength; }
 
-    __host__ __device__ bool constexpr isFinishedMaxLength()
-    {
-        return anyBitSet(kFinishedMaxLength);
-    }
+  __host__ __device__ bool constexpr isFinishedMaxLength() { return anyBitSet(kFinishedMaxLength); }
 
-    __host__ __device__ void constexpr setFinished()
-    {
-        mState |= kFinished;
-    }
+  __host__ __device__ void constexpr setFinished() { mState |= kFinished; }
 
-    __host__ __device__ bool constexpr isFinished() const
-    {
-        return anyBitSet(kFinished);
-    }
+  __host__ __device__ bool constexpr isFinished() const { return anyBitSet(kFinished); }
 
-    __host__ __device__ void constexpr setSkipDecoding()
-    {
-        mState = kSkipDecoding;
-    }
+  __host__ __device__ void constexpr setSkipDecoding() { mState = kSkipDecoding; }
 
-    __host__ __device__ bool constexpr isSkipDecoding() const
-    {
-        return anyBitSet(kSkipDecoding);
-    }
+  __host__ __device__ bool constexpr isSkipDecoding() const { return anyBitSet(kSkipDecoding); }
 
-    using UnderlyingType = uint8_t;
+  using UnderlyingType = uint8_t;
 
-private:
-    // The default state is interpreted as not finished.
-    __host__ __device__ constexpr FinishedState(UnderlyingType state)
-        : mState(state)
-    {
-    }
+ private:
+  // The default state is interpreted as not finished.
+  __host__ __device__ constexpr FinishedState(UnderlyingType state) : mState(state) {}
 
-    // Request has finished based on the generation of EOS token
-    static UnderlyingType constexpr kFinishedEos{1u << 0};
-    // Request has finished based on the generation of stop words
-    static UnderlyingType constexpr kFinishedStopWords{1u << 1};
-    // Request has finished based on reaching max sequence length
-    static UnderlyingType constexpr kFinishedMaxLength{1u << 2};
-    // Finished by any condition
-    static UnderlyingType constexpr kFinished{kFinishedEos | kFinishedStopWords | kFinishedMaxLength};
-    // Skip decoding. E.g. used for not accepted tokens in speculative decoding
-    static UnderlyingType constexpr kSkipDecoding{1u << 3};
+  // Request has finished based on the generation of EOS token
+  static UnderlyingType constexpr kFinishedEos{1u << 0};
+  // Request has finished based on the generation of stop words
+  static UnderlyingType constexpr kFinishedStopWords{1u << 1};
+  // Request has finished based on reaching max sequence length
+  static UnderlyingType constexpr kFinishedMaxLength{1u << 2};
+  // Finished by any condition
+  static UnderlyingType constexpr kFinished{kFinishedEos | kFinishedStopWords | kFinishedMaxLength};
+  // Skip decoding. E.g. used for not accepted tokens in speculative decoding
+  static UnderlyingType constexpr kSkipDecoding{1u << 3};
 
-    __host__ __device__ bool constexpr anyBitSet(UnderlyingType bits) const
-    {
-        return (mState & bits) != 0;
-    }
+  __host__ __device__ bool constexpr anyBitSet(UnderlyingType bits) const { return (mState & bits) != 0; }
 
-    UnderlyingType mState{};
+  UnderlyingType mState{};
 };
 
 static_assert(!FinishedState::empty().isFinished());
@@ -153,8 +96,8 @@ static_assert(FinishedState::finishedMaxLength().isFinishedMaxLength());
 //! \param batchSize number of states to initialize
 //! \param randomSeed seed to initialize states
 //! \param stream stream
-void invokeCurandInitialize(
-    curandState_t* state, const int* batchSlots, const size_t batchSize, uint64_t randomSeed, cudaStream_t stream);
+void invokeCurandInitialize(curandState_t* state, const int* batchSlots, const size_t batchSize, uint64_t randomSeed,
+                            cudaStream_t stream);
 
 //! \brief Initialize batchSize curand states with given seed per request.
 //!
@@ -164,7 +107,7 @@ void invokeCurandInitialize(
 //! \param randomSeeds input buffer [maxBatchSize] with seeds
 //! \param stream stream
 void invokeCurandBatchInitialize(curandState_t* states, const int* batchSlots, const size_t batchSize,
-    const uint64_t* randomSeeds, cudaStream_t stream);
+                                 const uint64_t* randomSeeds, cudaStream_t stream);
 
 //! \brief Applies mask, adds bias to logits and computes softmax values.
 //! Sets -MAX_FLT value for tokens in range [vocabSize; vocabSizePadded) to prevent them from being chosen.
@@ -191,9 +134,9 @@ void invokeCurandBatchInitialize(curandState_t* states, const int* batchSlots, c
 //! \param stream stream
 template <typename T>
 void invokeAddBiasSoftMax(T* logits, T** logitsPtrs, T* temperatures, T const* bias, int32_t const* endIds,
-    FinishedState const* finished, int32_t const* batchSlots, int32_t batchSize, int32_t maxBatchSize,
-    int32_t beamWidth, int32_t vocabSize, int32_t vocabSizePadded, bool skipSoftMax, bool batchSlotsLogits,
-    cudaStream_t stream);
+                          FinishedState const* finished, int32_t const* batchSlots, int32_t batchSize,
+                          int32_t maxBatchSize, int32_t beamWidth, int32_t vocabSize, int32_t vocabSizePadded,
+                          bool skipSoftMax, bool batchSlotsLogits, cudaStream_t stream);
 
 //! \brief Distributes values located in src to dst according to the indieces from batchSlots
 //!
@@ -204,5 +147,5 @@ void invokeAddBiasSoftMax(T* logits, T** logitsPtrs, T* temperatures, T const* b
 //! \param stream stream
 template <typename T>
 void invokeScatterDecodingParams(T const* src, T* dst, int const* batchSlots, int batchSize, cudaStream_t stream);
-} // namespace kernels
-} // namespace tensorrt_llm
+}  // namespace kernels
+}  // namespace tensorrt_llm

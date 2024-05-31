@@ -2,8 +2,8 @@
 
 #include <gtest/gtest.h>
 
-#include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
+#include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
 namespace llm_kernels {
@@ -108,9 +108,9 @@ TEST_F(LlamaNvidiaPagedAttentionTestSuit, LlamaPagedAttentionHalfTest) {
 
   // set block ptrs
   InvokeRange(reinterpret_cast<DataType**>(key_cache_ptrs.data_ptr), static_cast<DataType*>(key_caches.data_ptr),
-        num_seqs * seq_blocks, num_kv_heads * head_size * block_size, stream);
+              num_seqs * seq_blocks, num_kv_heads * head_size * block_size, stream);
   InvokeRange(reinterpret_cast<DataType**>(value_cache_ptrs.data_ptr), static_cast<DataType*>(value_caches.data_ptr),
-        num_seqs * seq_blocks, num_kv_heads * head_size * block_size, stream);
+              num_seqs * seq_blocks, num_kv_heads * head_size * block_size, stream);
 
   // run paged_attention(..., stream);
   PagedAttentionCuda<DataType> op;
@@ -145,128 +145,129 @@ TEST_F(LlamaNvidiaPagedAttentionTestSuit, LlamaPagedAttentionHalfTest) {
 }
 
 TEST(CacheCopyTest, CacheCopyTest) {
-    std::vector<size_t> h_input_offst = {0};
-    std::vector<int> h_block_offset = {0};
-    int block_size = 8;
-    int bs = 2;
-    int num_heads = 5;
-    int head_size = 8;
-    int x = 16 / sizeof(float);
-    int token_data_size = num_heads * head_size;
-    int stride_size = num_heads * head_size;
-    std::vector<int> inputs = {17, 41};
-    for (int i = 0; i < bs; i++){
-        h_input_offst.push_back(inputs[i] + h_input_offst.back());
-        h_block_offset.push_back((inputs[i] + block_size - 1 )/ block_size + h_block_offset.back());
+  std::vector<size_t> h_input_offst = {0};
+  std::vector<int> h_block_offset = {0};
+  int block_size = 8;
+  int bs = 2;
+  int num_heads = 5;
+  int head_size = 8;
+  int x = 16 / sizeof(float);
+  int token_data_size = num_heads * head_size;
+  int stride_size = num_heads * head_size;
+  std::vector<int> inputs = {17, 41};
+  for (int i = 0; i < bs; i++) {
+    h_input_offst.push_back(inputs[i] + h_input_offst.back());
+    h_block_offset.push_back((inputs[i] + block_size - 1) / block_size + h_block_offset.back());
+  }
+  int total_len = h_input_offst.back();
+  std::vector<float> h_src;
+  for (int i = 1; i <= bs; i++) {
+    for (int j = 1; j <= inputs[i - 1]; j++) {
+      for (int k = 1; k <= token_data_size; k++) {
+        h_src.push_back((i * 100 + j) * 100 + k);
+      }
     }
-    int total_len = h_input_offst.back();
-    std::vector<float> h_src;
-    for (int i = 1; i <= bs; i++) {
-        for (int j =1; j <= inputs[i - 1]; j++) {
-            for (int k = 1; k <= token_data_size; k++){
-                h_src.push_back((i*100+j)*100+k);
-            }
+  }
+
+  // 分配设备内存
+  float* d_src;
+  cudaMalloc(&d_src, h_src.size() * sizeof(float));
+  void** d_k_list;
+  cudaMalloc(&d_k_list, h_block_offset.back() * sizeof(void*));
+  void** d_v_list;
+  cudaMalloc(&d_v_list, h_block_offset.back() * sizeof(void*));
+  size_t* d_input_offst;
+  cudaMalloc(&d_input_offst, h_input_offst.size() * sizeof(size_t));
+  int* d_block_offset;
+  cudaMalloc(&d_block_offset, h_block_offset.size() * sizeof(int));
+
+  // 将主机数据复制到设备上
+  cudaMemcpy(d_src, h_src.data(), h_src.size() * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_input_offst, h_input_offst.data(), h_input_offst.size() * sizeof(size_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_block_offset, h_block_offset.data(), h_block_offset.size() * sizeof(int), cudaMemcpyHostToDevice);
+
+  // 为 k_list 分配内存并初始化
+  std::vector<float*> h_k_list_ptrs(h_block_offset.back());
+  for (int i = 0; i < h_block_offset.back(); i++) {
+    cudaMalloc(&h_k_list_ptrs[i], block_size * token_data_size * sizeof(float));
+  }
+  // 为 v_list 分配内存并初始化
+  std::vector<float*> h_v_list_ptrs(h_block_offset.back());
+  for (int i = 0; i < h_block_offset.back(); i++) {
+    cudaMalloc(&h_v_list_ptrs[i], block_size * token_data_size * sizeof(float));
+  }
+  cudaMemcpy(d_k_list, h_k_list_ptrs.data(), h_k_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_v_list, h_v_list_ptrs.data(), h_v_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
+
+  // 调用核函数
+  CacheCopy<float>(d_src, d_src, d_k_list, d_v_list, d_input_offst, d_block_offset, block_size, bs, total_len,
+                   num_heads, head_size, stride_size, nullptr);
+  cudaDeviceSynchronize();
+
+  // 将结果从设备复制回主机并验证
+  std::vector<float> h_dst(h_block_offset.back() * token_data_size * block_size);
+  for (int i = 0; i < h_block_offset.back(); i++) {
+    cudaMemcpy(h_dst.data() + i * block_size * token_data_size, h_k_list_ptrs[i],
+               block_size * token_data_size * sizeof(float), cudaMemcpyDeviceToHost);
+  }
+  // for (int num_head_i = 0; num_head_i < num_heads; num_head_i++) {
+  //     for (int head_size_i = 0; head_size_i < head_size / x; head_size_i++) {
+  //             for (int i = 0; i < block_size; i++ ){
+  //                 for (int j = 0; j < x; j++) {
+  //                     int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + i *
+  //                     x + j; printf("%f ", *(h_dst.data() + k_dst_index));
+  //                 }
+  //                 printf("\n");
+  //             }
+  //             printf("\n");
+  //     }
+  //     printf("\n");
+  // }
+
+  // 验证结果
+  int cache_offset_indx = 0;
+  int src_index = 0;
+  for (int i = 0; i < h_block_offset.back() * block_size; i++) {
+    if (h_input_offst[cache_offset_indx] == i) {
+      // printf("i %d -> %d\n", i, h_block_offset[cache_offset_indx] * block_size);
+      i = h_block_offset[cache_offset_indx] * block_size;
+      cache_offset_indx++;
+      if (!(i < h_block_offset.back() * block_size)) break;
+    }
+    int index = i % block_size;
+    float* h_src_base = h_src.data() + src_index * token_data_size;
+    float* h_dst_base = h_dst.data() + (i / block_size) * block_size * token_data_size;
+    // printf("i = %d h_src_base = %d h_dst_base = %d\n", i, int(src_index * token_data_size), int((i / block_size) *
+    // block_size * token_data_size));
+    for (int num_head_i = 0; num_head_i < num_heads; num_head_i++) {
+      for (int head_size_i = 0; head_size_i < head_size / x; head_size_i++) {
+        for (int j = 0; j < x; j++) {
+          int k_src_index = num_head_i * head_size + head_size_i * x + j;
+          int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + index * x + j;
+          // printf("num_head_i = %d head_size_i = %d j = %d x = %d\n", num_head_i, head_size_i, j, x);
+          // printf("k_src_index = %d k_dst_index = %d index = %d\n", k_src_index, k_dst_index, index);
+          EXPECT_EQ(*(h_src_base + k_src_index), *(h_dst_base + k_dst_index));
         }
+      }
     }
+    //    printf("%f ", *(h_dst.data() + i * token_data_size + j));
+    //    printf("%f ", *(h_src.data() + src_index * token_data_size + j));
+    // printf("\n");
+    src_index++;
+    if (i == 1) break;
+  }
 
-    // 分配设备内存
-    float* d_src;
-    cudaMalloc(&d_src, h_src.size() * sizeof(float));
-    void** d_k_list;
-    cudaMalloc(&d_k_list, h_block_offset.back() * sizeof(void*));
-    void** d_v_list;
-    cudaMalloc(&d_v_list, h_block_offset.back() * sizeof(void*));
-    size_t* d_input_offst;
-    cudaMalloc(&d_input_offst, h_input_offst.size() * sizeof(size_t));
-    int* d_block_offset;
-    cudaMalloc(&d_block_offset, h_block_offset.size() * sizeof(int));
-
-    // 将主机数据复制到设备上
-    cudaMemcpy(d_src, h_src.data(), h_src.size() * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_input_offst, h_input_offst.data(), h_input_offst.size() * sizeof(size_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_block_offset, h_block_offset.data(), h_block_offset.size() * sizeof(int), cudaMemcpyHostToDevice);
-
-    // 为 k_list 分配内存并初始化
-    std::vector<float*> h_k_list_ptrs(h_block_offset.back());
-    for (int i = 0; i < h_block_offset.back(); i++) {
-        cudaMalloc(&h_k_list_ptrs[i], block_size * token_data_size * sizeof(float));
-    }
-    // 为 v_list 分配内存并初始化
-    std::vector<float*> h_v_list_ptrs(h_block_offset.back());
-    for (int i = 0; i < h_block_offset.back(); i++) {
-        cudaMalloc(&h_v_list_ptrs[i], block_size * token_data_size * sizeof(float));
-    }
-    cudaMemcpy(d_k_list, h_k_list_ptrs.data(), h_k_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_v_list, h_v_list_ptrs.data(), h_v_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
-
-    // 调用核函数
-    CacheCopy<float>(d_src, d_src, d_k_list, d_v_list, d_input_offst, d_block_offset, block_size, bs, total_len, num_heads, head_size, stride_size, nullptr);
-    cudaDeviceSynchronize();
-
-    // 将结果从设备复制回主机并验证
-    std::vector<float> h_dst(h_block_offset.back() * token_data_size * block_size);
-    for (int i = 0; i < h_block_offset.back(); i++) {
-        cudaMemcpy(h_dst.data() + i * block_size * token_data_size, h_k_list_ptrs[i], block_size * token_data_size * sizeof(float), cudaMemcpyDeviceToHost);
-    }
-    //for (int num_head_i = 0; num_head_i < num_heads; num_head_i++) {
-    //    for (int head_size_i = 0; head_size_i < head_size / x; head_size_i++) {
-    //            for (int i = 0; i < block_size; i++ ){
-    //                for (int j = 0; j < x; j++) {
-    //                    int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + i * x + j;
-    //                    printf("%f ", *(h_dst.data() + k_dst_index));
-    //                }
-    //                printf("\n");
-    //            }
-    //            printf("\n");
-    //    }
-    //    printf("\n");
-    //}
-
-
-    // 验证结果
-    int cache_offset_indx = 0;
-    int src_index = 0;
-    for (int i = 0; i < h_block_offset.back() * block_size; i++) {
-        if (h_input_offst[cache_offset_indx] == i) {
-            //printf("i %d -> %d\n", i, h_block_offset[cache_offset_indx] * block_size);
-            i = h_block_offset[cache_offset_indx] * block_size;
-            cache_offset_indx++;
-            if (!(i < h_block_offset.back() * block_size)) break;
-        }
-        int index = i % block_size;
-        float * h_src_base = h_src.data() + src_index * token_data_size;
-        float * h_dst_base = h_dst.data() + (i / block_size) * block_size * token_data_size;
-        //printf("i = %d h_src_base = %d h_dst_base = %d\n", i, int(src_index * token_data_size), int((i / block_size) * block_size * token_data_size));
-        for (int num_head_i = 0; num_head_i < num_heads; num_head_i++) {
-            for (int head_size_i = 0; head_size_i < head_size / x; head_size_i++) {
-                    for (int j = 0; j < x; j++) {
-                        int k_src_index = num_head_i  * head_size + head_size_i * x + j;
-                        int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + index * x + j;
-                        //printf("num_head_i = %d head_size_i = %d j = %d x = %d\n", num_head_i, head_size_i, j, x);
-                        //printf("k_src_index = %d k_dst_index = %d index = %d\n", k_src_index, k_dst_index, index);
-                        EXPECT_EQ(*(h_src_base + k_src_index), 
-                                  *(h_dst_base + k_dst_index));
-                    }
-            }
-        }
-        //    printf("%f ", *(h_dst.data() + i * token_data_size + j));
-        //    printf("%f ", *(h_src.data() + src_index * token_data_size + j));
-        //printf("\n");
-        src_index++;
-        if (i==1) break;
-    }
-
-    // 释放设备内存
-    cudaFree(d_src);
-    cudaFree(d_k_list);
-    cudaFree(d_input_offst);
-    cudaFree(d_block_offset);
-    for (auto ptr : h_k_list_ptrs) {
-        cudaFree(ptr);
-    }
-    for (auto ptr : h_v_list_ptrs) {
-        cudaFree(ptr);
-    }
+  // 释放设备内存
+  cudaFree(d_src);
+  cudaFree(d_k_list);
+  cudaFree(d_input_offst);
+  cudaFree(d_block_offset);
+  for (auto ptr : h_k_list_ptrs) {
+    cudaFree(ptr);
+  }
+  for (auto ptr : h_v_list_ptrs) {
+    cudaFree(ptr);
+  }
 }
 
 }  // namespace test

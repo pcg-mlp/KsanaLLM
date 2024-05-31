@@ -81,8 +81,8 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
     size_t b_size = hidden_units * GetTypeSize(input_tensors[0].dtype);
     ACL_CHECK(
-      aclrtMemcpy(output_tensors[0].GetPtr<void>() + (b_idx * hidden_units * GetTypeSize(input_tensors[0].dtype)),
-                  b_size, b_tmp_buffers[1], b_size, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
+        aclrtMemcpy(output_tensors[0].GetPtr<void>() + (b_idx * hidden_units * GetTypeSize(input_tensors[0].dtype)),
+                    b_size, b_tmp_buffers[1], b_size, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE));
 
     ACL_CHECK(aclDestroyTensor(b_input_tensor));
   }

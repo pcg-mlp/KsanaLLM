@@ -11,14 +11,14 @@
 namespace ksana_llm {
 
 class BeamSearchSampling {
-  public:
-    BeamSearchSampling(std::shared_ptr<Context> context);
-    void Update(std::vector<std::shared_ptr<InferRequest>>& req_group, int dst_idx, int src_idx, int token_idx,
-                float cumulative_score);
-    Status Sampling(SamplingRequest& sampling_req);
+ public:
+  BeamSearchSampling(std::shared_ptr<Context> context);
+  void Update(std::vector<std::shared_ptr<InferRequest>>& req_group, int dst_idx, int src_idx, int token_idx,
+              float cumulative_score);
+  Status Sampling(SamplingRequest& sampling_req);
 
-  private:
-    std::shared_ptr<Context> context_;
+ private:
+  std::shared_ptr<Context> context_;
 };
 
 }  // namespace ksana_llm
