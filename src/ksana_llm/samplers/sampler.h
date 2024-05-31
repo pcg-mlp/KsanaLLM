@@ -19,7 +19,9 @@ class Sampler {
   ~Sampler();
   Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
   Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
-                                 SamplingDevideParameter sampling_devide_parameter, Stream& stream);
+                                 SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
+  void SamplingParameterToDevide(bool use_top_p, bool use_temperature, bool logits_softmax,
+                                 SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
   void CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
                              std::vector<std::vector<float>>& prompt_probs_output);
   void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,

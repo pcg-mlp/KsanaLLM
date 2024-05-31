@@ -30,6 +30,9 @@ class ServingOp : public torch::jit::CustomClassHolder {
   Status GenerateStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
                            std::shared_ptr<StreamingIterator> &streaming_iterator);
 
+ public:
+  std::string plugin_path_;
+
  private:
   // The inference implement.
   std::shared_ptr<ServingImpl> serving_impl_ = nullptr;

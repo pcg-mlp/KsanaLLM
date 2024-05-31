@@ -194,6 +194,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   if (plugin_) {
     py::dict kwargs;
     kwargs["model_path"] = model_config_.path;
+    kwargs["preprocess"] = true;
     plugin_->attr("init_plugin")(**kwargs);
   }
 }
@@ -462,26 +463,19 @@ template <typename T>
 Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs) {
   size_t batch_size = forward_reqs.size();
   for (size_t idx = 0; idx < batch_size; idx++) {
-    if (forward_reqs[idx].subinput_url->size() > 0) {
-      py::gil_scoped_acquire acquire;
+    py::gil_scoped_acquire acquire;
 
-      KsanaPythonInput ksana_python_input;
-      ksana_python_input.input_tokens = *forward_reqs[idx].output_tokens;
-      ksana_python_input.subinput_pos = *forward_reqs[idx].subinput_pos;
-      ksana_python_input.subinput_embedding = *forward_reqs[idx].subinput_embedding;
-      ksana_python_input.subinput_url = *forward_reqs[idx].subinput_url;
-      ksana_python_input.prompt_probs_offset = forward_reqs[idx].prompt_probs_offset;
+    auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+    ksana_python_input->input_tokens = *forward_reqs[idx].output_tokens;
+    ksana_python_input->subinput_pos = *forward_reqs[idx].subinput_pos;
+    ksana_python_input->subinput_embedding = std::move(*forward_reqs[idx].subinput_embedding);
+    ksana_python_input->subinput_url = *forward_reqs[idx].subinput_url;
+    ksana_python_input->prompt_probs_offset = forward_reqs[idx].prompt_probs_offset;
 
-      KsanaPythonOutput ksana_python_output;
-
-      py::dict kwargs;
-      kwargs["ksana_python_input"] = ksana_python_input;
-      kwargs["ksana_python_output"] = ksana_python_output;
-      py::object py_outputs = plugin_->attr("preprocess")(**kwargs);
-      KsanaPythonOutput outputs = py::cast<KsanaPythonOutput>(py_outputs);
-
-      *forward_reqs[idx].subinput_embedding = std::move(outputs.embedding);
-    }
+    py::dict kwargs;
+    kwargs["ksana_python_input"] = ksana_python_input;
+    plugin_->attr("preprocess")(**kwargs);
+    *forward_reqs[idx].subinput_embedding = std::move(ksana_python_input->subinput_embedding);
   }
   return Status();
 }

@@ -37,6 +37,9 @@ void ServingOp::InitServing(const std::string &config_file) {
     NLLM_LOG_FATAL << "InitServing error, " << status.ToString();
   }
 
+  ModelConfig model_config;
+  Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
+  plugin_path_ = model_config.path;
   serving_impl_ = std::make_shared<ServingImpl>();
   serving_impl_->Start();
   NLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
@@ -121,6 +124,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
   pybind11::class_<ksana_llm::ServingOp, std::shared_ptr<ksana_llm::ServingOp>>(m, "Serving")
       .def(pybind11::init<>())
       .def("init_serving", &ksana_llm::ServingOp::InitServing)
+      .def_readwrite("plugin_path", &ksana_llm::ServingOp::plugin_path_)
       .def("generate",
            [](std::shared_ptr<ksana_llm::ServingOp> &self, const ksana_llm::KsanaPythonInput &ksana_python_input) {
              pybind11::gil_scoped_release release;
