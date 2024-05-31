@@ -184,12 +184,6 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     EXPECT_TRUE(CheckResult<T>("custom_all_reduce_" + type_str + "_size_" + std::to_string(data_size * sizeof(T)),
                                self_data_copy_meta, result_meta, 1e-5f, 1e-5f));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-    DeleteBuffer(result_meta);
-    DeleteBuffer(self_data_copy_meta);
-    DeleteBuffer(rank_data_meta);
-    DeleteBuffer(buffer_meta);
-    DeleteBuffer(meta_meta);
-    DeleteBuffer(self_data_meta);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamDestroy(stream));
     counter = 0;
     while (counter != 0)
