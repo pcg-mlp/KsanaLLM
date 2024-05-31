@@ -31,8 +31,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config));
 
   size_t device_total, device_free;
-  Status status =
-      GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
+  Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
   if (status.OK()) {
     size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
     max_block_num = std::min(max_block_num, (device_free - reserved_memory_size) / GetBlockManager()->GetBlockSize());
@@ -57,23 +56,23 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
       CreateTensor(kv_cache_buffer,
                    {static_cast<unsigned long>(max_batch_size_), static_cast<unsigned long>((max_seq_len_ + 511) / 512),
                     static_cast<unsigned long>(head_num_per_tp), static_cast<unsigned long>(size_per_head) + 2},
-                    TYPE_FP32, rank_, MEMORY_DEVICE));
+                   TYPE_FP32, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(input_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
-    CreateTensor(prompt_probs_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
+      CreateTensor(prompt_probs_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(input_tokens_int32_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(rotary_embedding_pos, {max_token_num_ + extra_token_number}, TYPE_INT64, rank_, MEMORY_DEVICE));
 
+  STATUS_CHECK_FAILURE(CreateTensor(cpu_subinput_pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_,
+                                    MemoryDevice::MEMORY_HOST));
   STATUS_CHECK_FAILURE(
-    CreateTensor(cpu_subinput_pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_, MemoryDevice::MEMORY_HOST));
-  STATUS_CHECK_FAILURE(
-    CreateTensor(cpu_subinput_emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_, MemoryDevice::MEMORY_HOST));
+      CreateTensor(cpu_subinput_emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_, MemoryDevice::MEMORY_HOST));
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
@@ -227,7 +226,8 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
-    for (int prompt_offset = input_offset - forward_reqs[idx].prompt_probs_offset; prompt_offset < input_offset; prompt_offset++) {
+    for (int prompt_offset = input_offset - forward_reqs[idx].prompt_probs_offset; prompt_offset < input_offset;
+         prompt_offset++) {
       prompt_probs_offset_list_uint64[prompt_probs_offset_list_uint64_index++] = prompt_offset;
     }
     if (forward_reqs[idx].prompt_probs_offset != 0) {
@@ -245,7 +245,8 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   MemcpyAsync(prompt_probs_offset_uint64_tensor.GetPtr<void>(), prompt_probs_offset_list_uint64.data(),
-              prompt_probs_offset_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+              prompt_probs_offset_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_ACL

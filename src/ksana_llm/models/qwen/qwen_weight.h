@@ -10,15 +10,15 @@ namespace ksana_llm {
 
 template <typename T>
 class QwenWeight : public BaseWeight {
-  public:
-    QwenWeight() {}
-    explicit QwenWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+ public:
+  QwenWeight() {}
+  explicit QwenWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
-    Tensor GetModelWeights(const std::string& weight_name);
+  Tensor GetModelWeights(const std::string& weight_name);
 
-  private:
-    // the common weight instance.
-    std::shared_ptr<CommonWeight<T>> common_weight_ = nullptr;
+ private:
+  // the common weight instance.
+  std::shared_ptr<CommonWeight<T>> common_weight_ = nullptr;
 };
 
 }  // namespace ksana_llm

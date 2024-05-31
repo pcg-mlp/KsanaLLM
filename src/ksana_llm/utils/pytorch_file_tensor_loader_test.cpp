@@ -7,7 +7,7 @@ namespace ksana_llm {
 
 // Test case for PytorchFileTensorLoader
 TEST(PytorchFileTensorLoaderTest, PytorchFileTensorLoaderTest) {
-  py::scoped_interpreter guard{};  
+  py::scoped_interpreter guard{};
   PytorchFileTensorLoader loader("/model/llama-hf/7B/pytorch_model-00002-of-00002.bin");
   auto tensor_name_list = loader.GetTensorNameList();
 

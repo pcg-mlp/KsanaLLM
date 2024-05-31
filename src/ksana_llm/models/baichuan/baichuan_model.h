@@ -14,21 +14,20 @@ namespace ksana_llm {
 
 template <typename T>
 class BaichuanModel : public BaseModel {
-  public:
-    BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
+ public:
+  BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
 
-    float* GetLogitsPtr();
+  float* GetLogitsPtr();
 
-    // The prefill stage.
-    Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         std::vector<ForwardRequest>& forward_reqs);
+  // The prefill stage.
+  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
-    // The decode stage.
-    Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+  // The decode stage.
+  Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
-  private:
-    // The common model instance.
-    std::shared_ptr<CommonModel<T>> common_model_ = nullptr;
+ private:
+  // The common model instance.
+  std::shared_ptr<CommonModel<T>> common_model_ = nullptr;
 };
 
 }  // namespace ksana_llm

@@ -38,7 +38,7 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
     // No need to convert
   } else {
     throw std::runtime_error(
-      fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+        fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
   }
   tensor.dtype = target_dtype;
   return Status();

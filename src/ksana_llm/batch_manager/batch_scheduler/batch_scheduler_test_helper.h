@@ -254,8 +254,8 @@ class BlockManagerSimulator : public BlockManagerInterface {
         // Check results
         for (int i = 0; i < kv_cache_token_num; i++) {
           NLLM_CHECK_WITH_INFO(
-            kv_cache_contents[i] == temp_contents[i] - d_i,
-            FormatStr("Kv cache content diff between device 0 and device %d, token_idx=%d.", d_i, i));
+              kv_cache_contents[i] == temp_contents[i] - d_i,
+              FormatStr("Kv cache content diff between device 0 and device %d, token_idx=%d.", d_i, i));
         }
       }
     }
@@ -268,9 +268,9 @@ class BlockManagerSimulator : public BlockManagerInterface {
     for (int d_i = 0; d_i < device_num_; d_i++) {
       std::vector<int>& kv_cache_blocks = req->kv_cache_blocks[d_i];
       NLLM_CHECK_WITH_INFO(
-        kv_cache_blocks.size() > (size_t)block_offset,
-        FormatStr("Block not exist. Req id %d, block offset=%d, device_idx=%d, kv_cache_blocks.size()=%d.", req->req_id,
-                  block_offset, d_i, kv_cache_blocks.size()));
+          kv_cache_blocks.size() > (size_t)block_offset,
+          FormatStr("Block not exist. Req id %d, block offset=%d, device_idx=%d, kv_cache_blocks.size()=%d.",
+                    req->req_id, block_offset, d_i, kv_cache_blocks.size()));
       int block_idx = kv_cache_blocks[block_offset];
       NLLM_CHECK_WITH_INFO(device_kv_cache_contents_[d_i].find(block_idx) != device_kv_cache_contents_[d_i].end(),
                            FormatStr("Block kv cache content not exist on device %d. Req id %d, block idx=%d.", d_i,

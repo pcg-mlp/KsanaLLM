@@ -10,44 +10,43 @@ struct curandStateXORWOW;
 typedef struct curandStateXORWOW curandState_t;
 
 #ifdef ENABLE_CUDA
-  typedef curandState_t RandState;
+typedef curandState_t RandState;
 #else
-  // TODO(karlluo): need implement ascend random 
-  typedef int RandState;
+// TODO(karlluo): need implement ascend random
+typedef int RandState;
 #endif
 
 namespace ksana_llm {
 struct SamplingDevideParameter {
-    int* device_topKs = nullptr;
-    float* device_topPs = nullptr;
-    float* device_temperatures = nullptr;
-    int** device_output_tokens_ptrs = nullptr;
-    RandState* device_curandstates = nullptr;
-    int vocab_size_padded = 0;
-    int max_topK = 0;
-    int max_logprobs_num = 0;
-    int bs = 0;
+  int* device_topKs = nullptr;
+  float* device_topPs = nullptr;
+  float* device_temperatures = nullptr;
+  int** device_output_tokens_ptrs = nullptr;
+  RandState* device_curandstates = nullptr;
+  int vocab_size_padded = 0;
+  int max_topK = 0;
+  int max_logprobs_num = 0;
+  int bs = 0;
 };
 
 class BaseSampling {
-  public:
-    BaseSampling(size_t max_batch_size, size_t max_vocab_size)
-        : max_batch_size_(max_batch_size), max_vocab_size_(max_vocab_size) {}
-    Status Forward(float* logits, const uint32_t* offsets, uint32_t* output_token,
-                   const SamplingConfig* sampling_config, SamplingDevideParameter sampling_devide_parameter,
-                   const ModelConfig* model_config, Stream& stream);
-    virtual ~BaseSampling() {}
+ public:
+  BaseSampling(size_t max_batch_size, size_t max_vocab_size)
+      : max_batch_size_(max_batch_size), max_vocab_size_(max_vocab_size) {}
+  Status Forward(float* logits, const uint32_t* offsets, uint32_t* output_token, const SamplingConfig* sampling_config,
+                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config, Stream& stream);
+  virtual ~BaseSampling() {}
 
-  protected:
-    virtual Status RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
-                               const SamplingConfig* sampling_config, SamplingDevideParameter sampling_devide_parameter,
-                               const ModelConfig* model_config, Stream& stream) = 0;
+ protected:
+  virtual Status RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
+                             const SamplingConfig* sampling_config, SamplingDevideParameter sampling_devide_parameter,
+                             const ModelConfig* model_config, Stream& stream) = 0;
 
-    // The max batch size.
-    size_t max_batch_size_ = 8;
+  // The max batch size.
+  size_t max_batch_size_ = 8;
 
-    // The max vocab size.
-    size_t max_vocab_size_ = 0;
+  // The max vocab size.
+  size_t max_vocab_size_ = 0;
 };
 
 }  // namespace ksana_llm

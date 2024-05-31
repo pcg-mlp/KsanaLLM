@@ -131,9 +131,9 @@ void Sampler::CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs,
     if (sampling_reqs[i].sampling_config->return_prompt_probs) {
       prompt_probs_output[i].resize(batch_schedule_config_.max_vocab_size * sampling_reqs[i].prompt_probs_offset);
       MemcpyAsync(
-        prompt_probs_output[i].data(),
-        sampling_reqs[i].logits_buf[rank_] + sampling_reqs[i].logits_offset * batch_schedule_config_.max_vocab_size,
-        sizeof(float) * prompt_probs_output[i].size(), MEMCPY_DEVICE_TO_HOST, stream);
+          prompt_probs_output[i].data(),
+          sampling_reqs[i].logits_buf[rank_] + sampling_reqs[i].logits_offset * batch_schedule_config_.max_vocab_size,
+          sizeof(float) * prompt_probs_output[i].size(), MEMCPY_DEVICE_TO_HOST, stream);
     }
   }
 }
@@ -154,7 +154,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       const ModelConfig* model_config = sampling_req.model_config;
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
       sampling_devide_parameter.max_logprobs_num =
-        std::max(sampling_devide_parameter.max_logprobs_num, sampling_req.sampling_config->logprobs_num);
+          std::max(sampling_devide_parameter.max_logprobs_num, sampling_req.sampling_config->logprobs_num);
       float* logits = sampling_req.logits_buf[rank_];
       if (device_logits == logits || device_logits == nullptr) {
         device_logits = logits;
@@ -199,7 +199,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
                     MEMCPY_HOST_TO_DEVICE, stream);
         sampling_devide_parameter.device_topPs = device_topPs_;
       }
-      if (use_temperature|| sampling_devide_parameter.max_logprobs_num > 0) {
+      if (use_temperature || sampling_devide_parameter.max_logprobs_num > 0) {
         MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_devide_parameter.bs,
                     MEMCPY_HOST_TO_DEVICE, stream);
         sampling_devide_parameter.device_temperatures = device_temperatures_;

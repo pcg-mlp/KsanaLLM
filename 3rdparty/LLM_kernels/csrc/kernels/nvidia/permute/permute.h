@@ -17,20 +17,20 @@
 
 #pragma once
 
-#include "csrc/kernels/nvidia/permute/nd_index_offset_helper.h"
 #include <cuda_runtime.h>
+#include "csrc/kernels/nvidia/permute/nd_index_offset_helper.h"
 
 namespace llm_kernels {
 namespace nvidia {
 
-template<size_t num_dims, typename IndexType>
+template <size_t num_dims, typename IndexType>
 struct PermuteKernelParams {
-    NdIndexOffsetHelper<IndexType, num_dims> src_index_helper;
-    NdIndexOffsetHelper<IndexType, num_dims> dst_index_helper;
-    int                                      permutation[num_dims]{};
-    IndexType                                count{};
-    const void*                              src{};
-    void*                                    dst{};
+  NdIndexOffsetHelper<IndexType, num_dims> src_index_helper;
+  NdIndexOffsetHelper<IndexType, num_dims> dst_index_helper;
+  int permutation[num_dims]{};
+  IndexType count{};
+  const void* src{};
+  void* dst{};
 };
 
 /// @brief implement of permute

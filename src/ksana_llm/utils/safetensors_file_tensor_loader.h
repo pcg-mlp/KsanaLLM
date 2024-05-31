@@ -7,38 +7,38 @@
 namespace ksana_llm {
 // Define a class named PytorchFileTensorLoader that inherits from BaseFileTensorLoader
 class SafeTensorsLoader : public BaseFileTensorLoader {
-  public:
-    // Constructor that takes a file name as input
-    SafeTensorsLoader(const std::string& file_name);
+ public:
+  // Constructor that takes a file name as input
+  SafeTensorsLoader(const std::string& file_name);
 
-    ~SafeTensorsLoader();
+  ~SafeTensorsLoader();
 
-    // Get the list of tensor names
-    const std::vector<std::string>& GetTensorNameList() { return tensor_name_list_; }
+  // Get the list of tensor names
+  const std::vector<std::string>& GetTensorNameList() { return tensor_name_list_; }
 
-    // Get a tensor by its name
-    std::tuple<void*, size_t> GetTensor(const std::string& tensor_name);
+  // Get a tensor by its name
+  std::tuple<void*, size_t> GetTensor(const std::string& tensor_name);
 
-    DataType GetTensorDataType(const std::string& tensor_name);
+  DataType GetTensorDataType(const std::string& tensor_name);
 
-    std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
+  std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
 
-  private:
-    // Load the PyTorch binary file
-    void LoadSafeTensors();
+ private:
+  // Load the PyTorch binary file
+  void LoadSafeTensors();
 
-    DataType ConvertDtypeToDataType(const std::string& safetensors_dtype);
+  DataType ConvertDtypeToDataType(const std::string& safetensors_dtype);
 
-  private:
-    // Use unordered_map to store the tensor names and their data ptr
-    std::unordered_map<std::string, void*> tensor_ptr_map_;
+ private:
+  // Use unordered_map to store the tensor names and their data ptr
+  std::unordered_map<std::string, void*> tensor_ptr_map_;
 
-    std::unordered_map<std::string, size_t> tensor_offset_map_;
-    std::unordered_map<std::string, size_t> tensor_size_map_;
-    std::unordered_map<std::string, DataType> tensor_data_type_map_;
-    std::unordered_map<std::string, std::vector<size_t>> tensor_shape_map_;
+  std::unordered_map<std::string, size_t> tensor_offset_map_;
+  std::unordered_map<std::string, size_t> tensor_size_map_;
+  std::unordered_map<std::string, DataType> tensor_data_type_map_;
+  std::unordered_map<std::string, std::vector<size_t>> tensor_shape_map_;
 
-    char* weights_buffer_ = nullptr;
+  char* weights_buffer_ = nullptr;
 };
 
 }  // namespace ksana_llm

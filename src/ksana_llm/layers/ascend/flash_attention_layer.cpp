@@ -40,7 +40,7 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
     int64_t b_seq_len = seq_len - padded_size;
 
     void* b_qkv_ptr =
-      qkv_ptr + ((b_idx * seq_len + padded_size) * (hidden_units * 3 * GetTypeSize(input_tensors[0].dtype)));
+        qkv_ptr + ((b_idx * seq_len + padded_size) * (hidden_units * 3 * GetTypeSize(input_tensors[0].dtype)));
 
     std::vector<int64_t> b_shape = {1, b_seq_len, hidden_units * 3};
 
@@ -73,10 +73,10 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
     size_t b_size2 = b_seq_len * hidden_units * GetTypeSize(input_tensors[0].dtype);
     ACL_CHECK(
-      aclrtMemcpyAsync(output_tensors[0].GetPtr<void>() +
-                         ((b_idx * seq_len + padded_size) * (hidden_units * GetTypeSize(input_tensors[0].dtype))),
-                       b_size2, b_tmp_buffers2[1], b_size2, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE,
-                       context_->GetComputeStreams()[rank_].Get()));
+        aclrtMemcpyAsync(output_tensors[0].GetPtr<void>() +
+                             ((b_idx * seq_len + padded_size) * (hidden_units * GetTypeSize(input_tensors[0].dtype))),
+                         b_size2, b_tmp_buffers2[1], b_size2, aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE,
+                         context_->GetComputeStreams()[rank_].Get()));
 
     ACL_CHECK(aclDestroyTensor(b_input_tensor2));
   }

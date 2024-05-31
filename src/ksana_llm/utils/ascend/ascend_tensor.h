@@ -13,7 +13,7 @@ namespace ksana_llm {
 
 template <>
 struct DeviceTensorTypeTraits<DEVICE_TYPE_ASCEND> {
-    typedef aclTensor* value_type;
+  typedef aclTensor* value_type;
 };
 
 template <>

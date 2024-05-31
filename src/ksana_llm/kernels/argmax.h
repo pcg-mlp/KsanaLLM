@@ -16,6 +16,6 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
 
 template <typename T>
 Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
-                        uint32_t* result, Stream& stream, void* workspace_ptr = nullptr);
+              uint32_t* result, Stream& stream, void* workspace_ptr = nullptr);
 
 }  // namespace ksana_llm

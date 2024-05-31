@@ -222,7 +222,6 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
 
   template <typename T>
   void TestCustomAllReduce() {
-
     int device_count = -1;
     CHECK_NVIDIA_CUDA_ERROR(cudaGetDeviceCount(&device_count));
     if (device_count != 2) {

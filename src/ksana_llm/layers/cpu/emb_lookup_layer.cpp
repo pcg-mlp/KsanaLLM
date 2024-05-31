@@ -37,9 +37,9 @@ template class CpuEmbLookupLayer<float>;
 
 #ifdef ENABLE_CUDA
 template class CpuEmbLookupLayer<half>;
-#ifdef ENABLE_BFLOAT16
+#  ifdef ENABLE_BFLOAT16
 template class CpuEmbLookupLayer<__nv_bfloat16>;
-#endif
+#  endif
 #endif
 
 #ifdef ENABLE_ACL

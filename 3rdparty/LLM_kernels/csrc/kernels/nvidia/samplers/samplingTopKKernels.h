@@ -19,13 +19,11 @@
  */
 #pragma once
 
-#include "decodingCommon.h"
 #include <curand_kernel.h>
+#include "decodingCommon.h"
 
-namespace tensorrt_llm
-{
-namespace kernels
-{
+namespace tensorrt_llm {
+namespace kernels {
 // clang-format off
 //! \brief Given logProbs, performs top K **and** top P sampling at the same time. Fills sampled tokens to outputIds.
 //! Computes sequenceLength, finished state, cumLogProbs inplace.
@@ -69,18 +67,20 @@ namespace kernels
 // clang-format on
 template <typename T>
 void invokeBatchTopKSampling(void* workspace, size_t& workspaceSize, const T* logProbs, int** ids, int* sequenceLengths,
-    const FinishedState* finishedInput, FinishedState* finishedOutput, float* cumLogProbs, float* outputLogProbs,
-    curandState_t* curandstate, const int maxTopK, const int* topKs, const float topP, const float* topPs,
-    const int vocabSizePadded, const int* endIds, const int* batchSlots, cudaStream_t stream, const int batchSize,
-    int maxBatchSize, const bool* skipDecode, const bool normalizeLogProbs, const bool logitsHasProbs);
+                             const FinishedState* finishedInput, FinishedState* finishedOutput, float* cumLogProbs,
+                             float* outputLogProbs, curandState_t* curandstate, const int maxTopK, const int* topKs,
+                             const float topP, const float* topPs, const int vocabSizePadded, const int* endIds,
+                             const int* batchSlots, cudaStream_t stream, const int batchSize, int maxBatchSize,
+                             const bool* skipDecode, const bool normalizeLogProbs, const bool logitsHasProbs);
 
 //! \brief Specialization of invokeBatchTopKSampling with topPs=nullptr and topKs=nullptr
 template <typename T>
 void invokeTopKSampling(void* workspace, size_t& workspaceSize, const T* logProbs, int** outputIds, int* sequenceLength,
-    const FinishedState* finishedInput, FinishedState* finishedOutput, float* cumLogProbs, float* outputLogProbs,
-    curandState_t* curandstate, const int topK, const float topP, const int vocabSizePadded, const int* endIds,
-    const int* batchSlots, cudaStream_t stream, const int batchSize, int maxBatchSize, const bool* skipDecode,
-    const bool normalizeLogProbs, const bool logitsHasProbs);
+                        const FinishedState* finishedInput, FinishedState* finishedOutput, float* cumLogProbs,
+                        float* outputLogProbs, curandState_t* curandstate, const int topK, const float topP,
+                        const int vocabSizePadded, const int* endIds, const int* batchSlots, cudaStream_t stream,
+                        const int batchSize, int maxBatchSize, const bool* skipDecode, const bool normalizeLogProbs,
+                        const bool logitsHasProbs);
 
-} // namespace kernels
-} // namespace tensorrt_llm
+}  // namespace kernels
+}  // namespace tensorrt_llm

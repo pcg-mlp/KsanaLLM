@@ -2,6 +2,11 @@
 
 ==============================================================================*/
 
+#include <chrono>
+#include <cstring>
+#include <memory>
+#include <thread>
+
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/infer_request.h"
@@ -10,11 +15,6 @@
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
-
-#include <chrono>
-#include <cstring>
-#include <memory>
-#include <thread>
 
 namespace ksana_llm {
 
@@ -27,7 +27,7 @@ BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::
 
 Status BatchManager::Initialize() {
   batch_scheduler_ =
-    std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_->GetTensorParallelSize());
+      std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_->GetTensorParallelSize());
 
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_manager_config_.batch_scheduler_config, context_);
 

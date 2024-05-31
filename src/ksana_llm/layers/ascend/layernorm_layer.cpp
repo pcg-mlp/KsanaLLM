@@ -62,8 +62,8 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   // TODO(karlluo): support beta
   T* beta_ptr = nullptr;
   llm_kernels::ascend::InvokeRmsLayerNorm<T>(
-    (T*)lm_output_tensor_buf_ptr, (T*)lm_input_tensor_buf_ptr, (T*)lm_weight_tensor_buf_ptr, beta_ptr, rms_norm_eps_,
-    batch_size * seq_len, hidden_size, context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
+      (T*)lm_output_tensor_buf_ptr, (T*)lm_input_tensor_buf_ptr, (T*)lm_weight_tensor_buf_ptr, beta_ptr, rms_norm_eps_,
+      batch_size * seq_len, hidden_size, context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
 
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

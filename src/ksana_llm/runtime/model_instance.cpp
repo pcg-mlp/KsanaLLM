@@ -10,8 +10,8 @@
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/optional_weight_map.h"
+#include "ksana_llm/utils/status.h"
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
 #include "ksana_llm/models/llama/llama_weight.h"

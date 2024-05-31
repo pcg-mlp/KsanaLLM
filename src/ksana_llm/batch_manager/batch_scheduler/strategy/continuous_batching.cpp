@@ -9,8 +9,7 @@
 
 namespace ksana_llm {
 
-ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
-                                                       int tp_num,
+ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num,
                                                        std::shared_ptr<BatchState> batch_state)
     : BaseScheduleStrategy(batch_scheduler_config, tp_num, batch_state) {
   threadpool_ = std::make_shared<ThreadPool>(batch_scheduler_config.swap_threadpool_size);

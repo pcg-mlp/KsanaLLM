@@ -27,7 +27,7 @@ TEST_F(LlamaNvidiaPermuteTestSuit, PermuteKernelTest) {
   std::vector<size_t> input_shape = {3, 5, 7, 9};
   std::vector<size_t> permute = {2, 0, 1, 3};
   BufferMeta input = CreateBuffer<float>(MemoryType::MEMORY_GPU, {3, 5, 7, 9}, /*is_random_init*/ true);
-  
+
   BufferMeta output = CreateBuffer<float>(MemoryType::MEMORY_GPU, {7, 3, 5, 9}, /*is_random_init*/ false);
   InvokePermute<4ul, sizeof(float)>(input.data_ptr, output.data_ptr, input_shape, permute, stream);
   BufferMeta output_host = CopyToHost<float>(output);

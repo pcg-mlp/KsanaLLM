@@ -27,7 +27,7 @@
 
 namespace ksana_llm {
 
-BatchScheduler::BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, int tp_num)
+BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, int tp_num)
     : batch_scheduler_config_(batch_scheduler_config) {
   // Config validation.
   NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens > batch_scheduler_config_.max_token_len,
@@ -67,7 +67,7 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   }
 
   std::lock_guard<std::mutex> guard(batch_state_->queue_buffer_mutex);
-  for (auto& infer_request : infer_request_group){
+  for (auto& infer_request : infer_request_group) {
     batch_state_->waiting_buffer_queue.push_back(infer_request);
   }
   return Status();
@@ -91,7 +91,7 @@ inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<Infer
   return req->input_tokens.size() > batch_scheduler_config_.max_token_len;
 }
 
-std::vector<std::shared_ptr<InferRequest>> &BatchScheduler::Schedule() {
+std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
   NLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(batch_state_->queue_mutex);
 

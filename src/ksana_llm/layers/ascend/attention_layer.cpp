@@ -30,7 +30,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   if (ascend_flash_attn_ == nullptr) {
     // setting scaling factor and mode
     RoPEScalingFactor rope_scaling_factor_config =
-      std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
+        std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
     float scaling_factor = 1.0f;
     if (rope_scaling_factor_config.type == "dynamic") {
       scaling_factor = rope_scaling_factor_config.factor;

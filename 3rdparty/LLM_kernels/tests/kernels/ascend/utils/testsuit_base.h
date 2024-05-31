@@ -22,13 +22,9 @@ namespace test {
 
 class AscendTestSuitBase : public testing::Test {
  public:
-  static void SetUpTestCase() {
-    ACL_CHECK_RET(aclInit(nullptr));
-  }
+  static void SetUpTestCase() { ACL_CHECK_RET(aclInit(nullptr)); }
 
-  void SetUp() override {
-    Init(&context, &stream);
-  }
+  void SetUp() override { Init(&context, &stream); }
 
   void TearDown() override {
     if (is_inited) {

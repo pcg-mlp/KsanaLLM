@@ -33,17 +33,17 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   aclTensor* input_tensor = input_ids.ResetDeviceTensor(DataType::TYPE_INT32, {static_cast<int64_t>(total_seq_len)});
 
   aclTensor* embedding_tensor = embedding_table.ResetDeviceTensor(
-    DataType::TYPE_FP16,
-    {static_cast<int64_t>(embedding_table.shape[0]), static_cast<int64_t>(embedding_table.shape[1])});
+      DataType::TYPE_FP16,
+      {static_cast<int64_t>(embedding_table.shape[0]), static_cast<int64_t>(embedding_table.shape[1])});
 
   aclTensor* output_tensor = output_tensors[0].ResetDeviceTensor(
-    DataType::TYPE_FP16, {static_cast<int64_t>(total_seq_len), static_cast<int64_t>(hidden_units)});
+      DataType::TYPE_FP16, {static_cast<int64_t>(total_seq_len), static_cast<int64_t>(hidden_units)});
 
   if (input_tensors.size() > 3) {
     Tensor position_table = input_tensors[3];
     aclTensor* position_tensor = position_table.ResetDeviceTensor(
-      DataType::TYPE_FP16,
-      {static_cast<int64_t>(position_table.shape[0]), static_cast<int64_t>(position_table.shape[1])});
+        DataType::TYPE_FP16,
+        {static_cast<int64_t>(position_table.shape[0]), static_cast<int64_t>(position_table.shape[1])});
     LookupEmbedding(input_tensor, position_tensor, position_table.GetDeviceTensor(), output_tensor,
                     context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   } else {

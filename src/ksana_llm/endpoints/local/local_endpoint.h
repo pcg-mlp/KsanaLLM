@@ -13,19 +13,19 @@
 namespace ksana_llm {
 
 class LocalEndpoint : public BaseEndpoint {
-  public:
-    LocalEndpoint(const EndpointConfig &endpoint_config,
-                  Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+ public:
+  LocalEndpoint(const EndpointConfig& endpoint_config,
+                Channel<std::pair<Status, std::shared_ptr<Request>>>& request_queue);
 
-    virtual ~LocalEndpoint() override {}
+  virtual ~LocalEndpoint() override {}
 
-    // Handle a request.
-    virtual Status Handle(const ksana_llm::KsanaPythonInput& ksana_python_input,
-                          ksana_llm::KsanaPythonOutput& ksana_python_output);
+  // Handle a request.
+  virtual Status Handle(const ksana_llm::KsanaPythonInput& ksana_python_input,
+                        ksana_llm::KsanaPythonOutput& ksana_python_output);
 
-    // handle a streaming request.
-    virtual Status HandleStreaming(const ksana_llm::KsanaPythonInput& ksana_python_input,
-                                   std::shared_ptr<StreamingIterator>& streaming_iterator);
+  // handle a streaming request.
+  virtual Status HandleStreaming(const ksana_llm::KsanaPythonInput& ksana_python_input,
+                                 std::shared_ptr<StreamingIterator>& streaming_iterator);
 };
 
 }  // namespace ksana_llm

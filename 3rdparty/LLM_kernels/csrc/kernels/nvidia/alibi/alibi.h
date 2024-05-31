@@ -2,6 +2,8 @@
  * Copyright 2024 Tencent Inc.  All rights reserved.
  */
 
+#include <cuda_runtime.h>
+
 namespace llm_kernels {
 namespace nvidia {
 

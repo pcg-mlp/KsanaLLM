@@ -48,7 +48,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   GetBlockManager()->SetDeviceId(rank_);
 
   num_layer_ = model_config_.num_layer;
-  vocab_size_pad_ = DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
+  vocab_size_pad_ =
+      DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
 
   int head_num = model_config_.head_num;
   int size_per_head = model_config_.size_per_head;
@@ -72,7 +73,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
 
   int inter_size_per_tp = model_config_.inter_size / tensor_para_size;
   int max_dim =
-    std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units), inter_size_per_tp);
+      std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units), inter_size_per_tp);
   size_t tensor_buffer_size = std::max(model_config_.max_batch_size * vocab_size_pad_, max_token_num * max_dim);
   size_t up_matmul_tensor_buffer_size = max_token_num * std::max(static_cast<int>(inter_size_per_tp), hidden_units * 2);
 
@@ -81,7 +82,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
-    CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
+      CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
                                           model_config_.weight_data_type));
 #ifdef ENABLE_ACL
@@ -187,12 +188,12 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
                                       const bool is_context_stage) {
   // Attn proj MatMul
   Tensor attn_proj_weight =
-    base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
   std::vector<Tensor>& attn_proj_output = temp_buffer_2;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({hidden_states, attn_proj_weight}, attn_proj_output));
   if (qkv_add_bias_) {
     Tensor attn_proj_bias =
-      base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.bias", layer_idx));
+        base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.bias", layer_idx));
     STATUS_CHECK_RETURN(add_layer_->Forward({attn_proj_output[0], attn_proj_bias}, attn_proj_output));
   }
 
@@ -206,32 +207,32 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
 
   if (is_context_stage) {
     STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
-      {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
-       model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
+        {attn_proj_output[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
+         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, forward_shape_
 #ifdef ENABLE_ACL
-       ,
-       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
+         ,
+         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
 #endif
-      },
-      mmha_attention_output));
+        },
+        mmha_attention_output));
   } else {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
-      {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
-       model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
-       forward_shape_, up_matmul_tensor_buffer_
+        {attn_proj_output[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
+         model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->kv_cache_buffer,
+         forward_shape_, up_matmul_tensor_buffer_
 #ifdef ENABLE_ACL
-       ,
-       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
+         ,
+         ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
+         ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
 #endif
-      },
-      mmha_attention_output));
+        },
+        mmha_attention_output));
   }
 
   // Attn o_proj MatMul
   Tensor attn_o_proj_weight =
-    base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
   std::vector<Tensor>& attn_o_proj_output = temp_buffer_2;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({mmha_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
 
@@ -254,7 +255,7 @@ Status CommonModel<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::
                                 std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
-    base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
   std::vector<Tensor>& gate_matmul_output = temp_buffer_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output, gate_proj_weight}, gate_matmul_output));
 
@@ -268,7 +269,7 @@ Status CommonModel<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::
 
   // Mlp down_proj MatMul
   Tensor down_proj_weight =
-    base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.down_proj.weight", layer_idx));
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.down_proj.weight", layer_idx));
   std::vector<Tensor>& down_proj_output = temp_buffer_0;
   STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
 
@@ -291,13 +292,13 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
                                     std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
   // input layernorm
   Tensor input_layernorm_weight =
-    base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
   // input_layernorm_input = layer_idx == 0 ? emb_lookup_output : mlp_add_output
   // Since emb_lookup_output and mlp_add_output point to the same memory address, we implement it as follow:
   std::vector<Tensor>& input_layernorm_input = temp_buffer_0;
   std::vector<Tensor>& input_layernorm_output = temp_buffer_1;
   STATUS_CHECK_RETURN(
-    layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
+      layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
 
   STATUS_CHECK_RETURN(LlamaAttention(layer_idx, base_weight, input_layernorm_output[0], temp_buffer_0, temp_buffer_1,
                                      temp_buffer_2, is_context_stage));
@@ -309,12 +310,12 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
 
   // post_attention_layernorm
   Tensor post_layernorm_weight =
-    base_weight->GetModelWeights(fmt::format("model.layers.{}.post_attention_layernorm.weight", layer_idx));
+      base_weight->GetModelWeights(fmt::format("model.layers.{}.post_attention_layernorm.weight", layer_idx));
   std::vector<Tensor>& post_layernorm_output = temp_buffer_1;
   STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
 
   STATUS_CHECK_RETURN(
-    LlamaMlp(layer_idx, base_weight, post_layernorm_output[0], temp_buffer_0, temp_buffer_1, temp_buffer_2));
+      LlamaMlp(layer_idx, base_weight, post_layernorm_output[0], temp_buffer_0, temp_buffer_1, temp_buffer_2));
 
   // Mlp Add
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
@@ -369,7 +370,7 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
   if (embedding_weight.device == MemoryDevice::MEMORY_DEVICE) {
     STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-      {model_input_->input_ids, model_input_->input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
+        {model_input_->input_ids, model_input_->input_offset_uint64_tensor, embedding_weight}, emb_lookup_output));
 
     // NOTE(karlluo): multiple event in nccl will cause preformance regression
     // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
@@ -384,13 +385,14 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
   // Subinput needs to be processed only in the context stage.
   if (is_context_stage) {
     subinput_layer_->Forward(
-      {model_input_->cpu_subinput_pos_pair_tensor, model_input_->cpu_subinput_emb_fp32_ptr_tensor}, emb_lookup_output);
+        {model_input_->cpu_subinput_pos_pair_tensor, model_input_->cpu_subinput_emb_fp32_ptr_tensor},
+        emb_lookup_output);
   }
 
   // LlamaDecoder
   for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     STATUS_CHECK_RETURN(
-      LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2, is_context_stage));
+        LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2, is_context_stage));
   }
 
   // final norm
@@ -398,16 +400,16 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
   std::vector<Tensor>& final_layernorm_input = temp_buffer_0;
   std::vector<Tensor>& final_layernorm_output = temp_buffer_1;
   STATUS_CHECK_RETURN(
-    layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
+      layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
 
   // assemble last token
   std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;
   if (model_input_->use_prompt_probs_offset) {
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
-      {final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor}, assemble_last_token_output));
+        {final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor}, assemble_last_token_output));
   } else {
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
-      {final_layernorm_output[0], model_input_->input_offset_uint64_tensor}, assemble_last_token_output));
+        {final_layernorm_output[0], model_input_->input_offset_uint64_tensor}, assemble_last_token_output));
   }
 
   // lm_head

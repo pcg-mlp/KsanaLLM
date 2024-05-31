@@ -10,24 +10,24 @@ namespace ksana_llm {
 
 template <int T>
 struct StreamTypeTraits {
-    typedef void value_type;
+  typedef void value_type;
 };
 
 template <int T>
 class StreamT {
-  public:
-    typename StreamTypeTraits<T>::value_type& Get();
+ public:
+  typename StreamTypeTraits<T>::value_type& Get();
 };
 
 template <int T>
 struct EventTypeTraits {
-    typedef void value_type;
+  typedef void value_type;
 };
 
 template <int T>
 class EventT {
-  public:
-    typename EventTypeTraits<T>::value_type& Get();
+ public:
+  typename EventTypeTraits<T>::value_type& Get();
 };
 
 // Create event
@@ -137,9 +137,9 @@ void MemcpyT(void* dst, const void* src, size_t count, enum MemcpyKind kind);
 // Get the common data type from device data type.
 template <int T>
 class GetDataTypeT {
-  public:
-    template <class U>
-    static DataType impl();
+ public:
+  template <class U>
+  static DataType impl();
 };
 
 }  // namespace ksana_llm

@@ -228,8 +228,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     int qkv_offset = CheckQKVWeight(tensor_name, head_num, num_kv_heads);
     if (qkv_offset >= 0) {
       bool is_bias = (tensor_name.find("_proj.bias") != std::string::npos);
-      std::string qkv_name =
-        tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" + (is_bias ? ".bias" : ".weight");
+      std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
+                             (is_bias ? ".bias" : ".weight");
       if (!weights_map_.count(qkv_name)) {
         if (qkv_offset == 0) {
           // For q_proj in the GQA scenario, the weight_shape is first transformed into k_proj.
@@ -273,7 +273,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
                                              embed_tokens_shape[1] * tensor_para_size_};
         LoadRegularTensor(weight_ptr, "lm_head.weight", lm_head_shape, weight_data_type, /*transpose_first*/ false,
                           tensor_para_offset, weight_size);
-      } 
+      }
     } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
       weights_data_type_map_[qkv_name] = weight_data_type;
@@ -626,7 +626,7 @@ Status CommonWeight<T>::CreateTensorWithSameShape(const std::string& origin_tens
 template <typename T>
 std::string CommonWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias) {
   std::string layer_name =
-    "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
+      "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
   return layer_name;
 }
 

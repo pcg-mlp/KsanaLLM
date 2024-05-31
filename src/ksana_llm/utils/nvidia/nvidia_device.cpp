@@ -207,18 +207,18 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetIntType() {
 
 template <class U>
 DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl() {
-  // NOTE(karlluo): in order to fullfill Tencent's cyclomatic complexity rule, 
+  // NOTE(karlluo): in order to fullfill Tencent's cyclomatic complexity rule,
   // I have to seperate function.
   DataType dtype = GetFloatType<U>();
   if (dtype != TYPE_INVALID) {
     return dtype;
-  } 
-  
+  }
+
   dtype = GetIntType<U>();
   if (dtype != TYPE_INVALID) {
     return dtype;
   }
-  
+
   if (std::is_same<U, bool>::value || std::is_same<U, const bool>::value) {
     return TYPE_BOOL;
   } else if (std::is_same<U, char>::value || std::is_same<U, const char>::value) {

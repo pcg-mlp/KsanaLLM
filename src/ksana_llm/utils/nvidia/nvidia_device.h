@@ -9,42 +9,42 @@ namespace ksana_llm {
 
 template <>
 struct StreamTypeTraits<DEVICE_TYPE_NVIDIA> {
-    typedef cudaStream_t value_type;
+  typedef cudaStream_t value_type;
 };
 
 template <>
 class StreamT<DEVICE_TYPE_NVIDIA> {
-  public:
-    StreamT(int device_id);
+ public:
+  StreamT(int device_id);
 
-    // Get the cuda stream by reference..
-    cudaStream_t& Get();
+  // Get the cuda stream by reference..
+  cudaStream_t& Get();
 
-    // Destroy the stream.
-    void Destroy();
+  // Destroy the stream.
+  void Destroy();
 
-  private:
-    // the related device with this stream.
-    int device_id_;
+ private:
+  // the related device with this stream.
+  int device_id_;
 
-    // The cuda stream.
-    cudaStream_t cuda_stream_;
+  // The cuda stream.
+  cudaStream_t cuda_stream_;
 };
 
 template <>
 struct EventTypeTraits<DEVICE_TYPE_NVIDIA> {
-    typedef cudaEvent_t value_type;
+  typedef cudaEvent_t value_type;
 };
 
 template <>
 class EventT<DEVICE_TYPE_NVIDIA> {
-  public:
-    // Get the cuda event by reference.
-    cudaEvent_t& Get();
+ public:
+  // Get the cuda event by reference.
+  cudaEvent_t& Get();
 
-  private:
-    // The cuda event.
-    cudaEvent_t cuda_event_;
+ private:
+  // The cuda event.
+  cudaEvent_t cuda_event_;
 };
 
 template <>
@@ -127,16 +127,16 @@ void MemcpyT<DEVICE_TYPE_NVIDIA>(void* dst, const void* src, size_t count, enum 
 
 template <>
 class GetDataTypeT<DEVICE_TYPE_NVIDIA> {
-  public:
-    template <class U>
-    static DataType impl();
+ public:
+  template <class U>
+  static DataType impl();
 
-  private:
-    template <class U>
-    static DataType GetFloatType();
+ private:
+  template <class U>
+  static DataType GetFloatType();
 
-    template <class U>
-    static DataType GetIntType();
+  template <class U>
+  static DataType GetIntType();
 };
 
 }  // namespace ksana_llm

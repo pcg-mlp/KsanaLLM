@@ -54,7 +54,6 @@ struct PermuteTilingData {
 
   // The tiling key, used to specify data type.
   uint32_t tiling_key;
-
 };
 
 }  // namespace ascend
