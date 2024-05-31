@@ -156,8 +156,6 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   torch::Tensor qkv_tensor =
       torch::from_blob(qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
   auto tt = qkv_tensor.split({num_heads * head_size, num_kv_heads * head_size, num_kv_heads * head_size}, -1);
-
-  c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
   auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
   torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
 
@@ -180,6 +178,15 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
 
 // flash attention 2 or flash attention 1
 #ifdef ENABLE_FLASH_ATTN_2
+  // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
+  // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
+  // leads to a core dump.
+  bool seqlenq_ngroups_swapped =
+      max_tokens == 1 && num_heads > num_kv_heads && head_size % 8 == 0 && !alibi_slopes.has_value();
+  c10::optional<at::Tensor> out_tensor = c10::nullopt;
+  if (!seqlenq_ngroups_swapped) {
+    out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
+  }
   at::Tensor q_tmp_tensor = torch::reshape(q_tensor, {total_tokens, num_heads, head_size});
   c10::optional<at::Tensor> seqused_k = c10::nullopt;
   auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
@@ -187,11 +194,19 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* out, void* seq
   if (alibi_slopes.has_value()) {
     alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
   }
-  mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
-                 torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
-                 seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
-                 max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+  std::vector<at::Tensor> mha_output =
+      mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
+                     torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
+                     seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
+                     max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+  if (seqlenq_ngroups_swapped) {
+    NLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, set the output tensor to nullptr.";
+    at::Tensor& out_data = mha_output[0];
+    size_t total_size = out_data.numel() * out_data.element_size();
+    CUDA_CHECK(cudaMemcpyAsync(out, out_data.data_ptr(), total_size, cudaMemcpyDeviceToDevice, stream));
+  }
 #else
+  c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
   flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
                              torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
                              torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
