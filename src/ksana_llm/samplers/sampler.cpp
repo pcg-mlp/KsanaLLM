@@ -98,7 +98,7 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
 }
 
 Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
-                                        SamplingDevideParameter sampling_devide_parameter, Stream& stream) {
+                                        SamplingDevideParameter& sampling_devide_parameter, Stream& stream) {
   for (auto& sampling_req : sampling_reqs) {
     auto& logprobs_num = sampling_req.sampling_config->logprobs_num;
     auto& offset = sampling_req.logits_offset;
@@ -138,6 +138,26 @@ void Sampler::CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs,
   }
 }
 
+// Transfer sampling parameters to the device
+void Sampler::SamplingParameterToDevide(bool use_top_p, bool use_temperature, bool logits_softmax,
+                                        SamplingDevideParameter& sampling_devide_parameter, Stream& stream) {
+  MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_devide_parameter.bs, MEMCPY_HOST_TO_DEVICE,
+              stream);
+  sampling_devide_parameter.device_topKs = device_topKs_;
+  sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
+  sampling_devide_parameter.device_curandstates = device_curandstates_;
+  if (use_top_p) {
+    MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs, MEMCPY_HOST_TO_DEVICE,
+                stream);
+    sampling_devide_parameter.device_topPs = device_topPs_;
+  }
+  if (use_temperature || logits_softmax) {
+    MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_devide_parameter.bs,
+                MEMCPY_HOST_TO_DEVICE, stream);
+    sampling_devide_parameter.device_temperatures = device_temperatures_;
+  }
+}
+
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
   if (rank_ == 0) {
     bool use_arg_max = true;
@@ -146,15 +166,17 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     int req_index = 0;
     float* device_logits = nullptr;
     SamplingDevideParameter sampling_devide_parameter;
-    sampling_devide_parameter.bs = sampling_reqs.size();
-    sampling_devide_parameter.max_logprobs_num = 0;
-    std::vector<std::vector<float>> prompt_probs_output(sampling_reqs.size());
-    CopyPromptProbsOutput(sampling_reqs, stream, prompt_probs_output);
+    sampling_devide_parameter.bs = 0;
+    // If true, softmax must be done.
+    bool logits_softmax = false;
     for (auto& sampling_req : sampling_reqs) {
       const ModelConfig* model_config = sampling_req.model_config;
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
-      sampling_devide_parameter.max_logprobs_num =
-          std::max(sampling_devide_parameter.max_logprobs_num, sampling_req.sampling_config->logprobs_num);
+      logits_softmax =
+        logits_softmax || sampling_req.prompt_probs_offset > 0 || sampling_req.sampling_config->logprobs_num > 0;
+      // If prompt_probs_offset is used, there are prompt_probs_offset logits that need to be calculated.
+      int sampling_bs = (sampling_req.prompt_probs_offset > 0 ? sampling_req.prompt_probs_offset : 1);
+      sampling_devide_parameter.bs += sampling_bs;
       float* logits = sampling_req.logits_buf[rank_];
       if (device_logits == logits || device_logits == nullptr) {
         device_logits = logits;
@@ -170,9 +192,12 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       if (sampling_config->topk > 1024) {
         return Status(RET_INVALID_ARGUMENT, "topk > 1024.");
       }
-      host_topKs_[offset] = sampling_config->topk;
-      host_topPs_[offset] = sampling_config->topp == 0.0f ? 1.0f : sampling_config->topp;
-      host_temperatures_[offset] = sampling_config->temperature == 0.0f ? 1.0f : sampling_config->temperature;
+      for (int sampling_index = 0; sampling_index < sampling_bs; sampling_index++) {
+        host_topKs_[offset + sampling_index] = sampling_config->topk;
+        host_topPs_[offset + sampling_index] = sampling_config->topp == 0.0f ? 1.0f : sampling_config->topp;
+        host_temperatures_[offset + sampling_index] =
+          sampling_config->temperature == 0.0f ? 1.0f : sampling_config->temperature;
+      }
       if (sampling_devide_parameter.max_topK < sampling_config->topk) {
         sampling_devide_parameter.max_topK = sampling_config->topk;
       }
@@ -187,31 +212,18 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       }
       req_index++;
     }
-
-    if (!use_arg_max || sampling_devide_parameter.max_logprobs_num > 0) {
-      MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_devide_parameter.bs, MEMCPY_HOST_TO_DEVICE,
-                  stream);
-      sampling_devide_parameter.device_topKs = device_topKs_;
-      sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
-      sampling_devide_parameter.device_curandstates = device_curandstates_;
-      if (use_top_p) {
-        MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs,
-                    MEMCPY_HOST_TO_DEVICE, stream);
-        sampling_devide_parameter.device_topPs = device_topPs_;
-      }
-      if (use_temperature || sampling_devide_parameter.max_logprobs_num > 0) {
-        MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_devide_parameter.bs,
-                    MEMCPY_HOST_TO_DEVICE, stream);
-        sampling_devide_parameter.device_temperatures = device_temperatures_;
-      }
+    if (!use_arg_max || logits_softmax) {
+      SamplingParameterToDevide(use_top_p, use_temperature, logits_softmax, sampling_devide_parameter, stream);
     }
     SamplingAndCalcLogprobs(sampling_reqs, device_logits, sampling_devide_parameter, stream);
     STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, nullptr, device_output_tokens_, nullptr,
                                                 sampling_devide_parameter, nullptr, stream));
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
+    std::vector<std::vector<float>> prompt_probs_output(sampling_reqs.size());
+    CopyPromptProbsOutput(sampling_reqs, stream, prompt_probs_output);
     StreamSynchronize(stream);
-    for (int i = 0; i < sampling_devide_parameter.bs; i++) {
+    for (int i = 0; i < sampling_reqs.size(); i++) {
       std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
       beam_search_sampling_.Sampling(sampling_reqs[i]);

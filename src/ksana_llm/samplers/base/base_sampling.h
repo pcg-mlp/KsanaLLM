@@ -25,7 +25,6 @@ struct SamplingDevideParameter {
   RandState* device_curandstates = nullptr;
   int vocab_size_padded = 0;
   int max_topK = 0;
-  int max_logprobs_num = 0;
   int bs = 0;
 };
 

@@ -6,6 +6,7 @@ import asyncio
 import os
 import sys
 import torch
+import importlib.util
 
 from typing import Callable, List, Optional, Union
 
@@ -26,12 +27,80 @@ from concurrent import futures
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
 
+
+class KsanaPlugin(object):
+    """
+    This class is designed to dynamically load and manage plugins for the Ksana framework.
+    It allows for the initialization and post-processing of plugins specified by a file path.
+    """
+
+    def __init__(self, plugin_path: str):
+        """
+        Initializes the KsanaPlugin instance by loading a plugin from the given path.
+
+        :param plugin_path: The file system path to the plugin module to be loaded.
+        """
+
+        self._ksana_plugin = self.load_plugin(plugin_path)
+        if hasattr(self._ksana_plugin, 'init_plugin'):
+            kwargs = {
+                "postprocess" : True,
+            }
+            self._ksana_plugin.init_plugin(**kwargs)
+
+    def load_plugin(self, plugin_path : str):
+        """
+        Dynamically loads the plugin module located at the specified path.
+
+        :param plugin_path: The file system path to the plugin module to be loaded.
+        :return: An instance of the loaded plugin class if successful, None otherwise.
+        """
+
+        try:
+            plugin_path = plugin_path + "/ksana_plugin.py"
+            spec = importlib.util.spec_from_file_location("ksana_plugin", plugin_path)
+            if spec is None:
+                print("spec is None")
+                return None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            class_name = "KsanaPlugin"
+            if hasattr(module, class_name):
+                KsanaPlugin = getattr(module, class_name)
+                return KsanaPlugin()
+            else:
+                return None
+        except Exception as e:
+            print(f"Error loading plugin: {e}")
+            return None
+
+
+    def postprocess(self,
+                    ksana_python_input : libtorch_serving.KsanaPythonInput,
+                    ksana_python_output : libtorch_serving.KsanaPythonOutput):
+        """
+        Invokes the postprocess method of the loaded plugin, if available.
+        """
+
+        kwargs = {
+            "ksana_python_input" : ksana_python_input,
+            "ksana_python_output" : ksana_python_output,
+            }
+        if self._ksana_plugin is None:
+            return ksana_python_output
+        return self._ksana_plugin.postprocess(**kwargs)
+
 class PyAsyncStreamingIterator(object):
     """The streaming iterator.
     """
 
-    def __init__(self, serving_iterator: libtorch_serving.StreamingIterator):
+    def __init__(self, 
+                 serving_iterator: libtorch_serving.StreamingIterator,
+                 ksana_plugin : KsanaPlugin,
+                 ksana_python_input : libtorch_serving.KsanaPythonInput):
         self._serving_iterator = serving_iterator
+        self._ksana_plugin = ksana_plugin
+        self._ksana_python_input = ksana_python_input
 
     def __aiter__(self):
         return self
@@ -50,6 +119,7 @@ class PyAsyncStreamingIterator(object):
         # Check the status of the iteration
         if status.OK():
             # If the iteration is successful, return the token ID
+            self._ksana_plugin.postprocess(self._ksana_python_input, ksana_python_output)
             return ksana_python_output
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
             # If the iteration has finished, raise a StopAsyncIteration exception
@@ -78,6 +148,7 @@ class ServingModel(object):
         # The serving instance.
         self._serving = self._serving_cls()
         self._serving.init_serving(config_file)
+        self._ksana_plugin = KsanaPlugin(self._serving.plugin_path)
 
     @torch.no_grad()
     def generate(
@@ -145,7 +216,8 @@ class ServingModel(object):
 
         if streamer is None:
             _, ksana_python_output = self._serving.generate(ksana_python_input)
+            self._ksana_plugin.postprocess(ksana_python_input, ksana_python_output)
             return ksana_python_output
         else:
             _, streaming_iterator = self._serving.generate_streaming(ksana_python_input)
-            return PyAsyncStreamingIterator(streaming_iterator)
+            return PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
