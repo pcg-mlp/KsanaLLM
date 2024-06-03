@@ -95,14 +95,16 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("input_tokens", &ksana_llm::KsanaPythonInput::input_tokens)
       .def_readwrite("prompt_probs_offset", &ksana_llm::KsanaPythonInput::prompt_probs_offset)
       .def_readwrite("subinput_pos", &ksana_llm::KsanaPythonInput::subinput_pos)
-      .def_readwrite("subinput_embedding", &ksana_llm::KsanaPythonInput::subinput_embedding);
+      .def_readwrite("subinput_embedding", &ksana_llm::KsanaPythonInput::subinput_embedding)
+      .def_readwrite("subinput_url", &ksana_llm::KsanaPythonInput::subinput_url);
 
   // Export `KsanaPythonOutput` to python.
   pybind11::class_<ksana_llm::KsanaPythonOutput, std::shared_ptr<ksana_llm::KsanaPythonOutput>>(m, "KsanaPythonOutput")
       .def(pybind11::init<>())
       .def_readwrite("output_tokens", &ksana_llm::KsanaPythonOutput::output_tokens)
       .def_readwrite("prompt_probs", &ksana_llm::KsanaPythonOutput::prompt_probs)
-      .def_readwrite("logprobs", &ksana_llm::KsanaPythonOutput::logprobs);
+      .def_readwrite("logprobs", &ksana_llm::KsanaPythonOutput::logprobs)
+      .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding);
 
   // Export `StreamingIterator` to python.
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")

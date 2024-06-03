@@ -68,6 +68,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.output_tokens = &(req_ptr->output_tokens);
     forward_req.subinput_pos = &(req_ptr->subinput_pos);
     forward_req.subinput_embedding = &(req_ptr->subinput_embedding);
+    forward_req.subinput_url = &(req_ptr->subinput_url);
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
     forward_req.prefix_cache_len = req_ptr->prefix_cache_len;
     forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;

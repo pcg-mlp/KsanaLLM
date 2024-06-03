@@ -135,6 +135,9 @@ class ServingModel(object):
         if 'subinput_embedding' in kwargs:
             ksana_python_input.subinput_embedding = kwargs['subinput_embedding']
 
+        if 'subinput_url' in kwargs:
+            ksana_python_input.subinput_url = kwargs['subinput_url']
+
         if 'prompt_probs_offset' in kwargs:
             ksana_python_input.prompt_probs_offset = kwargs['prompt_probs_offset']
             sampling_config.max_new_tokens = 1

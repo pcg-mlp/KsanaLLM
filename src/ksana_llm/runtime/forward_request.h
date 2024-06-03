@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <vector>
+#include <string>
 
 #include "ksana_llm/runtime/infer_stage.h"
 
@@ -29,6 +30,9 @@ struct ForwardRequest {
 
   // The subinput_embedding is the embedding value to be used for the replacement, from the request.
   std::vector<std::vector<float>>* subinput_embedding;
+
+  // The subinput_url is the multimodal resources url
+  std::vector<std::string>* subinput_url;
 
   // The output logits buf and offset.
   std::vector<float*> logits_buf;

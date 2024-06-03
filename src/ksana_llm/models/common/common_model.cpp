@@ -10,6 +10,7 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
 
@@ -172,6 +173,28 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
 
     flash_attention_layers_[idx]->Init(attention_param, context_, rank_);
     paged_attention_layers_[idx]->Init(attention_param, context_, rank_);
+  }
+
+  py::gil_scoped_acquire acquire;
+  try {
+    std::string moduleroot = model_config_.path;
+    std::string modulepath = moduleroot + "/ksana_plugin.py";
+
+    py::module importlib_util = py::module::import("importlib.util");
+    py::object spec = importlib_util.attr("spec_from_file_location")(moduleroot, modulepath);
+    py::object module = importlib_util.attr("module_from_spec")(spec);
+    spec.attr("loader").attr("exec_module")(module);
+
+    plugin_ = std::make_shared<py::object>(module.attr("KsanaPlugin")());
+
+    NLLM_LOG_INFO << "Using Plugin";
+  } catch (const py::error_already_set& e) {
+    PyErr_Clear();
+  }
+  if (plugin_) {
+    py::dict kwargs;
+    kwargs["model_path"] = model_config_.path;
+    plugin_->attr("init_plugin")(**kwargs);
   }
 }
 
@@ -436,8 +459,39 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
 }
 
 template <typename T>
+Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs) {
+  size_t batch_size = forward_reqs.size();
+  for (size_t idx = 0; idx < batch_size; idx++) {
+    if (forward_reqs[idx].subinput_url->size() > 0) {
+      py::gil_scoped_acquire acquire;
+
+      KsanaPythonInput ksana_python_input;
+      ksana_python_input.input_tokens = *forward_reqs[idx].output_tokens;
+      ksana_python_input.subinput_pos = *forward_reqs[idx].subinput_pos;
+      ksana_python_input.subinput_embedding = *forward_reqs[idx].subinput_embedding;
+      ksana_python_input.subinput_url = *forward_reqs[idx].subinput_url;
+      ksana_python_input.prompt_probs_offset = forward_reqs[idx].prompt_probs_offset;
+
+      KsanaPythonOutput ksana_python_output;
+
+      py::dict kwargs;
+      kwargs["ksana_python_input"] = ksana_python_input;
+      kwargs["ksana_python_output"] = ksana_python_output;
+      py::object py_outputs = plugin_->attr("preprocess")(**kwargs);
+      KsanaPythonOutput outputs = py::cast<KsanaPythonOutput>(py_outputs);
+
+      *forward_reqs[idx].subinput_embedding = std::move(outputs.embedding);
+    }
+  }
+  return Status();
+}
+
+template <typename T>
 Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs) {
+  if (plugin_) {
+    PythonPluginPreproces(forward_reqs);
+  }
   return LlamaForward(base_weight, forward_reqs, /*is_context_stage*/ true);
 }
 
