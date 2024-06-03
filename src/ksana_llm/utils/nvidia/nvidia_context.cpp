@@ -20,6 +20,23 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
     CUDA_CHECK(
         cudaDeviceGetAttribute(&pool_supported_handle_types, cudaDevAttrMemoryPoolSupportedHandleTypes, worker_id));
     CUDA_CHECK(cudaDeviceGetDefaultMemPool(&mempool, worker_id));
+    // Set access_id's accessing to the worker_id's mempool.
+    for (int access_id = 0; access_id < base_ptr_->tensor_parallel_size_; ++access_id) {
+      if (access_id != worker_id) {
+        cudaMemAccessDesc desc = {};
+        desc.location.type = cudaMemLocationTypeDevice;
+        desc.location.id = access_id;
+        desc.flags = cudaMemAccessFlagsProtReadWrite;
+        int can_access = 0;
+        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, access_id, worker_id));
+        if (can_access == 0) {
+          NLLM_LOG_ERROR << "GPU " << access_id << " is not capable of directly accessing memory of peer GPU "
+                         << worker_id;
+          exit(-1);
+        }
+        CUDA_CHECK(cudaMemPoolSetAccess(mempool, &desc, 1));
+      }
+    }
     memory_pool_.emplace_back(std::move(mempool));
   }
 }

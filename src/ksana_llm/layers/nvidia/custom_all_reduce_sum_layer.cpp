@@ -35,17 +35,6 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
   input_handles_ = context_->ext->GetCustomAllReduceInputs(input_index);
   input_handles_[rank_] = input;
 
-  for (int i = 0; i < tp_size; ++i) {
-    if (i != rank_) {
-      cudaMemPool_t mempool;
-      cudaDeviceGetDefaultMemPool(&mempool, i);
-      cudaMemAccessDesc desc = {};
-      desc.location.type = cudaMemLocationTypeDevice;
-      desc.location.id = rank_;
-      desc.flags = cudaMemAccessFlagsProtReadWrite;
-      cudaMemPoolSetAccess(mempool, &desc, 1);
-    }
-  }
   return Status();
 }
 
