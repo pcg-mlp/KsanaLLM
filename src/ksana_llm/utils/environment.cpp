@@ -269,6 +269,8 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
     model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_token_len;
   }
   batch_manager_config_.batch_scheduler_config.max_token_len = model_config.max_token_num;
+  batch_manager_config_.batch_scheduler_config.max_step_tokens =
+      std::max(batch_manager_config_.batch_scheduler_config.max_step_tokens, model_config.max_token_num + 1);
   model_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   model_config.max_batch_size = batch_manager_config_.batch_scheduler_config.max_batch_size;
   model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_step_tokens;
