@@ -52,6 +52,8 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
 
     req->subinput_pos = {};
 
+    req->subinput_url = {};
+
     int input_tokens_length = std::stoi(http_req.get_param_value("tokens_len", 0));
     std::vector<int> tokens_vec(input_tokens_length);
     for (int v_id = 0; v_id < input_tokens_length; ++v_id) {

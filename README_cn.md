@@ -141,3 +141,8 @@ python -c "import ksana_llm"
 #### 6.1 模型权重映射
 
 在支持新模型时，如果模型结构与已知模型（例如Llama）相同，只是权重名字不同，可以通过JSON文件来对权重做一个映射，从而能够较简单的支持新模型。想要获取更详细的信息，请参考: [Optional Weigth Map Guide](src/ksana_llm/python/weight_map/README.md)。
+
+#### 6.2 自定义插件
+
+自定义插件可以做特殊预处理和后处理。使用时，你需要把ksana_plugin.py放在模型目录下。
+[样例](examples/qwenvl/ksana_plugin.py)

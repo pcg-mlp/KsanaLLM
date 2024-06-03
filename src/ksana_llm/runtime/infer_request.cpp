@@ -26,6 +26,7 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       prompt_probs(request->prompt_probs),
       subinput_pos(request->subinput_pos),
       subinput_embedding(request->subinput_embedding),
+      subinput_url(request->subinput_url),
       output_tokens(std::get<0>(request->output_group[index])),
       logprobs(std::get<1>(request->output_group[index])),
       cumulative_score(0),

@@ -85,6 +85,8 @@ class CommonModel : public BaseModel {
   std::shared_ptr<CastLayer<T>> cast_layer_;
   std::shared_ptr<SubinputLayer<T>> subinput_layer_;
 
+  std::shared_ptr<py::object> plugin_;
+
   // The layer number of the model
   int num_layer_;
 
@@ -140,7 +142,9 @@ class CommonModel : public BaseModel {
                       const bool is_context_stage);
 
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                           const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);
+                            const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);
+
+  Status PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs);
 };
 
 }  // namespace ksana_llm

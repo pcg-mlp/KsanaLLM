@@ -21,7 +21,8 @@ Request::Request(const ksana_llm::KsanaPythonInput &ksana_python_input)
       prompt_probs_offset(ksana_python_input.prompt_probs_offset),
       sampling_config(ksana_python_input.sampling_config),
       subinput_pos(ksana_python_input.subinput_pos),
-      subinput_embedding(ksana_python_input.subinput_embedding) {
+      subinput_embedding(ksana_python_input.subinput_embedding),
+      subinput_url(ksana_python_input.subinput_url) {
   for (auto output : output_group) {
     req_ids.push_back(id_generator_.Gen());
   }

@@ -11,7 +11,7 @@ import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from transformers import GenerationConfig, AutoTokenizer
+from transformers import GenerationConfig, AutoTokenizer, AutoConfig
 from fastapi import FastAPI
 
 import asyncio
@@ -24,6 +24,7 @@ TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
 model = None
 tokenizer = None
+model_config = None
 
 
 def args_config():
@@ -125,6 +126,28 @@ def get_sampling_value(sampling_config: dict, key: str, default_val=None):
     """
     return sampling_config[key] if key in sampling_config else default_val
 
+def update_resources(input_tokens, kwargs):
+    """Update parameters for special models
+    """
+    # Follow the preprocess from: https://huggingface.co/Qwen/Qwen-VL-Chat/blob/main/modeling_qwen.py#L554
+    if model_config.model_type == "qwen" and "visual" in model_config.to_dict().keys():
+        subinput_pos = [int(pos+1) for pos, ids in enumerate(input_tokens) if ids == model_config.visual["image_start_id"]]
+        subinput_end = [int(pos-1) for pos, ids in enumerate(input_tokens) if ids == model_config.visual["image_start_id"]+1]
+
+        # check token
+        if len(subinput_pos) != len(subinput_end):
+            raise RuntimeError(f"len(subinput_pos) != len(subinput_end), please check your prompt.")
+        
+        subinput_url = []
+        for i in range(len(subinput_pos)):
+            url = input_tokens[subinput_pos[i]:subinput_end[i]]
+            url = url[:url.index(model_config.visual['image_start_id'] + 2)]
+            subinput_url.append(bytes(url).decode('utf-8'))
+
+        kwargs["subinput_pos"] = subinput_pos
+        kwargs["subinput_url"] = subinput_url
+
+    return kwargs
 
 @app.post("/generate")
 async def generate(request: Request) -> Response:
@@ -144,6 +167,7 @@ async def generate(request: Request) -> Response:
 
     subinput_pos = request_dict.pop("subinput_pos", None)
     subinput_embedding = request_dict.pop("subinput_embedding", None)
+    subinput_url = request_dict.pop("subinput_url", None)
     prompt_probs_offset = request_dict.pop("prompt_probs_offset", None)
 
     input_tokens = request_dict.pop("input_tokens", None)
@@ -155,8 +179,12 @@ async def generate(request: Request) -> Response:
         kwargs['subinput_pos'] = subinput_pos
     if subinput_embedding is not None:
         kwargs['subinput_embedding'] = subinput_embedding
+    if subinput_url is not None:
+        kwargs['subinput_url'] = subinput_url
     if prompt_probs_offset is not None:
         kwargs['prompt_probs_offset'] = prompt_probs_offset
+
+    kwargs = update_resources(input_tokens, kwargs)
 
     generation_config = GenerationConfig(
         top_k=get_sampling_value(sampling_config, "topk", 1),
@@ -218,6 +246,8 @@ if __name__ == "__main__":
         with open(args.config_file, "r") as yaml_file:
             yaml_data = yaml.safe_load(yaml_file)
             args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
+    model_config = AutoConfig.from_pretrained(args.tokenizer_dir, 
+                                              trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)

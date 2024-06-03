@@ -1,0 +1,13 @@
+{
+  "transformer.wte.weight": "model.embed_tokens.weight",
+  "transformer.h.(\\d+).ln_1.weight": "model.layers.$1.input_layernorm.weight",
+  "transformer.h.(\\d+).attn.c_attn.weight": "model.layers.$1.self_attn.W_pack.weight",
+  "transformer.h.(\\d+).attn.c_attn.bias": "model.layers.$1.self_attn.query_key_value.bias",
+  "transformer.h.(\\d+).attn.c_proj.weight": "model.layers.$1.self_attn.o_proj.weight",
+  "transformer.h.(\\d+).ln_2.weight": "model.layers.$1.post_attention_layernorm.weight",
+  "transformer.h.(\\d+).mlp.w1.weight": "model.layers.$1.mlp.up_proj.weight",
+  "transformer.h.(\\d+).mlp.w2.weight": "model.layers.$1.mlp.gate_proj.weight",
+  "transformer.h.(\\d+).mlp.c_proj.weight": "model.layers.$1.mlp.down_proj.weight",
+  "transformer.ln_f.weight": "model.norm.weight",
+  ".*visual.*": "deprecated"
+}

@@ -52,6 +52,9 @@ struct KsanaPythonInput {
   // The subinput_embedding is the embedding value to be used for the replacement, from the request.
   std::vector<std::vector<float>> subinput_embedding;
 
+  // The subinput_url is the multimodal resources url
+  std::vector<std::string> subinput_url;
+
   // The offsets of the tokens for the prompt_probs that need to be returned.
   size_t prompt_probs_offset = 0;
 };
@@ -65,6 +68,9 @@ struct KsanaPythonOutput {
 
   // Probs of specific tokens at certain positions in the prompt.
   std::vector<float> prompt_probs;
+
+  // Embedding value for plugin output
+  std::vector<std::vector<float>> embedding;
 };
 
 class Request {
@@ -94,6 +100,9 @@ class Request {
 
   // The subinput_embedding is the embedding value to be used for the replacement, from the request.
   std::vector<std::vector<float>> subinput_embedding;
+
+  // The subinput_url is the multimodal resources url
+  std::vector<std::string> subinput_url;
 
   // TODO(zakwang): Replace output_tokens
   std::vector<OutputTuple> output_group;

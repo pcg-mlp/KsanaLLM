@@ -154,3 +154,8 @@ python -c "import ksana_llm"
 
 You can include an optional weight map JSON file for models that share the same structure as the Llama model but have different weight names.
 For more detailed information, please refer to the following link: [Optional Weigth Map Guide](src/ksana_llm/python/weight_map/README.md)
+
+#### 6.2 Plugin
+
+Custom plugins can perform some special pre-process and post-processing. You need to place ksana_plugin.py in the model directory.
+[Example](examples/qwenvl/ksana_plugin.py)
