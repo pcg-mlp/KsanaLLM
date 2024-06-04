@@ -42,3 +42,8 @@ set(ACL_SHARED_LIBS
   ${ASCEND_PATH}/x86_64-linux/lib64/libregister.so
   ${ASCEND_PATH}/x86_64-linux/lib64/libplatform.so
 )
+
+find_program(AWK awk mawk gawk)
+# awk -F= '{ if ($1 == "version_dir") print $2 }' /usr/local/Ascend/ascend-toolkit/latest/toolkit/version.info | awk -F. '{ print $1 }'
+execute_process(COMMAND /bin/sh -c "\"${AWK}\" -F= '\{ if ($1 == \"version_dir\") print $2 \}' ${ASCEND_PATH}/toolkit/version.info | awk -F. '\{ print $1 \}'" OUTPUT_VARIABLE ASCEND_TOOLKIT_MAR_VER OUTPUT_STRIP_TRAILING_WHITESPACE)
+add_definitions("-DASCEND_TOOLKIT_MAR_VER_${ASCEND_TOOLKIT_MAR_VER}")
