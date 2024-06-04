@@ -248,6 +248,8 @@ if __name__ == "__main__":
         with open(args.config_file, "r") as yaml_file:
             yaml_data = yaml.safe_load(yaml_file)
             args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
+    model_config = AutoConfig.from_pretrained(args.tokenizer_dir, 
+                                              trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
     model = ksana_llm.AutoModel.from_config(args.config_file)
