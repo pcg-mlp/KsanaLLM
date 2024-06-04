@@ -122,6 +122,7 @@ __aicore__ void SliceKernel::CopyIn(int32_t loop_idx, uint32_t src_offset, uint1
   DataCopyPadParams pad_params;
   DataCopyParams copy_params{1, src_size, 0, 0};
   DataCopyPad(local_tensor, input_gm_[src_offset], copy_params, pad_params);
+  pipe_barrier(PIPE_ALL);
 
   input_queue_.EnQue(local_tensor);
 }
@@ -132,6 +133,7 @@ __aicore__ void SliceKernel::CopyOut(int32_t loop_idx, uint32_t dst_offset, uint
   DataCopyParams copy_params{1, dst_size, 0, 0};
   LocalTensor<int32_t> local_tensor = input_queue_.DeQue<int32_t>();
   DataCopyPad(output_gm_[dst_offset], local_tensor, copy_params);
+  pipe_barrier(PIPE_ALL);
 
   input_queue_.FreeTensor(local_tensor);
 }

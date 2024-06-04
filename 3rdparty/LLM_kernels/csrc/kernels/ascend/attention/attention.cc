@@ -41,14 +41,29 @@ void FlashAttentionACL::Init(const int max_position_embeddings, const int head_d
 }
 
 void FlashAttentionACL::InitAttnMask(int max_tokens_num, aclDataType dtype) {
-  // only support fp16 yet
-  ACL_CHECK_EQ(dtype, aclDataType::ACL_FLOAT16);
   ACL_CHECK_GT(max_tokens_num, 1);
-  constexpr uint16_t one_in_fp16 = 0b11110000000000;
-  // constexpr uint16_t zero_in_fp16 = 0b0;
-
   std::vector<int64_t> attn_mask_shape = {max_tokens_num, max_tokens_num};
   auto elem_nums = max_tokens_num * max_tokens_num;
+
+#ifdef ASCEND_TOOLKIT_MAR_VER_8
+  uint8_t* host_data;
+  ACL_CHECK_RET(aclrtMallocHost((void**)(&host_data), elem_nums * sizeof(uint8_t)));
+  for (int i = 0; i < max_tokens_num; ++i) {
+    for (int j = i + 1; j < max_tokens_num; ++j) {
+      host_data[i * max_tokens_num + j] = uint8_t(1);
+    }
+  }
+  auto fmt = aclFormat::ACL_FORMAT_ND;
+  auto byte_size = elem_nums * DT2LONG.at(aclDataType::ACL_UINT8);
+  ACL_CHECK_RET(aclrtMalloc(&attn_mask_dev_, byte_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+  ACL_CHECK_RET(aclrtMemcpy(attn_mask_dev_, byte_size, host_data, byte_size, ACL_MEMCPY_HOST_TO_DEVICE));
+  CreateAclTensorWithData(attn_mask_shape, &attn_mask_dev_, aclDataType::ACL_UINT8, fmt, &attn_mask_);
+  ACL_CHECK_RET(aclrtFreeHost(host_data));
+  host_data = nullptr;
+#else
+  // only support fp16 yet
+  ACL_CHECK_EQ(dtype, aclDataType::ACL_FLOAT16);
+  constexpr uint16_t one_in_fp16 = 0b11110000000000;
   std::vector<uint16_t> host_data(elem_nums, 0u);
   for (int i = 0; i < max_tokens_num; ++i) {
     for (int j = i + 1; j < max_tokens_num; ++j) {
@@ -60,14 +75,15 @@ void FlashAttentionACL::InitAttnMask(int max_tokens_num, aclDataType dtype) {
   ACL_CHECK_RET(aclrtMalloc(&attn_mask_dev_, byte_size, ACL_MEM_MALLOC_NORMAL_ONLY));
   ACL_CHECK_RET(aclrtMemcpy(attn_mask_dev_, byte_size, host_data.data(), byte_size, ACL_MEMCPY_HOST_TO_DEVICE));
   CreateAclTensorWithData(attn_mask_shape, &attn_mask_dev_, dtype_, fmt, &attn_mask_);
+#endif
 }
 
 FlashAttentionACL::~FlashAttentionACL() {
   if (attn_mask_) {
-    aclDestroyTensor(attn_mask_);
+    ACL_CHECK_RET(aclDestroyTensor(attn_mask_));
   }
   if (attn_mask_dev_) {
-    aclrtFree(attn_mask_dev_);
+    ACL_CHECK_RET(aclrtFree(attn_mask_dev_));
     attn_mask_dev_ = nullptr;
   }
 }
@@ -231,7 +247,6 @@ void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t 
   aclTensor* ropeQueryInput = nullptr;
   GetSliceAndPermute(matmulQKVOutput, 0, attnInputShape, &tmp_buffers[1], &tmp_buffers[2], &ropeQueryInput, stream,
                      ws_func);
-  // PrintTensor(ropeQueryInput, stream, "ropeQueryInput");
   CreateAclTensorWithData(attnInputShape, &tmp_buffers[3], dtype_, fmt, &attnInputQ);
   rope_ptr_->Forward(ropeQueryInput, ropeIndex, &attnInputQ, stream, ws_func, workspace_buf_ptr);
   aclDestroyTensor(ropeQueryInput);
@@ -242,7 +257,6 @@ void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t 
   GetSliceAndPermute(matmulQKVOutput, 1, attnInputShape, &tmp_buffers[1], &tmp_buffers[2], &ropeKeyInput, stream,
                      ws_func);
   if (is_context_stage) {
-    // CreateAclTensorWithData(attnInputShape, &key_cache, dtype_, fmt, &attnInputK);
     attnInputK = aclCreateTensor(attnInputShape.data(), attnInputShape.size(), dtype_, kvStrides.data(), 0, fmt,
                                  attnInputShape.data(), attnInputShape.size(), *key_cache);
     rope_ptr_->Forward(ropeKeyInput, ropeIndex, &attnInputK, stream, ws_func, workspace_buf_ptr);

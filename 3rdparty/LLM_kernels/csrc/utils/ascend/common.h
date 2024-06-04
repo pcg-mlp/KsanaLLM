@@ -63,7 +63,9 @@ namespace utils {
 
 const std::unordered_map<aclDataType, size_t> DT2LONG = {{aclDataType::ACL_FLOAT16, sizeof(uint16_t)},
                                                          {aclDataType::ACL_INT64, sizeof(int64_t)},
-                                                         {aclDataType::ACL_FLOAT, sizeof(float)}};
+                                                         {aclDataType::ACL_FLOAT, sizeof(float)},
+                                                         {aclDataType::ACL_BOOL, sizeof(bool)},
+                                                         {aclDataType::ACL_UINT8, sizeof(uint8_t)}};
 
 int64_t GetShapeSize(const std::vector<int64_t>& shape);
 
