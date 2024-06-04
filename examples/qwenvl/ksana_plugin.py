@@ -57,6 +57,9 @@ class KsanaPlugin:
             # free cache
             torch.cuda.empty_cache()
 
+        if "postprocess" in kwargs:
+            return
+
     def check_intput(self, **kwargs):
         input_list = [
             'ksana_python_input',
@@ -79,4 +82,8 @@ class KsanaPlugin:
             image_embedding = self.visual.encode(image_url)
         image_embedding = image_embedding.cpu().view(image_embedding.shape[0],-1).float().numpy().tolist()
 
-        ksana_python_input.embedding = image_embedding
+        ksana_python_input.subinput_embedding = image_embedding
+
+    # Method for post-processing
+    def postprocess(self, **kwargs):
+        return
