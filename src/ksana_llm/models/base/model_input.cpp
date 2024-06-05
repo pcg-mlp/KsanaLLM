@@ -109,7 +109,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   NLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
     std::invalid_argument(fmt::format("ModelInput empty forward requests."));
-  } else if (batch_size > model_config_.max_batch_size) {
+  } else if (batch_size > (size_t)model_config_.max_batch_size) {
     std::invalid_argument(
         fmt::format("ModelInput bs exceed max bs. {} > {}", batch_size, model_config_.max_batch_size));
   }
@@ -244,8 +244,8 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   std::vector<int> input_ids_cpu(0);
   std::vector<int> input_prefix_list_int32(batch_size + 1, 0ul);
   std::vector<size_t> input_prefix_list_uint64(batch_size + 1, 0ul);
-  for (int idx = 0; idx < batch_size; ++idx) {
-    if (forward_reqs[idx].output_tokens->size() < forward_reqs[idx].prefix_cache_len) {
+  for (size_t idx = 0; idx < batch_size; ++idx) {
+    if (forward_reqs[idx].output_tokens->size() < (size_t)forward_reqs[idx].prefix_cache_len) {
       NLLM_LOG_ERROR << fmt::format("Forward Request input tokens {} < prefix cache len {}",
                                     forward_reqs[idx].output_tokens->size(), forward_reqs[idx].prefix_cache_len);
       throw std::runtime_error(fmt::format("Forward Request input tokens {} < prefix cache len {}",
@@ -259,7 +259,7 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
-    for (int prompt_offset = input_offset - forward_reqs[idx].prompt_probs_offset; prompt_offset < input_offset;
+    for (size_t prompt_offset = input_offset - forward_reqs[idx].prompt_probs_offset; prompt_offset < input_offset;
          prompt_offset++) {
       prompt_probs_offset_list_uint64[prompt_probs_offset_list_uint64_index++] = prompt_offset;
     }
@@ -279,7 +279,7 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
               context_->GetH2DStreams()[rank_]);
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
-  prompt_probs_offset_uint64_tensor.shape = {prompt_probs_offset_list_uint64_index};
+  prompt_probs_offset_uint64_tensor.shape = {(size_t)prompt_probs_offset_list_uint64_index};
   prompt_probs_offset_uint64_tensor.dtype = TYPE_UINT64;
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);

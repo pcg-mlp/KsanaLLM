@@ -23,8 +23,6 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
   void* input = std::any_cast<void*>(parameters[parameter_index++]);
   int input_index = std::any_cast<int>(parameters[parameter_index++]);
 
-  int tp_size = context_->GetTensorParallelSize();
-
   data_handles_ = context_->ext->GetCustomAllReduceBuffers();
   data_handles_[rank_] = buffer_;
 

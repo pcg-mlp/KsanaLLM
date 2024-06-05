@@ -41,7 +41,7 @@ struct ModelRunConfig {
 
 // A common implement of transfer based model.
 template <typename T>
-class CommonModel : public BaseModel {
+class __attribute__ ((visibility("hidden")))  CommonModel : public BaseModel {
  public:
   CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
   ~CommonModel();

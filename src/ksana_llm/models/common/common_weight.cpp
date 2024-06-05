@@ -176,7 +176,6 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
   GetBlockManager()->SetDeviceId(rank_);
   std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
   std::vector<std::string> custom_name_list;
-  size_t name_list_size = weight_name_list.size();
   STATUS_CHECK_RETURN(GetCustomNameList(weight_name_list, custom_name_list));
   for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
     // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
@@ -207,7 +206,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     if (weight_data_type == TYPE_FP32) {
       // cast TYPE_FP32 to weight_data_type_.
       auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
-      torch::Tensor in = torch::from_blob(weight_ptr, {weight_size / sizeof(float)}, options);
+      torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
       if (weight_data_type_ == TYPE_FP16) {
         weight_cpu_tensor = in.to(torch::kFloat16);
         weight_ptr = weight_cpu_tensor.data_ptr();
@@ -269,7 +268,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
          */
         NLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
         std::vector<size_t> embed_tokens_shape = weights_map_["model.embed_tokens.weight"].shape;
-        std::vector<size_t> lm_head_shape = {DivRoundUp(embed_tokens_shape[0], tensor_para_size_),
+        std::vector<size_t> lm_head_shape = {(size_t)(DivRoundUp(embed_tokens_shape[0], tensor_para_size_)),
                                              embed_tokens_shape[1] * tensor_para_size_};
         LoadRegularTensor(weight_ptr, "lm_head.weight", lm_head_shape, weight_data_type, /*transpose_first*/ false,
                           tensor_para_offset, weight_size);
@@ -342,7 +341,7 @@ Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_t
   // dst tensor: last_kv_tensor[d2, head_num / num_kv_heads * d1 + d1 + d1]
   int head_num = model_config_.head_num;
   int num_kv_heads = model_config_.num_key_value_heads;
-  for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& qkv_weight_tensor = weights_map_[qkv_name];
     auto qkv_shape = qkv_weight_tensor.shape;
@@ -375,7 +374,7 @@ Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_t
 template <typename T>
 Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
-  for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
     std::string down_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.down_proj.weight";
     Tensor& down_weight_tensor = weights_map_[down_proj_name];
     Permute(down_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
@@ -406,7 +405,7 @@ Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_
 template <typename T>
 Status CommonWeight<T>::PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
-  for (size_t layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
     std::string o_proj_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.o_proj.weight";
     Tensor& o_proj_weight_tensor = weights_map_[o_proj_name];
     Permute(o_proj_weight_tensor, last_o_proj_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
@@ -499,12 +498,9 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
 template <typename T>
 Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   weight_data_type_ = model_config.weight_data_type;
-  int head_num = model_config.head_num;
-  int num_kv_heads = model_config.num_key_value_heads;
   int hidden_units = model_config.hidden_units;
   int inter_size = model_config.inter_size;
   int num_layer = model_config.num_layer;
-  int rotary_embedding = model_config.rotary_embedding;
   int vocab_size = model_config.vocab_size;
   model_name_ = model_config.name;
   tensor_para_size_ = model_config.tensor_para_size;
@@ -575,7 +571,7 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
       }
 #endif
       auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
-      torch::Tensor in = torch::from_blob(tensor.GetPtr<void>(), {tensor.shape[0], tensor.shape[1]}, options);
+      torch::Tensor in = torch::from_blob(tensor.GetPtr<void>(), {(int64_t)tensor.shape[0], (int64_t)tensor.shape[1]}, options);
       auto out = torch::nn::functional::normalize(in, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
       MemcpyAsync(tensor.GetPtr<void>(), out.data_ptr(), sizeof(T) * tensor.shape[0] * tensor.shape[1],
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
