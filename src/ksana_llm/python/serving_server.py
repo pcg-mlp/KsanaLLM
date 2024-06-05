@@ -186,6 +186,15 @@ async def generate(request: Request) -> Response:
 
     kwargs = update_resources(input_tokens, kwargs)
 
+    stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
+    ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)
+    if (
+        tokenizer.eos_token_id is not None
+        and not ignore_eos
+        and not tokenizer.eos_token_id in stop_token_ids
+    ):
+        stop_token_ids.append(tokenizer.eos_token_id)
+
     generation_config = GenerationConfig(
         top_k=get_sampling_value(sampling_config, "topk", 1),
         do_sample=get_sampling_value(sampling_config, "topk", 1) != 1,
@@ -202,9 +211,8 @@ async def generate(request: Request) -> Response:
                                               "num_return_sequences", 1),
         length_penalty=get_sampling_value(sampling_config,
                                               "length_penalty", 1.0),
-        stop_token_ids=get_sampling_value(sampling_config,
-                                          "stop_token_ids", []),
-        ignore_eos=get_sampling_value(sampling_config, "ignore_eos", False)
+        stop_token_ids=stop_token_ids,
+        ignore_eos=ignore_eos
     )
 
     # Get the current event loop
