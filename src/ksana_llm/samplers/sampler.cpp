@@ -49,7 +49,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
     exit(RetCode::RET_SEGMENT_FAULT);
   }
   std::vector<uint32_t*> host_device_output_tokens_ptrs(max_batch_size);
-  for (int i = 0; i < max_batch_size; i++) {
+  for (size_t i = 0; i < max_batch_size; i++) {
     host_device_output_tokens_ptrs[i] = device_output_tokens_ + i;
   }
 
@@ -82,10 +82,10 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
   std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
   // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
   float inv_repetition_penalty = 1.0f / repetition_penalty;
-  for (int i = 0; i < input_tokens->size(); ++i) {
+  for (size_t i = 0; i < input_tokens->size(); ++i) {
     inv_repetition_penalties_[input_tokens->at(i)] = inv_repetition_penalty;
   }
-  for (int i = 0; i < output_tokens->size(); ++i) {
+  for (size_t i = 0; i < output_tokens->size(); ++i) {
     inv_repetition_penalties_[output_tokens->at(i)] = inv_repetition_penalty;
   }
   // copy inv_repetition_penalties_ to device
@@ -127,7 +127,7 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
 
 void Sampler::CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
                                     std::vector<std::vector<float>>& prompt_probs_output) {
-  for (int i = 0; i < sampling_reqs.size(); i++) {
+  for (size_t i = 0; i < sampling_reqs.size(); i++) {
     if (sampling_reqs[i].sampling_config->return_prompt_probs) {
       prompt_probs_output[i].resize(batch_schedule_config_.max_vocab_size * sampling_reqs[i].prompt_probs_offset);
       MemcpyAsync(
@@ -170,7 +170,6 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     // If true, softmax must be done.
     bool logits_softmax = false;
     for (auto& sampling_req : sampling_reqs) {
-      const ModelConfig* model_config = sampling_req.model_config;
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
       logits_softmax =
         logits_softmax || sampling_req.prompt_probs_offset > 0 || sampling_req.sampling_config->logprobs_num > 0;
@@ -184,7 +183,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
       } else {
         return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
       }
-      int offset = sampling_req.logits_offset;
+      size_t offset = sampling_req.logits_offset;
       if (offset >= batch_schedule_config_.max_batch_size) {
         return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= max_batch_size");
       }
@@ -223,7 +222,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     std::vector<std::vector<float>> prompt_probs_output(sampling_reqs.size());
     CopyPromptProbsOutput(sampling_reqs, stream, prompt_probs_output);
     StreamSynchronize(stream);
-    for (int i = 0; i < sampling_reqs.size(); i++) {
+    for (size_t i = 0; i < sampling_reqs.size(); i++) {
       std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
       beam_search_sampling_.Sampling(sampling_reqs[i]);

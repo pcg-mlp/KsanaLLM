@@ -76,10 +76,6 @@ std::string TensorT<T>::ToString() const {
                    std::to_string(block_id).c_str());
 }
 
-template <int T>
-const int TensorT<T>::GetBlockId() const {
-  return block_id;
-}
 
 template <int T>
 std::string TensorT<T>::GetNumpyType() const {

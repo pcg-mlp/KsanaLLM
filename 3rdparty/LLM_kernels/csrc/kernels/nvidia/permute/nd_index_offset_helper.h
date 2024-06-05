@@ -12,7 +12,7 @@ namespace nvidia {
 template <typename T, int N>
 class NdIndexOffsetHelper {
  public:
-  __device__ __host__ __forceinline__ NdIndexOffsetHelper() = default;
+  __forceinline__ NdIndexOffsetHelper() = default;
 
   template <class... Ts>
   __device__ __host__ __forceinline__ explicit NdIndexOffsetHelper(T d0, Ts... dims) {
@@ -160,7 +160,7 @@ class NdIndexOffsetHelper {
 template <typename T, int N>
 class NdIndexStrideOffsetHelper : public NdIndexOffsetHelper<T, N> {
  public:
-  __device__ __host__ __forceinline__ NdIndexStrideOffsetHelper() = default;
+  __forceinline__ NdIndexStrideOffsetHelper() = default;
   __device__ __host__ __forceinline__ explicit NdIndexStrideOffsetHelper(const T* strides) {
     for (int i = 0; i < N; ++i) {
       stride_[i] = strides[i];

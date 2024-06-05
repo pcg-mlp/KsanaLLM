@@ -146,8 +146,8 @@ TEST_F(LlamaNvidiaPagedAttentionTestSuit, LlamaPagedAttentionHalfTest) {
 
 TEST(CacheCopyTest, CacheCopyTest) {
   std::vector<size_t> h_input_offsets = {0};
-  std::vector<int> h_block_offsets = {0};
-  int block_size = 8;
+  std::vector<size_t> h_block_offsets = {0};
+  size_t block_size = 8;
   int bs = 2;
   int num_heads = 5;
   int head_size = 8;
@@ -191,12 +191,12 @@ TEST(CacheCopyTest, CacheCopyTest) {
 
   // 为 k_list 分配内存并初始化
   std::vector<float*> h_k_list_ptrs(h_block_offsets.back());
-  for (int i = 0; i < h_block_offsets.back(); i++) {
+  for (size_t i = 0; i < h_block_offsets.back(); i++) {
     cudaMalloc(&h_k_list_ptrs[i], block_size * token_data_size * sizeof(float));
   }
   // 为 v_list 分配内存并初始化
   std::vector<float*> h_v_list_ptrs(h_block_offsets.back());
-  for (int i = 0; i < h_block_offsets.back(); i++) {
+  for (size_t i = 0; i < h_block_offsets.back(); i++) {
     cudaMalloc(&h_v_list_ptrs[i], block_size * token_data_size * sizeof(float));
   }
   cudaMemcpy(d_k_list, h_k_list_ptrs.data(), h_k_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
@@ -209,7 +209,7 @@ TEST(CacheCopyTest, CacheCopyTest) {
 
   // 将结果从设备复制回主机并验证
   std::vector<float> h_dst(h_block_offsets.back() * token_data_size * block_size);
-  for (int i = 0; i < h_block_offsets.back(); i++) {
+  for (size_t i = 0; i < h_block_offsets.back(); i++) {
     cudaMemcpy(h_dst.data() + i * block_size * token_data_size, h_k_list_ptrs[i],
                block_size * token_data_size * sizeof(float), cudaMemcpyDeviceToHost);
   }
@@ -230,7 +230,7 @@ TEST(CacheCopyTest, CacheCopyTest) {
   // 验证结果
   int cache_offset_indx = 0;
   int src_index = 0;
-  for (int i = 0; i < h_block_offsets.back() * block_size; i++) {
+  for (size_t i = 0; i < h_block_offsets.back() * block_size; i++) {
     if (h_input_offsets[cache_offset_indx] == i) {
       // printf("i %d -> %d\n", i, h_block_offsets[cache_offset_indx] * block_size);
       i = h_block_offsets[cache_offset_indx] * block_size;

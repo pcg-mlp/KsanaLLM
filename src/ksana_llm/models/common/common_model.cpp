@@ -62,10 +62,12 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   // TODO(karlluo): all create tensor used dynamic memory pool
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
-      CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_, {rotary_embedding, max_position_embeddings},
+    CreateBufferTensor(tensor_buffer_2_, {max_token_num, (size_t)max_dim}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(
+    CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_,
+                                          {(size_t)rotary_embedding, (size_t)max_position_embeddings},
                                           model_config_.weight_data_type));
 #ifdef ENABLE_ACL
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_0_, {max_token_num, hidden_units}, TYPE_FP16));
@@ -193,7 +195,7 @@ Status CommonModel<T>::AddPrefixCache(std::vector<Tensor>& mmha_origin_input, st
   size_t total_token_num = 0;
   size_t dtype_size = GetTypeSize(mmha_origin_input[0].dtype);
   size_t per_size = mmha_origin_input[0].shape[1] / 3 * dtype_size;
-  for (int idx = 0; idx < model_input_->batch_size; ++idx) {
+  for (size_t idx = 0; idx < model_input_->batch_size; ++idx) {
     size_t src_offset = (model_input_->input_offset_list[idx] - model_input_->input_prefix_list[idx]) * per_size * 3;
     size_t input_token_num = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
     size_t prefix_token_num = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
@@ -217,7 +219,7 @@ Status CommonModel<T>::RemovePrefixCache(std::vector<Tensor>& mmha_prefix_output
   size_t src_offset = 0;
   size_t dtype_size = GetTypeSize(mmha_prefix_output[0].dtype);
   size_t per_size = mmha_prefix_output[0].shape[1] * dtype_size;
-  for (int idx = 0; idx < model_input_->batch_size; ++idx) {
+  for (size_t idx = 0; idx < model_input_->batch_size; ++idx) {
     size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
     size_t input_length = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
     src_offset += prefix_length * per_size;
@@ -451,7 +453,7 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
 
   // create forward shape tensor
   forward_shape_.shape = {model_input_->batch_size, model_input_->max_tokens,
-                          model_input_->kv_cache_offset_list.back()};
+                          (size_t)model_input_->kv_cache_offset_list.back()};
 
   std::vector<Tensor>& emb_lookup_output = temp_buffer_0;
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);

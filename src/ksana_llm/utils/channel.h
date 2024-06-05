@@ -63,9 +63,6 @@ class ChannelObject {
   // see Channel::PrintWaitRate
   void PrintWaitRate() {
     std::unique_lock<std::mutex> lck(mutex_);
-    double read_cnt = std::max(read_cnt_, 1ul);
-    double write_cnt = std::max(write_cnt_, 1ul);
-
     // TODO(karlluo): do something print
 
     read_cnt_ = 0;
