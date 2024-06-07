@@ -80,9 +80,7 @@ class KsanaPlugin:
             return
         with torch.no_grad():
             image_embedding = self.visual.encode(image_url)
-        image_embedding = image_embedding.cpu().view(image_embedding.shape[0],-1).float().numpy().tolist()
-
-        ksana_python_input.subinput_embedding = image_embedding
+        ksana_python_input.subinput_embedding_tensors = torch.split(image_embedding.cpu(), image_embedding.shape[0])
 
     # Method for post-processing
     def postprocess(self, **kwargs):

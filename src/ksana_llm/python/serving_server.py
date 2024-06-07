@@ -9,12 +9,14 @@ import yaml
 import uvicorn
 import os
 
+from typing import Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import GenerationConfig, AutoTokenizer, AutoConfig
 from fastapi import FastAPI
 
 import asyncio
+import msgpack
 from functools import partial
 from concurrent import futures
 
@@ -91,7 +93,7 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
             yield (json.dumps(ret) + "\0").encode("utf-8")
 
     # Return a StreamingResponse object with the streamed results
-    return StreamingResponse(stream_results())
+    return stream_results()
 
 
 def batch_generate(model_name, input_tokens, generation_config, **kwargs):
@@ -112,13 +114,13 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
         output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
 
     # Create a JSON response with the generated text and token IDs
-    return JSONResponse({
+    return {
         "texts": output_text,  # the generated text
         "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
         "logprobs": ksana_python_output.logprobs,
         "prompt_probs": ksana_python_output.prompt_probs,
         "input_token_ids": input_tokens  # the input token IDs
-    })
+    }
 
 
 def get_sampling_value(sampling_config: dict, key: str, default_val=None):
@@ -149,8 +151,7 @@ def update_resources(input_tokens, kwargs):
 
     return kwargs
 
-@app.post("/generate")
-async def generate(request: Request) -> Response:
+async def process_request(request_dict: Dict[str, Any]) -> Response:
     """Generate completion for the request.
 
     The request should be a JSON object with the following fields:
@@ -159,7 +160,6 @@ async def generate(request: Request) -> Response:
     - stream: whether to stream the results or not.
     """
 
-    request_dict = await request.json()
     model_name = request_dict.pop("model_name", "")
     prompt_text = request_dict.pop("prompt")
     enable_streaming = request_dict.pop("stream", True)
@@ -249,6 +249,34 @@ async def generate(request: Request) -> Response:
     # Return the results of the generation
     return results
 
+@app.post("/generate")
+async def generate(request: Request) -> Response:
+    """Generate completion for the request.
+
+    The request should be a JSON object with the following fields:
+    - model_name: the model your wanner to infer.
+    - prompt: the prompt to use for the generation.
+    - stream: whether to stream the results or not.
+    """
+    request_dict = await request.json()
+    enable_streaming = request_dict.get("stream", True)
+    response_data = await process_request(request_dict)
+    if enable_streaming:
+        return StreamingResponse(response_data)
+    else:
+        return JSONResponse(response_data)
+
+@app.post("/generate_msgpack")
+async def generate_msgpack(request: Request):
+    """Generate completion for the request.
+
+    The request should be a JSON object packaged with msgpack.
+    """
+    request_body_bytes = await request.body()
+    request_dict = msgpack.unpackb(request_body_bytes, raw=False)
+    request_dict["stream"] = False
+    response_data = await process_request(request_dict)
+    return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
 
 if __name__ == "__main__":
     args = args_config()

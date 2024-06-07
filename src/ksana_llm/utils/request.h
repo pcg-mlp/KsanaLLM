@@ -10,6 +10,9 @@
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
+#include "pybind11/pybind11.h"
+
+namespace py = pybind11;
 
 namespace ksana_llm {
 
@@ -55,6 +58,9 @@ struct KsanaPythonInput {
 
   // The subinput_embedding is the embedding value to be used for the replacement, from the request.
   std::vector<std::vector<float>> subinput_embedding;
+
+  // Preprocessing plugin usage
+  std::vector<py::object> subinput_embedding_tensors;
 
   // The subinput_url is the multimodal resources url
   std::vector<std::string> subinput_url;
