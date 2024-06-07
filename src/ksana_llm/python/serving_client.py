@@ -7,6 +7,7 @@ import multiprocessing
 import argparse
 import json
 import time
+import msgpack
 
 
 def args_config():
@@ -16,6 +17,13 @@ def args_config():
                         default="localhost",
                         help='server host address')
     parser.add_argument('--port', type=int, default=8888, help='server port')
+    parser.add_argument('--pack',
+                        type=str,
+                        default="json",
+                        choices=['json', 'msgpack'],
+                        help='Specify the format for data packing. "json" for text-based '
+                            'JSON format, and "msgpack" for binary MessagePack format. '
+                            'Default is "json".')
     args = parser.parse_args()
     return args
 
@@ -27,6 +35,13 @@ def post_request(serv, data, queue=None):
     else:
         queue.put(json.loads(resp.content))
 
+def post_request_msgpack(serv, data, queue=None):
+    packed_data = msgpack.packb(data)
+    response = requests.post(serv, data=packed_data, headers={'Content-Type': 'application/msgpack'})
+    if queue is None:
+        return msgpack.unpackb(response.content)
+    else:
+        queue.put(msgpack.unpackb(response.content))
 
 def show_response(data, result):
     print("result:", result)
@@ -35,6 +50,8 @@ def show_response(data, result):
 if __name__ == "__main__":
     args = args_config()
     serv = "http://" + args.host + ":" + str(args.port) + "/generate"
+    if args.pack == 'msgpack':
+        serv = serv+"_msgpack"
 
     text_list = [
         "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]",
@@ -72,8 +89,12 @@ if __name__ == "__main__":
         }
 
         # Create a new process to handle the post request
+        post_function = post_request
+        if args.pack == 'msgpack':
+            post_function = post_request_msgpack
+
         proc = multiprocessing.Process(
-            target=post_request,  # function to call
+            target=post_function,  # function to call
             args=(  # arguments to pass
                 serv,  # server object
                 data,  # data dictionary

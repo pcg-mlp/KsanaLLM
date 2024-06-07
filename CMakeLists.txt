@@ -167,6 +167,7 @@ print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
 include_directories(${PY_INCLUDE_DIR})
 include_directories(${TORCH_DIR}/include/torch/csrc/api/include/)
 include_directories(${TORCH_DIR}/include/)
+find_library(TORCH_PYTHON_LIBRARY NAMES torch_python PATHS "${TORCH_DIR}/lib" NO_DEFAULT_PATH)
 find_package(PythonLibs REQUIRED)
 include_directories(${PYTHON_INCLUDE_DIRS})
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)

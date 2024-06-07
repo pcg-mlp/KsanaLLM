@@ -11,6 +11,7 @@
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/singleton.h"
+#include "torch/csrc/autograd/python_variable.h"
 
 namespace ksana_llm {
 
@@ -537,14 +538,33 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
     auto ksana_python_input = std::make_shared<KsanaPythonInput>();
     ksana_python_input->input_tokens = *forward_reqs[idx].output_tokens;
     ksana_python_input->subinput_pos = *forward_reqs[idx].subinput_pos;
-    ksana_python_input->subinput_embedding = std::move(*forward_reqs[idx].subinput_embedding);
     ksana_python_input->subinput_url = *forward_reqs[idx].subinput_url;
     ksana_python_input->prompt_probs_offset = forward_reqs[idx].prompt_probs_offset;
+
+    auto& embeddings = *forward_reqs[idx].subinput_embedding;
+    auto& tensors = ksana_python_input->subinput_embedding_tensors;
+    tensors.resize(embeddings.size());
+    auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
+
+    // vector<vector<float>> to list[tensor]
+    for (int i = 0; i < embeddings.size(); i++) {
+      torch::Tensor subinput_embedding_tensor = torch::from_blob(embeddings[i].data(), {embeddings[i].size()}, options);
+      tensors[i] = pybind11::reinterpret_borrow<pybind11::object>(py::handle(THPVariable_Wrap(subinput_embedding_tensor))); 
+    }
 
     py::dict kwargs;
     kwargs["ksana_python_input"] = ksana_python_input;
     plugin_->attr("preprocess")(**kwargs);
-    *forward_reqs[idx].subinput_embedding = std::move(ksana_python_input->subinput_embedding);
+
+    // list[tensor] to vector<vector<float>>
+    for (int i = 0; i < embeddings.size(); i++) {
+      py::object value_obj = py::reinterpret_borrow<py::object>(tensors[i]);
+      torch::Tensor subinput_embedding_tensor = THPVariable_Unpack(value_obj.ptr());
+      int64_t output_number = subinput_embedding_tensor.numel();
+      embeddings[i].resize(output_number);
+      memcpy(embeddings[i].data(), subinput_embedding_tensor.data_ptr(),
+             sizeof(float) * output_number);
+    }
   }
   return Status();
 }
@@ -552,7 +572,7 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
 template <typename T>
 Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs) {
-  if (plugin_) {
+  if (plugin_ && rank_ == 0) {
     PythonPluginPreproces(forward_reqs);
   }
   return LlamaForward(base_weight, forward_reqs, /*is_context_stage*/ true);

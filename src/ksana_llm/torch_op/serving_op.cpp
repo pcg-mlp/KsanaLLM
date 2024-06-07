@@ -100,6 +100,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("prompt_probs_offset", &ksana_llm::KsanaPythonInput::prompt_probs_offset)
       .def_readwrite("subinput_pos", &ksana_llm::KsanaPythonInput::subinput_pos)
       .def_readwrite("subinput_embedding", &ksana_llm::KsanaPythonInput::subinput_embedding)
+      .def_readwrite("subinput_embedding_tensors", &ksana_llm::KsanaPythonInput::subinput_embedding_tensors)
       .def_readwrite("subinput_url", &ksana_llm::KsanaPythonInput::subinput_url);
 
   // Export `KsanaPythonOutput` to python.

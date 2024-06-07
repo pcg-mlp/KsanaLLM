@@ -129,11 +129,18 @@ void Sampler::CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs,
                                     std::vector<std::vector<float>>& prompt_probs_output) {
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
     if (sampling_reqs[i].sampling_config->return_prompt_probs) {
-      prompt_probs_output[i].resize(batch_schedule_config_.max_vocab_size * sampling_reqs[i].prompt_probs_offset);
-      MemcpyAsync(
-          prompt_probs_output[i].data(),
-          sampling_reqs[i].logits_buf[rank_] + sampling_reqs[i].logits_offset * batch_schedule_config_.max_vocab_size,
-          sizeof(float) * prompt_probs_output[i].size(), MEMCPY_DEVICE_TO_HOST, stream);
+      prompt_probs_output[i].resize(sampling_reqs[i].prompt_probs_offset);
+      auto& input_tokens = *sampling_reqs[i].input_tokens;
+      auto& vocab_size = batch_schedule_config_.max_vocab_size;
+      // Retrieve the logits of the last prompt_probs_offset tokens entered
+      for (int index = prompt_probs_output[i].size(); index > 0; index--) {
+        int token_index = input_tokens.size() - index;
+        int prompt_probs_index = prompt_probs_output[i].size() - index;
+        size_t req_logits_offset = (sampling_reqs[i].logits_offset + prompt_probs_index) * vocab_size;
+        MemcpyAsync(prompt_probs_output[i].data() + prompt_probs_index,
+                    sampling_reqs[i].logits_buf[rank_] + req_logits_offset + input_tokens[token_index], sizeof(float),
+                    MEMCPY_DEVICE_TO_HOST, stream);
+      }
     }
   }
 }

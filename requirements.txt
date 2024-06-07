@@ -4,3 +4,5 @@ uvicorn==0.29.0
 fastapi==0.110.0
 protobuf==4.24.4
 rouge_score==0.1.2
+aiohttp==3.9.5
+msgpack>=1.0.8
