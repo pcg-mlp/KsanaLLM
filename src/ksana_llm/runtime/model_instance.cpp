@@ -83,4 +83,28 @@ std::vector<std::future<Status>> ModelInstance::ForwardAsync(std::shared_ptr<Wor
   return results;
 }
 
+void ModelInstance::LoadWeightsAndModelsMap() {
+  bool is_safetensors = false;
+  std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, is_safetensors);
+  int count = 1;
+  for (std::string& file_name : weights_file_list) {
+      std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
+    if (is_safetensors) {
+      weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
+    } else {
+      weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
+    }
+    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      weights_[worker_id]->LoadWeightsFromFile(weights_loader);
+      NLLM_LOG_DEBUG << "The "<<count<<"'th weight file is loaded on rank "<<worker_id;
+      StreamSynchronize(context_->GetMemoryManageStreams()[worker_id]);
+    }
+    count++;
+  }
+  
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    weights_[worker_id]->ProcessWeights();
+  }
+}
+
 }  // namespace ksana_llm

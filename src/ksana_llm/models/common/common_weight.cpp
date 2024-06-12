@@ -52,7 +52,7 @@ CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::sh
     : context_(context), model_config_(model_config) {
   model_path_ = model_config.path;
   rank_ = rank;
-  if (!LoadLlamaWeightsMap(model_config).OK()) {
+  if (!GetModelInfo(model_config).OK()) {
     NLLM_LOG_ERROR << fmt::format("Load model config file error.");
     exit(-1);
   }
@@ -74,41 +74,6 @@ int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_
     }
   }
   return -1;
-}
-
-template <typename T>
-std::vector<std::string> CommonWeight<T>::SearchLocalPath(const std::string& model_path, bool& is_safetensors) {
-  std::vector<std::string> bin_file_list;
-  std::vector<std::string> safetensors_list;
-  std::vector<std::string> black_list = {"training_args.bin", "optimizer.bin"};
-  for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
-    if (entry.is_regular_file()) {
-      std::string file_name = entry.path().filename().string();
-      std::string extension = entry.path().extension().string();
-      if (file_name.length() >= 6 && file_name.compare(0, 6, ".etag.") == 0) {
-        // skip etag file
-        continue;
-      } else if (extension == ".bin") {
-        bool is_black_file = false;
-        for (std::string& black_file_name : black_list) {
-          if (entry.path().filename().string() == black_file_name) {
-            is_black_file = true;
-            break;
-          }
-        }
-        if (!is_black_file) {
-          bin_file_list.emplace_back(entry.path().string());
-        }
-      } else if (extension == ".safetensors") {
-        safetensors_list.emplace_back(entry.path().string());
-      }
-    }
-  }
-  if (safetensors_list.size() > 0) {
-    is_safetensors = true;
-    return safetensors_list;
-  }
-  return bin_file_list;
 }
 
 template <typename T>
@@ -496,28 +461,72 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
 }
 
 template <typename T>
-Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
+bool CommonWeight<T>::IsLoaded() {
+  return weights_had_loaded_;
+}
+
+template <typename T>
+Status CommonWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
+  if (weights_map_.count(weight_name)) {
+    NLLM_LOG_WARNING << fmt::format("The weight named {} has already been created. Skip creating the weight tensor.",
+                                    weight_name);
+    return Status();
+  }
+  size_t length = GetTypeSize(dtype);
+  for (auto& dim : shapes) {
+    length *= dim;
+  }
+  int block_id;
+  GetBlockManager()->SetDeviceId(rank_);
+  GetBlockManager()->AllocateContiguous(length, block_id);
+
+  weights_map_.emplace(weight_name, Tensor(MemoryDevice::MEMORY_DEVICE, dtype, shapes, block_id));
+  return Status();
+}
+
+template <typename T>
+Status CommonWeight<T>::CreateTensorWithSameShape(const std::string& origin_tensor_name,
+                                                  const std::string& copy_tensor_name) {
+  if (!weights_map_.count(origin_tensor_name)) {
+    NLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
+                                  origin_tensor_name);
+    exit(-1);
+  }
+  Tensor& origin_tensor = weights_map_[origin_tensor_name];
+  AddWeightTensor(copy_tensor_name, origin_tensor.shape, origin_tensor.dtype);
+  return Status();
+}
+
+template <typename T>
+std::string CommonWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias) {
+  std::string layer_name =
+      "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
+  return layer_name;
+}
+
+template <typename T>
+Tensor CommonWeight<T>::GetModelWeights(const std::string& weight_name) {
+  if (!weights_map_.count(weight_name)) {
+    NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
+    return Tensor();
+  }
+  return weights_map_[weight_name];
+}
+
+template <typename T>
+Status CommonWeight<T>::GetModelInfo(const ModelConfig& model_config) {
   weight_data_type_ = model_config.weight_data_type;
-  int hidden_units = model_config.hidden_units;
-  int inter_size = model_config.inter_size;
-  int num_layer = model_config.num_layer;
-  int vocab_size = model_config.vocab_size;
   model_name_ = model_config.name;
   tensor_para_size_ = model_config.tensor_para_size;
+  return Status();
+}
 
-  bool is_safetensors = false;
-  std::vector<std::string> weights_file_list = SearchLocalPath(model_path_, is_safetensors);
-  for (std::string& file_name : weights_file_list) {
-    std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-    if (is_safetensors) {
-      weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
-    } else {
-      weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
-    }
-    LoadWeightsFromFile(weights_loader);
-    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
-  }
-
+template <typename T>
+void CommonWeight<T>::ProcessWeights(){
+  int hidden_units = model_config_.hidden_units;
+  int inter_size = model_config_.inter_size;
+  int num_layer = model_config_.num_layer;
+  int vocab_size = model_config_.vocab_size;
   // Convert of BFP16 and FP16
   if (model_config_.weight_data_type == TYPE_FP16 || model_config_.weight_data_type == TYPE_BF16) {
     for (auto& data_type_iter : weights_data_type_map_) {
@@ -579,61 +588,8 @@ Status CommonWeight<T>::LoadLlamaWeightsMap(const ModelConfig& model_config) {
   }
 
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
-  return Status();
 }
 
-template <typename T>
-bool CommonWeight<T>::IsLoaded() {
-  return weights_had_loaded_;
-}
-
-template <typename T>
-Status CommonWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
-  if (weights_map_.count(weight_name)) {
-    NLLM_LOG_WARNING << fmt::format("The weight named {} has already been created. Skip creating the weight tensor.",
-                                    weight_name);
-    return Status();
-  }
-  size_t length = GetTypeSize(dtype);
-  for (auto& dim : shapes) {
-    length *= dim;
-  }
-  int block_id;
-  GetBlockManager()->SetDeviceId(rank_);
-  GetBlockManager()->AllocateContiguous(length, block_id);
-
-  weights_map_.emplace(weight_name, Tensor(MemoryDevice::MEMORY_DEVICE, dtype, shapes, block_id));
-  return Status();
-}
-
-template <typename T>
-Status CommonWeight<T>::CreateTensorWithSameShape(const std::string& origin_tensor_name,
-                                                  const std::string& copy_tensor_name) {
-  if (!weights_map_.count(origin_tensor_name)) {
-    NLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
-                                  origin_tensor_name);
-    exit(-1);
-  }
-  Tensor& origin_tensor = weights_map_[origin_tensor_name];
-  AddWeightTensor(copy_tensor_name, origin_tensor.shape, origin_tensor.dtype);
-  return Status();
-}
-
-template <typename T>
-std::string CommonWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias) {
-  std::string layer_name =
-      "model.layers." + std::to_string(layer_index) + "." + layer_flag + (is_bias ? ".bias" : ".weight");
-  return layer_name;
-}
-
-template <typename T>
-Tensor CommonWeight<T>::GetModelWeights(const std::string& weight_name) {
-  if (!weights_map_.count(weight_name)) {
-    NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
-    return Tensor();
-  }
-  return weights_map_[weight_name];
-}
 
 template class CommonWeight<float>;
 template class CommonWeight<float16>;
