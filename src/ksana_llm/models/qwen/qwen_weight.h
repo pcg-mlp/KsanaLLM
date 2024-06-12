@@ -15,6 +15,12 @@ class QwenWeight : public BaseWeight {
   explicit QwenWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
   Tensor GetModelWeights(const std::string& weight_name);
+  
+  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
+
+  void ProcessWeights();
+  
+  std::shared_ptr<CommonWeight<T>> Getcommonweight() { return common_weight_; }
 
  private:
   // the common weight instance.

@@ -15,6 +15,20 @@ Tensor BaichuanWeight<T>::GetModelWeights(const std::string& weight_name) {
   return common_weight_->GetModelWeights(weight_name);
 }
 
+template <typename T>
+Status BaichuanWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
+  if (!common_weight_->LoadWeightsFromFile(weights_loader).OK()) {
+    NLLM_LOG_ERROR << fmt::format("Load weight file error.");
+    exit(-1);
+  }
+  return Status();
+}
+
+template <typename T>
+void BaichuanWeight<T>::ProcessWeights() {
+  common_weight_->ProcessWeights();
+}
+
 template class BaichuanWeight<float>;
 template class BaichuanWeight<float16>;
 #ifdef ENABLE_BFLOAT16

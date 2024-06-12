@@ -18,20 +18,20 @@ class CommonWeight : public BaseWeight {
 
   Tensor GetModelWeights(const std::string& weight_name);
 
+  void ProcessWeights();
+
+  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
+
  private:
   Status PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
 
-  std::vector<std::string> SearchLocalPath(const std::string& model_path, bool& is_safetensors);
-
-  Status LoadLlamaWeightsMap(const ModelConfig& model_config);
+  Status GetModelInfo(const ModelConfig& model_config);
 
   std::string ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias = false);
 
   Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
 
   Status CreateTensorWithSameShape(const std::string& origin_tensor_name, const std::string& copy_tensor_name);
-
-  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
   Status LoadRegularTensor(void* weight_ptr, std::string tensor_name, std::vector<size_t>& weight_shape,
                            DataType& weight_data_type, bool transpose_first, size_t tensor_para_offset,

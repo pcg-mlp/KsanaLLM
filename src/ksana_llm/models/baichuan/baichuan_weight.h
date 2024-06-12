@@ -16,6 +16,12 @@ class BaichuanWeight : public BaseWeight {
 
   Tensor GetModelWeights(const std::string& weight_name);
 
+  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
+
+  void ProcessWeights();
+
+  std::shared_ptr<CommonWeight<T>> Getcommonweight() { return common_weight_; }
+
  private:
   // the common weight instance.
   std::shared_ptr<CommonWeight<T>> common_weight_ = nullptr;
