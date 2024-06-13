@@ -3,7 +3,3 @@
 if(WITH_CUDA)
   add_subdirectory(nvidia)
 endif()
-
-if(WITH_ACL)
-  add_subdirectory(ascend)
-endif()

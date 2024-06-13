@@ -4,8 +4,8 @@
 #pragma once
 
 #include <cstddef>
-#include <vector>
 #include <string>
+#include <vector>
 
 #include "ksana_llm/runtime/infer_stage.h"
 

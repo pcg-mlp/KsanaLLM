@@ -76,7 +76,6 @@ std::string TensorT<T>::ToString() const {
                    std::to_string(block_id).c_str());
 }
 
-
 template <int T>
 std::string TensorT<T>::GetNumpyType() const {
   static const std::unordered_map<DataType, std::string> type_map{

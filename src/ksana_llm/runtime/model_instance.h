@@ -7,14 +7,14 @@
 #include <memory>
 #include <string>
 
+#include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/tensor.h"
-#include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/utils/search_path.h"
+#include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
 
@@ -99,7 +99,7 @@ class ModelInstance {
       weights_.push_back(CreateModelWeight<WeightType>(worker_id));
       NLLM_LOG_INFO << "Start to create model on device " << worker_id;
       models_.push_back(CreateModel<ModelType>(worker_id));
-    }   
+    }
     LoadWeightsAndModelsMap();
   }
 

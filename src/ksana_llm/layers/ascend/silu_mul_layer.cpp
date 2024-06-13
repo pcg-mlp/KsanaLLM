@@ -3,8 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/silu_mul_layer.h"
-#include "csrc/kernels/ascend/activation/activation.h"
-#include "csrc/kernels/ascend/elementwise/elementwise.h"
+
 #include "csrc/kernels/ascend/silu_mul/silu_mul.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"

@@ -64,9 +64,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
-    CreateBufferTensor(tensor_buffer_2_, {max_token_num, (size_t)max_dim}, model_config_.weight_data_type));
+      CreateBufferTensor(tensor_buffer_2_, {max_token_num, (size_t)max_dim}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(
-    CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
+      CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_,
                                           {(size_t)rotary_embedding, (size_t)max_position_embeddings},
                                           model_config_.weight_data_type));
@@ -267,10 +267,10 @@ Status CommonModel<T>::FlashAttentionForward(std::vector<Tensor>& flash_attentio
 }
 
 template <typename T>
-Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                      Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
-                                      std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
-                                      const bool is_context_stage) {
+Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                       Tensor& hidden_states, std::vector<Tensor>& temp_buffer_0,
+                                       std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2,
+                                       const bool is_context_stage) {
   // Attn proj MatMul
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
@@ -339,9 +339,9 @@ Status CommonModel<T>::LlamaAttention(const int layer_idx, std::shared_ptr<ksana
 }
 
 template <typename T>
-Status CommonModel<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                Tensor& post_layernorm_output, std::vector<Tensor>& temp_buffer_0,
-                                std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
+Status CommonModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                 Tensor& post_layernorm_output, std::vector<Tensor>& temp_buffer_0,
+                                 std::vector<Tensor>& temp_buffer_1, std::vector<Tensor>& temp_buffer_2) {
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
@@ -376,9 +376,9 @@ Status CommonModel<T>::LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::
 }
 
 template <typename T>
-Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                    std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
-                                    std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
+Status CommonModel<T>::CommonDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                     std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
+                                     std::vector<Tensor>& temp_buffer_2, const bool is_context_stage) {
   // input layernorm
   Tensor input_layernorm_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx));
@@ -390,8 +390,8 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
   STATUS_CHECK_RETURN(
       layernorm_layer_->Forward({input_layernorm_input[0], input_layernorm_weight}, input_layernorm_output));
 
-  STATUS_CHECK_RETURN(LlamaAttention(layer_idx, base_weight, input_layernorm_output[0], temp_buffer_0, temp_buffer_1,
-                                     temp_buffer_2, is_context_stage));
+  STATUS_CHECK_RETURN(CommonAttention(layer_idx, base_weight, input_layernorm_output[0], temp_buffer_0, temp_buffer_1,
+                                      temp_buffer_2, is_context_stage));
 
   // Attn Add
   std::vector<Tensor>& attn_all_reduce_sum_output = temp_buffer_1;
@@ -405,7 +405,7 @@ Status CommonModel<T>::LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_l
   STATUS_CHECK_RETURN(layernorm_layer_->Forward({attn_add_output[0], post_layernorm_weight}, post_layernorm_output));
 
   STATUS_CHECK_RETURN(
-      LlamaMlp(layer_idx, base_weight, post_layernorm_output[0], temp_buffer_0, temp_buffer_1, temp_buffer_2));
+      CommonMlp(layer_idx, base_weight, post_layernorm_output[0], temp_buffer_0, temp_buffer_1, temp_buffer_2));
 
   // Mlp Add
   std::vector<Tensor>& mlp_all_reduce_sum_output = temp_buffer_1;
@@ -437,8 +437,8 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 }
 
 template <typename T>
-Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                    std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage) {
+Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                     std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage) {
   GetBlockManager()->SetDeviceId(rank_);
 
   // 推理前准备三块循环使用的推理时临时空间, 用于暂存各层输出结果
@@ -480,10 +480,10 @@ Status CommonModel<T>::LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base
         emb_lookup_output);
   }
 
-  // LlamaDecoder
+  // CommonDecoder
   for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
     STATUS_CHECK_RETURN(
-        LlamaDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2, is_context_stage));
+        CommonDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2, is_context_stage));
   }
 
   // final norm
@@ -549,7 +549,8 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
     // vector<vector<float>> to list[tensor]
     for (int i = 0; i < embeddings.size(); i++) {
       torch::Tensor subinput_embedding_tensor = torch::from_blob(embeddings[i].data(), {embeddings[i].size()}, options);
-      tensors[i] = pybind11::reinterpret_borrow<pybind11::object>(py::handle(THPVariable_Wrap(subinput_embedding_tensor))); 
+      tensors[i] =
+          pybind11::reinterpret_borrow<pybind11::object>(py::handle(THPVariable_Wrap(subinput_embedding_tensor)));
     }
 
     py::dict kwargs;
@@ -563,8 +564,7 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
       torch::Tensor subinput_embedding_tensor = THPVariable_Unpack(value_obj.ptr());
       int64_t output_number = subinput_embedding_tensor.numel();
       embeddings[i].resize(output_number);
-      memcpy(embeddings[i].data(), subinput_embedding_tensor.data_ptr(),
-             sizeof(float) * output_number);
+      memcpy(embeddings[i].data(), subinput_embedding_tensor.data_ptr(), sizeof(float) * output_number);
     }
   }
   return Status();
@@ -576,13 +576,13 @@ Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& bas
   if (plugin_ && rank_ == 0) {
     PythonPluginPreproces(forward_reqs);
   }
-  return LlamaForward(base_weight, forward_reqs, /*is_context_stage*/ true);
+  return CommonForward(base_weight, forward_reqs, /*is_context_stage*/ true);
 }
 
 template <typename T>
 Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs) {
-  return LlamaForward(base_weight, forward_reqs, /*is_context_stage*/ false);
+  return CommonForward(base_weight, forward_reqs, /*is_context_stage*/ false);
 }
 
 template class CommonModel<float>;

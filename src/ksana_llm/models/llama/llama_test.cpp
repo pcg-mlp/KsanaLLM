@@ -9,8 +9,8 @@
 #include <filesystem>
 #include "ksana_llm/models/llama/llama_model.h"
 #include "ksana_llm/samplers/sampler.h"
-#include "test.h"
 #include "ksana_llm/utils/search_path.h"
+#include "test.h"
 
 using namespace ksana_llm;
 
@@ -64,22 +64,22 @@ TEST_F(LlamaTest, ForwardTest) {
   EventCreate(&stop);
 
   Py_Initialize();
-  
+
   std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
-  //Start Loder Weight
+  // Start Loder Weight
   bool is_safetensors = false;
   std::vector<std::string> weights_file_list = SearchLocalPath(model_path, is_safetensors);
-  for (std::string& file_name : weights_file_list) {
-      std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
+  for (std::string &file_name : weights_file_list) {
+    std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
     if (is_safetensors) {
       weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
     } else {
       weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
-    } 
+    }
     llama_weight->LoadWeightsFromFile(weights_loader);
     StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   }
-  llama_weight->ProcessWeights();//End Loder Weight
+  llama_weight->ProcessWeights();  // End Loder Weight
   std::shared_ptr<LlamaModel<float16>> llama = std::make_shared<LlamaModel<float16>>(model_config, 0, context_);
 
   // Weight Name Check
@@ -188,13 +188,12 @@ TEST_F(LlamaTest, ForwardTest) {
 
   llama.reset();
   llama_weight.reset();
-  
+
   StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   Py_Finalize();
   EventDestroy(stop);
   EventDestroy(start);
   DeviceSynchronize();
-
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

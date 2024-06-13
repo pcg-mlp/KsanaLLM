@@ -6,7 +6,7 @@
 #include <cmath>
 
 #include "3rdparty/half/include/half.hpp"
-#include "csrc/kernels/ascend/cat/cat.h"
+#include "csrc/kernels/ascend/concat/concat.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
 
@@ -59,7 +59,7 @@ TEST_F(LlamaAscendCatTestSuit, CatTest) {
   std::vector<const aclTensor*> inputs = {input_tensor_1, input_tensor_2};
   int64_t cat_dim = -1;
 
-  Cat(inputs, cat_dim, &output_tensor, stream, llm_kernels::utils::GetTestWorkSpaceFunc);
+  Concat(inputs, cat_dim, &output_tensor, stream, llm_kernels::utils::GetTestWorkSpaceFunc);
 
   ACL_CHECK_RET(aclrtMemcpyAsync(out_vec_host.data(), GetShapeSize(output_shape) * sizeof(half_float::half),
                                  output_workspace, GetShapeSize(output_shape) * sizeof(half_float::half),

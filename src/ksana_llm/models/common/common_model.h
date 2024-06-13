@@ -41,7 +41,7 @@ struct ModelRunConfig {
 
 // A common implement of transfer based model.
 template <typename T>
-class __attribute__ ((visibility("hidden")))  CommonModel : public BaseModel {
+class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
  public:
   CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
   ~CommonModel();
@@ -132,26 +132,26 @@ class __attribute__ ((visibility("hidden")))  CommonModel : public BaseModel {
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L257
-  Status LlamaAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight, Tensor& hidden_states,
-                        std::vector<Tensor>& output_0, std::vector<Tensor>& output_1, std::vector<Tensor>& output_2,
-                        const bool is_context_stage);
+  Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                         Tensor& hidden_states, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
+                         std::vector<Tensor>& output_2, const bool is_context_stage);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L211
-  Status LlamaMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                  Tensor& post_layernorm_output, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
-                  std::vector<Tensor>& output_2);
+  Status CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                   Tensor& post_layernorm_output, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
+                   std::vector<Tensor>& output_2);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L694
-  Status LlamaDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                      std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
-                      std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
+  Status CommonDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                       std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
+                       std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
 
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
-  Status LlamaForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
-                      const bool is_context_stage);
+  Status CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
+                       const bool is_context_stage);
 
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
                            const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);

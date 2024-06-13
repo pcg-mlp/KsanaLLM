@@ -5,7 +5,7 @@
 
 #include "rotary_embedding.h"
 
-#include "csrc/kernels/ascend/cat/cat.h"
+#include "csrc/kernels/ascend/concat/concat.h"
 #include "csrc/kernels/ascend/elementwise/elementwise.h"
 #include "csrc/kernels/ascend/gather/gather.h"
 #include "csrc/kernels/ascend/pointwise/pointwise.h"
@@ -135,7 +135,7 @@ void RotaryEmbeddingACL::RotarySplit(const aclTensor* input, const int bs, const
   // negOutput + slice1Output -> catOutput
   std::vector<const aclTensor*> tmp{negOutput, slice1Output};
   int64_t catDim = -1;
-  Cat(tmp, catDim, catOutput, stream, ws_func);
+  Concat(tmp, catDim, catOutput, stream, ws_func);
   aclDestroyTensor(slice1Output);
   aclDestroyTensor(negOutput);
 }

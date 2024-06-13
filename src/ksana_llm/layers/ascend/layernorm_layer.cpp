@@ -3,10 +3,11 @@
 ==============================================================================*/
 
 #include "ksana_llm/layers/layernorm_layer.h"
+
 #include <cstdint>
+
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
-#include "csrc/kernels/ascend/layernorm/layernorm.h"
 #include "csrc/kernels/ascend/rmsnorm/rmsnorm.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
