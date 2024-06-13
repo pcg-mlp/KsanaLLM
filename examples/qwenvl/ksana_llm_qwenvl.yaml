@@ -1,0 +1,66 @@
+# 全局设置
+setting:
+  # 全局配置
+  global:
+    # TP并行
+    tensor_para_size: 1
+    # PP并行
+    pipeline_para_size: 1
+    # 是否启用lora适配，false表示不启用，true表示启用
+    enable_lora_adapter: false
+    # 是否使用cpu保存embed_tokens, A10下设置为true更好
+    embed_tokens_use_cpu: true
+  # 调度相关配置
+  batch_scheduler:
+    # 调度策略，0表示continuous_batching，1表示auto_batchin，默认为0
+    schedule_strategy: 0
+    # 请求在队列中的超时时间，单位为毫秒
+    waiting_timeout_in_ms: 3600000
+    # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
+    max_waiting_queue_len: 1200
+    # 一个调度step处理的最大token个数，一次context decode视为多个token。
+    max_step_tokens: 4096
+    # 每一步推理时的最大batch_size
+    max_batch_size: 128
+    # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
+    max_token_len: 2048
+    # 单个请求可用blck小于该值触发换出
+    swapout_block_threshold: 1.0
+    # 单个请求可用block大于该值触发换入
+    swapin_block_threshold: 2.0
+    # 单个请求可用block大于该值拉起新任务
+    launch_block_threshold: 2.0
+    # 用于执行异步swap的线程池大小
+    swap_threadpool_size: 8
+    # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
+    prefix_cache_len: 0
+    # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
+    preempt_mode: 0
+  # 显存块相关配置
+  block_manager:
+    # 单个block可处理的最大token个数
+    block_token_num: 16
+    # 保留的显存占比，单位为百分比。
+    reserved_device_memory_ratio: 0.04
+    # Lora权重的显存占比
+    lora_deivce_memory_ratio: 0.0
+    # Lora权重在host上的预分配大小，相比device上的倍数
+    lora_host_memory_factor: 10.0
+    # block部分的显存占比，<0表示使用所有剩余显存
+    block_device_memory_ratio: -1.0
+    # block部分在host上的预分配大小，相比device上的倍数
+    block_host_memory_factor: 2.0
+  # 性能统计相关配置
+  profiler:
+    # 统计周期，每隔多少秒输出一次统计数据
+    stat_interval_second: 5
+    # 缓存队列大小
+    stat_buffer_size: 1024
+    # 异步上报的线程池大小
+    report_threadpool_size: 4
+# 模型配置
+model_spec:
+  # 基础模型配置，只能有一个
+  base_model:
+    # 模型路径
+    model_dir: /model/qwen-hf/Qwen-VL-Chat/

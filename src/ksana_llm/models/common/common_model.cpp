@@ -557,6 +557,7 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
     plugin_->attr("preprocess")(**kwargs);
 
     // list[tensor] to vector<vector<float>>
+    embeddings.resize(tensors.size());
     for (int i = 0; i < embeddings.size(); i++) {
       py::object value_obj = py::reinterpret_borrow<py::object>(tensors[i]);
       torch::Tensor subinput_embedding_tensor = THPVariable_Unpack(value_obj.ptr());
