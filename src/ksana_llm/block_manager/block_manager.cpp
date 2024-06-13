@@ -95,22 +95,33 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
   NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0, "lora_host_memory_factor should >= 1.0");
   NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 0.0, "block_host_memory_factor should >= 0.0");
 
-  size_t alignment_bytes = 8;
+  const size_t alignment_bytes = 8;
   size_t device_block_memory_size = 0;
   if (block_manager_config_.block_device_memory_ratio >= 0.0) {
-    device_block_memory_size = (device_total * block_manager_config_.block_device_memory_ratio) / alignment_bytes;
+    device_block_memory_size =
+        DivRoundDown(std::min((static_cast<size_t>(device_total * block_manager_config_.block_device_memory_ratio)),
+                              device_free),
+                     alignment_bytes) *
+        alignment_bytes;
   } else {
     size_t reserved_memory_size =
-        ((device_total * block_manager_config_.reserved_device_memory_ratio) / alignment_bytes + 1) * alignment_bytes;
-    device_block_memory_size = ((device_free - reserved_memory_size) / alignment_bytes + 1) * alignment_bytes;
+        DivRoundUp((device_total * block_manager_config_.reserved_device_memory_ratio), alignment_bytes) *
+        alignment_bytes;
+    device_block_memory_size =
+        DivRoundDown((reserved_memory_size < device_free ? device_free - reserved_memory_size : 0ul), alignment_bytes) *
+        alignment_bytes;
   }
 
-  device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
-  host_block_num = device_blocks_num * block_manager_config_.block_host_memory_factor;
+  const float block_host_memory_ratio = 0.8;
+  size_t host_block_memory_size =
+      DivRoundDown(
+          static_cast<size_t>(std::min(device_block_memory_size * block_manager_config_.block_host_memory_factor,
+                                       host_free * block_host_memory_ratio)),
+          alignment_bytes) *
+      alignment_bytes;
 
-  size_t host_allocate_bytes = host_block_num * block_manager_config_.host_allocator_config.block_size;
-  NLLM_CHECK_WITH_INFO(host_allocate_bytes < host_free,
-                       FormatStr("Not enough host free memory, expect %d, free %d", host_allocate_bytes, host_free));
+  device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
+  host_block_num = host_block_memory_size / block_manager_config_.host_allocator_config.block_size;
 #ifdef ENABLE_ACL
   device_blocks_num = 4;
   host_block_num = 4;
