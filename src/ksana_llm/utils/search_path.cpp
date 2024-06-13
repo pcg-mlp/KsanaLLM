@@ -1,7 +1,6 @@
 #include "ksana_llm/utils/search_path.h"
 #include <filesystem>
 
-
 namespace ksana_llm {
 
 std::vector<std::string> SearchLocalPath(const std::string& model_path, bool& is_safetensors) {
@@ -38,4 +37,4 @@ std::vector<std::string> SearchLocalPath(const std::string& model_path, bool& is
   return bin_file_list;
 }
 
-} // namespace ksana_llm
+}  // namespace ksana_llm

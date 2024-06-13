@@ -179,7 +179,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     for (auto& sampling_req : sampling_reqs) {
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
       logits_softmax =
-        logits_softmax || sampling_req.prompt_probs_offset > 0 || sampling_req.sampling_config->logprobs_num > 0;
+          logits_softmax || sampling_req.prompt_probs_offset > 0 || sampling_req.sampling_config->logprobs_num > 0;
       // If prompt_probs_offset is used, there are prompt_probs_offset logits that need to be calculated.
       int sampling_bs = (sampling_req.prompt_probs_offset > 0 ? sampling_req.prompt_probs_offset : 1);
       sampling_devide_parameter.bs += sampling_bs;
@@ -202,7 +202,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         host_topKs_[offset + sampling_index] = sampling_config->topk;
         host_topPs_[offset + sampling_index] = sampling_config->topp == 0.0f ? 1.0f : sampling_config->topp;
         host_temperatures_[offset + sampling_index] =
-          sampling_config->temperature == 0.0f ? 1.0f : sampling_config->temperature;
+            sampling_config->temperature == 0.0f ? 1.0f : sampling_config->temperature;
       }
       if (sampling_devide_parameter.max_topK < sampling_config->topk) {
         sampling_devide_parameter.max_topK = sampling_config->topk;

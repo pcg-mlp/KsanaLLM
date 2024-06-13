@@ -9,9 +9,8 @@
 #include "aclnnop/aclnn_incre_flash_attention_v2.h"
 #include "aclnnop/aclnn_prompt_flash_attention_v2.h"
 
-#include "csrc/kernels/ascend/cat/cat.h"
+#include "csrc/kernels/ascend/concat/concat.h"
 #include "csrc/kernels/ascend/elementwise/elementwise.h"
-#include "csrc/kernels/ascend/layernorm/layernorm.h"
 #include "csrc/kernels/ascend/matmul/matmul.h"
 #include "csrc/kernels/ascend/permute/permute.h"
 #include "csrc/kernels/ascend/reshape/reshape.h"
@@ -276,7 +275,7 @@ void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t 
     CreateAclTensorWithData(catKeyOutputShape, &tmp_buffers[4], dtype_, fmt, &attnInputK);
     int64_t catKeyDim = 2;
     std::vector<const aclTensor*> catKeyTmp{lastKeyStates, ropeKeyOutput};
-    Cat(catKeyTmp, catKeyDim, &attnInputK, stream, ws_func);
+    Concat(catKeyTmp, catKeyDim, &attnInputK, stream, ws_func);
 
     // catKeyOutput -> key_cache
     auto catKeySize = GetShapeSize(catKeyOutputShape) * DT2LONG.at(dtype_);
@@ -302,7 +301,7 @@ void FlashAttentionACL::Forward(const aclTensor* matmulQKVOutput, const int64_t 
     CreateAclTensorWithData(catValueOutputShape, &tmp_buffers[1], dtype_, fmt, &attnInputV);
     int64_t catValueDim = 2;
     std::vector<const aclTensor*> catValueTmp{lastValueStates, sliceOutputV};
-    Cat(catValueTmp, catValueDim, &attnInputV, stream, ws_func);
+    Concat(catValueTmp, catValueDim, &attnInputV, stream, ws_func);
 
     // catValueOutput -> val_cache
     auto catValueSize = GetShapeSize(catValueOutputShape) * DT2LONG.at(dtype_);

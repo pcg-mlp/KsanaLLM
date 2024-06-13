@@ -40,14 +40,20 @@ static std::string GetLogFile() {
 }
 
 // Get name from log level.
-inline std::string GetLevelName(const Level level) { 
-  switch(level){
-    case DEBUG: return "DEBUG";
-    case INFO: return "INFO";
-    case WARNING: return "WARNING";
-    case ERROR: return "ERROR";
-    case FATAL: return "FATAL";
-    default: return "Invalid: "+std::to_string(level);
+inline std::string GetLevelName(const Level level) {
+  switch (level) {
+    case DEBUG:
+      return "DEBUG";
+    case INFO:
+      return "INFO";
+    case WARNING:
+      return "WARNING";
+    case ERROR:
+      return "ERROR";
+    case FATAL:
+      return "FATAL";
+    default:
+      return "Invalid: " + std::to_string(level);
   }
 }
 

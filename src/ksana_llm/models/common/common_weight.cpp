@@ -522,7 +522,7 @@ Status CommonWeight<T>::GetModelInfo(const ModelConfig& model_config) {
 }
 
 template <typename T>
-void CommonWeight<T>::ProcessWeights(){
+void CommonWeight<T>::ProcessWeights() {
   int hidden_units = model_config_.hidden_units;
   int inter_size = model_config_.inter_size;
   int num_layer = model_config_.num_layer;
@@ -580,7 +580,8 @@ void CommonWeight<T>::ProcessWeights(){
       }
 #endif
       auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
-      torch::Tensor in = torch::from_blob(tensor.GetPtr<void>(), {(int64_t)tensor.shape[0], (int64_t)tensor.shape[1]}, options);
+      torch::Tensor in =
+          torch::from_blob(tensor.GetPtr<void>(), {(int64_t)tensor.shape[0], (int64_t)tensor.shape[1]}, options);
       auto out = torch::nn::functional::normalize(in, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
       MemcpyAsync(tensor.GetPtr<void>(), out.data_ptr(), sizeof(T) * tensor.shape[0] * tensor.shape[1],
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
@@ -589,7 +590,6 @@ void CommonWeight<T>::ProcessWeights(){
 
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
 }
-
 
 template class CommonWeight<float>;
 template class CommonWeight<float16>;
