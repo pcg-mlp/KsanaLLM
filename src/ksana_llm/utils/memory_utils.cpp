@@ -5,6 +5,7 @@
 #include "ksana_llm/utils/memory_utils.h"
 
 #include <memory>
+#include <optional>
 
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/ret_code.h"
@@ -34,15 +35,13 @@ Status GetHostMemoryInfo(size_t* free, size_t* total) {
   while (file >> token) {
     if (token == "MemTotal:") {
       if (file >> *total) {
+        *total <<= 10;  // convert kB to bytes.
         found_total = true;
-      } else {
-        return Status(RET_RUNTIME, "Get total memory failed.");
       }
     } else if (token == "MemAvailable:") {
       if (file >> *free) {
+        *free <<= 10;  // convert kB to bytes.
         found_free = true;
-      } else {
-        return Status(RET_RUNTIME, "Get free memory failed.");
       }
     }
 
@@ -50,9 +49,69 @@ Status GetHostMemoryInfo(size_t* free, size_t* total) {
     file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
   }
 
+  constexpr const char* memory_limit_file_cgroup_v1 = "/sys/fs/cgroup/memory/memory.limit_in_bytes";
+  constexpr const char* memory_limit_file_cgroup_v2 = "/sys/fs/cgroup/memory.max";
+
+  std::optional<size_t> cgroup_mem_total;
+  for (const auto memory_file : {memory_limit_file_cgroup_v1, memory_limit_file_cgroup_v2}) {
+    std::ifstream file(memory_file);
+    size_t value;
+    if (file >> value) {
+      cgroup_mem_total = value;
+    }
+  }
+
+  constexpr const char* memory_usage_file_cgroup_v1 = "/sys/fs/cgroup/memory/memory.usage_in_bytes";
+  constexpr const char* memory_usage_file_cgroup_v2 = "/sys/fs/cgroup/memory.current";
+
+  std::optional<size_t> cgroup_mem_usage;
+  for (const auto memory_file : {memory_usage_file_cgroup_v1, memory_usage_file_cgroup_v2}) {
+    std::ifstream file(memory_file);
+    size_t value;
+    if (file >> value) {
+      cgroup_mem_usage = value;
+    }
+  }
+
+  constexpr const char* memory_stat_file_cgroup_v1 = "/sys/fs/cgroup/memory/memory.stat";
+  constexpr const char* memory_stat_file_cgroup_v2 = "/sys/fs/cgroup/memory.stat";
+
+  size_t cgroup_cache = 0;
+  for (const auto memory_file : {memory_stat_file_cgroup_v1, memory_stat_file_cgroup_v2}) {
+    std::ifstream file(memory_file);
+    while (file >> token) {
+      if (token == "total_inactive_file") {  // cgroup v1
+        file >> cgroup_cache;
+      } else if (token == "inactive_file") {  // cgroup v2
+        file >> cgroup_cache;
+      }
+    }
+  }
+
+  if (cgroup_mem_total.has_value()) {
+    if (found_total) {
+      // memory.limit_in_bytes returns a very big number if there is no limit
+      *total = std::min(*total, cgroup_mem_total.value());
+    } else {
+      *total = cgroup_mem_total.value();
+      found_total = true;
+    }
+
+    if (cgroup_mem_usage.has_value()) {
+      // Cache is intentionally excluded from memeory usage in Docker
+      // Refer to
+      // https://github.com/docker/cli/blob/master/cli/command/container/stats_helpers.go#L227
+      if (cgroup_cache < cgroup_mem_usage.value()) {
+        cgroup_mem_usage.value() -= cgroup_cache;
+      }
+      if (cgroup_mem_usage.value() <= *total) {
+        *free = *total - cgroup_mem_usage.value();
+        found_free = true;
+      }
+    }
+  }
+
   if (found_free && found_total) {
-    // convert kB to bytes.
-    *free *= 1024, *total *= 1024;
     return Status();
   }
 
