@@ -8,5 +8,6 @@
   "transformer.h.(\\d+).mlp.w1.weight": "model.layers.$1.mlp.up_proj.weight",
   "transformer.h.(\\d+).mlp.w2.weight": "model.layers.$1.mlp.gate_proj.weight",
   "transformer.h.(\\d+).mlp.c_proj.weight": "model.layers.$1.mlp.down_proj.weight",
-  "transformer.ln_f.weight": "model.norm.weight"
+  "transformer.ln_f.weight": "model.norm.weight",
+  ".*visual.*": "deprecated"
 }

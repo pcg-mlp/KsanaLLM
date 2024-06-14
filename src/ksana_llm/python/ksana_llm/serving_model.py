@@ -71,7 +71,7 @@ class KsanaPlugin(object):
             else:
                 return None
         except Exception as e:
-            print(f"Error loading plugin: {e}")
+            # TODO: need a better log
             return None
 
 

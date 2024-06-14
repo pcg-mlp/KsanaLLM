@@ -132,6 +132,7 @@ def update_resources(input_tokens, kwargs):
     """Update parameters for special models
     """
     # Follow the preprocess from: https://huggingface.co/Qwen/Qwen-VL-Chat/blob/main/modeling_qwen.py#L554
+    # TODO: a better way to determine qwenvl model
     if model_config.model_type == "qwen" and "visual" in model_config.to_dict().keys():
         subinput_pos = [int(pos+1) for pos, ids in enumerate(input_tokens) if ids == model_config.visual["image_start_id"]]
         subinput_end = [int(pos-1) for pos, ids in enumerate(input_tokens) if ids == model_config.visual["image_start_id"]+1]

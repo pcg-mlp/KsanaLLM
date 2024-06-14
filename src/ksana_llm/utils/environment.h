@@ -66,6 +66,9 @@ struct ModelConfig {
 
   bool tie_word_embeddings;
 
+  // Determines if the model is a visual llm model.
+  bool is_visual;
+
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;
 };
