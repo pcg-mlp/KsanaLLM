@@ -159,13 +159,15 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
     paged_attention_layers_[idx]->Init(attention_param, context_, rank_);
   }
 
+  // search optional plugin
+  auto optional_file = Singleton<OptionalFile>::GetInstance();
+  std::string& plugin_path =
+      optional_file->GetOptionalFile(model_config_.path, "ksana_plugin/" + plugin_name, "ksana_plugin.py");
+  // try to load plugin
   py::gil_scoped_acquire acquire;
   try {
-    std::string moduleroot = model_config_.path;
-    std::string modulepath = moduleroot + "/ksana_plugin.py";
-
     py::module importlib_util = py::module::import("importlib.util");
-    py::object spec = importlib_util.attr("spec_from_file_location")(moduleroot, modulepath);
+    py::object spec = importlib_util.attr("spec_from_file_location")("ksana_plugin", plugin_path);
     py::object module = importlib_util.attr("module_from_spec")(spec);
     spec.attr("loader").attr("exec_module")(module);
 
@@ -175,6 +177,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   } catch (const py::error_already_set& e) {
     PyErr_Clear();
   }
+  // if load plugin success, try to init plugin
   if (plugin_) {
     py::dict kwargs;
     kwargs["model_path"] = model_config_.path;

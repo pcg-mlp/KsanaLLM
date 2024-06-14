@@ -17,7 +17,7 @@
 #include "ksana_llm/kernels/permute.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
-#include "ksana_llm/utils/optional_weight_map.h"
+#include "ksana_llm/utils/optional_file.h"
 
 #include <Python.h>
 #include <pybind11/embed.h>
@@ -83,8 +83,9 @@ Status CommonWeight<T>::GetCustomNameList(std::vector<std::string>& weight_name_
   custom_name_list.assign(weight_name_list.begin(), weight_name_list.end());
 
   // Search for the optional_weight_map.json file
-  auto optional_weight_map = Singleton<OptionalWeightMap>::GetInstance();
-  std::string& weight_path = optional_weight_map->GetOptionalWeightMap(model_config_.path, model_config_.type);
+  auto optional_file = Singleton<OptionalFile>::GetInstance();
+  std::string& weight_path =
+      optional_file->GetOptionalFile(model_config_.path, "weight_map", model_config_.type + "_weight_map.json");
   if (weight_path == "") {
     return Status();
   }

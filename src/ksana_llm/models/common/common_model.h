@@ -15,6 +15,7 @@
 #include "ksana_llm/layers/subinput_layer.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/optional_file.h"
 
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/models/base/model_communicator.h"
@@ -56,6 +57,10 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   // The decode stage.
   Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+
+ public:
+  // plugin name
+  std::string plugin_name = "";
 
  private:
   using BaseModel::context_;

@@ -89,13 +89,17 @@ class build_ext(build_ext_orig):
         def ignore_files(dir, files):
             return [file for file in files if not file.endswith('.json')]
 
-        optional_weight_maps = 'src/ksana_llm/python/weight_map'
-        ksana_llm_path = os.path.join(extdir.parent.absolute(),
-                                      "ksana_llm/weight_map")
-        shutil.copytree(optional_weight_maps,
-                        ksana_llm_path,
-                        dirs_exist_ok=True,
-                        ignore=ignore_files)
+        need_dirs = [
+            'weight_map', 
+            'ksana_plugin'
+        ]
+        for need_dir in need_dirs:
+            src_dir = os.path.join('src/ksana_llm/python', need_dir)
+            dst_dir = os.path.join(extdir.parent.absolute(), os.path.join("ksana_llm", need_dir))
+            shutil.copytree(src_dir,
+                            dst_dir,
+                            dirs_exist_ok=True,
+                            ignore=ignore_files)
 
 
 setup(name='ksana_llm',

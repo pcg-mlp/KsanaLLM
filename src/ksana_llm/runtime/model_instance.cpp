@@ -10,7 +10,7 @@
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/optional_weight_map.h"
+#include "ksana_llm/utils/optional_file.h"
 #include "ksana_llm/utils/status.h"
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
@@ -43,8 +43,9 @@ void ModelInstance::Load() {
     CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_type);
   } else {
     // Optional weights map
-    auto optional_weight_map = Singleton<OptionalWeightMap>::GetInstance();
-    std::string& weight_map = optional_weight_map->GetOptionalWeightMap(model_config_.path, unified_model_type, true);
+    auto optional_file = Singleton<OptionalFile>::GetInstance();
+    std::string& weight_map =
+        optional_file->GetOptionalFile(model_config_.path, "weight_map", unified_model_type + "_weight_map.json");
     if (weight_map != "") {
       type = "llama";
       CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);

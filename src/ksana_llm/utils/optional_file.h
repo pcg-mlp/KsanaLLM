@@ -10,28 +10,23 @@
 
 namespace ksana_llm {
 
-class OptionalWeightMap {
+class OptionalFile {
  public:
-  static std::shared_ptr<OptionalWeightMap> GetInstance() {
-    return Singleton<OptionalWeightMap>::GetInstance();
+  static std::shared_ptr<OptionalFile> GetInstance() {
+    return Singleton<OptionalFile>::GetInstance();
     ;
   }
 
-  // TODO(zezhao): 初始化时,加载pip目录以及本地开发目录所有 weight_map.json;
-  //               对于每个模型实例, 追加读取模型目录下的 weight_map.json
-  std::string& GetOptionalWeightMap(std::string& model_path, std::string& model_type, bool force_reload = false) {
-    if (force_reload || !is_loaded) {
-      SearchWeightMap(model_path, model_type);
-    }
-    is_loaded = true;
-    return optional_weight_map_;
+  std::string& GetOptionalFile(const std::string& model_path, const std::string& path_name,
+                               const std::string& file_name) {
+    SearchOptionalFile(model_path, path_name, file_name);
+    return target_file;
   }
 
  private:
-  // Search for the optional_weight_map.json file
-  void SearchWeightMap(std::string& model_path, std::string& model_type) {
+  void SearchOptionalFile(const std::string& model_path, const std::string& path_name, const std::string& file_name) {
     // Search within the model path
-    optional_weight_map_ = model_path + "/" + model_type + "_weight_map.json";
+    target_file = model_path + "/" + file_name;
     if (FileExists()) {
       return;
     }
@@ -42,7 +37,7 @@ class OptionalWeightMap {
       PyObject* pathObj = PyList_GetItem(sysPath, 0);
       if (pathObj && PyUnicode_Check(pathObj) && PyUnicode_AsUTF8String(pathObj)) {
         std::string python_dir(PyBytes_AsString(PyUnicode_AsUTF8String(pathObj)));
-        optional_weight_map_ = python_dir + "/weight_map/" + model_type + "_weight_map.json";
+        target_file = python_dir + "/" + path_name + "/" + file_name;
         if (FileExists()) {
           return;
         }
@@ -56,7 +51,7 @@ class OptionalWeightMap {
           std::string python_dir(PyBytes_AsString(PyUnicode_AsUTF8String(pathObj)));
           if (python_dir.length() > package_suffix.length() &&
               python_dir.substr(python_dir.length() - package_suffix.length()) == package_suffix) {
-            optional_weight_map_ = python_dir + "/ksana-llm/weight_map/" + model_type + "_weight_map.json";
+            target_file = python_dir + "/ksana-llm/" + path_name + "/" + file_name;
             if (FileExists()) {
               return;
             }
@@ -66,17 +61,16 @@ class OptionalWeightMap {
     }
 
     // Not Found
-    optional_weight_map_ = "";
+    target_file = "";
   }
 
   bool FileExists() {
-    bool is_exists = std::filesystem::exists(optional_weight_map_);
-    NLLM_LOG_DEBUG << fmt::format("File {} is exists? {}", optional_weight_map_, is_exists);
+    bool is_exists = std::filesystem::exists(target_file);
+    NLLM_LOG_DEBUG << fmt::format("File {} is exists? {}", target_file, is_exists);
     return is_exists;
   }
 
-  std::string optional_weight_map_ = "";
-  bool is_loaded = false;
+  std::string target_file = "";
 };
 
 }  // namespace ksana_llm

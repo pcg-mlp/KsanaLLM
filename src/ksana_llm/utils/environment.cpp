@@ -111,6 +111,7 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
+  model_config.is_visual = config_json.contains("visual");
 
   ParseModelMaxLength(config_json, model_config);
 
