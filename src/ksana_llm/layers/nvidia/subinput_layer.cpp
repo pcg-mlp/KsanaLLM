@@ -38,8 +38,10 @@ Status SubinputLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::
     // Ensure that the data is not released before completing the data transfer to the GPU.
     cast_tensor_vec_.push_back(cast_tensor);
     // Copy the cast tensor data to the output tensor.
-    MemcpyAsync(output_ptr + pos * hidden_units * sizeof(T), cast_tensor.data_ptr(), len * sizeof(T),
-                MEMCPY_HOST_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+    if (pos * hidden_units + len <= output_tensors[0].GetElementNumber()) {
+      MemcpyAsync(output_ptr + pos * hidden_units * sizeof(T), cast_tensor.data_ptr(), len * sizeof(T),
+                  MEMCPY_HOST_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+    }
   }
   return Status();
 }
