@@ -55,9 +55,9 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   }
 
   if (CheckRequestExceedLength(infer_request)) {
-    NLLM_LOG_DEBUG << "input len is too long, req " << infer_request->req_id << " failed.";
+    NLLM_LOG_DEBUG << "input len or prompt_probs_offset is too long, req " << infer_request->req_id << " failed.";
 
-    infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length exceed max_token_len.");
+    infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length or prompt_probs_offset exceeds the limit.");
     for (auto& infer_request : infer_request_group) {
       infer_request->finished = true;
     }
@@ -88,7 +88,8 @@ bool BatchScheduler::CheckWaitingQueueFull(int num) {
 }
 
 inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
-  return req->input_tokens.size() > batch_scheduler_config_.max_token_len;
+  return req->input_tokens.size() > batch_scheduler_config_.max_token_len ||
+         req->prompt_probs_offset > std::min(req->input_tokens.size(), batch_scheduler_config_.max_batch_size);
 }
 
 std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
