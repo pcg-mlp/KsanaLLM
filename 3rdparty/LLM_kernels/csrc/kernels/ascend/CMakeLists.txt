@@ -29,6 +29,12 @@ function(add_ascend_kernel_lib)
     ascendc_include_directories(${aicore_kernel_lib_name} PRIVATE
       ${PROJECT_SOURCE_DIR} ${ACL_INC_DIRS}
     )
+    ascendc_compile_definitions(${aicore_kernel_lib_name} PRIVATE
+      $<$<BOOL:$<IN_LIST:${SOC_VERSION},${CUSTOM_ASCEND310P_LIST}>>:CUSTOM_ASCEND310P>
+      # NOTE(karlluo): if you want to printf/dump tensor from kernel please uncomment this line
+      # -DASCENDC_DUMP
+      # -DHAVE_WORKSPACE
+    )
   endif()
 
   if(NOT "${add_ascend_kernel_lib_DEPS_KERNELS}" STREQUAL "")
