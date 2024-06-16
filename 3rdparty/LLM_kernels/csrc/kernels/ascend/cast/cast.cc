@@ -25,8 +25,14 @@ void InvokeCast(SRC_DTYPE* input, DST_DTYPE* output, uint32_t seq_len, uint32_t 
   CastTilingConfig* buf = &tiling;
   void* tiling_device = nullptr;
   ws_func(sizeof(CastTilingConfig), &tiling_device);
-  ACL_CHECK_RET(aclrtMemcpy(tiling_device, sizeof(CastTilingConfig), (void*)buf, sizeof(CastTilingConfig),
-                            ACL_MEMCPY_HOST_TO_DEVICE));
+  if (std::is_same<SRC_DTYPE, DST_DTYPE>::value) {
+    ACL_CHECK_RET(aclrtMemcpyAsync(output, tiling.total_elem_num * sizeof(DST_DTYPE), input,
+                                   tiling.total_elem_num * sizeof(SRC_DTYPE), ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
+    return;
+  }
+  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_device, sizeof(CastTilingConfig), (void*)buf, sizeof(CastTilingConfig),
+                                 ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   if (std::is_same<SRC_DTYPE, aclFloat16>::value && std::is_same<DST_DTYPE, float>::value) {
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeCastHalfToFloatKernel)(seq_len, stream, (uint8_t*)input, (uint8_t*)output,
                                                                    tiling_device));
@@ -34,7 +40,8 @@ void InvokeCast(SRC_DTYPE* input, DST_DTYPE* output, uint32_t seq_len, uint32_t 
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeCastFloatToHalfKernel)(seq_len, stream, (uint8_t*)input, (uint8_t*)output,
                                                                    tiling_device));
   } else {
-    throw std::invalid_argument("Invalid cast compute type, only support float16 to float32 or float32 to float16.");
+    throw std::invalid_argument(
+        "Invalid cast compute type in InvokeCast, only support float16 to float32 or float32 to float16.");
   }
 }
 

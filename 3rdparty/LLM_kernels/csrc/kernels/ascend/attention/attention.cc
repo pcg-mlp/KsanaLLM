@@ -54,7 +54,7 @@ void FlashAttentionACL::InitAttnMask(int max_tokens_num, aclDataType dtype) {
   }
   auto fmt = aclFormat::ACL_FORMAT_ND;
   auto byte_size = elem_nums * DT2LONG.at(aclDataType::ACL_UINT8);
-  ACL_CHECK_RET(aclrtMalloc(&attn_mask_dev_, byte_size, ACL_MEM_MALLOC_NORMAL_ONLY));
+  ACL_CHECK_RET(aclrtMalloc(&attn_mask_dev_, byte_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
   ACL_CHECK_RET(aclrtMemcpy(attn_mask_dev_, byte_size, host_data, byte_size, ACL_MEMCPY_HOST_TO_DEVICE));
   CreateAclTensorWithData(attn_mask_shape, &attn_mask_dev_, aclDataType::ACL_UINT8, fmt, &attn_mask_);
   ACL_CHECK_RET(aclrtFreeHost(host_data));
