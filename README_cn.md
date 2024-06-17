@@ -11,8 +11,8 @@
 - 使用极致优化的 CUDA kernels, 包括来自 [vLLM](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer) 等工作的高性能算子
 - 基于 [PagedAttention](https://arxiv.org/abs/2309.06180) 实现地对注意力机制中key和value的高效显存管理
 - 对任务调度和显存占用精细调优的动态batching
-- (实验版) 支持前缀缓存 (Prefix caching)
-- 在 A10 和 A100 等卡上做了较充分的验证测试
+- (实验版) 支持前缀缓存(Prefix caching)
+- 在A10, A100和L40等卡上做了较充分的验证测试
 
 **灵活易用:**
 
@@ -33,11 +33,12 @@
 
 - LLaMA 7B/13B & LLaMA-2 7B/13B & LLaMA3 8B/70B
 - Baichuan1 7B/13B & Baichuan2 7B/13B
-- Qwen 7B/14B & QWen1.5 7B/14B/72B
+- Qwen 7B/14B & QWen1.5 7B/14B/72B/110B
+- Yi1.5-34B
 
 **支持的硬件**
 
- - Nvidia GPUs: A10, A100
+ - Nvidia GPUs: A10, A100, L40
  - Huawei Ascend NPUs: 910B
 
 ## 使用
@@ -145,3 +146,6 @@ python -c "import ksana_llm"
 自定义插件可以做特殊预处理和后处理。使用时，你需要把ksana_plugin.py放在模型目录下。
 [样例](examples/qwenvl/ksana_plugin.py)
 
+#### 7. 联系我们
+##### 微信群
+<img src=doc/img/webchat-github.jpg width="200px">
