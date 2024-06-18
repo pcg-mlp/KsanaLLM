@@ -9,6 +9,7 @@ using namespace AscendC;
 
 constexpr int32_t RMSNORM_BUFFER_NUM = 1;  // tensor num for each queue
 
+#pragma begin_pipe(V)
 template <typename T>
 class RmsNormKernel {
  public:
@@ -115,6 +116,8 @@ __aicore__ inline void RmsNormKernel<T>::RmsNormCompute() {
   input_queue.FreeTensor(input_local);
   gamma_queue.FreeTensor(gamma_local);
 }
+
+#pragma end_pipe
 
 extern "C" __global__ __aicore__ void InvokeRmsNormHalfKernel(GM_ADDR input, GM_ADDR gamma, GM_ADDR output,
                                                               GM_ADDR tiling_gm) {
