@@ -20,10 +20,10 @@ void Permute(const aclTensor* permute_input, void** permute_input_tensor_addr_pt
              const std::vector<int64_t>& dims, aclrtStream& stream, void (*ws_func)(size_t, void**));
 
 template <typename T>
-class Permute2 {
+class PermuteKernelWrapper {
  public:
-  Permute2();
-  ~Permute2();
+  PermuteKernelWrapper();
+  ~PermuteKernelWrapper();
 
   // Permute.
   void Forward(void* output, void* input, const std::vector<uint64_t>& shape, const std::vector<uint64_t> new_indexes,

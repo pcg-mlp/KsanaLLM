@@ -40,6 +40,7 @@ class PermuteKernel {
   // The tiling config.
   PermuteTilingData* tiling_;
 
+  TPipe pipe;
   GlobalTensor<T> input_gm_;
   GlobalTensor<T> output_gm_;
 
@@ -79,34 +80,22 @@ __aicore__ void PermuteKernel<T>::Init(GM_ADDR input, GM_ADDR output, PermuteTil
 
 template <typename T>
 __aicore__ void PermuteKernel<T>::Process() {
-  bool should_break = false;
-  for (size_t i = 0; i < tiling_->dim0; ++i) {
-    if (should_break) break;
-    for (size_t j = 0; j < tiling_->dim1; ++j) {
-      if (should_break) break;
-      for (size_t k = 0; k < tiling_->dim2; ++k) {
-        if (should_break) break;
-        for (size_t x = 0; x < tiling_->dim3; ++x) {
-          if (should_break) break;
-          for (size_t y = 0; y < tiling_->dim4; ++y) {
-            if (should_break) break;
-            for (size_t z = 0; z < tiling_->dim5; ++z) {
-              uint64_t src_pos = GetInputIndexPos(i, j, k, x, y, z);
-              if (src_pos >= tiling_->block_length * (block_idx_ + 1) || src_pos >= tiling_->total_length) {
-                should_break = true;
-                break;
-              }
-
-              if (src_pos >= tiling_->block_length * block_idx_) {
-                uint64_t dst_pos = GetNewIndexPos(i, j, k, x, y, z);
-                *(const_cast<__gm__ T*>(output_gm_.GetPhyAddr()) + dst_pos) =
-                    *(const_cast<__gm__ T*>(input_gm_.GetPhyAddr()) + src_pos);
-              }
-            }
-          }
-        }
-      }
-    }
+  // contingious source, sparse distination
+  for (uint64_t idx = block_idx_; idx < tiling_->total_length; ++idx) {
+    uint64_t rest = 0;
+    uint64_t i = idx / tiling_->stride0;
+    rest = idx % tiling_->stride0;
+    uint64_t j = rest / tiling_->stride1;
+    rest = rest % tiling_->stride1;
+    uint64_t k = rest / tiling_->stride2;
+    rest = rest % tiling_->stride2;
+    uint64_t x = rest / tiling_->stride3;
+    rest = rest % tiling_->stride3;
+    uint64_t y = rest / tiling_->stride4;
+    uint64_t z = rest % tiling_->stride4;
+    uint64_t src_pos = idx;
+    uint64_t dst_pos = GetNewIndexPos(i, j, k, x, y, z);
+    output_gm_.SetValue(dst_pos, input_gm_.GetValue(src_pos));
   }
 }
 

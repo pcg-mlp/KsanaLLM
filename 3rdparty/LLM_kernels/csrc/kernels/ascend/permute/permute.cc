@@ -47,33 +47,33 @@ void Permute(const aclTensor* permute_input, void** permute_input_tensor_addr_pt
 }
 
 template <typename T>
-Permute2<T>::Permute2() {
+PermuteKernelWrapper<T>::PermuteKernelWrapper() {
   tiling_size_ = sizeof(PermuteTilingData);
   ACL_CHECK_RET(aclrtMalloc(&tiling_buffer_gm_, tiling_size_, ACL_MEM_MALLOC_HUGE_FIRST));
 
   // TODO: Get block num from device info.
   tiling_data_.used_core_num = MAX_USED_CORE_NUM;
 
-  size_t usr_workspace_size = 4 * 1024;
-  size_t sys_workspace_size = 16 * 1024 * 1024;
+  size_t usr_workspace_size = 1024 << 2;
+  size_t sys_workspace_size = 1024 << 14;
   ACL_CHECK_RET(aclrtMalloc(&workspace_gm_, usr_workspace_size + sys_workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
 template <typename T>
-Permute2<T>::~Permute2() {
+PermuteKernelWrapper<T>::~PermuteKernelWrapper() {
   ACL_CHECK_RET(aclrtFree(tiling_buffer_gm_));
   ACL_CHECK_RET(aclrtFree(workspace_gm_));
 }
 
 template <typename T>
-void Permute2<T>::CopyTilingToDevice(aclrtStream stream) {
+void PermuteKernelWrapper<T>::CopyTilingToDevice(aclrtStream stream) {
   ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, &tiling_data_, tiling_size_,
                                  aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 template <typename T>
-void Permute2<T>::Forward(void* output, void* input, const std::vector<uint64_t>& shape,
+void PermuteKernelWrapper<T>::Forward(void* output, void* input, const std::vector<uint64_t>& shape,
                           const std::vector<uint64_t> new_indexes, aclrtStream stream) {
   // The kernel support at most 6 dimension now.
   if (shape.size() > 6 && new_indexes.size() > 6) {
@@ -91,6 +91,8 @@ void Permute2<T>::Forward(void* output, void* input, const std::vector<uint64_t>
     strides[i] = input_shape[i + 1] * strides[i + 1];
   }
 
+  // NOTE(karlluo): for Huawei kernel not support dynamic vector.
+  // extern indexes to 6 dims to fill static const length vector.
   std::vector<uint64_t> output_new_indexes = new_indexes;
   int fill_dim = 6 - output_new_indexes.size();
   for (size_t i = 0; i < output_new_indexes.size(); ++i) {
@@ -169,8 +171,8 @@ void Permute2<T>::Forward(void* output, void* input, const std::vector<uint64_t>
   (tiling_data_.used_core_num, stream, input, output, workspace_gm_, tiling_buffer_gm_);
 }
 
-template class Permute2<aclFloat16>;
-template class Permute2<float>;
+template class PermuteKernelWrapper<aclFloat16>;
+template class PermuteKernelWrapper<float>;
 
 }  // namespace ascend
 }  // namespace llm_kernels
