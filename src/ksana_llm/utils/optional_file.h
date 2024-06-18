@@ -33,7 +33,7 @@ class OptionalFile {
 
     PyObject* sysPath = PySys_GetObject("path");
     if (sysPath && PyList_Check(sysPath)) {
-      // Search within the ksana-llm packages
+      // Search within the ksana_llm packages
       PyObject* pathObj = PyList_GetItem(sysPath, 0);
       if (pathObj && PyUnicode_Check(pathObj) && PyUnicode_AsUTF8String(pathObj)) {
         std::string python_dir(PyBytes_AsString(PyUnicode_AsUTF8String(pathObj)));
@@ -51,7 +51,7 @@ class OptionalFile {
           std::string python_dir(PyBytes_AsString(PyUnicode_AsUTF8String(pathObj)));
           if (python_dir.length() > package_suffix.length() &&
               python_dir.substr(python_dir.length() - package_suffix.length()) == package_suffix) {
-            target_file = python_dir + "/ksana-llm/" + path_name + "/" + file_name;
+            target_file = python_dir + "/ksana_llm/" + path_name + "/" + file_name;
             if (FileExists()) {
               return;
             }

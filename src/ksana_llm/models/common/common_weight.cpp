@@ -173,6 +173,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       // cast TYPE_FP32 to weight_data_type_.
       auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
       torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
+      weight_size /= sizeof(float) / GetTypeSize(weight_data_type_);
       if (weight_data_type_ == TYPE_FP16) {
         weight_cpu_tensor = in.to(torch::kFloat16);
         weight_ptr = weight_cpu_tensor.data_ptr();
