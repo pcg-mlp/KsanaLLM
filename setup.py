@@ -86,9 +86,6 @@ class build_ext(build_ext_orig):
             copy_file(str(build_temp_lib.joinpath(target_lib)),
                       str(extdir.parent.absolute()))
         # copy optional weight map to cwd for wheel package
-        def ignore_files(dir, files):
-            return [file for file in files if not file.endswith('.json')]
-
         need_dirs = [
             'weight_map', 
             'ksana_plugin'
@@ -96,10 +93,13 @@ class build_ext(build_ext_orig):
         for need_dir in need_dirs:
             src_dir = os.path.join('src/ksana_llm/python', need_dir)
             dst_dir = os.path.join(extdir.parent.absolute(), os.path.join("ksana_llm", need_dir))
-            shutil.copytree(src_dir,
-                            dst_dir,
-                            dirs_exist_ok=True,
-                            ignore=ignore_files)
+            shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
+        need_files = ["serving_server.py", "serving_client.py"]
+        for need_file in need_files:
+            src_dir = os.path.join('src/ksana_llm/python', need_file)
+            dst_dir = os.path.join(extdir.parent.absolute(), "ksana_llm")
+            copy_file(src_dir, dst_dir)
 
 
 setup(name='ksana_llm',
