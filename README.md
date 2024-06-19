@@ -1,6 +1,6 @@
 # KsanaLLM
 
-[English](README.md) [中文](README_cn.md)
+[English](README.md) | [中文](README_cn.md)
 
 ## About
 
@@ -8,7 +8,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 **High Performance and Throughput:**
 
-- Utilizes optimized CUDA kernels, including high performance kernels from [vllm](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer)
+- Utilizes optimized CUDA kernels, including high performance kernels from [vLLM](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer)
 - Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180)
 - Detailed optimization of task-scheduling and memory-uitlization for dynamic batching 
 - (Experimental) Prefix caching support
@@ -43,11 +43,9 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 ## Usage
 
-### 1. Create docker container and runtime environment
+### 1. Create Docker container and runtime environment
 
 #### 1.1 For Nvidia GPU
-
-Option 1: Create and set container for **NVIDIA official image**
 
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
@@ -58,26 +56,15 @@ pip install -r requirements.txt
 apt update && apt install git-lfs -y
 ```
 
-Option 2: Create and set container for **Tencent image**:
-
-```bash
-sudo docker run -it --network host --shm-size=10g --privileged \
-    --device /dev/nvidia0 --device /dev/nvidiactl \
-    -v /usr/local/nvidia:/usr/local/nvidia mirrors.tencent.com/todacc/venus-numerous-llm:0.1.19 bash
-```
-
 #### 1.2 For Huawei Ascend NPU
 
-```bash
-sudo docker run -it --network host --shm-size=10g --privileged \
-    mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
-```
-Note: image for Huawei cloud is in progress.
+> [!NOTE]  
+> Image for Huawei Cloud is in progress.
 
 ### 2. Clone source code
 
 ```bash
-git clone --recurse-submodules https://github.com/Tencent/KsanaLLM
+git clone --recurse-submodules https://github.com/pcg-mlp/KsanaLLM
 export GIT_PROJECT_REPO_ROOT=`pwd`/KsanaLLM
 ```
 
@@ -153,7 +140,8 @@ python -c "import ksana_llm"
 #### 6.1 Model Weight Map
 
 You can include an optional weight map JSON file for models that share the same structure as the Llama model but have different weight names.
-For more detailed information, please refer to the following link: [Optional Weigth Map Guide](src/ksana_llm/python/weight_map/README.md)
+
+For more detailed information, please refer to the following link: [Optional Weight Map Guide](src/ksana_llm/python/weight_map/README.md)
 
 #### 6.2 Plugin
 

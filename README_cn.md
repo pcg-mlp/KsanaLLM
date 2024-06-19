@@ -4,32 +4,32 @@
 
 ## 介绍
 
-**一念LLM**是面向LLM推理和服务的高性能和高易用的推理引擎。
+**一念LLM** 是面向LLM推理和服务的高性能和高易用的推理引擎。
 
 **高性能和高吞吐:**
 
-- 使用极致优化的 CUDA kernels, 包括来自 [vllm](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer) 等工作的高性能算子
-- 基于[PagedAttention](https://arxiv.org/abs/2309.06180)实现地对注意力机制中key和value的高效显存管理
+- 使用极致优化的 CUDA kernels, 包括来自 [vLLM](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer) 等工作的高性能算子
+- 基于 [PagedAttention](https://arxiv.org/abs/2309.06180) 实现地对注意力机制中key和value的高效显存管理
 - 对任务调度和显存占用精细调优的动态batching
-- (实验版) 支持前缀缓存(Prefix caching)
-- 在A10和A100等卡上做了较充分的验证测试
+- (实验版) 支持前缀缓存 (Prefix caching)
+- 在 A10 和 A100 等卡上做了较充分的验证测试
 
 **灵活易用:**
 
-- 能够无缝集成流行的Hugging Face格式模型，支持pytorch和SafeTensor两种权重格式
+- 能够无缝集成流行的 Hugging Face 格式模型，支持 PyTorch 和 SafeTensor 两种权重格式
 
-- 能够实现高吞吐服务，支持多种解码算法，包括并行采样、beam search等
+- 能够实现高吞吐服务，支持多种解码算法，包括并行采样、beam search 等
 
-- 支持多卡间的tensor并行 
+- 支持多卡间的 tensor 并行 
 
 - 支持流式输出
 
-- 支持OpenAI-compatible API server
+- 支持 OpenAI-compatible API server
 
-- 支持英伟达GPU和华为昇腾NPU
+- 支持英伟达 GPU 和华为昇腾 NPU
 
 
-**一念LLM支持 Hugging Face的很多流行模型，下面是经过验证测试的模型:**
+**一念LLM 支持 Hugging Face 的很多流行模型，下面是经过验证测试的模型:**
 
 - LLaMA 7B/13B & LLaMA-2 7B/13B & LLaMA3 8B/70B
 - Baichuan1 7B/13B & Baichuan2 7B/13B
@@ -42,9 +42,9 @@
 
 ## 使用
 
-### 1. 创建 docker 容器和运行时环境
+### 1. 创建 Docker 容器和运行时环境
 
-#### 1.1 英伟达GPU
+#### 1.1 英伟达 GPU
 
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
@@ -55,17 +55,15 @@ pip install -r requirements.txt
 apt update && apt install git-lfs -y
 ```
 
-#### 1.2 华为昇腾NPU
+#### 1.2 华为昇腾 NPU
 
-```bash
-sudo docker run -it --network host --shm-size=10g --privileged \
-    mirrors.tencent.com/todacc/venus-std-base-tlinux3-npu-llm:0.1.3 bash
-```
+> [!NOTE]  
+> 当前代码暂时仅在腾讯内部的定制机型上适配，华为云机型的适配工作正在进行中
 
 ### 2. 下载源码
 
 ```bash
-git clone --recurse-submodules https://github.com/Tencent/KsanaLLM
+git clone --recurse-submodules https://github.com/pcg-mlp/KsanaLLM
 export GIT_PROJECT_REPO_ROOT=`pwd`/KsanaLLM
 ```
 
@@ -76,7 +74,7 @@ cd ${GIT_PROJECT_REPO_ROOT}
 mkdir build && cd build
 ```
 
-#### 3.1 英伟达GPU
+#### 3.1 英伟达 GPU
 
 ```bash
 # SM for A10 is 86， change it when using other gpus.
@@ -84,7 +82,7 @@ mkdir build && cd build
 cmake -DSM=86 -DWITH_TESTING=ON .. && make -j32
 ```
 
-#### 3.2 华为昇腾NPU
+#### 3.2 华为昇腾 NPU
 
 ```bash
 cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
@@ -146,3 +144,4 @@ python -c "import ksana_llm"
 
 自定义插件可以做特殊预处理和后处理。使用时，你需要把ksana_plugin.py放在模型目录下。
 [样例](examples/qwenvl/ksana_plugin.py)
+
