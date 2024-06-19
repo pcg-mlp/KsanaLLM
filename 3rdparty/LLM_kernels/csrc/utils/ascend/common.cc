@@ -69,7 +69,6 @@ void CreateAclTensor(const std::vector<int64_t>& shape, void** deviceAddr, aclDa
                             shape.size(), *deviceAddr);
 }
 
-// TODO: void** deviceAddr,aclTensor** tensor,aclDataType dataType, aclFormat dataFormat,
 void CreateAclTensorWithData(const std::vector<int64_t>& shape, void** deviceAddr, aclDataType dataType,
                              aclFormat dataFormat, aclTensor** tensor) {
   auto size = GetShapeSize(shape) * DT2LONG.at(dataType);
@@ -288,7 +287,6 @@ void SaveNpy(const aclTensor* tensor, const void* tensor_workspace_ptr, const st
     tensor_shape[i] = shape[i];
   }
 
-  // copy
   void* host_buffer_ptr = nullptr;
   if (is_on_device) {
     ACL_CHECK_RET(aclrtMallocHost(&host_buffer_ptr, elem_nums * aclDataTypeSize(acl_dtype)));

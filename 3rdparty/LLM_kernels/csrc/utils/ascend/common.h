@@ -43,6 +43,7 @@ namespace utils {
     aclError ret = (expr);                                                           \
     if (ret != ACL_SUCCESS) {                                                        \
       FATAL_LOG("Acl return error %s:%d, with ERROR %d\n", __FILE__, __LINE__, ret); \
+      throw std::runtime_error("Failed with ACL return error.");                     \
     }                                                                                \
   } while (0)
 
@@ -52,6 +53,7 @@ namespace utils {
     int64_t ret_b = (b);                                                                                      \
     if (!(ret_a op ret_b)) {                                                                                  \
       FATAL_LOG("Acl check %s(%d) %s %s(%d) fail at %s:%d\n", #a, ret_a, #op, #b, ret_b, __FILE__, __LINE__); \
+      throw std::runtime_error("Failed with ACL return error.");                                              \
     }                                                                                                         \
   } while (0)
 
