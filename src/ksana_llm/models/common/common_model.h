@@ -9,7 +9,7 @@
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
-#include "ksana_llm/layers/matmul_layer.h"
+#include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
 #include "ksana_llm/layers/subinput_layer.h"
@@ -48,7 +48,7 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   ~CommonModel();
 
   // Initialize the run config.
-  void InitRunConfig(const ModelRunConfig& model_run_config);
+  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
 
   float* GetLogitsPtr();
 
@@ -85,7 +85,12 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::vector<std::shared_ptr<PagedAttentionLayer<T>>> paged_attention_layers_;
   std::shared_ptr<AddLayer<T>> add_layer_;
   std::shared_ptr<SiluMulLayer<T>> silu_mul_layer_;
-  std::shared_ptr<MatMulLayer<T>> matmul_layer_;
+  std::shared_ptr<BaseLayer> attn_qkv_proj_layer_;
+  std::shared_ptr<BaseLayer> attn_o_proj_layer_;
+  std::shared_ptr<BaseLayer> mlp_gate_proj_layer_;
+  std::shared_ptr<BaseLayer> mlp_up_proj_layer_;
+  std::shared_ptr<BaseLayer> mlp_down_proj_layer_;
+  std::shared_ptr<BaseLayer> lm_head_proj_layer_;
   std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
   std::shared_ptr<CastLayer<T>> cast_layer_;
   std::shared_ptr<SubinputLayer<T>> subinput_layer_;

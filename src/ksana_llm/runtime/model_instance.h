@@ -58,20 +58,20 @@ class ModelInstance {
 
  private:
   // Create the object and return a shared pointer.
-  template <template <class> class ClassT, class BaseT>
-  std::shared_ptr<BaseT> CreatetModelObject(int rank) {
+  template <template <class> class ClassT, class BaseT, class... Args>
+  std::shared_ptr<BaseT> CreatetModelObject(int rank, Args&&... args) {
     std::shared_ptr<BaseT> model_obj = nullptr;
     switch (model_config_.weight_data_type) {
       case DataType::TYPE_FP16:
-        model_obj = std::make_shared<ClassT<float16>>(model_config_, rank, context_);
+        model_obj = std::make_shared<ClassT<float16>>(model_config_, rank, context_, std::forward<Args>(args)...);
         break;
 #ifdef ENABLE_BFLOAT16
       case DataType::TYPE_BF16:
-        model_obj = std::make_shared<ClassT<bfloat16>>(model_config_, rank, context_);
+        model_obj = std::make_shared<ClassT<bfloat16>>(model_config_, rank, context_, std::forward<Args>(args)...);
         break;
 #endif
       case DataType::TYPE_FP32:
-        model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_);
+        model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_, std::forward<Args>(args)...);
         break;
       default:
         throw std::runtime_error("Unsupported Tensor type.");
@@ -80,8 +80,8 @@ class ModelInstance {
   }
 
   template <template <class> class ClassT>
-  std::shared_ptr<BaseModel> CreateModel(int rank) {
-    return CreatetModelObject<ClassT, BaseModel>(rank);
+  std::shared_ptr<BaseModel> CreateModel(int rank, std::shared_ptr<BaseWeight> base_weight) {
+    return CreatetModelObject<ClassT, BaseModel>(rank, base_weight);
   }
 
   template <template <class> class ClassT>
@@ -97,10 +97,12 @@ class ModelInstance {
     for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
       NLLM_LOG_INFO << "Start to create empty model weight on device " << worker_id;
       weights_.push_back(CreateModelWeight<WeightType>(worker_id));
-      NLLM_LOG_INFO << "Start to create model on device " << worker_id;
-      models_.push_back(CreateModel<ModelType>(worker_id));
     }
     LoadWeightsAndModelsMap();
+    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      NLLM_LOG_INFO << "Start to create model on device " << worker_id;
+      models_.push_back(CreateModel<ModelType>(worker_id, weights_[worker_id]));
+    }
   }
 
  private:

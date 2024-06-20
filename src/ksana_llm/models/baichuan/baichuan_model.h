@@ -15,7 +15,8 @@ namespace ksana_llm {
 template <typename T>
 class __attribute__((visibility("hidden"))) BaichuanModel : public BaseModel {
  public:
-  BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
+  BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
+                std::shared_ptr<BaseWeight> base_weight);
 
   float* GetLogitsPtr();
 

@@ -22,6 +22,8 @@ struct RoPEScalingFactor {
   float factor{1.0f};
 };
 
+enum QuantMode { None };
+
 // The model informations.
 struct ModelConfig {
   // The model name.

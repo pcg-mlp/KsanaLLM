@@ -8,7 +8,8 @@
 namespace ksana_llm {
 
 template <typename T>
-BaichuanModel<T>::BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) {
+BaichuanModel<T>::BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
+                                std::shared_ptr<BaseWeight> base_weight) {
   common_model_ = std::make_shared<CommonModel<T>>(model_config, rank, context);
 
   ModelRunConfig model_run_config;
@@ -17,7 +18,7 @@ BaichuanModel<T>::BaichuanModel(const ModelConfig& model_config, const int rank,
   model_run_config.position_encoding =
       (model_config.size_per_head * model_config.head_num != 4096) ? PositionEncoding::ALIBI : PositionEncoding::ROPE;
   model_run_config.qkv_add_bias = false;
-  common_model_->InitRunConfig(model_run_config);
+  common_model_->InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>

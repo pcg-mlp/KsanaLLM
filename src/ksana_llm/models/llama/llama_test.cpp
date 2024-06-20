@@ -80,7 +80,8 @@ TEST_F(LlamaTest, ForwardTest) {
     StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   }
   llama_weight->ProcessWeights();  // End Loder Weight
-  std::shared_ptr<LlamaModel<float16>> llama = std::make_shared<LlamaModel<float16>>(model_config, 0, context_);
+  std::shared_ptr<LlamaModel<float16>> llama =
+      std::make_shared<LlamaModel<float16>>(model_config, 0, context_, llama_weight);
 
   // Weight Name Check
   // 正确的 weight 名称

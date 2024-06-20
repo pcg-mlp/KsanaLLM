@@ -26,7 +26,7 @@ template <typename T>
 CommonModel<T>::~CommonModel() {}
 
 template <typename T>
-void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
+void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
   GetBlockManager()->SetDeviceId(rank_);
 
   num_layer_ = model_config_.num_layer;
@@ -60,16 +60,14 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   size_t tensor_buffer_size = std::max(model_config_.max_batch_size * vocab_size_pad_, max_token_num * max_dim);
   size_t up_matmul_tensor_buffer_size = max_token_num * std::max(static_cast<int>(inter_size_per_tp), hidden_units * 2);
 
+  DataType weight_type = model_config_.weight_data_type;
   // TODO(karlluo): all create tensor used dynamic memory pool
-  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(tensor_buffer_2_, {max_token_num, (size_t)max_dim}, model_config_.weight_data_type));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, model_config_.weight_data_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_0_, {tensor_buffer_size}, weight_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_1_, {tensor_buffer_size}, weight_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(tensor_buffer_2_, {max_token_num, (size_t)max_dim}, weight_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(up_matmul_tensor_buffer_, {up_matmul_tensor_buffer_size}, weight_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_,
-                                          {(size_t)rotary_embedding, (size_t)max_position_embeddings},
-                                          model_config_.weight_data_type));
+                                          {(size_t)rotary_embedding, (size_t)max_position_embeddings}, weight_type));
 #ifdef ENABLE_ACL
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_0_, {max_token_num, hidden_units}, TYPE_FP16));
   STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_1_, {max_token_num, hidden_units}, TYPE_FP16));
@@ -109,8 +107,19 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config) {
   silu_mul_layer_ = std::make_shared<SiluMulLayer<T>>();
   silu_mul_layer_->Init({}, context_, rank_);
 
-  matmul_layer_ = std::make_shared<MatMulLayer<T>>();
-  matmul_layer_->Init({}, context_, rank_);
+  auto matmul_layer_factory = MatMulLayerFactory<T>();
+  attn_qkv_proj_layer_ = matmul_layer_factory.CreateLayer(
+      base_weight, "model.layers.0.self_attn.query_key_value.weight", weight_type, weight_type, {}, context_, rank_);
+  attn_o_proj_layer_ = matmul_layer_factory.CreateLayer(base_weight, "model.layers.0.self_attn.o_proj.weight",
+                                                        weight_type, weight_type, {}, context_, rank_);
+  mlp_gate_proj_layer_ = matmul_layer_factory.CreateLayer(base_weight, "model.layers.0.mlp.gate_proj.weight",
+                                                          weight_type, weight_type, {}, context_, rank_);
+  mlp_up_proj_layer_ = matmul_layer_factory.CreateLayer(base_weight, "model.layers.0.mlp.up_proj.weight", weight_type,
+                                                        weight_type, {}, context_, rank_);
+  mlp_down_proj_layer_ = matmul_layer_factory.CreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight",
+                                                          weight_type, weight_type, {}, context_, rank_);
+  lm_head_proj_layer_ =
+      matmul_layer_factory.CreateLayer(base_weight, "lm_head.weight", weight_type, weight_type, {}, context_, rank_);
 
   assemble_last_token_layer_ = std::make_shared<AssembleLastTokenLayer<T>>();
   assemble_last_token_layer_->Init({}, context_, rank_);
@@ -278,7 +287,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
   std::vector<Tensor>& attn_proj_output = temp_buffer_2;
-  STATUS_CHECK_RETURN(matmul_layer_->Forward({hidden_states, attn_proj_weight}, attn_proj_output));
+  STATUS_CHECK_RETURN(attn_qkv_proj_layer_->Forward({hidden_states, attn_proj_weight}, attn_proj_output));
   if (qkv_add_bias_) {
     Tensor attn_proj_bias =
         base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.bias", layer_idx));
@@ -326,7 +335,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
   Tensor attn_o_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
   std::vector<Tensor>& attn_o_proj_output = temp_buffer_2;
-  STATUS_CHECK_RETURN(matmul_layer_->Forward({mmha_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
+  STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({mmha_attention_output[0], attn_o_proj_weight}, attn_o_proj_output));
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
@@ -349,12 +358,12 @@ Status CommonModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm:
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
   std::vector<Tensor>& gate_matmul_output = temp_buffer_0;
-  STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output, gate_proj_weight}, gate_matmul_output));
+  STATUS_CHECK_RETURN(mlp_gate_proj_layer_->Forward({post_layernorm_output, gate_proj_weight}, gate_matmul_output));
 
   // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
   Tensor up_proj_weight = base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.up_proj.weight", layer_idx));
   std::vector<Tensor> up_matmul_output = {up_matmul_tensor_buffer_};
-  STATUS_CHECK_RETURN(matmul_layer_->Forward({post_layernorm_output, up_proj_weight}, up_matmul_output));
+  STATUS_CHECK_RETURN(mlp_up_proj_layer_->Forward({post_layernorm_output, up_proj_weight}, up_matmul_output));
 
   std::vector<Tensor>& silu_mul_output = temp_buffer_1;
   STATUS_CHECK_RETURN(silu_mul_layer_->Forward({gate_matmul_output[0], up_matmul_output[0]}, silu_mul_output));
@@ -363,7 +372,7 @@ Status CommonModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm:
   Tensor down_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.down_proj.weight", layer_idx));
   std::vector<Tensor>& down_proj_output = temp_buffer_0;
-  STATUS_CHECK_RETURN(matmul_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
+  STATUS_CHECK_RETURN(mlp_down_proj_layer_->Forward({silu_mul_output[0], down_proj_weight}, down_proj_output));
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
@@ -512,7 +521,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   // lm_head
   Tensor lm_head_weight = base_weight->GetModelWeights("lm_head.weight");
   std::vector<Tensor>& lm_head_output = temp_buffer_0;
-  STATUS_CHECK_RETURN(matmul_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
+  STATUS_CHECK_RETURN(lm_head_proj_layer_->Forward({assemble_last_token_output[0], lm_head_weight}, lm_head_output));
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
