@@ -117,7 +117,13 @@ python serving_server.py \
 ```bash
 # open another session
 cd ${GIT_PROJECT_REPO_ROOT}/examples/llama7b
-python serving_client.py --port 8080
+python serving_generate_client.py --port 8080
+```
+
+forward推理测试（单轮推理，无采样）
+
+```bash
+python serving_forward_client.py --port 8080
 ```
 
 ### 5. 分发

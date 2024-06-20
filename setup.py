@@ -95,7 +95,7 @@ class build_ext(build_ext_orig):
             dst_dir = os.path.join(extdir.parent.absolute(), os.path.join("ksana_llm", need_dir))
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
-        need_files = ["serving_server.py", "serving_client.py"]
+        need_files = ["serving_server.py", "serving_generate_client.py", "serving_forward_client.py"]
         for need_file in need_files:
             src_dir = os.path.join('src/ksana_llm/python', need_file)
             dst_dir = os.path.join(extdir.parent.absolute(), "ksana_llm")

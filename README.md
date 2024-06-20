@@ -118,7 +118,13 @@ Inference test with one shot conversation
 ```bash
 # open another session
 cd ${GIT_PROJECT_REPO_ROOT}/examples/llama7b
-python serving_client.py --port 8080
+python serving_generate_client.py --port 8080
+```
+
+Inference test with forward(Single round inference without generate sampling)
+
+```bash
+python serving_forward_client.py --port 8080
 ```
 
 ### 5. Distribute
