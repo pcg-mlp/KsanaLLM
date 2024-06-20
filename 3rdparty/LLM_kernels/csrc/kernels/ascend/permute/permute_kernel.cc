@@ -81,7 +81,7 @@ __aicore__ void PermuteKernel<T>::Init(GM_ADDR input, GM_ADDR output, PermuteTil
 template <typename T>
 __aicore__ void PermuteKernel<T>::Process() {
   // contingious source, sparse distination
-  for (uint64_t idx = block_idx_; idx < tiling_->total_length; ++idx) {
+  for (uint64_t idx = block_idx_; idx < tiling_->total_length; idx += tiling_->used_core_num) {
     uint64_t rest = 0;
     uint64_t i = idx / tiling_->stride0;
     rest = idx % tiling_->stride0;
