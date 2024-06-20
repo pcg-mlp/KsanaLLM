@@ -267,8 +267,8 @@ async def generate(request: Request) -> Response:
     else:
         return JSONResponse(response_data)
 
-@app.post("/generate_msgpack")
-async def generate_msgpack(request: Request):
+@app.post("/forward")
+async def forward(request: Request):
     """Generate completion for the request.
 
     The request should be a JSON object packaged with msgpack.
@@ -276,6 +276,7 @@ async def generate_msgpack(request: Request):
     request_body_bytes = await request.body()
     request_dict = msgpack.unpackb(request_body_bytes, raw=False)
     request_dict["stream"] = False
+    request_dict["sampling_config"] = {"max_new_tokens" : 1}
     response_data = await process_request(request_dict)
     return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
 

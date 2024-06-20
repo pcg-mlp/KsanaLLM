@@ -17,23 +17,9 @@ def args_config():
                         default="localhost",
                         help='server host address')
     parser.add_argument('--port', type=int, default=8888, help='server port')
-    parser.add_argument('--pack',
-                        type=str,
-                        default="json",
-                        choices=['json', 'msgpack'],
-                        help='Specify the format for data packing. "json" for text-based '
-                            'JSON format, and "msgpack" for binary MessagePack format. '
-                            'Default is "json".')
     args = parser.parse_args()
     return args
 
-
-def post_request(serv, data, queue=None):
-    resp = requests.post(serv, json=data, timeout=600000)
-    if queue is None:
-        return json.loads(resp.content)
-    else:
-        queue.put(json.loads(resp.content))
 
 def post_request_msgpack(serv, data, queue=None):
     packed_data = msgpack.packb(data)
@@ -49,14 +35,10 @@ def show_response(data, result):
 
 if __name__ == "__main__":
     args = args_config()
-    serv = "http://" + args.host + ":" + str(args.port) + "/generate"
-    if args.pack == 'msgpack':
-        serv = serv+"_msgpack"
+    serv = "http://" + args.host + ":" + str(args.port) + "/forward"
 
     text_list = [
-        "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]",
-        "[INST]想象一下您是夏洛克·福尔摩斯，您被要求解开一个涉及失踪传家宝的谜团。请解释一下您找到该物品的策略。[/INST]"
-        # "USER:你好\nASSISTANT:",
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n你好。<|im_end|>\n<|im_start|>assistant",
     ]
 
     multi_proc_list = []
@@ -73,28 +55,12 @@ if __name__ == "__main__":
             "prompt": prompt,
             # "subinput_pos": [6,6,6],
             # "subinput_embedding": [[1.0,2.0],[3.0,4.0]],
-            # Configure the sampling parameters
-            "sampling_config": {
-                "temperature": 0.0,  # temperature for sampling
-                "topk": 1,  # top-k sampling
-                "topp": 0.0,  # top-p sampling
-                "logprobs": 0, # Return the n token log probabilities for each position.
-                "max_new_tokens":
-                128,  # maximum number of new tokens to generate
-                "repetition_penalty": 1.0,  # penalty for repetitive responses
-                "stop_token_ids": [] # list of tokens that stop the generation
-            },
-            # Set stream mode to False
-            "stream": False,
         }
 
         # Create a new process to handle the post request
-        post_function = post_request
-        if args.pack == 'msgpack':
-            post_function = post_request_msgpack
 
         proc = multiprocessing.Process(
-            target=post_function,  # function to call
+            target=post_request_msgpack,  # function to call
             args=(  # arguments to pass
                 serv,  # server object
                 data,  # data dictionary
