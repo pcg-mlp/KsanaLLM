@@ -12,7 +12,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 - Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180)
 - Detailed optimization of task-scheduling and memory-uitlization for dynamic batching 
 - (Experimental) Prefix caching support
-- Sufficient testing has been conducted on GPU cards such as A10, A100, etc
+- Sufficient testing has been conducted on GPU cards such as A10, A100, L40, etc
 
 **Flexibility and easy to use:**
 
@@ -34,11 +34,12 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 - LLaMA 7B/13B & LLaMA-2 7B/13B & LLaMA3 8B/70B
 - Baichuan1 7B/13B & Baichuan2 7B/13B
-- Qwen 7B/14B & QWen1.5 7B/14B/72B
+- Qwen 7B/14B & QWen1.5 7B/14B/72B/110B
+- Yi1.5-34B 
 
 **Supported Hardware**
 
- - Nvidia GPUs: A10, A100
+ - Nvidia GPUs: A10, A100, L40
  - Huawei Ascend NPUs: 910B
 
 ## Usage
@@ -147,3 +148,8 @@ For more detailed information, please refer to the following link: [Optional Wei
 
 Custom plugins can perform some special pre-process and post-processing. You need to place ksana_plugin.py in the model directory.
 [Example](examples/qwenvl/ksana_plugin.py)
+
+#### 7. Contact Us
+##### WeChat Group
+<img src=doc/img/webchat-github.jpg width="200px">
+
