@@ -9,6 +9,13 @@ import importlib.util
 
 import torch
 from transformers import AutoConfig
+from safetensors.torch import load
+
+def load_safetensors(file_path):
+    with open(file_path, "rb") as f:
+        data = f.read()
+    loaded = load(data)
+    return loaded
 
 class KsanaPlugin:
     """
@@ -42,7 +49,11 @@ class KsanaPlugin:
             # read weight
             visual_weights = {}
             for weight_map_file in weight_map_files:
-                weights = torch.load(os.path.join(modelpath,weight_map_file), map_location=torch.device('cpu'))
+                weight_file = os.path.join(modelpath,weight_map_file)
+                if os.path.splitext(weight_file)[1] == ".safetensors":
+                    weights = load_safetensors(weight_file)
+                else:
+                    weights = torch.load(weight_file, map_location=torch.device('cpu'))
                 for name, tensor in weights.items():
                     if "transformer.visual." in name:
                         visual_weights[name.replace("transformer.visual.","")] = tensor
