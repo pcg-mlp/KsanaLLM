@@ -106,14 +106,8 @@ class InferRequest {
   // The input tokens.
   std::vector<int> &input_tokens;
 
-  // The subinput_pos indicates the start position of the embedding to be replaced.
-  std::vector<int> &subinput_pos;
-
-  // The subinput_embedding is the embedding value to be used for the replacement, from the request.
-  std::vector<std::vector<float>> &subinput_embedding;
-
-  // The subinput_url is the multimodal resources url
-  std::vector<std::string> &subinput_url;
+  // Embedding slice used to refit input embedding    
+  EmbeddingSlice &input_refit_embedding; 
 
   // The output tokens, always contain input tokens on the left.
   std::vector<int> &output_tokens;

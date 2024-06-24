@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ksana_llm/runtime/infer_stage.h"
+#include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
 
@@ -28,14 +29,8 @@ struct ForwardRequest {
   // The input tokens.
   std::vector<int>* output_tokens;
 
-  // The subinput_pos indicates the start position of the embedding to be replaced.
-  std::vector<int>* subinput_pos;
-
-  // The subinput_embedding is the embedding value to be used for the replacement, from the request.
-  std::vector<std::vector<float>>* subinput_embedding;
-
-  // The subinput_url is the multimodal resources url
-  std::vector<std::string>* subinput_url;
+  // Embedding slice used to refit input embedding    
+  EmbeddingSlice* input_refit_embedding; 
 
   // The output logits buf and offset.
   std::vector<float*> logits_buf;

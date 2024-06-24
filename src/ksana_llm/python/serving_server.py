@@ -128,30 +128,6 @@ def get_sampling_value(sampling_config: dict, key: str, default_val=None):
     """
     return sampling_config[key] if key in sampling_config else default_val
 
-def update_resources(input_tokens, kwargs):
-    """Update parameters for special models
-    """
-    # Follow the preprocess from: https://huggingface.co/Qwen/Qwen-VL-Chat/blob/main/modeling_qwen.py#L554
-    # TODO: a better way to determine qwenvl model
-    if model_config.model_type == "qwen" and "visual" in model_config.to_dict().keys():
-        subinput_pos = [int(pos+1) for pos, ids in enumerate(input_tokens) if ids == model_config.visual["image_start_id"]]
-        subinput_end = [int(pos-1) for pos, ids in enumerate(input_tokens) if ids == model_config.visual["image_start_id"]+1]
-
-        # check token
-        if len(subinput_pos) != len(subinput_end):
-            raise RuntimeError(f"len(subinput_pos) != len(subinput_end), please check your prompt.")
-        
-        subinput_url = []
-        for i in range(len(subinput_pos)):
-            url = input_tokens[subinput_pos[i]:subinput_end[i]]
-            url = url[:url.index(model_config.visual['image_start_id'] + 2)]
-            subinput_url.append(bytes(url).decode('utf-8'))
-
-        kwargs["subinput_pos"] = subinput_pos
-        kwargs["subinput_url"] = subinput_url
-
-    return kwargs
-
 async def process_request(request_dict: Dict[str, Any]) -> Response:
     """Generate completion for the request.
 
@@ -166,26 +142,25 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
 
-    subinput_pos = request_dict.pop("subinput_pos", None)
-    subinput_embedding = request_dict.pop("subinput_embedding", None)
-    subinput_url = request_dict.pop("subinput_url", None)
+    input_refit_embedding = request_dict.pop("input_refit_embedding", None)
     prompt_probs_offset = request_dict.pop("prompt_probs_offset", None)
 
     input_tokens = request_dict.pop("input_tokens", None)
     if input_tokens is None:
        input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
-    kwargs = {}
-    if subinput_pos is not None:
-        kwargs['subinput_pos'] = subinput_pos
-    if subinput_embedding is not None:
-        kwargs['subinput_embedding'] = subinput_embedding
-    if subinput_url is not None:
-        kwargs['subinput_url'] = subinput_url
+    kwargs = {
+        "input_refit_embedding": {}
+    }
+    
+    if input_refit_embedding is not None and "pos" in input_refit_embedding:
+        kwargs['input_refit_embedding']["pos"] = input_refit_embedding["pos"]
+
+    if input_refit_embedding is not None and "embeddings" in input_refit_embedding:
+        kwargs['input_refit_embedding']["embeddings"] = input_refit_embedding["embeddings"]
+
     if prompt_probs_offset is not None:
         kwargs['prompt_probs_offset'] = prompt_probs_offset
-
-    kwargs = update_resources(input_tokens, kwargs)
 
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)

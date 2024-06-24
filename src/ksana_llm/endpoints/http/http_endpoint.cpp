@@ -50,9 +50,7 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
     std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input);
     req->model_name = http_req.get_param_value("model_name");
 
-    req->subinput_pos = {};
-
-    req->subinput_url = {};
+    req->input_refit_embedding.pos = {};
 
     int input_tokens_length = std::stoi(http_req.get_param_value("tokens_len", 0));
     std::vector<int> tokens_vec(input_tokens_length);

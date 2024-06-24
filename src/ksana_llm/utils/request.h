@@ -43,6 +43,17 @@ struct SamplingConfig {
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;
 
+struct EmbeddingSlice{
+  // The pos indicates the start position of the embedding to be replaced.     
+  std::vector<int> pos;
+
+  // embeddings is the embedding value to be used for the replacement, from the request.          
+  std::vector<std::vector<float>> embeddings;
+
+  // The same as embeddings but is python object
+  std::vector<py::object> embedding_tensors;
+};
+
 struct KsanaPythonInput {
   // The requested model name.
   std::string model_name;
@@ -53,17 +64,8 @@ struct KsanaPythonInput {
   // The tokens of this request.
   std::vector<int> input_tokens;
 
-  // The subinput_pos indicates the start position of the embedding to be replaced.
-  std::vector<int> subinput_pos;
-
-  // The subinput_embedding is the embedding value to be used for the replacement, from the request.
-  std::vector<std::vector<float>> subinput_embedding;
-
-  // Preprocessing plugin usage
-  std::vector<py::object> subinput_embedding_tensors;
-
-  // The subinput_url is the multimodal resources url
-  std::vector<std::string> subinput_url;
+  // Embedding slice used to refit input embedding    
+  EmbeddingSlice input_refit_embedding; 
 
   // The offsets of the tokens for the prompt_probs that need to be returned.
   size_t prompt_probs_offset = 0;
@@ -105,14 +107,8 @@ class Request {
   // Probs of specific tokens at certain positions in the prompt.
   std::vector<float> prompt_probs;
 
-  // The subinput_pos indicates the start position of the embedding to be replaced.
-  std::vector<int> subinput_pos;
-
-  // The subinput_embedding is the embedding value to be used for the replacement, from the request.
-  std::vector<std::vector<float>> subinput_embedding;
-
-  // The subinput_url is the multimodal resources url
-  std::vector<std::string> subinput_url;
+  // Embedding slice used to refit input embedding    
+  EmbeddingSlice input_refit_embedding; 
 
   // TODO(zakwang): Replace output_tokens
   std::vector<OutputTuple> output_group;

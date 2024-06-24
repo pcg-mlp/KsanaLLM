@@ -103,10 +103,12 @@ TEST_F(LlamaTest, ForwardTest) {
   forward.logits_buf.resize(1);
   forward.logits_buf[0] = llama->GetLogitsPtr();
   forward.logits_offset = 0;
-  std::vector<int> subinput_pos;
-  std::vector<std::vector<float>> subinput_embedding;
-  forward.subinput_pos = &subinput_pos;
-  forward.subinput_embedding = &subinput_embedding;
+  std::vector<int> input_refit_pos;
+  std::vector<std::vector<float>> input_refit_embedding;
+  EmbeddingSlice embedding_slice;
+  embedding_slice.pos = input_refit_pos;
+  embedding_slice.embeddings = input_refit_embedding;
+  forward.input_refit_embedding = &embedding_slice;
   std::vector<int> block_ids;
   GetBlockManager()->AllocateBlocks(1, block_ids);
   forward.kv_cache_ptrs.resize(1);

@@ -11,6 +11,12 @@
 
 namespace ksana_llm {
 
+struct InputRefitCPUTensor{
+  // Tensor to hold pairs(pos, data_length) of positions for input_refit on the CPU.
+  Tensor pos_pair_tensor;
+  Tensor emb_fp32_ptr_tensor;
+};
+
 // Convert input ids to expected format.
 class ModelInput {
  public:
@@ -32,7 +38,7 @@ class ModelInput {
 
   void PrepareDecodeInputIds(const std::vector<ForwardRequest>& forward_reqs);
 
-  void PrepareSubinput(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
 
  public:
   // The input batch size.
@@ -86,9 +92,8 @@ class ModelInput {
   Tensor kv_list;
   std::vector<void*> cpu_kv_list;
 
-  // Tensor to hold pairs(pos, data_length) of positions for subinputs on the CPU.
-  Tensor cpu_subinput_pos_pair_tensor;
-  Tensor cpu_subinput_emb_fp32_ptr_tensor;
+  // Tensors to hold pairs(pos, data_length) and embeddings ptr of positions for input_refit on the CPU.
+  InputRefitCPUTensor cpu_input_refit_tensor;
 
   Event kvcache_offset_event;
   Event rotary_embedding_event;

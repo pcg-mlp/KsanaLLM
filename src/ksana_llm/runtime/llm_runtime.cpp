@@ -67,9 +67,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
     forward_req.logits_offset = req_ptr->logits_offset;
     forward_req.output_tokens = &(req_ptr->output_tokens);
-    forward_req.subinput_pos = &(req_ptr->subinput_pos);
-    forward_req.subinput_embedding = &(req_ptr->subinput_embedding);
-    forward_req.subinput_url = &(req_ptr->subinput_url);
+    forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
     // For the first request, it is enforced to be non-reusable computation.
     forward_req.prefix_cache_len = req_ptr->req_id == 1 ? 0 : req_ptr->prefix_cache_len;

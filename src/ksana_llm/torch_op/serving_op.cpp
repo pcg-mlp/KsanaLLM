@@ -91,6 +91,13 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("stop_token_ids", &ksana_llm::SamplingConfig::stop_token_ids)
       .def_readwrite("ignore_eos", &ksana_llm::SamplingConfig::ignore_eos);
 
+  // Export `EmbeddingSlice` to python.
+  pybind11::class_<ksana_llm::EmbeddingSlice, std::shared_ptr<ksana_llm::EmbeddingSlice>>(m, "EmbeddingSlice")
+      .def(pybind11::init<>())
+      .def_readwrite("pos", &ksana_llm::EmbeddingSlice::pos)
+      .def_readwrite("embeddings", &ksana_llm::EmbeddingSlice::embeddings)
+      .def_readwrite("embedding_tensors", &ksana_llm::EmbeddingSlice::embedding_tensors);
+
   // Export `KsanaPythonInput` to python.
   pybind11::class_<ksana_llm::KsanaPythonInput, std::shared_ptr<ksana_llm::KsanaPythonInput>>(m, "KsanaPythonInput")
       .def(pybind11::init<>())
@@ -98,10 +105,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("sampling_config", &ksana_llm::KsanaPythonInput::sampling_config)
       .def_readwrite("input_tokens", &ksana_llm::KsanaPythonInput::input_tokens)
       .def_readwrite("prompt_probs_offset", &ksana_llm::KsanaPythonInput::prompt_probs_offset)
-      .def_readwrite("subinput_pos", &ksana_llm::KsanaPythonInput::subinput_pos)
-      .def_readwrite("subinput_embedding", &ksana_llm::KsanaPythonInput::subinput_embedding)
-      .def_readwrite("subinput_embedding_tensors", &ksana_llm::KsanaPythonInput::subinput_embedding_tensors)
-      .def_readwrite("subinput_url", &ksana_llm::KsanaPythonInput::subinput_url);
+      .def_readwrite("input_refit_embedding", &ksana_llm::KsanaPythonInput::input_refit_embedding);
 
   // Export `KsanaPythonOutput` to python.
   pybind11::class_<ksana_llm::KsanaPythonOutput, std::shared_ptr<ksana_llm::KsanaPythonOutput>>(m, "KsanaPythonOutput")

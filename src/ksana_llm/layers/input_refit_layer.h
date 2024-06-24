@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-class SubinputLayer : public BaseLayer {
+class InputRefitLayer : public BaseLayer {
  public:
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
   void Clear() { cast_tensor_vec_.clear(); }

@@ -75,10 +75,10 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(
       CreateTensor(input_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
-  STATUS_CHECK_FAILURE(CreateTensor(cpu_subinput_pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_,
+  STATUS_CHECK_FAILURE(CreateTensor(cpu_input_refit_tensor.pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_,
                                     MemoryDevice::MEMORY_HOST));
   STATUS_CHECK_FAILURE(
-      CreateTensor(cpu_subinput_emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_, MemoryDevice::MEMORY_HOST));
+      CreateTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_, MemoryDevice::MEMORY_HOST));
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
@@ -89,8 +89,8 @@ ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(input_ids, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_offset_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(prompt_probs_offset_uint64_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(cpu_subinput_pos_pair_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(cpu_subinput_emb_fp32_ptr_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.pos_pair_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_tokens_int32_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_pos, rank_));
@@ -138,7 +138,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
     PrepareKVCacheBlocks(forward_reqs);
     PreparePrefillPositionIds(forward_reqs);
     PreparePrefillInputIds(forward_reqs);
-    PrepareSubinput(forward_reqs);
+    PrepareInputRefit(forward_reqs);
   } else {
     PrepareKVCacheBlocks(forward_reqs);
     PrepareDecodePositionIds(forward_reqs);
@@ -197,28 +197,28 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
 }
 
-void ModelInput::PrepareSubinput(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs) {
   size_t pos = 0;
-  size_t cpu_subinput_pos_pair_idx = 0;
-  // Get pointers to the CPU subinput position pair and CPU subinput embedding float32 tensors
-  int64_t* cpu_subinput_pos_pair = reinterpret_cast<int64_t*>(cpu_subinput_pos_pair_tensor.GetPtr<void>());
-  void** cpu_subinput_emb_fp32_ptr = reinterpret_cast<void**>(cpu_subinput_emb_fp32_ptr_tensor.GetPtr<void>());
+  size_t cpu_input_refit_pos_pair_idx = 0;
+  // Get pointers to the CPU input_refit position pair and CPU input_refit embedding float32 tensors
+  int64_t* cpu_input_refit_pos_pair = reinterpret_cast<int64_t*>(cpu_input_refit_tensor.pos_pair_tensor.GetPtr<void>());
+  void** cpu_input_refit_emb_fp32_ptr = reinterpret_cast<void**>(cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<void>());
 
   for (size_t bs_idx = 0; bs_idx < batch_size; ++bs_idx) {
     const ForwardRequest& forward_req = forward_reqs[bs_idx];
-    std::vector<int>& subinput_pos = *forward_req.subinput_pos;
-    std::vector<std::vector<float>>& subinput_embedding = *forward_req.subinput_embedding;
-    // Iterate over the subinput positions and embeddings
-    for (size_t subinput_idx = 0; subinput_idx < subinput_pos.size() && subinput_idx < subinput_embedding.size();
-         subinput_idx++) {
-      cpu_subinput_emb_fp32_ptr[cpu_subinput_pos_pair_idx >> 1] = subinput_embedding[subinput_idx].data();
-      cpu_subinput_pos_pair[cpu_subinput_pos_pair_idx++] = subinput_pos[subinput_idx] + pos;
-      cpu_subinput_pos_pair[cpu_subinput_pos_pair_idx++] = subinput_embedding[subinput_idx].size();
+    std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
+    std::vector<std::vector<float>>& input_refit_embedding = (*forward_req.input_refit_embedding).embeddings;
+    // Iterate over the input_refit positions and embeddings
+    for (size_t input_refit_idx = 0; input_refit_idx < input_refit_pos.size() && input_refit_idx < input_refit_embedding.size();
+         input_refit_idx++) {
+      cpu_input_refit_emb_fp32_ptr[cpu_input_refit_pos_pair_idx >> 1] = input_refit_embedding[input_refit_idx].data();
+      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx++] = input_refit_pos[input_refit_idx] + pos;
+      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx++] = input_refit_embedding[input_refit_idx].size();
     }
     pos += forward_req.output_tokens->size();
   }
-  cpu_subinput_emb_fp32_ptr_tensor.shape = {cpu_subinput_pos_pair_idx / 2};
-  cpu_subinput_pos_pair_tensor.shape = {cpu_subinput_pos_pair_idx / 2, 2};
+  cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape = {cpu_input_refit_pos_pair_idx / 2};
+  cpu_input_refit_tensor.pos_pair_tensor.shape = {cpu_input_refit_pos_pair_idx / 2, 2};
 }
 
 void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& forward_reqs) {

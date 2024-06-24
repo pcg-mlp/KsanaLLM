@@ -12,7 +12,7 @@
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
-#include "ksana_llm/layers/subinput_layer.h"
+#include "ksana_llm/layers/input_refit_layer.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/optional_file.h"
@@ -93,7 +93,7 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> lm_head_proj_layer_;
   std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
   std::shared_ptr<CastLayer<T>> cast_layer_;
-  std::shared_ptr<SubinputLayer<T>> subinput_layer_;
+  std::shared_ptr<InputRefitLayer<T>> input_refit_layer_;
 
   std::shared_ptr<py::object> plugin_;
 

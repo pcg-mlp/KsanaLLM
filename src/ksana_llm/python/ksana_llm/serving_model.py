@@ -201,15 +201,11 @@ class ServingModel(object):
         sampling_config.ignore_eos = \
             get_generation_value(generation_config, 'ignore_eos', False)
 
+        if 'input_refit_embedding' in kwargs and 'pos' in kwargs['input_refit_embedding']:
+            ksana_python_input.input_refit_embedding.pos = kwargs['input_refit_embedding']['pos']
 
-        if 'subinput_pos' in kwargs:
-            ksana_python_input.subinput_pos = kwargs['subinput_pos']
-
-        if 'subinput_embedding' in kwargs:
-            ksana_python_input.subinput_embedding = kwargs['subinput_embedding']
-
-        if 'subinput_url' in kwargs:
-            ksana_python_input.subinput_url = kwargs['subinput_url']
+        if 'input_refit_embedding' in kwargs and 'embeddings' in kwargs['input_refit_embedding']:
+            ksana_python_input.input_refit_embedding.embeddings = kwargs['input_refit_embedding']['embeddings']
 
         if 'prompt_probs_offset' in kwargs:
             ksana_python_input.prompt_probs_offset = kwargs['prompt_probs_offset']

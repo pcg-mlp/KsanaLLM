@@ -53,8 +53,10 @@ if __name__ == "__main__":
         data = {
             # Set the prompt for the request
             "prompt": prompt,
-            # "subinput_pos": [6,6,6],
-            # "subinput_embedding": [[1.0,2.0],[3.0,4.0]],
+            # "input_refit_embedding": {
+            #     "pos": [20,285,550],
+            #     "embeddings": [[1.0,2.0,...],[3.0,4.0,...],[5.0,6.0,...]],
+            # },
         }
 
         # Create a new process to handle the post request

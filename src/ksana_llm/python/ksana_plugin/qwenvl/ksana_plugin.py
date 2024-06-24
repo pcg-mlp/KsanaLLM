@@ -28,15 +28,15 @@ class KsanaPlugin:
             modelpath = kwargs["model_path"]
 
             # read config
-            config = AutoConfig.from_pretrained(modelpath, trust_remote_code=True)
-            precision = config.torch_dtype
+            self.config = AutoConfig.from_pretrained(modelpath, trust_remote_code=True)
+            precision = self.config.torch_dtype
 
             # get visual model
             spec = importlib.util.spec_from_file_location(modelpath, f'{modelpath}/visual.py')
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             VisionTransformer = getattr(module, "VisionTransformer")
-            visual = VisionTransformer(**config.visual)
+            visual = VisionTransformer(**self.config.visual)
 
             # read weight map
             weight_map_json = glob(os.path.join(modelpath, "*index.json"))
@@ -86,12 +86,22 @@ class KsanaPlugin:
             raise RuntimeError(f"Check input failed.")
         ksana_python_input = kwargs['ksana_python_input']
 
-        image_url = ksana_python_input.subinput_url
+        input_tokens = ksana_python_input.input_tokens
+        url_srt = [int(pos+1) for pos, ids in enumerate(input_tokens) if ids == self.config.visual["image_start_id"]]
+        url_end = [int(pos-1) for pos, ids in enumerate(input_tokens) if ids == self.config.visual["image_start_id"]+1]
+        image_url = []
+        for i in range(len(url_srt)):
+            url = input_tokens[url_srt[i]:url_end[i]]
+            url = url[:url.index(self.config.visual['image_start_id']+2)]
+            image_url.append(bytes(url).decode('utf-8'))
+
         if (len(image_url) == 0):
             return
         with torch.no_grad():
             image_embedding = self.visual.encode(image_url)
-        ksana_python_input.subinput_embedding_tensors = torch.unbind(image_embedding.cpu().float())
+
+        ksana_python_input.input_refit_embedding.pos = url_srt
+        ksana_python_input.input_refit_embedding.embedding_tensors = torch.unbind(image_embedding.cpu().float())
 
     # Method for post-processing
     def postprocess(self, **kwargs):
