@@ -221,12 +221,12 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
                                                              output_type, model_config_, {}, context_, rank_);
 
   // get maximum matmul workspace size and malloc workspace buffer
-  std::vector<int> each_size = {
+  std::vector<size_t> each_size = {
       attn_qkv_proj_layer_->GetWorkSpaceSize(), attn_o_proj_layer_->GetWorkSpaceSize(),
       mlp_gate_proj_layer_->GetWorkSpaceSize(), mlp_up_proj_layer_->GetWorkSpaceSize(),
       mlp_down_proj_layer_->GetWorkSpaceSize(), lm_head_proj_layer_->GetWorkSpaceSize(),
   };
-  int shared_matmul_workspace_buffer_size = *std::max_element(each_size.begin(), each_size.end());
+  size_t shared_matmul_workspace_buffer_size = *std::max_element(each_size.begin(), each_size.end());
   if (shared_matmul_workspace_buffer_size > 0) {
     STATUS_CHECK_FAILURE(CreateBufferTensor(shared_matmul_workspace_buffer_,
                                             {static_cast<size_t>(shared_matmul_workspace_buffer_size)}, TYPE_UINT8));

@@ -24,6 +24,24 @@ class LlamaNvidiaCastTestSuit : public NvidiaTestSuitBase {
   using NvidiaTestSuitBase::stream;
 };
 
+TEST_F(LlamaNvidiaCastTestSuit, ConvertFloatToHalfTest) {
+  const std::vector<size_t> test_data_size = {1ul, 1024ul, 32768ul};
+  for (size_t input_data_size : test_data_size) {
+    BufferMeta input = CreateBuffer<float>(MemoryType::MEMORY_GPU, {input_data_size}, /*is_random_init*/ true);
+    BufferMeta input_host_reference = CopyToHost<float>(input);
+    BufferMeta output_device = CreateBuffer<half>(MemoryType::MEMORY_GPU, {input_data_size}, /*is_random_init*/ false);
+    FloatToHalf(reinterpret_cast<float*>(input.data_ptr), input_data_size,
+                reinterpret_cast<half*>(output_device.data_ptr), stream);
+    BufferMeta output_host = CopyToHost<half>(output_device);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+    for (size_t idx = 0ul; idx < input_data_size; ++idx) {
+      half* output_ptr = reinterpret_cast<half*>(output_host.data_ptr);
+      float* output_ref_ptr = reinterpret_cast<float*>(input_host_reference.data_ptr);
+      EXPECT_TRUE((half_float::half)(output_ptr[idx]) == (half_float::half)(output_ref_ptr[idx]));
+    }
+  }
+}
+
 TEST_F(LlamaNvidiaCastTestSuit, ConvertHalfToFloatVectorizeTest) {
   const std::vector<size_t> test_data_size = {1ul, 1024ul, 32768ul};
   for (size_t input_data_size : test_data_size) {

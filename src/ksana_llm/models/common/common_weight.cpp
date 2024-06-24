@@ -571,6 +571,17 @@ void CommonWeight<T>::ProcessWeights() {
   if (weights_map_.find(up_proj_name) == weights_map_.end()) {
     ChunkGateWeight(num_layer);
   }
+
+  if (model_config_.is_quant && model_config_.quant_config.method == QUANT_FP8_E4M3 &&
+      model_config_.quant_config.is_checkpoint_fp8_serialized == false) {
+#ifdef ENABLE_FP8
+    quant_weight_slover_->ConvertFp8E4m3(num_layer);
+#else
+    KLLM_LOG_ERROR << "Device not support Fp8";
+    throw std::runtime_error("Device not support Fp8");
+#endif
+  }
+  StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
 }
 
 template <typename T>

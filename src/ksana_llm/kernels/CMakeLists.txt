@@ -18,7 +18,8 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_assemble_last_token llm_kernels_nvidia_kernel_cast
     llm_kernels_nvidia_kernel_rotary_embedding llm_kernels_nvidia_kernel_all_reduce
     llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi
-    llm_kernels_nvidia_kernel_greedy llm_kernels_nvidia_kernel_asymmetric_gemm)
+    llm_kernels_nvidia_kernel_greedy llm_kernels_nvidia_kernel_asymmetric_gemm
+    llm_kernels_nvidia_utils)
 endif()
 
 message(STATUS "nvidia_kernels_SRCS: ${nvidia_kernels_SRCS}")

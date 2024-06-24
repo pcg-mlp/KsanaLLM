@@ -22,7 +22,7 @@ Status GPTQMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, std
 }
 
 template <typename T, DataType WT>
-int GPTQMatMulLayer<T, WT>::GetWorkSpaceSize() {
+size_t GPTQMatMulLayer<T, WT>::GetWorkSpaceSize() {
   size_t max_ws_bytes;
   if constexpr (WT == TYPE_I4_G128) {
     GetFpAIntBGPTQGemmWorkspaceSize<T, llm_kernels::nvidia::WeightType::INT4>(max_m, max_n, max_k, max_ws_bytes);

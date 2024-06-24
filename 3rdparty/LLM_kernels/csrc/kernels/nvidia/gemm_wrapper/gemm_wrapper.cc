@@ -42,7 +42,7 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, float f_alpha, float f_beta,
                                 cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
-                                cublasLtMatmulAlgo_t* cublaslt_algo) {
+                                cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale, const void* b_scale) {
   // NOTE(karlluo): half no static cast in regular c_ptr++
   half h_alpha = (half)(f_alpha);
   half h_beta = (half)(f_beta);
@@ -83,7 +83,14 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
       cublasLtMatmulDescSetAttribute(operation_desc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(cublasOperation_t)));
   RETURN_NVIDIA_CUBLAS_ERROR(
       cublasLtMatmulDescSetAttribute(operation_desc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(cublasOperation_t)));
-
+  if (a_scale != nullptr) {
+    RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescSetAttribute(operation_desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                                              &a_scale, sizeof(a_scale)));
+  }
+  if (b_scale != nullptr) {
+    RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescSetAttribute(operation_desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                                              &b_scale, sizeof(b_scale)));
+  }
   // TODO(karlluo): get from GetCublasWorkspaceSize()
   size_t workspace_size = workspace_ptr == nullptr ? 0ul : DEFAULT_CUBLAS_WORKSPACE_SIZE;
   bool is_use_cublaslt_algo = (cublaslt_algo != nullptr) && (workspace_size > 0);

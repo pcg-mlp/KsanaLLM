@@ -7,6 +7,7 @@ namespace ksana_llm {
 
 // The minimum cuda version that support mempool.
 constexpr int CUDA_MEMPOOL_MIN_DRIVER_VERSION = 11030;
+constexpr int CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION = 120103;
 
 template <int T>
 void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
@@ -50,6 +51,8 @@ void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
   CUDA_CHECK(cublasLtCreate(&cublaslt_handle));
   cublas_handles_.emplace_back(cublas_handle);
   cublaslt_handles_.emplace_back(cublaslt_handle);
+
+  base_ptr_->is_gemm_fp8_supported_ = (cublasLtGetVersion() >= CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION);
 
   // binding compute stream to cublas
   CUDA_CHECK(cublasSetStream(cublas_handles_[worker_id], base_ptr_->compute_streams_[worker_id].Get()));

@@ -19,7 +19,7 @@ class BaseLayer {
     return Status();
   }
 
-  virtual int GetWorkSpaceSize() { return 0; }
+  virtual size_t GetWorkSpaceSize() { return 0; }
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 

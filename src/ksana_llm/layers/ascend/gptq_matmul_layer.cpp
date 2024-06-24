@@ -12,7 +12,7 @@ Status GPTQMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, std
 }
 
 template <typename T, DataType WT>
-int GPTQMatMulLayer<T, WT>::GetWorkSpaceSize() {
+size_t GPTQMatMulLayer<T, WT>::GetWorkSpaceSize() {
   return 0;
 }
 

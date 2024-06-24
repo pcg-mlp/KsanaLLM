@@ -62,7 +62,8 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, float f_alpha, float f_beta,
                                 cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
-                                cublasLtMatmulAlgo_t* cublaslt_algo);
+                                cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale = nullptr,
+                                const void* b_scale = nullptr);
 
 cublasStatus_t InvokeCublasStridedBatchedGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
                                               cublasOperation_t transa, cublasOperation_t transb, const int32_t m,

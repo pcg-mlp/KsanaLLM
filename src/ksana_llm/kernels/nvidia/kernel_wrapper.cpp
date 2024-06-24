@@ -601,4 +601,37 @@ INSTANTIATE_ARG_MAX(__nv_bfloat16);
 
 #undef INSTANTIATE_ARG_MAX
 
+#ifdef ENABLE_FP8
+#  define INSTANTIATE_FP8_DYNAMIC_QUANTIZE(T)                                                                         \
+    template <>                                                                                                       \
+    void Fp8DynamicQuantize<T>(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr,               \
+                               float* scale_ptr, cudaStream_t& stream) {                                              \
+      llm_kernels::utils::InvokeComputeFP8QuantizeScale<T>(scale_ptr, input_ptr, num_channels, channel_size, stream); \
+      llm_kernels::utils::InvokeQuantizeMatrix<__nv_fp8_e4m3, T>(static_cast<__nv_fp8_e4m3*>(quant_ptr), scale_ptr,   \
+                                                                 input_ptr, num_channels, channel_size, stream);      \
+    }
+INSTANTIATE_FP8_DYNAMIC_QUANTIZE(float);
+INSTANTIATE_FP8_DYNAMIC_QUANTIZE(half);
+#  ifdef ENABLE_BFLOAT16
+INSTANTIATE_FP8_DYNAMIC_QUANTIZE(__nv_bfloat16);
+#  endif
+#  undef INSTANTIATE_FP8_DYNAMIC_QUANTIZE
+
+#  define INVOKE_FP8_QUANTIZED_MATMUL(T, CUDA_TYPE)                                                                 \
+    template <>                                                                                                     \
+    void Fp8QuantizedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k, \
+                               const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale,      \
+                               T* c_ptr, cudaStream_t& stream) {                                                    \
+      CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                             \
+          cublas_handle, cublaslt_handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, b_ptr, k, CUDA_R_8F_E4M3, a_ptr, k,    \
+          CUDA_R_8F_E4M3, c_ptr, n, CUDA_TYPE, 1.0f, 0.f, CUDA_R_32F, stream, nullptr, nullptr, a_scale, b_scale)); \
+    }
+
+INVOKE_FP8_QUANTIZED_MATMUL(float, CUDA_R_32F);
+INVOKE_FP8_QUANTIZED_MATMUL(half, CUDA_R_16F);
+#  ifdef ENABLE_BFLOAT16
+INVOKE_FP8_QUANTIZED_MATMUL(__nv_bfloat16, CUDA_R_16BF);
+#  endif
+#  undef INVOKE_FP8_QUANTIZED_MATMUL
+#endif
 }  // namespace ksana_llm

@@ -19,12 +19,14 @@ class MatMulLayerFactory {
     builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, QUANT_NONE}] = &MatMulLayerFactory<T>::BuildLayer<MatMulLayer<T>>;
     builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, QUANT_NONE}] = &MatMulLayerFactory<T>::BuildLayer<MatMulLayer<T>>;
     builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, QUANT_NONE}] = &MatMulLayerFactory<T>::BuildLayer<MatMulLayer<T>>;
-    builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_NONE}] =
+#ifdef ENABLE_FP8
+    builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_FP8_E4M3}] =
         &MatMulLayerFactory<T>::BuildLayer<Fp8MatMulLayer<T>>;
-    builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_NONE}] =
+    builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_FP8_E4M3}] =
         &MatMulLayerFactory<T>::BuildLayer<Fp8MatMulLayer<T>>;
-    builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_NONE}] =
+    builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_FP8_E4M3}] =
         &MatMulLayerFactory<T>::BuildLayer<Fp8MatMulLayer<T>>;
+#endif
     builder_map_[{TYPE_I4_G128, TYPE_FP16, TYPE_FP16, QUANT_GPTQ}] =
         &MatMulLayerFactory<T>::BuildLayer<GPTQMatMulLayer<T, TYPE_I4_G128>>;
   }
@@ -37,7 +39,7 @@ class MatMulLayerFactory {
                                              ModelConfig& model_config_, const std::vector<std::any>& init_params,
                                              std::shared_ptr<Context> context, int rank) {
     // gptq layer
-    if (model_config_.is_quant && model_config_.quant_config.method == "gptq") {
+    if (model_config_.is_quant && model_config_.quant_config.method == QUANT_GPTQ) {
       if (weight_name != "lm_head.weight") {  // skip lm_head
         std::vector<std::any> gptq_matmul_param;
         gptq_matmul_param.push_back(model_config_.max_token_num);
@@ -46,6 +48,18 @@ class MatMulLayerFactory {
         gptq_matmul_param.push_back(model_config_.quant_config.group_size);
         return CreateLayer(TYPE_I4_G128, input_type, output_type, gptq_matmul_param, context, rank, QUANT_GPTQ);
       }
+    }
+    // fp8 layer
+    if (base_weight->GetModelWeights(weight_name).dtype == TYPE_FP8_E4M3) {
+      std::vector<std::any> fp8_matmul_params;
+      fp8_matmul_params.push_back(model_config_.max_scheduler_token_num);
+      size_t inter_size = model_config_.inter_size;
+      size_t head_num = model_config_.head_num;
+      size_t num_kv_heads = model_config_.num_key_value_heads;
+      size_t size_per_head = model_config_.size_per_head;
+      fp8_matmul_params.push_back(
+          std::max(std::max(inter_size, (head_num + 2 * num_kv_heads) * size_per_head), head_num * size_per_head * 2));
+      return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_matmul_params, context, rank, QUANT_FP8_E4M3);
     }
     // default layer
     return CreateLayer(base_weight, weight_name, input_type, output_type, init_params, context, rank, QUANT_NONE);

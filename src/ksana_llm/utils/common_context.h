@@ -39,6 +39,8 @@ class ContextT {
 
   std::vector<Stream>& GetNCCLStreams() { return nccl_streams_; }
 
+  inline bool IsGemmFp8Supported() { return is_gemm_fp8_supported_; }
+
  public:
   friend class ExtensionTypeTraits<T>::value_type;
   typename ExtensionTypeTraits<T>::value_type* ext = nullptr;
@@ -56,6 +58,7 @@ class ContextT {
   // if true, only one thread execute context_decode/decode and context_decode decode run in sync
   // TODO(karlluo): load from environment
   bool is_contextdecode_and_decode_run_serially_{true};
+  bool is_gemm_fp8_supported_{false};
 
   // streams
   std::vector<Stream> memory_manage_streams_;

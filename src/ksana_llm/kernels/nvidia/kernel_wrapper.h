@@ -93,4 +93,14 @@ void Mul(float* a, float* b, float* c, int n, int device_rank);
 void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, int logprobs_num, float* logprobs,
                   int64_t* token_ids);
 
+#ifdef ENABLE_FP8
+template <typename T>
+void Fp8DynamicQuantize(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr, float* scale_ptr,
+                        cudaStream_t& stream);
+
+template <typename T>
+void Fp8QuantizedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
+                        const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale, T* c_ptr,
+                        cudaStream_t& stream);
+#endif
 }  // namespace ksana_llm

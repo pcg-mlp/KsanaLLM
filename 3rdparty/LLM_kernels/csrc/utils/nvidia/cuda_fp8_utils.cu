@@ -23,43 +23,38 @@ namespace llm_kernels {
 namespace utils {
 #ifdef ENABLE_FP8
 
-template <typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
-__global__ void QuantizeMatrix(T_OUT* output, float const* input_scale, T_IN const* input, uint32_t size, uint32_t n) {
-  for (uint32_t i = threadIdx.x + blockIdx.x * blockDim.x; i < size; i += blockDim.x * gridDim.x) {
-    if (quantize_mode == QUANTIZE_MODE::PER_CHANNEL) {
-      output[i] = T_OUT((float)(input[i]) * __ldg(input_scale + (i % n)));
-    } else {
-      output[i] = T_OUT((float)(input[i]) * __ldg(input_scale));
-    }
+template <typename T_OUT, typename T_IN>
+__global__ void QuantizeMatrix(T_OUT* output, float const* scale, T_IN const* input, uint32_t num_channels,
+                               uint32_t channel_size) {
+  uint32_t k = threadIdx.x + blockIdx.x * blockDim.x;
+  uint32_t n = blockIdx.y;
+  if (n < num_channels && k < channel_size) {
+    output[n * channel_size + k] =
+        (T_OUT)(min(max((float)(input[n * channel_size + k]) / __ldg(scale + n), -FP8_E4M3_MAX), FP8_E4M3_MAX));
   }
 }
 
-template <typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
-void InvokeQuantizeMatrix(T_OUT* output, float const* input_scale, T_IN const* input, uint32_t size, uint32_t n,
-                          cudaStream_t stream) {
-  dim3 grid(DEFAULT_CUDA_WARP_SIZE);
+template <typename T_OUT, typename T_IN>
+void InvokeQuantizeMatrix(T_OUT* output, float const* scale, T_IN const* input, uint32_t num_channels,
+                          uint32_t channel_size, cudaStream_t stream) {
+  dim3 grid((channel_size + DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM,
+            num_channels);
   dim3 block(DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
-  QuantizeMatrix<T_OUT, T_IN, quantize_mode><<<grid, block, 0, stream>>>(output, input_scale, input, size, n);
+  QuantizeMatrix<T_OUT, T_IN><<<grid, block, 0, stream>>>(output, scale, input, num_channels, channel_size);
 }
 
-#  define INVOKE_QUANTIZE_MATRIX(type_out, type_in, mode)                                                        \
-    template void InvokeQuantizeMatrix<type_out, type_in, mode>(type_out * output, float const* input_scale,     \
-                                                                type_in const* input, uint32_t size, uint32_t n, \
-                                                                cudaStream_t stream);
+#  define INVOKE_QUANTIZE_MATRIX(type_out, type_in)                                                                    \
+    template void InvokeQuantizeMatrix<type_out, type_in>(type_out * output, float const* scale, type_in const* input, \
+                                                          uint32_t num_channels, uint32_t channel_size,                \
+                                                          cudaStream_t stream);
 
-INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, float, QUANTIZE_MODE::PER_CHANNEL);
-INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, float, QUANTIZE_MODE::PER_TENSOR);
-INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, half, QUANTIZE_MODE::PER_CHANNEL);
-INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, half, QUANTIZE_MODE::PER_TENSOR);
-INVOKE_QUANTIZE_MATRIX(half, __nv_fp8_e4m3, QUANTIZE_MODE::PER_CHANNEL);
-INVOKE_QUANTIZE_MATRIX(half, __nv_fp8_e4m3, QUANTIZE_MODE::PER_TENSOR);
-INVOKE_QUANTIZE_MATRIX(float, __nv_fp8_e4m3, QUANTIZE_MODE::PER_CHANNEL);
-INVOKE_QUANTIZE_MATRIX(float, __nv_fp8_e4m3, QUANTIZE_MODE::PER_TENSOR);
+INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, float);
+INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, half);
+INVOKE_QUANTIZE_MATRIX(half, __nv_fp8_e4m3);
+INVOKE_QUANTIZE_MATRIX(float, __nv_fp8_e4m3);
 #  ifdef ENABLE_BF16
-INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, __nv_bfloat16, QUANTIZE_MODE::PER_CHANNEL);
-INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, __nv_bfloat16, QUANTIZE_MODE::PER_TENSOR);
-INVOKE_QUANTIZE_MATRIX(__nv_bfloat16, __nv_fp8_e4m3, QUANTIZE_MODE::PER_CHANNEL);
-INVOKE_QUANTIZE_MATRIX(__nv_bfloat16, __nv_fp8_e4m3, QUANTIZE_MODE::PER_TENSOR);
+INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, __nv_bfloat16);
+INVOKE_QUANTIZE_MATRIX(__nv_bfloat16, __nv_fp8_e4m3);
 #  endif
 
 #  undef INVOKE_QUANTIZE_MATRIX
@@ -86,31 +81,61 @@ template void InvokeFakeQuantize<__nv_bfloat16, __nv_bfloat16, __nv_fp8_e4m3>(__
                                                                               const __nv_bfloat16* src,
                                                                               const int32_t size, cudaStream_t stream);
 
-template <typename T_W>
-__global__ void ComputeFP8QuantizeScaleKernel(float* quant_ptr, const T_W* weights, const int32_t k, const int32_t n) {
-  float max = -10000.f;
-  for (int32_t i = 0; i < k; i++) {
-    float val = fabs((float)weights[i * n + blockIdx.x * blockDim.x + threadIdx.x]);
-    max = max > val ? max : val;
+template <typename T_IN>
+__global__ void ComputeFP8QuantizeScaleKernel(float* output, const T_IN* input, const int32_t num_channels,
+                                              const int32_t channel_size) {
+  const int num_warps = DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM / DEFAULT_CUDA_WARP_SIZE;
+  __shared__ float shmem[num_warps];
+  int k = threadIdx.x + blockDim.x * blockIdx.x;
+  int n = blockIdx.y;
+  // min of fabs is 0.f
+  float scale = 0.f;
+  if (k < channel_size && n < num_channels) {
+    float val = fabs((float)(input[n * channel_size + k]));
+    scale = fabs(val);
   }
-  quant_ptr[blockIdx.x * blockDim.x + threadIdx.x] = std::max(max / FP8_E4M3_MAX, 1.0f / 32.f);
+  // warp_reduce
+  for (int offset = DEFAULT_CUDA_WARP_SIZE / 2; offset > 0; offset /= 2) {
+    scale = max(scale, __shfl_down_sync(0xFFFFFFFF, scale, offset));
+  }
+  // block_reduce
+  if (threadIdx.x % DEFAULT_CUDA_WARP_SIZE == 0) {
+    shmem[threadIdx.x / DEFAULT_CUDA_WARP_SIZE] = scale;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    for (int i = 0; i < num_warps; ++i) {
+      scale = max(scale, shmem[i]);
+    }
+  }
+  // grid reduce
+  if (threadIdx.x == 0) {
+    scale = max(scale / FP8_E4M3_MAX, FP8_E4M3_MIN_SCALE);
+    atomicMax(reinterpret_cast<unsigned int*>(output + n), __float_as_uint(scale));
+  }
 }
 
-template <typename T_W>
-void InvokeComputeFP8QuantizeScale(float* quant_ptr, const T_W* weights, const int32_t k, const int32_t n,
-                                   cudaStream_t stream) {
+template <typename T_IN>
+void InvokeComputeFP8QuantizeScale(float* output, const T_IN* input, const int32_t num_channels,
+                                   const int32_t channel_size, cudaStream_t stream) {
   dim3 block(DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
-  dim3 grid((n + DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
-  ComputeFP8QuantizeScaleKernel<T_W><<<grid, block, 0, stream>>>(quant_ptr, weights, k, n);
+  dim3 grid((channel_size + DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM,
+            num_channels);
+  // atomicMax compare origin data in output with new output.
+  cudaMemsetAsync(output, 0, sizeof(float) * num_channels, stream);
+  ComputeFP8QuantizeScaleKernel<T_IN><<<grid, block, 0, stream>>>(output, input, num_channels, channel_size);
 }
+
+template void InvokeComputeFP8QuantizeScale(float* output, const half* input, const int32_t num_channels,
+                                            const int32_t channel_size, cudaStream_t stream);
 
 #  ifdef ENABLE_BF16
-template void InvokeComputeFP8QuantizeScale(float* quant_ptr, const __nv_bfloat16* weights, const int32_t k,
-                                            const int32_t n, cudaStream_t stream);
+template void InvokeComputeFP8QuantizeScale(float* output, const __nv_bfloat16* input, const int32_t num_channels,
+                                            const int32_t channel_size, cudaStream_t stream);
 #  endif
 
-template void InvokeComputeFP8QuantizeScale(float* quant_ptr, const float* weights, const int32_t k, const int32_t n,
-                                            cudaStream_t stream);
+template void InvokeComputeFP8QuantizeScale(float* output, const float* input, const int32_t num_channels,
+                                            const int32_t channel_size, cudaStream_t stream);
 
 #endif  // ENABLE_FP8
 

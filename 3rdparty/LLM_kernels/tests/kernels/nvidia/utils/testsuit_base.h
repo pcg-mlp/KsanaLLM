@@ -314,7 +314,7 @@ class NvidiaTestSuitBase : public testing::Test {
   // is_random_init == false buffer will init with zero
   template <typename T>
   BufferMeta CreateBuffer(const MemoryType mtype, const std::vector<size_t> shape, const bool is_random_init = false,
-                          const T min_val = -1, const T max_val = 1) {
+                          const float min_val = -1, const float max_val = 1) {
     size_t n_elmts = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
     size_t buf_size = sizeof(T) * n_elmts;
 

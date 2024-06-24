@@ -57,6 +57,11 @@ setting:
       # 支持fp8_e5m2和auto
       #dtype: fp8_e5m2 # fp8_e5m2为fp8的一种存储格式
       dtype: auto # 默认值，跟随推理精度
+    weight:
+      # quant_method支持fp8_e4m3和auto
+      # fp8_e4m3 表示推理使用fp8_e4m3(fp8的一种格式)精度
+      # auto 是默认值，表示推理使用模型默认精度
+      quant_method: auto
   # 性能统计相关配置
   profiler:
     # 统计周期，每隔多少秒输出一次统计数据

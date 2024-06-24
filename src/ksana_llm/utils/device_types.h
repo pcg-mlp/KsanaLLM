@@ -28,6 +28,9 @@
 #  include <cublas_v2.h>
 #  include <cuda_runtime.h>
 #endif
+#ifdef ENABLE_FP8
+#  include <cuda_fp8.h>
+#endif
 
 #ifdef ENABLE_ACL
 #  include <acl/acl.h>

@@ -51,6 +51,52 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
   }
 }
 
+void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config,
+                           std::string &yaml_weight_quant_method) {
+  model_config.is_quant = config_json.contains("quantization_config");
+  if (model_config.is_quant) {
+    std::string quant_method = config_json["quantization_config"].at("quant_method");
+    if (quant_method == "gptq") {
+      model_config.quant_config.method = QUANT_GPTQ;
+      model_config.quant_config.bits = config_json["quantization_config"].at("bits");
+      model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
+      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}", quant_method,
+                                   model_config.quant_config.bits, model_config.quant_config.group_size);
+    } else if (quant_method == "fp8") {
+      // TODO(catheywang): support fp8 quantized weight loading.
+      KLLM_LOG_ERROR << "Loading of fp8 weights from checkpoint is not supported.";
+      throw std::runtime_error("Loading of fp8 weights from checkpoint is not supported.");
+      model_config.quant_config.method = QUANT_FP8_E4M3;
+      model_config.quant_config.is_checkpoint_fp8_serialized = true;
+      model_config.quant_config.is_activation_scheme_static =
+          (config_json["quantization_config"].at("activation_scheme") == "static");
+      KLLM_LOG_INFO << fmt::format(
+          "using quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, is_activation_scheme_static: {}",
+          quant_method, model_config.quant_config.is_checkpoint_fp8_serialized,
+          model_config.quant_config.is_activation_scheme_static);
+    } else {
+      KLLM_LOG_ERROR << fmt::format("Not support quant_method {}.", quant_method);
+      throw std::runtime_error(fmt::format("Not support quant_method {}.", quant_method));
+    }
+  } else if (yaml_weight_quant_method != "auto") {
+    if (yaml_weight_quant_method == "fp8_e4m3") {
+      // when quantization_config in config.json is null,
+      // quant method is decided by quantization_config in yaml.
+      model_config.is_quant = true;
+      model_config.quant_config.method = QUANT_FP8_E4M3;
+      model_config.quant_config.is_checkpoint_fp8_serialized = false;
+      model_config.quant_config.is_activation_scheme_static = false;
+      KLLM_LOG_INFO << fmt::format(
+          "using quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, is_activation_scheme_static: {}",
+          yaml_weight_quant_method, model_config.quant_config.is_checkpoint_fp8_serialized,
+          model_config.quant_config.is_activation_scheme_static);
+    } else {
+      KLLM_LOG_ERROR << fmt::format("Not support quant_method {}.", yaml_weight_quant_method);
+      throw std::runtime_error(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
+    }
+  }
+}
+
 void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_config) {
   // refer to
   // github vllm-project/vllm/blob vllm/config.py#L1116
@@ -95,7 +141,8 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   KLLM_LOG_DEBUG << "Model Max Token Num = " << model_config.max_token_num;
 }
 
-void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
+void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config,
+                                  std::string &yaml_weight_quant_method) {
   model_config.head_num = config_json.at("num_attention_heads");
   model_config.num_key_value_heads = config_json.value("num_key_value_heads", model_config.head_num);
   model_config.inter_size = config_json.at("intermediate_size");
@@ -112,17 +159,7 @@ void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
   model_config.is_visual = config_json.contains("visual");
 
-  model_config.is_quant = config_json.contains("quantization_config");
-  if (model_config.is_quant) {
-    model_config.quant_config.method = config_json["quantization_config"].at("quant_method");
-    if (model_config.quant_config.method == "gptq") {
-      model_config.quant_config.bits = config_json["quantization_config"].at("bits");
-      model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
-      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
-                                   model_config.quant_config.method, model_config.quant_config.bits,
-                                   model_config.quant_config.group_size);
-    }
-  }
+  ParseModelQuantConfig(config_json, model_config, yaml_weight_quant_method);
 
   ParseModelMaxLength(config_json, model_config);
 
@@ -131,7 +168,8 @@ void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig
   model_config.rotary_embedding = size_per_head;
 }
 
-void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
+void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config,
+                              std::string &yaml_weight_quant_method) {
   model_config.head_num = config_json.at("num_attention_heads");
   model_config.num_key_value_heads = config_json.value("multi_query_group_num", model_config.head_num);
   model_config.inter_size = config_json.at("ffn_hidden_size");
@@ -154,17 +192,7 @@ void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &mo
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
   model_config.is_visual = config_json.contains("visual");
 
-  model_config.is_quant = config_json.contains("quantization_config");
-  if (model_config.is_quant) {
-    model_config.quant_config.method = config_json["quantization_config"].at("quant_method");
-    if (model_config.quant_config.method == "gptq") {
-      model_config.quant_config.bits = config_json["quantization_config"].at("bits");
-      model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
-      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
-                                   model_config.quant_config.method, model_config.quant_config.bits,
-                                   model_config.quant_config.group_size);
-    }
-  }
+  ParseModelQuantConfig(config_json, model_config, yaml_weight_quant_method);
 
   ParseModelMaxLength(config_json, model_config);
 
@@ -307,6 +335,10 @@ Status Environment::ParseConfig(const std::string &config_file) {
   profiler_config_.report_threadpool_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.report_threadpool_size", 4);
 
+  // quantization_config in yaml takes effect when quantization_config in config.json is null.
+  yaml_weight_quant_method_ = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.quantization_config.weight.quant_method", "auto");
+
   // Read base model.
   std::string base_model_dir =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
@@ -359,9 +391,9 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
 
   model_config.type = config_json.at("model_type");
   if (model_config.type == "chatglm") {
-    PrepareChatglmAttirbutes(config_json, model_config);
+    PrepareChatglmAttirbutes(config_json, model_config, yaml_weight_quant_method_);
   } else {
-    PrepareCommonModelAttirbutes(config_json, model_config);
+    PrepareCommonModelAttirbutes(config_json, model_config, yaml_weight_quant_method_);
   }
 
   UpdateEndIdFromGeneration(model_dir, model_config);

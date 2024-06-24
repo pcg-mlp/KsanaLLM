@@ -22,21 +22,24 @@ struct RoPEScalingFactor {
   float factor{1.0f};
 };
 
-enum QuantMode {
-  QUANT_NONE,
-  QUANT_GPTQ
-};
+enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_FP8_E4M3 };
 
 // The Quant informations.
 struct QuantConfig {
   // The quant method
-  std::string method;
+  QuantMode method = QUANT_NONE;
 
-  // The quant bits
+  // (gptq) The quant bits
   size_t bits;
 
-  // The quant group size
+  // (gptq) The quant group size
   size_t group_size;
+
+  // (fp8) Whether weight is quantized in checkpoint.
+  bool is_checkpoint_fp8_serialized = false;
+
+  // (fp8) Whether input_scale is in checkpoint.
+  bool is_activation_scheme_static = false;
 };
 
 // The model informations.
@@ -57,8 +60,6 @@ struct ModelConfig {
   size_t max_token_num;
 
   size_t max_scheduler_token_num;
-
-  // TODO(karlluo): Quant mode
 
   int tensor_para_size;
 
@@ -281,6 +282,9 @@ class Environment {
 
   // The config of block manager.
   BlockManagerConfig block_manager_config_;
+
+  // The config of quantization.
+  std::string yaml_weight_quant_method_;
 
   // The config of endpoint.
   EndpointConfig endpoint_config_;

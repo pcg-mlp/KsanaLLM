@@ -64,8 +64,17 @@ template <typename T>
 bool QuantWeight<T>::CheckQuantModel() {
   // TODO(jinxcwu): make a struct to store different quant type: gptq, awq, ...
   if (model_config_.is_quant) {
-    if (model_config_.quant_config.method == "gptq") {
+    if (model_config_.quant_config.method == QUANT_GPTQ) {
       return true;
+    }
+    if (model_config_.quant_config.method == QUANT_FP8_E4M3) {
+      if (model_config_.quant_config.is_checkpoint_fp8_serialized) {
+        KLLM_LOG_ERROR << "Loading of fp8 weights from checkpoint is not supported.";
+        throw std::runtime_error("Loading of fp8 weights from checkpoint is not supported.");
+        // return true;
+      } else {
+        return false;
+      }
     }
   }
   return false;
@@ -278,6 +287,90 @@ Status QuantWeight<T>::ConvertGPTQTensor(int hidden_units, int inter_size, int n
 #endif
   return Status(RetCode::RET_RUNTIME, "Not supported Ascend.");
 }
+
+#ifdef ENABLE_FP8
+template <typename T>
+Status QuantWeight<T>::ConvertFp8E4m3(const int num_layer) {
+  if (!context_->IsGemmFp8Supported()) {
+    KLLM_LOG_ERROR << "Cublas is insufficient to support FP8.";
+    throw std::runtime_error("Cublas is insufficient to support FP8.");
+  }
+  DataType quant_type = TYPE_FP8_E4M3;
+  KLLM_LOG_INFO << "Converting weight to fp8_e4m3";
+  GetBlockManager()->SetDeviceId(rank_);
+  std::string name;
+  name = ".mlp.gate_proj.weight";
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
+    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+  }
+  name = ".mlp.up_proj.weight";
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
+    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+  }
+  name = ".mlp.down_proj.weight";
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
+    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+  }
+  name = ".self_attn.o_proj.weight";
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
+    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+  }
+  name = ".self_attn.query_key_value.weight";
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
+    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+  }
+  return Status();
+}
+
+template <typename T>
+Status QuantWeight<T>::ConvertFp8E4m3Tensor(std::string& weight_name, DataType quant_type) {
+  // replace weight tensor with quantized tensor in weights_map_
+  // and add scale tensor to weights_map_
+  std::string trans_name = weight_name + "_trans";
+  std::string quant_name = weight_name + "_quant";
+  std::string scale_name = weight_name + "_scale";
+
+  Tensor& weight_tensor = weights_map_[weight_name];
+  auto weight_shape = weight_tensor.shape;
+  if (weight_shape.back() % 2 != 0) {
+    KLLM_LOG_INFO << "The last dim of weight is " << weight_shape.back() << " % 2 != 0 "
+                  << ", therefore the weight cannot be calculated after quantization. "
+                  << "Tensor of weight will not be quantized.";
+    return Status();
+  }
+
+  // transpose weight from [k, n] to [n, k]
+  std::vector<size_t> trans_shape{weight_shape[1], weight_shape[0]};
+  tensor_manager_->AddWeightTensor(trans_name, trans_shape, weight_tensor.dtype);
+  Tensor& trans_tensor = weights_map_[trans_name];
+  weight_tensor.shape.insert(weight_tensor.shape.begin(), 1);
+  trans_tensor.shape.insert(trans_tensor.shape.begin(), 1);
+  // Permute only support 3D trans
+  Permute(weight_tensor, trans_tensor, {0, 2, 1}, context_->GetMemoryManageStreams()[rank_]);
+  weight_tensor.shape.erase(weight_tensor.shape.begin());
+  trans_tensor.shape.erase(trans_tensor.shape.begin());
+
+  tensor_manager_->AddWeightTensor(quant_name, trans_tensor.shape, quant_type);
+  tensor_manager_->AddWeightTensor(scale_name, {1}, TYPE_FP32);
+  Tensor& quant_tensor = weights_map_[quant_name];
+  Tensor& scale_tensor = weights_map_[scale_name];
+  Fp8DynamicQuantize(1, trans_tensor.shape[0] * trans_tensor.shape[1],
+                     static_cast<const T*>(trans_tensor.GetPtr<void>()), quant_tensor.GetPtr<void>(),
+                     static_cast<float*>(scale_tensor.GetPtr<void>()), context_->GetMemoryManageStreams()[rank_].Get());
+  quant_tensor.scales = &scale_tensor;
+  GetBlockManager()->FreeContiguous(weights_map_[weight_name].GetBlockId());
+  GetBlockManager()->FreeContiguous(weights_map_[trans_name].GetBlockId());
+  weights_map_[weight_name] = weights_map_[quant_name];
+  weights_map_.erase(quant_name);
+  weights_map_.erase(trans_name);
+  return Status();
+}
+#endif
 
 template class QuantWeight<float>;
 template class QuantWeight<float16>;

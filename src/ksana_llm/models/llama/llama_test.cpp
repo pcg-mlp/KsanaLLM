@@ -46,187 +46,226 @@ class LlamaTest : public testing::Test {
   BlockManager *block_manager = nullptr;
 
   std::shared_ptr<Context> context_{nullptr};
+
+  template <typename weight_data_type>
+  void TestLlamaForward() {
+    int device_id = 0;
+    SetDevice(device_id);
+#ifdef ENABLE_FP8
+    if (model_config.quant_config.method == QUANT_FP8_E4M3 && !context_->IsGemmFp8Supported()) {
+      std::cout << "Cublas is insufficient to support FP8, skip test." << std::endl;
+      return;
+    }
+#endif
+    std::filesystem::path model_path(model_config.path);
+    if (!std::filesystem::exists(model_path)) {
+      KLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
+      EXPECT_TRUE(std::filesystem::exists(model_path));
+    }
+    Event start;
+    Event stop;
+    float milliseconds = 0;
+    int rounds = 10;
+    EventCreate(&start);
+    EventCreate(&stop);
+
+    std::shared_ptr<BaseWeight> llama_weight =
+        std::make_shared<LlamaWeight<weight_data_type>>(model_config, 0, context_);
+    // Start Loader Weight
+    bool is_safetensors = false;
+    std::vector<std::string> weights_file_list = SearchLocalPath(model_path, is_safetensors);
+    for (std::string &file_name : weights_file_list) {
+      std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
+      if (is_safetensors) {
+        weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
+      } else {
+        weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
+      }
+      std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
+      std::vector<std::string> custom_name_list;
+      GetCustomNameList(weight_name_list, custom_name_list, model_config.path, model_config.type);
+
+      llama_weight->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
+      StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
+    }
+    llama_weight->ProcessWeights();  // End Loader Weight
+    std::shared_ptr<LlamaModel<weight_data_type>> llama =
+        std::make_shared<LlamaModel<weight_data_type>>(model_config, 0, context_, llama_weight);
+
+    // Weight Name Check
+    // 正确的 weight 名称
+    std::string weight_name = "lm_head.weight";
+    Tensor lm_head = llama_weight->GetModelWeights(weight_name);
+    EXPECT_EQ(lm_head.device, MEMORY_DEVICE);
+    EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
+
+    // 错误的 weight 名称
+    weight_name = "wrong_name";
+    Tensor wrong_tensor = llama_weight->GetModelWeights(weight_name);
+    EXPECT_EQ(wrong_tensor.device, MEMORY_HOST);
+    EXPECT_TRUE(wrong_tensor.shape.empty());
+
+    // ContextDecode
+    ForwardRequest forward;
+    std::vector<int> input_ids = {233, 1681};
+    forward.output_tokens = &input_ids;
+    forward.logits_buf.resize(1);
+    forward.logits_buf[0] = llama->GetLogitsPtr();
+    forward.logits_offset = 0;
+    std::vector<int> input_refit_pos;
+    std::vector<std::vector<float>> input_refit_embedding;
+    EmbeddingSlice embedding_slice;
+    embedding_slice.pos = input_refit_pos;
+    embedding_slice.embeddings = input_refit_embedding;
+    forward.input_refit_embedding = &embedding_slice;
+    std::vector<int> block_ids;
+    GetBlockManager()->AllocateBlocks(1, block_ids);
+    forward.kv_cache_ptrs.resize(1);
+    GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
+    Memset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
+    KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
+                                  forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
+    std::vector<ForwardRequest> forward_reqs = {forward};
+    EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
+
+    std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
+    EventRecord(start, context_->GetComputeStreams()[device_id]);
+    for (int i = 0; i < rounds; ++i) {
+      llama->ContextDecode(llama_weight, multi_forward_reqs);
+    }
+    EventRecord(stop, context_->GetComputeStreams()[device_id]);
+    EventSynchronize(stop);
+    EventElapsedTime(&milliseconds, start, stop);
+    std::cout << "ContextDecode milliseconds / 10 is: " << milliseconds / 10 << std::endl;
+
+#ifdef ENABLE_CUDA
+    EXPECT_TRUE((milliseconds / 10) < 35);
+#else
+    // NOTE(karlluo): ACL inference is slower than CUDA
+    EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;
+#endif
+
+    // Sampling
+    SamplingRequest sample_req;
+    std::vector<std::vector<std::pair<int, float>>> logprobs;
+    std::vector<float> prompt_probs;
+    sample_req.logits_offset = forward_reqs[0].logits_offset;
+    sample_req.output_tokens = forward_reqs[0].output_tokens;
+    sample_req.logprobs = &logprobs;
+    std::mutex output_mutex;
+    sample_req.output_mutex = &output_mutex;
+    sample_req.logits_buf = forward_reqs[0].logits_buf;
+    sample_req.model_config = &model_config;
+    SamplingConfig sample_config;
+    sample_config.num_beams = 1;
+    sample_config.topk = 1;
+    sample_config.topp = 0;
+    sample_config.temperature = 0;
+    sample_config.repetition_penalty = 1;
+    sample_req.sampling_config = &sample_config;
+    BatchManagerConfig batch_manager_config;
+    Singleton<Environment>::GetInstance()->GetBatchManagerConfig(batch_manager_config);
+
+    std::vector<SamplingRequest> sample_reqs = {sample_req};
+    std::shared_ptr<Sampler> sampler =
+        std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
+    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
+
+    // Decode
+    EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    EXPECT_EQ(29896, (*forward_reqs[0].output_tokens)[3]);
+
+#ifdef ENABLE_CUDA
+    EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
+#endif
+
+    EventRecord(start, context_->GetComputeStreams()[device_id]);
+    for (int i = 0; i < rounds; ++i) {
+      llama->Decode(llama_weight, multi_forward_reqs);
+    }
+    EventRecord(stop, context_->GetComputeStreams()[device_id]);
+    EventSynchronize(stop);
+    EventElapsedTime(&milliseconds, start, stop);
+    std::cout << "Decode milliseconds / 10 is: " << milliseconds / 10 << std::endl;
+
+#ifdef ENABLE_CUDA
+    EXPECT_TRUE((milliseconds / 10) < 30);
+
+    // Test logits_custom_length
+    std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    forward.output_tokens = &prompt_probs_input_tokens;
+    forward.logits_custom_length = 5;
+    std::map<std::string, ksana_llm::TargetDescribe> request_target;
+    ksana_llm::TargetDescribe target_describe;
+    target_describe.slice_pos.push_back({0, 4});
+    request_target["logits"] = target_describe;
+    forward.request_target = &request_target;
+    std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
+    ModelInput model_input(model_config, 0, context_);
+    model_input.ParseFromRequests(prompt_probs_forward_reqs, true);
+    EXPECT_TRUE(model_input.use_logits_custom_length);
+    std::vector<uint64_t> result(model_input.logits_custom_length_uint64_tensor.GetElementNumber());
+    std::vector<uint64_t> dst = {0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14};
+    Memcpy(result.data(), model_input.logits_custom_length_uint64_tensor.GetPtr<void>(),
+           result.size() * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST);
+    EXPECT_EQ(dst.size(), result.size());
+    for (int i = 0; i < result.size(); i++) {
+      EXPECT_EQ(result[i], dst[i]);
+    }
+    EXPECT_TRUE(model_input.use_logits_custom_length);
+    EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
+#else
+    // NOTE(karlluo): ACL inference is slower than CUDA
+    EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;
+#endif
+
+    llama.reset();
+    llama_weight.reset();
+
+    StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
+    EventDestroy(stop);
+    EventDestroy(start);
+    DeviceSynchronize();
+  }
 };
 
 TEST_F(LlamaTest, ForwardTest) {
-  int device_id = 0;
-  SetDevice(device_id);
-
-  std::filesystem::path model_path(model_config.path);
-  if (!std::filesystem::exists(model_path)) {
-    KLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
-    EXPECT_TRUE(std::filesystem::exists(model_path));
-  }
-  Event start;
-  Event stop;
-  float milliseconds = 0;
-  int rounds = 10;
-  EventCreate(&start);
-  EventCreate(&stop);
-
   Py_Initialize();
-
-  std::shared_ptr<BaseWeight> llama_weight = std::make_shared<LlamaWeight<float16>>(model_config, 0, context_);
-  // Start Loader Weight
-  bool is_safetensors = false;
-  std::vector<std::string> weights_file_list = SearchLocalPath(model_path, is_safetensors);
-  for (std::string &file_name : weights_file_list) {
-    std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-    if (is_safetensors) {
-      weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
-    } else {
-      weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
-    }
-    std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
-    std::vector<std::string> custom_name_list;
-    GetCustomNameList(weight_name_list, custom_name_list, model_config.path, model_config.type);
-
-    llama_weight->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
-    StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
-  }
-  llama_weight->ProcessWeights();  // End Loader Weight
-  std::shared_ptr<LlamaModel<float16>> llama =
-      std::make_shared<LlamaModel<float16>>(model_config, 0, context_, llama_weight);
-
-  // Weight Name Check
-  // 正确的 weight 名称
-  std::string weight_name = "lm_head.weight";
-  Tensor lm_head = llama_weight->GetModelWeights(weight_name);
-  EXPECT_EQ(lm_head.device, MEMORY_DEVICE);
-  EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
-
-  // 错误的 weight 名称
-  weight_name = "wrong_name";
-  Tensor wrong_tensor = llama_weight->GetModelWeights(weight_name);
-  EXPECT_EQ(wrong_tensor.device, MEMORY_HOST);
-  EXPECT_TRUE(wrong_tensor.shape.empty());
-
-  // ContextDecode
-  ForwardRequest forward;
-  std::vector<int> input_ids = {233, 1681};
-  forward.output_tokens = &input_ids;
-  forward.logits_buf.resize(1);
-  forward.logits_buf[0] = llama->GetLogitsPtr();
-  forward.logits_offset = 0;
-  std::vector<int> input_refit_pos;
-  std::vector<std::vector<float>> input_refit_embedding;
-  EmbeddingSlice embedding_slice;
-  embedding_slice.pos = input_refit_pos;
-  embedding_slice.embeddings = input_refit_embedding;
-  forward.input_refit_embedding = &embedding_slice;
-  std::vector<int> block_ids;
-  GetBlockManager()->AllocateBlocks(1, block_ids);
-  forward.kv_cache_ptrs.resize(1);
-  GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
-  Memset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
-  KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
-                                forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
-  std::vector<ForwardRequest> forward_reqs = {forward};
-  EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
-
-  std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
-  EventRecord(start, context_->GetComputeStreams()[device_id]);
-  for (int i = 0; i < rounds; ++i) {
-    llama->ContextDecode(llama_weight, multi_forward_reqs);
-  }
-  EventRecord(stop, context_->GetComputeStreams()[device_id]);
-  EventSynchronize(stop);
-  EventElapsedTime(&milliseconds, start, stop);
-  std::cout << "ContextDecode milliseconds / 10 is: " << milliseconds / 10 << std::endl;
-
-#ifdef ENABLE_CUDA
-  EXPECT_TRUE((milliseconds / 10) < 35);
-#else
-  // NOTE(karlluo): ACL inference is slower than CUDA
-  EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;
+  // fp16 forward
+  model_config.is_quant = false;
+  model_config.weight_data_type = TYPE_FP16;
+  model_config.quant_config.method = QUANT_NONE;
+  std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
+  TestLlamaForward<float16>();
+#ifdef ENABLE_FP8
+  // fp8 forward
+  model_config.is_quant = true;
+  model_config.quant_config.method = QUANT_FP8_E4M3;
+  model_config.quant_config.is_checkpoint_fp8_serialized = false;
+  std::cout << "Test TYPE_FP16 weight_data_type with QUANT_FP8_E4M3 forward" << std::endl;
+  TestLlamaForward<float16>();
 #endif
 
-  // Sampling
-  SamplingRequest sample_req;
-  std::vector<std::vector<std::pair<int, float>>> logprobs;
-  std::vector<float> prompt_probs;
-  sample_req.logits_offset = forward_reqs[0].logits_offset;
-  sample_req.output_tokens = forward_reqs[0].output_tokens;
-  sample_req.logprobs = &logprobs;
-  std::mutex output_mutex;
-  sample_req.output_mutex = &output_mutex;
-  sample_req.logits_buf = forward_reqs[0].logits_buf;
-  sample_req.model_config = &model_config;
-  SamplingConfig sample_config;
-  sample_config.num_beams = 1;
-  sample_config.topk = 1;
-  sample_config.topp = 0;
-  sample_config.temperature = 0;
-  sample_config.repetition_penalty = 1;
-  sample_req.sampling_config = &sample_config;
-  BatchManagerConfig batch_manager_config;
-  Singleton<Environment>::GetInstance()->GetBatchManagerConfig(batch_manager_config);
-
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
-  std::shared_ptr<Sampler> sampler =
-      std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
-  EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
-
-  // Decode
-  EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
-  EXPECT_EQ(29896, (*forward_reqs[0].output_tokens)[3]);
-
-#ifdef ENABLE_CUDA
-  EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
-  sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
-  EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
+#ifdef ENABLE_BFLOAT16
+  model_config.is_quant = false;
+  model_config.weight_data_type = TYPE_BF16;
+  model_config.quant_config.method = QUANT_NONE;
+  std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
+  TestLlamaForward<bfloat16>();
+#  ifdef ENABLE_FP8
+  // fp8 forward
+  model_config.is_quant = true;
+  model_config.quant_config.method = QUANT_FP8_E4M3;
+  model_config.quant_config.is_checkpoint_fp8_serialized = false;
+  std::cout << "Test TYPE_BF16 weight_data_type with QUANT_FP8_E4M3 forward" << std::endl;
+  TestLlamaForward<bfloat16>();
+#  endif
 #endif
-
-  EventRecord(start, context_->GetComputeStreams()[device_id]);
-  for (int i = 0; i < rounds; ++i) {
-    llama->Decode(llama_weight, multi_forward_reqs);
-  }
-  EventRecord(stop, context_->GetComputeStreams()[device_id]);
-  EventSynchronize(stop);
-  EventElapsedTime(&milliseconds, start, stop);
-  std::cout << "Decode milliseconds / 10 is: " << milliseconds / 10 << std::endl;
-
-#ifdef ENABLE_CUDA
-  EXPECT_TRUE((milliseconds / 10) < 30);
-
-  // Test logits_custom_length
-  std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-  forward.output_tokens = &prompt_probs_input_tokens;
-  forward.logits_custom_length = 5;
-  std::map<std::string, ksana_llm::TargetDescribe> request_target;
-  ksana_llm::TargetDescribe target_describe;
-  target_describe.slice_pos.push_back({0, 4});
-  request_target["logits"] = target_describe;
-  forward.request_target = &request_target;
-  std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
-  ModelInput model_input(model_config, 0, context_);
-  model_input.ParseFromRequests(prompt_probs_forward_reqs, true);
-  EXPECT_TRUE(model_input.use_logits_custom_length);
-  std::vector<uint64_t> result(model_input.logits_custom_length_uint64_tensor.GetElementNumber());
-  std::vector<uint64_t> dst = {0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14};
-  Memcpy(result.data(), model_input.logits_custom_length_uint64_tensor.GetPtr<void>(), result.size() * sizeof(uint64_t),
-         MEMCPY_DEVICE_TO_HOST);
-  EXPECT_EQ(dst.size(), result.size());
-  for (int i = 0; i < result.size(); i++) {
-    EXPECT_EQ(result[i], dst[i]);
-  }
-  EXPECT_TRUE(model_input.use_logits_custom_length);
-  EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
-#else
-  // NOTE(karlluo): ACL inference is slower than CUDA
-  EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;
-#endif
-
-  llama.reset();
-  llama_weight.reset();
-
-  StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
   Py_Finalize();
-  EventDestroy(stop);
-  EventDestroy(start);
-  DeviceSynchronize();
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

@@ -39,9 +39,8 @@
 namespace llm_kernels {
 namespace utils {
 
-constexpr float FP8_E4M3_MAX = 480.0f;
-
-enum QUANTIZE_MODE { PER_CHANNEL, PER_TENSOR, PER_CHANNEL_WEIGHT_PER_TENSOR_ACT };
+constexpr float FP8_E4M3_MAX = 448.0f;
+constexpr float FP8_E4M3_MIN_SCALE = 1.0f / FP8_E4M3_MAX / 512.0f;
 
 // Packed Data Type
 typedef struct __CUDA_ALIGN__(32) {
@@ -141,18 +140,17 @@ __inline__ __device__ half2 fp8x2_e4m3_to_half2(const __nv_fp8x2_e4m3* in) {
   return out;
 }
 
-template <typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
-void InvokeQuantizeMatrix(T_OUT* output, float const* input_qua_amax_ptr, T_IN const* input, uint32_t size, uint32_t n,
-                          cudaStream_t stream);
+template <typename T_OUT, typename T_IN>
+void InvokeQuantizeMatrix(T_OUT* output, float const* scale, T_IN const* input, uint32_t num_channels,
+                          uint32_t channel_size, cudaStream_t stream);
 
 template <typename T_OUT, typename T_IN, typename T_FAKE>
 void invokeFakeQuantize(T_OUT* dst, const T_IN* src, const int32_t size, cudaStream_t stream);
 
-template <typename T_W>
-void InvokeComputeFP8QuantizeScale(float* quant_ptr, const T_W* weights, const int32_t k, const int32_t n,
-                                   cudaStream_t stream);
-
-#endif  // ENABLE_FP8
+template <typename T_IN>
+void InvokeComputeFP8QuantizeScale(float* output, const T_IN* input, const int32_t num_channels,
+                                   const int32_t channel_size, cudaStream_t stream);
 
 }  // namespace utils
 }  // namespace llm_kernels
+#endif  // ENABLE_FP8

@@ -30,6 +30,12 @@ class QuantWeight {
   bool LoadQuantWeight(std::string& tensor_name, std::vector<size_t>& weight_shape, DataType& weight_data_type,
                        void* weight_ptr);
 
+#ifdef ENABLE_FP8
+  Status ConvertFp8E4m3Tensor(std::string& weight_name, DataType quant_type);
+
+  Status ConvertFp8E4m3(const int num_layer);
+#endif
+
  private:
 #ifdef ENABLE_CUDA
   torch::Tensor UnpackInt32IntoInt8(const torch::Tensor& w_packed);
@@ -50,6 +56,7 @@ class QuantWeight {
 
   int tensor_para_size_ = 1;
 
+  // weight is quantized in checkpoint
   bool enable_ = false;
 
   int rank_ = 0;

@@ -28,6 +28,9 @@ namespace nvidia {
 
 void HalfToFloat(const half* input, int32_t input_length, float* output, cudaStream_t& stream);
 
+void FloatToHalf(const float* input, int32_t input_length, half* output, cudaStream_t& stream);
+void FloatToBFloat16(const float* input, int32_t input_length, __nv_bfloat16* output, cudaStream_t& stream);
+
 void BFloat16ToFloat(const __nv_bfloat16* input, int32_t input_length, float* output, cudaStream_t& stream);
 
 void FP16ToBFP16(void* data_ptr, int32_t input_length, cudaStream_t& stream);

@@ -69,4 +69,9 @@ if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
   # enable BFloat16
   add_definitions("-DENABLE_BFLOAT16")
   message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
+  # enable FP8
+  if(${CUDA_VERSION_MINOR} VERSION_GREATER_EQUAL "8" OR ${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "12")
+    add_definitions("-DENABLE_FP8")
+    message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
+  endif()
 endif()
