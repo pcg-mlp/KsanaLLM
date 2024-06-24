@@ -84,6 +84,12 @@ class BlockManagerSimulator : public BlockManagerInterface {
   // This function maybe called concurrently from different threads.
   int GetDeviceId() { return g_cur_device_id; }
 
+  // The data type of the memory block allocated.
+  DataType GetDtype() {
+    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    return TYPE_INVALID;
+  }
+
   // Allocate blocked memory on devicen
   Status AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
     return AllocBlocks(g_cur_device_id, block_num, blocks, device_free_block_[g_cur_device_id],

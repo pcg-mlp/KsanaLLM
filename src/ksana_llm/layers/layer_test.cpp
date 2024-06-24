@@ -91,7 +91,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
 
 #ifdef ENABLE_CUDA
   std::shared_ptr<Context> context = std::make_shared<Context>(1, 1);
-  FlashAttentionLayer<half> flash_attention_layer;
+  FlashAttentionLayer<half, half, false> flash_attention_layer;
   int head_num = 32;
   int kv_head_num = 32;
   int size_per_head = 128;
@@ -106,8 +106,8 @@ TEST_F(LayerTest, AttentionLayerTest) {
                            GetDataType<half>());
   EXPECT_TRUE(flash_attention_layer
                   .Init({static_cast<int>(0), static_cast<int>(2048), head_num, kv_head_num, size_per_head, stride_size,
-                         static_cast<int>(1), rotary_embedding, rope_theta, is_neox, static_cast<bool>(false),
-                         std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
+                         static_cast<int>(1), TYPE_FP16, rotary_embedding, rope_theta, is_neox,
+                         static_cast<bool>(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
                         context, 0)
                   .OK());
 
@@ -153,14 +153,14 @@ TEST_F(LayerTest, AttentionLayerTest) {
           .Forward({qkv, input_len, kv_list, prefix_offsets, block_offsets, pos, mask, forward_shape}, output_tensors)
           .OK());
 
-  PagedAttentionLayer<half> attention_layer;
-  EXPECT_TRUE(
-      attention_layer
-          .Init({static_cast<int>(1), static_cast<int>(2048), static_cast<int>(head_num), kv_head_num,
-                 static_cast<int>(size_per_head), stride_size, static_cast<int>(1), rotary_embedding, rope_theta,
-                 is_neox, static_cast<bool>(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
-                context, 0)
-          .OK());
+  PagedAttentionLayer<half, half, false> attention_layer;
+  EXPECT_TRUE(attention_layer
+                  .Init({static_cast<int>(1), static_cast<int>(2048), static_cast<int>(head_num), kv_head_num,
+                         static_cast<int>(size_per_head), stride_size, static_cast<int>(1), TYPE_FP16, rotary_embedding,
+                         rope_theta, is_neox, static_cast<bool>(false), std::any(cos_sin_cache_tensor.GetPtr<void>()),
+                         rope_scaling_factor},
+                        context, 0)
+                  .OK());
 #endif
 }
 

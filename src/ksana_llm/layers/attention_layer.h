@@ -18,6 +18,16 @@
 
 namespace ksana_llm {
 
+template <typename T, template <typename, typename, bool> class ATTENTION_LAYER>
+std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
+  switch (kv_cache_dtype) {
+    case TYPE_FP8_E5M2:
+      return std::make_shared<ATTENTION_LAYER<T, uint8_t, true>>();
+    default:
+      return std::make_shared<ATTENTION_LAYER<T, T, false>>();
+  }
+}
+
 template <typename T>
 class AttentionLayer : public BaseLayer {
  public:
@@ -42,6 +52,10 @@ class AttentionLayer : public BaseLayer {
   int head_size_;
   int stride_size_;
   int tensor_para_size_;
+
+  // kv_cache storage type
+  DataType kv_cache_dtype_;
+
   bool is_causal_{true};
 #ifdef ENABLE_CUDA
   llm_kernels::nvidia::RotaryEmbeddingCuda<T> rotary_embedding_cuda_;

@@ -315,6 +315,15 @@ Status Environment::ParseConfig(const std::string &config_file) {
     return status;
   }
 
+  auto kv_cache_dtype_str = yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(),
+                                                               "setting.quantization_config.kv_cache.dtype", "auto");
+  DataType kv_cache_dtype = model_configs_[""].weight_data_type;
+  if (kv_cache_dtype_str == "fp8_e5m2") {
+    kv_cache_dtype = TYPE_FP8_E5M2;
+  }
+  block_manager_config_.host_allocator_config.kv_cache_dtype = kv_cache_dtype;
+  block_manager_config_.device_allocator_config.kv_cache_dtype = kv_cache_dtype;
+
   // Read lora models if needed.
   if (enable_lora_adapter_) {
     auto lora_nodes = yaml_reader.GetSequence(yaml_reader.GetRootNode(), "model_spec.lora_models");
@@ -426,8 +435,7 @@ void Environment::InitializeBlockManagerConfig() {
                       (model_config.num_key_value_heads / GetTensorParallelSize()) * model_config.size_per_head;
   size_t block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   size_t block_dtype_size = 0ul;
-
-  block_dtype_size = GetTypeSize(DataType::TYPE_FP16);
+  block_dtype_size = GetTypeSize(block_manager_config_.device_allocator_config.kv_cache_dtype);
 
   block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
   block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;

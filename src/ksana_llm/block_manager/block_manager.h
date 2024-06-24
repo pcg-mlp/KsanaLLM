@@ -36,6 +36,9 @@ class BlockManager : public BlockManagerInterface {
   // Allocate blocked memory on device.
   Status AllocateBlocks(int64_t block_num, std::vector<int>& blocks);
 
+  // The data type of the memory block allocated.
+  DataType GetDtype();
+
   // Allocate contiguous memory on device.
   Status AllocateContiguous(int64_t size, int& block_id);
 

@@ -11,8 +11,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+Status FlashAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vector<Tensor>& input_tensors,
+                                                                 std::vector<Tensor>& output_tensors) {
   // input_tensors:
   //     0: qkv_tensor shape [max_token_num, hidden_units, 3], type same as weight
   //     1: input offset tensor shape [max_batch_size + 1], type uint64
@@ -50,7 +51,9 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   return Status();
 }
-template class FlashAttentionLayer<float>;
-template class FlashAttentionLayer<float16>;
+template class FlashAttentionLayer<float, float, false>;
+template class FlashAttentionLayer<float, uint8_t, true>;
+template class FlashAttentionLayer<float16, float16, false>;
+template class FlashAttentionLayer<float16, uint8_t, true>;
 
 }  // namespace ksana_llm

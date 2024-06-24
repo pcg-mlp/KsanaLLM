@@ -29,6 +29,9 @@ class BlockManagerInterface {
   // This function maybe called concurrently from different threads.
   virtual int GetDeviceId() = 0;
 
+  // The data type of the memory block allocated.
+  virtual DataType GetDtype() = 0;
+
   // Allocate blocked memory on device.
   virtual Status AllocateBlocks(int64_t block_num, std::vector<int>& blocks) = 0;
 

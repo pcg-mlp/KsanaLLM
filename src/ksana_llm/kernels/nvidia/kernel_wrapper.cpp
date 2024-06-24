@@ -183,13 +183,14 @@ GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
 #endif
 #undef GET_TORCH_DATA_TYPE
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
-                 llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens,
-                 int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, int tensor_para_size,
-                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* prefix_offsets,
-                 void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream) {
-  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
+                 llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens,
+                 int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size,
+                 int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,
+                 void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
+                 cudaStream_t stream) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
       torch::from_blob(qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
   auto tt = qkv_tensor.split({num_heads * head_size, num_kv_heads * head_size, num_kv_heads * head_size}, -1);
@@ -201,24 +202,25 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   torch::Tensor k_tensor = tt[1];
   torch::Tensor v_tensor = tt[2];
 
-  llm_kernels::nvidia::ReverseCacheCopy<T>(reinterpret_cast<T*>(k_tensor.data_ptr()),
-                                           reinterpret_cast<T*>(v_tensor.data_ptr()), k_list, v_list,
-                                           reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
-                                           reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens,
-                                           num_kv_heads, head_size, stride_size, stream);
+  llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
+      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
+      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
+      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+      stream);
 
   if (!alibi_slopes.has_value()) {
-    rotary_embedding_cuda.SetInput(
-        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<T*>(q_tensor.data_ptr()), reinterpret_cast<T*>(k_tensor.data_ptr()), total_tokens, stream);
+    rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                   reinterpret_cast<int64_t*>(rotary_embedding_mask),
+                                   reinterpret_cast<SCALAR_T*>(q_tensor.data_ptr()),
+                                   reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), total_tokens, stream);
     rotary_embedding_cuda.Forward();
   }
 
-  llm_kernels::nvidia::CacheCopy<T>(reinterpret_cast<T*>(k_tensor.data_ptr()),
-                                    reinterpret_cast<T*>(v_tensor.data_ptr()), k_list, v_list,
-                                    reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
-                                    reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens,
-                                    num_kv_heads, head_size, stride_size, stream);
+  llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
+      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
+      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
+      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+      stream);
 
 // flash attention 2 or flash attention 1
 #ifdef ENABLE_FLASH_ATTN_2
@@ -259,57 +261,65 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 #endif
 }
 
-#define ATTEN_VARLEN(T)                                                                                           \
-  template void AttenVarlen<T>(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, \
-                               void* seqlen, llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda,  \
-                               int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads,      \
-                               int head_size, int stride_size, int tensor_para_size, bool is_causal, int rank,    \
-                               int block_size, void** k_list, void** v_list, void* prefix_offsets,                \
-                               void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
-ATTEN_VARLEN(float);
-ATTEN_VARLEN(half);
+#define ATTEN_VARLEN(SCALAR_T, CACHE_T, FP8_E5M2)                                                                  \
+  template void AttenVarlen<SCALAR_T, CACHE_T, FP8_E5M2>(                                                          \
+      void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,             \
+      llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens, int max_tokens, \
+      int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, int tensor_para_size,            \
+      bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* prefix_offsets,                \
+      void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
+ATTEN_VARLEN(float, float, false);
+ATTEN_VARLEN(float, uint8_t, true);
+ATTEN_VARLEN(half, half, false);
+ATTEN_VARLEN(half, uint8_t, true);
 #ifdef ENABLE_BFLOAT16
-ATTEN_VARLEN(__nv_bfloat16);
+ATTEN_VARLEN(__nv_bfloat16, __nv_bfloat16, false);
+ATTEN_VARLEN(__nv_bfloat16, uint8_t, true);
 #endif
 #undef ATTEN_VARLEN
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void PagedAttention(int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size, void* out,
                     void* q_tensor_ptr, void* key_cache_ptrs, void* value_cache_ptrs, void* cache_offsets_ptr,
                     void* context_lens_ptr, int max_context_len, int num_seqs, cudaStream_t& stream, void* workspace,
                     size_t work_size, const float* alibi_slopes_ptr);
 
-#define PAGED_ATTENTION(T1, T2)                                                                                       \
-  template <>                                                                                                         \
-  void PagedAttention<T1>(int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size, void* out, \
-                          void* q_tensor_ptr, void* key_cache_ptrs, void* value_cache_ptrs, void* cache_offsets_ptr,  \
-                          void* context_lens_ptr, int max_context_len, int num_seqs, cudaStream_t& stream,            \
-                          void* workspace, size_t work_size, const float* alibi_slopes_ptr) {                         \
-    llm_kernels::nvidia::PagedAttentionCuda<T2> op;                                                                   \
-    op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size);                                        \
-    op.SetInput(reinterpret_cast<T2*>(out), reinterpret_cast<const T2*>(q_tensor_ptr),                                \
-                reinterpret_cast<T2**>(key_cache_ptrs), reinterpret_cast<T2**>(value_cache_ptrs),                     \
-                reinterpret_cast<const int*>(cache_offsets_ptr), reinterpret_cast<const int*>(context_lens_ptr),      \
-                max_context_len, num_seqs, stream, workspace, work_size, alibi_slopes_ptr);                           \
-    op.Forward();                                                                                                     \
+#define PAGED_ATTENTION(T1, T2, CACHE_T1, CACHE_T2, FP8_E5M2)                                                          \
+  template <>                                                                                                          \
+  void PagedAttention<T1, CACHE_T1, FP8_E5M2>(int num_heads, int head_size, int num_kv_heads, int stride_size,         \
+                                              int block_size, void* out, void* q_tensor_ptr, void* key_cache_ptrs,     \
+                                              void* value_cache_ptrs, void* cache_offsets_ptr, void* context_lens_ptr, \
+                                              int max_context_len, int num_seqs, cudaStream_t& stream,                 \
+                                              void* workspace, size_t work_size, const float* alibi_slopes_ptr) {      \
+    llm_kernels::nvidia::PagedAttentionCuda<T2, CACHE_T2, FP8_E5M2> op;                                                \
+    op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size);                                         \
+    op.SetInput(reinterpret_cast<T2*>(out), reinterpret_cast<const T2*>(q_tensor_ptr),                                 \
+                reinterpret_cast<CACHE_T2**>(key_cache_ptrs), reinterpret_cast<CACHE_T2**>(value_cache_ptrs),          \
+                reinterpret_cast<const int*>(cache_offsets_ptr), reinterpret_cast<const int*>(context_lens_ptr),       \
+                max_context_len, num_seqs, stream, workspace, work_size, alibi_slopes_ptr);                            \
+    op.Forward();                                                                                                      \
   }
-PAGED_ATTENTION(float, float);
-PAGED_ATTENTION(half, uint16_t);
+PAGED_ATTENTION(float, float, float, float, false);
+PAGED_ATTENTION(float, float, uint8_t, uint8_t, true);
+PAGED_ATTENTION(half, uint16_t, half, uint16_t, false);
+PAGED_ATTENTION(half, uint16_t, uint8_t, uint8_t, true);
 #ifdef ENABLE_BFLOAT16
-PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16);
+PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, false);
+PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, uint8_t, uint8_t, true);
 #endif
 #undef PAGED_ATTENTION
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs,
                           void* context_lens_ptr, int max_context_len, cudaStream_t stream, void* cache_offsets_ptr,
                           int seqs_num, int heads_num, int head_size, int kv_heads_num, int stride_size, int block_size,
                           int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,
-                          llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr,
-                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace) {
+                          llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda,
+                          void* workspace_ptr, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
+                          void* qkv_workspace) {
   const float* alibi_slopes_ptr =
       reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
-  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
+  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
       torch::from_blob(query_ptr, {total_tokens, (heads_num + kv_heads_num * 2) * head_size}, options);
   auto tt = qkv_tensor.split({heads_num * head_size, kv_heads_num * head_size, kv_heads_num * head_size}, -1);
@@ -325,32 +335,37 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     // When the alibi_slopes parameter is empty, execute the rotary embedding.
     rotary_embedding_cuda.SetInput(
         reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<T*>(q_tensor_ptr), reinterpret_cast<T*>(k_tensor_ptr), total_tokens, stream);
+        reinterpret_cast<SCALAR_T*>(q_tensor_ptr), reinterpret_cast<SCALAR_T*>(k_tensor_ptr), total_tokens, stream);
     rotary_embedding_cuda.Forward();
   }
 
-  llm_kernels::nvidia::CachePosCopy<T>(
-      reinterpret_cast<T*>(k_tensor_ptr), reinterpret_cast<T*>(v_tensor_ptr), key_cache_ptrs, value_cache_ptrs,
-      rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
-      block_size, batch, total_tokens, kv_heads_num, head_size, stride_size, stream);
+  llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
+      reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
+      value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
+      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, kv_heads_num, head_size, stride_size,
+      stream);
 
-  PagedAttention<T>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr, q_tensor_ptr,
-                    key_cache_ptrs, value_cache_ptrs, cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num,
-                    stream, workspace_ptr, work_size, alibi_slopes_ptr);
+  PagedAttention<SCALAR_T, CACHE_T, FP8_E5M2>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr,
+                                              q_tensor_ptr, key_cache_ptrs, value_cache_ptrs, cache_offsets_ptr,
+                                              context_lens_ptr, max_context_len, seqs_num, stream, workspace_ptr,
+                                              work_size, alibi_slopes_ptr);
 }
 
-#define RUN_PAGED_ATTENTION(T)                                                                                       \
-  template void InvokePagedAttention<T>(                                                                             \
+#define RUN_PAGED_ATTENTION(SCALAR_T, CACHE_T, FP8_E5M2)                                                             \
+  template void InvokePagedAttention<SCALAR_T, CACHE_T, FP8_E5M2>(                                                   \
       void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,     \
       int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int heads_num, int head_size, \
       int kv_heads_num, int stride_size, int block_size, int batch, void* rotary_embedding_pos,                      \
       void* rotary_embedding_mask, int total_tokens,                                                                 \
-      llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace_ptr, size_t work_size,     \
-      int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace)
-RUN_PAGED_ATTENTION(float);
-RUN_PAGED_ATTENTION(half);
+      llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, void* workspace_ptr,                \
+      size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace)
+RUN_PAGED_ATTENTION(float, float, false);
+RUN_PAGED_ATTENTION(float, uint8_t, true);
+RUN_PAGED_ATTENTION(half, half, false);
+RUN_PAGED_ATTENTION(half, uint8_t, true);
 #ifdef ENABLE_BFLOAT16
-RUN_PAGED_ATTENTION(__nv_bfloat16);
+RUN_PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, false);
+RUN_PAGED_ATTENTION(__nv_bfloat16, uint8_t, true);
 #endif
 #undef RUN_PAGED_ATTENTION
 

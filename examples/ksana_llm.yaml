@@ -50,6 +50,13 @@ setting:
     block_host_memory_factor: 2.0
     # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
     prefix_cache_len: 0
+  # 量化相关配置
+  quantization_config:
+    # block中kv cache的量化
+    kv_cache:
+      # 支持fp8_e5m2和auto
+      #dtype: fp8_e5m2 # fp8_e5m2为fp8的一种存储格式
+      dtype: auto # 默认值，跟随推理精度
   # 性能统计相关配置
   profiler:
     # 统计周期，每隔多少秒输出一次统计数据

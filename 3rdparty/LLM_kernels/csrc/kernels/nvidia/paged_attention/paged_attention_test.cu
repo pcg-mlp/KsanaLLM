@@ -113,7 +113,7 @@ TEST_F(LlamaNvidiaPagedAttentionTestSuit, LlamaPagedAttentionHalfTest) {
               num_seqs * seq_blocks, num_kv_heads * head_size * block_size, stream);
 
   // run paged_attention(..., stream);
-  PagedAttentionCuda<DataType> op;
+  PagedAttentionCuda<DataType, DataType, false> op;
   op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size);
   size_t work_size = op.GetWorkSpaceSize(num_seqs, max_context_len);
   BufferMeta workspace_meta = CreateBuffer<char>(MemoryType::MEMORY_GPU, {work_size});
@@ -203,8 +203,8 @@ TEST(CacheCopyTest, CacheCopyTest) {
   cudaMemcpy(d_v_list, h_v_list_ptrs.data(), h_v_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
 
   // 调用核函数
-  CacheCopy<float>(d_src, d_src, d_k_list, d_v_list, d_input_offsets, d_prefix_offsets, d_block_offsets, block_size, bs,
-                   total_len, num_heads, head_size, stride_size, nullptr);
+  CacheCopy<float, float, false>(d_src, d_src, d_k_list, d_v_list, d_input_offsets, d_prefix_offsets, d_block_offsets,
+                                 block_size, bs, total_len, num_heads, head_size, stride_size, nullptr);
   cudaDeviceSynchronize();
 
   // 将结果从设备复制回主机并验证

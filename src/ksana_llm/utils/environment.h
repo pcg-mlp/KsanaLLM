@@ -150,6 +150,9 @@ struct AllocatorConfig {
   // The block size, in bytes.
   int64_t block_size;
 
+  // kv_cache storage type
+  DataType kv_cache_dtype;
+
   // The max token number of one block.
   size_t block_token_num;
 

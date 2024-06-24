@@ -135,8 +135,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   paged_attention_layers_.resize(num_layer_);
   void* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<void>();
   for (int idx = 0; idx < num_layer_; ++idx) {
-    flash_attention_layers_[idx] = std::make_shared<FlashAttentionLayer<T>>();
-    paged_attention_layers_[idx] = std::make_shared<PagedAttentionLayer<T>>();
+    flash_attention_layers_[idx] = CreateAttentionLayer<T, FlashAttentionLayer>(GetBlockManager()->GetDtype());
+    paged_attention_layers_[idx] = CreateAttentionLayer<T, PagedAttentionLayer>(GetBlockManager()->GetDtype());
     // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert from ‘<brace-enclosed initializer list>’
     // to ‘std::vector<std::any>’ so we use push back to make it work.
     std::vector<std::any> attention_param;
@@ -150,6 +150,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(size_per_head);
     attention_param.push_back(stride_size);
     attention_param.push_back(tensor_para_size);
+    attention_param.push_back(GetBlockManager()->GetDtype());
     attention_param.push_back(rotary_embedding);
     attention_param.push_back(rope_theta);
     attention_param.push_back(is_neox);

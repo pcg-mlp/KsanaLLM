@@ -10,8 +10,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+Status PagedAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vector<Tensor>& input_tensors,
+                                                                 std::vector<Tensor>& output_tensors) {
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
@@ -57,7 +58,9 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
 
   return Status();
 }
-template class PagedAttentionLayer<float>;
-template class PagedAttentionLayer<float16>;
+template class PagedAttentionLayer<float, float, false>;
+template class PagedAttentionLayer<float, uint8_t, true>;
+template class PagedAttentionLayer<float16, float16, false>;
+template class PagedAttentionLayer<float16, uint8_t, true>;
 
 }  // namespace ksana_llm

@@ -5,14 +5,14 @@
 namespace llm_kernels {
 namespace nvidia {
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 struct PagedAttentionParams {
  public:
-  T* out_;                // [num_seqs, num_heads, head_size]
-  const T* query_;        // [num_seqs, num_heads, head_size]
-  T** key_caches_;        // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
-  T** value_caches_;      // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
-  int num_head_repeats_;  // num_heads / num_kv_heads
+  SCALAR_T* out_;           // [num_seqs, num_heads, head_size]
+  const SCALAR_T* query_;   // [num_seqs, num_heads, head_size]
+  CACHE_T** key_caches_;    // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
+  CACHE_T** value_caches_;  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
+  int num_head_repeats_;    // num_heads / num_kv_heads
   int num_seqs_;
   int num_heads_;
   int head_size_;
@@ -31,7 +31,7 @@ struct PagedAttentionParams {
   int max_num_partitions_;
   float* exp_sums_ = nullptr;    // [num_seqs, num_heads, max_num_partitions]
   float* max_logits_ = nullptr;  // [num_seqs, num_heads, max_num_partitions]
-  T* tmp_out_ = nullptr;         // [num_seqs, num_heads, max_num_partitions, head_size]
+  SCALAR_T* tmp_out_ = nullptr;  // [num_seqs, num_heads, max_num_partitions, head_size]
 
  public:
   int GetTmpOutNumel() const;
@@ -43,15 +43,15 @@ struct PagedAttentionParams {
   void SetWorkSpace(void* workspace, size_t work_size);
 };
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 class PagedAttentionCuda {
  public:
   void SetConfig(int num_kv_heads, int num_heads, int head_size, int block_size, int stride_size);
   size_t GetWorkSpaceSize(int num_seqs, int max_context_len);
-  void SetInput(T* out,                    // [num_seqs, num_heads, head_size]
-                const T* query,            // [num_seqs, num_heads, head_size]
-                T** key_caches,            // num_seqs x [seq_blocks, num_heads, head_size/x, block_size, x]
-                T** value_caches,          // num_seqs x [seq_blocks, num_heads, head_size, block_size]
+  void SetInput(SCALAR_T* out,             // [num_seqs, num_heads, head_size]
+                const SCALAR_T* query,     // [num_seqs, num_heads, head_size]
+                CACHE_T** key_caches,      // num_seqs x [seq_blocks, num_heads, head_size/x, block_size, x]
+                CACHE_T** value_caches,    // num_seqs x [seq_blocks, num_heads, head_size, block_size]
                 const int* cache_offsets,  // [num_heads]
                 const int* context_lens,   // [num_seqs]
                 int max_context_len, int num_seqs, cudaStream_t stream, void* workspace, size_t work_size,
@@ -59,7 +59,7 @@ class PagedAttentionCuda {
   void Forward();
 
  private:
-  PagedAttentionParams<T> params_;
+  PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2> params_;
 };
 
 }  // namespace nvidia

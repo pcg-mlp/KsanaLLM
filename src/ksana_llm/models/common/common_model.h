@@ -87,8 +87,8 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::shared_ptr<EmbLookupLayer<T>> emb_lookup_layer_;
   std::shared_ptr<CpuEmbLookupLayer<T>> cpu_emb_lookup_layer_;
   std::shared_ptr<LayernormLayer<T>> layernorm_layer_;
-  std::vector<std::shared_ptr<FlashAttentionLayer<T>>> flash_attention_layers_;
-  std::vector<std::shared_ptr<PagedAttentionLayer<T>>> paged_attention_layers_;
+  std::vector<std::shared_ptr<BaseLayer>> flash_attention_layers_;
+  std::vector<std::shared_ptr<BaseLayer>> paged_attention_layers_;
   std::shared_ptr<AddLayer<T>> add_layer_;
   std::shared_ptr<SiluMulLayer<T>> silu_mul_layer_;
   std::shared_ptr<BaseLayer> attn_qkv_proj_layer_;

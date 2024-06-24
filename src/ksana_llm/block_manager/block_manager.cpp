@@ -128,6 +128,8 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
 
 void BlockManager::SetDeviceId(int device_id) { SetDevice(device_id); }
 
+DataType BlockManager::GetDtype() { return block_manager_config_.device_allocator_config.kv_cache_dtype; }
+
 int BlockManager::GetDeviceId() {
   int device_id = -1;
   GetDevice(&device_id);

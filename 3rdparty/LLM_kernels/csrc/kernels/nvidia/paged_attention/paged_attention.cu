@@ -23,6 +23,7 @@
 #include "paged_attention.h"
 #include "paged_attention_dtypes.h"
 #include "paged_attention_utils.cuh"
+#include "quant_utils.cuh"
 
 #include "csrc/utils/nvidia/cuda_utils.h"
 
@@ -75,16 +76,16 @@ inline __device__ float block_sum(float* red_smem, float sum) {
 
 // TODO(woosuk): Merge the last two dimensions of the grid.
 // Grid: (num_heads, num_seqs, max_num_partitions).
-template <typename scalar_t, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
+template <typename scalar_t, typename cache_t, bool FP8_E5M2, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
           int PARTITION_SIZE = 0>  // Zero means no partitioning.
 __device__ void paged_attention_kernel(
-    float* __restrict__ exp_sums,     // [num_seqs, num_heads, max_num_partitions]
-    float* __restrict__ max_logits,   // [num_seqs, num_heads, max_num_partitions]
-    scalar_t* __restrict__ out,       // [num_seqs, num_heads, max_num_partitions, head_size]
-    const scalar_t* __restrict__ q,   // [num_seqs, num_heads, head_size]
-    scalar_t** __restrict__ k_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
-    scalar_t** __restrict__ v_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
-    const int num_head_repeats,       // num_heads / num_kv_heads
+    float* __restrict__ exp_sums,    // [num_seqs, num_heads, max_num_partitions]
+    float* __restrict__ max_logits,  // [num_seqs, num_heads, max_num_partitions]
+    scalar_t* __restrict__ out,      // [num_seqs, num_heads, max_num_partitions, head_size]
+    const scalar_t* __restrict__ q,  // [num_seqs, num_heads, head_size]
+    cache_t** __restrict__ k_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
+    cache_t** __restrict__ v_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
+    const int num_head_repeats,      // num_heads / num_kv_heads
     const float scale,
     const int* __restrict__ cache_offsets,   // [num_seqs]
     const int* __restrict__ context_lens,    // [num_seqs]
@@ -136,6 +137,7 @@ __device__ void paged_attention_kernel(
   constexpr int VEC_SIZE = MAX(16 / (THREAD_GROUP_SIZE * sizeof(scalar_t)), 1);
   using K_vec = typename Vec<scalar_t, VEC_SIZE>::Type;
   using Q_vec = typename Vec<scalar_t, VEC_SIZE>::Type;
+  using Quant_vec = typename Vec<cache_t, VEC_SIZE>::Type;
 
   constexpr int NUM_ELEMS_PER_THREAD = HEAD_SIZE / THREAD_GROUP_SIZE;
   constexpr int NUM_VECS_PER_THREAD = NUM_ELEMS_PER_THREAD / VEC_SIZE;
@@ -174,9 +176,9 @@ __device__ void paged_attention_kernel(
   // Each warp fetches a block of keys for each iteration.
   // Each thread group in a warp fetches a key from the block, and computes
   // dot product with the query.
-  scalar_t** k_ptrs = k_cache + static_cast<int64_t>(cache_offsets[seq_idx]);
+  cache_t** k_ptrs = k_cache + static_cast<int64_t>(cache_offsets[seq_idx]);
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
-    const scalar_t* k_block_ptr = k_ptrs[block_idx];
+    const cache_t* k_block_ptr = k_ptrs[block_idx];
 
     // Load a key to registers.
     // Each thread in a thread group has a different part of the key.
@@ -189,11 +191,17 @@ __device__ void paged_attention_kernel(
       K_vec k_vecs[NUM_VECS_PER_THREAD];
 #pragma unroll
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
-        const scalar_t* k_ptr = k_block_ptr + kv_head_idx * kv_head_stride + physical_block_offset * x;
+        const cache_t* k_ptr = k_block_ptr + kv_head_idx * kv_head_stride + physical_block_offset * x;
         const int vec_idx = thread_group_offset + j * THREAD_GROUP_SIZE;
         const int offset1 = (vec_idx * VEC_SIZE) / x;
         const int offset2 = (vec_idx * VEC_SIZE) % x;
-        k_vecs[j] = *reinterpret_cast<const K_vec*>(k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+        if constexpr (FP8_E5M2) {
+          // Vector conversion from Quant_vec to K_vec.
+          Quant_vec k_vec_quant = *reinterpret_cast<const Quant_vec*>(k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+          k_vecs[j] = fp8_e5m2_unscaled::vec_conversion<K_vec, Quant_vec>(k_vec_quant);
+        } else {
+          k_vecs[j] = *reinterpret_cast<const K_vec*>(k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+        }
       }
 
       // Compute dot product.
@@ -265,6 +273,7 @@ __device__ void paged_attention_kernel(
   constexpr int V_VEC_SIZE = MIN(16 / sizeof(scalar_t), BLOCK_SIZE);
   using V_vec = typename Vec<scalar_t, V_VEC_SIZE>::Type;
   using L_vec = typename Vec<scalar_t, V_VEC_SIZE>::Type;
+  using V_quant_vec = typename Vec<cache_t, V_VEC_SIZE>::Type;
   using Float_L_vec = typename FloatVec<L_vec>::Type;
 
   constexpr int NUM_V_VECS_PER_ROW = BLOCK_SIZE / V_VEC_SIZE;
@@ -280,21 +289,28 @@ __device__ void paged_attention_kernel(
 
   scalar_t zero_value;
   zero(zero_value);
-  scalar_t** v_ptrs = v_cache + static_cast<int64_t>(cache_offsets[seq_idx]);
+  cache_t** v_ptrs = v_cache + static_cast<int64_t>(cache_offsets[seq_idx]);
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
-    const scalar_t* v_block_ptr = v_ptrs[block_idx];
+    const cache_t* v_block_ptr = v_ptrs[block_idx];
     const int physical_block_offset = (lane % NUM_V_VECS_PER_ROW) * V_VEC_SIZE;
     const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
     L_vec logits_vec;
     from_float(logits_vec, *reinterpret_cast<Float_L_vec*>(logits + token_idx - start_token_idx));
 
-    const scalar_t* v_ptr = v_block_ptr + kv_head_idx * kv_head_stride;
+    const cache_t* v_ptr = v_block_ptr + kv_head_idx * kv_head_stride;
 #pragma unroll
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
       const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
       if (row_idx < HEAD_SIZE) {
         const int offset = row_idx * BLOCK_SIZE + physical_block_offset;
-        V_vec v_vec = *reinterpret_cast<const V_vec*>(v_ptr + offset);
+        V_vec v_vec;
+        if constexpr (FP8_E5M2) {
+          V_quant_vec v_quant_vec = *reinterpret_cast<const V_quant_vec*>(v_ptr + offset);
+          // Vector conversion from V_quant_vec to V_vec.
+          v_vec = fp8_e5m2_unscaled::vec_conversion<V_vec, V_quant_vec>(v_quant_vec);
+        } else {
+          v_vec = *reinterpret_cast<const V_vec*>(v_ptr + offset);
+        }
         if (block_idx == num_context_blocks - 1) {
           // NOTE(woosuk): When v_vec contains the tokens that are out of the context,
           // we should explicitly zero out the values since they may contain NaNs.
@@ -372,41 +388,41 @@ __device__ void paged_attention_kernel(
 }
 
 // Grid: (num_heads, num_seqs, 1).
-template <typename scalar_t, int HEAD_SIZE, int BLOCK_SIZE,
+template <typename scalar_t, typename cache_t, bool FP8_E5M2, int HEAD_SIZE, int BLOCK_SIZE,
           int NUM_THREADS>
 __global__ void paged_attention_v1_kernel(
-    scalar_t* __restrict__ out,       // [num_seqs, num_heads, head_size]
-    const scalar_t* __restrict__ q,   // [num_seqs, num_heads, head_size]
-    scalar_t** __restrict__ k_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
-    scalar_t** __restrict__ v_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
-    const int num_head_repeats,       // num_heads / num_kv_heads
+    scalar_t* __restrict__ out,      // [num_seqs, num_heads, head_size]
+    const scalar_t* __restrict__ q,  // [num_seqs, num_heads, head_size]
+    cache_t** __restrict__ k_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
+    cache_t** __restrict__ v_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
+    const int num_head_repeats,      // num_heads / num_kv_heads
     const float scale,
     const int* __restrict__ cache_offsets,   // [num_seqs]
     const int* __restrict__ context_lens,    // [num_seqs]
     const float* __restrict__ alibi_slopes,  // [num_heads]
     const int q_stride, const int kv_head_stride) {
-  paged_attention_kernel<scalar_t, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS>(
+  paged_attention_kernel<scalar_t, cache_t, FP8_E5M2, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS>(
       /* exp_sums */ nullptr, /* max_logits */ nullptr, out, q, k_cache, v_cache, num_head_repeats, scale,
       cache_offsets, context_lens, alibi_slopes, q_stride, kv_head_stride);
 }
 
 // Grid: (num_heads, num_seqs, max_num_partitions).
-template <typename scalar_t, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
+template <typename scalar_t, typename cache_t, bool FP8_E5M2, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
           int PARTITION_SIZE>
 __global__ void paged_attention_v2_kernel(
-    float* __restrict__ exp_sums,     // [num_seqs, num_heads, max_num_partitions]
-    float* __restrict__ max_logits,   // [num_seqs, num_heads, max_num_partitions]
-    scalar_t* __restrict__ tmp_out,   // [num_seqs, num_heads, max_num_partitions, head_size]
-    const scalar_t* __restrict__ q,   // [num_seqs, num_heads, head_size]
-    scalar_t** __restrict__ k_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
-    scalar_t** __restrict__ v_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
-    const int num_head_repeats,       // num_heads / num_kv_heads
+    float* __restrict__ exp_sums,    // [num_seqs, num_heads, max_num_partitions]
+    float* __restrict__ max_logits,  // [num_seqs, num_heads, max_num_partitions]
+    scalar_t* __restrict__ tmp_out,  // [num_seqs, num_heads, max_num_partitions, head_size]
+    const scalar_t* __restrict__ q,  // [num_seqs, num_heads, head_size]
+    cache_t** __restrict__ k_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size/x, block_size, x]
+    cache_t** __restrict__ v_cache,  // num_seqs x [seq_blocks, num_kv_heads, head_size, block_size]
+    const int num_head_repeats,      // num_heads / num_kv_heads
     const float scale,
     const int* __restrict__ cache_offsets,   // [num_seqs]
     const int* __restrict__ context_lens,    // [num_seqs]
     const float* __restrict__ alibi_slopes,  // [num_heads]
     const int q_stride, const int kv_head_stride) {
-  paged_attention_kernel<scalar_t, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, PARTITION_SIZE>(
+  paged_attention_kernel<scalar_t, cache_t, FP8_E5M2, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, PARTITION_SIZE>(
       exp_sums, max_logits, tmp_out, q, k_cache, v_cache, num_head_repeats, scale, cache_offsets, context_lens,
       alibi_slopes, q_stride, kv_head_stride);
 }
@@ -505,16 +521,18 @@ __global__ void paged_attention_v2_reduce_kernel(
   }
 }
 
-#define LAUNCH_PAGED_ATTENTION_V1(HEAD_SIZE)                                                                          \
-  cudaFuncSetAttribute(paged_attention_v1_kernel<T, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS>,                              \
-                       cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem_size);                                 \
-  paged_attention_v1_kernel<T, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS><<<grid, block, shared_mem_size, params.stream_>>>( \
-      params.out_, params.query_, params.key_caches_, params.value_caches_, params.num_head_repeats_, params.scale_,  \
-      params.cache_offsets_, params.context_lens_, params.alibi_slopes_, params.q_stride_, params.kv_head_stride_);
+#define LAUNCH_PAGED_ATTENTION_V1(HEAD_SIZE)                                                                       \
+  cudaFuncSetAttribute(paged_attention_v1_kernel<SCALAR_T, CACHE_T, FP8_E5M2, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS>, \
+                       cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem_size);                              \
+  paged_attention_v1_kernel<SCALAR_T, CACHE_T, FP8_E5M2, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS>                       \
+      <<<grid, block, shared_mem_size, params.stream_>>>(                                                          \
+          params.out_, params.query_, params.key_caches_, params.value_caches_, params.num_head_repeats_,          \
+          params.scale_, params.cache_offsets_, params.context_lens_, params.alibi_slopes_, params.q_stride_,      \
+          params.kv_head_stride_);
 
 // TODO(woosuk): Tune NUM_THREADS.
-template <typename T, int BLOCK_SIZE, int NUM_THREADS = 128>
-void paged_attention_v1_launcher(const PagedAttentionParams<T>& params) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2, int BLOCK_SIZE, int NUM_THREADS = 128>
+void paged_attention_v1_launcher(const PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>& params) {
   int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
 
   if (params.head_size_ % thread_group_size != 0) {
@@ -560,18 +578,19 @@ void paged_attention_v1_launcher(const PagedAttentionParams<T>& params) {
 }
 
 #define LAUNCH_PAGED_ATTENTION_V2(HEAD_SIZE)                                                                          \
-  paged_attention_v2_kernel<T, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, PARTITION_SIZE>                                    \
+  paged_attention_v2_kernel<SCALAR_T, CACHE_T, FP8_E5M2, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, PARTITION_SIZE>          \
       <<<grid, block, shared_mem_size, params.stream_>>>(                                                             \
           params.exp_sums_, params.max_logits_, params.tmp_out_, params.query_, params.key_caches_,                   \
           params.value_caches_, params.num_head_repeats_, params.scale_, params.cache_offsets_, params.context_lens_, \
           params.alibi_slopes_, params.q_stride_, params.kv_head_stride_);                                            \
-  paged_attention_v2_reduce_kernel<T, HEAD_SIZE, NUM_THREADS, PARTITION_SIZE>                                         \
+  paged_attention_v2_reduce_kernel<SCALAR_T, HEAD_SIZE, NUM_THREADS, PARTITION_SIZE>                                  \
       <<<reduce_grid, block, reduce_shared_mem_size, params.stream_>>>(params.out_, params.exp_sums_,                 \
                                                                        params.max_logits_, params.tmp_out_,           \
                                                                        params.context_lens_, max_num_partitions);
 
-template <typename T, int BLOCK_SIZE, int NUM_THREADS = 128, int PARTITION_SIZE = 512>
-void paged_attention_v2_launcher(const PagedAttentionParams<T>& params) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2, int BLOCK_SIZE, int NUM_THREADS = 128,
+          int PARTITION_SIZE = 512>
+void paged_attention_v2_launcher(const PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>& params) {
   int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
 
   if (params.head_size_ % thread_group_size != 0) {
@@ -618,20 +637,20 @@ void paged_attention_v2_launcher(const PagedAttentionParams<T>& params) {
   }
 }
 
-template <typename T>
-void paged_attention_v1(const PagedAttentionParams<T>& params) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void paged_attention_v1(const PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>& params) {
   switch (params.block_size_) {
     case 8:
-      paged_attention_v1_launcher<T, 8>(params);
+      paged_attention_v1_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 8>(params);
       break;
     case 16:
-      paged_attention_v1_launcher<T, 16>(params);
+      paged_attention_v1_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 16>(params);
       break;
     case 32:
-      paged_attention_v1_launcher<T, 32>(params);
+      paged_attention_v1_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 32>(params);
       break;
     case 64:
-      paged_attention_v1_launcher<T, 64>(params);
+      paged_attention_v1_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 64>(params);
       break;
     default:
       throw std::runtime_error("Unsupported block size:" + std::to_string(params.block_size_));
@@ -639,22 +658,22 @@ void paged_attention_v1(const PagedAttentionParams<T>& params) {
   }
 }
 
-template <typename T>
-void paged_attention_v2(const PagedAttentionParams<T>& params) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void paged_attention_v2(const PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>& params) {
   // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
   // 1, 2, 4, 64, 128, 256.
   switch (params.block_size_) {
     case 8:
-      paged_attention_v2_launcher<T, 8>(params);
+      paged_attention_v2_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 8>(params);
       break;
     case 16:
-      paged_attention_v2_launcher<T, 16>(params);
+      paged_attention_v2_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 16>(params);
       break;
     case 32:
-      paged_attention_v2_launcher<T, 32>(params);
+      paged_attention_v2_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 32>(params);
       break;
     case 64:
-      paged_attention_v2_launcher<T, 64>(params);
+      paged_attention_v2_launcher<SCALAR_T, CACHE_T, FP8_E5M2, 64>(params);
       break;
     default:
       throw std::runtime_error("Unsupported block size:" + std::to_string(params.block_size_));
@@ -662,41 +681,35 @@ void paged_attention_v2(const PagedAttentionParams<T>& params) {
   }
 }
 
-template <typename T>
-void paged_attention_impl(const PagedAttentionParams<T>& params) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void paged_attention_impl(const PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>& params) {
   if (params.use_v1_) {
     // v1
-    paged_attention_v1<T>(params);
+    paged_attention_v1<SCALAR_T, CACHE_T, FP8_E5M2>(params);
   } else {
     // v2
-    paged_attention_v2<T>(params);
+    paged_attention_v2<SCALAR_T, CACHE_T, FP8_E5M2>(params);
   }
 }
 
-template void paged_attention_impl<float>(const PagedAttentionParams<float>& params);
-
-template void paged_attention_impl<uint16_t>(const PagedAttentionParams<uint16_t>& params);
-
-template void paged_attention_impl<__nv_bfloat16>(const PagedAttentionParams<__nv_bfloat16>& params);
-
-template <typename T>
-int PagedAttentionParams<T>::GetTmpOutNumel() const {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+int PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::GetTmpOutNumel() const {
   return num_seqs_ * num_heads_ * max_num_partitions_ * head_size_;
 }
-template <typename T>
-int PagedAttentionParams<T>::GetExpSumsNumel() const {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+int PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::GetExpSumsNumel() const {
   return num_seqs_ * num_heads_ * max_num_partitions_;
 }
-template <typename T>
-int PagedAttentionParams<T>::GetMaxLogitsNumel() const {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+int PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::GetMaxLogitsNumel() const {
   return num_seqs_ * num_heads_ * max_num_partitions_;
 }
-template <typename T>
-int PagedAttentionParams<T>::GetMaxNumPartitions() const {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+int PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::GetMaxNumPartitions() const {
   return DIVIDE_ROUND_UP(max_context_len_, _PARTITION_SIZE);
 }
-template <typename T>
-bool PagedAttentionParams<T>::IsUseV1() const {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+bool PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::IsUseV1() const {
   int max_num_partitions = max_num_partitions_;
   // NOTE(woosuk): We use a simple heuristic to decide whether to use
   // PagedAttention V1 or V2. If the number of partitions is 1, we use
@@ -709,22 +722,22 @@ bool PagedAttentionParams<T>::IsUseV1() const {
   return use_v1;
 }
 
-template <typename T>
-size_t PagedAttentionParams<T>::GetWorkSize() const {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+size_t PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::GetWorkSize() const {
   size_t work_size = 0;
   if (!use_v1_) {
     size_t exp_sums_size = GetExpSumsNumel() * sizeof(float);
     work_size += exp_sums_size;
     size_t max_logits_size = GetMaxLogitsNumel() * sizeof(float);
     work_size += max_logits_size;
-    size_t tmp_out_size = GetTmpOutNumel() * sizeof(T);
+    size_t tmp_out_size = GetTmpOutNumel() * sizeof(SCALAR_T);
     work_size += tmp_out_size;
   }
   return work_size;
 }
 
-template <typename T>
-void PagedAttentionParams<T>::SetWorkSpace(void* workspace, size_t work_size) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2>::SetWorkSpace(void* workspace, size_t work_size) {
   char* workspace_ptr = static_cast<char*>(workspace);
   if (GetWorkSize() > work_size) {
     throw std::runtime_error("workspace less than needed");
@@ -734,14 +747,14 @@ void PagedAttentionParams<T>::SetWorkSpace(void* workspace, size_t work_size) {
     workspace_ptr += GetExpSumsNumel() * sizeof(float);
     max_logits_ = reinterpret_cast<float*>(workspace_ptr);
     workspace_ptr += GetMaxLogitsNumel() * sizeof(float);
-    tmp_out_ = reinterpret_cast<T*>(workspace_ptr);
-    workspace_ptr += GetTmpOutNumel() * sizeof(T);
+    tmp_out_ = reinterpret_cast<SCALAR_T*>(workspace_ptr);
+    workspace_ptr += GetTmpOutNumel() * sizeof(SCALAR_T);
   }
 }
 
-template <typename T>
-void PagedAttentionCuda<T>::SetConfig(const int num_kv_heads, int num_heads, int head_size, int block_size,
-                                      int stride_size) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void PagedAttentionCuda<SCALAR_T, CACHE_T, FP8_E5M2>::SetConfig(const int num_kv_heads, int num_heads, int head_size,
+                                                                int block_size, int stride_size) {
   params_.num_head_repeats_ = num_heads / num_kv_heads;
   params_.num_heads_ = num_heads;
   params_.head_size_ = head_size;
@@ -751,15 +764,8 @@ void PagedAttentionCuda<T>::SetConfig(const int num_kv_heads, int num_heads, int
   params_.block_size_ = block_size;
 }
 
-template void PagedAttentionCuda<float>::SetConfig(const int num_kv_heads, int num_heads, int head_size, int block_size,
-                                                   int stride_size);
-template void PagedAttentionCuda<uint16_t>::SetConfig(const int num_kv_heads, int num_heads, int head_size,
-                                                      int block_size, int stride_size);
-template void PagedAttentionCuda<__nv_bfloat16>::SetConfig(const int num_kv_heads, int num_heads, int head_size,
-                                                           int block_size, int stride_size);
-
-template <typename T>
-size_t PagedAttentionCuda<T>::GetWorkSpaceSize(int num_seqs, int max_context_len) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+size_t PagedAttentionCuda<SCALAR_T, CACHE_T, FP8_E5M2>::GetWorkSpaceSize(int num_seqs, int max_context_len) {
   params_.num_seqs_ = num_seqs;
   params_.max_context_len_ = max_context_len;
   params_.max_num_partitions_ = params_.GetMaxNumPartitions();
@@ -767,14 +773,13 @@ size_t PagedAttentionCuda<T>::GetWorkSpaceSize(int num_seqs, int max_context_len
   return params_.GetWorkSize();
 }
 
-template size_t PagedAttentionCuda<float>::GetWorkSpaceSize(int num_seqs, int max_context_len);
-template size_t PagedAttentionCuda<uint16_t>::GetWorkSpaceSize(int num_seqs, int max_context_len);
-template size_t PagedAttentionCuda<__nv_bfloat16>::GetWorkSpaceSize(int num_seqs, int max_context_len);
-
-template <typename T>
-void PagedAttentionCuda<T>::SetInput(T* out, const T* query, T** key_caches, T** value_caches, const int* cache_offsets,
-                                     const int* context_lens, int max_context_len, int num_seqs, cudaStream_t stream,
-                                     void* workspace, size_t work_size, const float* alibi_slopes) {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void PagedAttentionCuda<SCALAR_T, CACHE_T, FP8_E5M2>::SetInput(SCALAR_T* out, const SCALAR_T* query,
+                                                               CACHE_T** key_caches, CACHE_T** value_caches,
+                                                               const int* cache_offsets, const int* context_lens,
+                                                               int max_context_len, int num_seqs, cudaStream_t stream,
+                                                               void* workspace, size_t work_size,
+                                                               const float* alibi_slopes) {
   params_.out_ = out;
   params_.query_ = query;
   params_.key_caches_ = key_caches;
@@ -792,30 +797,19 @@ void PagedAttentionCuda<T>::SetInput(T* out, const T* query, T** key_caches, T**
   params_.SetWorkSpace(workspace, work_size);
 }
 
-template void PagedAttentionCuda<float>::SetInput(float* out, const float* query, float** key_caches,
-                                                  float** value_caches, const int* cache_offsets,
-                                                  const int* context_lens, int max_context_len, int num_seqs,
-                                                  cudaStream_t stream, void* workspace, size_t work_size,
-                                                  const float* alibi_slopes);
-template void PagedAttentionCuda<uint16_t>::SetInput(uint16_t* out, const uint16_t* query, uint16_t** key_caches,
-                                                     uint16_t** value_caches, const int* cache_offsets,
-                                                     const int* context_lens, int max_context_len, int num_seqs,
-                                                     cudaStream_t stream, void* workspace, size_t work_size,
-                                                     const float* alibi_slopes);
-template void PagedAttentionCuda<__nv_bfloat16>::SetInput(__nv_bfloat16* out, const __nv_bfloat16* query,
-                                                          __nv_bfloat16** key_caches, __nv_bfloat16** value_caches,
-                                                          const int* cache_offsets, const int* context_lens,
-                                                          int max_context_len, int num_seqs, cudaStream_t stream,
-                                                          void* workspace, size_t work_size, const float* alibi_slopes);
-
-template <typename T>
-void PagedAttentionCuda<T>::Forward() {
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+void PagedAttentionCuda<SCALAR_T, CACHE_T, FP8_E5M2>::Forward() {
   paged_attention_impl(params_);
 }
 
-template void PagedAttentionCuda<float>::Forward();
-template void PagedAttentionCuda<uint16_t>::Forward();
-template void PagedAttentionCuda<__nv_bfloat16>::Forward();
-
+#define PAGED_ATTENTION_CUDA(SCALAR_T, CACHE_T, FP8_E5M2) \
+  template class PagedAttentionCuda<SCALAR_T, CACHE_T, FP8_E5M2>;
+PAGED_ATTENTION_CUDA(float, float, false);
+PAGED_ATTENTION_CUDA(float, uint8_t, true);
+PAGED_ATTENTION_CUDA(uint16_t, uint16_t, false);
+PAGED_ATTENTION_CUDA(uint16_t, uint8_t, true);
+PAGED_ATTENTION_CUDA(__nv_bfloat16, __nv_bfloat16, false);
+PAGED_ATTENTION_CUDA(__nv_bfloat16, uint8_t, true);
+#undef PAGED_ATTENTION_CUDA
 }  // namespace nvidia
 }  // namespace llm_kernels

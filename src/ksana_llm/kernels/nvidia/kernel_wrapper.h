@@ -48,14 +48,15 @@ template <typename T>
 void AssembleLastToken(const void* inputs, const void* offsets, const void* prefix_offsets, const int batch_size,
                        const int hidden_units_num, void* output, cudaStream_t& stream);
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
-                 llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, int total_tokens, int max_tokens,
-                 int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, int tensor_para_size,
-                 bool is_causal, int rank, int block_size, void** k_list, void** v_list, void* prefix_offsets,
-                 void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream);
+                 llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens,
+                 int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size,
+                 int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,
+                 void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
+                 cudaStream_t stream);
 
-template <typename T>
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]
                           void* query,              // [num_seqs, num_heads, head_size]
                           void** key_cache_ptrs,    // num_seqs,[seq_blocks]
@@ -65,7 +66,7 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           void* cache_offsets_ptr,  // num_seqs
                           int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
                           int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,
-                          llm_kernels::nvidia::RotaryEmbeddingCuda<T>& rotary_embedding_cuda, void* workspace,
+                          llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, void* workspace,
                           size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
 
 template <typename T>

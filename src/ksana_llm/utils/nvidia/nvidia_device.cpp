@@ -180,6 +180,8 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetFloatType() {
 #ifdef ENABLE_FP8
   } else if (std::is_same<U, __nv_fp8_e4m3>::value || std::is_same<U, const __nv_fp8_e4m3>::value) {
     return TYPE_FP8_E4M3;
+  } else if (std::is_same<U, __nv_fp8_e5m2>::value || std::is_same<U, const __nv_fp8_e5m2>::value) {
+    return TYPE_FP8_E5M2;
 #endif
   } else {
     return TYPE_INVALID;

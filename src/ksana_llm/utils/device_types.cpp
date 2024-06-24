@@ -21,6 +21,7 @@ size_t GetTypeSize(DataType dtype) {
                                                              {TYPE_FP16, sizeof(float16)},
                                                              {TYPE_FP32, sizeof(float)},
                                                              {TYPE_FP64, sizeof(double)},
+                                                             {TYPE_FP8_E5M2, sizeof(uint8_t)},
                                                              {TYPE_POINTER, sizeof(void*)}
 #ifdef ENABLE_BFLOAT16
                                                              ,

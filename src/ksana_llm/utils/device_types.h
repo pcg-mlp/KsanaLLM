@@ -76,6 +76,7 @@ enum DataType {
   TYPE_BYTES,
   TYPE_FP8_E4M3,
   TYPE_I4_G128,
+  TYPE_FP8_E5M2,
   TYPE_VOID,
   TYPE_POINTER
 #elif defined(ENABLE_ACL)
@@ -96,6 +97,7 @@ enum DataType {
   TYPE_BYTES = aclDataType::ACL_STRING,
   TYPE_FP8_E4M3 = aclDataType::ACL_DT_UNDEFINED,
   TYPE_I4_G128 = aclDataType::ACL_DT_UNDEFINED,
+  TYPE_FP8_E5M2 = aclDataType::ACL_DT_UNDEFINED,
   TYPE_VOID = aclDataType::ACL_DT_UNDEFINED,
   TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED
 #endif
