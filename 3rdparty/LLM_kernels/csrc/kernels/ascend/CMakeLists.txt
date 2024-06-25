@@ -97,6 +97,7 @@ add_subdirectory(cast)
 add_subdirectory(silu_mul)
 add_subdirectory(rmsnorm)
 add_subdirectory(fused_rotary_embedding)
+add_subdirectory(add)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")
