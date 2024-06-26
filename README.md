@@ -59,8 +59,8 @@ apt update && apt install git-lfs -y
 
 #### 1.2 For Huawei Ascend NPU
 
-> [!NOTE]  
-> Image for Huawei Cloud is in progress.
+[https://ascendhub.huawei.com/#/detail/mindie](https://ascendhub.huawei.com/#/detail/mindie)
+version: 1.0.RC1-800I-A2-aarch64
 
 ### 2. Clone source code
 

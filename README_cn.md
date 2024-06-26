@@ -58,8 +58,8 @@ apt update && apt install git-lfs -y
 
 #### 1.2 华为昇腾 NPU
 
-> [!NOTE]  
-> 当前代码暂时仅在腾讯内部的定制机型上适配，华为云机型的适配工作正在进行中
+[https://ascendhub.huawei.com/#/detail/mindie](https://ascendhub.huawei.com/#/detail/mindie)
+version: 1.0.RC1-800I-A2-aarch64
 
 ### 2. 下载源码
 
