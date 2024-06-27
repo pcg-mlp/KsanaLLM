@@ -29,12 +29,8 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
   llm_kernels::utils::CreateAclTensorWithData(input_shape, &(output_buffer_space_ptr), aclDataType::ACL_FLOAT,
                                               aclFormat::ACL_FORMAT_ND, &output_device_tensor_ptr);
 
-  uint32_t seq_len = 1;
-  uint32_t hidden_units_num = 0;
-  hidden_units_num = input_shape.back();
-  for (int idx = 0; idx < input_shape.size(); ++idx) {
-    seq_len *= input_shape[0];
-  }
+  uint32_t seq_len = input_shape.front();
+  uint32_t hidden_units_num = input_shape.back();
   llm_kernels::ascend::InvokeCast<SRC_DTYPE, float>((SRC_DTYPE*)input_buffer_space_ptr, (float*)output_buffer_space_ptr,
                                                     seq_len, hidden_units_num,
                                                     context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
