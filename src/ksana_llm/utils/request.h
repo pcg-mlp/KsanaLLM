@@ -4,6 +4,7 @@
 #pragma once
 
 #include <sys/stat.h>
+#include <map>
 #include <vector>
 
 #include "ksana_llm/utils/id_generator.h"
@@ -54,6 +55,22 @@ struct EmbeddingSlice{
   std::vector<py::object> embedding_tensors;
 };
 
+enum TokenReduceMode {
+  GATHER_ALL,
+  GATHER_TOKEN_ID,
+};
+
+struct TargetDescribe {
+  // The IDs of special tokens in the request target. Based on these IDs, the corresponding target tensor (hidden state,
+  // logits, etc.) should be returned.
+  std::vector<int> token_id;
+  // The position intervals (inclusive of both ends) of token segments in the request target. The target tensor (hidden
+  // state, logits, etc.) should be returned based on the defined intervals.
+  std::vector<std::pair<size_t, size_t>> slice_pos;
+  // The reduction operation mode for each token_id when returning values.
+  TokenReduceMode token_reduce_mode;
+};
+
 struct KsanaPythonInput {
   // The requested model name.
   std::string model_name;
@@ -67,8 +84,19 @@ struct KsanaPythonInput {
   // Embedding slice used to refit input embedding    
   EmbeddingSlice input_refit_embedding; 
 
+  // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
+  // layernorm, transformer, logits}.
+  std::map<std::string, TargetDescribe> request_target;
+
   // The offsets of the tokens for the prompt_probs that need to be returned.
   size_t prompt_probs_offset = 0;
+};
+
+// In the Python environment, define tensor class.
+struct PythonTensor {
+  py::bytes data;
+  std::vector<size_t> shape;
+  std::string dtype;
 };
 
 struct KsanaPythonOutput {
@@ -83,6 +111,9 @@ struct KsanaPythonOutput {
 
   // Embedding value for plugin output
   std::vector<std::vector<float>> embedding;
+
+  // The result of request_target.
+  std::map<std::string, PythonTensor> response;
 };
 
 class Request {
@@ -145,6 +176,13 @@ class Request {
 
   // Protect parallel access for output token.
   std::mutex output_mutex;
+
+  // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
+  // layernorm, transformer, logits}.
+  const std::map<std::string, TargetDescribe>& request_target;
+
+  // The result of request_target.
+  std::map<std::string, PythonTensor> response;
 
  private:
   // The id generator

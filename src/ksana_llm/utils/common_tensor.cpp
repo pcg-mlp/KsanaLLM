@@ -79,9 +79,9 @@ std::string TensorT<T>::ToString() const {
 template <int T>
 std::string TensorT<T>::GetNumpyType() const {
   static const std::unordered_map<DataType, std::string> type_map{
-      {TYPE_INVALID, "x"}, {TYPE_BOOL, "?"},    {TYPE_BYTES, "b"}, {TYPE_UINT8, "u1"}, {TYPE_UINT16, "u2"},
-      {TYPE_UINT32, "u4"}, {TYPE_UINT64, "u8"}, {TYPE_INT8, "i1"}, {TYPE_INT16, "i2"}, {TYPE_INT32, "i4"},
-      {TYPE_INT64, "i8"},  {TYPE_FP16, "f2"},   {TYPE_FP32, "f4"}, {TYPE_FP64, "f8"}};
+      {TYPE_INVALID, "x"}, {TYPE_BOOL, "?"},    {TYPE_BYTES, "b"},  {TYPE_UINT8, "u1"}, {TYPE_UINT16, "u2"},
+      {TYPE_UINT32, "u4"}, {TYPE_UINT64, "u8"}, {TYPE_INT8, "i1"},  {TYPE_INT16, "i2"}, {TYPE_INT32, "i4"},
+      {TYPE_INT64, "i8"},  {TYPE_FP16, "f2"},   {TYPE_BF16, "bf2"}, {TYPE_FP32, "f4"},  {TYPE_FP64, "f8"}};
   return type_map.count(dtype) ? type_map.at(dtype) : "x";
 }
 

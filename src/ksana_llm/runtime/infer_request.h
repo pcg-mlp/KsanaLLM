@@ -115,6 +115,13 @@ class InferRequest {
   // Store token and their corresponding float probability values.
   std::vector<std::vector<std::pair<int, float>>> &logprobs;
 
+  // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
+  // layernorm, transformer, logits}.
+  const std::map<std::string, TargetDescribe>& request_target;
+
+  // The result of request_target.
+  std::map<std::string, PythonTensor>& response;
+
   float cumulative_score;
 
   // The sampling config of this request.

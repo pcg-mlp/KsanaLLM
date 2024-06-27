@@ -19,6 +19,7 @@ Request::Request(const ksana_llm::KsanaPythonInput &ksana_python_input)
       model_name(ksana_python_input.model_name),
       input_tokens(ksana_python_input.input_tokens),
       prompt_probs_offset(ksana_python_input.prompt_probs_offset),
+      request_target(ksana_python_input.request_target),
       sampling_config(ksana_python_input.sampling_config),
       input_refit_embedding(ksana_python_input.input_refit_embedding) {
   for (auto output : output_group) {

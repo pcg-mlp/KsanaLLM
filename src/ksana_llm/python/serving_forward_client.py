@@ -8,6 +8,7 @@ import argparse
 import json
 import time
 import msgpack
+import numpy as np
 
 
 def args_config():
@@ -29,9 +30,63 @@ def post_request_msgpack(serv, data, queue=None):
     else:
         queue.put(msgpack.unpackb(response.content))
 
-def show_response(data, result):
-    print("result:", result)
+def python_tensor_to_numpy(python_tensor):
+    """
+    Converts a custom PythonTensor object to a NumPy array.
 
+    This function is designed to take a PythonTensor, a custom object for this example,
+    and convert it into a NumPy array. The conversion respects the specified shape and
+    data type of the input tensor.
+
+    Parameters:
+    - python_tensor: A tuple containing the data buffer from the PythonTensor object,
+                     the desired shape of the NumPy array, and the desired data type.
+                     The data buffer is expected to be a buffer or similar object that
+                     contains the raw data.
+
+    Returns:
+    - numpy.ndarray: A NumPy array created from the PythonTensor's data, with the
+                     specified shape and data type.
+
+    Raises:
+    - ValueError: If the specified data type is not supported. Currently, only 'float32'
+                  and 'int32' data types are supported.
+    """
+    # Unpack the python_tensor tuple into data, shape, and dtype
+    data, shape, dtype, *_ = python_tensor
+    
+    # Map the specified string data type to the corresponding NumPy data type
+    if dtype == "f4":
+        np_dtype = np.float32
+    elif dtype == "f2":
+        np_dtype = np.float16
+    elif dtype == "bf2":
+        np_dtype = np.uint16
+    elif dtype == "i4":
+        np_dtype = np.int32
+    else:
+        # Raise an exception if an unsupported data type is specified
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
+    # Convert the raw data buffer to a NumPy array with the specified data type
+    data_array = np.frombuffer(data, dtype=np_dtype)
+    
+    # Reshape the NumPy array to the desired shape
+    numpy_array = data_array.reshape(shape)
+
+    if dtype == "bf2":
+        numpy_array = numpy_array.astype(np.uint32) << 16
+        numpy_array = numpy_array.view(np.float32)
+
+    return numpy_array
+
+def show_response(data, result):
+    if "response" in result:
+        for target, python_tensor in result["response"].items():
+            print(
+                f"input_token_ids : {result['input_token_ids']}, target : {target}, tensor : \n{python_tensor_to_numpy(python_tensor)}")
+    else:
+        print(result)
 
 if __name__ == "__main__":
     args = args_config()
@@ -57,6 +112,14 @@ if __name__ == "__main__":
             #     "pos": [20,285,550],
             #     "embeddings": [[1.0,2.0,...],[3.0,4.0,...],[5.0,6.0,...]],
             # },
+            "request_target" : {
+                "layernorm" : {
+                    "token_id" : [13],
+                    #"slice_pos" : [[0,0],[2,5],[7,7]],
+                    "token_reduce_mode" : "GATHER_ALL",
+                    #"token_reduce_mode" : "GATHER_TOKEN_ID",
+                },
+            },
         }
 
         # Create a new process to handle the post request

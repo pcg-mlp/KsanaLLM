@@ -32,6 +32,13 @@ struct ForwardRequest {
   // Embedding slice used to refit input embedding    
   EmbeddingSlice* input_refit_embedding; 
 
+  // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
+  // layernorm, transformer, logits}.
+  const std::map<std::string, TargetDescribe>* request_target = nullptr;
+
+  // The result of request_target.
+  std::map<std::string, PythonTensor>* response = nullptr;
+
   // The output logits buf and offset.
   std::vector<float*> logits_buf;
   size_t logits_offset;

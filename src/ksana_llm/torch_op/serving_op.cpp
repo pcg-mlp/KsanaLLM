@@ -18,6 +18,10 @@
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
 
+PYBIND11_MAKE_OPAQUE(std::map<std::string, ksana_llm::TargetDescribe>);
+PYBIND11_MAKE_OPAQUE(std::map<std::string, ksana_llm::PythonTensor>);
+PYBIND11_MAKE_OPAQUE(std::vector<std::pair<size_t, size_t>>);
+
 namespace ksana_llm {
 
 ServingOp::ServingOp() {}
@@ -98,6 +102,22 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("embeddings", &ksana_llm::EmbeddingSlice::embeddings)
       .def_readwrite("embedding_tensors", &ksana_llm::EmbeddingSlice::embedding_tensors);
 
+  // Export `TokenReduceMode` to python.
+  pybind11::enum_<ksana_llm::TokenReduceMode>(m, "TokenReduceMode", pybind11::arithmetic())
+      .value("GATHER_ALL", ksana_llm::TokenReduceMode::GATHER_ALL)
+      .value("GATHER_TOKEN_ID", ksana_llm::TokenReduceMode::GATHER_TOKEN_ID)
+      .export_values();
+
+  // Export `TargetDescribe` to python.
+  pybind11::class_<ksana_llm::TargetDescribe, std::shared_ptr<ksana_llm::TargetDescribe>>(m, "TargetDescribe")
+      .def(pybind11::init<>())
+      .def_readwrite("token_id", &ksana_llm::TargetDescribe::token_id)
+      .def_readwrite("slice_pos", &ksana_llm::TargetDescribe::slice_pos)
+      .def_readwrite("token_reduce_mode", &ksana_llm::TargetDescribe::token_reduce_mode);
+
+  py::bind_vector<std::vector<std::pair<size_t, size_t>>>(m, "VectorSizeTPair");
+  py::bind_map<std::map<std::string, ksana_llm::TargetDescribe>>(m, "TargetDescribeMap");
+
   // Export `KsanaPythonInput` to python.
   pybind11::class_<ksana_llm::KsanaPythonInput, std::shared_ptr<ksana_llm::KsanaPythonInput>>(m, "KsanaPythonInput")
       .def(pybind11::init<>())
@@ -105,7 +125,17 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("sampling_config", &ksana_llm::KsanaPythonInput::sampling_config)
       .def_readwrite("input_tokens", &ksana_llm::KsanaPythonInput::input_tokens)
       .def_readwrite("prompt_probs_offset", &ksana_llm::KsanaPythonInput::prompt_probs_offset)
+      .def_readwrite("request_target", &ksana_llm::KsanaPythonInput::request_target)
       .def_readwrite("input_refit_embedding", &ksana_llm::KsanaPythonInput::input_refit_embedding);
+
+  // Export `PythonTensor` to python.
+  pybind11::class_<ksana_llm::PythonTensor, std::shared_ptr<ksana_llm::PythonTensor>>(m, "PythonTensor")
+      .def(pybind11::init<>())
+      .def_readwrite("data", &ksana_llm::PythonTensor::data)
+      .def_readwrite("shape", &ksana_llm::PythonTensor::shape)
+      .def_readwrite("dtype", &ksana_llm::PythonTensor::dtype);
+
+  py::bind_map<std::map<std::string, ksana_llm::PythonTensor>>(m, "PythonTensorMap");
 
   // Export `KsanaPythonOutput` to python.
   pybind11::class_<ksana_llm::KsanaPythonOutput, std::shared_ptr<ksana_llm::KsanaPythonOutput>>(m, "KsanaPythonOutput")
@@ -113,6 +143,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("output_tokens", &ksana_llm::KsanaPythonOutput::output_tokens)
       .def_readwrite("prompt_probs", &ksana_llm::KsanaPythonOutput::prompt_probs)
       .def_readwrite("logprobs", &ksana_llm::KsanaPythonOutput::logprobs)
+      .def_readwrite("response", &ksana_llm::KsanaPythonOutput::response)
       .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding);
 
   // Export `StreamingIterator` to python.

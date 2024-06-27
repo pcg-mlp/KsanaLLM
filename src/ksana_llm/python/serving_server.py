@@ -54,7 +54,6 @@ def args_config():
     args = parser.parse_args()
     return args
 
-
 def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform streaming generation.
     """
@@ -114,11 +113,15 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
         output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
 
     # Create a JSON response with the generated text and token IDs
+    response = {}
+    for target, python_tensor in ksana_python_output.response.items():
+        response[target] = (python_tensor.data, python_tensor.shape, python_tensor.dtype)
     return {
         "texts": output_text,  # the generated text
         "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
         "logprobs": ksana_python_output.logprobs,
         "prompt_probs": ksana_python_output.prompt_probs,
+        "response": response,
         "input_token_ids": input_tokens  # the input token IDs
     }
 
@@ -161,6 +164,10 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
 
     if prompt_probs_offset is not None:
         kwargs['prompt_probs_offset'] = prompt_probs_offset
+
+    request_target = request_dict.pop("request_target", None)
+    if request_target is not None:
+        kwargs['request_target'] = request_target
 
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)
@@ -248,12 +255,15 @@ async def forward(request: Request):
 
     The request should be a JSON object packaged with msgpack.
     """
-    request_body_bytes = await request.body()
-    request_dict = msgpack.unpackb(request_body_bytes, raw=False)
-    request_dict["stream"] = False
-    request_dict["sampling_config"] = {"max_new_tokens" : 1}
-    response_data = await process_request(request_dict)
-    return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
+    try:
+        request_body_bytes = await request.body()
+        request_dict = msgpack.unpackb(request_body_bytes, raw=False)
+        request_dict["stream"] = False
+        request_dict["sampling_config"] = {"max_new_tokens" : 1}
+        response_data = await process_request(request_dict)
+        return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
+    except Exception as e:
+        return Response(content=msgpack.packb(str(e)), media_type="application/x-msgpack")
 
 if __name__ == "__main__":
     args = args_config()

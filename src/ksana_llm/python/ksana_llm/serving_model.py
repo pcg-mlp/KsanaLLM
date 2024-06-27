@@ -8,7 +8,7 @@ import sys
 import torch
 import importlib.util
 
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Union, Dict, Any
 
 from transformers.generation.streamers import BaseStreamer
 from transformers.modeling_utils import PreTrainedModel
@@ -150,6 +150,99 @@ class ServingModel(object):
         self._serving.init_serving(config_file)
         self._ksana_plugin = KsanaPlugin(self._serving.plugin_path)
 
+    def validate_slice_pair(self,
+                            slice_pair: tuple,
+                            previous_end: int,
+                            input_tokens_num: int) -> bool:
+        """
+        Validates a slice pair to ensure it represents a valid interval within a sequence of input tokens.
+
+        Parameters:
+        - slice_pair (tuple): A tuple containing two integers where the first element is the start position,
+                            and the second element is the end position of the interval.
+        - previous_end (int): The end position of the previous interval to check for overlaps.
+        - input_tokens_num (int): The total number of input tokens to ensure the interval does not exceed this number.
+
+        Returns:
+        - bool: True if the slice_pair represents a valid interval, otherwise raises a ValueError.
+        """
+
+        # Ensure slice_pair contains exactly two elements
+        if len(slice_pair) != 2:
+            raise ValueError(f"Error: {slice_pair} does not represent a valid interval (expected a tuple of two elements).")
+
+        # Check if the end position is greater than or equal to the start position
+        if slice_pair[1] < slice_pair[0]:
+            raise ValueError(
+                f"Error: The end position of interval {slice_pair} is less than its start position.")
+
+        # Validate that the end position does not exceed the number of input tokens
+        if slice_pair[1] >= input_tokens_num:
+            raise ValueError(
+                f"Error: The end position of interval {slice_pair} exceeds the total number of input tokens ({input_tokens_num}).")
+
+        # Check for overlap with the previous interval
+        if slice_pair[0] <= previous_end:
+            raise ValueError(
+                f"Error: Interval {slice_pair} overlaps with the previous interval ending at position {previous_end}.")
+
+        return True
+
+    def parse_request_target(self,
+                            request_target: Dict[str, Any],
+                            ksana_python_input: libtorch_serving.KsanaPythonInput):
+        """
+        Parses the request target and updates the ksana_python_input object accordingly.
+
+        This function iterates through each target specified in the request, processes its description,
+        and updates the ksana_python_input object with the processed target information.
+
+        Parameters:
+        - request_target (Dict[str, Any]): A dictionary where each key is a target name and its value is a dictionary
+                                        describing the target.
+        - ksana_python_input (libtorch_serving.KsanaPythonInput): An object that will be updated with the processed
+                                                                target information.
+
+        Raises:
+        - RuntimeError: If both 'token_id' and 'slice_pos' are specified for the same target, or if 'GATHER_TOKEN_ID'
+                        is specified for a transformer, layernorm target, which is not supported.
+        """
+
+        # Iterate through each target specified in the request
+        for target_name, target_desc in request_target.items():
+            target_describe = libtorch_serving.TargetDescribe()
+
+            # If 'token_id' is specified, set it in the target description
+            if 'token_id' in target_desc:
+                target_describe.token_id = target_desc['token_id']
+
+            # If 'slice_pos' is specified, validate and set it in the target description
+            if 'slice_pos' in target_desc:
+                previous_end = -1
+                input_tokens_num = len(ksana_python_input.input_tokens)
+                for slice_pair in target_desc['slice_pos']:
+                    if self.validate_slice_pair(slice_pair, previous_end, input_tokens_num):
+                        target_describe.slice_pos.append((slice_pair[0], slice_pair[1]))
+                        previous_end = slice_pair[1]
+
+            # Ensure that 'token_id' and 'slice_pos' are not both set for the same target
+            if len(target_describe.token_id) > 0 and len(target_describe.slice_pos) > 0:
+                raise RuntimeError("Unable to set both token_id and slice_pos at the same time")
+
+            # Set the token reduce mode based on the specified mode in the target description
+            if 'token_reduce_mode' in target_desc:
+                if target_desc['token_reduce_mode'] == 'GATHER_ALL':
+                    target_describe.token_reduce_mode = libtorch_serving.TokenReduceMode.GATHER_ALL
+                elif target_desc['token_reduce_mode'] == 'GATHER_TOKEN_ID':
+                    # Ensure 'GATHER_TOKEN_ID' is not used with transformer, layernorm targets
+                    if target_name == "transformer" or target_name == "layernorm":
+                        raise RuntimeError(
+                            "The output of the {target_name} does not support GATHER_TOKEN_ID")
+                    target_describe.token_reduce_mode = libtorch_serving.TokenReduceMode.GATHER_TOKEN_ID
+
+            # Update the ksana_python_input object with the processed target information
+            ksana_python_input.request_target[target_name] = target_describe
+
     @torch.no_grad()
     def generate(
         self,
@@ -211,6 +304,11 @@ class ServingModel(object):
             ksana_python_input.prompt_probs_offset = kwargs['prompt_probs_offset']
             sampling_config.max_new_tokens = 1
             sampling_config.return_prompt_probs = True
+
+        if 'request_target' in kwargs:
+            sampling_config.max_new_tokens = 1
+            streamer = None
+            self.parse_request_target(kwargs["request_target"], ksana_python_input)
 
         if streamer is None:
             _, ksana_python_output = self._serving.generate(ksana_python_input)

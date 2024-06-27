@@ -39,6 +39,7 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
     }
   }
   ksana_python_output.prompt_probs = std::move(req->prompt_probs);
+  ksana_python_output.response = std::move(req->response);
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
 }

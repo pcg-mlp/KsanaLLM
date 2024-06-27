@@ -66,6 +66,8 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
     forward_req.logits_offset = req_ptr->logits_offset;
+    forward_req.request_target = &req_ptr->request_target;
+    forward_req.response = &req_ptr->response;
     forward_req.output_tokens = &(req_ptr->output_tokens);
     forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;

@@ -452,6 +452,62 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 }
 
 template <typename T>
+bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output,
+                                    const std::string& stage) {
+  bool ret = true;
+  int req_offset = 0;
+  for (ForwardRequest& req : forward_reqs) {
+    int output_tokens_num = req.output_tokens->size();
+    req_offset += output_tokens_num;
+    if (!req.request_target) {
+      ret = false;
+      continue;
+    }
+    auto it = req.request_target->find(stage);
+    if (it == req.request_target->end()) {
+      ret = false;
+      continue;
+    }
+    // Determine whether to exit early
+    ret = ret & req.request_target->size() == req.response->size();
+    if (rank_ != 0) continue;
+    int output_len = 0;
+    std::vector<std::pair<size_t, size_t>> slice_pos = it->second.slice_pos;
+    // If specific token IDs are provided, add their positions to slice_pos.
+    if (it->second.token_id.size() != 0) {
+      std::set<int> token_id_set(it->second.token_id.begin(), it->second.token_id.end());
+      for (int i = 0; i < output_tokens_num; i++) {
+        if (token_id_set.count(req.output_tokens->at(i)) > 0) {
+          slice_pos.push_back({i, i});
+        }
+      }
+    }
+    // Calculate the total output length based on slice positions.
+    for (auto [l, r] : slice_pos) {
+      output_len += r - l + 1;
+    }
+    // Calculate the size of each chunk based on the output tensor's data type and shape.
+    size_t chunk_size = GetTypeSize(output.dtype) * output.shape[1];
+    std::vector<char> output_data(output_len * chunk_size);
+    output_len = 0;
+    // Copy data from the output tensor to the output_data buffer based on slice positions.
+    for (auto [l, r] : slice_pos) {
+      MemcpyAsync(output_data.data() + output_len * chunk_size,
+                  output.GetPtr<void>() + (req_offset - output_tokens_num + l) * chunk_size, (r - l + 1) * chunk_size,
+                  MEMCPY_DEVICE_TO_HOST, context_->GetComputeStreams()[rank_]);
+      output_len += r - l + 1;
+    }
+    StreamSynchronize(context_->GetComputeStreams()[rank_]);
+    // Update the response tensor with the sliced data.
+    PythonTensor& ret_tensor = (*req.response)[stage];
+    ret_tensor.shape = {output_len, output.shape[1]};
+    ret_tensor.dtype = output.GetNumpyType();
+    ret_tensor.data = py::bytes(output_data.data(), output_data.size());
+  }
+  return ret;
+}
+
+template <typename T>
 Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage) {
   GetBlockManager()->SetDeviceId(rank_);
@@ -501,12 +557,28 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
         CommonDecoder(layer_idx, base_weight, temp_buffer_0, temp_buffer_1, temp_buffer_2, is_context_stage));
   }
 
+  if (is_context_stage) {
+    if (UpdateResponse(forward_reqs, temp_buffer_0[0], "transformer")) {
+      StreamSynchronize(context_->GetComputeStreams()[rank_]);
+      input_refit_layer_->Clear();
+      return Status();
+    }
+  }
+
   // final norm
   Tensor final_layernorm_weight = base_weight->GetModelWeights("model.norm.weight");
   std::vector<Tensor>& final_layernorm_input = temp_buffer_0;
   std::vector<Tensor>& final_layernorm_output = temp_buffer_1;
   STATUS_CHECK_RETURN(
       layernorm_layer_->Forward({final_layernorm_input[0], final_layernorm_weight}, final_layernorm_output));
+
+  if (is_context_stage) {
+    if (UpdateResponse(forward_reqs, final_layernorm_output[0], "layernorm")) {
+      StreamSynchronize(context_->GetComputeStreams()[rank_]);
+      input_refit_layer_->Clear();
+      return Status();
+    }
+  }
 
   // assemble last token
   std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;

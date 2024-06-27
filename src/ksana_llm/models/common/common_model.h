@@ -58,6 +58,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // The decode stage.
   Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
+  // Update response. Stop inference when the return value is true.
+  bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
+
  public:
   // plugin name
   std::string plugin_name = "";
