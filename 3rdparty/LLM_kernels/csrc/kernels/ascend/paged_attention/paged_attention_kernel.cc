@@ -14,7 +14,7 @@ using namespace AscendC;
 using namespace matmul;
 using namespace llm_kernels::ascend;
 
-constexpr int32_t BUFFER_NUM = 1;  // tensor num for each queue
+constexpr uint32_t BUFFER_NUM = 1;  // tensor num for each queue
 
 constexpr uint32_t cube_tiling_size = sizeof(TCubeTiling) / sizeof(uint32_t);
 constexpr uint32_t softmax_tiling_size = sizeof(SoftMaxTiling) / sizeof(uint32_t);
@@ -88,8 +88,8 @@ class PagedAttentionKernel {
   GlobalTensor<T> workspace_gm_;
 
   // The k & v list.
-  GlobalTensor<int32_t> k_list_gm_;
-  GlobalTensor<int32_t> v_list_gm_;
+  GlobalTensor<uint32_t> k_list_gm_;
+  GlobalTensor<uint32_t> v_list_gm_;
 
   GlobalTensor<T> k_cache_gm_;
   GlobalTensor<T> v_cache_gm_;
@@ -131,8 +131,8 @@ __aicore__ void PagedAttentionKernel<T>::Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, G
   v_gm_.SetGlobalBuffer((__gm__ T*)v);
 
   if (tiling_->context_stage == 0) {
-    k_list_gm_.SetGlobalBuffer((__gm__ int32_t*)k_list);
-    v_list_gm_.SetGlobalBuffer((__gm__ int32_t*)v_list);
+    k_list_gm_.SetGlobalBuffer((__gm__ uint32_t*)k_list);
+    v_list_gm_.SetGlobalBuffer((__gm__ uint32_t*)v_list);
   }
 
   attn_mask_gm_.SetGlobalBuffer((__gm__ T*)attn_mask);
@@ -215,12 +215,12 @@ __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
 
       // q * k_T
       for (uint32_t tok_idx = 0; tok_idx <= tiling_->token_pos; ++tok_idx) {
-        int32_t k_block_idx = tok_idx / tiling_->block_token_num;
-        int32_t k_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
-        int32_t k_head_offset = head_idx * tiling_->head_dim;
+        uint32_t k_block_idx = tok_idx / tiling_->block_token_num;
+        uint32_t k_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
+        uint32_t k_head_offset = head_idx * tiling_->head_dim;
 
-        int32_t k_cache_ptr0 = k_list_gm_.GetValue(k_block_idx * 2);
-        int32_t k_cache_ptr1 = k_list_gm_.GetValue(k_block_idx * 2 + 1);
+        uint32_t k_cache_ptr0 = k_list_gm_.GetValue(k_block_idx * 2);
+        uint32_t k_cache_ptr1 = k_list_gm_.GetValue(k_block_idx * 2 + 1);
 
         uint64_t k_cache_ptr = k_cache_ptr1;
         k_cache_ptr = k_cache_ptr << 32;
@@ -244,12 +244,12 @@ __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
 
       // attn_weight * v
       for (uint32_t tok_idx = 0; tok_idx <= tiling_->token_pos; ++tok_idx) {
-        int32_t v_block_idx = tok_idx / tiling_->block_token_num;
-        int32_t v_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
-        int32_t v_head_offset = head_idx * tiling_->head_dim;
+        uint32_t v_block_idx = tok_idx / tiling_->block_token_num;
+        uint32_t v_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
+        uint32_t v_head_offset = head_idx * tiling_->head_dim;
 
-        int32_t v_cache_ptr0 = v_list_gm_.GetValue(v_block_idx * 2);
-        int32_t v_cache_ptr1 = v_list_gm_.GetValue(v_block_idx * 2 + 1);
+        uint32_t v_cache_ptr0 = v_list_gm_.GetValue(v_block_idx * 2);
+        uint32_t v_cache_ptr1 = v_list_gm_.GetValue(v_block_idx * 2 + 1);
 
         uint64_t v_cache_ptr = v_cache_ptr1;
         v_cache_ptr = v_cache_ptr << 32;

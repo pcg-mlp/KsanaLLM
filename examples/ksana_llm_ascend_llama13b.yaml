@@ -37,7 +37,7 @@ setting:
     # 单个block可处理的最大token个数
     block_token_num: 16
     # 保留的显存占比，最大为1.0。
-    reserved_device_memory_ratio: 0.2
+    reserved_device_memory_ratio: 0.1
     # Lora权重的显存占比
     lora_deivce_memory_ratio: 0.0
     # Lora权重在host上的预分配大小，相比device上的倍数
