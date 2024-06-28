@@ -32,30 +32,31 @@ def post_request_msgpack(serv, data, queue=None):
 
 def python_tensor_to_numpy(python_tensor):
     """
-    Converts a custom PythonTensor object to a NumPy array.
+    Converts a custom PythonTensor object into a NumPy array.
 
-    This function is designed to take a PythonTensor, a custom object for this example,
-    and convert it into a NumPy array. The conversion respects the specified shape and
-    data type of the input tensor.
+    This function is designed to transform a PythonTensor, which is a custom object for this example,
+    into a NumPy array. The conversion process takes into account the specified shape and
+    data type of the input tensor to ensure accurate representation in the NumPy array format.
 
     Parameters:
-    - python_tensor: A tuple containing the data buffer from the PythonTensor object,
-                     the desired shape of the NumPy array, and the desired data type.
-                     The data buffer is expected to be a buffer or similar object that
-                     contains the raw data.
+    - python_tensor: A dictionary containing the data buffer from the PythonTensor object,
+                     the desired shape for the resulting NumPy array, and the desired data type.
+                     The data buffer should be a buffer or a similar object that
+                     holds the raw data.
 
     Returns:
-    - numpy.ndarray: A NumPy array created from the PythonTensor's data, with the
-                     specified shape and data type.
+    - numpy.ndarray: A NumPy array constructed from the PythonTensor's data, adhering to the
+                     specified shape and data type requirements.
 
     Raises:
-    - ValueError: If the specified data type is not supported. Currently, only 'float32'
-                  and 'int32' data types are supported.
+    - ValueError: If the specified data type is not recognized. Currently, only 'float32',
+                  'float16', 'uint16', and 'int32' data types are supported, represented as
+                  'f4', 'f2', 'bf2', and 'i4' respectively.
     """
-    # Unpack the python_tensor tuple into data, shape, and dtype
-    data, shape, dtype, *_ = python_tensor
+    # Extract data, shape, and dtype from the python_tensor dictionary
+    data, shape, dtype = python_tensor["data"], python_tensor["shape"], python_tensor["dtype"]
     
-    # Map the specified string data type to the corresponding NumPy data type
+    # Map the specified string data type to its corresponding NumPy data type
     if dtype == "f4":
         np_dtype = np.float32
     elif dtype == "f2":
@@ -65,15 +66,16 @@ def python_tensor_to_numpy(python_tensor):
     elif dtype == "i4":
         np_dtype = np.int32
     else:
-        # Raise an exception if an unsupported data type is specified
+        # Throw an exception for unsupported data types
         raise ValueError(f"Unsupported dtype: {dtype}")
 
-    # Convert the raw data buffer to a NumPy array with the specified data type
+    # Create a NumPy array from the raw data buffer using the specified data type
     data_array = np.frombuffer(data, dtype=np_dtype)
     
-    # Reshape the NumPy array to the desired shape
+    # Reshape the NumPy array according to the specified shape
     numpy_array = data_array.reshape(shape)
 
+    # Special handling for 'bf2' dtype to convert uint16 to float32
     if dtype == "bf2":
         numpy_array = numpy_array.astype(np.uint32) << 16
         numpy_array = numpy_array.view(np.float32)
@@ -81,7 +83,7 @@ def python_tensor_to_numpy(python_tensor):
     return numpy_array
 
 def show_response(data, result):
-    if "response" in result:
+    if isinstance(result, dict) and "response" in result:
         for target, python_tensor in result["response"].items():
             print(
                 f"input_token_ids : {result['input_token_ids']}, target : {target}, tensor : \n{python_tensor_to_numpy(python_tensor)}")

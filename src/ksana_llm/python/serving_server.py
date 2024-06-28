@@ -8,6 +8,7 @@ import json
 import yaml
 import uvicorn
 import os
+import traceback
 
 from typing import Dict, Any
 from fastapi import FastAPI, Request
@@ -112,16 +113,24 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
     for tokens in ksana_python_output.output_tokens:
         output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
 
+    # Create a return for the forward interface
+    if (len(ksana_python_output.response) > 0):
+        response = {}
+        for target, python_tensor in ksana_python_output.response.items():
+            response[target] = {"data": python_tensor.data,
+                                "shape": python_tensor.shape,
+                                "dtype": python_tensor.dtype}
+        return {
+            "input_token_ids": input_tokens,  # the input token IDs
+            "response": response  # The processed response containing tensor data
+        }
+
     # Create a JSON response with the generated text and token IDs
-    response = {}
-    for target, python_tensor in ksana_python_output.response.items():
-        response[target] = (python_tensor.data, python_tensor.shape, python_tensor.dtype)
     return {
         "texts": output_text,  # the generated text
         "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
         "logprobs": ksana_python_output.logprobs,
         "prompt_probs": ksana_python_output.prompt_probs,
-        "response": response,
         "input_token_ids": input_tokens  # the input token IDs
     }
 
@@ -263,6 +272,7 @@ async def forward(request: Request):
         response_data = await process_request(request_dict)
         return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
     except Exception as e:
+        print(traceback.format_exc())
         return Response(content=msgpack.packb(str(e)), media_type="application/x-msgpack")
 
 if __name__ == "__main__":
