@@ -80,7 +80,6 @@ function(add_ascend_kernel_lib)
 endfunction()
 
 add_subdirectory(argmax)
-add_subdirectory(attention)
 add_subdirectory(concat)
 add_subdirectory(elementwise)
 add_subdirectory(embedding)

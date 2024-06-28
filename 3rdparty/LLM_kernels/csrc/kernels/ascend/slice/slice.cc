@@ -18,7 +18,7 @@ namespace ascend {
 constexpr uint32_t MAX_SLICE_BLOCK_SIZE = 16 * 16;
 
 // The max used ai core number.
-constexpr uint32_t MAX_USED_CORE_NUM = 24;
+constexpr uint32_t MAX_USED_CORE_NUM = 24 * 2;
 
 void Slice(const aclTensor* input, const int sliceDim, const int sliceStart, const int sliceEnd, const int sliceStep,
            aclTensor** output, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
@@ -38,16 +38,11 @@ Slice2<T>::Slice2() {
 
   // TODO: Get block num from device info.
   tiling_data_.used_core_num = 24;
-
-  size_t usr_workspace_size = 4 * 1024;
-  size_t sys_workspace_size = 16 * 1024 * 1024;
-  ACL_CHECK_RET(aclrtMalloc(&workspace_gm_, usr_workspace_size + sys_workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
 template <typename T>
 Slice2<T>::~Slice2() {
   ACL_CHECK_RET(aclrtFree(tiling_buffer_gm_));
-  ACL_CHECK_RET(aclrtFree(workspace_gm_));
 }
 
 template <typename T>
@@ -58,37 +53,68 @@ void Slice2<T>::CopyTilingToDevice(aclrtStream stream) {
 }
 
 template <typename T>
-void Slice2<T>::Forward(void* output, void* input, int start, int length, int step, int times, aclrtStream stream) {
-  tiling_data_.start = start * sizeof(T);
-  tiling_data_.length = length * sizeof(T);
-  tiling_data_.step = step * sizeof(T);
-  tiling_data_.times = times;
+void Slice2<T>::GenerateTiling(int start, int length, int step, int times, SliceTilingData& tiling_data) {
+  tiling_data.start = start * sizeof(T);
+  tiling_data.length = length * sizeof(T);
+  tiling_data.step = step * sizeof(T);
+  tiling_data.times = times;
 
-  if (tiling_data_.length < MAX_SLICE_BLOCK_SIZE) {
-    tiling_data_.block_size = tiling_data_.length;
-    tiling_data_.tail_block_size = tiling_data_.length;
-    tiling_data_.step_block_num = 1;
+  if (tiling_data.length < MAX_SLICE_BLOCK_SIZE) {
+    tiling_data.block_size = tiling_data.length;
+    tiling_data.tail_block_size = tiling_data.length;
+    tiling_data.step_block_num = 1;
   } else {
-    tiling_data_.block_size = MAX_SLICE_BLOCK_SIZE;
-    uint32_t tail_size = tiling_data_.length % MAX_SLICE_BLOCK_SIZE;
+    tiling_data.block_size = MAX_SLICE_BLOCK_SIZE;
+    uint32_t tail_size = tiling_data.length % MAX_SLICE_BLOCK_SIZE;
     if (tail_size != 0) {
-      tiling_data_.tail_block_size = tail_size;
+      tiling_data.tail_block_size = tail_size;
     } else {
-      tiling_data_.tail_block_size = tiling_data_.block_size;
+      tiling_data.tail_block_size = tiling_data.block_size;
     }
-    tiling_data_.step_block_num = (tiling_data_.length + MAX_SLICE_BLOCK_SIZE - 1) / MAX_SLICE_BLOCK_SIZE;
+    tiling_data.step_block_num = (tiling_data.length + MAX_SLICE_BLOCK_SIZE - 1) / MAX_SLICE_BLOCK_SIZE;
   }
 
-  if (tiling_data_.times * tiling_data_.step_block_num < MAX_USED_CORE_NUM) {
-    tiling_data_.used_core_num = tiling_data_.times * tiling_data_.step_block_num;
+  if (tiling_data.times * tiling_data.step_block_num < MAX_USED_CORE_NUM) {
+    tiling_data.used_core_num = tiling_data.times * tiling_data.step_block_num;
   } else {
-    tiling_data_.used_core_num = MAX_USED_CORE_NUM;
+    tiling_data.used_core_num = MAX_USED_CORE_NUM;
   }
+}
 
+template <typename T>
+void Slice2<T>::CacheTiling(void* dev, size_t key, int start, int length, int step, int times, aclrtStream stream) {
+  SliceTilingData tiling_data;
+  GenerateTiling(start, length, step, times, tiling_data);
+
+  ACL_CHECK_RET(aclrtMemcpyAsync(dev, tiling_size_, &tiling_data, tiling_size_,
+                                 aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+
+  tiling_cache_[key] = dev;
+  tiling_cores_[key] = tiling_data.used_core_num;
+}
+
+template <typename T>
+void* Slice2<T>::GetTilingData(size_t key, int& block_dim) {
+  if (tiling_cache_.find(key) != tiling_cache_.end()) {
+    block_dim = tiling_cores_.at(key);
+    return tiling_cache_.at(key);
+  }
+  return nullptr;
+}
+
+template <typename T>
+void Slice2<T>::Forward(void* output, void* input, void* tiling, int block_dim, aclrtStream stream) {
+  ACLRT_LAUNCH_KERNEL(InvokeSliceKernel)(block_dim, stream, input, output, tiling);
+}
+
+template <typename T>
+void Slice2<T>::Forward(void* output, void* input, int start, int length, int step, int times, aclrtStream stream) {
+  GenerateTiling(start, length, step, times, tiling_data_);
   CopyTilingToDevice(stream);
 
   ACLRT_LAUNCH_KERNEL(InvokeSliceKernel)
-  (tiling_data_.used_core_num, stream, input, output, workspace_gm_, tiling_buffer_gm_);
+  (tiling_data_.used_core_num, stream, input, output, tiling_buffer_gm_);
 }
 
 template class Slice2<aclFloat16>;

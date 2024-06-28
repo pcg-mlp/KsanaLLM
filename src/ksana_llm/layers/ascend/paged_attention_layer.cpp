@@ -5,7 +5,6 @@
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
-#include "csrc/kernels/ascend/attention/attention.h"
 #include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 #include "csrc/utils/ascend/common.h"
 

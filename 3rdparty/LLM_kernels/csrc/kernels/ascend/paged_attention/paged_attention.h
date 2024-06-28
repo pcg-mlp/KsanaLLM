@@ -36,15 +36,18 @@ class PagedAttention {
                   const float scaling_factor = 1.0f);
 
   // private:
-  void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos);
+  void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos,
+                          PagedAttentionTilingData* tiling_data);
 
   // Initialize common tiling data.
-  void InitTilingData(bool is_context_stage);
+  void InitTilingData(bool is_context_stage, PagedAttentionTilingData* tiling_data);
 
   // Copy the tiling data from host to global memory.
-  void CopyTilingToDevice(bool is_context_stage, aclrtStream stream);
+  void CopyTilingToDevice(PagedAttentionTilingData* tiling_data, aclrtStream stream);
 
-  void IniAttnMask();
+  void InitAttnMask();
+  void InitPermuteTiling(aclrtStream stream);
+  void InitSliceTiling(aclrtStream stream);
 
  private:
   // The tiling data for current request.
@@ -90,6 +93,12 @@ class PagedAttention {
   void* tiling_buffer_gm_;
 
   void* attn_mask_gm_;
+
+  // Used to cache permute tiling.
+  void* permute_tiling_gm_;
+
+  // Used to cache slice tiling.
+  void* slice_tiling_gm_;
 
   // The size of tiling data.
   size_t tiling_size_;

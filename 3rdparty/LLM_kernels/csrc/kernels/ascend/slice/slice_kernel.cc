@@ -138,23 +138,13 @@ __aicore__ void SliceKernel::CopyOut(int32_t loop_idx, uint32_t dst_offset, uint
   input_queue_.FreeTensor(local_tensor);
 }
 
-extern "C" __global__ __aicore__ void InvokeSliceKernel(GM_ADDR input, GM_ADDR output, GM_ADDR workspace,
-                                                        GM_ADDR tiling_gm) {
+extern "C" __global__ __aicore__ void InvokeSliceKernel(GM_ADDR input, GM_ADDR output, 
+                                                        GM_ADDR __restrict tiling_gm) {
   TPipe pipe;
 
   SliceTilingData tiling;
   CopyTiling(&tiling, tiling_gm);
   if (GetBlockIdx() >= tiling.used_core_num) {
-    return;
-  }
-
-  if (workspace == nullptr) {
-    return;
-  }
-
-  SetSysWorkspace(workspace);
-  GM_ADDR usr_workspace = GetUserWorkspace(workspace);
-  if (usr_workspace == nullptr) {
     return;
   }
 

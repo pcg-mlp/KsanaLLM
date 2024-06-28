@@ -51,19 +51,11 @@ template <typename T>
 PermuteKernelWrapper<T>::PermuteKernelWrapper() {
   tiling_size_ = sizeof(PermuteTilingData);
   ACL_CHECK_RET(aclrtMalloc(&tiling_buffer_gm_, tiling_size_, ACL_MEM_MALLOC_HUGE_FIRST));
-
-  // TODO: Get block num from device info.
-  tiling_data_.used_core_num = MAX_USED_CORE_NUM;
-
-  size_t usr_workspace_size = 1024 << 2;
-  size_t sys_workspace_size = 1024 << 14;
-  ACL_CHECK_RET(aclrtMalloc(&workspace_gm_, usr_workspace_size + sys_workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
 template <typename T>
 PermuteKernelWrapper<T>::~PermuteKernelWrapper() {
   ACL_CHECK_RET(aclrtFree(tiling_buffer_gm_));
-  ACL_CHECK_RET(aclrtFree(workspace_gm_));
 }
 
 template <typename T>
@@ -74,103 +66,103 @@ void PermuteKernelWrapper<T>::CopyTilingToDevice(aclrtStream stream) {
 }
 
 template <typename T>
-void PermuteKernelWrapper<T>::Forward(void* output, void* input, const std::vector<uint64_t>& shape,
-                          const std::vector<uint64_t> new_indexes, aclrtStream stream) {
-  // The kernel support at most 6 dimension now.
-  if (shape.size() > 6 && new_indexes.size() > 6) {
-    return;
-  }
-
-  std::vector<uint64_t> input_shape = shape;
-  while (input_shape.size() < 6) {
-    input_shape.insert(input_shape.begin(), 1);
-  }
-
-  std::vector<uint32_t> strides;
-  strides.resize(input_shape.size(), 1);
-  for (int64_t i = input_shape.size() - 2; i >= 0; i--) {
-    strides[i] = input_shape[i + 1] * strides[i + 1];
-  }
-
-  // NOTE(karlluo): for Huawei kernel not support dynamic vector.
-  // extern indexes to 6 dims to fill static const length vector.
-  std::vector<uint64_t> output_new_indexes = new_indexes;
-  int fill_dim = 6 - output_new_indexes.size();
-  for (size_t i = 0; i < output_new_indexes.size(); ++i) {
-    output_new_indexes[i] = output_new_indexes[i] + fill_dim;
-  }
-
-  fill_dim = fill_dim - 1;
-  while (fill_dim >= 0) {
-    output_new_indexes.insert(output_new_indexes.begin(), fill_dim);
-    fill_dim = fill_dim - 1;
+void PermuteKernelWrapper<T>::GenerateTiling(const std::vector<uint64_t>& shape,
+                                             const std::vector<uint64_t> new_indexes, PermuteTilingData& tiling_data) {
+  std::vector<uint32_t> strides(shape.size(), 1);
+  for (int64_t i = shape.size() - 2; i >= 0; i--) {
+    strides[i] = shape[i + 1] * strides[i + 1];
   }
 
   std::vector<int64_t> new_shape;
-  for (auto i : output_new_indexes) {
-    new_shape.push_back(input_shape[i]);
+  for (auto i : new_indexes) {
+    new_shape.push_back(shape[i]);
   }
 
-  std::vector<uint32_t> new_strides;
-  new_strides.resize(new_shape.size(), 1);
+  std::vector<uint32_t> new_strides(new_shape.size(), 1);
   for (int64_t i = new_shape.size() - 2; i >= 0; i--) {
     new_strides[i] = new_shape[i + 1] * new_strides[i + 1];
   }
 
   int64_t shape_size = 1;
-  for (auto i : input_shape) {
+  for (auto i : shape) {
     shape_size *= i;
   }
 
-  tiling_data_.dim0 = input_shape[0];
-  tiling_data_.dim1 = input_shape[1];
-  tiling_data_.dim2 = input_shape[2];
-  tiling_data_.dim3 = input_shape[3];
-  tiling_data_.dim4 = input_shape[4];
-  tiling_data_.dim5 = input_shape[5];
+  tiling_data.dim0 = shape[0];
+  tiling_data.dim1 = shape[1];
+  tiling_data.dim2 = shape[2];
 
-  tiling_data_.stride0 = strides[0];
-  tiling_data_.stride1 = strides[1];
-  tiling_data_.stride2 = strides[2];
-  tiling_data_.stride3 = strides[3];
-  tiling_data_.stride4 = strides[4];
-  tiling_data_.stride5 = strides[5];
+  tiling_data.stride0 = strides[0];
+  tiling_data.stride1 = strides[1];
+  tiling_data.stride2 = strides[2];
 
-  tiling_data_.new_idx0 = output_new_indexes[0];
-  tiling_data_.new_idx1 = output_new_indexes[1];
-  tiling_data_.new_idx2 = output_new_indexes[2];
-  tiling_data_.new_idx3 = output_new_indexes[3];
-  tiling_data_.new_idx4 = output_new_indexes[4];
-  tiling_data_.new_idx5 = output_new_indexes[5];
+  tiling_data.new_idx0 = new_indexes[0];
+  tiling_data.new_idx1 = new_indexes[1];
+  tiling_data.new_idx2 = new_indexes[2];
 
-  tiling_data_.new_stride0 = new_strides[0];
-  tiling_data_.new_stride1 = new_strides[1];
-  tiling_data_.new_stride2 = new_strides[2];
-  tiling_data_.new_stride3 = new_strides[3];
-  tiling_data_.new_stride4 = new_strides[4];
-  tiling_data_.new_stride5 = new_strides[5];
+  tiling_data.new_stride0 = new_strides[0];
+  tiling_data.new_stride1 = new_strides[1];
+  tiling_data.new_stride2 = new_strides[2];
 
-  tiling_data_.total_length = shape_size;
-
-  if (shape_size / MIN_PERMUTE_BLOCK_SIZE >= MAX_USED_CORE_NUM) {
-    tiling_data_.used_core_num = MAX_USED_CORE_NUM;
+  // Use single core to work around with ascend's cache line align.
+  if (tiling_data.new_idx2 != 2) {
+    tiling_data.total_length = shape_size;
+    tiling_data.used_core_num = 1;
   } else {
-    tiling_data_.used_core_num = (shape_size + MIN_PERMUTE_BLOCK_SIZE - 1) / MIN_PERMUTE_BLOCK_SIZE;
-  }
+    tiling_data.total_length = shape_size / tiling_data.dim2;
+    tiling_data.used_core_num = MAX_USED_CORE_NUM * 2;
 
-  tiling_data_.used_core_num = 1;
-  tiling_data_.block_length = (shape_size + tiling_data_.used_core_num - 1) / tiling_data_.used_core_num;
+    tiling_data.stride0 /= tiling_data.dim2;
+    tiling_data.stride1 /= tiling_data.dim2;
+    tiling_data.stride2 /= tiling_data.dim2;
+
+    tiling_data.new_stride0 /= tiling_data.dim2;
+    tiling_data.new_stride1 /= tiling_data.dim2;
+    tiling_data.new_stride2 /= tiling_data.dim2;
+  }
 
   if (sizeof(T) == 2) {
-    tiling_data_.tiling_key = static_cast<uint32_t>(TilingDataType::FLOAT16);
+    tiling_data.tiling_key = static_cast<uint32_t>(TilingDataType::FLOAT16);
   } else if (sizeof(T) == 4) {
-    tiling_data_.tiling_key = static_cast<uint32_t>(TilingDataType::FLOAT32);
+    tiling_data.tiling_key = static_cast<uint32_t>(TilingDataType::FLOAT32);
   }
+}
 
+template <typename T>
+void PermuteKernelWrapper<T>::CacheTiling(void* dev, size_t key, const std::vector<uint64_t>& shape,
+                                          const std::vector<uint64_t> new_indexes, aclrtStream stream) {
+  PermuteTilingData tiling_data;
+  GenerateTiling(shape, new_indexes, tiling_data);
+
+  ACL_CHECK_RET(aclrtMemcpyAsync(dev, tiling_size_, &tiling_data, tiling_size_,
+                                 aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+
+  tiling_cache_[key] = dev;
+  tiling_cores_[key] = tiling_data.used_core_num;
+}
+
+template <typename T>
+void* PermuteKernelWrapper<T>::GetTilingData(size_t key, int& block_dim) {
+  if (tiling_cache_.find(key) != tiling_cache_.end()) {
+    block_dim = tiling_cores_.at(key);
+    return tiling_cache_.at(key);
+  }
+  return nullptr;
+}
+
+template <typename T>
+void PermuteKernelWrapper<T>::Forward(void* output, void* input, void* tiling, int block_dim, aclrtStream stream) {
+  ACLRT_LAUNCH_KERNEL(InvokePermuteKernel)(block_dim, stream, input, output, tiling);
+}
+
+template <typename T>
+void PermuteKernelWrapper<T>::Forward(void* output, void* input, const std::vector<uint64_t>& shape,
+                                      const std::vector<uint64_t> new_indexes, aclrtStream stream) {
+  GenerateTiling(shape, new_indexes, tiling_data_);
   CopyTilingToDevice(stream);
 
-  ACLRT_LAUNCH_KERNEL(InvokePermuteKernel)
-  (tiling_data_.used_core_num, stream, input, output, workspace_gm_, tiling_buffer_gm_);
+  ACLRT_LAUNCH_KERNEL(InvokePermuteKernel)(tiling_data_.used_core_num, stream, input, output, tiling_buffer_gm_);
 }
 
 template class PermuteKernelWrapper<aclFloat16>;

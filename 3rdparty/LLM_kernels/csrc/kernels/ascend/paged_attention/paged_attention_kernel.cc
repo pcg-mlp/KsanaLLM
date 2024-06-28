@@ -173,35 +173,31 @@ template <typename T>
 __aicore__ void PagedAttentionKernel<T>::ProcessPrefill() {
   REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &qk_tiling_, mm2_, &wv_tiling_);
 
-  for (uint32_t head_idx = 0; head_idx < tiling_->head_size; ++head_idx) {
-    if (head_idx % tiling_->head_size == block_idx_) {
-      uint32_t head_offset = head_idx * tiling_->seq_len * tiling_->head_dim;
+  uint32_t head_idx = block_idx_;
+  uint32_t head_offset = head_idx * tiling_->seq_len * tiling_->head_dim;
+  uint32_t qk_offset = head_idx * tiling_->seq_len * tiling_->seq_len;
 
-      uint32_t qk_offset = head_idx * tiling_->seq_len * tiling_->seq_len;
+  mm_.SetTensorA(q_gm_[head_offset], false);
+  mm_.SetTensorB(k_gm_[head_offset], true);
+  mm_.IterateAll(workspace_gm_[qk_offset]);
+  mm_.End();
+  pipe_barrier(PIPE_ALL);
 
-      mm_.SetTensorA(q_gm_[head_offset]);
-      mm_.SetTensorB(k_gm_[head_offset]);
-      mm_.IterateAll(workspace_gm_[qk_offset]);
-      mm_.End();
-      pipe_barrier(PIPE_ALL);
-
-      // scaling & attn_mask & softmax.
-      for (uint32_t tok_idx = 0; tok_idx < tiling_->seq_len; ++tok_idx) {
-        // Loop seq_len * [1, seq_len]
-        ContextCopyIn(head_idx, tok_idx);
-        ContextCompute(head_idx, tok_idx);
-        ContextCopyOut(head_idx, tok_idx);
-      }
-      pipe_barrier(PIPE_ALL);
-
-      // attn_weight * v
-      mm2_.SetTensorA(workspace_gm_[qk_offset]);
-      mm2_.SetTensorB(v_gm_[head_offset]);
-      mm2_.IterateAll(output_gm_[head_offset]);
-      mm2_.End();
-      pipe_barrier(PIPE_ALL);
-    }
+  // scaling & attn_mask & softmax.
+  for (uint32_t tok_idx = 0; tok_idx < tiling_->seq_len; ++tok_idx) {
+    // Loop seq_len * [1, seq_len]
+    ContextCopyIn(head_idx, tok_idx);
+    ContextCompute(head_idx, tok_idx);
+    ContextCopyOut(head_idx, tok_idx);
   }
+  pipe_barrier(PIPE_ALL);
+
+  // attn_weight * v
+  mm2_.SetTensorA(workspace_gm_[qk_offset], false);
+  mm2_.SetTensorB(v_gm_[head_offset], false);
+  mm2_.IterateAll(output_gm_[head_offset]);
+  mm2_.End();
+  pipe_barrier(PIPE_ALL);
 }
 
 template <typename T>
@@ -224,8 +220,8 @@ __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
     uint64_t k_cache_ptr = ((uint64_t)k_cache_ptr1 << 32) | k_cache_ptr0;
     k_cache_gm_.SetGlobalBuffer(reinterpret_cast<__gm__ T*>(k_cache_ptr) + k_token_offset + k_head_offset);
 
-    mm_.SetTensorA(q_gm_[head_offset]);
-    mm_.SetTensorB(k_cache_gm_);
+    mm_.SetTensorA(q_gm_[head_offset], false);
+    mm_.SetTensorB(k_cache_gm_, true);
     mm_.IterateAll(workspace_gm_[qk_offset + tok_idx]);
     mm_.End();
   }
@@ -250,8 +246,8 @@ __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
     uint64_t v_cache_ptr = ((uint64_t)v_cache_ptr1 << 32) | v_cache_ptr0;
     v_cache_gm_.SetGlobalBuffer(reinterpret_cast<__gm__ T*>(v_cache_ptr) + v_token_offset + v_head_offset);
 
-    mm2_.SetTensorA(workspace_gm_[qk_offset + tok_idx]);
-    mm2_.SetTensorB(v_cache_gm_);
+    mm2_.SetTensorA(workspace_gm_[qk_offset + tok_idx], false);
+    mm2_.SetTensorB(v_cache_gm_, false);
     mm2_.IterateAll(output_gm_[head_offset]);
     mm2_.End();
 
@@ -409,11 +405,6 @@ extern "C" __global__ __aicore__ void InvokePagedAttentionKernel(GM_ADDR q, GM_A
                                                                  GM_ADDR workspace, GM_ADDR tiling_gm) {
   PagedAttentionTilingData tiling;
   CopyTiling(&tiling, tiling_gm);
-
-  uint32_t max_core_num = (g_coreType == AIC) ? tiling.used_core_num : tiling.used_core_num * 2;
-  if (GetBlockIdx() >= max_core_num) {
-    return;
-  }
 
   TPipe pipe;
   if (tiling.data_type == 0) {

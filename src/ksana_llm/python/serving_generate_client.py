@@ -65,7 +65,7 @@ if __name__ == "__main__":
                 "topp": 0.0,  # top-p sampling
                 "logprobs": 0, # Return the n token log probabilities for each position.
                 "max_new_tokens":
-                32,  # maximum number of new tokens to generate
+                128,  # maximum number of new tokens to generate
                 "repetition_penalty": 1.0,  # penalty for repetitive responses
                 "stop_token_ids": [] # list of tokens that stop the generation
             },
