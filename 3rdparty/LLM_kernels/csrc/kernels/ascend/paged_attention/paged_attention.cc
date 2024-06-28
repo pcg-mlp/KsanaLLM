@@ -22,6 +22,8 @@
 #include "tiling/softmax/softmax_tiling_intf.h"
 #include "tiling/tiling_api.h"
 
+#include "csrc/kernels/ascend/paged_attention/paged_attention_tiling.h"
+
 // The max possible batch size.
 #define MAX_BATCH_SIZE 256
 
@@ -45,6 +47,10 @@
 
 namespace llm_kernels {
 namespace ascend {
+
+// The tiling data for current request.
+PagedAttentionTilingData prefill_tiling_data_;
+PagedAttentionTilingData decode_tiling_data_;
 
 template <typename T>
 PagedAttention<T>::~PagedAttention() {
@@ -126,8 +132,8 @@ void PagedAttention<T>::Initialize(uint32_t head_size, uint32_t kv_head_size, ui
   InitPermuteTiling(stream);
   InitSliceTiling(stream);
 
-  InitTilingData(true, &prefill_tiling_data_);
-  InitTilingData(false, &decode_tiling_data_);
+  InitTilingData(true);
+  InitTilingData(false);
 }
 
 template <typename T>
@@ -177,7 +183,9 @@ void PagedAttention<T>::InitSliceTiling(aclrtStream stream) {
 }
 
 template <typename T>
-void PagedAttention<T>::InitTilingData(bool is_context_stage, PagedAttentionTilingData* tiling_data) {
+void PagedAttention<T>::InitTilingData(bool is_context_stage) {
+  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+
   if (std::is_same<T, aclFloat16>::value) {
     tiling_data->data_type = static_cast<uint32_t>(TilingDataType::FLOAT16);
   } else if (std::is_same<T, float>::value) {
@@ -200,7 +208,9 @@ void PagedAttention<T>::InitTilingData(bool is_context_stage, PagedAttentionTili
 
 template <typename T>
 void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num,
-                                           int32_t token_pos, PagedAttentionTilingData* tiling_data) {
+                                           int32_t token_pos) {
+  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+
   tiling_data->seq_len = seq_len;
   tiling_data->seq_block_num = seq_block_num;
   tiling_data->token_pos = token_pos;
@@ -283,7 +293,9 @@ void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_l
 }
 
 template <typename T>
-void PagedAttention<T>::CopyTilingToDevice(PagedAttentionTilingData* tiling_data, aclrtStream stream) {
+void PagedAttention<T>::CopyTilingToDevice(bool is_context_stage, aclrtStream stream) {
+  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+
   ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, tiling_data, tiling_size_,
                                  aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
 }
@@ -330,6 +342,11 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
           slice_.GetTilingData(SLICE_TILING_2 | static_cast<size_t>(cur_seq_len), slice2_block_dim);
       slice_.Forward(v_buffer_, qkv_tensor + b_offset, slice2_tiling_data, slice2_block_dim, stream);
 
+      // stream different batch idx.
+      if (b_idx > 0) {
+        aclrtSynchronizeStream(stream);
+      }
+
       // ROPE
       size_t rope_offset = total_seq_len_idx * sizeof(int64_t);
       rope_.SetInput((int64_t*)(rope_pos + rope_offset), (T*)q_buffer_, (T*)k_buffer_, cur_seq_len, stream);
@@ -375,8 +392,8 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       permute_.Forward(v_buffer_2_, v_buffer_, pre_tiling_data, pre_block_dim, stream);
 
 
-      GenerateTilingData(true, cur_seq_len, cur_block_num, cur_seq_len - 1, &prefill_tiling_data_);
-      CopyTilingToDevice(&prefill_tiling_data_, stream);
+      GenerateTilingData(true, cur_seq_len, cur_block_num, cur_seq_len - 1);
+      CopyTilingToDevice(true, stream);
 
       ACLRT_LAUNCH_KERNEL(InvokePagedAttentionKernel)
       (prefill_tiling_data_.used_core_num, stream, q_buffer_2_, k_buffer_2_, v_buffer_2_, attn_mask_gm_, k_list, v_list,
@@ -451,8 +468,8 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
                                        aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
       }
 
-      GenerateTilingData(false, cur_seq_len, cur_block_num, cur_seq_len - 1, &decode_tiling_data_);
-      CopyTilingToDevice(&decode_tiling_data_, stream);
+      GenerateTilingData(false, cur_seq_len, cur_block_num, cur_seq_len - 1);
+      CopyTilingToDevice(false, stream);
 
       size_t output_offset = b_idx * head_size_ * head_dim_ * sizeof(T);
       ACLRT_LAUNCH_KERNEL(InvokePagedAttentionKernel)

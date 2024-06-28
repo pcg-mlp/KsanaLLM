@@ -13,8 +13,6 @@
 #include "csrc/kernels/ascend/permute/permute.h"
 #include "csrc/kernels/ascend/slice/slice.h"
 
-#include "csrc/kernels/ascend/paged_attention/paged_attention_tiling.h"
-
 namespace llm_kernels {
 namespace ascend {
 
@@ -35,25 +33,20 @@ class PagedAttention {
                   const RotaryEmbeddingType scaling_type = RotaryEmbeddingType::DEFAULT,
                   const float scaling_factor = 1.0f);
 
-  // private:
-  void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos,
-                          PagedAttentionTilingData* tiling_data);
+ private:
+  void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos);
 
   // Initialize common tiling data.
-  void InitTilingData(bool is_context_stage, PagedAttentionTilingData* tiling_data);
+  void InitTilingData(bool is_context_stage);
 
   // Copy the tiling data from host to global memory.
-  void CopyTilingToDevice(PagedAttentionTilingData* tiling_data, aclrtStream stream);
+  void CopyTilingToDevice(bool is_context_stage, aclrtStream stream);
 
   void InitAttnMask();
   void InitPermuteTiling(aclrtStream stream);
   void InitSliceTiling(aclrtStream stream);
 
  private:
-  // The tiling data for current request.
-  PagedAttentionTilingData prefill_tiling_data_;
-  PagedAttentionTilingData decode_tiling_data_;
-
   // The token offset of prefill and decode stage.
   uint64_t* prefill_token_offset_ = nullptr;
   int32_t* decode_tokens_len_ = nullptr;

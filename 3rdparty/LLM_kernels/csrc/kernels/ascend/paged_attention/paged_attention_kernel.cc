@@ -69,11 +69,6 @@ class PagedAttentionKernel {
 
   PagedAttentionTilingData* tiling_;
 
-  TCubeTiling qk_tiling_;
-  TCubeTiling wv_tiling_;
-
-  SoftMaxTiling softmax_tiling_;
-
   T scale_;
 
   uint32_t block_idx_;
@@ -151,27 +146,11 @@ __aicore__ void PagedAttentionKernel<T>::Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, G
   }
   pipe_->InitBuffer(softmax_max_queue_, BUFFER_NUM, padded_seq_len_ * sizeof(T));
   pipe_->InitBuffer(softmax_sum_queue_, BUFFER_NUM, padded_seq_len_ * sizeof(T));
-
-  // Copy tiling to TCubeTiling & SoftMaxTiling
-  uint32_t* assign_ptr = nullptr;
-  uint32_t* tiling_ptr = reinterpret_cast<uint32_t*>(tiling_);
-  for (int i = 0; (i < 2 * cube_tiling_size + softmax_tiling_size); ++i) {
-    if (i == 0) {
-      assign_ptr = reinterpret_cast<uint32_t*>(&qk_tiling_);
-    } else if (i == cube_tiling_size) {
-      assign_ptr = reinterpret_cast<uint32_t*>(&wv_tiling_);
-    } else if (i == 2 * cube_tiling_size) {
-      assign_ptr = reinterpret_cast<uint32_t*>(&softmax_tiling_);
-    }
-
-    *assign_ptr = *(tiling_ptr + i);
-    assign_ptr++;
-  }
 }
 
 template <typename T>
 __aicore__ void PagedAttentionKernel<T>::ProcessPrefill() {
-  REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &qk_tiling_, mm2_, &wv_tiling_);
+  REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &tiling_->cube_tiling_qk, mm2_, &tiling_->cube_tiling_wv);
 
   uint32_t head_idx = block_idx_;
   uint32_t head_offset = head_idx * tiling_->seq_len * tiling_->head_dim;
@@ -202,7 +181,7 @@ __aicore__ void PagedAttentionKernel<T>::ProcessPrefill() {
 
 template <typename T>
 __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
-  REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &qk_tiling_, mm2_, &wv_tiling_);
+  REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &tiling_->cube_tiling_qk, mm2_, &tiling_->cube_tiling_wv);
 
   uint32_t head_idx = block_idx_;
   uint32_t head_offset = head_idx * tiling_->head_dim;
@@ -317,7 +296,7 @@ __aicore__ void PagedAttentionKernel<T>::ContextCompute(uint32_t head_idx, uint3
 
   SoftMaxShapeInfo shape = {1, padded_seq_len_, 1, padded_seq_len_};
   SoftMax<T>(output_tensor, softmax_sum_tensor, softmax_max_tensor, output_tensor,
-             *reinterpret_cast<SoftMaxTiling*>(&softmax_tiling_), shape);
+             *reinterpret_cast<SoftMaxTiling*>(&tiling_->softmax_tiling), shape);
 
   output_queue_.EnQue(output_tensor);
   input_queue_.FreeTensor(local_tensor);
@@ -378,7 +357,7 @@ __aicore__ void PagedAttentionKernel<T>::DecodeCompute(uint32_t head_idx, uint32
 
   SoftMaxShapeInfo shape = {1, padded_seq_len_, 1, padded_seq_len_};
   SoftMax<T>(output_tensor, softmax_sum_tensor, softmax_max_tensor, output_tensor,
-             *reinterpret_cast<SoftMaxTiling*>(&softmax_tiling_), shape);
+             *reinterpret_cast<SoftMaxTiling*>(&tiling_->softmax_tiling), shape);
 
   output_queue_.EnQue(output_tensor);
   input_queue_.FreeTensor(local_tensor);

@@ -236,7 +236,7 @@ def args_config():
                              " model outputs them.")
     parser.add_argument('--client_timeout',
                         type=int,
-                        default=3*3600,
+                        default=30*3600,
                         help="The timeout limit for the aiohttp client,"
                              "(default is 3 hour).")
     args = parser.parse_args()
