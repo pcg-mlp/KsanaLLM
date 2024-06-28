@@ -208,80 +208,71 @@ template <typename T>
 __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
   REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &qk_tiling_, mm2_, &wv_tiling_);
 
-  for (uint32_t head_idx = 0; head_idx < tiling_->head_size; ++head_idx) {
-    if (head_idx % tiling_->head_size == block_idx_) {
-      uint32_t head_offset = head_idx * tiling_->head_dim;
-      uint32_t qk_offset = head_idx * 1 * tiling_->seq_len;
+  uint32_t head_idx = block_idx_;
+  uint32_t head_offset = head_idx * tiling_->head_dim;
+  uint32_t qk_offset = head_idx * 1 * tiling_->seq_len;
 
-      // q * k_T
-      for (uint32_t tok_idx = 0; tok_idx <= tiling_->token_pos; ++tok_idx) {
-        uint32_t k_block_idx = tok_idx / tiling_->block_token_num;
-        uint32_t k_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
-        uint32_t k_head_offset = head_idx * tiling_->head_dim;
+  // q * k_T
+  for (uint32_t tok_idx = 0; tok_idx <= tiling_->token_pos; ++tok_idx) {
+    uint32_t k_block_idx = tok_idx / tiling_->block_token_num;
+    uint32_t k_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
+    uint32_t k_head_offset = head_idx * tiling_->head_dim;
 
-        uint32_t k_cache_ptr0 = k_list_gm_.GetValue(k_block_idx * 2);
-        uint32_t k_cache_ptr1 = k_list_gm_.GetValue(k_block_idx * 2 + 1);
+    uint32_t k_cache_ptr0 = k_list_gm_.GetValue(k_block_idx * 2);
+    uint32_t k_cache_ptr1 = k_list_gm_.GetValue(k_block_idx * 2 + 1);
 
-        uint64_t k_cache_ptr = k_cache_ptr1;
-        k_cache_ptr = k_cache_ptr << 32;
-        k_cache_ptr = k_cache_ptr + k_cache_ptr0;
+    uint64_t k_cache_ptr = ((uint64_t)k_cache_ptr1 << 32) | k_cache_ptr0;
+    k_cache_gm_.SetGlobalBuffer(reinterpret_cast<__gm__ T*>(k_cache_ptr) + k_token_offset + k_head_offset);
 
-        k_cache_gm_.SetGlobalBuffer(reinterpret_cast<__gm__ T*>(k_cache_ptr) + k_token_offset + k_head_offset);
+    mm_.SetTensorA(q_gm_[head_offset]);
+    mm_.SetTensorB(k_cache_gm_);
+    mm_.IterateAll(workspace_gm_[qk_offset + tok_idx]);
+    mm_.End();
+  }
 
-        mm_.SetTensorA(q_gm_[head_offset]);
-        mm_.SetTensorB(k_cache_gm_);
-        mm_.IterateAll(workspace_gm_[qk_offset + tok_idx]);
-        mm_.End();
-      }
+  // scaling & attn_mask & softmax.
+  DecodeCopyIn(head_idx, tiling_->token_pos);
+  DecodeCompute(head_idx, tiling_->token_pos);
+  DecodeCopyOut(head_idx, tiling_->token_pos);
 
-      // scaling & attn_mask & softmax.
-      DecodeCopyIn(head_idx, tiling_->token_pos);
-      DecodeCompute(head_idx, tiling_->token_pos);
-      DecodeCopyOut(head_idx, tiling_->token_pos);
+  LocalTensor<T> local_tensor_result = attn_wv_result_queue_.AllocTensor<T>();
+  LocalTensor<T> local_tensor_buffer = attn_wv_buffer_queue_.AllocTensor<T>();
 
-      LocalTensor<T> local_tensor_result = attn_wv_result_queue_.AllocTensor<T>();
-      LocalTensor<T> local_tensor_buffer = attn_wv_buffer_queue_.AllocTensor<T>();
+  // attn_weight * v
+  for (uint32_t tok_idx = 0; tok_idx <= tiling_->token_pos; ++tok_idx) {
+    uint32_t v_block_idx = tok_idx / tiling_->block_token_num;
+    uint32_t v_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
+    uint32_t v_head_offset = head_idx * tiling_->head_dim;
 
-      // attn_weight * v
-      for (uint32_t tok_idx = 0; tok_idx <= tiling_->token_pos; ++tok_idx) {
-        uint32_t v_block_idx = tok_idx / tiling_->block_token_num;
-        uint32_t v_token_offset = (tok_idx % tiling_->block_token_num) * tiling_->head_size * tiling_->head_dim;
-        uint32_t v_head_offset = head_idx * tiling_->head_dim;
+    uint32_t v_cache_ptr0 = v_list_gm_.GetValue(v_block_idx * 2);
+    uint32_t v_cache_ptr1 = v_list_gm_.GetValue(v_block_idx * 2 + 1);
 
-        uint32_t v_cache_ptr0 = v_list_gm_.GetValue(v_block_idx * 2);
-        uint32_t v_cache_ptr1 = v_list_gm_.GetValue(v_block_idx * 2 + 1);
+    uint64_t v_cache_ptr = ((uint64_t)v_cache_ptr1 << 32) | v_cache_ptr0;
+    v_cache_gm_.SetGlobalBuffer(reinterpret_cast<__gm__ T*>(v_cache_ptr) + v_token_offset + v_head_offset);
 
-        uint64_t v_cache_ptr = v_cache_ptr1;
-        v_cache_ptr = v_cache_ptr << 32;
-        v_cache_ptr = v_cache_ptr + v_cache_ptr0;
+    mm2_.SetTensorA(workspace_gm_[qk_offset + tok_idx]);
+    mm2_.SetTensorB(v_cache_gm_);
+    mm2_.IterateAll(output_gm_[head_offset]);
+    mm2_.End();
 
-        v_cache_gm_.SetGlobalBuffer(reinterpret_cast<__gm__ T*>(v_cache_ptr) + v_token_offset + v_head_offset);
-
-        mm2_.SetTensorA(workspace_gm_[qk_offset + tok_idx]);
-        mm2_.SetTensorB(v_cache_gm_);
-        mm2_.IterateAll(output_gm_[head_offset]);
-        mm2_.End();
-
-        // Add all output_gm_[head_offset] to get the result.
-        if (tok_idx == 0) {
-          DataCopy(local_tensor_buffer, output_gm_[head_offset], tiling_->head_dim);
-          pipe_barrier(PIPE_ALL);
-          DataCopy(local_tensor_result, output_gm_[head_offset], tiling_->head_dim);
-          pipe_barrier(PIPE_ALL);
-        } else {
-          DataCopy(local_tensor_buffer, output_gm_[head_offset], tiling_->head_dim);
-          pipe_barrier(PIPE_ALL);
-          Add(local_tensor_result, local_tensor_result, local_tensor_buffer, tiling_->head_dim);
-          pipe_barrier(PIPE_ALL);
-        }
-      }
-
-      DataCopy(output_gm_[head_offset], local_tensor_result, tiling_->head_dim);
-
-      attn_wv_result_queue_.FreeTensor(local_tensor_result);
-      attn_wv_buffer_queue_.FreeTensor(local_tensor_buffer);
+    // Add all output_gm_[head_offset] to get the result.
+    if (tok_idx == 0) {
+      DataCopy(local_tensor_buffer, output_gm_[head_offset], tiling_->head_dim);
+      pipe_barrier(PIPE_ALL);
+      DataCopy(local_tensor_result, output_gm_[head_offset], tiling_->head_dim);
+      pipe_barrier(PIPE_ALL);
+    } else {
+      DataCopy(local_tensor_buffer, output_gm_[head_offset], tiling_->head_dim);
+      pipe_barrier(PIPE_ALL);
+      Add(local_tensor_result, local_tensor_result, local_tensor_buffer, tiling_->head_dim);
+      pipe_barrier(PIPE_ALL);
     }
   }
+
+  DataCopy(output_gm_[head_offset], local_tensor_result, tiling_->head_dim);
+
+  attn_wv_result_queue_.FreeTensor(local_tensor_result);
+  attn_wv_buffer_queue_.FreeTensor(local_tensor_buffer);
 }
 
 template <typename T>

@@ -38,14 +38,18 @@ class PagedAttention {
   // private:
   void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos);
 
+  // Initialize common tiling data.
+  void InitTilingData(bool is_context_stage);
+
   // Copy the tiling data from host to global memory.
-  void CopyTilingToDevice(aclrtStream stream);
+  void CopyTilingToDevice(bool is_context_stage, aclrtStream stream);
 
   void IniAttnMask();
 
  private:
   // The tiling data for current request.
-  PagedAttentionTilingData tiling_data_;
+  PagedAttentionTilingData prefill_tiling_data_;
+  PagedAttentionTilingData decode_tiling_data_;
 
   // The token offset of prefill and decode stage.
   uint64_t* prefill_token_offset_ = nullptr;
@@ -92,6 +96,16 @@ class PagedAttention {
 
   // The worksapce.
   void* workspace_gm_;
+
+  // The buffer memory
+  void* q_buffer_;
+  void* k_buffer_;
+  void* v_buffer_;
+  void* o_buffer_;
+
+  void* q_buffer_2_;
+  void* k_buffer_2_;
+  void* v_buffer_2_;
 };
 
 }  // namespace ascend

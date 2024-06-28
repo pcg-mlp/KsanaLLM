@@ -34,11 +34,14 @@
 // The max seq_len
 #define MAX_SEQ_LEN 4096
 
-// The max used ai core number.
-constexpr uint32_t MAX_USED_CORE_NUM = 24;
-
 namespace llm_kernels {
 namespace ascend {
+
+// Instead class member, to avoid compile conflict between torch & ascendc.
+static matmul_tiling::MatmulApiTiling prefill_qk_tiling_api_;
+static matmul_tiling::MatmulApiTiling prefill_vw_tiling_api_;
+static matmul_tiling::MatmulApiTiling decode_qk_tiling_api_;
+static matmul_tiling::MatmulApiTiling decode_vw_tiling_api_;
 
 template <typename T>
 PagedAttention<T>::~PagedAttention() {
@@ -50,6 +53,15 @@ PagedAttention<T>::~PagedAttention() {
 
   ACL_CHECK_RET(aclrtFree(tiling_buffer_gm_));
   ACL_CHECK_RET(aclrtFree(workspace_gm_));
+
+  ACL_CHECK_RET(aclrtFree(q_buffer_));
+  ACL_CHECK_RET(aclrtFree(k_buffer_));
+  ACL_CHECK_RET(aclrtFree(v_buffer_));
+  ACL_CHECK_RET(aclrtFree(o_buffer_));
+
+  ACL_CHECK_RET(aclrtFree(q_buffer_2_));
+  ACL_CHECK_RET(aclrtFree(k_buffer_2_));
+  ACL_CHECK_RET(aclrtFree(v_buffer_2_));
 }
 
 template <typename T>
@@ -87,7 +99,20 @@ void PagedAttention<T>::Initialize(uint32_t head_size, uint32_t kv_head_size, ui
   size_t sys_workspace_size = 1024 * 1024 * 1024;
   ACL_CHECK_RET(aclrtMalloc(&workspace_gm_, usr_workspace_size + sys_workspace_size, ACL_MEM_MALLOC_HUGE_FIRST));
 
+  size_t buffer_size = MAX_SEQ_LEN * head_size_ * head_dim_ * sizeof(T);
+  ACL_CHECK_RET(aclrtMalloc(&q_buffer_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK_RET(aclrtMalloc(&k_buffer_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK_RET(aclrtMalloc(&v_buffer_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK_RET(aclrtMalloc(&o_buffer_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+
+  ACL_CHECK_RET(aclrtMalloc(&q_buffer_2_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK_RET(aclrtMalloc(&k_buffer_2_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK_RET(aclrtMalloc(&v_buffer_2_, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+
   IniAttnMask();
+
+  InitTilingData(true);
+  InitTilingData(false);
 }
 
 template <typename T>
@@ -108,148 +133,148 @@ void PagedAttention<T>::IniAttnMask() {
 }
 
 template <typename T>
-void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num,
-                                           int32_t token_pos) {
+void PagedAttention<T>::InitTilingData(bool is_context_stage) {
+  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+
   if (std::is_same<T, aclFloat16>::value) {
-    tiling_data_.data_type = static_cast<uint32_t>(TilingDataType::FLOAT16);
+    tiling_data->data_type = static_cast<uint32_t>(TilingDataType::FLOAT16);
   } else if (std::is_same<T, float>::value) {
-    tiling_data_.data_type = static_cast<uint32_t>(TilingDataType::FLOAT32);
+    tiling_data->data_type = static_cast<uint32_t>(TilingDataType::FLOAT32);
   }
 
-  tiling_data_.context_stage = static_cast<uint32_t>(is_context_stage);
-  tiling_data_.seq_len = seq_len;
-  tiling_data_.seq_block_num = seq_block_num;
-  tiling_data_.block_token_num = block_token_num_;
-  tiling_data_.token_pos = token_pos;
-  tiling_data_.head_size = head_size_;
-  tiling_data_.head_dim = head_dim_;
-  tiling_data_.used_core_num = MAX_USED_CORE_NUM;
-  tiling_data_.max_seq_len = MAX_SEQ_LEN;
+  tiling_data->context_stage = static_cast<uint32_t>(is_context_stage);
+  tiling_data->block_token_num = block_token_num_;
+  tiling_data->head_size = head_size_;
+  tiling_data->head_dim = head_dim_;
+  tiling_data->used_core_num = head_size_;
+  tiling_data->max_seq_len = MAX_SEQ_LEN;
 
   float scale = 1.0 / std::sqrt(head_dim_);
-  tiling_data_.scale = *reinterpret_cast<uint32_t*>(&scale);
+  tiling_data->scale = *reinterpret_cast<uint32_t*>(&scale);
 
   aclFloat16 scale_fp16 = aclFloatToFloat16(scale);
-  tiling_data_.scale_fp16 = *reinterpret_cast<uint16_t*>(&scale_fp16);
+  tiling_data->scale_fp16 = *reinterpret_cast<uint16_t*>(&scale_fp16);
+
+  matmul_tiling::DataType computing_dtype;
+  if (std::is_same<T, aclFloat16>::value) {
+    computing_dtype = matmul_tiling::DataType::DT_FLOAT16;
+  }
 
   // q * k_T
   {
-    matmul_tiling::DataType computing_dtype;
+    matmul_tiling::MatmulApiTiling* qk_tiling = is_context_stage ? &prefill_qk_tiling_api_ : &decode_qk_tiling_api_;
 
-    if (std::is_same<T, aclFloat16>::value) {
-      computing_dtype = matmul_tiling::DataType::DT_FLOAT16;
+    qk_tiling->SetAType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype, false);
+    qk_tiling->SetBType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype,
+                        is_context_stage ? false : true);
+    qk_tiling->SetCType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype);
+    qk_tiling->SetBiasType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype);
+    qk_tiling->SetBias(false);
+    qk_tiling->SetBufferSpace(-1, -1, -1);
+
+    if (!is_context_stage) {
+      size_t m = 1;
+      size_t n = 1;
+      size_t k = head_dim_;
+
+      qk_tiling->SetOrgShape(m, n, k);
+      qk_tiling->SetShape(m, n, k);
+
+      optiling::TCubeTiling cube_tiling_data;
+      if (qk_tiling->GetTiling(cube_tiling_data) == -1) {
+        std::cerr << "Get prefill qk TCubeTiling error." << std::endl;
+        assert(false);
+      }
+
+      uint32_t tiling_size = cube_tiling_data.GetDataSize();
+      cube_tiling_data.SaveToBuffer(&tiling_data->cube_tiling_qk, tiling_size);
     }
-
-    // Q
-    matmul_tiling::TPosition left_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat left_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType left_dtype = computing_dtype;
-    bool transpose_a = false;
-
-    // K_T
-    matmul_tiling::TPosition right_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat right_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType right_dtype = computing_dtype;
-    bool transpose_b = is_context_stage ? false : true;
-
-    matmul_tiling::TPosition res_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat res_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType res_dtype = computing_dtype;
-    bool is_bias = false;
-
-    matmul_tiling::TPosition bias_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat bias_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType bias_dtype = computing_dtype;
-
-    size_t m = is_context_stage ? seq_len : 1;
-    size_t n = is_context_stage ? seq_len : 1;
-    size_t k = head_dim_;
-
-    matmul_tiling::MatmulApiTiling tiling_api;
-    tiling_api.SetAType(left_pos, left_format, left_dtype, transpose_a);
-    tiling_api.SetBType(right_pos, right_format, right_dtype, transpose_b);
-    tiling_api.SetCType(res_pos, res_format, res_dtype);
-    tiling_api.SetBiasType(bias_pos, bias_format, bias_dtype);
-    tiling_api.SetOrgShape(m, n, k);
-    tiling_api.SetShape(m, n, k);
-    tiling_api.SetBias(is_bias);
-    tiling_api.SetBufferSpace(-1, -1, -1);
-
-    optiling::TCubeTiling tiling_data;
-    if (tiling_api.GetTiling(tiling_data) == -1) {
-      std::cerr << "Get TCubeTiling error." << std::endl;
-      assert(false);
-    }
-
-    matmul_tiling::SysTilingTempBufSize buf_size;
-    if (MatmulGetTmpBufSize(tiling_data, buf_size) == -1) {
-      std::cerr << "Get TCubeTiling temp buf size error." << std::endl;
-      assert(false);
-    }
-
-    tiling_data_.qk_ub_size = buf_size.ubSize;
-
-    uint32_t tiling_size = tiling_data.GetDataSize();
-    tiling_data.SaveToBuffer(&tiling_data_.cube_tiling_qk, tiling_size);
   }
 
   // w * v
   {
-    matmul_tiling::DataType computing_dtype;
+    matmul_tiling::MatmulApiTiling* vw_tiling = is_context_stage ? &prefill_vw_tiling_api_ : &decode_vw_tiling_api_;
 
-    if (std::is_same<T, aclFloat16>::value) {
-      computing_dtype = matmul_tiling::DataType::DT_FLOAT16;
+    vw_tiling->SetAType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype, false);
+    vw_tiling->SetBType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype, false);
+    vw_tiling->SetCType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype);
+    vw_tiling->SetBiasType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND, computing_dtype);
+    vw_tiling->SetBias(false);
+    vw_tiling->SetBufferSpace(-1, -1, -1);
+
+    if (!is_context_stage) {
+      size_t m = 1;
+      size_t n = head_dim_;
+      size_t k = 1;
+
+      vw_tiling->SetOrgShape(m, n, k);
+      vw_tiling->SetShape(m, n, k);
+
+      optiling::TCubeTiling cube_tiling_data;
+      if (vw_tiling->GetTiling(cube_tiling_data) == -1) {
+        std::cerr << "Get prefill vw TCubeTiling error." << std::endl;
+        assert(false);
+      }
+
+      uint32_t tiling_size = cube_tiling_data.GetDataSize();
+      cube_tiling_data.SaveToBuffer(&tiling_data->cube_tiling_wv, tiling_size);
     }
+  }
+}
 
-    // W
-    matmul_tiling::TPosition left_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat left_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType left_dtype = computing_dtype;
-    bool transpose_a = false;
+template <typename T>
+void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num,
+                                           int32_t token_pos) {
+  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
 
-    // V
-    matmul_tiling::TPosition right_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat right_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType right_dtype = computing_dtype;
-    bool transpose_b = false;
+  tiling_data->seq_len = seq_len;
+  tiling_data->seq_block_num = seq_block_num;
+  tiling_data->token_pos = token_pos;
 
-    matmul_tiling::TPosition res_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat res_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType res_dtype = computing_dtype;
-    bool is_bias = false;
+  // q * k_T
+  {
+    if (is_context_stage) {
+      matmul_tiling::MatmulApiTiling* qk_tiling = is_context_stage ? &prefill_qk_tiling_api_ : &decode_qk_tiling_api_;
 
-    matmul_tiling::TPosition bias_pos = matmul_tiling::TPosition::GM;
-    matmul_tiling::CubeFormat bias_format = matmul_tiling::CubeFormat::ND;
-    matmul_tiling::DataType bias_dtype = computing_dtype;
+      size_t m = seq_len;
+      size_t n = seq_len;
+      size_t k = head_dim_;
 
-    size_t m = is_context_stage ? seq_len : 1;
-    size_t n = head_dim_;
-    size_t k = is_context_stage ? seq_len : 1;
+      qk_tiling->SetOrgShape(m, n, k);
+      qk_tiling->SetShape(m, n, k);
 
-    matmul_tiling::MatmulApiTiling tiling_api;
-    tiling_api.SetAType(left_pos, left_format, left_dtype, transpose_a);
-    tiling_api.SetBType(right_pos, right_format, right_dtype, transpose_b);
-    tiling_api.SetCType(res_pos, res_format, res_dtype);
-    tiling_api.SetBiasType(bias_pos, bias_format, bias_dtype);
-    tiling_api.SetOrgShape(m, n, k);
-    tiling_api.SetShape(m, n, k);
-    tiling_api.SetBias(is_bias);
-    tiling_api.SetBufferSpace(-1, -1, -1);
+      optiling::TCubeTiling cube_tiling_data;
+      if (qk_tiling->GetTiling(cube_tiling_data) == -1) {
+        std::cerr << "Get decode qk TCubeTiling error." << std::endl;
+        assert(false);
+      }
 
-    optiling::TCubeTiling tiling_data;
-    if (tiling_api.GetTiling(tiling_data) == -1) {
-      assert(false);
+      uint32_t tiling_size = cube_tiling_data.GetDataSize();
+      cube_tiling_data.SaveToBuffer(&tiling_data->cube_tiling_qk, tiling_size);
     }
+  }
 
-    matmul_tiling::SysTilingTempBufSize buf_size;
-    if (MatmulGetTmpBufSize(tiling_data, buf_size) == -1) {
-      assert(false);
+  // w * v
+  {
+    if (is_context_stage) {
+      matmul_tiling::MatmulApiTiling* vw_tiling = is_context_stage ? &prefill_vw_tiling_api_ : &decode_vw_tiling_api_;
+
+      size_t m = seq_len;
+      size_t n = head_dim_;
+      size_t k = seq_len;
+
+      vw_tiling->SetOrgShape(m, n, k);
+      vw_tiling->SetShape(m, n, k);
+
+      optiling::TCubeTiling cube_tiling_data;
+      if (vw_tiling->GetTiling(cube_tiling_data) == -1) {
+        std::cerr << "Get decode vw TCubeTiling error." << std::endl;
+        assert(false);
+      }
+
+      uint32_t tiling_size = cube_tiling_data.GetDataSize();
+      cube_tiling_data.SaveToBuffer(&tiling_data->cube_tiling_wv, tiling_size);
     }
-
-    tiling_data_.wv_ub_size = buf_size.ubSize;
-
-    uint32_t tiling_size = tiling_data.GetDataSize();
-    tiling_data.SaveToBuffer(&tiling_data_.cube_tiling_wv, tiling_size);
   }
 
   // Softmax
@@ -261,14 +286,18 @@ void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_l
   AscendC::SoftMaxTilingFunc(src_shape, sizeof(aclFloat16), local_workspace_size, softmax_tiling);
 
   uint32_t tiling_size = softmax_tiling.GetDataSize();
-  softmax_tiling.SaveToBuffer(&tiling_data_.softmax_tiling, tiling_size);
+  softmax_tiling.SaveToBuffer(&tiling_data->softmax_tiling, tiling_size);
 }
 
 template <typename T>
-void PagedAttention<T>::CopyTilingToDevice(aclrtStream stream) {
-  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, &tiling_data_, tiling_size_,
-                                 aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+void PagedAttention<T>::CopyTilingToDevice(bool is_context_stage, aclrtStream stream) {
+  if (is_context_stage) {
+    ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, &prefill_tiling_data_, tiling_size_,
+                                   aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  } else {
+    ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, &decode_tiling_data_, tiling_size_,
+                                   aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  }
 }
 
 template <typename T>
@@ -296,84 +325,70 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       uint32_t cur_seq_len = prefill_token_offset_[b_idx + 1] - prefill_token_offset_[b_idx];
       uint32_t cur_block_num = kv_cache_offset_[b_idx + 1] - kv_cache_offset_[b_idx];
 
-      void* q_buffer;
-      void* k_buffer;
-      void* v_buffer;
-      void* o_buffer;
-      size_t buffer_size = cur_seq_len * head_size_ * head_dim_ * sizeof(T);
-      ACL_CHECK_RET(aclrtMalloc(&q_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&k_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&v_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&o_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-
       size_t b_offset = total_seq_len_idx * head_size_ * head_dim_ * sizeof(T) * 3;
 
-      slice_.Forward(q_buffer, qkv_tensor + b_offset, 0, head_size_ * head_dim_, head_size_ * head_dim_ * 3,
+      slice_.Forward(q_buffer_, qkv_tensor + b_offset, 0, head_size_ * head_dim_, head_size_ * head_dim_ * 3,
                      cur_seq_len, stream);
-      slice_.Forward(k_buffer, qkv_tensor + b_offset, head_size_ * head_dim_, head_size_ * head_dim_,
+      slice_.Forward(k_buffer_, qkv_tensor + b_offset, head_size_ * head_dim_, head_size_ * head_dim_,
                      head_size_ * head_dim_ * 3, cur_seq_len, stream);
-      slice_.Forward(v_buffer, qkv_tensor + b_offset, head_size_ * head_dim_ * 2, head_size_ * head_dim_,
+      slice_.Forward(v_buffer_, qkv_tensor + b_offset, head_size_ * head_dim_ * 2, head_size_ * head_dim_,
                      head_size_ * head_dim_ * 3, cur_seq_len, stream);
 
       // ROPE
       size_t rope_offset = total_seq_len_idx * sizeof(int64_t);
-      rope_.SetInput((int64_t*)(rope_pos + rope_offset), (T*)q_buffer, (T*)k_buffer, cur_seq_len, stream);
+      rope_.SetInput((int64_t*)(rope_pos + rope_offset), (T*)q_buffer_, (T*)k_buffer_, cur_seq_len, stream);
       rope_.Forward();
 
       // Cache KV
       void** k_list = kv_list_ + layer_index * total_block_num * 2 + total_block_num_idx;
       void** v_list = k_list + total_block_num;
-      for (size_t token_idx = 0; token_idx < cur_seq_len; ++token_idx) {
+      for (size_t token_idx = 0; token_idx < cur_seq_len;) {
         int b_block_index = token_idx / block_token_num_;
         int b_block_offset = token_idx % block_token_num_;
 
         void* k_dst = k_list[b_block_index] + b_block_offset * head_dim_ * kv_head_size_ * sizeof(T);
         void* v_dst = v_list[b_block_index] + b_block_offset * head_dim_ * kv_head_size_ * sizeof(T);
 
-        void* k_src = k_buffer + token_idx * kv_head_size_ * head_dim_ * sizeof(T);
-        void* v_src = v_buffer + token_idx * kv_head_size_ * head_dim_ * sizeof(T);
+        void* k_src = k_buffer_ + token_idx * kv_head_size_ * head_dim_ * sizeof(T);
+        void* v_src = v_buffer_ + token_idx * kv_head_size_ * head_dim_ * sizeof(T);
 
-        ACL_CHECK_RET(aclrtMemcpyAsync(k_dst, kv_head_size_ * head_dim_ * sizeof(T), k_src,
-                                       kv_head_size_ * head_dim_ * sizeof(T),
-                                       aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
-        ACL_CHECK_RET(aclrtMemcpyAsync(v_dst, kv_head_size_ * head_dim_ * sizeof(T), v_src,
-                                       kv_head_size_ * head_dim_ * sizeof(T),
-                                       aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
+        if (token_idx + block_token_num_ <= cur_seq_len) {
+          ACL_CHECK_RET(aclrtMemcpyAsync(k_dst, block_token_num_ * kv_head_size_ * head_dim_ * sizeof(T), k_src,
+                                         block_token_num_ * kv_head_size_ * head_dim_ * sizeof(T),
+                                         aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
+          ACL_CHECK_RET(aclrtMemcpyAsync(v_dst, block_token_num_ * kv_head_size_ * head_dim_ * sizeof(T), v_src,
+                                         block_token_num_ * kv_head_size_ * head_dim_ * sizeof(T),
+                                         aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
+          token_idx += block_token_num_;
+        } else {
+          int tail = cur_seq_len % block_token_num_;
+          ACL_CHECK_RET(aclrtMemcpyAsync(k_dst, tail * kv_head_size_ * head_dim_ * sizeof(T), k_src,
+                                         tail * kv_head_size_ * head_dim_ * sizeof(T),
+                                         aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
+          ACL_CHECK_RET(aclrtMemcpyAsync(v_dst, tail * kv_head_size_ * head_dim_ * sizeof(T), v_src,
+                                         tail * kv_head_size_ * head_dim_ * sizeof(T),
+                                         aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
+          token_idx += tail;
+        }
       }
 
-      void* q_buffer_2;
-      void* k_buffer_2;
-      void* v_buffer_2;
-      ACL_CHECK_RET(aclrtMalloc(&q_buffer_2, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&k_buffer_2, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&v_buffer_2, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-
       // [seq_len, head_size, head_dim] => [head_size, seq_len, head_dim]
-      permute_.Forward(q_buffer_2, q_buffer, {cur_seq_len, head_size_, head_dim_}, {1, 0, 2}, stream);
-      permute_.Forward(k_buffer_2, k_buffer, {cur_seq_len, head_size_, head_dim_}, {1, 2, 0}, stream);
-      permute_.Forward(v_buffer_2, v_buffer, {cur_seq_len, head_size_, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(q_buffer_2_, q_buffer_, {cur_seq_len, head_size_, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(k_buffer_2_, k_buffer_, {cur_seq_len, head_size_, head_dim_}, {1, 2, 0}, stream);
+      permute_.Forward(v_buffer_2_, v_buffer_, {cur_seq_len, head_size_, head_dim_}, {1, 0, 2}, stream);
 
       GenerateTilingData(true, cur_seq_len, cur_block_num, cur_seq_len - 1);
-      CopyTilingToDevice(stream);
+      CopyTilingToDevice(true, stream);
 
       ACLRT_LAUNCH_KERNEL(InvokePagedAttentionKernel)
-      (tiling_data_.used_core_num, stream, q_buffer_2, k_buffer_2, v_buffer_2, attn_mask_gm_, k_list, v_list, o_buffer,
-       workspace_gm_, tiling_buffer_gm_);
+      (prefill_tiling_data_.used_core_num, stream, q_buffer_2_, k_buffer_2_, v_buffer_2_, attn_mask_gm_, k_list, v_list,
+       o_buffer_, workspace_gm_, tiling_buffer_gm_);
 
       size_t output_offset = total_seq_len_idx * head_size_ * head_dim_ * sizeof(T);
-      permute_.Forward(output + output_offset, o_buffer, {head_size_, cur_seq_len, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(output + output_offset, o_buffer_, {head_size_, cur_seq_len, head_dim_}, {1, 0, 2}, stream);
 
       total_seq_len_idx += cur_seq_len;
       total_block_num_idx += cur_block_num;
-
-      ACL_CHECK_RET(aclrtFree(q_buffer));
-      ACL_CHECK_RET(aclrtFree(k_buffer));
-      ACL_CHECK_RET(aclrtFree(v_buffer));
-      ACL_CHECK_RET(aclrtFree(o_buffer));
-
-      ACL_CHECK_RET(aclrtFree(q_buffer_2));
-      ACL_CHECK_RET(aclrtFree(k_buffer_2));
-      ACL_CHECK_RET(aclrtFree(v_buffer_2));
     }
   } else {
     // Decode.
@@ -386,26 +401,17 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       uint32_t cur_seq_len = decode_tokens_len_[b_idx];
       uint32_t cur_block_num = kv_cache_offset_[b_idx + 1] - kv_cache_offset_[b_idx];
 
-      void* q_buffer;
-      void* k_buffer;
-      void* v_buffer;
-      void* o_buffer;
-      size_t buffer_size = head_size_ * head_dim_ * sizeof(T);
-      ACL_CHECK_RET(aclrtMalloc(&q_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&k_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&v_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&o_buffer, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-
       size_t b_offset = b_idx * head_size_ * head_dim_ * sizeof(T) * 3;
-      slice_.Forward(q_buffer, qkv_tensor + b_offset, 0, head_size_ * head_dim_, head_size_ * head_dim_ * 3, 1, stream);
-      slice_.Forward(k_buffer, qkv_tensor + b_offset, head_size_ * head_dim_, head_size_ * head_dim_,
+      slice_.Forward(q_buffer_, qkv_tensor + b_offset, 0, head_size_ * head_dim_, head_size_ * head_dim_ * 3, 1,
+                     stream);
+      slice_.Forward(k_buffer_, qkv_tensor + b_offset, head_size_ * head_dim_, head_size_ * head_dim_,
                      head_size_ * head_dim_ * 3, 1, stream);
-      slice_.Forward(v_buffer, qkv_tensor + b_offset, head_size_ * head_dim_ * 2, head_size_ * head_dim_,
+      slice_.Forward(v_buffer_, qkv_tensor + b_offset, head_size_ * head_dim_ * 2, head_size_ * head_dim_,
                      head_size_ * head_dim_ * 3, 1, stream);
 
       // ROPE
       size_t rope_offset = b_idx * sizeof(int64_t);
-      rope_.SetInput((int64_t*)(rope_pos + rope_offset), (T*)q_buffer, (T*)k_buffer, 1, stream);
+      rope_.SetInput((int64_t*)(rope_pos + rope_offset), (T*)q_buffer_, (T*)k_buffer_, 1, stream);
       rope_.Forward();
 
       // Cache KV
@@ -422,50 +428,30 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
         void* k_dst = k_list[b_block_index] + b_block_offset * head_dim_ * kv_head_size_ * sizeof(T);
         void* v_dst = v_list[b_block_index] + b_block_offset * head_dim_ * kv_head_size_ * sizeof(T);
 
-        void* k_src = k_buffer;
-        void* v_src = v_buffer;
-
-        ACL_CHECK_RET(aclrtMemcpyAsync(k_dst, kv_head_size_ * head_dim_ * sizeof(T), k_src,
+        ACL_CHECK_RET(aclrtMemcpyAsync(k_dst, kv_head_size_ * head_dim_ * sizeof(T), k_buffer_,
                                        kv_head_size_ * head_dim_ * sizeof(T),
                                        aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
-        ACL_CHECK_RET(aclrtMemcpyAsync(v_dst, kv_head_size_ * head_dim_ * sizeof(T), v_src,
+        ACL_CHECK_RET(aclrtMemcpyAsync(v_dst, kv_head_size_ * head_dim_ * sizeof(T), v_buffer_,
                                        kv_head_size_ * head_dim_ * sizeof(T),
                                        aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_DEVICE, stream));
       }
 
-      void* q_buffer_2;
-      void* k_buffer_2;
-      void* v_buffer_2;
-      ACL_CHECK_RET(aclrtMalloc(&q_buffer_2, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&k_buffer_2, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-      ACL_CHECK_RET(aclrtMalloc(&v_buffer_2, buffer_size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
-
       // [1, head_size, head_dim] => [head_size, 1, head_dim]
-      permute_.Forward(q_buffer_2, q_buffer, {1, head_size_, head_dim_}, {1, 0, 2}, stream);
-      permute_.Forward(k_buffer_2, k_buffer, {1, head_size_, head_dim_}, {1, 0, 2}, stream);
-      permute_.Forward(v_buffer_2, v_buffer, {1, head_size_, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(q_buffer_2_, q_buffer_, {1, head_size_, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(k_buffer_2_, k_buffer_, {1, head_size_, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(v_buffer_2_, v_buffer_, {1, head_size_, head_dim_}, {1, 0, 2}, stream);
 
       GenerateTilingData(false, cur_seq_len, cur_block_num, cur_seq_len - 1);
-      CopyTilingToDevice(stream);
-
+      CopyTilingToDevice(false, stream);
 
       ACLRT_LAUNCH_KERNEL(InvokePagedAttentionKernel)
-      (tiling_data_.used_core_num, stream, q_buffer_2, k_buffer_2, v_buffer_2, attn_mask_gm_, k_list_dev, v_list_dev,
-       o_buffer, workspace_gm_, tiling_buffer_gm_);
+      (decode_tiling_data_.used_core_num, stream, q_buffer_2_, k_buffer_2_, v_buffer_2_, attn_mask_gm_, k_list_dev,
+       v_list_dev, o_buffer_, workspace_gm_, tiling_buffer_gm_);
 
       size_t output_offset = b_idx * head_size_ * head_dim_ * sizeof(T);
-      permute_.Forward(output + output_offset, o_buffer, {head_size_, 1, head_dim_}, {1, 0, 2}, stream);
+      permute_.Forward(output + output_offset, o_buffer_, {head_size_, 1, head_dim_}, {1, 0, 2}, stream);
 
       total_block_num_idx += cur_block_num;
-
-      ACL_CHECK_RET(aclrtFree(q_buffer));
-      ACL_CHECK_RET(aclrtFree(k_buffer));
-      ACL_CHECK_RET(aclrtFree(v_buffer));
-      ACL_CHECK_RET(aclrtFree(o_buffer));
-
-      ACL_CHECK_RET(aclrtFree(q_buffer_2));
-      ACL_CHECK_RET(aclrtFree(k_buffer_2));
-      ACL_CHECK_RET(aclrtFree(v_buffer_2));
     }
   }
 }
