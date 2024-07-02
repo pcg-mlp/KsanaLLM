@@ -186,6 +186,13 @@ TEST_F(LlamaTest, ForwardTest) {
 
 #ifdef ENABLE_CUDA
   EXPECT_TRUE((milliseconds / 10) < 30);
+
+  // Test prompt_probs_offset
+  std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  forward.output_tokens = &prompt_probs_input_tokens;
+  forward.prompt_probs_offset = 5;
+  std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
+  EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
 #else
   // NOTE(karlluo): ACL inference is slower than CUDA
   EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;

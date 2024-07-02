@@ -82,6 +82,9 @@ class ModelInput {
 
   // The input's prefix length
   Tensor input_prefix_uint64_tensor;
+  // If prompt props is returned, use prompt_probs_prefix_uint64_tensor instead of input_prefix_uint64_tensor for
+  // calculation.
+  Tensor prompt_probs_prefix_uint64_tensor;
 
   // Input offset sequence and input prefix sequence on the CPU
   std::vector<int> input_offset_list;

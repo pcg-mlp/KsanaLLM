@@ -74,6 +74,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
       CreateTensor(rotary_embedding_mask, {max_token_num_ + extra_token_number}, TYPE_INT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(input_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(
+      CreateTensor(prompt_probs_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(CreateTensor(cpu_input_refit_tensor.pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_,
                                     MemoryDevice::MEMORY_HOST));
@@ -93,6 +95,7 @@ ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_tokens_int32_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_prefix_uint64_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(prompt_probs_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_pos, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_mask, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_buffer, rank_));
@@ -246,9 +249,11 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
 void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs) {
   input_ids.shape = {total_seq_len - total_prefix_len};
   size_t input_offset = 0;
+  use_prompt_probs_offset = false;
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
   std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
   std::vector<size_t> prompt_probs_offset_list_uint64(max_batch_size_ + 1, 0ul);
+  std::vector<size_t> prompt_probs_prefix_list_uint64(max_batch_size_ + 1, 0ul);
   int prompt_probs_offset_list_uint64_index = 1;
   std::vector<int> input_ids_cpu(0);
   std::vector<int> input_prefix_list_int32(batch_size + 1, 0ul);
@@ -268,9 +273,13 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
+    size_t prompt_probs_prefix_uint64 =
+        prompt_probs_prefix_list_uint64[prompt_probs_offset_list_uint64_index - 1] + prefix_offset;
     for (size_t prompt_offset = input_offset - forward_reqs[idx].prompt_probs_offset; prompt_offset < input_offset;
          prompt_offset++) {
-      prompt_probs_offset_list_uint64[prompt_probs_offset_list_uint64_index++] = prompt_offset;
+      prompt_probs_offset_list_uint64[prompt_probs_offset_list_uint64_index] = prompt_offset;
+      prompt_probs_prefix_list_uint64[prompt_probs_offset_list_uint64_index] = prompt_probs_prefix_uint64;
+      prompt_probs_offset_list_uint64_index++;
     }
     if (forward_reqs[idx].prompt_probs_offset != 0) {
       use_prompt_probs_offset = true;
@@ -290,9 +299,14 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
   prompt_probs_offset_uint64_tensor.shape = {(size_t)prompt_probs_offset_list_uint64_index};
   prompt_probs_offset_uint64_tensor.dtype = TYPE_UINT64;
+  prompt_probs_prefix_uint64_tensor.shape = prompt_probs_offset_uint64_tensor.shape;
+  prompt_probs_prefix_uint64_tensor.dtype = prompt_probs_offset_uint64_tensor.dtype;
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   MemcpyAsync(prompt_probs_offset_uint64_tensor.GetPtr<void>(), prompt_probs_offset_list_uint64.data(),
+              prompt_probs_offset_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
+  MemcpyAsync(prompt_probs_prefix_uint64_tensor.GetPtr<void>(), prompt_probs_prefix_list_uint64.data(),
               prompt_probs_offset_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);

@@ -67,6 +67,7 @@ void NvidiaContextExtension<T>::InitNcclParam() {
 
   nccl_uid_ = GenerateNCCLUniqueID();
   nccl_params_.resize(base_ptr_->tensor_parallel_size_);
+  if (base_ptr_->tensor_parallel_size_ == 1) return;
   NCCL_CHECK(ncclGroupStart());
   // TODO(karlluo): for single machine multiple xpus, device_num is the world_size
   // for multiple machine, world size should change in future, and the same situation of rank_id

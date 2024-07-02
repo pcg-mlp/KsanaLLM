@@ -239,6 +239,24 @@ class ServingModel(object):
                         raise RuntimeError(
                             "The output of the {target_name} does not support GATHER_TOKEN_ID")
                     target_describe.token_reduce_mode = libtorch_serving.TokenReduceMode.GATHER_TOKEN_ID
+            # TODO(zakwang): Enhance support for additional request parameters
+            if target_name == "logits":
+                # Verify if the 'GATHER_ALL' token reduction mode is not used, as it's unsupported for logits output
+                if target_desc['token_reduce_mode'] == 'GATHER_ALL':
+                    raise RuntimeError(
+                        f"The output for {target_name} does not support the 'GATHER_ALL' reduction mode.")
+                # Ensure that either no token IDs are specified or exactly one slice position is defined
+                if len(target_describe.token_id) > 0 or len(target_describe.slice_pos) != 1:
+                    raise RuntimeError(
+                        f"{target_name} output requires exactly one slice position to be specified.")
+                # Check if the slice position correctly targets the last N items excluding the last one.
+                if target_describe.slice_pos[0][1] != len(ksana_python_input.input_tokens) - 2:
+                    raise RuntimeError(
+                        f"{target_name} output currently supports returning the last N items excluding the last one, "
+                        f"thus the slice must be [start, {len(ksana_python_input.input_tokens) - 2}].")
+                ksana_python_input.prompt_probs_offset = target_describe.slice_pos[0][1] - target_describe.slice_pos[0][0] + 1
+                ksana_python_input.sampling_config.return_prompt_probs = True
+
 
             # Update the ksana_python_input object with the processed target information
             ksana_python_input.request_target[target_name] = target_describe

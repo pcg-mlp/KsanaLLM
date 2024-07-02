@@ -585,7 +585,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   if (model_input_->use_prompt_probs_offset) {
     STATUS_CHECK_RETURN(
         assemble_last_token_layer_->Forward({final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor,
-                                             model_input_->input_prefix_uint64_tensor},
+                                             model_input_->prompt_probs_prefix_uint64_tensor},
                                             assemble_last_token_output));
   } else {
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
