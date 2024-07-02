@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <string>
 #include <unordered_map>
 
 // All supported device type.
@@ -97,6 +98,15 @@ enum DataType {
   TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED
 #endif
 };
+
+static std::string GetTypeString(DataType dtype) {
+  static const std::unordered_map<DataType, std::string> type_map{
+      {TYPE_INVALID, "invalid"}, {TYPE_BOOL, "bool"},     {TYPE_BYTES, "bytes"},   {TYPE_UINT8, "uint8"},
+      {TYPE_UINT16, "uint16"},   {TYPE_UINT32, "uint32"}, {TYPE_UINT64, "uint64"}, {TYPE_INT8, "int8"},
+      {TYPE_INT16, "int16"},     {TYPE_INT32, "int32"},   {TYPE_INT64, "int64"},   {TYPE_FP16, "float16"},
+      {TYPE_BF16, "bfloat16"},   {TYPE_FP32, "float32"},  {TYPE_FP64, "float64"}};
+  return type_map.count(dtype) ? type_map.at(dtype) : "invalid";
+}
 
 size_t GetTypeSize(DataType dtype);
 

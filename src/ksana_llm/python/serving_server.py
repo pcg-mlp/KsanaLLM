@@ -9,6 +9,7 @@ import yaml
 import uvicorn
 import os
 import traceback
+import base64
 
 from typing import Dict, Any
 from fastapi import FastAPI, Request
@@ -115,11 +116,16 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
 
     # Create a return for the forward interface
     if (len(ksana_python_output.response) > 0):
-        response = {}
+        response = []
         for target, python_tensor in ksana_python_output.response.items():
-            response[target] = {"data": python_tensor.data,
-                                "shape": python_tensor.shape,
-                                "dtype": python_tensor.dtype}
+            response.append({
+                "target_name": target,
+                "tensor": {
+                    "data": base64.b64encode(python_tensor.data),
+                    "shape": python_tensor.shape,
+                    "dtype": python_tensor.dtype,
+                }
+            })
         return {
             "input_token_ids": input_tokens,  # the input token IDs
             "response": response  # The processed response containing tensor data
@@ -150,7 +156,7 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
     """
 
     model_name = request_dict.pop("model_name", "")
-    prompt_text = request_dict.pop("prompt")
+    prompt_text = request_dict.pop("prompt", None)
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
 

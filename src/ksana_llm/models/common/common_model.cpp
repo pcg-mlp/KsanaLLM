@@ -501,7 +501,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
     // Update the response tensor with the sliced data.
     PythonTensor& ret_tensor = (*req.response)[stage];
     ret_tensor.shape = {output_len, output.shape[1]};
-    ret_tensor.dtype = output.GetNumpyType();
+    ret_tensor.dtype = GetTypeString(output.dtype);
     ret_tensor.data = py::bytes(output_data.data(), output_data.size());
   }
   return ret;

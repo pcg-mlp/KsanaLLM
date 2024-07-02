@@ -41,7 +41,7 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
   if (req->prompt_probs.size()) {
     PythonTensor &ret_tensor = req->response["logits"];
     ret_tensor.shape = {req->prompt_probs.size()};
-    ret_tensor.dtype = "f4";
+    ret_tensor.dtype = GetTypeString(TYPE_FP32);
     ret_tensor.data =
         py::bytes(reinterpret_cast<char *>(req->prompt_probs.data()), req->prompt_probs.size() * sizeof(float));
   }

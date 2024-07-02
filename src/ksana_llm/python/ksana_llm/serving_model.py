@@ -45,6 +45,7 @@ class KsanaPlugin(object):
         if hasattr(self._ksana_plugin, 'init_plugin'):
             kwargs = {
                 "postprocess" : True,
+                "model_path" : plugin_path,
             }
             self._ksana_plugin.init_plugin(**kwargs)
 
@@ -189,27 +190,29 @@ class ServingModel(object):
         return True
 
     def parse_request_target(self,
-                            request_target: Dict[str, Any],
+                            request_target: List[Dict[str, Any]],
                             ksana_python_input: libtorch_serving.KsanaPythonInput):
         """
-        Parses the request target and updates the ksana_python_input object accordingly.
+        Parses the request target and updates the ksana_python_input object with the processed information.
 
         This function iterates through each target specified in the request, processes its description,
         and updates the ksana_python_input object with the processed target information.
 
         Parameters:
-        - request_target (Dict[str, Any]): A dictionary where each key is a target name and its value is a dictionary
-                                        describing the target.
-        - ksana_python_input (libtorch_serving.KsanaPythonInput): An object that will be updated with the processed
-                                                                target information.
+        - request_target (List[Dict[str, Any]]): A list of dictionaries, where each dictionary represents a target with its description.
+        - ksana_python_input (libtorch_serving.KsanaPythonInput): An object to be updated with the processed target information.
 
         Raises:
         - RuntimeError: If both 'token_id' and 'slice_pos' are specified for the same target, or if 'GATHER_TOKEN_ID'
-                        is specified for a transformer, layernorm target, which is not supported.
+                        is specified for a transformer or layernorm target, which is not supported.
         """
 
         # Iterate through each target specified in the request
-        for target_name, target_desc in request_target.items():
+        for target_desc in request_target:
+            # Ensure 'target_name' is specified
+            if 'target_name' not in target_desc:
+                raise RuntimeError("Missing 'target_name' in target description.")
+            target_name = target_desc["target_name"]
             target_describe = libtorch_serving.TargetDescribe()
 
             # If 'token_id' is specified, set it in the target description
