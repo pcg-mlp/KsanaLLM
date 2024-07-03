@@ -17,6 +17,7 @@ class AscendDeviceContextManager {
   // Get device id of device_id
   aclrtContext& GetDeviceContext(int device_id);
 
+ private:
   std::unordered_map<int, aclrtContext> acl_contexts_;
 };
 

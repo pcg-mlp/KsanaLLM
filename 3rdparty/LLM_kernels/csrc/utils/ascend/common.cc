@@ -15,6 +15,8 @@
 #include "aclnnop/aclnn_copy.h"
 #include "aclnnop/aclnn_random.h"
 
+#include "3rdparty/ini_reader.h"
+
 namespace llm_kernels {
 namespace utils {
 
@@ -387,6 +389,23 @@ void GetTestWorkSpaceFunc(size_t size, void** ws_addr) {
 
     *ws_addr = cached_addr;
   }
+}
+
+void LoadDeviceAttribute(const std::string& platform_config_path, AscendNPUDeviceAttribute& device_attr) {
+  INIReader ini_reader = INIReader(platform_config_path);
+  if (ini_reader.ParseError() < 0) {
+    throw std::runtime_error(platform_config_path + " Device Attribute parse error");
+  }
+
+  device_attr.ai_core_num = ini_reader.GetInteger("SoCInfo", "ai_core_cnt");
+  device_attr.cube_core_num = ini_reader.GetInteger("SoCInfo", "cube_core_cnt");
+  device_attr.vector_core_num = ini_reader.GetInteger("SoCInfo", "vector_core_cnt");
+  device_attr.ai_cpu_num = ini_reader.GetInteger("SoCInfo", "ai_cpu_cnt");
+  device_attr.l2_size = ini_reader.GetInteger("SoCInfo", "l2_size");
+  device_attr.l0_a_size = ini_reader.GetInteger("AICoreSpec", "l0_a_size");
+  device_attr.l0_b_size = ini_reader.GetInteger("AICoreSpec", "l0_b_size");
+  device_attr.l0_c_size = ini_reader.GetInteger("AICoreSpec", "l0_c_size");
+  device_attr.l1_size = ini_reader.GetInteger("AICoreSpec", "l1_size");
 }
 
 }  // namespace utils

@@ -27,4 +27,6 @@ set(ACL_SHARED_LIBS
   ${ASCEND_PATH}/lib64/libopapi.so
 )
 
-add_definitions("-DENABLE_ACL")
+set(PLATFORM_CONFIG_PATH "${ASCEND_PATH}/compiler/data/platform_config/${ASCEND_PLATFORM_NAME}.ini")
+
+add_definitions("-DENABLE_ACL" "-DPLATFORM_CONFIG_PATH=\"${PLATFORM_CONFIG_PATH}\"")

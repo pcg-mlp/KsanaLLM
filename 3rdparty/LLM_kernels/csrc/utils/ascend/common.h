@@ -107,5 +107,20 @@ typedef void (*WorkSpaceFunc)(size_t, void**);
 
 void GetTestWorkSpaceFunc(size_t size, void** ws_addr);
 
+struct AscendNPUDeviceAttribute {
+  // NOTE(karlluo): all these config is needed for NPU performance optimization
+  uint32_t ai_core_num{0};
+  uint32_t cube_core_num{0};
+  uint32_t vector_core_num{0};
+  uint32_t ai_cpu_num{0};
+  size_t l2_size{0};
+  size_t l0_a_size{0};
+  size_t l0_b_size{0};
+  size_t l0_c_size{0};
+  size_t l1_size{0};
+};
+
+void LoadDeviceAttribute(const std::string& platform_config_path, AscendNPUDeviceAttribute& device_attr);
+
 }  // namespace utils
 }  // namespace llm_kernels
