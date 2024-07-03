@@ -66,7 +66,13 @@ class AscendEmbeddingTestSuit : public AscendTestSuitBase {
     ACL_CHECK_RET(aclrtMallocHost((void **)(&emb_host), emb_size));
     ACL_CHECK_RET(aclrtMalloc((void **)&emb_device, emb_size, ACL_MEM_MALLOC_HUGE_FIRST));
     for (size_t i = 0; i < emb_config_tiling.vocab_size * emb_config_tiling.hidden_units; ++i) {
-      ((DTYPE *)emb_host)[i] = DTYPE(std::sin(float(i)));
+      if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+        ((DTYPE *)emb_host)[i] = DTYPE(std::sin(float(i)));
+      } else if (std::is_same<DTYPE, aclFloat16>::value) {
+        ((DTYPE *)emb_host)[i] = aclFloatToFloat16(std::sin(float(i)));
+      } else {
+        throw std::invalid_argument("Invalid embedding lookup type, only support float16 or float32.");
+      }
       emb_ref[i] = ((DTYPE *)emb_host)[i];
     }
     ACL_CHECK_RET(aclrtMemcpy(emb_device, emb_size, emb_host, emb_size, ACL_MEMCPY_HOST_TO_DEVICE));

@@ -7,6 +7,7 @@
 #include "kernel_operator.h"
 
 constexpr int32_t ROPE_EMBEDDING_BUFFER_NUM = 1;  // tensor num for each queue
+using namespace AscendC;
 
 template <typename T>
 class RotaryEmbeddingKernel {

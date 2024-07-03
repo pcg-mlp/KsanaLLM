@@ -16,7 +16,7 @@ endif()
 if(NOT "$ENV{ASCEND_MAIN_PATH}" STREQUAL "")
   set(ASCEND_MAIN_PATH $ENV{ASCEND_MAIN_PATH})
 else()
-  set(ASCEND_MAIN_PATH "/usr/local/Ascend/ascend-toolkit/7.0.0/x86_64-linux")
+  set(ASCEND_MAIN_PATH "/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux")
 endif()
 
 set(CCE_CMAKE_PATH ${PROJECT_SOURCE_DIR}/cmake/module)

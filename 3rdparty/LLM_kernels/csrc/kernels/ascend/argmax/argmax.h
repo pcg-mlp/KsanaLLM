@@ -14,5 +14,9 @@ namespace ascend {
 void ArgMax(const aclTensor* argMaxInput, const int64_t argMaxDim, const bool argMaxKeepdim, aclTensor** argMaxOutput,
             aclrtStream& stream, void (*ws_func)(size_t, void**));
 
+template <typename T>
+void InvokeArgmax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
+                  uint32_t* result, aclrtStream& stream, void (*ws_func)(size_t, void**));
+
 }  // namespace ascend
 }  // namespace llm_kernels
