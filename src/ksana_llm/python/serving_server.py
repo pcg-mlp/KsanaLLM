@@ -121,7 +121,7 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
             response.append({
                 "target_name": target,
                 "tensor": {
-                    "data": base64.b64encode(python_tensor.data),
+                    "data": base64.b64encode(python_tensor.data).decode('utf-8'),
                     "shape": python_tensor.shape,
                     "dtype": python_tensor.dtype,
                 }
