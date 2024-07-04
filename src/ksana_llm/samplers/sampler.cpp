@@ -125,21 +125,22 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
   return Status();
 }
 
-void Sampler::CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
-                                    std::vector<std::vector<float>>& prompt_probs_output) {
+void Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+                                    std::vector<std::vector<float>>& probs_output) {
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
-    if (sampling_reqs[i].sampling_config->return_prompt_probs) {
-      prompt_probs_output[i].resize(sampling_reqs[i].prompt_probs_offset);
+    if (sampling_reqs[i].logits_custom_length > 0) {
+      probs_output[i].resize(sampling_reqs[i].logits_custom_length);
       auto& input_tokens = *sampling_reqs[i].input_tokens;
       auto& vocab_size = batch_schedule_config_.max_vocab_size;
-      // Retrieve the logits of the last prompt_probs_offset tokens entered
-      for (int index = prompt_probs_output[i].size(); index > 0; index--) {
-        int token_index = input_tokens.size() - index;
-        int prompt_probs_index = prompt_probs_output[i].size() - index;
-        size_t req_logits_offset = (sampling_reqs[i].logits_offset + prompt_probs_index) * vocab_size;
-        MemcpyAsync(prompt_probs_output[i].data() + prompt_probs_index,
-                    sampling_reqs[i].logits_buf[rank_] + req_logits_offset + input_tokens[token_index], sizeof(float),
-                    MEMCPY_DEVICE_TO_HOST, stream);
+      size_t probs_index = 0;
+      for (auto [l, r] : sampling_reqs[i].request_target->at("logits").slice_pos) {
+        for (auto index = l; index <= r; index++) {
+          size_t req_logits_offset = (sampling_reqs[i].logits_offset + probs_index) * vocab_size;
+          MemcpyAsync(probs_output[i].data() + probs_index,
+                      sampling_reqs[i].logits_buf[rank_] + req_logits_offset + input_tokens[index + 1], sizeof(float),
+                      MEMCPY_DEVICE_TO_HOST, stream);
+          probs_index++;
+        }
       }
     }
   }
@@ -179,9 +180,9 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     for (auto& sampling_req : sampling_reqs) {
       const SamplingConfig* sampling_config = sampling_req.sampling_config;
       logits_softmax =
-          logits_softmax || sampling_req.prompt_probs_offset > 0 || sampling_req.sampling_config->logprobs_num > 0;
-      // If prompt_probs_offset is used, there are prompt_probs_offset logits that need to be calculated.
-      int sampling_bs = (sampling_req.prompt_probs_offset > 0 ? sampling_req.prompt_probs_offset : 1);
+          logits_softmax || sampling_req.logits_custom_length > 0 || sampling_req.sampling_config->logprobs_num > 0;
+      // If logits_custom_length is used, there are logits_custom_length logits that need to be calculated.
+      int sampling_bs = (sampling_req.logits_custom_length > 0 ? sampling_req.logits_custom_length : 1);
       sampling_devide_parameter.bs += sampling_bs;
       float* logits = sampling_req.logits_buf[rank_];
       if (device_logits == logits || device_logits == nullptr) {
@@ -226,14 +227,20 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
                                                 sampling_devide_parameter, nullptr, stream));
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
-    std::vector<std::vector<float>> prompt_probs_output(sampling_reqs.size());
-    CopyPromptProbsOutput(sampling_reqs, stream, prompt_probs_output);
+    std::vector<std::vector<float>> probs_output(sampling_reqs.size());
+    CopyProbsOutput(sampling_reqs, stream, probs_output);
     StreamSynchronize(stream);
     for (size_t i = 0; i < sampling_reqs.size(); i++) {
       std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
       beam_search_sampling_.Sampling(sampling_reqs[i]);
-      (*sampling_reqs[i].prompt_probs) = std::move(prompt_probs_output[i]);
+      if (!probs_output[i].empty()) {
+        PythonTensor& ret_tensor = (*sampling_reqs[i].response)["logits"];
+        ret_tensor.shape = {probs_output[i].size()};
+        ret_tensor.dtype = GetTypeString(TYPE_FP32);
+        ret_tensor.data.resize(probs_output[i].size() * sizeof(float));
+        memcpy(ret_tensor.data.data(), probs_output[i].data(), ret_tensor.data.size());
+      }
     }
   }
   return Status();

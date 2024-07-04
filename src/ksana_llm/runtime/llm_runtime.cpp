@@ -41,9 +41,9 @@ void LlmRuntime::BuildForwardRequests(
 
     req_ptr->step += 1;
     req_ptr->logits_offset = logits_offset;
-    // When the prompt_probs_offset is greater than 0, the size of logits to be calculated is prompt_probs_offset.
-    if (req_ptr->prompt_probs_offset > 0) {
-      logits_offset += req_ptr->prompt_probs_offset;
+    // When the logits_custom_length is greater than 0, the size of logits to be calculated is logits_custom_length.
+    if (req_ptr->logits_custom_length > 0) {
+      logits_offset += req_ptr->logits_custom_length;
     } else {
       logits_offset++;
     }
@@ -61,7 +61,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.req_id = req_ptr->req_id;
     forward_req.infer_stage = req_ptr->infer_stage;
     forward_req.step = req_ptr->step;
-    forward_req.prompt_probs_offset = req_ptr->prompt_probs_offset;
+    forward_req.logits_custom_length = req_ptr->logits_custom_length;
     forward_req.block_size = req_ptr->block_size;
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
@@ -130,10 +130,11 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
     SamplingRequest sampling_req;
     sampling_req.req_id = req_ptr->req_id;
-    sampling_req.prompt_probs_offset = req_ptr->prompt_probs_offset;
-    sampling_req.prompt_probs = &(req_ptr->prompt_probs);
+    sampling_req.logits_custom_length = req_ptr->logits_custom_length;
     sampling_req.input_tokens = &(req_ptr->input_tokens);
     sampling_req.output_tokens = &(req_ptr->output_tokens);
+    sampling_req.response = &req_ptr->response;
+    sampling_req.request_target = &req_ptr->request_target;
     sampling_req.logprobs = &(req_ptr->logprobs);
     sampling_req.output_mutex = &(req_ptr->output_mutex);
     sampling_req.logits_offset = req_ptr->logits_offset;

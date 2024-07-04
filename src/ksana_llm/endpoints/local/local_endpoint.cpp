@@ -38,13 +38,6 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
       ksana_python_output.logprobs.emplace_back(req_logprobs);
     }
   }
-  if (req->prompt_probs.size()) {
-    PythonTensor &ret_tensor = req->response["logits"];
-    ret_tensor.shape = {req->prompt_probs.size()};
-    ret_tensor.dtype = GetTypeString(TYPE_FP32);
-    ret_tensor.data =
-        py::bytes(reinterpret_cast<char *>(req->prompt_probs.data()), req->prompt_probs.size() * sizeof(float));
-  }
   ksana_python_output.response = std::move(req->response);
   NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;

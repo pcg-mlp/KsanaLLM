@@ -22,8 +22,8 @@ class Sampler {
                                  SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
   void SamplingParameterToDevide(bool use_top_p, bool use_temperature, bool logits_softmax,
                                  SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
-  void CopyPromptProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
-                             std::vector<std::vector<float>>& prompt_probs_output);
+  void CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+                             std::vector<std::vector<float>>& probs_output);
   void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
                               const int vocab_size, const float repetition_penalty, Stream& stream);
 

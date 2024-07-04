@@ -248,18 +248,14 @@ class ServingModel(object):
                 if target_desc['token_reduce_mode'] == 'GATHER_ALL':
                     raise RuntimeError(
                         f"The output for {target_name} does not support the 'GATHER_ALL' reduction mode.")
-                # Ensure that either no token IDs are specified or exactly one slice position is defined
-                if len(target_describe.token_id) > 0 or len(target_describe.slice_pos) != 1:
+                # Verify that no token IDs are specified, as they are not supported for logits output.
+                if len(target_describe.token_id) > 0:
                     raise RuntimeError(
-                        f"{target_name} output requires exactly one slice position to be specified.")
-                # Check if the slice position correctly targets the last N items excluding the last one.
-                if target_describe.slice_pos[0][1] != len(ksana_python_input.input_tokens) - 2:
+                        f"Specifying token_id for {target_name} output is not supported.")
+                # Ensure the 'GATHER_TOKEN_ID' reduction mode does not use the last logits, as it might be unsupported or not intended.
+                if target_desc['token_reduce_mode'] == 'GATHER_TOKEN_ID' and target_desc['slice_pos'][-1][-1] == len(ksana_python_input.input_tokens) - 1:
                     raise RuntimeError(
-                        f"{target_name} output currently supports returning the last N items excluding the last one, "
-                        f"thus the slice must be [start, {len(ksana_python_input.input_tokens) - 2}].")
-                ksana_python_input.prompt_probs_offset = target_describe.slice_pos[0][1] - target_describe.slice_pos[0][0] + 1
-                ksana_python_input.sampling_config.return_prompt_probs = True
-
+                        f"The last logits is not supported for {target_name} in the 'GATHER_TOKEN_ID' token reduction mode.")
 
             # Update the ksana_python_input object with the processed target information
             ksana_python_input.request_target[target_name] = target_describe
@@ -320,11 +316,6 @@ class ServingModel(object):
 
         if 'input_refit_embedding' in kwargs and 'embeddings' in kwargs['input_refit_embedding']:
             ksana_python_input.input_refit_embedding.embeddings = kwargs['input_refit_embedding']['embeddings']
-
-        if 'prompt_probs_offset' in kwargs:
-            ksana_python_input.prompt_probs_offset = kwargs['prompt_probs_offset']
-            sampling_config.max_new_tokens = 1
-            sampling_config.return_prompt_probs = True
 
         if 'request_target' in kwargs:
             sampling_config.max_new_tokens = 1

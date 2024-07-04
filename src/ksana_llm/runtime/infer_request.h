@@ -97,11 +97,8 @@ class InferRequest {
   // The name of model instance.
   std::string &model_name;
 
-  // The offsets of the tokens for the prompt_probs that need to be returned.
-  size_t prompt_probs_offset = 0;
-
-  // Probs of specific tokens at certain positions in the prompt.
-  std::vector<float> &prompt_probs;
+  // The custom length for the logits output, allowing for a specific size of logits to be generated.
+  size_t logits_custom_length = 0;
 
   // The input tokens.
   std::vector<int> &input_tokens;

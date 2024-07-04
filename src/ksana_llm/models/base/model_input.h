@@ -67,10 +67,11 @@ class ModelInput {
 
   // The ids offset tensor, uint64
   Tensor input_offset_uint64_tensor;
-  // If prompt props is returned, use prompt_probs_offset_uint64_tensor instead of input_offset_uint64_tensor for
-  // calculation.
-  Tensor prompt_probs_offset_uint64_tensor;
-  bool use_prompt_probs_offset = false;
+  // If use_logits_custom_length is true, use logits_custom_length_uint64_tensor instead of input_offset_uint64_tensor
+  // for calculation.
+  Tensor logits_custom_length_uint64_tensor;
+  // Flag to indicate if custom logits length is used.
+  bool use_logits_custom_length = false;
   Tensor input_tokens_int32_tensor;
 
   // Indicate the corresponding index position of the input during rotary_embedding kernel.
@@ -82,9 +83,9 @@ class ModelInput {
 
   // The input's prefix length
   Tensor input_prefix_uint64_tensor;
-  // If prompt props is returned, use prompt_probs_prefix_uint64_tensor instead of input_prefix_uint64_tensor for
-  // calculation.
-  Tensor prompt_probs_prefix_uint64_tensor;
+  // If use_logits_custom_length is true, use logits_length_prefix_uint64_tensor instead of input_prefix_uint64_tensor
+  // for calculation.
+  Tensor logits_length_prefix_uint64_tensor;
 
   // Input offset sequence and input prefix sequence on the CPU
   std::vector<int> input_offset_list;

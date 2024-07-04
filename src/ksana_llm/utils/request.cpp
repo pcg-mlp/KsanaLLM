@@ -18,7 +18,6 @@ Request::Request(const ksana_llm::KsanaPythonInput &ksana_python_input)
       logprobs(std::get<1>(output_group[0])),
       model_name(ksana_python_input.model_name),
       input_tokens(ksana_python_input.input_tokens),
-      prompt_probs_offset(ksana_python_input.prompt_probs_offset),
       request_target(ksana_python_input.request_target),
       sampling_config(ksana_python_input.sampling_config),
       input_refit_embedding(ksana_python_input.input_refit_embedding) {
@@ -26,6 +25,12 @@ Request::Request(const ksana_llm::KsanaPythonInput &ksana_python_input)
     req_ids.push_back(id_generator_.Gen());
   }
   req_id = req_ids[0];
+  auto it = request_target.find("logits");
+  if (it != request_target.end()) {
+    for (auto [l, r] : it->second.slice_pos) {
+      logits_custom_length += (r - l + 1);
+    }
+  }
 }
 
 }  // namespace ksana_llm

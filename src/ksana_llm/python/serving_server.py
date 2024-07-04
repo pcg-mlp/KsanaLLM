@@ -87,7 +87,6 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
             ret = {
                 "texts": output_texts,
                 "output_token_ids": output_token_ids,
-                "prompt_probs": ksana_python_output.prompt_probs,
                 "logprobs": ksana_python_output.logprobs,
                 "input_token_ids": input_tokens
             }
@@ -121,7 +120,7 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
             response.append({
                 "target_name": target,
                 "tensor": {
-                    "data": base64.b64encode(python_tensor.data).decode('utf-8'),
+                    "data": base64.b64encode(bytes(python_tensor.data)).decode('utf-8'),
                     "shape": python_tensor.shape,
                     "dtype": python_tensor.dtype,
                 }
@@ -136,7 +135,6 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
         "texts": output_text,  # the generated text
         "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
         "logprobs": ksana_python_output.logprobs,
-        "prompt_probs": ksana_python_output.prompt_probs,
         "input_token_ids": input_tokens  # the input token IDs
     }
 
@@ -161,7 +159,6 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
     sampling_config = request_dict.pop("sampling_config", None)
 
     input_refit_embedding = request_dict.pop("input_refit_embedding", None)
-    prompt_probs_offset = request_dict.pop("prompt_probs_offset", None)
 
     input_tokens = request_dict.pop("input_tokens", None)
     if input_tokens is None:
@@ -176,9 +173,6 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
 
     if input_refit_embedding is not None and "embeddings" in input_refit_embedding:
         kwargs['input_refit_embedding']["embeddings"] = input_refit_embedding["embeddings"]
-
-    if prompt_probs_offset is not None:
-        kwargs['prompt_probs_offset'] = prompt_probs_offset
 
     request_target = request_dict.pop("request_target", None)
     if request_target is not None:

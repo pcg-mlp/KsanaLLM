@@ -87,7 +87,6 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("temperature", &ksana_llm::SamplingConfig::temperature)
       .def_readwrite("max_new_tokens", &ksana_llm::SamplingConfig::max_new_tokens)
       .def_readwrite("logprobs_num", &ksana_llm::SamplingConfig::logprobs_num)
-      .def_readwrite("return_prompt_probs", &ksana_llm::SamplingConfig::return_prompt_probs)
       .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty)
       .def_readwrite("num_beams", &ksana_llm::SamplingConfig::num_beams)
       .def_readwrite("num_return_sequences", &ksana_llm::SamplingConfig::num_return_sequences)
@@ -124,7 +123,6 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("model_name", &ksana_llm::KsanaPythonInput::model_name)
       .def_readwrite("sampling_config", &ksana_llm::KsanaPythonInput::sampling_config)
       .def_readwrite("input_tokens", &ksana_llm::KsanaPythonInput::input_tokens)
-      .def_readwrite("prompt_probs_offset", &ksana_llm::KsanaPythonInput::prompt_probs_offset)
       .def_readwrite("request_target", &ksana_llm::KsanaPythonInput::request_target)
       .def_readwrite("input_refit_embedding", &ksana_llm::KsanaPythonInput::input_refit_embedding);
 
@@ -141,7 +139,6 @@ PYBIND11_MODULE(libtorch_serving, m) {
   pybind11::class_<ksana_llm::KsanaPythonOutput, std::shared_ptr<ksana_llm::KsanaPythonOutput>>(m, "KsanaPythonOutput")
       .def(pybind11::init<>())
       .def_readwrite("output_tokens", &ksana_llm::KsanaPythonOutput::output_tokens)
-      .def_readwrite("prompt_probs", &ksana_llm::KsanaPythonOutput::prompt_probs)
       .def_readwrite("logprobs", &ksana_llm::KsanaPythonOutput::logprobs)
       .def_readwrite("response", &ksana_llm::KsanaPythonOutput::response)
       .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding);

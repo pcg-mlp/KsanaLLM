@@ -488,21 +488,20 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
     }
     // Calculate the size of each chunk based on the output tensor's data type and shape.
     size_t chunk_size = GetTypeSize(output.dtype) * output.shape[1];
-    std::vector<char> output_data(output_len * chunk_size);
+    // Update the response tensor with the sliced data.
+    PythonTensor& ret_tensor = (*req.response)[stage];
+    ret_tensor.shape = {output_len, output.shape[1]};
+    ret_tensor.dtype = GetTypeString(output.dtype);
+    ret_tensor.data.resize(output_len * chunk_size);
     output_len = 0;
     // Copy data from the output tensor to the output_data buffer based on slice positions.
     for (auto [l, r] : slice_pos) {
-      MemcpyAsync(output_data.data() + output_len * chunk_size,
+      MemcpyAsync(ret_tensor.data.data() + output_len * chunk_size,
                   output.GetPtr<void>() + (req_offset - output_tokens_num + l) * chunk_size, (r - l + 1) * chunk_size,
                   MEMCPY_DEVICE_TO_HOST, context_->GetComputeStreams()[rank_]);
       output_len += r - l + 1;
     }
     StreamSynchronize(context_->GetComputeStreams()[rank_]);
-    // Update the response tensor with the sliced data.
-    PythonTensor& ret_tensor = (*req.response)[stage];
-    ret_tensor.shape = {output_len, output.shape[1]};
-    ret_tensor.dtype = GetTypeString(output.dtype);
-    ret_tensor.data = py::bytes(output_data.data(), output_data.size());
   }
   return ret;
 }
@@ -582,11 +581,11 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
 
   // assemble last token
   std::vector<Tensor>& assemble_last_token_output = temp_buffer_2;
-  if (model_input_->use_prompt_probs_offset) {
-    STATUS_CHECK_RETURN(
-        assemble_last_token_layer_->Forward({final_layernorm_output[0], model_input_->prompt_probs_offset_uint64_tensor,
-                                             model_input_->prompt_probs_prefix_uint64_tensor},
-                                            assemble_last_token_output));
+  if (model_input_->use_logits_custom_length) {
+    STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
+        {final_layernorm_output[0], model_input_->logits_custom_length_uint64_tensor,
+         model_input_->logits_length_prefix_uint64_tensor},
+        assemble_last_token_output));
   } else {
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
         {final_layernorm_output[0], model_input_->input_offset_uint64_tensor, model_input_->input_prefix_uint64_tensor},
@@ -625,7 +624,6 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
     auto ksana_python_input = std::make_shared<KsanaPythonInput>();
     ksana_python_input->input_tokens = *forward_reqs[idx].output_tokens;
     ksana_python_input->input_refit_embedding.pos = (*forward_reqs[idx].input_refit_embedding).pos;
-    ksana_python_input->prompt_probs_offset = forward_reqs[idx].prompt_probs_offset;
 
     auto& embeddings = (*forward_reqs[idx].input_refit_embedding).embeddings;
     auto& tensors = ksana_python_input->input_refit_embedding.embedding_tensors;

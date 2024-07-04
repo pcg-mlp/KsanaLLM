@@ -23,8 +23,8 @@ struct ForwardRequest {
   // The decode step, 1 for context decode, and then 2, 3, 4...
   int step;
 
-  // The offsets of the tokens for the prompt_probs that need to be returned.
-  size_t prompt_probs_offset = 0;
+  // The custom length for the logits output, allowing for a specific size of logits to be generated.
+  size_t logits_custom_length = 0;
 
   // The input tokens.
   std::vector<int>* output_tokens;

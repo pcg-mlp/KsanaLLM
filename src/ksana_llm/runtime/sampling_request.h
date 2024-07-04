@@ -16,11 +16,8 @@ struct SamplingRequest {
   // The req id of the user's request.
   int64_t req_id;
 
-  // The offsets of the tokens for the prompt_probs that need to be returned.
-  size_t prompt_probs_offset = 0;
-
-  // Probs of specific tokens at certain positions in the prompt.
-  std::vector<float>* prompt_probs;
+  // The custom length for the logits output, allowing for a specific size of logits to be generated.
+  size_t logits_custom_length = 0;
 
   // The sampling config.
   SamplingConfig* sampling_config;
@@ -32,6 +29,13 @@ struct SamplingRequest {
   std::vector<int>* input_tokens;
   // The output token will be appended here.
   std::vector<int>* output_tokens;
+
+  // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
+  // layernorm, transformer, logits}.
+  const std::map<std::string, TargetDescribe>* request_target = nullptr;
+
+  // The result of request_target.
+  std::map<std::string, PythonTensor>* response;
 
   // The mutex used to protect output_tokens.
   std::mutex* output_mutex;

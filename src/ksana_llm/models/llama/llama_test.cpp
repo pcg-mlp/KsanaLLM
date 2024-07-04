@@ -143,7 +143,6 @@ TEST_F(LlamaTest, ForwardTest) {
   sample_req.logits_offset = forward_reqs[0].logits_offset;
   sample_req.output_tokens = forward_reqs[0].output_tokens;
   sample_req.logprobs = &logprobs;
-  sample_req.prompt_probs = &prompt_probs;
   std::mutex output_mutex;
   sample_req.output_mutex = &output_mutex;
   sample_req.logits_buf = forward_reqs[0].logits_buf;
@@ -187,10 +186,15 @@ TEST_F(LlamaTest, ForwardTest) {
 #ifdef ENABLE_CUDA
   EXPECT_TRUE((milliseconds / 10) < 30);
 
-  // Test prompt_probs_offset
+  // Test logits_custom_length
   std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
   forward.output_tokens = &prompt_probs_input_tokens;
-  forward.prompt_probs_offset = 5;
+  forward.logits_custom_length = 5;
+  std::map<std::string, ksana_llm::TargetDescribe> request_target;
+  ksana_llm::TargetDescribe target_describe;
+  target_describe.slice_pos.push_back({0, 4});
+  request_target["logits"] = target_describe;
+  forward.request_target = &request_target;
   std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
 #else

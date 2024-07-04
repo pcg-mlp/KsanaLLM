@@ -64,7 +64,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
       CreateTensor(input_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
-      CreateTensor(prompt_probs_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
+      CreateTensor(logits_custom_length_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(input_tokens_int32_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
@@ -75,7 +75,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(
       CreateTensor(input_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
-      CreateTensor(prompt_probs_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
+      CreateTensor(logits_length_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(CreateTensor(cpu_input_refit_tensor.pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_,
                                     MemoryDevice::MEMORY_HOST));
@@ -90,12 +90,12 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(input_ids, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_offset_uint64_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(prompt_probs_offset_uint64_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(logits_custom_length_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.pos_pair_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_tokens_int32_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_prefix_uint64_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(prompt_probs_prefix_uint64_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(logits_length_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_pos, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_mask, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_buffer, rank_));
@@ -249,12 +249,12 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
 void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs) {
   input_ids.shape = {total_seq_len - total_prefix_len};
   size_t input_offset = 0;
-  use_prompt_probs_offset = false;
+  use_logits_custom_length = false;
   std::vector<int> input_offset_list_int32(batch_size + 1, 0);
   std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
-  std::vector<size_t> prompt_probs_offset_list_uint64(max_batch_size_ + 1, 0ul);
-  std::vector<size_t> prompt_probs_prefix_list_uint64(max_batch_size_ + 1, 0ul);
-  int prompt_probs_offset_list_uint64_index = 1;
+  std::vector<size_t> logits_custom_length_list_uint64(max_batch_size_ + 1, 0ul);
+  std::vector<size_t> logits_length_prefix_list_uint64(max_batch_size_ + 1, 0ul);
+  int logits_custom_length_list_uint64_index = 1;
   std::vector<int> input_ids_cpu(0);
   std::vector<int> input_prefix_list_int32(batch_size + 1, 0ul);
   std::vector<size_t> input_prefix_list_uint64(batch_size + 1, 0ul);
@@ -270,20 +270,21 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
     size_t prefix_offset = forward_reqs[idx].prefix_cache_len;
     size_t length = req_input->size();
     input_ids_cpu.insert(input_ids_cpu.end(), req_input->begin() + prefix_offset, req_input->end());
+    size_t logits_length_prefix_uint64 =
+        logits_length_prefix_list_uint64[logits_custom_length_list_uint64_index - 1] + prefix_offset;
+    if (forward_reqs[idx].logits_custom_length != 0) {
+      for (auto [l, r] : forward_reqs[idx].request_target->at("logits").slice_pos) {
+        for (auto i = l; i <= r; i++) {
+          logits_custom_length_list_uint64[logits_custom_length_list_uint64_index] = input_offset + i + 1;
+          logits_length_prefix_list_uint64[logits_custom_length_list_uint64_index] = logits_length_prefix_uint64;
+          logits_custom_length_list_uint64_index++;
+        }
+      }
+      use_logits_custom_length = true;
+    }
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
     input_offset_list_uint64[idx + 1] = input_offset;
-    size_t prompt_probs_prefix_uint64 =
-        prompt_probs_prefix_list_uint64[prompt_probs_offset_list_uint64_index - 1] + prefix_offset;
-    for (size_t prompt_offset = input_offset - forward_reqs[idx].prompt_probs_offset; prompt_offset < input_offset;
-         prompt_offset++) {
-      prompt_probs_offset_list_uint64[prompt_probs_offset_list_uint64_index] = prompt_offset;
-      prompt_probs_prefix_list_uint64[prompt_probs_offset_list_uint64_index] = prompt_probs_prefix_uint64;
-      prompt_probs_offset_list_uint64_index++;
-    }
-    if (forward_reqs[idx].prompt_probs_offset != 0) {
-      use_prompt_probs_offset = true;
-    }
     input_prefix_list_int32[idx + 1] = input_prefix_list_int32[idx] + forward_reqs[idx].prefix_cache_len;
     input_prefix_list_uint64[idx + 1] = input_prefix_list_uint64[idx] + prefix_offset;
     max_tokens = std::max(max_tokens, length);
@@ -297,17 +298,17 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
               context_->GetH2DStreams()[rank_]);
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
-  prompt_probs_offset_uint64_tensor.shape = {(size_t)prompt_probs_offset_list_uint64_index};
-  prompt_probs_offset_uint64_tensor.dtype = TYPE_UINT64;
-  prompt_probs_prefix_uint64_tensor.shape = prompt_probs_offset_uint64_tensor.shape;
-  prompt_probs_prefix_uint64_tensor.dtype = prompt_probs_offset_uint64_tensor.dtype;
+  logits_custom_length_uint64_tensor.shape = {(size_t)logits_custom_length_list_uint64_index};
+  logits_custom_length_uint64_tensor.dtype = TYPE_UINT64;
+  logits_length_prefix_uint64_tensor.shape = logits_custom_length_uint64_tensor.shape;
+  logits_length_prefix_uint64_tensor.dtype = logits_custom_length_uint64_tensor.dtype;
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
-  MemcpyAsync(prompt_probs_offset_uint64_tensor.GetPtr<void>(), prompt_probs_offset_list_uint64.data(),
-              prompt_probs_offset_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+  MemcpyAsync(logits_custom_length_uint64_tensor.GetPtr<void>(), logits_custom_length_list_uint64.data(),
+              logits_custom_length_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
-  MemcpyAsync(prompt_probs_prefix_uint64_tensor.GetPtr<void>(), prompt_probs_prefix_list_uint64.data(),
-              prompt_probs_offset_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+  MemcpyAsync(logits_length_prefix_uint64_tensor.GetPtr<void>(), logits_length_prefix_list_uint64.data(),
+              logits_custom_length_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
 
@@ -343,7 +344,7 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
   // create input offset tensor int32 and uint64
   input_tokens_int32_tensor.shape = {static_cast<unsigned long>(batch_size)};
   input_offset_uint64_tensor.shape = {static_cast<unsigned long>(batch_size) + 1};
-  use_prompt_probs_offset = false;
+  use_logits_custom_length = false;
   void* input_tokens_int32_ptr = input_tokens_int32_tensor.GetPtr<void>();
   MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), (batch_size) * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);

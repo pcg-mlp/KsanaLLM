@@ -23,7 +23,6 @@ bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_out
     ksana_python_output.output_tokens.push_back(std::get<0>(output));
     if (return_logprobs_) ksana_python_output.logprobs.push_back(std::get<1>(output));
   }
-  ksana_python_output.prompt_probs = std::move(request_->prompt_probs);
   return true;
 }
 

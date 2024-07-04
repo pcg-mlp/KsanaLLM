@@ -379,25 +379,27 @@ void ContinuousBatchingStrategy::ProcessWaitingRequests(const std::vector<size_t
   size_t launch_block_threshold = step_batch_size * batch_scheduler_config_.launch_block_threshold;
 
   running_indexes.clear();
+  size_t total_logits_extra_length = 0;
   for (size_t i = 0; i < batch_state_->waiting_queue.size(); ++i) {
-    // When the prompt_probs_offset is greater than 0, the size of logits to be calculated is prompt_probs_offset.
-    if (batch_state_->waiting_queue[i]->prompt_probs_offset > 0) {
-      step_batch_size += batch_state_->waiting_queue[i]->prompt_probs_offset;
-    } else {
-      ++step_batch_size;
+    // When the logits_custom_length is greater than 0, the size of logits to be calculated is logits_custom_length.
+    auto logits_extra_length = (batch_state_->waiting_queue[i]->logits_custom_length - 1);
+    if (batch_state_->waiting_queue[i]->logits_custom_length > 0) {
+      total_logits_extra_length += logits_extra_length;
     }
+    ++step_batch_size;
+
     launch_block_threshold = step_batch_size * batch_scheduler_config_.launch_block_threshold;
     step_token_num_sum += step_token_num_list[i];
     total_block_num_sum += total_block_num_list[i];
 
     if (step_token_num_sum < batch_scheduler_config_.max_step_tokens &&
-        step_batch_size <= batch_scheduler_config_.max_batch_size &&
+        step_batch_size + total_logits_extra_length <= batch_scheduler_config_.max_batch_size &&
         total_block_num_sum + launch_block_threshold < total_free_block_num) {
       running_indexes.push_back(i);
       continue;
     }
-
     // Stay waiting.
+    total_logits_extra_length -= logits_extra_length;
     step_token_num_sum -= step_token_num_list[i];
     total_block_num_sum -= total_block_num_list[i];
     break;

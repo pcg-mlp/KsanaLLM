@@ -23,7 +23,6 @@ struct SamplingConfig {
   int num_return_sequences = 1;
   float topp = 0.0f;
   float temperature = 0.0f;
-  bool return_prompt_probs = false;
   // The parameter for repetition penalty. 1.0 means no penalty
   float repetition_penalty = 1.0f;
   float length_penalty = 1.0f;
@@ -87,14 +86,11 @@ struct KsanaPythonInput {
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
   std::map<std::string, TargetDescribe> request_target;
-
-  // The offsets of the tokens for the prompt_probs that need to be returned.
-  size_t prompt_probs_offset = 0;
 };
 
 // In the Python environment, define tensor class.
 struct PythonTensor {
-  py::bytes data;
+  std::vector<uint8_t> data;
   std::vector<size_t> shape;
   std::string dtype;
 };
@@ -105,9 +101,6 @@ struct KsanaPythonOutput {
 
   // Store token and their corresponding float probability values.
   std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
-
-  // Probs of specific tokens at certain positions in the prompt.
-  std::vector<float> prompt_probs;
 
   // Embedding value for plugin output
   std::vector<std::vector<float>> embedding;
@@ -132,11 +125,8 @@ class Request {
   // The tokens of this request.
   std::vector<int> input_tokens;
 
-  // The offsets of the tokens for the prompt_probs that need to be returned.
-  size_t prompt_probs_offset = 0;
-
-  // Probs of specific tokens at certain positions in the prompt.
-  std::vector<float> prompt_probs;
+  // The custom length for the logits output, allowing for a specific size of logits to be generated.
+  size_t logits_custom_length = 0;
 
   // Embedding slice used to refit input embedding    
   EmbeddingSlice input_refit_embedding; 
