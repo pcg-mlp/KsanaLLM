@@ -79,10 +79,10 @@ class ProfileCollector {
                           std::vector<std::string>& results) {
     for (auto& [name, stat_result] : stat_results) {
       if (std::is_same<T, time_t>::value || std::is_same<T, int64_t>::value) {
-        results.push_back(FormatStr("%s|%s|size=%d mean=%d min=%d max=%d", datetime.c_str(), name.c_str(),
+        results.push_back(FormatStr("%s|%s|record_num=%d mean=%d min=%d max=%d", datetime.c_str(), name.c_str(),
                                     stat_result.size, stat_result.mean, stat_result.min, stat_result.max));
       } else if (std::is_same<T, float>::value) {
-        results.push_back(FormatStr("%s|%s|size=%d mean=%.2f min=%.2f max=%.2f", datetime.c_str(), name.c_str(),
+        results.push_back(FormatStr("%s|%s|record_num=%d mean=%.2f min=%.2f max=%.2f", datetime.c_str(), name.c_str(),
                                     stat_result.size, stat_result.mean, stat_result.min, stat_result.max));
       }
     }
