@@ -196,6 +196,18 @@ TEST_F(LlamaTest, ForwardTest) {
   request_target["logits"] = target_describe;
   forward.request_target = &request_target;
   std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
+  ModelInput model_input(model_config, 0, context_);
+  model_input.ParseFromRequests(prompt_probs_forward_reqs, true);
+  EXPECT_TRUE(model_input.use_logits_custom_length);
+  std::vector<uint64_t> result(model_input.logits_custom_length_uint64_tensor.GetElementNumber());
+  std::vector<uint64_t> dst = {0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14};
+  Memcpy(result.data(), model_input.logits_custom_length_uint64_tensor.GetPtr<void>(), result.size() * sizeof(uint64_t),
+         MEMCPY_DEVICE_TO_HOST);
+  EXPECT_EQ(dst.size(), result.size());
+  for (int i = 0; i < result.size(); i++) {
+    EXPECT_EQ(result[i], dst[i]);
+  }
+  EXPECT_TRUE(model_input.use_logits_custom_length);
   EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
 #else
   // NOTE(karlluo): ACL inference is slower than CUDA
