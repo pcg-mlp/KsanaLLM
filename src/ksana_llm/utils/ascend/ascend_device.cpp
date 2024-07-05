@@ -19,20 +19,37 @@ AscendDeviceContextManager::AscendDeviceContextManager() {
     ACL_CHECK(aclrtSetDevice(dev_id));
     ACL_CHECK(aclrtCreateContext(&context, dev_id));
     acl_contexts_[dev_id] = context;
+#ifdef WITH_ACL_ATB
+    atb::Context* atb_context_ptr = nullptr;
+    ATB_CHECK(CreateContext(&atb_context_ptr));
+    acl_atb_contexts_[dev_id] = atb_context_ptr;
+#endif
   }
 }
 
 aclrtContext& AscendDeviceContextManager::GetDeviceContext(int device_id) { return acl_contexts_[device_id]; }
 
+#ifdef WITH_ACL_ATB
+atb::Context* AscendDeviceContextManager::GetDeviceATBContext(int device_id) { return acl_atb_contexts_[device_id]; }
+#endif
+
 AscendDeviceContextManager::~AscendDeviceContextManager() {
   for (auto& [dev_id, context] : acl_contexts_) {
     ACL_CHECK(aclrtDestroyContext(context));
+#ifdef WITH_ACL_ATB
+    ATB_CHECK(DestroyContext(acl_atb_contexts_[dev_id]));
+#endif
   }
 }
 
 StreamT<DEVICE_TYPE_ASCEND>::StreamT(int device_id) : device_id_(device_id) {
   ACL_CHECK(aclrtSetDevice(device_id_));
   ACL_CHECK(aclrtCreateStream(&acl_stream_));
+
+#ifdef WITH_ACL_ATB
+  g_context_manager.GetDeviceATBContext(device_id)->SetExecuteStream(acl_stream_);
+#endif
+
 }
 
 void StreamT<DEVICE_TYPE_ASCEND>::Destroy() {

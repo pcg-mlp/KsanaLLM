@@ -12,6 +12,10 @@
 #include "tests/references/matmul.h"
 #include "tiling/tiling_api.h"
 
+#ifdef WITH_ACL_ATB
+#include "atb/infer_op_params.h"
+#endif
+
 namespace llm_kernels {
 namespace ascend {
 
@@ -111,6 +115,36 @@ template void InvokeMatMul(const size_t m, const size_t n, const size_t k, aclFl
 template void InvokeMatMul(const size_t m, const size_t n, const size_t k, float* input_device, float* weight_device,
                            float* bias_device, float* output_device, aclrtStream& stream,
                            void (*ws_func)(size_t, void**));
+
+#ifdef WITH_ACL_ATB
+template <typename DTYPE>
+void InvokeATBMatMul(const size_t m, const size_t n, const size_t k, DTYPE* input_device, DTYPE* weight_device,
+                     DTYPE* bias_device, DTYPE* output_device, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
+  atb::infer::LinearParam linear_param;
+  linear_param.transposeA = false;
+  linear_param.transposeB = false;
+  if (bias_device == nullptr) {
+    linear_param.hasBias = false;
+  } else {
+    linear_param.hasBias = true;
+  }
+
+  if (std::is_same<DTYPE, float>::value) {
+    linear_param.outDataType = ACL_FLOAT;
+  } else if (std::is_same<DTYPE, aclFloat16>::value) {
+    linear_param.outDataType = ACL_FLOAT16;
+  } else {
+    throw std::invalid_argument("Not support matmul dtype, only support float16 and float32");
+  }
+}
+
+template void InvokeATBMatMul(const size_t m, const size_t n, const size_t k, float* input_device, float* weight_device,
+                              float* bias_device, float* output_device, aclrtStream& stream,
+                              void (*ws_func)(size_t, void**));
+template void InvokeATBMatMul(const size_t m, const size_t n, const size_t k, aclFloat16* input_device,
+                              aclFloat16* weight_device, aclFloat16* bias_device, aclFloat16* output_device,
+                              aclrtStream& stream, void (*ws_func)(size_t, void**));
+#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

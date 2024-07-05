@@ -20,5 +20,11 @@ template <typename DTYPE>
 void InvokeMatMul(const size_t m, const size_t n, const size_t k, DTYPE* input_device, DTYPE* weight_device,
                   DTYPE* bias_device, DTYPE* output_device, aclrtStream& stream, void (*ws_func)(size_t, void**));
 
+#ifdef WITH_ACL_ATB
+template <typename DTYPE>
+void InvokeATBMatMul(const size_t m, const size_t n, const size_t k, DTYPE* input_device, DTYPE* weight_device,
+                  DTYPE* bias_device, DTYPE* output_device, aclrtStream& stream, void (*ws_func)(size_t, void**));
+#endif
+
 }  // namespace ascend
 }  // namespace llm_kernels
