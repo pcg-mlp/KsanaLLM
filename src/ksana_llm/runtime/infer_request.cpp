@@ -17,26 +17,25 @@
 #include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
-
 InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
     : req_id(request->req_ids[index]),
       model_name(request->model_name),
-      input_tokens(request->input_tokens),
       logits_custom_length(request->logits_custom_length),
+      input_tokens(request->input_tokens),
       input_refit_embedding(request->input_refit_embedding),
-      request_target(request->request_target),
-      response(request->response),
       output_tokens(std::get<0>(request->output_group[index])),
       logprobs(std::get<1>(request->output_group[index])),
+      request_target(request->request_target),
+      response(request->response),
       cumulative_score(0),
       sampling_config(request->sampling_config),
-      beam_search_group(request->beam_search_group),
       waiter(request->waiter),
       step_waiter(request->step_waiter),
       finished(request->finisheds[index]),
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
-      padded_size(request->padded_size) {
+      padded_size(request->padded_size),
+      beam_search_group(request->beam_search_group) {
   timestamp_in_ms = GetCurrentTimeInMs();
 }
 

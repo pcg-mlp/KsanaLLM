@@ -43,11 +43,11 @@ struct SamplingConfig {
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;
 
-struct EmbeddingSlice{
-  // The pos indicates the start position of the embedding to be replaced.     
+struct __attribute__((visibility("default"))) EmbeddingSlice {
+  // The pos indicates the start position of the embedding to be replaced.
   std::vector<int> pos;
 
-  // embeddings is the embedding value to be used for the replacement, from the request.          
+  // embeddings is the embedding value to be used for the replacement, from the request.
   std::vector<std::vector<float>> embeddings;
 
   // The same as embeddings but is python object
