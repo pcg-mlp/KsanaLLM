@@ -7,39 +7,68 @@
 #include <unordered_map>
 
 #include "acl/acl.h"
-#include "acl/acl_op_compiler.h"
-#include "aclnn/acl_meta.h"
+
+#include "csrc/kernels/ascend/rotary_embedding/rotary_embedding_kernel.h"
+#include "csrc/utils/ascend/common.h"
 
 namespace llm_kernels {
 namespace ascend {
 
-class RotaryEmbeddingACL {
+enum RotaryEmbeddingType { DEFAULT, LINEAR_SCALING, DYNAMIC_NTK_SCALING };
+
+template <typename T>
+struct RotaryEmbeddingParam {
+  T* cos_sin_cache;  // [max_position_embeddings, rotary_dim]
+  int rotary_dim;
+  int max_position_embeddings;
+  int head_size;
+  int num_heads;
+  int num_kv_heads;
+  int64_t query_stride;
+  int64_t key_stride;
+  float base;
+  bool is_neox;
+  aclrtStream stream;
+
+  int64_t* positions;
+  T* query_;
+  T* key_;
+  T* workspace;
+  int num_tokens_;
+
+  RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT;
+  float scaling_factor = 1.0f;
+
+  RotaryEmbeddingTilingConfig tiling_config;
+};
+
+template <typename T>
+class RotaryEmbeddingAscendC {
  public:
-  void Init(const int max_position_embeddings, const int head_dims, const float rope_theta,
-            const float rope_scaling_factor, aclDataType dtype, aclrtStream& stream, void (*ws_func)(size_t, void**));
+  void SetConfig(T* cos_sin_cache,  // temp buffer, [max_position_embeddings, rotary_dim]
+                 const int rotary_dim, const int max_position_embeddings, const float base, const int head_size,
+                 const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
+                 aclrtStream& stream, const RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT,
+                 const float scaling_factor = 1.0f);
 
-  void Forward(const aclTensor* input, const aclTensor* pos_index, aclTensor** output, aclrtStream& stream,
-               void (*ws_func)(size_t, void**) = nullptr, void* workspace_buf_ptr = nullptr);
-  ~RotaryEmbeddingACL();
+  void SetInput(int64_t* positions,  // [num_tokens]
+                T* query,            // [num_tokens, num_heads * head_size]
+                T* key,              // [num_tokens, num_kv_heads * head_size]
+                int num_tokens, aclrtStream& stream);
+
+  void Forward();
+
+  ~RotaryEmbeddingAscendC() {
+    if (tiling_config_device_ptr != nullptr) {
+      ACL_CHECK_RET(aclrtFree(tiling_config_device_ptr));
+      tiling_config_device_ptr = nullptr;
+    }
+  }
 
  private:
-  void InitSinCos(const int max_position_embeddings, const int head_dims, const float rope_theta, aclDataType dtype,
-                  aclrtStream& stream, void (*ws_func)(size_t, void**));
-  void RotarySplit(const aclTensor* input, const int bs, const int64_t seq_len, const int num_heads, void** maxDev_a,
-                   void** maxDev_b, void** maxDev_c, aclTensor** catOutput, aclrtStream& stream,
-                   void (*ws_func)(size_t, void**));
-
- private:
-  int max_position_embeddings_;
-  int head_dims_;
-  float rope_theta_;
-  float rope_scaling_factor_;
-  aclDataType dtype_;
-
-  void* sin_dev_ = nullptr;
-  void* cos_dev_ = nullptr;
-  aclTensor* sin_ = nullptr;
-  aclTensor* cos_ = nullptr;
+  RotaryEmbeddingParam<T> params_;
+  uint8_t* tiling_config_device_ptr{nullptr};
+  uint8_t* workspace_device_ptr{nullptr};
 };
 
 }  // namespace ascend

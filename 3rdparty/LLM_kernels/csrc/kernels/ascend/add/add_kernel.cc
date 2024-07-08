@@ -120,13 +120,10 @@ __aicore__ inline void AddKernel<DTYPE>::AddCompute(uint32_t loop_idx) {
   LocalTensor<DTYPE> input_b_local = input_b_queue.DeQue<DTYPE>();
   LocalTensor<DTYPE> output_local = output_queue.AllocTensor<DTYPE>();
 
-  // compute alpha * a
-  Muls(output_local, input_a_local, alpha, tile_elem_num);
+  // compute (a + b)
+  Add(output_local, input_a_local, input_b_local, tile_elem_num);
   pipe_barrier(PIPE_V);
-  // compute (alpha * a + b)
-  Add(output_local, output_local, input_b_local, tile_elem_num);
-  pipe_barrier(PIPE_V);
-  // compute (alpha * a + b) + bias
+  // compute (a + b) + bias
   if (is_bias) {
     LocalTensor<DTYPE> bias_local = bias_queue.AllocTensor<DTYPE>();
     Add(output_local, output_local, bias_local, tile_elem_num);

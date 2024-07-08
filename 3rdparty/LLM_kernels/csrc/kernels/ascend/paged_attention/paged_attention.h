@@ -9,8 +9,8 @@
 #include "acl/acl.h"
 #include "acl/acl_op_compiler.h"
 
-#include "csrc/kernels/ascend/fused_rotary_embedding/fused_rotary_embedding.h"
 #include "csrc/kernels/ascend/permute/permute.h"
+#include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 #include "csrc/kernels/ascend/slice/slice.h"
 
 namespace llm_kernels {

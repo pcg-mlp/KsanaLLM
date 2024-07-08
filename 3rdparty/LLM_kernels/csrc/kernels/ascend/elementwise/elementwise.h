@@ -11,10 +11,6 @@
 namespace llm_kernels {
 namespace ascend {
 
-// output = input + other*alpha
-void Add(const aclTensor* input, const aclTensor* other, const aclScalar* alpha, aclTensor** addOutput,
-         aclrtStream& stream, void (*ws_func)(size_t, void**));
-
 // output = input + scalar1*scalar2
 void Adds(const aclTensor* input, const aclScalar* scalar1, const aclScalar* scalar2, aclTensor** addOutput,
           aclrtStream& stream, void (*ws_func)(size_t, void**));

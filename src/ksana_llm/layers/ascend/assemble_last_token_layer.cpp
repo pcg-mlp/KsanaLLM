@@ -21,7 +21,9 @@ Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tenso
   void* output_ptr = output_tensors[0].GetPtr<void>();
 
   void* seq_len_offset = malloc((batch_size + 1) * sizeof(uint64_t));
-  Memcpy(seq_len_offset, input_tensors[1].GetPtr<void>(), (batch_size + 1) * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST);
+  MemcpyAsync(seq_len_offset, input_tensors[1].GetPtr<void>(), (batch_size + 1) * sizeof(uint64_t),
+              MEMCPY_DEVICE_TO_HOST, context_->GetComputeStreams()[rank_]);
+  StreamSynchronize(context_->GetComputeStreams()[rank_]);
 
   size_t total_batch_offset = 0;
   for (size_t i = 0; i < batch_size; ++i) {

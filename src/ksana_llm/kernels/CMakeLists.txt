@@ -35,7 +35,6 @@ if(WITH_ACL)
     llm_kernels_ascend_transpose
     llm_kernels_ascend_permute
     llm_kernels_ascend_embedding
-    llm_kernels_ascend_reshape
     llm_kernels_ascend_argmax)
 endif()
 

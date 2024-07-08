@@ -12,8 +12,8 @@ namespace llm_kernels {
 namespace ascend {
 
 template <typename DTYPE>
-void InvokeAdd(DTYPE* input, DTYPE* output, DTYPE alpha, DTYPE* bias, uint32_t hidden_units_num, uint32_t total_seq_len,
-               aclrtStream& stream, void (*ws_func)(size_t, void**));
+void InvokeAdd(DTYPE* input_a, DTYPE* input_b, DTYPE* bias, DTYPE* output, uint32_t hidden_units_num,
+               uint32_t total_seq_len, aclrtStream& stream, void (*ws_func)(size_t, void**));
 
 }  // namespace ascend
 }  // namespace llm_kernels

@@ -5,238 +5,133 @@
 
 #include "rotary_embedding.h"
 
-#include "csrc/kernels/ascend/concat/concat.h"
-#include "csrc/kernels/ascend/elementwise/elementwise.h"
-#include "csrc/kernels/ascend/gather/gather.h"
-#include "csrc/kernels/ascend/pointwise/pointwise.h"
-#include "csrc/kernels/ascend/slice/slice.h"
-
-#include "csrc/utils/ascend/common.h"
+#include "aclrtlaunch_InvokeRotaryEmbeddingHalfKernel.h"
 
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
 namespace ascend {
 
-void RotaryEmbeddingACL::Init(const int max_position_embeddings, const int head_dims, const float rope_theta,
-                              const float rope_scaling_factor, aclDataType dtype, aclrtStream& stream,
-                              void (*ws_func)(size_t, void**)) {
-  max_position_embeddings_ = max_position_embeddings;
-  rope_theta_ = rope_theta;
-  head_dims_ = head_dims;
-  rope_scaling_factor_ = rope_scaling_factor;
-  dtype_ = dtype;
+template <typename T>
+void RotaryEmbeddingAscendC<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, const int max_position_embeddings,
+                                          const float base, const int head_size, const int num_heads,
+                                          const int num_kv_heads, const int stride_size, const bool is_neox,
+                                          aclrtStream& stream, const RotaryEmbeddingType rotary_embedding_type,
+                                          const float scaling_factor) {
+  params_.cos_sin_cache = cos_sin_cache;
+  params_.rotary_dim = rotary_dim;
+  params_.max_position_embeddings = max_position_embeddings;
+  params_.base = base;
+  params_.head_size = head_size;
+  params_.num_heads = num_heads;
+  params_.num_kv_heads = num_kv_heads;
+  params_.is_neox = is_neox;
+  params_.stream = stream;
+  params_.query_stride = stride_size;
+  params_.key_stride = stride_size;
+  params_.rotary_embedding_type = rotary_embedding_type;
+  params_.scaling_factor = scaling_factor;
 
-  InitSinCos(max_position_embeddings, head_dims, rope_theta, dtype, stream, ws_func);
-}
+  size_t extend_max_len = params_.max_position_embeddings;
+  size_t inner_iter_num = std::min(params_.rotary_dim / 2, 512);
+  float new_base = params_.base;
+  float scaling = 1.0f;
+  // https://github.com/vllm-project/vllm/blob/523e30ea0c5abcb447763dcd9a77b54d5c5f3239/vllm/model_executor/layers/rotary_embedding.py#L219
+  if (params_.rotary_embedding_type == RotaryEmbeddingType::DYNAMIC_NTK_SCALING) {
+    extend_max_len = params_.max_position_embeddings * params_.scaling_factor;
+    new_base = std::pow(params_.base * ((params_.scaling_factor * extend_max_len / params_.max_position_embeddings) -
+                                        (params_.scaling_factor - 1)),
+                        (params_.rotary_dim / (params_.rotary_dim - 2)));
+  }
+  if (params_.rotary_embedding_type == RotaryEmbeddingType::LINEAR_SCALING) {
+    extend_max_len = params_.max_position_embeddings * params_.scaling_factor;
+    scaling = params_.scaling_factor;
+  }
 
-void RotaryEmbeddingACL::InitSinCos(const int max_position_embeddings, const int head_dims, const float rope_theta,
-                                    aclDataType dtype, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
-  // only support fp16 yet
-  ACL_CHECK_EQ(dtype, aclDataType::ACL_FLOAT16);
-  ACL_CHECK_GT(max_position_embeddings, 1);
+  std::vector<T> cos_sin_cache_host(max_position_embeddings * rotary_dim, 0u);
+  for (size_t token_idx = 0; token_idx < extend_max_len; ++token_idx) {
+    int pos = token_idx;
+    for (size_t rid = 0; rid < rotary_dim / 2; ++rid) {
+      float inv_freq = 1.0 / std::pow(new_base, rid * 2 / (float)rotary_dim);
+      float freq = pos * inv_freq / scaling;
+      if (std::is_same<T, aclFloat16>::value) {
+        cos_sin_cache_host[pos * rotary_dim + rid] = aclFloatToFloat16(std::cos(freq));
+        cos_sin_cache_host[pos * rotary_dim + rotary_dim / 2 + rid] = aclFloatToFloat16(std::sin(freq));
 
-  std::vector<int64_t> shape = {max_position_embeddings, head_dims};
-  auto elem_nums = max_position_embeddings * head_dims;
-  std::vector<float> host_cos(elem_nums, 0u);
-  std::vector<float> host_sin(elem_nums, 0u);
-  for (int seq_idx = 0; seq_idx < max_position_embeddings; ++seq_idx) {
-    for (int i = 0; i < head_dims / 2; ++i) {
-      float inv_freq = 1.0 / pow(rope_theta, i * 2 / (float)head_dims);
-      float freq = seq_idx * inv_freq;
-      float fp32_cos = cos(freq);
-      float fp32_sin = sin(freq);
-
-      host_cos[seq_idx * head_dims + i] = fp32_cos;
-      host_sin[seq_idx * head_dims + i] = fp32_sin;
-
-      host_cos[seq_idx * head_dims + head_dims / 2 + i] = fp32_cos;
-      host_sin[seq_idx * head_dims + head_dims / 2 + i] = fp32_sin;
+        // cos_sin_cache_host[pos * rotary_dim + rid] = aclFloatToFloat16(1.0f);
+        // cos_sin_cache_host[pos * rotary_dim + rotary_dim / 2 + rid] = aclFloatToFloat16(1.0f);
+      } else if (std::is_same<T, float>::value) {
+        cos_sin_cache_host[pos * rotary_dim + rid] = std::cos(freq);
+        cos_sin_cache_host[pos * rotary_dim + rotary_dim / 2 + rid] = std::sin(freq);
+      } else {
+        throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");
+      }
     }
   }
 
-  auto fmt = aclFormat::ACL_FORMAT_ND;
-  auto byte_size_fp32 = elem_nums * sizeof(float);
-  void* sin_dev_fp32 = nullptr;
-  void* cos_dev_fp32 = nullptr;
-  ACL_CHECK_RET(aclrtMalloc(&sin_dev_fp32, byte_size_fp32, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&cos_dev_fp32, byte_size_fp32, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMemcpy(sin_dev_fp32, byte_size_fp32, host_sin.data(), byte_size_fp32, ACL_MEMCPY_HOST_TO_DEVICE));
-  ACL_CHECK_RET(aclrtMemcpy(cos_dev_fp32, byte_size_fp32, host_cos.data(), byte_size_fp32, ACL_MEMCPY_HOST_TO_DEVICE));
-  aclTensor* sin_fp32 = nullptr;
-  aclTensor* cos_fp32 = nullptr;
-  CreateAclTensorWithData(shape, &sin_dev_fp32, aclDataType::ACL_FLOAT, fmt, &sin_fp32);
-  CreateAclTensorWithData(shape, &cos_dev_fp32, aclDataType::ACL_FLOAT, fmt, &cos_fp32);
+  ACL_CHECK_RET(aclrtMemcpyAsync(params_.cos_sin_cache, cos_sin_cache_host.size() * sizeof(T),
+                                 cos_sin_cache_host.data(), cos_sin_cache_host.size() * sizeof(T),
+                                 ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
-  ACL_CHECK_RET(aclrtMalloc(&sin_dev_, byte_size_fp32 / 2, ACL_MEM_MALLOC_NORMAL_ONLY));
-  ACL_CHECK_RET(aclrtMalloc(&cos_dev_, byte_size_fp32 / 2, ACL_MEM_MALLOC_NORMAL_ONLY));
-  CreateAclTensorWithData(shape, &sin_dev_, dtype_, fmt, &sin_);
-  CreateAclTensorWithData(shape, &cos_dev_, dtype_, fmt, &cos_);
+  ACL_CHECK_RET(
+      aclrtMalloc((void**)&tiling_config_device_ptr, sizeof(RotaryEmbeddingTilingConfig), ACL_MEM_MALLOC_HUGE_FIRST));
 
-  Cast(sin_fp32, dtype_, &sin_, stream, ws_func);
-  Cast(cos_fp32, dtype_, &cos_, stream, ws_func);
-
-  aclDestroyTensor(sin_fp32);
-  aclDestroyTensor(cos_fp32);
-  aclrtFree(sin_dev_fp32);
-  aclrtFree(cos_dev_fp32);
+  params_.tiling_config.hidden_units_num = params_.rotary_dim / 2;
+  params_.tiling_config.rotary_dim = params_.rotary_dim;
+  params_.tiling_config.num_heads = params_.num_heads;
+  params_.tiling_config.num_kv_heads = params_.num_kv_heads;
+  params_.tiling_config.head_size = params_.head_size;
 }
 
-RotaryEmbeddingACL::~RotaryEmbeddingACL() {
-  if (sin_) {
-    aclDestroyTensor(sin_);
-  }
-  if (cos_) {
-    aclDestroyTensor(cos_);
-  }
-  if (sin_dev_) {
-    aclrtFree(sin_dev_);
-    sin_dev_ = nullptr;
-  }
-  if (cos_dev_) {
-    aclrtFree(cos_dev_);
-    cos_dev_ = nullptr;
-  }
+template void RotaryEmbeddingAscendC<float>::SetConfig(float* cos_sin_cache, const int rotary_dim,
+                                                       const int max_position_embeddings, const float base,
+                                                       const int head_size, const int num_heads, const int num_kv_heads,
+                                                       const int stride_size, const bool is_neox, aclrtStream& stream,
+                                                       const RotaryEmbeddingType rotary_embedding_type,
+                                                       const float scaling_factor);
+template void RotaryEmbeddingAscendC<aclFloat16>::SetConfig(
+    aclFloat16* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
+    const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
+    aclrtStream& stream, const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor);
+
+template <typename T>
+void RotaryEmbeddingAscendC<T>::SetInput(int64_t* positions,  // [num_tokens]
+                                         T* query,            // [num_tokens, num_heads * head_size]
+                                         T* key,              // [num_tokens, num_kv_heads * head_size]
+                                         int num_tokens, aclrtStream& stream) {
+  params_.positions = positions;
+  params_.query_ = query;
+  params_.key_ = key;
+  params_.num_tokens_ = num_tokens;
+  params_.stream = stream;
+
+  params_.tiling_config.seq_len = num_tokens;
 }
 
-void RotaryEmbeddingACL::RotarySplit(const aclTensor* input, const int bs, const int64_t seq_len, const int num_heads,
-                                     void** maxDev_a, void** maxDev_b, void** maxDev_c, aclTensor** catOutput,
-                                     aclrtStream& stream, void (*ws_func)(size_t, void**)) {
-  auto fmt = aclFormat::ACL_FORMAT_ND;
-  // /* part b */
-  // input - > slice1Output
-  int64_t slice1Dim = -1;
-  int64_t slice1Start = 0;
-  int64_t slice1End = head_dims_ / 2;
-  int64_t slice1Step = 1;
-  std::vector<int64_t> slice1OutputShape = {bs, num_heads, seq_len, head_dims_ / 2};
-  aclTensor* slice1Output = nullptr;
-  CreateAclTensorWithData(slice1OutputShape, maxDev_a, dtype_, fmt, &slice1Output);
-  Slice(input, slice1Dim, slice1Start, slice1End, slice1Step, &slice1Output, stream, ws_func);
+template void RotaryEmbeddingAscendC<float>::SetInput(int64_t* positions, float* query, float* key, int num_tokens,
+                                                      aclrtStream& stream);
+template void RotaryEmbeddingAscendC<aclFloat16>::SetInput(int64_t* positions, aclFloat16* query, aclFloat16* key,
+                                                           int num_tokens, aclrtStream& stream);
 
-  // /* part c */
-  // input - > slice2Output
-  int64_t slice2Dim = -1;
-  int64_t slice2Start = head_dims_ / 2;
-  int64_t slice2End = head_dims_;
-  int64_t slice2Step = 1;
-  std::vector<int64_t> slice2OutputShape = {bs, num_heads, seq_len, head_dims_ / 2};
-  aclTensor* slice2Output = nullptr;
-  CreateAclTensorWithData(slice2OutputShape, maxDev_b, dtype_, fmt, &slice2Output);
-  Slice(input, slice2Dim, slice2Start, slice2End, slice2Step, &slice2Output, stream, ws_func);
-
-  // slice2Output - > negOutput
-  std::vector<int64_t> negOutputShape = {bs, num_heads, seq_len, head_dims_ / 2};
-  aclTensor* negOutput = nullptr;
-  CreateAclTensorWithData(negOutputShape, maxDev_c, dtype_, fmt, &negOutput);
-  Neg(slice2Output, &negOutput, stream, ws_func);
-  aclDestroyTensor(slice2Output);
-
-  // negOutput + slice1Output -> catOutput
-  std::vector<const aclTensor*> tmp{negOutput, slice1Output};
-  int64_t catDim = -1;
-  Concat(tmp, catDim, catOutput, stream, ws_func);
-  aclDestroyTensor(slice1Output);
-  aclDestroyTensor(negOutput);
-}
-
-void RotaryEmbeddingACL::Forward(const aclTensor* input, const aclTensor* ropeIndex, aclTensor** output,
-                                 aclrtStream& stream, void (*ws_func)(size_t, void**), void* workspace_buf_ptr) {
-  aclOpExecutor* executor;
-  auto dtype_ = aclDataType::ACL_FLOAT16;
-  auto fmt = aclFormat::ACL_FORMAT_ND;
-
-  int64_t* input_shape = nullptr;
-  uint64_t input_shape_num = 0;
-  ACL_CHECK_RET(aclGetViewShape(input, &input_shape, &input_shape_num));
-  ACL_CHECK_EQ(input_shape_num, 4);
-
-  auto bs = input_shape[0];
-  auto num_heads = input_shape[1];
-  auto seq_len = input_shape[2];
-  auto head_dims = input_shape[3];
-
-  // TODO: opt this mem
-  auto maxDevSize = bs * seq_len * num_heads * head_dims * sizeof(uint16_t);
-  void* maxDev_a = nullptr;
-  void* maxDev_b = nullptr;
-  void* maxDev_c = nullptr;
-  if (workspace_buf_ptr == nullptr) {
-    ACL_CHECK_RET(aclrtMalloc(&maxDev_a, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-    ACL_CHECK_RET(aclrtMalloc(&maxDev_b, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
-    ACL_CHECK_RET(aclrtMalloc(&maxDev_c, maxDevSize, ACL_MEM_MALLOC_NORMAL_ONLY));
+template <typename T>
+void RotaryEmbeddingAscendC<T>::Forward() {
+  RotaryEmbeddingTilingConfig* buf = &(params_.tiling_config);
+  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_config_device_ptr, sizeof(RotaryEmbeddingTilingConfig), buf,
+                                 sizeof(RotaryEmbeddingTilingConfig), ACL_MEMCPY_HOST_TO_DEVICE, params_.stream));
+  if (std::is_same<T, aclFloat16>::value) {
+    // NOTE(karlluo): each token handle by one ai core
+    ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeRotaryEmbeddingHalfKernel)(
+        params_.num_tokens_, params_.stream, params_.positions, params_.query_, params_.key_, params_.cos_sin_cache,
+        tiling_config_device_ptr, params_.query_, params_.key_));
+  } else if (std::is_same<T, float>::value) {
   } else {
-    maxDev_a = workspace_buf_ptr;
-    maxDev_b = workspace_buf_ptr + maxDevSize;
-    maxDev_c = workspace_buf_ptr + maxDevSize * 2;
-  }
-
-  std::vector<int64_t> catOutputShape = {bs, num_heads, seq_len, head_dims};
-  aclTensor* catOutput = nullptr;
-  CreateAclTensorWithData(catOutputShape, &maxDev_b, dtype_, fmt, &catOutput);
-  RotarySplit(input, bs, seq_len, num_heads, &maxDev_a, &maxDev_b, &maxDev_c, &catOutput, stream, ws_func);
-
-  // /* part a -sin */
-  // sin_ + sinIndex - > sinOutput
-  std::vector<int64_t> sinOutputShape = {bs, seq_len, head_dims};
-  aclTensor* sinOutput = nullptr;
-  CreateAclTensorWithData(sinOutputShape, &maxDev_a, dtype_, fmt, &sinOutput);
-  int64_t sinDim = 0;
-  Gather(sin_, sinDim, ropeIndex, &sinOutput, stream, ws_func);
-
-  // sinOutput reshape to -> usq1Output
-  aclTensor* usq1Output = nullptr;
-  std::vector<int64_t> usq1OutputShape = {bs, 1, seq_len, head_dims};
-  CreateAclTensorWithData(usq1OutputShape, &maxDev_a, dtype_, fmt, &usq1Output);
-
-  // catOutput * usq1Output - > mul1Output
-  std::vector<int64_t> mul1OutputShape = {bs, num_heads, seq_len, head_dims};
-  aclTensor* mul1Output = nullptr;
-  CreateAclTensorWithData(mul1OutputShape, &maxDev_c, dtype_, fmt, &mul1Output);
-  Mul(catOutput, usq1Output, &mul1Output, stream, ws_func);
-  aclDestroyTensor(catOutput);
-  aclDestroyTensor(usq1Output);
-
-  // /* part d - cos */
-  // cos_ + cosIndex - > cosOutput
-  std::vector<int64_t> cosIndexShape = {bs, seq_len};
-  std::vector<int64_t> cosOutputShape = {bs, seq_len, head_dims};
-  aclTensor* cosOutput = nullptr;
-  CreateAclTensorWithData(cosOutputShape, &maxDev_a, dtype_, fmt, &cosOutput);
-  int64_t cosDim = 0;
-  Gather(cos_, cosDim, ropeIndex, &cosOutput, stream, ws_func);
-
-  // cosOutput - > usq2Output
-  std::vector<int64_t> usq2OutputShape = {bs, 1, seq_len, head_dims};
-  aclTensor* usq2Output = nullptr;
-  CreateAclTensorWithData(usq2OutputShape, &maxDev_a, dtype_, fmt, &usq2Output);
-
-  // input * usq2Output -> mul2Output
-  std::vector<int64_t> mul2OutputShape = {bs, num_heads, seq_len, head_dims};
-  aclTensor* mul2Output = nullptr;
-  CreateAclTensorWithData(mul2OutputShape, &maxDev_b, dtype_, fmt, &mul2Output);
-  Mul(input, usq2Output, &mul2Output, stream, ws_func);
-  aclDestroyTensor(usq2Output);
-  aclDestroyTensor(cosOutput);
-
-  // mul1Output + mul2Output - > output
-  uint16_t one_in_fp16 = 0b11110000000000;
-  aclScalar* addAlpha = aclCreateScalar(&one_in_fp16, dtype_);
-  Add(mul1Output, mul2Output, addAlpha, output, stream, ws_func);
-  aclDestroyTensor(mul1Output);
-  aclDestroyTensor(mul2Output);
-  aclDestroyScalar(addAlpha);
-
-  // release dev mem for infer
-  if (workspace_buf_ptr == nullptr) {
-    aclrtFree(maxDev_a);
-    maxDev_a = nullptr;
-    aclrtFree(maxDev_b);
-    maxDev_b = nullptr;
-    aclrtFree(maxDev_c);
-    maxDev_c = nullptr;
+    throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");
   }
 }
+
+template void RotaryEmbeddingAscendC<float>::Forward();
+template void RotaryEmbeddingAscendC<aclFloat16>::Forward();
 
 }  // namespace ascend
 }  // namespace llm_kernels

@@ -23,13 +23,13 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
   llm_kernels::ascend::InvokeSiluMul<T>((T*)silu_input_buf_ptr, (T*)gated_weight_buf_ptr, total_seq_len, ffn_size,
                                         (T*)silu_output_buf_ptr, context_->GetComputeStreams()[rank_].Get(),
                                         GetWorkSpaceFunc());
-  std::vector<int64_t> silu_output_shape = {total_seq_len, ffn_size};
-  aclTensor* silu_output = nullptr;
-  llm_kernels::utils::CreateAclTensorWithData(silu_output_shape, &silu_output_buf_ptr, aclDataType::ACL_FLOAT16,
-                                              aclFormat::ACL_FORMAT_ND, &silu_output);
+  // std::vector<int64_t> silu_output_shape = {total_seq_len, ffn_size};
+  // aclTensor* silu_output = nullptr;
+  // llm_kernels::utils::CreateAclTensorWithData(silu_output_shape, &silu_output_buf_ptr, aclDataType::ACL_FLOAT16,
+  //                                             aclFormat::ACL_FORMAT_ND, &silu_output);
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
-  output_tensors[0].ResetDeviceTensor(silu_output);
+  // output_tensors[0].ResetDeviceTensor(silu_output);
 
   return Status();
 }

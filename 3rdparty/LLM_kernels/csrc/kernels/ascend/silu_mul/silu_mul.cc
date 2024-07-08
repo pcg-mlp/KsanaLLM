@@ -28,7 +28,8 @@ void InvokeSiluMul(T* input, T* weight, const size_t m, const size_t n, T* outpu
   void* workspace_ptr = nullptr;
   ws_func(tiling_size, &workspace_ptr);
   uint8_t* tiling_device = (uint8_t*)workspace_ptr;
-  ACL_CHECK_RET(aclrtMemcpy(tiling_device, tiling_size, (void*)buf, tiling_size, ACL_MEMCPY_HOST_TO_DEVICE));
+  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_device, tiling_size, (void*)buf, tiling_size, ACL_MEMCPY_HOST_TO_DEVICE, stream));
+  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   if (std::is_same<T, aclFloat16>::value) {
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeSiluMulHalfKernel)(dim_num, stream, input, weight, output, tiling_device));
   } else if (std::is_same<T, float>::value) {
@@ -36,7 +37,6 @@ void InvokeSiluMul(T* input, T* weight, const size_t m, const size_t n, T* outpu
   } else {
     throw std::invalid_argument("Unsupported inference type in SiluMul.");
   }
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 template void InvokeSiluMul(aclFloat16* input, aclFloat16* weight, const size_t m, const size_t n, aclFloat16* output,

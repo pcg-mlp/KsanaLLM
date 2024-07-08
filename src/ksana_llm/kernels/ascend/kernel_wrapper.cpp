@@ -6,7 +6,6 @@
 #include "csrc/kernels/ascend/embedding/embedding.h"
 #include "csrc/kernels/ascend/permute/permute.h"
 #include "csrc/kernels/ascend/pointwise/pointwise.h"
-#include "csrc/kernels/ascend/reshape/reshape.h"
 #include "csrc/kernels/ascend/transpose/transpose.h"
 
 #include "ksana_llm/kernels/argmax.h"
@@ -14,11 +13,6 @@
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
 namespace ksana_llm {
-
-void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_table, const aclTensor* position_table,
-                     aclTensor* output, aclrtStream stream, WorkSpaceFunc ws_func) {
-  llm_kernels::ascend::LookupEmbedding(input_ids, embedding_table, position_table, output, stream, ws_func);
-}
 
 aclDataType CastDataTypeToAclDataType(const DataType dtype) {
   switch (dtype) {
@@ -29,6 +23,11 @@ aclDataType CastDataTypeToAclDataType(const DataType dtype) {
     default:
       return aclDataType::ACL_FLOAT;
   }
+}
+
+void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_table, const aclTensor* position_table,
+                     aclTensor* output, aclrtStream stream, WorkSpaceFunc ws_func) {
+  llm_kernels::ascend::LookupEmbedding(input_ids, embedding_table, position_table, output, stream, ws_func);
 }
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {

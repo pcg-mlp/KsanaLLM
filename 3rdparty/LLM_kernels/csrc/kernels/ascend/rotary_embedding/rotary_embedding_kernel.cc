@@ -2,7 +2,7 @@
  * Copyright 2024 Tencent Inc.  All rights reserved.
  */
 
-#include "fused_rotary_embedding_kernel.h"
+#include "rotary_embedding_kernel.h"
 #include "interface/kernel_operator_vec_vconv_intf.h"
 #include "kernel_operator.h"
 

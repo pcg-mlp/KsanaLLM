@@ -6,7 +6,7 @@
 #include <cmath>
 
 #include "3rdparty/half/include/half.hpp"
-#include "csrc/kernels/ascend/fused_rotary_embedding/fused_rotary_embedding.h"
+#include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
 
