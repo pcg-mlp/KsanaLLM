@@ -54,7 +54,6 @@ void SafeTensorsLoader::LoadSafeTensors() {
   size_t data_size = file_size - header_size - sizeof(size_t);
   weights_buffer_ = new char[data_size];
   safetensors_file.read(weights_buffer_, data_size);
-  safetensors_file.close();
 
   // Parsing JSON to retrieve tensor information.
   json tensor_dict = json::parse(tensor_dict_str);
@@ -79,25 +78,20 @@ void SafeTensorsLoader::LoadSafeTensors() {
     }
     tensor_offset_map_[tensor_name] = tensor_begin_index;
     tensor_size_map_[tensor_name] = tensor_end_index - tensor_begin_index;
+
+    safetensors_file.seekg(tensor_offset_map_["base_index"], std::ios::cur);
+    safetensors_file.read(weights_buffer_ + tensor_offset_map_[tensor_name], tensor_size_map_[tensor_name]);
+    tensor_ptr_map_[tensor_name] = weights_buffer_ + tensor_offset_map_[tensor_name];
   }
+  safetensors_file.close();
 }
 
 // Function to get a tensor by its name
 std::tuple<void*, size_t> SafeTensorsLoader::GetTensor(const std::string& tensor_name) {
   // Check if the tensor name exists in the index map
-  if (!tensor_ptr_map_.count(tensor_name)) {
-    if (!tensor_offset_map_.count(tensor_name) || !tensor_size_map_.count(tensor_name)) {
-      return std::make_tuple(nullptr, 0);
-    }
-    std::ifstream safetensors_file(file_name_, std::ios::binary | std::ios::ate);
-    if (!safetensors_file.is_open()) {
-      NLLM_LOG_ERROR << fmt::format("Can't open safetensors file: {}", file_name_);
-      return std::make_tuple(nullptr, 0);
-    }
-    safetensors_file.seekg(tensor_offset_map_["base_index"], std::ios::cur);
-    safetensors_file.read(weights_buffer_ + tensor_offset_map_[tensor_name], tensor_size_map_[tensor_name]);
-    safetensors_file.close();
-    tensor_ptr_map_[tensor_name] = weights_buffer_ + tensor_offset_map_[tensor_name];
+  if (!tensor_ptr_map_.count(tensor_name) || !tensor_offset_map_.count(tensor_name) ||
+      !tensor_size_map_.count(tensor_name)) {
+    return std::make_tuple(nullptr, 0);
   }
   return std::make_tuple(tensor_ptr_map_[tensor_name], tensor_size_map_[tensor_name]);
 }

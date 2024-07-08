@@ -79,43 +79,6 @@ int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_
 }
 
 template <typename T>
-Status CommonWeight<T>::GetCustomNameList(std::vector<std::string>& weight_name_list,
-                                          std::vector<std::string>& custom_name_list) {
-  // In the default case, the tensor name is consistent with the weight name.
-  custom_name_list.assign(weight_name_list.begin(), weight_name_list.end());
-
-  // Search for the optional_weight_map.json file
-  auto optional_file = Singleton<OptionalFile>::GetInstance();
-  std::string& weight_path =
-      optional_file->GetOptionalFile(model_config_.path, "weight_map", model_config_.type + "_weight_map.json");
-  if (weight_path == "") {
-    return Status();
-  }
-
-  nlohmann::json weight_map_json;
-  std::ifstream file(weight_path);
-  if (!file.is_open()) {
-    NLLM_LOG_ERROR << fmt::format("Load weight map json: {} error.", weight_path) << std::endl;
-    return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load weight map json: {} error.", weight_path));
-  } else {
-    file >> weight_map_json;
-    file.close();
-  }
-  for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
-    std::string weight_name = weight_name_list[idx];
-    for (auto it = weight_map_json.begin(); it != weight_map_json.end(); ++it) {
-      std::regex pattern(it.key());
-      std::string format = it.value();
-      if (std::regex_search(weight_name, pattern)) {
-        custom_name_list[idx] = std::regex_replace(weight_name, pattern, format);
-        break;
-      }
-    }
-  }
-  return Status();
-}
-
-template <typename T>
 Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape,
                                           bool& transpose_first, const std::string& tensor_name) {
   // EmbedTokensUseCpu does not require slicing
@@ -140,11 +103,10 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
 }
 
 template <typename T>
-Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader) {
+Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
+                                            std::vector<std::string>& weight_name_list,
+                                            std::vector<std::string>& custom_name_list) {
   GetBlockManager()->SetDeviceId(rank_);
-  std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
-  std::vector<std::string> custom_name_list;
-  STATUS_CHECK_RETURN(GetCustomNameList(weight_name_list, custom_name_list));
   for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
     // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
     //     input_layernorm:          不做分卡处理
@@ -174,6 +136,9 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     void* weight_ptr;
     size_t weight_size;
     std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
+    if (weight_ptr == nullptr) {
+      NLLM_LOG_DEBUG << fmt::format("The {}' weight_ptr is null", weight_name);
+    }
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
 
     torch::Tensor weight_cpu_tensor;

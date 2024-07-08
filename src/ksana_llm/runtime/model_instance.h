@@ -11,6 +11,7 @@
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
+#include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/search_path.h"
@@ -24,8 +25,11 @@ class WorkerGroup;
 class ModelInstance {
  public:
   ModelInstance(const ModelConfig& model_config, std::shared_ptr<Context> context)
-      : model_config_(model_config), context_(context) {}
-
+      : model_config_(model_config), context_(context) {
+    loader_weight_threadpool_ = std::make_shared<ThreadPool>(context->GetTensorParallelSize());
+    loader_weight_threadpool_->Start();
+  }
+  ~ModelInstance() { loader_weight_threadpool_->Stop(); }
   // Load model with specified model config.
   void Load();
 
@@ -94,12 +98,12 @@ class ModelInstance {
   template <template <class> class ModelType, template <class> class WeightType>
   void CreateModelInstance(const std::string model_name) {
     NLLM_LOG_INFO << "Start to init model instance " << model_name;
-    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
       NLLM_LOG_INFO << "Start to create empty model weight on device " << worker_id;
       weights_.push_back(CreateModelWeight<WeightType>(worker_id));
     }
     LoadWeightsAndModelsMap();
-    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
       NLLM_LOG_INFO << "Start to create model on device " << worker_id;
       models_.push_back(CreateModel<ModelType>(worker_id, weights_[worker_id]));
     }
@@ -115,6 +119,8 @@ class ModelInstance {
   // The base model and weight, shared by all model instances.
   static std::vector<std::shared_ptr<BaseModel>> models_;
   static std::vector<std::shared_ptr<BaseWeight>> weights_;
+
+  std::shared_ptr<ThreadPool> loader_weight_threadpool_ = nullptr;
 };
 
 }  // namespace ksana_llm

@@ -22,7 +22,8 @@ class CommonWeight : public BaseWeight {
 
   void ProcessWeights();
 
-  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
+  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
+                             std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list);
 
  private:
   Status ConvertCommonTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
@@ -42,8 +43,6 @@ class CommonWeight : public BaseWeight {
   Status PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_layer);
 
   Status PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer);
-
-  Status GetCustomNameList(std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list);
 
   Status PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape, bool& transpose_first,
                            const std::string& tensor_name);

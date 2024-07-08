@@ -9,6 +9,7 @@
 
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/optional_file.h"
 #include "ksana_llm/utils/status.h"
@@ -87,7 +88,7 @@ std::vector<std::future<Status>> ModelInstance::ForwardAsync(std::shared_ptr<Wor
 void ModelInstance::LoadWeightsAndModelsMap() {
   bool is_safetensors = false;
   std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, is_safetensors);
-  int count = 1;
+
   for (std::string& file_name : weights_file_list) {
     std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
     if (is_safetensors) {
@@ -95,16 +96,32 @@ void ModelInstance::LoadWeightsAndModelsMap() {
     } else {
       weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
     }
-    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      weights_[worker_id]->LoadWeightsFromFile(weights_loader);
-      NLLM_LOG_DEBUG << "The " << count << "'th weight file is loaded on rank " << worker_id;
-      StreamSynchronize(context_->GetMemoryManageStreams()[worker_id]);
-    }
-    count++;
-  }
+    std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
+    std::vector<std::string> custom_name_list;
+    GetCustomNameList(weight_name_list, custom_name_list, model_config_.path, model_config_.type);
 
-  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    weights_[worker_id]->ProcessWeights();
+    std::vector<std::future<void>> get_weight_tasks;
+    for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      get_weight_tasks.push_back(
+          loader_weight_threadpool_->Submit([worker_id, this, &weights_loader, &weight_name_list, &custom_name_list]() {
+            this->weights_[worker_id]->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
+            StreamSynchronize(this->context_->GetMemoryManageStreams()[worker_id]);
+            return;
+          }));
+    }
+    for (auto&& get_weight_task : get_weight_tasks) {
+      get_weight_task.get();
+    }
+  }
+  std::vector<std::future<void>> process_weight_tasks;
+  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+    process_weight_tasks.push_back(loader_weight_threadpool_->Submit([worker_id, this]() {
+      this->weights_[worker_id]->ProcessWeights();
+      return;
+    }));
+  }
+  for (auto&& process_weight_task : process_weight_tasks) {
+    process_weight_task.get();
   }
 }
 

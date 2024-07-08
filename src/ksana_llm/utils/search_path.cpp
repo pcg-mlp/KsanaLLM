@@ -1,3 +1,7 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
 #include "ksana_llm/utils/search_path.h"
 #include <filesystem>
 

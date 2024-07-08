@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <filesystem>
 #include "ksana_llm/utils/singleton.h"
 
 #include <Python.h>
