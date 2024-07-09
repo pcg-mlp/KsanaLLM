@@ -31,6 +31,8 @@ class TensorT {
   DataType dtype;
   std::vector<size_t> shape;
 
+  TensorT<T>* scales = nullptr;
+
   TensorT();
   TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id,
           const std::vector<int64_t>& strides = {}, DataFormat data_format = FORMAT_DEFAULT);

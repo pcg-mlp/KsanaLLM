@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.8)
 file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/quant/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/baichuan/*.cpp)
@@ -13,8 +14,14 @@ file(GLOB_RECURSE models_SRCS
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "models_SRCS: ${models_SRCS}")
 
+set(kernels_nvidia_LIBS, "")
+
+if(WITH_CUDA)
+  list(APPEND kernels_nvidia_LIBS llm_kernels_nvidia_kernel_asymmetric_gemm)
+endif()
+
 add_library(models STATIC ${models_SRCS})
-target_link_libraries(models PUBLIC block_manager layers samplers "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY})
+target_link_libraries(models PUBLIC block_manager layers samplers "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
 
 # for test
 file(GLOB_RECURSE models_test_SRCS

@@ -13,7 +13,7 @@ add_subdirectory(cast)
 # TODO(karlluo): will be support in multi-lora
 # add_subdirectory(bgmv)
 # TODO(karlluo): will be support in quantization
-# add_subdirectory(asymmetric_gemm)
+add_subdirectory(asymmetric_gemm)
 add_subdirectory(all_reduce)
 add_subdirectory(permute)
 add_subdirectory(alibi)

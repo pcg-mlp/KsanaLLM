@@ -22,7 +22,22 @@ struct RoPEScalingFactor {
   float factor{1.0f};
 };
 
-enum QuantMode { None };
+enum QuantMode {
+  QUANT_NONE,
+  QUANT_GPTQ
+};
+
+// The Quant informations.
+struct QuantConfig {
+  // The quant method
+  std::string method;
+
+  // The quant bits
+  size_t bits;
+
+  // The quant group size
+  size_t group_size;
+};
 
 // The model informations.
 struct ModelConfig {
@@ -70,6 +85,10 @@ struct ModelConfig {
 
   // Determines if the model is a visual llm model.
   bool is_visual;
+
+  // Determines if the model is a quant model.
+  bool is_quant;
+  QuantConfig quant_config;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

@@ -8,11 +8,19 @@
 #include <optional>
 #include <vector>
 
+#include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 
 #include "ksana_llm/utils/nvidia/nccl_utils.h"
 
 namespace ksana_llm {
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+void GetFpAIntBGPTQGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+void InvokeFpAIntBGPTQGemm(void* output, const void* input, const void* weight, const void* scales, void* ws, size_t m,
+                           size_t n, size_t k, size_t groupsize, cudaStream_t stream);
 
 // Invoke the lookup embedding.
 template <typename T>

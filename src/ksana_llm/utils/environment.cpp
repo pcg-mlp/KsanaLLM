@@ -113,6 +113,18 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
   model_config.is_visual = config_json.contains("visual");
 
+  model_config.is_quant = config_json.contains("quantization_config");
+  if (model_config.is_quant) {
+    model_config.quant_config.method = config_json["quantization_config"].at("quant_method");
+    if (model_config.quant_config.method == "gptq") {
+      model_config.quant_config.bits = config_json["quantization_config"].at("bits");
+      model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
+      NLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
+                                   model_config.quant_config.method, model_config.quant_config.bits,
+                                   model_config.quant_config.group_size);
+    }
+  }
+
   ParseModelMaxLength(config_json, model_config);
 
   size_t size_per_head = model_config.hidden_units / model_config.head_num;

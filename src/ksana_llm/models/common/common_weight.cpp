@@ -56,6 +56,8 @@ CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::sh
     NLLM_LOG_ERROR << fmt::format("Load model config file error.");
     exit(-1);
   }
+  tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
+  quant_weight_slover_ = std::make_shared<QuantWeight<T>>(model_config, rank, context, weights_map_);
 }
 
 int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_heads) {
@@ -157,6 +159,12 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     //     embedding:                不做分卡处理
     std::string& tensor_name = custom_name_list[idx];
     std::string& weight_name = weight_name_list[idx];
+
+    // filter out some weight
+    if (quant_weight_slover_->FilterOutQuantWeight(tensor_name)) {
+      continue;
+    }
+
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
@@ -188,6 +196,10 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       NLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
     }
 
+    if (quant_weight_slover_->LoadQuantWeight(tensor_name, weight_shape, weight_data_type, weight_ptr)) {
+      continue;
+    }
+
     int head_num = model_config_.head_num;
     int num_kv_heads = model_config_.num_key_value_heads;
     // copy host data to device
@@ -207,7 +219,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
           // broadcasting is required.
           weight_shape.insert(weight_shape.begin(), 1);
         }
-        AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
+        tensor_manager_->AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
       }
       weights_data_type_map_[qkv_name] = weight_data_type;
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
@@ -246,7 +258,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       if (!weights_map_.count(qkv_name)) {
         weight_shape.insert(weight_shape.begin(), 3);
         weight_shape[1] /= 3;
-        AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
+        tensor_manager_->AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
       }
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
       size_t src_pitch = weight_shape[1] * weight_shape[2] * tensor_para_size_ * sizeof(T);
@@ -256,7 +268,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
                     weight_shape[0], MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else if (tensor_name.find("query_key_value.bias") != std::string::npos) {
       weights_data_type_map_[tensor_name] = weight_data_type;
-      AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
+      tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
       Tensor& qkv_bias_tensor = weights_map_[tensor_name];
       size_t src_pitch = weight_shape[0] / 3 * tensor_para_size_ * sizeof(T);
       size_t dst_pitch = weight_shape[0] / 3 * sizeof(T);
@@ -388,7 +400,7 @@ template <typename T>
 Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_name, std::vector<size_t>& weight_shape,
                                           DataType& weight_data_type, bool transpose_first, size_t tensor_para_offset,
                                           size_t& weight_size) {
-  AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
+  tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
   weights_data_type_map_[tensor_name] = weight_data_type;
   if (transpose_first) {
     size_t src_pitch = weights_map_[tensor_name].shape[1] * tensor_para_size_ * sizeof(T);
@@ -412,16 +424,16 @@ Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_n
 }
 
 template <typename T>
-Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size) {
+Status CommonWeight<T>::ConvertCommonTensor(int hidden_units, int inter_size, int num_layer, int vocab_size) {
   GetBlockManager()->SetDeviceId(rank_);
 
   // permute qkv_tensor: permute((2, 0, 1))
-  CreateTensorWithSameShape("model.layers.0.self_attn.query_key_value.weight", "empty_qkv_tensor");
+  tensor_manager_->CreateTensorWithSameShape("model.layers.0.self_attn.query_key_value.weight", "empty_qkv_tensor");
   auto shape = weights_map_["model.layers.0.self_attn.query_key_value.weight"].shape;
   auto dtype = weights_map_["model.layers.0.self_attn.query_key_value.weight"].dtype;
   shape[0] = shape[0] * model_config_.head_num / (model_config_.head_num + 2 * model_config_.num_key_value_heads);
-  AddWeightTensor("empty_q_in_tensor", shape, dtype);
-  AddWeightTensor("empty_q_out_tensor", shape, dtype);
+  tensor_manager_->AddWeightTensor("empty_q_in_tensor", shape, dtype);
+  tensor_manager_->AddWeightTensor("empty_q_out_tensor", shape, dtype);
   Tensor& last_qkv_tensor = weights_map_["empty_qkv_tensor"];
   Tensor& q_in_tensor = weights_map_["empty_q_in_tensor"];
   Tensor& q_out_tensor = weights_map_["empty_q_out_tensor"];
@@ -431,19 +443,19 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
   GetBlockManager()->FreeContiguous(q_out_tensor.GetBlockId());
 
   // permute gate_proj, up_proj, down_proj: permute(1, 0)
-  CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
+  tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
   Tensor& last_mlp_tensor = weights_map_["empty_mlp_tensor"];
   STATUS_CHECK_RETURN(PermuteMLPWeight(last_mlp_tensor, num_layer));
   GetBlockManager()->FreeContiguous(last_mlp_tensor.GetBlockId());
 
   // permute o_proj: permute(1, 0)
-  CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
+  tensor_manager_->CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
   Tensor& last_o_proj_tensor = weights_map_["empty_o_proj_tensor"];
   STATUS_CHECK_RETURN(PermuteOutputProjectWeight(last_o_proj_tensor, num_layer));
   GetBlockManager()->FreeContiguous(last_o_proj_tensor.GetBlockId());
 
   // permute lm_head: permute(1, 0)
-  CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
+  tensor_manager_->CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
   Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
   Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
   Permute(lm_head_tensor, lm_head_transpose_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
@@ -457,46 +469,14 @@ Status CommonWeight<T>::PermuteTensor(int hidden_units, int inter_size, int num_
   weights_map_.erase("empty_q_in_tensor");
   weights_map_.erase("empty_q_out_tensor");
   weights_map_.erase("empty_mlp_tensor");
-  weights_map_.erase("empty_lm_head_tensor");
   weights_map_.erase("empty_o_proj_tensor");
+  weights_map_.erase("empty_lm_head_tensor");
   return Status();
 }
 
 template <typename T>
 bool CommonWeight<T>::IsLoaded() {
   return weights_had_loaded_;
-}
-
-template <typename T>
-Status CommonWeight<T>::AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
-  if (weights_map_.count(weight_name)) {
-    NLLM_LOG_WARNING << fmt::format("The weight named {} has already been created. Skip creating the weight tensor.",
-                                    weight_name);
-    return Status();
-  }
-  size_t length = GetTypeSize(dtype);
-  for (auto& dim : shapes) {
-    length *= dim;
-  }
-  int block_id;
-  GetBlockManager()->SetDeviceId(rank_);
-  GetBlockManager()->AllocateContiguous(length, block_id);
-
-  weights_map_.emplace(weight_name, Tensor(MemoryDevice::MEMORY_DEVICE, dtype, shapes, block_id));
-  return Status();
-}
-
-template <typename T>
-Status CommonWeight<T>::CreateTensorWithSameShape(const std::string& origin_tensor_name,
-                                                  const std::string& copy_tensor_name) {
-  if (!weights_map_.count(origin_tensor_name)) {
-    NLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
-                                  origin_tensor_name);
-    exit(-1);
-  }
-  Tensor& origin_tensor = weights_map_[origin_tensor_name];
-  AddWeightTensor(copy_tensor_name, origin_tensor.shape, origin_tensor.dtype);
-  return Status();
 }
 
 template <typename T>
@@ -557,7 +537,11 @@ void CommonWeight<T>::ProcessWeights() {
     StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   }
 
-  PermuteTensor(hidden_units, inter_size, num_layer, vocab_size);
+  if (quant_weight_slover_->IsEnable()) {
+    quant_weight_slover_->ConvertGPTQTensor(hidden_units, inter_size, num_layer);
+  } else {  // roll back to common weight slover
+    ConvertCommonTensor(hidden_units, inter_size, num_layer, vocab_size);
+  }
 
   // We use vocab_size to determine whether it is the Baichuan2 model.
   // If vocab_size is equal to 125,696, then it is the Baichuan2 model.

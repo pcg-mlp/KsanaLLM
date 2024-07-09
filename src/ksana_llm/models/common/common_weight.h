@@ -4,6 +4,8 @@
 #pragma once
 
 #include "ksana_llm/models/base/base_weight.h"
+#include "ksana_llm/models/quant/quant_weight.h"
+#include "ksana_llm/models/tensor_manager.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/utils.h"
 
@@ -23,15 +25,11 @@ class CommonWeight : public BaseWeight {
   Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader);
 
  private:
-  Status PermuteTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
+  Status ConvertCommonTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
 
   Status GetModelInfo(const ModelConfig& model_config);
 
   std::string ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias = false);
-
-  Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype);
-
-  Status CreateTensorWithSameShape(const std::string& origin_tensor_name, const std::string& copy_tensor_name);
 
   Status LoadRegularTensor(void* weight_ptr, std::string tensor_name, std::vector<size_t>& weight_shape,
                            DataType& weight_data_type, bool transpose_first, size_t tensor_para_offset,
@@ -65,6 +63,10 @@ class CommonWeight : public BaseWeight {
   std::shared_ptr<Context> context_{nullptr};
 
   ModelConfig model_config_;
+
+  std::shared_ptr<TensorManager> tensor_manager_;
+
+  std::shared_ptr<QuantWeight<T>> quant_weight_slover_;
 };
 
 }  // namespace ksana_llm

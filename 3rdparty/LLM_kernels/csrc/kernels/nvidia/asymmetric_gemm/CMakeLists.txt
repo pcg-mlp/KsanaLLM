@@ -1,7 +1,7 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 
 # set kernels target
-file(GLOB_RECURSE ASYMMETRIC_GEMM_SRCS *.cc)
+file(GLOB_RECURSE ASYMMETRIC_GEMM_SRCS *.cc *.cu)
 list(FILTER ASYMMETRIC_GEMM_SRCS EXCLUDE REGEX ".*test.cu")
 add_library(llm_kernels_nvidia_kernel_asymmetric_gemm STATIC ${ASYMMETRIC_GEMM_SRCS})
 set_property(TARGET llm_kernels_nvidia_kernel_asymmetric_gemm PROPERTY POSITION_INDEPENDENT_CODE ON)

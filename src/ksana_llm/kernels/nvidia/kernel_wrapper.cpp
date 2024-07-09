@@ -34,6 +34,43 @@
 
 namespace ksana_llm {
 
+template <typename T, llm_kernels::nvidia::WeightType WT>
+void GetFpAIntBGPTQGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes) {
+  auto gemm = llm_kernels::nvidia::FpAIntBGPTQGemmWrapper<T, WT>();
+  gemm.GetWorkspaceSize(m, n, k, ws_bytes);
+}
+#define GET_FPA_INTB_CONFIG(T, WT) \
+  template void GetFpAIntBGPTQGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
+GET_FPA_INTB_CONFIG(float, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_CONFIG(float, llm_kernels::nvidia::WeightType::INT8);
+GET_FPA_INTB_CONFIG(half, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_CONFIG(half, llm_kernels::nvidia::WeightType::INT8);
+#ifdef ENABLE_BFLOAT16
+GET_FPA_INTB_CONFIG(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_CONFIG(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+#endif
+#undef GET_FPA_INTB_CONFIG
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+void InvokeFpAIntBGPTQGemm(void* output, const void* input, const void* weight, const void* scales, void* ws, size_t m,
+                           size_t n, size_t k, size_t groupsize, cudaStream_t stream) {
+  auto gemm = llm_kernels::nvidia::FpAIntBGPTQGemmWrapper<T, WT>();
+  gemm.Gemm(output, input, weight, scales, ws, m, n, k, groupsize, stream);
+}
+#define INVOKE_FPA_INTB_GPTQ_GEMM(T, WT)                                                                              \
+  template void InvokeFpAIntBGPTQGemm<T, WT>(void* output, const void* input, const void* weight, const void* scales, \
+                                             void* ws, size_t m, size_t n, size_t k, size_t groupsize,                \
+                                             cudaStream_t stream)
+INVOKE_FPA_INTB_GPTQ_GEMM(float, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GPTQ_GEMM(float, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GPTQ_GEMM(half, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GPTQ_GEMM(half, llm_kernels::nvidia::WeightType::INT8);
+#ifdef ENABLE_BFLOAT16
+INVOKE_FPA_INTB_GPTQ_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GPTQ_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+#endif
+#undef INVOKE_FPA_INTB_GPTQ_GEMM
+
 template <typename T>
 void LookupEmbedding(const void* ids, const void* offsets, const void* prefix_offsets, const void* emb, const void* pos,
                      void* output, int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,

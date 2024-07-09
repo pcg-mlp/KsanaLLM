@@ -25,6 +25,8 @@ DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensor
     return TYPE_FP32;
   } else if (safetensors_dtype == "BF16") {
     return TYPE_BF16;
+  } else if (safetensors_dtype == "I32") {
+    return TYPE_INT32;
   }
   return TYPE_INVALID;
 }

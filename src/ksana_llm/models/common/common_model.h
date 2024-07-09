@@ -5,14 +5,16 @@
 
 #include "ksana_llm/layers/add_layer.h"
 #include "ksana_llm/layers/assemble_last_token_layer.h"
+#include "ksana_llm/layers/base_layer.h"
 #include "ksana_llm/layers/cast_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
+#include "ksana_llm/layers/gptq_matmul_layer.h"
+#include "ksana_llm/layers/input_refit_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
-#include "ksana_llm/layers/input_refit_layer.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/optional_file.h"
@@ -121,6 +123,8 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   Tensor cpu_input_tokens_tensor_;
   Tensor cpu_tokens_emb_tensor_;
 
+  Tensor shared_matmul_workspace_buffer_;
+
 #ifdef ENABLE_ACL
   // Used for ascend attention.
   Tensor ascend_buffer_0_;
@@ -134,6 +138,8 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 #endif
 
  private:
+  Status CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight);
+
   Status AddPrefixCache(std::vector<Tensor>& mmha_origin_input, std::vector<Tensor>& mmha_prefix_input);
 
   Status RemovePrefixCache(std::vector<Tensor>& mmha_prefix_output, std::vector<Tensor>& mmha_output);
