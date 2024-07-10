@@ -463,7 +463,7 @@ class BatchSchedulerEvironmentSimulator {
 
   bool IsRequestFinished(std::shared_ptr<InferRequest>& req) { return req->output_tokens.back() == GetEndId(); }
 
-  int GetEndId() { return -1; };
+  int GetEndId() { return -1; }
 
   std::vector<std::shared_ptr<InferRequest>> InitRequest(int req_id, int seed, int input_token_num,
                                                          int expected_output_token_num, std::shared_ptr<Request>& req,

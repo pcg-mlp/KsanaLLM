@@ -228,27 +228,27 @@ Status InferRequest::DropSwappedAsync() {
 }
 
 bool InferRequest::CheckLoraEnable() {
-  // TODO
+  // Not implemented
   return false;
 }
 
 size_t InferRequest::GetLoraBlockNumber() {
-  // TODO
+  // Not implemented
   return 0;
 }
 
 Status InferRequest::SwapInLoraAsync() {
-  // TODO
+  // Not implemented
   return Status();
 }
 
 Status InferRequest::SwapOutLoraAsync() {
-  // TODO
+  // Not implemented
   return Status();
 }
 
 Status InferRequest::AllocateStepBlocks() {
-  // TODO
+  // Not implemented
   return Status();
 }
 
