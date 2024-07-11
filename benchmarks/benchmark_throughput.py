@@ -15,8 +15,10 @@ import numpy as np
 import csv
 
 from dataclasses import dataclass
-from typing import AsyncGenerator, List, Tuple
+from typing import AsyncGenerator, List, Tuple, Union
 from tqdm.asyncio import tqdm
+# NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
+from transformers import AutoTokenizer 
 
 import prefix_cache_reader
 
@@ -168,7 +170,7 @@ def args_config():
         type=str,
         default="ksana",
         choices=[
-            'ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm', 'evart'
+            'ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm', 'evart', 'mindie-service'
         ],
         help='serving backend, ksana or vllm or evart or online server')
     parser.add_argument('--prompt_num',
@@ -239,6 +241,10 @@ def args_config():
                         default=30*3600,
                         help="The timeout limit for the aiohttp client,"
                              "(default is 3 hour).")
+    parser.add_argument('--tokenizer_path',
+                        type=str,
+                        default=None,
+                        help="mindie-service wont return tokens, we need encode tokens to get output tokens")
     args = parser.parse_args()
     return args
 
@@ -279,7 +285,8 @@ async def generate_prompt_async(
 
 
 async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str,
-                             req_id: int, result_list: List, pbar: tqdm):
+                             req_id: int, result_list: List, pbar: tqdm,
+                             tokenizer: Union[None, AutoTokenizer]):
     headers = {"User-Agent": "Benchmark Client"}
     if not args.stop_token_ids:
         args.stop_token_ids = DEFAULT_STOP_TOKEN_IDS.get(args.model_type, [])
@@ -308,7 +315,7 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
             "stop_words": "",
             "top_k": args.topk,
         }
-    elif args.backend in ["vllm", "evart"]:
+    elif args.backend in ["vllm", "evart", "mindie-service"]:
         # max outputlen is 1024.
         data = {
             "prompt": prompt,
@@ -425,6 +432,15 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
         prompt_len = len(prompt)
         output_text = output['choices'][0][server_map_idx]['content'][
             prompt_len:].strip()
+    elif args.backend == "mindie-service":
+        prompt_len = len(prompt)
+        output_text = output["text"][0][prompt_len:].strip()
+        if tokenizer is None:
+            input_token_num = 0
+            output_token_num = 0
+        else:
+            input_token_num = len(tokenizer.encode(prompt))
+            output_token_num = len(tokenizer.encode(output_text))
 
     output_len = len(output_text)
     result_list[req_id] = output_text
@@ -438,7 +454,7 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
 
 # Define an asynchronous function to benchmark the API
 async def benchmark_async(args: argparse.Namespace, api_url: str,
-                          inputs: List[str]):
+                          inputs: List[str], tokenizer: Union[None, AutoTokenizer]):
     # Initialize a list to store the asynchronous tasks
     tasks: List[asyncio.Task] = []
     # Create a progress bar with a total count equal to the number of inputs
@@ -453,7 +469,8 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
-            send_request_async(args, prompt, api_url, req_id, result_list, pbar))
+            send_request_async(args, prompt, api_url, req_id, result_list, pbar, 
+                                tokenizer))
         # Add the task to the list of tasks
         tasks.append(task)
     # Wait for all tasks to complete
@@ -499,18 +516,20 @@ def adjust_list_length(inputs: List[str], args: argparse.Namespace):
         return inputs[:args.prompt_num]
 
 
-def run_benchmark(args: argparse.Namespace, api_url: str, inputs: List[str]):
+def run_benchmark(args: argparse.Namespace, api_url: str, inputs: List[str],
+                  tokenizer: Union[None, AutoTokenizer]):
     if args.mode == "async":
         # Run the asynchronous benchmark
-        return asyncio.run(benchmark_async(args, api_url, inputs))
+        return asyncio.run(benchmark_async(args, api_url, inputs, tokenizer))
     else:
         # Run the synchronous benchmark
-        return asyncio.run(benchmark_sync(args, api_url, inputs))
+        return asyncio.run(benchmark_sync(args, api_url, inputs, tokenizer))
 
 
 def main(args: argparse.Namespace):
     global REQUEST_LATENCY
 
+    tokenizer = None
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(
@@ -518,6 +537,16 @@ def main(args: argparse.Namespace):
     elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
         args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
+    # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
+    elif args.backend == "mindie-service":
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_path,
+            revision=None,
+            padding_side="left",
+            truncation_side="left",
+            trust_remote_code=True,
+            use_fast=True
+        )
 
     # Initialize inputs to None
     inputs = None
@@ -539,14 +568,14 @@ def main(args: argparse.Namespace):
 
         for iter in range(args.warmup_num_iters):
             print(f"Start warmup iteration {iter} with request rate {metrics.request_rate:.3f}")
-            run_benchmark(args, api_url, inputs)
+            run_benchmark(args, api_url, inputs, tokenizer)
         REQUEST_LATENCY.clear()
 
         # Record the start time of the benchmark
         benchmark_start_time = time.perf_counter()
         for iter in range(args.repeat_num_iters):
             print(f"Start profile iteration {iter} with request rate {metrics.request_rate:.3f}")
-            result_list = run_benchmark(args, api_url, inputs)
+            result_list = run_benchmark(args, api_url, inputs, tokenizer)
         # Record the end time of the benchmark
         benchmark_end_time = time.perf_counter()
 
