@@ -14,7 +14,7 @@ namespace ksana_llm {
 // The serving engine define.
 class InferenceEngine {
  public:
-  InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+  explicit InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
   ~InferenceEngine();
 
   // Start the rpc service.

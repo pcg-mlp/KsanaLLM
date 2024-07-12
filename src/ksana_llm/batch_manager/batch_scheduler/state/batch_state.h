@@ -11,7 +11,7 @@
 namespace ksana_llm {
 
 struct BatchState {
-  BatchState(const BatchSchedulerConfig &batch_scheduler_config) {
+  explicit BatchState(const BatchSchedulerConfig &batch_scheduler_config) {
     waiting_queue.reserve(batch_scheduler_config.max_waiting_queue_len);
     running_queue.reserve(batch_scheduler_config.max_batch_size);
     swapped_queue.reserve(batch_scheduler_config.max_batch_size);
@@ -43,7 +43,7 @@ struct BatchState {
   std::mutex queue_buffer_mutex;
 
   // The current timestamp for current schedule loop.
-  unsigned long schedule_time_in_ms;
+  uint64_t schedule_time_in_ms;
 };
 
 }  // namespace ksana_llm

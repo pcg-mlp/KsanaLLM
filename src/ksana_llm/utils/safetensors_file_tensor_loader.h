@@ -9,7 +9,7 @@ namespace ksana_llm {
 class SafeTensorsLoader : public BaseFileTensorLoader {
  public:
   // Constructor that takes a file name as input
-  SafeTensorsLoader(const std::string& file_name);
+  explicit SafeTensorsLoader(const std::string& file_name);
 
   ~SafeTensorsLoader();
 

@@ -438,22 +438,36 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     return;
   }
 
-  int retry_times = 0;
   size_t step_token_num_sum_tmp;
+  bool swapout_done = false;
   do {
     running_swapped_indexes_.clear();
     step_token_num_sum_tmp = step_token_num_sum;
     ProcessRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_,
                            running_swapped_indexes_, step_token_num_sum_tmp);
     NLLM_LOG_DEBUG << "Process running requests, swapped size:" << running_swapped_indexes_.size();
+    if (swapout_done) {
+      break;
+    }
     if (!batch_state_->running_queue.empty() && batch_state_->running_queue.size() == running_swapped_indexes_.size()) {
+      // no block for any requests, need to wait swapout queue releases some block.
       if (!swapout_pending_queue_.empty()) {
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
         WaitPendingSwapoutDone();
-        ++retry_times;
+        // swapout pending queue will not be filled in this loop, need to break after next ProcessRunningRequests.
+        swapout_done = true;
+      } else {
+        // No block for next step. no request pending in swapout queue.
+        // This case should not happen. Blocks for a request should be less than total memory.
+        NLLM_LOG_WARNING << "Bad state in ScheduleRunning";
+        break;
       }
+    } else {
+      // not running req, or still have block for next step of some requests, may swapout some request later.
+      break;
     }
-  } while (retry_times == 1);
+  } while (true);
+
   step_token_num_sum = step_token_num_sum_tmp;
   skip_other = !running_swapped_indexes_.empty();
 
@@ -541,9 +555,9 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
     return;
   }
 
-  int retry_times = 0;
   size_t step_token_num_sum_tmp;
   size_t curr_block_num_sum_tmp;
+  bool swapout_done = false;
   do {
     swapped_running_indexes_.clear();
     step_token_num_sum_tmp = step_token_num_sum;
@@ -551,15 +565,23 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
     ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
     NLLM_LOG_DEBUG << "Process swapped requests, running size:" << swapped_running_indexes_.size();
+    if(swapout_done){
+      break;
+    }
     if (batch_state_->running_queue.empty() && !batch_state_->swapped_queue.empty() &&
         swapped_running_indexes_.empty()) {
       if (!swapout_pending_queue_.empty()) {
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
         WaitPendingSwapoutDone();
-        ++retry_times;
+        swapout_done = true;
+      }else{
+        NLLM_LOG_WARNING << "Bad state in ScheduleSwapped";
+        break;
       }
+    }else{
+      break;
     }
-  } while (retry_times == 1);
+  } while (true);
   step_token_num_sum = step_token_num_sum_tmp;
   curr_block_num_sum = curr_block_num_sum_tmp;
 
@@ -599,9 +621,9 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
     return;
   }
 
-  int retry_times = 0;
   size_t step_token_num_sum_tmp;
   size_t curr_block_num_sum_tmp;
+  bool swapout_done = false;
   do {
     waiting_running_indexes_.clear();
     step_token_num_sum_tmp = step_token_num_sum;
@@ -609,15 +631,24 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
     ProcessWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, waiting_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
     NLLM_LOG_DEBUG << "Process waiting requests, running size:" << waiting_running_indexes_.size();
+    if (swapout_done) {
+      break;
+    }
     if (batch_state_->running_queue.empty() && !batch_state_->waiting_queue.empty() &&
         waiting_running_indexes_.empty()) {
       if (!swapout_pending_queue_.empty()) {
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
         WaitPendingSwapoutDone();
-        ++retry_times;
+        swapout_done = true;
+      } else {
+        NLLM_LOG_WARNING << "Bad state in ScheduleWaiting";
+        break;
       }
+    } else {
+      break;
     }
-  } while (retry_times == 1);
+  } while (true);
+
   step_token_num_sum = step_token_num_sum_tmp;
   curr_block_num_sum = curr_block_num_sum_tmp;
 

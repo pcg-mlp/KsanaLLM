@@ -29,8 +29,8 @@ struct ForwardRequest {
   // The input tokens.
   std::vector<int>* output_tokens;
 
-  // Embedding slice used to refit input embedding    
-  EmbeddingSlice* input_refit_embedding; 
+  // Embedding slice used to refit input embedding
+  EmbeddingSlice* input_refit_embedding;
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.

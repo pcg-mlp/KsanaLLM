@@ -3,9 +3,14 @@
 ==============================================================================*/
 
 #include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler.h"
+#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_client.h"
 #include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_helper.h"
 
+#include <exception>
 #include <memory>
+#include <thread>
+
+#include "ksana_llm/profiler/timer.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
 #include "test.h"
@@ -15,14 +20,17 @@ using namespace ksana_llm;
 // 定义一个 BatchSchedulerTest 类，继承自 testing::Test
 class BatchSchedulerTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    InitLoguru();
+  }
   // 在每个测试用例执行之前调用的函数
   void SetUp() override {
     // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEvironmentSimulator
-    block_manager_config.host_allocator_config.blocks_num = 100;
-    block_manager_config.device_allocator_config.blocks_num = 100;
-    block_manager_config.device_allocator_config.block_token_num = 6;
-
     tp_num = 4;
+    int device_block_num = 100;
+    block_manager_config.host_allocator_config.blocks_num = device_block_num * tp_num * 2;
+    block_manager_config.device_allocator_config.blocks_num = device_block_num;
+    block_manager_config.device_allocator_config.block_token_num = 6;
 
     // 使用配置创建一个 BlockManagerSimulator 对象
     env_simulator = new BatchSchedulerEvironmentSimulator(block_manager_config, tp_num);
@@ -50,6 +58,75 @@ class BatchSchedulerTest : public testing::Test {
   }
 
  protected:
+  struct RequestInfo {
+    int req_id;
+    int expect_output_token_num;
+    int input_token_num;
+    std::shared_ptr<Request> req;
+    std::vector<std::shared_ptr<InferRequest>> infer_req_group;
+  };
+
+  void GenerateRequests(int request_num, int max_expect_output_num, int max_input_num, std::vector<RequestInfo>& reqs) {
+    std::srand(10);
+    for (int i = 0; i < request_num; i++) {
+      RequestInfo info;
+      info.req_id = i;
+      info.expect_output_token_num = std::rand() % max_expect_output_num + 1;
+      info.input_token_num = std::rand() % max_input_num + 1;
+      reqs.push_back(info);
+    }
+  }
+
+  void DoParallelRequestAndCheck(int client_num, std::vector<RequestInfo>& reqs, int timeout = 5) {
+    NLLM_LOG_INFO << "DoParallelRequestAndCheck start.  client_num=" << client_num << ", request_num=" << reqs.size();
+    time_t start_time = ProfileTimer::GetCurrentTime();
+    ClientSimulator client_simulator(client_num, batch_scheduler);
+    for (auto& info : reqs) {
+      info.infer_req_group = env_simulator->InitRequest(info.req_id, info.req_id, info.input_token_num,
+                                                        info.expect_output_token_num, info.req);
+      client_simulator.AddInferRequests(info.req_id, info.infer_req_group);
+    }
+
+    // Wait for request enqueue
+    std::this_thread::sleep_for(std::chrono::microseconds(1));
+    // schedule and generate tokens
+    int i = 0;
+    while (true) {
+      std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
+      scheduled_reqs = batch_scheduler->Schedule();
+      if (scheduled_reqs.empty()) {
+        if (client_simulator.IsAllRequestFinished()) {
+          NLLM_LOG_INFO << "All requests finished";
+          break;
+        }
+        time_t cur_time = ProfileTimer::GetCurrentTime();
+        if((cur_time - start_time)> timeout){
+          NLLM_LOG_INFO << "Test Timeout. timeout="<< timeout<< " seconds";
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        continue;
+      }
+      env_simulator->RunAStep(scheduled_reqs);
+
+      for (auto req : scheduled_reqs) {
+        NLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
+                      << ", output_token.size()=" << req->output_tokens.size()
+                      << ", last output token= " << req->output_tokens.back();
+      }
+      i++;
+    }
+
+    // Check request results
+    for (auto& info : reqs) {
+      for (auto& infer_req : info.infer_req_group) {
+        env_simulator->CheckRequestOutput(infer_req);
+      }
+    }
+    NLLM_LOG_INFO << "DoParallelRequestAndCheck finished";
+  }
+
+ protected:
   // 定义一个 BlockManager 指针，用于在测试用例中使用
   BatchSchedulerEvironmentSimulator* env_simulator;
   BatchScheduler* batch_scheduler;
@@ -60,40 +137,55 @@ class BatchSchedulerTest : public testing::Test {
 };
 
 TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
-  // 创建两个请求
-  int expected_output_token_num1 = 100;
-  int input_token_num1 = 10;
-  int expected_output_token_num2 = 2;
-  int input_token_num2 = 30;
-  std::shared_ptr<Request> req1, req2;
-  std::vector<std::shared_ptr<InferRequest>> infer_req_list1 =
-      env_simulator->InitRequest(1, 1, input_token_num1, expected_output_token_num1, req1);
-  std::vector<std::shared_ptr<InferRequest>> infer_req_list2 =
-      env_simulator->InitRequest(2, 2, input_token_num2, expected_output_token_num2, req2);
-  std::shared_ptr<InferRequest> infer_req1 = infer_req_list1[0];
-  std::shared_ptr<InferRequest> infer_req2 = infer_req_list2[0];
+  // Run requests one by one
+  int request_num = 100;
+  int client_num = 1;
+  int max_expect_output_num = 100;
+  int max_input_num = 400;
+  std::vector<RequestInfo> req_list;
+  GenerateRequests(request_num, max_expect_output_num, max_input_num, req_list);
+  DoParallelRequestAndCheck(client_num, req_list);
 
-  // Add requests to scheduler
-  batch_scheduler->AddInferRequest(infer_req_list1);
-  batch_scheduler->AddInferRequest(infer_req_list2);
-
-  // schedule and generate tokens
-  int max_output_step = std::max(expected_output_token_num1, expected_output_token_num2) + 1;
-  for (int i = 0; i < max_output_step; i++) {
-    std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
-    scheduled_reqs = batch_scheduler->Schedule();
-    if (scheduled_reqs.empty()) {
-      break;
-    }
-    env_simulator->RunAStep(scheduled_reqs);
-    for (auto req : scheduled_reqs) {
-      NLLM_LOG_INFO << "Step " << i << ": req_id:" << req->req_id
-                    << ", output_token.size()=" << req->output_tokens.size()
-                    << ", last output token= " << req->output_tokens.back();
-    }
-  }
-
-  // Check request results
-  env_simulator->CheckRequestOutput(infer_req1);
-  env_simulator->CheckRequestOutput(infer_req2);
+  auto& stat = env_simulator->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapout_fail_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
+  EXPECT_EQ(stat.swapin_fail_num, 0);
 }
+
+TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
+  // Run requests in parallel
+  // input and max output token are limited, SwapOut/In are not triggered.
+  int request_num = 100;
+  int client_num = 10;
+  int max_expect_output_num = 40;
+  int max_input_num = 60;
+  std::vector<RequestInfo> req_list;
+  GenerateRequests(request_num, max_expect_output_num, max_input_num, req_list);
+  DoParallelRequestAndCheck(client_num, req_list);
+
+  auto& stat = env_simulator->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapout_fail_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
+  EXPECT_EQ(stat.swapin_fail_num, 0);
+}
+
+TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
+  // Run requests in parallel
+  // max output token are large, SwapOut/In will be triggered when there are multiple requests.
+  int request_num = 100;
+  int client_num = 10;
+  int max_expect_output_num = 400;
+  int max_input_num = 100;
+  std::vector<RequestInfo> req_list;
+  GenerateRequests(request_num, max_expect_output_num, max_input_num, req_list);
+  DoParallelRequestAndCheck(client_num, req_list);
+
+  auto& stat = env_simulator->GetBlockManagerStat();
+  EXPECT_GT(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapout_fail_num, 0);
+  EXPECT_GT(stat.swapin_succ_num, 0);
+  EXPECT_EQ(stat.swapin_fail_num, 0);
+}
+

@@ -168,8 +168,8 @@ Status InferRequest::SwapInAsync() {
     GetBlockManager()->SetDeviceId(i);
     if (is_use_prefix_cache) {
       NLLM_LOG_DEBUG << fmt::format(
-          "req {} kv_cache_blocks[{}] len: {} include prefix share cache tokens number: {} in {} blocks", req_id, i,
-          kv_cache_blocks[i].size(), prefix_cache_len, prefix_cache_blocks_number);
+          "SwapIn req {} kv_cache_blocks[{}] len: {} include prefix share cache tokens number: {} in {} blocks", req_id,
+          i, kv_cache_blocks[i].size(), prefix_cache_len, prefix_cache_blocks_number);
       // NOTE(karlluo): skip prefix share blocks
       std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
       std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
@@ -177,7 +177,7 @@ Status InferRequest::SwapInAsync() {
       GetBlockManager()->SwapIn(private_kv_cache_blocks, device_blocks);
       std::copy(device_blocks.begin(), device_blocks.end(), kv_cache_blocks[i].begin() + prefix_cache_blocks_number);
     } else {
-      NLLM_LOG_DEBUG << fmt::format("req {} kv_cache_blocks[{}] len: {}", req_id, i, kv_cache_blocks[i].size());
+      NLLM_LOG_DEBUG << fmt::format("SwapIn req {} kv_cache_blocks[{}] len: {}", req_id, i, kv_cache_blocks[i].size());
       GetBlockManager()->SwapIn(kv_cache_blocks[i], device_blocks);
       kv_cache_blocks[i].swap(device_blocks);
     }
@@ -192,8 +192,8 @@ Status InferRequest::SwapOutAsync(const int host_block_num_to_add) {
     GetBlockManager()->SetDeviceId(i);
     if (is_use_prefix_cache) {
       NLLM_LOG_DEBUG << fmt::format(
-          "req {} kv_cache_blocks[{}] len: {} include prefix share cache tokens number: {} in {} blocks", req_id, i,
-          kv_cache_blocks[i].size(), prefix_cache_len, prefix_cache_blocks_number);
+          "SwapOut req {} kv_cache_blocks[{}] len: {} include prefix share cache tokens number: {} in {} blocks",
+          req_id, i, kv_cache_blocks[i].size(), prefix_cache_len, prefix_cache_blocks_number);
       // NOTE(karlluo): skip prefix share blocks
       std::vector<int> private_kv_cache_blocks(kv_cache_blocks[i].size() - prefix_cache_blocks_number);
       std::copy(kv_cache_blocks[i].begin() + prefix_cache_blocks_number, kv_cache_blocks[i].end(),
@@ -202,6 +202,7 @@ Status InferRequest::SwapOutAsync(const int host_block_num_to_add) {
       std::copy(host_blocks.begin(), host_blocks.end() - host_block_num_to_add,
                 kv_cache_blocks[i].begin() + prefix_cache_blocks_number);
     } else {
+      NLLM_LOG_DEBUG << fmt::format("SwapOut req {} kv_cache_blocks[{}] len: {}", req_id, i, kv_cache_blocks[i].size());
       GetBlockManager()->SwapOut(kv_cache_blocks[i], host_blocks, host_block_num_to_add);
       kv_cache_blocks[i].swap(host_blocks);
     }

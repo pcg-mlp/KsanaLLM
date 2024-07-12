@@ -17,7 +17,7 @@ class BaseLayer {
     context_ = context;
     rank_ = rank;
     return Status();
-  };
+  }
 
   virtual int GetWorkSpaceSize() { return 0; }
 

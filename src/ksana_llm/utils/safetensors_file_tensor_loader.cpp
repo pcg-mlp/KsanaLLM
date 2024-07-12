@@ -1,3 +1,7 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
 #include "safetensors_file_tensor_loader.h"
 #include <nlohmann/json.hpp>
 #include "logger.h"
