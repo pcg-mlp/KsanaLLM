@@ -40,12 +40,16 @@ class CommonWeight : public BaseWeight {
                                         std::vector<size_t>& data_shape, std::vector<size_t>& qkv_dst_shape);
   Status PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_tensor, Tensor& q_out_tensor, const int num_layer);
 
-  Status PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_layer);
+  Status CommonPermuteWeight(const std::string& origin_tensor_name, Tensor& swap_tensor);
+
+  Status PermuteMLPWeight(Tensor& last_down_up_tensor, Tensor& last_gate_tensor, const int num_layer);
 
   Status PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer);
 
   Status PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape, bool& transpose_first,
                            const std::string& tensor_name);
+
+  void ChunkGateWeight(const int num_layer);
 
   bool IsLoaded();
   bool weights_had_loaded_ = false;

@@ -37,7 +37,8 @@ enum PositionEncoding { ROPE = 0, ALIBI = 1 };
 struct ModelRunConfig {
   // The model position embedding
   PositionEncoding position_encoding = PositionEncoding::ROPE;
-
+  // The rope parameters
+  bool is_neox = true;
   // Whether add a bias on qkv output.
   bool qkv_add_bias = false;
 };

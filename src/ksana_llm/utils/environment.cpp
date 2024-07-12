@@ -95,8 +95,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   NLLM_LOG_DEBUG << "Model Max Token Num = " << model_config.max_token_num;
 }
 
-void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
-  model_config.type = config_json.at("model_type");
+void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
   model_config.head_num = config_json.at("num_attention_heads");
   model_config.num_key_value_heads = config_json.value("num_key_value_heads", model_config.head_num);
   model_config.inter_size = config_json.at("intermediate_size");
@@ -130,6 +129,48 @@ void PrepareModeAttirbutes(const nlohmann::json &config_json, ModelConfig &model
   size_t size_per_head = model_config.hidden_units / model_config.head_num;
   model_config.size_per_head = size_per_head;
   model_config.rotary_embedding = size_per_head;
+}
+
+void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
+  model_config.head_num = config_json.at("num_attention_heads");
+  model_config.num_key_value_heads = config_json.value("multi_query_group_num", model_config.head_num);
+  model_config.inter_size = config_json.at("ffn_hidden_size");
+  model_config.vocab_size = config_json.value("vocab_size", 65024);
+  model_config.vocab_size = config_json.value("padded_vocab_size", model_config.vocab_size);  // for glm4 config
+  model_config.num_layer = config_json.value("num_layers", 28);
+  model_config.hidden_units = config_json.at("hidden_size");
+  model_config.rope_theta = config_json.at("rope_ratio");
+  model_config.rope_theta = model_config.rope_theta * 10000;
+  model_config.layernorm_eps = config_json.value("layernorm_epsilon", 1e-5);
+  model_config.start_id = config_json.value("bos_token_id", 1);
+  // for glm4 config
+  if (config_json.contains("eos_token_id") && config_json["eos_token_id"].is_array()) {
+    model_config.end_ids = config_json["eos_token_id"].get<std::vector<int>>();
+  } else {
+    model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 2)};
+  }
+  model_config.pad_id = config_json.value("pad_token_id", 0);
+  model_config.max_position_embeddings = config_json.value("seq_length", 32768);
+  model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);
+  model_config.is_visual = config_json.contains("visual");
+
+  model_config.is_quant = config_json.contains("quantization_config");
+  if (model_config.is_quant) {
+    model_config.quant_config.method = config_json["quantization_config"].at("quant_method");
+    if (model_config.quant_config.method == "gptq") {
+      model_config.quant_config.bits = config_json["quantization_config"].at("bits");
+      model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
+      NLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
+                                   model_config.quant_config.method, model_config.quant_config.bits,
+                                   model_config.quant_config.group_size);
+    }
+  }
+  
+  ParseModelMaxLength(config_json, model_config);
+
+  size_t size_per_head = model_config.hidden_units / model_config.head_num;
+  model_config.size_per_head = size_per_head;
+  model_config.rotary_embedding = size_per_head / 2;
 }
 
 void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_config) {
@@ -306,8 +347,25 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   model_config.path = abs_model_dir_path.u8string();
   model_config.weight_data_type = GetModelDataType(config_json, model_config);
   model_config.tensor_para_size = tensor_parallel_size_;
-  PrepareModeAttirbutes(config_json, model_config);
+
+  model_config.type = config_json.at("model_type");
+  if (model_config.type == "chatglm") {
+    PrepareChatglmAttirbutes(config_json, model_config);
+  } else {
+    PrepareCommonModelAttirbutes(config_json, model_config);
+  }
+
   UpdateEndIdFromGeneration(model_dir, model_config);
+
+  if (tensor_parallel_size_ > model_config.num_key_value_heads ||
+      model_config.num_key_value_heads % tensor_parallel_size_ != 0) {
+    NLLM_LOG_ERROR << fmt::format(
+        "The size of key_value_heads cannot be evenly divided by the size of tensor_parallel_size_. "
+        "{} % {} != 0 ",
+        model_config.num_key_value_heads, tensor_parallel_size_);
+    throw std::runtime_error(
+        "The number of key-value heads must exceed that of TP and must be an integer multiple of TP.");
+  }
 
   // TODO: Model with GQA not supported prefix caching currently.
   if (model_config.head_num != model_config.num_key_value_heads) {

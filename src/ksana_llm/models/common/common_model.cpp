@@ -45,6 +45,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   int max_position_embeddings = model_config_.max_position_embeddings;
   float rope_theta = model_config_.rope_theta;
 
+  bool is_neox = model_run_config.is_neox;
   bool is_alibi = (model_run_config.position_encoding == PositionEncoding::ALIBI);
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config));
@@ -151,7 +152,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(tensor_para_size);
     attention_param.push_back(rotary_embedding);
     attention_param.push_back(rope_theta);
-    attention_param.push_back(true);
+    attention_param.push_back(is_neox);
     attention_param.push_back(is_alibi);
     attention_param.push_back(std::any(cos_sin_cache_ptr));
     attention_param.push_back(model_config_.rope_scaling_factor_config);
@@ -583,9 +584,9 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
 
   // refit input needs to be processed only in the context stage.
   if (is_context_stage) {
-    input_refit_layer_->Forward(
-        {model_input_->cpu_input_refit_tensor.pos_pair_tensor, model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor},
-        emb_lookup_output);
+    input_refit_layer_->Forward({model_input_->cpu_input_refit_tensor.pos_pair_tensor,
+                                 model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor},
+                                emb_lookup_output);
   }
 
   // CommonDecoder
@@ -670,7 +671,8 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
 
     // vector<vector<float>> to list[tensor]
     for (int i = 0; i < embeddings.size(); i++) {
-      torch::Tensor input_refit_embedding_tensor = torch::from_blob(embeddings[i].data(), {embeddings[i].size()}, options);
+      torch::Tensor input_refit_embedding_tensor =
+          torch::from_blob(embeddings[i].data(), {embeddings[i].size()}, options);
       tensors[i] =
           pybind11::reinterpret_borrow<pybind11::object>(py::handle(THPVariable_Wrap(input_refit_embedding_tensor)));
     }

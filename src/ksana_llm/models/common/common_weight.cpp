@@ -221,25 +221,49 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
       weights_data_type_map_[qkv_name] = weight_data_type;
       if (!weights_map_.count(qkv_name)) {
-        weight_shape.insert(weight_shape.begin(), 3);
-        weight_shape[1] /= 3;
+        weight_shape.insert(weight_shape.begin(), ((head_num / num_kv_heads) + 2));
+        weight_shape[1] /= ((head_num / num_kv_heads) + 2);
         tensor_manager_->AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
       }
+
       Tensor& qkv_weight_tensor = weights_map_[qkv_name];
-      size_t src_pitch = weight_shape[1] * weight_shape[2] * tensor_para_size_ * sizeof(T);
-      size_t dst_pitch = weight_shape[1] * weight_shape[2] * sizeof(T);
-      tensor_para_offset *= dst_pitch;
-      Memcpy2DAsync(qkv_weight_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch,
-                    weight_shape[0], MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      size_t q_para_offset = rank_;
+      size_t kv_para_offset = rank_;
+      size_t qkv_pitch = weight_shape[1] * weight_shape[2] * sizeof(T);
+      size_t q_size = (head_num / num_kv_heads) * qkv_pitch;
+
+      q_para_offset *= q_size;
+      kv_para_offset *= qkv_pitch;
+
+      MemcpyAsync(qkv_weight_tensor.GetPtr<void>(), weight_ptr + q_para_offset, q_size, MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+      MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + q_size, weight_ptr + q_size * tensor_para_size_ + kv_para_offset,
+                  qkv_pitch, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + q_size + qkv_pitch,
+                  weight_ptr + kv_para_offset + (q_size + qkv_pitch) * tensor_para_size_, qkv_pitch,
+                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+
     } else if (tensor_name.find("query_key_value.bias") != std::string::npos) {
       weights_data_type_map_[tensor_name] = weight_data_type;
+      weight_shape.insert(weight_shape.begin(), 1);
       tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
+      
       Tensor& qkv_bias_tensor = weights_map_[tensor_name];
-      size_t src_pitch = weight_shape[0] / 3 * tensor_para_size_ * sizeof(T);
-      size_t dst_pitch = weight_shape[0] / 3 * sizeof(T);
-      tensor_para_offset *= dst_pitch;
-      Memcpy2DAsync(qkv_bias_tensor.GetPtr<void>(), dst_pitch, weight_ptr + tensor_para_offset, src_pitch, dst_pitch, 3,
-                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      size_t q_para_offset = rank_;
+      size_t kv_para_offset = rank_;
+      size_t qkv_pitch = weight_shape[1] / ((head_num / num_kv_heads) + 2) * sizeof(T);
+      size_t q_size = (head_num / num_kv_heads) * qkv_pitch;
+
+      q_para_offset *= q_size;
+      kv_para_offset *= qkv_pitch;
+
+      MemcpyAsync(qkv_bias_tensor.GetPtr<void>(), weight_ptr + q_para_offset, q_size, MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+      MemcpyAsync(qkv_bias_tensor.GetPtr<void>() + q_size, weight_ptr + kv_para_offset + q_size * tensor_para_size_,
+                  qkv_pitch, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      MemcpyAsync(qkv_bias_tensor.GetPtr<void>() + q_size + qkv_pitch,
+                  weight_ptr + kv_para_offset + (q_size + qkv_pitch) * tensor_para_size_, qkv_pitch,
+                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
@@ -316,32 +340,31 @@ Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_t
 }
 
 template <typename T>
-Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_mlp_tensor, const int num_layer) {
+Status CommonWeight<T>::CommonPermuteWeight(const std::string& origin_tensor_name, Tensor& swap_tensor) {
+  Tensor& origin_mlp_tensor = weights_map_[origin_tensor_name];
+  Permute(origin_mlp_tensor, swap_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
+  Tensor t = swap_tensor;
+  swap_tensor = origin_mlp_tensor;
+  t.shape = {origin_mlp_tensor.shape[1], origin_mlp_tensor.shape[0]};
+  weights_map_[origin_tensor_name] = t;
+
+  return Status();
+}
+
+template <typename T>
+Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_down_up_tensor, Tensor& last_gate_tensor, const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
   for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
     std::string down_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.down_proj.weight";
-    Tensor& down_weight_tensor = weights_map_[down_proj_name];
-    Permute(down_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
-    Tensor t = last_mlp_tensor;
-    last_mlp_tensor = down_weight_tensor;
-    t.shape = {down_weight_tensor.shape[1], down_weight_tensor.shape[0]};
-    weights_map_[down_proj_name] = t;
+    CommonPermuteWeight(down_proj_name, last_down_up_tensor);
 
     std::string gate_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.gate_proj.weight";
-    Tensor& gate_weight_tensor = weights_map_[gate_proj_name];
-    Permute(gate_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
-    t = last_mlp_tensor;
-    last_mlp_tensor = gate_weight_tensor;
-    t.shape = {gate_weight_tensor.shape[1], gate_weight_tensor.shape[0]};
-    weights_map_[gate_proj_name] = t;
+    CommonPermuteWeight(gate_proj_name, last_gate_tensor);
 
     std::string up_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.up_proj.weight";
-    Tensor& up_weight_tensor = weights_map_[up_proj_name];
-    Permute(up_weight_tensor, last_mlp_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
-    t = last_mlp_tensor;
-    last_mlp_tensor = up_weight_tensor;
-    t.shape = {up_weight_tensor.shape[1], up_weight_tensor.shape[0]};
-    weights_map_[up_proj_name] = t;
+    if (weights_map_.find(up_proj_name) != weights_map_.end()) {
+      CommonPermuteWeight(up_proj_name, last_down_up_tensor);
+    }
   }
   return Status();
 }
@@ -351,12 +374,7 @@ Status CommonWeight<T>::PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, c
   GetBlockManager()->SetDeviceId(rank_);
   for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
     std::string o_proj_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.o_proj.weight";
-    Tensor& o_proj_weight_tensor = weights_map_[o_proj_name];
-    Permute(o_proj_weight_tensor, last_o_proj_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
-    Tensor t = last_o_proj_tensor;
-    last_o_proj_tensor = o_proj_weight_tensor;
-    t.shape = {o_proj_weight_tensor.shape[1], o_proj_weight_tensor.shape[0]};
-    weights_map_[o_proj_name] = t;
+    CommonPermuteWeight(o_proj_name, last_o_proj_tensor);
   }
   return Status();
 }
@@ -381,9 +399,18 @@ Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_n
     if (rank_ == (tensor_para_size_ - 1) && tensor_name == "lm_head.weight") {
       sub_bytes = weights_map_[tensor_name].GetTotalBytes() * tensor_para_size_ - weight_size;
     }
-    MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                weights_map_[tensor_name].GetTotalBytes() - sub_bytes, MEMCPY_HOST_TO_DEVICE,
-                context_->GetMemoryManageStreams()[rank_]);
+    if (model_config_.type == "chatglm" && tensor_name.find("mlp.gate_proj.weight") != std::string::npos) {
+      size_t gate_para_offset = rank_;
+      size_t src_pitch = weight_shape[0] * weight_shape[1] / 2 * tensor_para_size_ * sizeof(T);
+      size_t dst_pitch = weight_shape[0] * weight_shape[1] / 2 * sizeof(T);
+      gate_para_offset *= dst_pitch;
+      Memcpy2DAsync(weights_map_[tensor_name].GetPtr<void>(), dst_pitch, weight_ptr + gate_para_offset, src_pitch,
+                    dst_pitch, 2, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+    } else {
+      MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
+                  weights_map_[tensor_name].GetTotalBytes() - sub_bytes, MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+    }
   }
   return Status();
 }
@@ -408,10 +435,14 @@ Status CommonWeight<T>::ConvertCommonTensor(int hidden_units, int inter_size, in
   GetBlockManager()->FreeContiguous(q_out_tensor.GetBlockId());
 
   // permute gate_proj, up_proj, down_proj: permute(1, 0)
-  tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_mlp_tensor");
-  Tensor& last_mlp_tensor = weights_map_["empty_mlp_tensor"];
-  STATUS_CHECK_RETURN(PermuteMLPWeight(last_mlp_tensor, num_layer));
-  GetBlockManager()->FreeContiguous(last_mlp_tensor.GetBlockId());
+  tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_down_up_tensor");
+  tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.gate_proj.weight", "empty_gate_tensor");
+  Tensor& last_down_up_tensor = weights_map_["empty_down_up_tensor"];
+  Tensor& last_gate_tensor = weights_map_["empty_gate_tensor"];
+  STATUS_CHECK_RETURN(PermuteMLPWeight(last_down_up_tensor, last_gate_tensor, num_layer));
+  GetBlockManager()->FreeContiguous(last_down_up_tensor.GetBlockId());
+  GetBlockManager()->FreeContiguous(last_gate_tensor.GetBlockId());
+
 
   // permute o_proj: permute(1, 0)
   tensor_manager_->CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
@@ -421,19 +452,15 @@ Status CommonWeight<T>::ConvertCommonTensor(int hidden_units, int inter_size, in
 
   // permute lm_head: permute(1, 0)
   tensor_manager_->CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
-  Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
   Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
-  Permute(lm_head_tensor, lm_head_transpose_tensor, {1, 0}, context_->GetMemoryManageStreams()[rank_]);
-  Tensor t = lm_head_transpose_tensor;
-  lm_head_transpose_tensor = lm_head_tensor;
-  t.shape = {lm_head_tensor.shape[1], lm_head_tensor.shape[0]};
-  weights_map_["lm_head.weight"] = t;
+  CommonPermuteWeight("lm_head.weight", lm_head_transpose_tensor);
   GetBlockManager()->FreeContiguous(lm_head_transpose_tensor.GetBlockId());
 
   weights_map_.erase("empty_qkv_tensor");
   weights_map_.erase("empty_q_in_tensor");
   weights_map_.erase("empty_q_out_tensor");
-  weights_map_.erase("empty_mlp_tensor");
+  weights_map_.erase("empty_down_up_tensor");
+  weights_map_.erase("empty_gate_tensor");
   weights_map_.erase("empty_o_proj_tensor");
   weights_map_.erase("empty_lm_head_tensor");
   return Status();
@@ -539,6 +566,39 @@ void CommonWeight<T>::ProcessWeights() {
     }
   }
 
+  StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+
+  // The chatglm model does not contain up_proj.weight, but its gate_proj.weight includes up_proj.weight.
+  // We need chunk them for the convenience of later decoding.
+  std::string up_proj_name = "model.layers.0.mlp.up_proj.weight";
+  if (weights_map_.find(up_proj_name) == weights_map_.end()) {
+    ChunkGateWeight(num_layer);
+  }
+}
+
+template <typename T>
+void CommonWeight<T>::ChunkGateWeight(const int num_layer) {
+  GetBlockManager()->SetDeviceId(rank_);
+  for (size_t layer_idx = 0; layer_idx < size_t(num_layer); ++layer_idx) {
+    std::string gate_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.gate_proj.weight";
+    std::string up_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.up_proj.weight";
+    Tensor& gate_weight = weights_map_[gate_proj_name];
+    std::string gate_proj_name_bk = gate_proj_name + "_bk";
+
+    tensor_manager_->AddWeightTensor(gate_proj_name_bk, {gate_weight.shape[0], gate_weight.shape[1] / 2}, gate_weight.dtype);
+    tensor_manager_->AddWeightTensor(up_proj_name, {gate_weight.shape[0], gate_weight.shape[1] / 2}, gate_weight.dtype);
+
+    size_t spitch = gate_weight.shape[1] * sizeof(T);
+    size_t dpitch = (gate_weight.shape[1] / 2) * sizeof(T);
+    Memcpy2DAsync(weights_map_[gate_proj_name_bk].GetPtr<void>(), dpitch, gate_weight.GetPtr<void>(), spitch, dpitch,
+                  gate_weight.shape[0], MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+    Memcpy2DAsync(weights_map_[up_proj_name].GetPtr<void>(), dpitch, gate_weight.GetPtr<void>() + dpitch, spitch,
+                  dpitch, gate_weight.shape[0], MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+
+    GetBlockManager()->FreeContiguous(gate_weight.GetBlockId());
+    weights_map_[gate_proj_name] = weights_map_[gate_proj_name_bk];
+    weights_map_.erase(gate_proj_name_bk);
+  }
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
 }
 

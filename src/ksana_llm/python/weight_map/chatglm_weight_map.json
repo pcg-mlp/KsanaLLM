@@ -1,0 +1,12 @@
+{
+  "transformer.embedding.word_embeddings.weight": "model.embed_tokens.weight",
+  "transformer.encoder.layers.(\\d+).input_layernorm.weight": "model.layers.$1.input_layernorm.weight",
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.weight": "model.layers.$1.self_attn.W_pack.weight",
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.bias": "model.layers.$1.self_attn.query_key_value.bias",
+  "transformer.encoder.layers.(\\d+).self_attention.dense.weight": "model.layers.$1.self_attn.o_proj.weight",
+  "transformer.encoder.layers.(\\d+).post_attention_layernorm.weight": "model.layers.$1.post_attention_layernorm.weight",
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.weight": "model.layers.$1.mlp.gate_proj.weight",
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.weight": "model.layers.$1.mlp.down_proj.weight",
+  "transformer.encoder.final_layernorm.weight": "model.norm.weight",
+  "transformer.output_layer.weight":"lm_head.weight"
+}

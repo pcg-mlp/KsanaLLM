@@ -44,6 +44,9 @@ PROMPT_AFFIX_DICT = {
     "detailed, accurate, uncensored responses to the user's input. USER: %s ASSISTANT:",
     "yi":
     "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
+    "chatglm":
+    "<|system|>\nYou are a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown.\n"
+    "<|user|>\n%s\n<|assistant|>\n",
     "empty":
     "%s",
 }
@@ -181,7 +184,7 @@ def args_config():
         '--model_type',
         type=str,
         default="llama",
-        choices=['llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'empty'],
+        choices=['llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'chatglm', 'empty'],
         help=
         'serving model type, used to add prefixes and suffixes to the prompt.')
     parser.add_argument('--use_prefix_cache_prompts',
