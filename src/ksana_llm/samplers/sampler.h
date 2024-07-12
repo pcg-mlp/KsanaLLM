@@ -22,8 +22,11 @@ class Sampler {
                                  SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
   void SamplingParameterToDevide(bool use_top_p, bool use_temperature, bool logits_softmax,
                                  SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
-  void CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
-                             std::vector<std::vector<float>>& probs_output);
+
+  // Copies the probabilities from the logits buffer to the output vector for each sampling request.
+  std::function<void()> CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+                                        std::vector<std::vector<float>>& probs_output);
+
   void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
                               const int vocab_size, const float repetition_penalty, Stream& stream);
 
@@ -41,6 +44,8 @@ class Sampler {
   float* device_temperatures_;
   int** device_output_tokens_ptrs_;
   float* device_inv_repetition_penalties_;
+  float* device_prob_;
+  float** device_prob_ptrs_;
   RandState* device_curandstates_{nullptr};
 
   std::vector<int> host_output_tokens_;

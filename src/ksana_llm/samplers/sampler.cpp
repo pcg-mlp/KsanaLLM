@@ -4,6 +4,7 @@
 
 #ifdef ENABLE_CUDA
 #  include <curand_kernel.h>
+#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/copy_elements.cuh"
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
@@ -26,12 +27,12 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
 
   GetBlockManager()->AllocateContiguous(
       (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(RandState) + sizeof(int*)) * max_batch_size +
-          sizeof(float) * batch_schedule_config_.max_vocab_size,
+          sizeof(float) * batch_schedule_config_.max_vocab_size + (sizeof(float) + sizeof(float*)) * max_batch_size,
       device_buffer_block_id_);
   GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
   NLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
                  << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(RandState) + sizeof(int*)) * max_batch_size +
-                        sizeof(float) * batch_schedule_config_.max_vocab_size;
+                        sizeof(float) * batch_schedule_config_.max_vocab_size + sizeof(float) * max_batch_size;
   device_output_tokens_ = static_cast<uint32_t*>(device_buffer_);
   device_offset_ = device_output_tokens_ + max_batch_size;
   device_topKs_ = reinterpret_cast<int*>(device_offset_ + max_batch_size);
@@ -40,6 +41,8 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   device_curandstates_ = reinterpret_cast<RandState*>(device_temperatures_ + max_batch_size);
   device_output_tokens_ptrs_ = reinterpret_cast<int**>(device_curandstates_ + max_batch_size);
   device_inv_repetition_penalties_ = reinterpret_cast<float*>(device_output_tokens_ptrs_ + max_batch_size);
+  device_prob_ = reinterpret_cast<float*>(device_inv_repetition_penalties_ + batch_schedule_config_.max_vocab_size);
+  device_prob_ptrs_ = reinterpret_cast<float**>(device_inv_repetition_penalties_ + max_batch_size);
 
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
 
@@ -125,8 +128,13 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
   return Status();
 }
 
-void Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
-                                    std::vector<std::vector<float>>& probs_output) {
+// Copies the probabilities from the logits buffer to the output vector for each sampling request.
+std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+                                               std::vector<std::vector<float>>& probs_output) {
+  float* logits_buf = sampling_reqs[0].logits_buf[rank_];
+  // Vectors to hold source and destination pointers for copying.
+  std::vector<float*> src_ptr_vector;
+  std::vector<float*> dst_ptr_vector;
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
     if (sampling_reqs[i].logits_custom_length > 0) {
       probs_output[i].resize(sampling_reqs[i].logits_custom_length);
@@ -136,14 +144,29 @@ void Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Strea
       for (auto [l, r] : sampling_reqs[i].request_target->at("logits").slice_pos) {
         for (auto index = l; index <= r; index++) {
           size_t req_logits_offset = (sampling_reqs[i].logits_offset + probs_index) * vocab_size;
-          MemcpyAsync(probs_output[i].data() + probs_index,
-                      sampling_reqs[i].logits_buf[rank_] + req_logits_offset + input_tokens[index + 1], sizeof(float),
-                      MEMCPY_DEVICE_TO_HOST, stream);
+          // Add destination and source pointers for copying.
+          dst_ptr_vector.push_back(probs_output[i].data() + probs_index);
+          src_ptr_vector.push_back(logits_buf + req_logits_offset + input_tokens[index + 1]);
           probs_index++;
         }
       }
     }
   }
+  std::vector<float> dst_vector(src_ptr_vector.size());
+#ifdef ENABLE_CUDA
+  // Copy source pointers to device memory asynchronously.
+  MemcpyAsync(device_prob_ptrs_, src_ptr_vector.data(), sizeof(float*) * src_ptr_vector.size(), MEMCPY_HOST_TO_DEVICE,
+              stream);
+  // Invoke kernel to copy elements from source to a temporary device buffer.
+  llm_kernels::nvidia::InvokeCopyElements(device_prob_ptrs_, device_prob_, src_ptr_vector.size(), stream.Get());
+  // Copy the temporary device buffer to host memory asynchronously.
+  MemcpyAsync(dst_vector.data(), device_prob_, sizeof(float) * src_ptr_vector.size(), MEMCPY_DEVICE_TO_HOST, stream);
+#endif
+  return [dst_vector = std::move(dst_vector), dst_ptr_vector = std::move(dst_ptr_vector)]() mutable {
+    for (int i = 0; i < dst_ptr_vector.size(); i++) {
+      *dst_ptr_vector[i] = dst_vector[i];
+    }
+  };
 }
 
 // Transfer sampling parameters to the device
@@ -228,8 +251,9 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
     std::vector<std::vector<float>> probs_output(sampling_reqs.size());
-    CopyProbsOutput(sampling_reqs, stream, probs_output);
+    auto copy_probs_after_synchronize = CopyProbsOutput(sampling_reqs, stream, probs_output);
     StreamSynchronize(stream);
+    copy_probs_after_synchronize();
     for (size_t i = 0; i < sampling_reqs.size(); i++) {
       std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
       sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
