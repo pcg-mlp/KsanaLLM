@@ -14,6 +14,8 @@ using namespace ksana_llm;
 // 定义一个 BlockSchedulerTest 类，用于测试BatchSchedulerEvironmentSimulator
 class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() { InitLoguru(); }
+
   // 在每个测试用例执行之前调用的函数
   void SetUp() override {
     // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEvironmentSimulator
@@ -60,44 +62,111 @@ class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
 };
 
 TEST_F(BatchSchedulerEvironmentSimulatorTest, BasicTokenGenerationTest) {
-  int expected_output_token_num1 = 3;
-  int input_token_num1 = 2;
-  int expected_output_token_num2 = 2;
-  int input_token_num2 = 3;
-  std::shared_ptr<Request> req1, req2;
-  std::vector<std::shared_ptr<InferRequest>> infer_req_list1 =
-      env_simulator->InitRequest(1, 1, input_token_num1, expected_output_token_num1, req1);
-  std::vector<std::shared_ptr<InferRequest>> infer_req_list2 =
-      env_simulator->InitRequest(2, 2, input_token_num2, expected_output_token_num2, req2);
-  std::shared_ptr<InferRequest> infer_req1 = infer_req_list1[0];
-  std::shared_ptr<InferRequest> infer_req2 = infer_req_list2[0];
+  int expected_output_token_num1 = 30;
+  int input_token_num1 = 20;
 
-  // Simple memory strategy, init all blocks at the beginning
+  int seed_1_token_num = 20;
+  int seed_2_token_num = 30;
+  int seed_0 = 20;
+  int seed_1 = 30;
+  int seed_2 = 40;
+  int expected_output_token_num2 = seed_1_token_num + seed_2_token_num;
+  int input_token_num2 = 30;
+
+  std::shared_ptr<Request> req1, req2, req2_same_seed, req2_diff_seed, req2_same20_diff30;
+  std::shared_ptr<InferRequest> infer_req1, infer_req2, infer_req2_same_seed, infer_req2_diff_seed,
+      infer_req2_same20_diff30;
+
+  std::vector<std::pair<int, int>> seeds;
+  seeds.push_back(std::make_pair(0, 1));
+  // Init req1
+  std::vector<std::shared_ptr<InferRequest>> infer_req_list =
+      env_simulator->InitRequest(1, input_token_num1, expected_output_token_num1, req1, seeds);
+  infer_req1 = infer_req_list[0];
   InitRequestBlock(infer_req1, expected_output_token_num1);
+
+  // Init req2
+  seeds[0].second = seed_0;
+  infer_req_list = env_simulator->InitRequest(2, input_token_num2, expected_output_token_num2, req2, seeds);
+  infer_req2 = infer_req_list[0];
   InitRequestBlock(infer_req2, expected_output_token_num2);
+
+  // Init req2_same_seed
+  seeds.push_back(std::make_pair(input_token_num2, seed_0));
+  infer_req_list = env_simulator->InitRequest(3, input_token_num2, expected_output_token_num2, req2_same_seed, seeds);
+  infer_req2_same_seed = infer_req_list[0];
+  InitRequestBlock(infer_req2_same_seed, expected_output_token_num2);
+
+  // Init req2_diff_seed
+  seeds[1].second = seed_1;
+  infer_req_list = env_simulator->InitRequest(4, input_token_num2, expected_output_token_num2, req2_diff_seed, seeds);
+  infer_req2_diff_seed = infer_req_list[0];
+  InitRequestBlock(infer_req2_diff_seed, expected_output_token_num2);
+
+  // Init req2_same20_diff30
+  seeds.push_back(std::make_pair(input_token_num2 + seed_1_token_num, seed_2));
+  infer_req_list =
+      env_simulator->InitRequest(5, input_token_num2, expected_output_token_num2, req2_same20_diff30, seeds);
+  infer_req2_same20_diff30 = infer_req_list[0];
+  InitRequestBlock(infer_req2_same20_diff30, expected_output_token_num2);
+
+  std::vector<std::shared_ptr<InferRequest>> infer_reqs;
+  infer_reqs.push_back(infer_req1);
+  infer_reqs.push_back(infer_req2);
+  infer_reqs.push_back(infer_req2_same_seed);
+  infer_reqs.push_back(infer_req2_diff_seed);
+  infer_reqs.push_back(infer_req2_same20_diff30);
 
   int max_output_step = std::max(expected_output_token_num1, expected_output_token_num2) + 1;
   for (int i = 0; i < max_output_step; i++) {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
-    if (!env_simulator->IsRequestFinished(infer_req1)) {
-      scheduled_reqs.push_back(infer_req1);
+    for (auto& req : infer_reqs) {
+      if (!env_simulator->IsRequestFinished(req)) {
+        scheduled_reqs.push_back(req);
+      }
     }
-    if (!env_simulator->IsRequestFinished(infer_req2)) {
-      scheduled_reqs.push_back(infer_req2);
-    }
+
     if (scheduled_reqs.empty()) break;
-    NLLM_LOG_INFO << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
+    NLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
     env_simulator->RunAStep(scheduled_reqs);
     for (auto req : scheduled_reqs) {
-      NLLM_LOG_INFO << "Step " << i << ": req_id:" << req->req_id
-                    << ", output_token.size()=" << req->output_tokens.size()
-                    << ", last output token= " << req->output_tokens.back();
+      NLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
+                     << ", output_token.size()=" << req->output_tokens.size()
+                     << ", last output token= " << req->output_tokens.back();
     }
   }
 
   // Check request results
-  env_simulator->CheckRequestOutput(infer_req1);
-  env_simulator->CheckRequestOutput(infer_req2);
+  for (auto& req : infer_reqs) {
+    env_simulator->CheckRequestOutput(req);
+  }
+
+  // Check seed generation results
+  // input token should be same
+  for (int i = 0; i < input_token_num2; i++) {
+    int input_token = infer_req2->input_tokens[i];
+    EXPECT_EQ(input_token, infer_req2_same_seed->input_tokens[i]);
+    EXPECT_EQ(input_token, infer_req2_diff_seed->input_tokens[i]);
+    EXPECT_EQ(input_token, infer_req2_same20_diff30->input_tokens[i]);
+  }
+
+  for (int i = 0; i < expected_output_token_num2 - 1; i++) {
+    int offset = input_token_num2 + i;
+    int output2 = infer_req2->output_tokens[offset];
+    int output2_same = infer_req2_same_seed->output_tokens[offset];
+    int output2_diff = infer_req2_diff_seed->output_tokens[offset];
+    int output2_same20_diff30 = infer_req2_same20_diff30->output_tokens[offset];
+    if (i < seed_1_token_num) {
+      EXPECT_EQ(output2, output2_same);                // same seed_0
+      EXPECT_EQ(output2_diff, output2_same20_diff30);  // same seed_1
+      EXPECT_NE(output2, output2_diff);                // seed_0 vs seed_1
+    } else {
+      EXPECT_EQ(output2, output2_same);                // same seed_0
+      EXPECT_NE(output2_diff, output2_same20_diff30);  // seed_1 vs seed_2
+      EXPECT_NE(output2, output2_diff);                // seed_0 vs seed_1
+      EXPECT_NE(output2, output2_same20_diff30);       // seed_0 vs seed_2
+    }
+  }
 }
 
 TEST_F(BatchSchedulerEvironmentSimulatorTest, SwapTokenGenerationTest) {
@@ -107,10 +176,17 @@ TEST_F(BatchSchedulerEvironmentSimulatorTest, SwapTokenGenerationTest) {
   int expected_output_token_num2 = 12;
   int input_token_num2 = 30;
   std::shared_ptr<Request> req1, req2;
+
+  std::vector<std::pair<int, int>> seeds;
+  seeds.resize(1);
+  seeds[0].first = 0;
+  seeds[0].second = 1;
   std::vector<std::shared_ptr<InferRequest>> infer_req_list1 =
-      env_simulator->InitRequest(1, 1, input_token_num1, expected_output_token_num1, req1);
+      env_simulator->InitRequest(1, input_token_num1, expected_output_token_num1, req1, seeds);
+  seeds[0].second = 2;
   std::vector<std::shared_ptr<InferRequest>> infer_req_list2 =
-      env_simulator->InitRequest(2, 2, input_token_num2, expected_output_token_num2, req2);
+      env_simulator->InitRequest(2, input_token_num2, expected_output_token_num2, req2, seeds);
+
   std::shared_ptr<InferRequest> infer_req1 = infer_req_list1[0];
   std::shared_ptr<InferRequest> infer_req2 = infer_req_list2[0];
 
@@ -138,12 +214,12 @@ TEST_F(BatchSchedulerEvironmentSimulatorTest, SwapTokenGenerationTest) {
       scheduled_reqs.push_back(infer_req2);
     }
     if (scheduled_reqs.empty()) break;
-    NLLM_LOG_INFO << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
+    NLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
     env_simulator->RunAStep(scheduled_reqs);
     for (auto req : scheduled_reqs) {
-      NLLM_LOG_INFO << "Step " << i << ": req_id:" << req->req_id
-                    << ", output_token.size()=" << req->output_tokens.size()
-                    << ", last output token= " << req->output_tokens.back();
+      NLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
+                     << ", output_token.size()=" << req->output_tokens.size()
+                     << ", last output token= " << req->output_tokens.back();
     }
   }
 
