@@ -484,7 +484,8 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
     return result_list
 
 
-async def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[str]):
+async def benchmark_sync(args: argparse.Namespace, api_url: str,
+                         inputs: List[str], tokenizer: Union[None, AutoTokenizer]):
     # Create a progress bar with a total count equal to the number of inputs
     pbar = tqdm(total=len(inputs))
     # Initialize a result list with empty strings, one for each input
@@ -495,7 +496,8 @@ async def benchmark_sync(args: argparse.Namespace, api_url: str, inputs: List[st
         # Format the prompt using the affix dictionary for the specified model type
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Await until last request finished
-        await send_request_async(args, prompt, api_url, req_id, result_list, pbar)
+        await send_request_async(args, prompt, api_url, req_id, result_list, pbar,
+                                  tokenizer)
     # Close the progress bar
     pbar.close()
     # Return the result list

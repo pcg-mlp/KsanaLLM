@@ -16,6 +16,10 @@
 #include "acl/acl_op_compiler.h"
 #include "aclnn/acl_meta.h"
 
+#ifdef WITH_ACL_ATB
+#  include "atb/types.h"
+#endif
+
 namespace llm_kernels {
 namespace utils {
 
@@ -37,6 +41,17 @@ namespace utils {
   do {                              \
     printf(message, ##__VA_ARGS__); \
   } while (0)
+
+#ifdef WITH_ACL_ATB
+#  define ATB_CHECK_RET(expr)                                                          \
+    do {                                                                               \
+      atb::Status ret = (expr);                                                        \
+      if (ret != ACL_SUCCESS) {                                                        \
+        FATAL_LOG("Atb return error %s:%d, with ERROR %d\n", __FILE__, __LINE__, ret); \
+        throw std::runtime_error("Failed with ACL return error.");                     \
+      }                                                                                \
+    } while (0)
+#endif
 
 #define ACL_CHECK_RET(expr)                                                          \
   do {                                                                               \

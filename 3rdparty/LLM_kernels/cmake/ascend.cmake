@@ -26,8 +26,10 @@ else()
 endif()
 
 set(ATB_VER "")
+
 if(EXISTS "${ATB_HOME_PATH}/set_env.sh")
   add_definitions("-DWITH_ACL_ATB")
+
   # awk -F: '{ gsub(/ /, "", $0); if ($1 == "Ascend-mindie-atbVersion") print $2 }' /usr/local/Ascend/mindie/latest/mindie-rt/mindie-atb/version.info
   execute_process(COMMAND /bin/sh -c "\"${AWK}\" -F: '\{ gsub(/ /, \"\", $0); if ($1 == \"Ascend-mindie-atbVersion\") print $2 \}' ${ATB_HOME_PATH}/../version.info" OUTPUT_VARIABLE ATB_VER OUTPUT_STRIP_TRAILING_WHITESPACE)
   message(STATUS "Using ATB ${ATB_VER} at ${ATB_HOME_PATH}")
@@ -59,7 +61,15 @@ set(ACL_SHARED_LIBS
   ${ASCEND_PATH}/x86_64-linux/lib64/libplatform.so
 )
 
+if(EXISTS "${ATB_HOME_PATH}/set_env.sh")
+  list(APPEND ACL_SHARED_LIBS
+    ${ATB_HOME_PATH}/lib/libatb.so
+    ${ATB_HOME_PATH}/lib/libasdops.so
+    ${ATB_HOME_PATH}/lib/liblcal.so)
+endif()
+
 find_program(AWK awk mawk gawk)
+
 # awk -F= '{ if ($1 == "version_dir") print $2 }' /usr/local/Ascend/ascend-toolkit/latest/toolkit/version.info | awk -F. '{ print $1 }'
 execute_process(COMMAND /bin/sh -c "\"${AWK}\" -F= '\{ if ($1 == \"version_dir\") print $2 \}' ${ASCEND_PATH}/toolkit/version.info | awk -F. '\{ print $1 \}'" OUTPUT_VARIABLE ASCEND_TOOLKIT_MAR_VER OUTPUT_STRIP_TRAILING_WHITESPACE)
 add_definitions("-DASCEND_TOOLKIT_MAR_VER_${ASCEND_TOOLKIT_MAR_VER}")

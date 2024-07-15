@@ -170,4 +170,3 @@ template class PermuteKernelWrapper<float>;
 
 }  // namespace ascend
 }  // namespace llm_kernels
-   //

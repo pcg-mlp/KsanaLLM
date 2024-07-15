@@ -9,6 +9,11 @@
 #include "csrc/kernels/ascend/rmsnorm/rmsnorm_tiling.h"
 #include "csrc/utils/ascend/common.h"
 
+#ifdef WITH_ACL_ATB
+#include "atb/infer_op_params.h"
+#include "atb/operation.h"
+#endif
+
 namespace llm_kernels {
 namespace ascend {
 
@@ -58,6 +63,26 @@ template void InvokeRmsLayerNorm(aclFloat16* out, aclFloat16* input, aclFloat16*
 template void InvokeRmsLayerNorm(float* out, float* input, float* gamma, float* beta, const float layernorm_eps,
                                  const int32_t m, const int32_t n, aclrtStream& stream,
                                  void (*ws_func)(size_t, void**));
+
+#ifdef WITH_ACL_ATB
+template <typename DTYPE>
+void InvokeATBRmsNorm(DTYPE* out, DTYPE* input, DTYPE* gamma, DTYPE* beta, const float layernorm_eps, const int32_t m,
+                      const int32_t n, aclrtStream& stream, void (*ws_func)(size_t, void**)) {
+  atb::infer::RmsNormParam rms_norm_param;
+  rms_norm_param.layerType = atb::infer::RmsNormParam::RmsNormType::RMS_NORM_NORM;
+  rms_norm_param.normParam.epsilon = layernorm_eps;
+  rms_norm_param.normParam.layerNormEps = layernorm_eps;
+
+  atb::Operation *operation = nullptr;
+  ATB_CHECK_RET(atb::CreateOperation(rms_norm_param, &operation));
+}
+
+template void InvokeATBRmsNorm(aclFloat16* out, aclFloat16* input, aclFloat16* gamma, aclFloat16* beta,
+                               const float layernorm_eps, const int32_t m, const int32_t n, aclrtStream& stream,
+                               void (*ws_func)(size_t, void**));
+template void InvokeATBRmsNorm(float* out, float* input, float* gamma, float* beta, const float layernorm_eps,
+                               const int32_t m, const int32_t n, aclrtStream& stream, void (*ws_func)(size_t, void**));
+#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels
