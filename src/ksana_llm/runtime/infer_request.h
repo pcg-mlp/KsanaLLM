@@ -103,8 +103,8 @@ class InferRequest {
   // The input tokens.
   std::vector<int> &input_tokens;
 
-  // Embedding slice used to refit input embedding    
-  EmbeddingSlice &input_refit_embedding; 
+  // Embedding slice used to refit input embedding
+  EmbeddingSlice &input_refit_embedding;
 
   // The output tokens, always contain input tokens on the left.
   std::vector<int> &output_tokens;
@@ -114,10 +114,10 @@ class InferRequest {
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
-  const std::map<std::string, TargetDescribe>& request_target;
+  const std::map<std::string, TargetDescribe> &request_target;
 
   // The result of request_target.
-  std::map<std::string, PythonTensor>& response;
+  std::map<std::string, PythonTensor> &response;
 
   float cumulative_score;
 
@@ -154,7 +154,7 @@ class InferRequest {
   int pad_id;
 
   // The arrive time.
-  unsigned long timestamp_in_ms;
+  uint64_t timestamp_in_ms;
 
   // context decode or decode stage.
   InferStage infer_stage;

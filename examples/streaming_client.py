@@ -2,9 +2,9 @@
 
 import argparse
 import json
-import requests
-
 from typing import Iterable, List
+
+import requests
 
 
 # Define a function to get streaming response from the server

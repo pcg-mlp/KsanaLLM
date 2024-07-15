@@ -11,11 +11,13 @@ import torch
 from transformers import AutoConfig
 from safetensors.torch import load
 
+
 def load_safetensors(file_path):
     with open(file_path, "rb") as f:
         data = f.read()
     loaded = load(data)
     return loaded
+
 
 class KsanaPlugin:
     """
@@ -45,18 +47,19 @@ class KsanaPlugin:
                 weight_map_files = json.load(file)
             weight_map_files = weight_map_files["weight_map"]
             # get visual weight files
-            weight_map_files = list(set([value for key, value in weight_map_files.items() if "transformer.visual" in key]))
+            filtered_values = {value for key, value in weight_map_files.items() if "transformer.visual" in key}
+            weight_map_files = list(filtered_values)
             # read weight
             visual_weights = {}
             for weight_map_file in weight_map_files:
-                weight_file = os.path.join(modelpath,weight_map_file)
+                weight_file = os.path.join(modelpath, weight_map_file)
                 if os.path.splitext(weight_file)[1] == ".safetensors":
                     weights = load_safetensors(weight_file)
                 else:
                     weights = torch.load(weight_file, map_location=torch.device('cpu'))
                 for name, tensor in weights.items():
                     if "transformer.visual." in name:
-                        visual_weights[name.replace("transformer.visual.","")] = tensor
+                        visual_weights[name.replace("transformer.visual.", "")] = tensor
 
             # assign gpu and precision
             visual = visual.to(dtype=precision)

@@ -65,7 +65,7 @@ WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pipeline_parallel_s
 WorkerGroup::~WorkerGroup() { threadpool_->Stop(); }
 
 std::shared_ptr<Worker> WorkerGroup::GetWorker(int rank) {
-  if (rank < 0 || rank >= (int)workers_.size()) {
+  if (rank < 0 || rank >= static_cast<int>(workers_.size())) {
     NLLM_LOG_FATAL << "The worker rank " << rank << " exceed worker size " << workers_.size();
   }
   return workers_[rank];

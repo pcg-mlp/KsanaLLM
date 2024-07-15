@@ -10,7 +10,7 @@ def load_prompts(input_csv="prefix_cache_input.csv", tokenizer_dir=None):
     prompts = []
     tokenizer = None
     # Check if a tokenizer directory is provided
-    if not tokenizer_dir is None:
+    if tokenizer_dir is not None:
         # Load the tokenizer from the given directory
         tokenizer = LlamaTokenizer.from_pretrained(tokenizer_dir)
 

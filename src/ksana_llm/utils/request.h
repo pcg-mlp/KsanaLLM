@@ -80,8 +80,8 @@ struct KsanaPythonInput {
   // The tokens of this request.
   std::vector<int> input_tokens;
 
-  // Embedding slice used to refit input embedding    
-  EmbeddingSlice input_refit_embedding; 
+  // Embedding slice used to refit input embedding
+  EmbeddingSlice input_refit_embedding;
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
@@ -111,7 +111,7 @@ struct KsanaPythonOutput {
 
 class Request {
  public:
-  Request(const ksana_llm::KsanaPythonInput& ksana_python_input);
+  explicit Request(const ksana_llm::KsanaPythonInput& ksana_python_input);
 
   // The unique id of a request.
   int64_t req_id;
@@ -128,8 +128,8 @@ class Request {
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
 
-  // Embedding slice used to refit input embedding    
-  EmbeddingSlice input_refit_embedding; 
+  // Embedding slice used to refit input embedding
+  EmbeddingSlice input_refit_embedding;
 
   // TODO(zakwang): Replace output_tokens
   std::vector<OutputTuple> output_group;

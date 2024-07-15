@@ -27,7 +27,8 @@ Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tenso
 
   size_t total_batch_offset = 0;
   for (size_t i = 0; i < batch_size; ++i) {
-    size_t cur_seq_len = *((uint64_t*)seq_len_offset + i + 1) - *((uint64_t*)seq_len_offset + i);
+    uint64_t* seq_len_ptr = reinterpret_cast<uint64_t*>(seq_len_offset);
+    size_t cur_seq_len = seq_len_ptr[i + 1] - seq_len_ptr[i];
     size_t batch_offset = total_batch_offset * hidden_size * sizeof(T);
 
     size_t offset = batch_offset + (cur_seq_len - 1) * hidden_size * sizeof(T);

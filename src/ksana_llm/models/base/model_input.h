@@ -3,15 +3,15 @@
 ==============================================================================*/
 #pragma once
 
+#include <vector>
+
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/utils/tensor.h"
 
-#include <vector>
-
 namespace ksana_llm {
 
-struct InputRefitCPUTensor{
+struct InputRefitCPUTensor {
   // Tensor to hold pairs(pos, data_length) of positions for input_refit on the CPU.
   Tensor pos_pair_tensor;
   Tensor emb_fp32_ptr_tensor;

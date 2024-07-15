@@ -50,14 +50,13 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(CreateTensor(kv_cache_offset_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(input_ids, {max_token_num_ + extra_token_number}, TYPE_INT32, rank_, MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(CreateTensor(kv_list,
-                                    {static_cast<unsigned long>(num_layer_), max_block_num + extra_block_number, 2},
+  STATUS_CHECK_FAILURE(CreateTensor(kv_list, {static_cast<uint64_t>(num_layer_), max_block_num + extra_block_number, 2},
                                     TYPE_POINTER, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(kv_cache_buffer,
-                   {static_cast<unsigned long>(max_batch_size_), static_cast<unsigned long>((max_seq_len_ + 511) / 512),
-                    static_cast<unsigned long>(head_num_per_tp), static_cast<unsigned long>(size_per_head) + 2},
+                   {static_cast<uint64_t>(max_batch_size_), static_cast<uint64_t>((max_seq_len_ + 511) / 512),
+                    static_cast<uint64_t>(head_num_per_tp), static_cast<uint64_t>(size_per_head) + 2},
                    TYPE_FP32, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
@@ -79,8 +78,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 
   STATUS_CHECK_FAILURE(CreateTensor(cpu_input_refit_tensor.pos_pair_tensor, {input_ids.shape[0], 2}, TYPE_INT64, rank_,
                                     MemoryDevice::MEMORY_HOST));
-  STATUS_CHECK_FAILURE(
-      CreateTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_, MemoryDevice::MEMORY_HOST));
+  STATUS_CHECK_FAILURE(CreateTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_,
+                                    MemoryDevice::MEMORY_HOST));
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
@@ -124,7 +123,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   kv_cache_offset_list = {0};
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
-    // TODO: First version of Prefix Cache: Only the first request is supported for cache generation.
+    // TODO(zezhao): First version of Prefix Cache: Only the first request is supported for cache generation.
     if (forward_reqs[idx].req_id != 1) {
       total_prefix_len += forward_reqs[idx].prefix_cache_len;
     }
@@ -211,14 +210,16 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
   size_t cpu_input_refit_pos_pair_idx = 0;
   // Get pointers to the CPU input_refit position pair and CPU input_refit embedding float32 tensors
   int64_t* cpu_input_refit_pos_pair = reinterpret_cast<int64_t*>(cpu_input_refit_tensor.pos_pair_tensor.GetPtr<void>());
-  void** cpu_input_refit_emb_fp32_ptr = reinterpret_cast<void**>(cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<void>());
+  void** cpu_input_refit_emb_fp32_ptr =
+      reinterpret_cast<void**>(cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<void>());
 
   for (size_t bs_idx = 0; bs_idx < batch_size; ++bs_idx) {
     const ForwardRequest& forward_req = forward_reqs[bs_idx];
     std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
     std::vector<std::vector<float>>& input_refit_embedding = (*forward_req.input_refit_embedding).embeddings;
     // Iterate over the input_refit positions and embeddings
-    for (size_t input_refit_idx = 0; input_refit_idx < input_refit_pos.size() && input_refit_idx < input_refit_embedding.size();
+    for (size_t input_refit_idx = 0;
+         input_refit_idx < input_refit_pos.size() && input_refit_idx < input_refit_embedding.size();
          input_refit_idx++) {
       cpu_input_refit_emb_fp32_ptr[cpu_input_refit_pos_pair_idx >> 1] = input_refit_embedding[input_refit_idx].data();
       cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx++] = input_refit_pos[input_refit_idx] + pos;
@@ -342,8 +343,8 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
               context_->GetH2DStreams()[rank_]);
 
   // create input offset tensor int32 and uint64
-  input_tokens_int32_tensor.shape = {static_cast<unsigned long>(batch_size)};
-  input_offset_uint64_tensor.shape = {static_cast<unsigned long>(batch_size) + 1};
+  input_tokens_int32_tensor.shape = {static_cast<uint64_t>(batch_size)};
+  input_offset_uint64_tensor.shape = {static_cast<uint64_t>(batch_size) + 1};
   use_logits_custom_length = false;
   void* input_tokens_int32_ptr = input_tokens_int32_tensor.GetPtr<void>();
   MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), (batch_size) * sizeof(int), MEMCPY_HOST_TO_DEVICE,

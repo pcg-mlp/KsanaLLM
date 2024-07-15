@@ -99,8 +99,8 @@ inline void CheckAssert(bool result, const char* const file, int const line, std
 
 // Get current time in ms.
 inline uint64_t GetCurrentTimeInMs() {
-  using namespace std::chrono;
-  return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+      .count();
 }
 
 #define NLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__)

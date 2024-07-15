@@ -2,11 +2,11 @@
 #
 # ==============================================================================
 
-import requests
 import multiprocessing
 import argparse
 import json
 import time
+import requests
 
 
 def args_config():
@@ -63,11 +63,11 @@ if __name__ == "__main__":
                 "temperature": 0.0,  # temperature for sampling
                 "topk": 1,  # top-k sampling
                 "topp": 0.0,  # top-p sampling
-                "logprobs": 0, # Return the n token log probabilities for each position.
+                "logprobs": 0,  # Return the n token log probabilities for each position.
                 "max_new_tokens":
                 128,  # maximum number of new tokens to generate
                 "repetition_penalty": 1.0,  # penalty for repetitive responses
-                "stop_token_ids": [] # list of tokens that stop the generation
+                "stop_token_ids": []  # list of tokens that stop the generation
             },
             # Set stream mode to False
             "stream": False,

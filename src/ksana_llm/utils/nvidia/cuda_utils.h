@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <cublas_v2.h>
+#include <cuda_runtime.h>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
 
 #include <cublasLt.h>
-#include <cublas_v2.h>
-#include <cuda_runtime.h>
 
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"

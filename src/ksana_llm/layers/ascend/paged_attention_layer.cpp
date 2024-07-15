@@ -48,11 +48,11 @@ Status PagedAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   void* block_offset = input_tensors[3].GetPtr<void>();
   void* rope_pos = input_tensors[4].GetPtr<void>();
 
-  this->ascend_paged_attn_->Forward(output, qkv_tensor, seq_offset, (void**)kv_list, block_offset, rope_pos, batch_size,
-                                    total_token_num, total_block_num, layer_index_, false,
+  this->ascend_paged_attn_->Forward(output, qkv_tensor, seq_offset, reinterpret_cast<void**>(kv_list), block_offset,
+                                    rope_pos, batch_size, total_token_num, total_block_num, layer_index_, false,
                                     context_->GetComputeStreams()[rank_].Get());
 
-  output_tensors[0].shape = {static_cast<unsigned long>(batch_size), static_cast<unsigned long>(hidden_units)};
+  output_tensors[0].shape = {static_cast<uint64_t>(batch_size), static_cast<uint64_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();

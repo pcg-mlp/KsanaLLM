@@ -565,7 +565,7 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
     ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
     NLLM_LOG_DEBUG << "Process swapped requests, running size:" << swapped_running_indexes_.size();
-    if(swapout_done){
+    if (swapout_done) {
       break;
     }
     if (batch_state_->running_queue.empty() && !batch_state_->swapped_queue.empty() &&
@@ -574,11 +574,11 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
         REPORT_TIME_US(batch_scheduler_wait_swapout_us);
         WaitPendingSwapoutDone();
         swapout_done = true;
-      }else{
+      } else {
         NLLM_LOG_WARNING << "Bad state in ScheduleSwapped";
         break;
       }
-    }else{
+    } else {
       break;
     }
   } while (true);

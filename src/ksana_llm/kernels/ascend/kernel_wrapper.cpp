@@ -2,6 +2,8 @@
 
 ==============================================================================*/
 
+#include "ksana_llm/kernels/ascend/kernel_wrapper.h"
+
 #include "csrc/kernels/ascend/argmax/argmax.h"
 #include "csrc/kernels/ascend/embedding/embedding.h"
 #include "csrc/kernels/ascend/permute/permute.h"

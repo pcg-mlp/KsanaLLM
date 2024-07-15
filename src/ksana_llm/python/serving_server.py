@@ -2,25 +2,24 @@
 #
 # ==============================================================================
 
-import ksana_llm
 import argparse
 import json
-import yaml
-import uvicorn
 import os
 import traceback
 import base64
-
+import asyncio
 from typing import Dict, Any
+from functools import partial
+from concurrent import futures
+
+import ksana_llm
+import yaml
+import uvicorn
+import msgpack
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import GenerationConfig, AutoTokenizer, AutoConfig
 from fastapi import FastAPI
-
-import asyncio
-import msgpack
-from functools import partial
-from concurrent import futures
 
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
@@ -55,6 +54,7 @@ def args_config():
         help="FastAPI root_path when app is behind a path based routing proxy")
     args = parser.parse_args()
     return args
+
 
 def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform streaming generation.
@@ -144,6 +144,7 @@ def get_sampling_value(sampling_config: dict, key: str, default_val=None):
     """
     return sampling_config[key] if key in sampling_config else default_val
 
+
 async def process_request(request_dict: Dict[str, Any]) -> Response:
     """Generate completion for the request.
 
@@ -162,7 +163,7 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
 
     input_tokens = request_dict.pop("input_tokens", None)
     if input_tokens is None:
-       input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+        input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
     kwargs = {
         "input_refit_embedding": {}
@@ -241,6 +242,7 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
     # Return the results of the generation
     return results
 
+
 @app.post("/generate")
 async def generate(request: Request) -> Response:
     """Generate completion for the request.
@@ -257,6 +259,7 @@ async def generate(request: Request) -> Response:
         return StreamingResponse(response_data)
     else:
         return JSONResponse(response_data)
+
 
 @app.post("/forward")
 async def forward(request: Request):

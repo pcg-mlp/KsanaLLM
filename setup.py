@@ -5,10 +5,10 @@
 import os
 import pathlib
 import shutil
+from distutils.file_util import copy_file
 
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as build_ext_orig
-from distutils.file_util import copy_file
 
 
 class CMakeExtension(Extension):

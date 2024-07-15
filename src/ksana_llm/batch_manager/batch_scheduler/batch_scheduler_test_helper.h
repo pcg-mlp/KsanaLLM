@@ -3,12 +3,12 @@
 ==============================================================================*/
 #pragma once
 
+#include <sstream>
+
 #include "ksana_llm/block_manager/block_manager_interface.h"
 #include "ksana_llm/profiler/collector.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "test.h"
-
-#include <sstream>
 
 namespace ksana_llm {
 
@@ -514,7 +514,8 @@ class BatchSchedulerEvironmentSimulator {
         // Generate next token based on recorded kv cache content
         // If memory operations break kv cache content, generation results will be wrong
         blk_mgr_->CollectKvCacheContent(req, kv_contents);
-        GenerateAToken(kv_contents, output_token, GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
+        GenerateAToken(kv_contents, output_token,
+                       GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
       }
       req->output_tokens.push_back(output_token);
     }
@@ -551,7 +552,7 @@ class BatchSchedulerEvironmentSimulator {
   std::vector<std::shared_ptr<InferRequest>> InitRequest(int req_id, int input_token_num, int expected_output_token_num,
                                                          std::shared_ptr<Request>& req,
                                                          const std::vector<std::pair<int, int>>& seeds) {
-    NLLM_LOG_DEBUG << "Init req " << req_id  << ", input_token_num=" << input_token_num
+    NLLM_LOG_DEBUG << "Init req " << req_id << ", input_token_num=" << input_token_num
                    << ", expect_output_token_num=" << expected_output_token_num;
     ksana_llm::KsanaPythonInput ksana_python_input;
     ksana_python_input.sampling_config.num_beams = 0;

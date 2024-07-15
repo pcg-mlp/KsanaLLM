@@ -19,9 +19,10 @@ Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
     void* add_out_buf = output_tensors[0].GetPtr<void>();
     void* a_ptr = reinterpret_cast<void*>(input_tensors[0].GetPtr<void>());
     void* b_ptr = reinterpret_cast<void*>(input_tensors[1].GetPtr<void>());
-    llm_kernels::ascend::InvokeAdd<T>((T*)a_ptr, (T*)b_ptr, nullptr, (T*)add_out_buf,
-                                      static_cast<uint32_t>(hidden_size), static_cast<uint32_t>(total_seq_len),
-                                      context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
+    llm_kernels::ascend::InvokeAdd<T>(reinterpret_cast<T*>(a_ptr), reinterpret_cast<T*>(b_ptr), nullptr,
+                                      reinterpret_cast<T*>(add_out_buf), static_cast<uint32_t>(hidden_size),
+                                      static_cast<uint32_t>(total_seq_len), context_->GetComputeStreams()[rank_].Get(),
+                                      GetWorkSpaceFunc());
   } else {
     return Status(RET_SEGMENT_FAULT, "add bias not implemented");
   }

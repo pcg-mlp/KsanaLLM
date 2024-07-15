@@ -8,10 +8,10 @@ import requests
 
 
 def clear_line(n: int = 1) -> None:
-    LINE_UP = '\033[1A'
-    LINE_CLEAR = '\x1b[2K'
+    line_up = '\033[1A'
+    line_clear = '\x1b[2K'
     for _ in range(n):
-        print(LINE_UP, end=LINE_CLEAR, flush=True)
+        print(line_up, end=line_clear, flush=True)
 
 
 def post_http_request(prompt: str,
@@ -120,8 +120,6 @@ if __name__ == "__main__":
     result = ""
     # Handle the response based on the stream flag
     if stream:
-        # Initialize a counter for the number of printed lines
-        num_printed_lines = 0
         # Iterate over the streaming response
         for output in get_streaming_response(response):
             # Clear the previous lines

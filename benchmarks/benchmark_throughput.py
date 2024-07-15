@@ -10,19 +10,20 @@ import argparse
 import asyncio
 import json
 import time
-import aiohttp
-import numpy as np
 import csv
-
 from dataclasses import dataclass
 from typing import AsyncGenerator, List, Tuple, Union
+
+import aiohttp
+import numpy as np
 from tqdm.asyncio import tqdm
 # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
 from transformers import AutoTokenizer 
 
 import prefix_cache_reader
 
-# (prompt len, output len, input token num, output token num, request latency, first token latency, inter token latencies)
+# (prompt len, output len, input token num, output token num,
+#  request latency, first token latency, inter token latencies)
 REQUEST_LATENCY: List[Tuple[int, int, int, int, float, float, List[float]]] = []
 
 # Chat template and stop token ids
@@ -45,8 +46,8 @@ PROMPT_AFFIX_DICT = {
     "yi":
     "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
     "chatglm":
-    "<|system|>\nYou are a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown.\n"
-    "<|user|>\n%s\n<|assistant|>\n",
+    "<|system|>\nYou are a large language model trained by Zhipu.AI. Follow the user's instructions carefully."
+    " Respond using markdown.\n<|user|>\n%s\n<|assistant|>\n",
     "empty":
     "%s",
 }
@@ -68,7 +69,7 @@ class BenchmarkMetrics:
     avg_output_chars: float = 0.
     avg_input_tokens: float = 0.
     avg_output_tokens: float = 0.
-    avg_tokens_per_sec: float = 0. # token throughput
+    avg_tokens_per_sec: float = 0.  # token throughput
 
     def __str__(self):
         return '\n'.join([
@@ -84,15 +85,16 @@ class BenchmarkMetrics:
             f"Token throughput: {self.avg_tokens_per_sec:.2f} tokens/s",
         ])
 
+
 @dataclass
 class BenchmarkStreamMetrics:
-    avg_first_token_latency: float = 0. # TTFT
+    avg_first_token_latency: float = 0.  # TTFT
     median_first_token_latency: float = 0.
     p99_first_token_latency: float = 0.
-    avg_latency_per_out_token: float = 0. # TPOT
+    avg_latency_per_out_token: float = 0.  # TPOT
     median_latency_per_out_token: float = 0.
     p99_latency_per_out_token: float = 0.
-    avg_inter_token_latency: float = 0. # ITL
+    avg_inter_token_latency: float = 0.  # ITL
     median_inter_token_latency: float = 0.
     p99_inter_token_latency: float = 0.
 
@@ -614,7 +616,7 @@ def main(args: argparse.Namespace):
         print(metrics)
 
         stream_metrics = BenchmarkStreamMetrics()
-        if args.stream: # TTFT, TPOT and ITL are only available in stream mode
+        if args.stream:  # TTFT, TPOT and ITL are only available in stream mode
             first_token_latencies = [
                 first_token_latency
                 for _, _, _, _, _, first_token_latency, _ in REQUEST_LATENCY

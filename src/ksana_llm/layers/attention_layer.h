@@ -26,6 +26,7 @@ class AttentionLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
 #ifdef ENABLE_ACL
+
  public:
   // The attention implementation for ascend device.
   static std::shared_ptr<llm_kernels::ascend::PagedAttention<T>> ascend_paged_attn_;

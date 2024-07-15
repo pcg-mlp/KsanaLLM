@@ -4,10 +4,15 @@
 
 #include "ksana_llm/models/common/common_weight.h"
 
+#include <Python.h>
+#include <pybind11/embed.h>
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <torch/nn/functional/normalization.h>
 #include <regex>
-#include "nlohmann/json.hpp"
 
 #include "ksana_llm/utils/common_device.h"
+#include "nlohmann/json.hpp"
 
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
@@ -18,12 +23,6 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/optional_file.h"
-
-#include <Python.h>
-#include <pybind11/embed.h>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <torch/nn/functional/normalization.h>
 
 namespace ksana_llm {
 
@@ -247,7 +246,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       weights_data_type_map_[tensor_name] = weight_data_type;
       weight_shape.insert(weight_shape.begin(), 1);
       tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
-      
+
       Tensor& qkv_bias_tensor = weights_map_[tensor_name];
       size_t q_para_offset = rank_;
       size_t kv_para_offset = rank_;
@@ -443,7 +442,6 @@ Status CommonWeight<T>::ConvertCommonTensor(int hidden_units, int inter_size, in
   GetBlockManager()->FreeContiguous(last_down_up_tensor.GetBlockId());
   GetBlockManager()->FreeContiguous(last_gate_tensor.GetBlockId());
 
-
   // permute o_proj: permute(1, 0)
   tensor_manager_->CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
   Tensor& last_o_proj_tensor = weights_map_["empty_o_proj_tensor"];
@@ -551,12 +549,11 @@ void CommonWeight<T>::ProcessWeights() {
         torch_dtype = torch::kFloat32;
       } else if (tensor.dtype == DataType::TYPE_FP16) {
         torch_dtype = torch::kFloat16;
-      }
 #ifdef ENABLE_BFLOAT16
-      else if (tensor.dtype == DataType::TYPE_BF16) {
+      } else if (tensor.dtype == DataType::TYPE_BF16) {
         torch_dtype = torch::kBFloat16;
-      }
 #endif
+      }
       auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
       torch::Tensor in =
           torch::from_blob(tensor.GetPtr<void>(), {(int64_t)tensor.shape[0], (int64_t)tensor.shape[1]}, options);
@@ -585,7 +582,8 @@ void CommonWeight<T>::ChunkGateWeight(const int num_layer) {
     Tensor& gate_weight = weights_map_[gate_proj_name];
     std::string gate_proj_name_bk = gate_proj_name + "_bk";
 
-    tensor_manager_->AddWeightTensor(gate_proj_name_bk, {gate_weight.shape[0], gate_weight.shape[1] / 2}, gate_weight.dtype);
+    tensor_manager_->AddWeightTensor(gate_proj_name_bk, {gate_weight.shape[0], gate_weight.shape[1] / 2},
+                                     gate_weight.dtype);
     tensor_manager_->AddWeightTensor(up_proj_name, {gate_weight.shape[0], gate_weight.shape[1] / 2}, gate_weight.dtype);
 
     size_t spitch = gate_weight.shape[1] * sizeof(T);

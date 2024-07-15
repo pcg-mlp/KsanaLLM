@@ -2,13 +2,12 @@
 
 ==============================================================================*/
 
-#include "src/ksana_llm/utils/waiter.h"
-
-#include "test.h"
-
 #include <atomic>
 #include <memory>
 #include <thread>
+
+#include "ksana_llm/utils/waiter.h"
+#include "test.h"
 
 namespace ksana_llm {
 

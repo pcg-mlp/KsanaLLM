@@ -15,7 +15,7 @@ struct StreamTypeTraits<DEVICE_TYPE_NVIDIA> {
 template <>
 class StreamT<DEVICE_TYPE_NVIDIA> {
  public:
-  StreamT(int device_id);
+  explicit StreamT(int device_id);
 
   // Get the cuda stream by reference..
   cudaStream_t& Get();

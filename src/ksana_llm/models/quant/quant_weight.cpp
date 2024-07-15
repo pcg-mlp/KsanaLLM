@@ -62,7 +62,7 @@ bool QuantWeight<T>::FilterOutQuantWeight(const std::string& tensor_name) {
 
 template <typename T>
 bool QuantWeight<T>::CheckQuantModel() {
-  // TODO: make a struct to store different quant type: gptq, awq, ...
+  // TODO(jinxcwu): make a struct to store different quant type: gptq, awq, ...
   if (model_config_.is_quant) {
     if (model_config_.quant_config.method == "gptq") {
       return true;

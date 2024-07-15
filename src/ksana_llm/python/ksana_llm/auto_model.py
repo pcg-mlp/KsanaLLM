@@ -3,10 +3,7 @@
 # ==============================================================================
 
 import os
-import sys
 from typing import Optional, Union
-
-from transformers.configuration_utils import PretrainedConfig
 
 from .serving_model import ServingModel
 

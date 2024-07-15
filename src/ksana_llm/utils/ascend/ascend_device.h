@@ -6,7 +6,7 @@
 #include "ksana_llm/utils/common_device.h"
 
 #ifdef WITH_ACL_ATB
-#include "atb/context.h"
+#  include "atb/context.h"
 #endif
 
 #include <unordered_map>
@@ -43,7 +43,7 @@ struct StreamTypeTraits<DEVICE_TYPE_ASCEND> {
 template <>
 class StreamT<DEVICE_TYPE_ASCEND> {
  public:
-  StreamT(int device_id);
+  explicit StreamT(int device_id);
 
   aclrtStream& Get();
 

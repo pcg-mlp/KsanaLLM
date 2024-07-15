@@ -10,7 +10,7 @@ namespace ksana_llm {
 // The class used for ascend extension.
 template <int T>
 struct AscendContextExtension {
-  AscendContextExtension(ContextT<T>* base_ptr) { base_ptr_ = base_ptr; }
+  explicit AscendContextExtension(ContextT<T>* base_ptr) { base_ptr_ = base_ptr; }
 
  private:
   ContextT<T>* base_ptr_ = nullptr;

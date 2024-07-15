@@ -20,9 +20,9 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
   void* silu_output_buf_ptr = output_tensors[0].GetPtr<void>();
   void* gated_weight_buf_ptr = input_tensors[1].GetPtr<void>();
 
-  llm_kernels::ascend::InvokeSiluMul<T>((T*)silu_input_buf_ptr, (T*)gated_weight_buf_ptr, total_seq_len, ffn_size,
-                                        (T*)silu_output_buf_ptr, context_->GetComputeStreams()[rank_].Get(),
-                                        GetWorkSpaceFunc());
+  llm_kernels::ascend::InvokeSiluMul<T>(
+      reinterpret_cast<T*>(silu_input_buf_ptr), reinterpret_cast<T*>(gated_weight_buf_ptr), total_seq_len, ffn_size,
+      reinterpret_cast<T*>(silu_output_buf_ptr), context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();

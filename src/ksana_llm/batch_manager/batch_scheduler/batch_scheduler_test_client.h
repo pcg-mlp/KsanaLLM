@@ -3,15 +3,14 @@
 ==============================================================================*/
 #pragma once
 
+#include <sstream>
+#include <unordered_map>
+
 #include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler.h"
 #include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_helper.h"
+#include "ksana_llm/profiler/timer.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/threadpool.h"
-
-#include "ksana_llm/profiler/timer.h"
-
-#include <unordered_map>
-#include <sstream>
 
 namespace ksana_llm {
 
@@ -118,10 +117,11 @@ class ParallelTester {
   // This hook checks results when  all requests are finished as expected.
   class DefaultResultCheckHook : public ExeHookInterface {
    public:
-    DefaultResultCheckHook(BatchSchedulerEvironmentSimulator* env_simulator) : env_simulator_(env_simulator) {}
-    ~DefaultResultCheckHook(){
+    explicit DefaultResultCheckHook(BatchSchedulerEvironmentSimulator* env_simulator) : env_simulator_(env_simulator) {}
+    ~DefaultResultCheckHook() {
       NLLM_LOG_INFO << "~DefaultResultCheckHook, after_exe_num=" << after_exe_num;
-      EXPECT_GT(after_exe_num, 0); // CheckRequestsAfterExecution must be invoked. Maybe this hook is not added to hook list.
+      EXPECT_GT(after_exe_num,
+                0);  // CheckRequestsAfterExecution must be invoked. Maybe this hook is not added to hook list.
     }
 
     void CheckRequestsAfterExecution(const std::vector<RequestInfo>& reqs) override {
@@ -199,8 +199,8 @@ class ParallelTester {
 
 class PrintStepHook : public ParallelTester::ExeHookInterface {
  public:
-  PrintStepHook(bool print_all_blocks = false) : print_all_blocks_(print_all_blocks) {}
-  ~PrintStepHook(){
+  explicit PrintStepHook(bool print_all_blocks = false) : print_all_blocks_(print_all_blocks) {}
+  ~PrintStepHook() {
     NLLM_LOG_INFO << "~PrintStepHook, before_step_num=" << before_step_num;
     EXPECT_GT(before_step_num, 0);
   }
@@ -222,7 +222,7 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
         }
       }
       ss << "} ";
-      NLLM_LOG_INFO << ss.str(); 
+      NLLM_LOG_INFO << ss.str();
     }
   }
 

@@ -40,8 +40,8 @@ Status FlashAttentionLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
   int total_token_num = input_tensors[0].shape[0];
   int total_block_num = input_tensors[7].shape[2];
 
-  this->ascend_paged_attn_->Forward(output, qkv_tensor, seq_offset, (void**)kv_list, block_offset, rope_pos, batch_size,
-                                    total_token_num, total_block_num, layer_index_, true,
+  this->ascend_paged_attn_->Forward(output, qkv_tensor, seq_offset, reinterpret_cast<void**>(kv_list), block_offset,
+                                    rope_pos, batch_size, total_token_num, total_block_num, layer_index_, true,
                                     context_->GetComputeStreams()[rank_].Get());
 
   output_tensors[0].shape[0] = input_tensors[0].shape[0];

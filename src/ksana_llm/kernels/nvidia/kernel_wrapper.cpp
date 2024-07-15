@@ -207,7 +207,6 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                                            reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens,
                                            num_kv_heads, head_size, stride_size, stream);
 
-  // TODO: ROTARY
   if (!alibi_slopes.has_value()) {
     rotary_embedding_cuda.SetInput(
         reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
@@ -389,8 +388,8 @@ void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data,
   std::vector<std::string> handles;
   handles.reserve(tp_size);
   for (int i = 0; i < tp_size; i++) {
-    char* begin = (char*)&(input_handles[i]);
-    char* end = (char*)&(input_handles[i + 1]);
+    char* begin = reinterpret_cast<char*>(&input_handles[i]);
+    char* end = reinterpret_cast<char*>(&input_handles[i + 1]);
     handles.emplace_back(begin, end);
   }
   reduce_op->RegisterBuffer(handles, offsets, input, stream);

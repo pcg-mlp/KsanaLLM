@@ -3,13 +3,12 @@
 # ==============================================================================
 
 import asyncio
-import os
-import sys
-import torch
 import importlib.util
+from typing import Callable, List, Optional, Dict, Any
+import asyncio
+from concurrent import futures
 
-from typing import Callable, List, Optional, Union, Dict, Any
-
+import torch
 from transformers.generation.streamers import BaseStreamer
 from transformers.modeling_utils import PreTrainedModel
 from transformers.configuration_utils import PretrainedConfig
@@ -20,9 +19,6 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 
 import libtorch_serving
-
-import asyncio
-from concurrent import futures
 
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
@@ -90,6 +86,7 @@ class KsanaPlugin(object):
         if self._ksana_plugin is None:
             return ksana_python_output
         return self._ksana_plugin.postprocess(**kwargs)
+
 
 class PyAsyncStreamingIterator(object):
     """The streaming iterator.
@@ -170,7 +167,8 @@ class ServingModel(object):
 
         # Ensure slice_pair contains exactly two elements
         if len(slice_pair) != 2:
-            raise ValueError(f"Error: {slice_pair} does not represent a valid interval (expected a tuple of two elements).")
+            raise ValueError(f"Error: {slice_pair} does not represent a valid interval "
+                             "(expected a tuple of two elements).")
 
         # Check if the end position is greater than or equal to the start position
         if slice_pair[1] < slice_pair[0]:
@@ -180,7 +178,8 @@ class ServingModel(object):
         # Validate that the end position does not exceed the number of input tokens
         if slice_pair[1] >= input_tokens_num:
             raise ValueError(
-                f"Error: The end position of interval {slice_pair} exceeds the total number of input tokens ({input_tokens_num}).")
+                f"Error: The end position of interval {slice_pair} exceeds the total number of input tokens "
+                f"({input_tokens_num}).")
 
         # Check for overlap with the previous interval
         if slice_pair[0] <= previous_end:
@@ -199,8 +198,10 @@ class ServingModel(object):
         and updates the ksana_python_input object with the processed target information.
 
         Parameters:
-        - request_target (List[Dict[str, Any]]): A list of dictionaries, where each dictionary represents a target with its description.
-        - ksana_python_input (libtorch_serving.KsanaPythonInput): An object to be updated with the processed target information.
+        - request_target (List[Dict[str, Any]]): A list of dictionaries, where each dictionary represents a target
+                                                 with its description.
+        - ksana_python_input (libtorch_serving.KsanaPythonInput): An object to be updated with the processed
+                                                                  target information.
 
         Raises:
         - RuntimeError: If both 'token_id' and 'slice_pos' are specified for the same target, or if 'GATHER_TOKEN_ID'
@@ -252,10 +253,13 @@ class ServingModel(object):
                 if len(target_describe.token_id) > 0:
                     raise RuntimeError(
                         f"Specifying token_id for {target_name} output is not supported.")
-                # Ensure the 'GATHER_TOKEN_ID' reduction mode does not use the last logits, as it might be unsupported or not intended.
-                if target_desc['token_reduce_mode'] == 'GATHER_TOKEN_ID' and target_desc['slice_pos'][-1][-1] == len(ksana_python_input.input_tokens) - 1:
+                # Ensure the 'GATHER_TOKEN_ID' reduction mode does not use the last logits, as it might be unsupported
+                # or not intended.
+                if target_desc['token_reduce_mode'] == 'GATHER_TOKEN_ID' and \
+                   target_desc['slice_pos'][-1][-1] == len(ksana_python_input.input_tokens) - 1:
                     raise RuntimeError(
-                        f"The last logits is not supported for {target_name} in the 'GATHER_TOKEN_ID' token reduction mode.")
+                        f"The last logits is not supported for {target_name} in the 'GATHER_TOKEN_ID' "
+                        "token reduction mode.")
 
             # Update the ksana_python_input object with the processed target information
             ksana_python_input.request_target[target_name] = target_describe

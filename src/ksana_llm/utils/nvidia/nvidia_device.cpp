@@ -1,11 +1,12 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/utils/nvidia/nvidia_device.h"
-#include "ksana_llm/utils/device_types.h"
-#include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 #include <iostream>
+
+#include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/nvidia/cuda_utils.h"
+#include "ksana_llm/utils/nvidia/nvidia_device.h"
 
 namespace ksana_llm {
 
@@ -172,18 +173,15 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetFloatType() {
     return TYPE_FP32;
   } else if (std::is_same<U, half>::value || std::is_same<U, const half>::value) {
     return TYPE_FP16;
-  }
 #ifdef ENABLE_BFLOAT16
-  else if (std::is_same<U, __nv_bfloat16>::value || std::is_same<U, const __nv_bfloat16>::value) {
+  } else if (std::is_same<U, __nv_bfloat16>::value || std::is_same<U, const __nv_bfloat16>::value) {
     return TYPE_BF16;
-  }
 #endif
 #ifdef ENABLE_FP8
-  else if (std::is_same<U, __nv_fp8_e4m3>::value || std::is_same<U, const __nv_fp8_e4m3>::value) {
+  } else if (std::is_same<U, __nv_fp8_e4m3>::value || std::is_same<U, const __nv_fp8_e4m3>::value) {
     return TYPE_FP8_E4M3;
-  }
 #endif
-  else {
+  } else {
     return TYPE_INVALID;
   }
 }
@@ -198,7 +196,7 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetIntType() {
     return TYPE_UINT8;
   } else if (std::is_same<U, unsigned int>::value || std::is_same<U, const unsigned int>::value) {
     return TYPE_UINT32;
-  } else if (std::is_same<U, unsigned long>::value || std::is_same<U, const unsigned long>::value) {
+  } else if (std::is_same<U, uint64_t>::value || std::is_same<U, const uint64_t>::value) {
     return TYPE_UINT64;
   } else {
     return TYPE_INVALID;
@@ -236,7 +234,7 @@ template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<int>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<int8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<uint8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<unsigned int>();
-template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<unsigned long>();
+template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<uint64_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<bool>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<char>();
 

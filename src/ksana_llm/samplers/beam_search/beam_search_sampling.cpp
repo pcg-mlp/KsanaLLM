@@ -88,7 +88,7 @@ Status BeamSearchSampling::Sampling(SamplingRequest& sampling_req) {
     std::sort(output_source.rbegin(), output_source.rend());
     // Processing beam-req that does not require copying.
     std::set<int> finished_set;
-    for (i = 0; i < num_beams && i < (int)output_source.size(); i++) {
+    for (i = 0; i < num_beams && i < static_cast<int>(output_source.size()); i++) {
       int req_idx = output_source[i].second / num_beams;
       int token_idx = output_source[i].second % num_beams;
       if (token_idx == 0) {
@@ -98,7 +98,7 @@ Status BeamSearchSampling::Sampling(SamplingRequest& sampling_req) {
     }
     // Processing that needs to be replicated.
     int dst_idx = 0;
-    for (i = 0; i < num_beams && i < (int)output_source.size(); i++) {
+    for (i = 0; i < num_beams && i < static_cast<int>(output_source.size()); i++) {
       int req_idx = output_source[i].second / num_beams;
       int token_idx = output_source[i].second % num_beams;
       if (token_idx != 0) {

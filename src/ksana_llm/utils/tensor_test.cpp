@@ -1,12 +1,12 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/block_manager/block_manager.h"
-#include "ksana_llm/utils/singleton.h"
-#include "src/ksana_llm/utils/memory_utils.h"
 
 #include <filesystem>
 
+#include "ksana_llm/block_manager/block_manager.h"
+#include "ksana_llm/utils/memory_utils.h"
+#include "ksana_llm/utils/singleton.h"
 #include "test.h"
 
 namespace ksana_llm {

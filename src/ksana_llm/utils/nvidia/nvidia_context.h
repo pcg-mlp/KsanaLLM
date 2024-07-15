@@ -16,7 +16,7 @@ namespace ksana_llm {
 template <int T>
 class NvidiaContextExtension {
  public:
-  NvidiaContextExtension(ContextT<T>* base_ptr) { base_ptr_ = base_ptr; }
+  explicit NvidiaContextExtension(ContextT<T>* base_ptr) { base_ptr_ = base_ptr; }
 
   std::vector<cudaMemPool_t>& GetMemoryPools() { return memory_pool_; }
 

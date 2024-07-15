@@ -2,6 +2,9 @@
 
 ==============================================================================*/
 
+#include <cstdint>
+#include <random>
+
 #include "ksana_llm/samplers/topk/topk_sampling.h"
 #include "ksana_llm/utils/logger.h"
 
@@ -10,9 +13,6 @@
 #endif
 
 #include "ksana_llm/kernels/argmax.h"
-
-#include <cstdint>
-#include <random>
 
 namespace ksana_llm {
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandState* device_curandstates)

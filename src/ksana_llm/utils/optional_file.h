@@ -13,10 +13,7 @@ namespace ksana_llm {
 
 class OptionalFile {
  public:
-  static std::shared_ptr<OptionalFile> GetInstance() {
-    return Singleton<OptionalFile>::GetInstance();
-    ;
-  }
+  static std::shared_ptr<OptionalFile> GetInstance() { return Singleton<OptionalFile>::GetInstance(); }
 
   std::string& GetOptionalFile(const std::string& model_path, const std::string& path_name,
                                const std::string& file_name) {

@@ -79,7 +79,7 @@ class ModelInstance {
         break;
       default:
         throw std::runtime_error("Unsupported Tensor type.");
-    };
+    }
     return model_obj;
   }
 

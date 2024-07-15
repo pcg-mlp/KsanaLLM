@@ -2,14 +2,14 @@
 #
 # ==============================================================================
 
-import requests
 import multiprocessing
 import argparse
-import json
 import time
-import msgpack
-import numpy as np
 import base64
+
+import msgpack
+import requests
+import numpy as np
 
 
 def args_config():
@@ -30,6 +30,7 @@ def post_request_msgpack(serv, data, queue=None):
         return msgpack.unpackb(response.content)
     else:
         queue.put(msgpack.unpackb(response.content))
+
 
 def python_tensor_to_numpy(python_tensor):
     """
@@ -83,13 +84,15 @@ def python_tensor_to_numpy(python_tensor):
 
     return numpy_array
 
+
 def show_response(data, result):
     if isinstance(result, dict) and "response" in result:
         for response in result["response"]:
             target = response["target_name"]
             python_tensor = response["tensor"]
             print(
-                f"input_token_ids : {result['input_token_ids']}, target : {target}, tensor : \n{python_tensor_to_numpy(python_tensor)}")
+                f"input_token_ids : {result['input_token_ids']}, target : {target}, "
+                f"tensor : \n{python_tensor_to_numpy(python_tensor)}")
     else:
         print(result)
 
@@ -98,7 +101,8 @@ if __name__ == "__main__":
     serv = "http://" + args.host + ":" + str(args.port) + "/forward"
 
     text_list = [
-        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n你好。<|im_end|>\n<|im_start|>assistant",
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n你好。<|im_end|>\n"
+        "<|im_start|>assistant",
     ]
 
     multi_proc_list = []

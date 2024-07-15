@@ -91,7 +91,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
     }
   }
 
-  model_config.max_token_num = int(derived_max_model_len);
+  model_config.max_token_num = static_cast<int>(derived_max_model_len);
   NLLM_LOG_DEBUG << "Model Max Token Num = " << model_config.max_token_num;
 }
 
@@ -165,7 +165,7 @@ void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &mo
                                    model_config.quant_config.group_size);
     }
   }
-  
+
   ParseModelMaxLength(config_json, model_config);
 
   size_t size_per_head = model_config.hidden_units / model_config.head_num;
@@ -367,7 +367,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
         "The number of key-value heads must exceed that of TP and must be an integer multiple of TP.");
   }
 
-  // TODO: Model with GQA not supported prefix caching currently.
+  // TODO(zezhao): Model with GQA not supported prefix caching currently.
   if (model_config.head_num != model_config.num_key_value_heads) {
     block_manager_config_.prefix_cache_len = 0;
   }

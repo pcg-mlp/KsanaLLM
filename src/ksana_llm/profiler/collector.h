@@ -1,6 +1,7 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+#pragma once
 
 #include <mutex>
 #include <numeric>
@@ -29,7 +30,7 @@ class ProfileCollector {
   };
 
  public:
-  ProfileCollector(const ProfilerConfig& profiler_config);
+  explicit ProfileCollector(const ProfilerConfig& profiler_config);
   ~ProfileCollector();
 
   // Report values of different types.

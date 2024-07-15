@@ -49,7 +49,6 @@ StreamT<DEVICE_TYPE_ASCEND>::StreamT(int device_id) : device_id_(device_id) {
 #ifdef WITH_ACL_ATB
   g_context_manager.GetDeviceATBContext(device_id)->SetExecuteStream(acl_stream_);
 #endif
-
 }
 
 void StreamT<DEVICE_TYPE_ASCEND>::Destroy() {
@@ -230,7 +229,7 @@ DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl() {
     return TYPE_UINT8;
   } else if (std::is_same<U, unsigned int>::value || std::is_same<U, const unsigned int>::value) {
     return TYPE_UINT32;
-  } else if (std::is_same<U, unsigned long>::value || std::is_same<U, const unsigned long>::value) {
+  } else if (std::is_same<U, uint64_t>::value || std::is_same<U, const uint64_t>::value) {
     return TYPE_UINT64;
   } else if (std::is_same<U, bool>::value || std::is_same<U, const bool>::value) {
     return TYPE_BOOL;
@@ -249,7 +248,7 @@ template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<uint8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned int>();
-template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned long>();
+template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned uint64_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<bool>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<char>();
 

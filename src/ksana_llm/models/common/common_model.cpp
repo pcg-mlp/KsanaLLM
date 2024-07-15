@@ -222,14 +222,14 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
 
   // get maximum matmul workspace size and malloc workspace buffer
   std::vector<int> each_size = {
-    attn_qkv_proj_layer_->GetWorkSpaceSize(), attn_o_proj_layer_->GetWorkSpaceSize(),
-    mlp_gate_proj_layer_->GetWorkSpaceSize(), mlp_up_proj_layer_->GetWorkSpaceSize(),
-    mlp_down_proj_layer_->GetWorkSpaceSize(), lm_head_proj_layer_->GetWorkSpaceSize(),
+      attn_qkv_proj_layer_->GetWorkSpaceSize(), attn_o_proj_layer_->GetWorkSpaceSize(),
+      mlp_gate_proj_layer_->GetWorkSpaceSize(), mlp_up_proj_layer_->GetWorkSpaceSize(),
+      mlp_down_proj_layer_->GetWorkSpaceSize(), lm_head_proj_layer_->GetWorkSpaceSize(),
   };
   int shared_matmul_workspace_buffer_size = *std::max_element(each_size.begin(), each_size.end());
   if (shared_matmul_workspace_buffer_size > 0) {
-    STATUS_CHECK_FAILURE(
-        CreateBufferTensor(shared_matmul_workspace_buffer_, {shared_matmul_workspace_buffer_size}, TYPE_UINT8));
+    STATUS_CHECK_FAILURE(CreateBufferTensor(shared_matmul_workspace_buffer_,
+                                            {static_cast<size_t>(shared_matmul_workspace_buffer_size)}, TYPE_UINT8));
   }
 
   // set matumul workspace buffer
@@ -508,7 +508,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
       continue;
     }
     // Determine whether to exit early
-    ret = ret & req.request_target->size() == req.response->size();
+    ret &= req.request_target->size() == req.response->size();
     if (rank_ != 0) continue;
     int output_len = 0;
     std::vector<std::pair<size_t, size_t>> slice_pos = it->second.slice_pos;
@@ -529,7 +529,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
     size_t chunk_size = GetTypeSize(output.dtype) * output.shape[1];
     // Update the response tensor with the sliced data.
     PythonTensor& ret_tensor = (*req.response)[stage];
-    ret_tensor.shape = {output_len, output.shape[1]};
+    ret_tensor.shape = {static_cast<size_t>(output_len), output.shape[1]};
     ret_tensor.dtype = GetTypeString(output.dtype);
     ret_tensor.data.resize(output_len * chunk_size);
     output_len = 0;
@@ -670,9 +670,9 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
     auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
 
     // vector<vector<float>> to list[tensor]
-    for (int i = 0; i < embeddings.size(); i++) {
+    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
       torch::Tensor input_refit_embedding_tensor =
-          torch::from_blob(embeddings[i].data(), {embeddings[i].size()}, options);
+          torch::from_blob(embeddings[i].data(), {static_cast<int64_t>(embeddings[i].size())}, options);
       tensors[i] =
           pybind11::reinterpret_borrow<pybind11::object>(py::handle(THPVariable_Wrap(input_refit_embedding_tensor)));
     }
@@ -683,7 +683,7 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
 
     // list[tensor] to vector<vector<float>>
     embeddings.resize(tensors.size());
-    for (int i = 0; i < embeddings.size(); i++) {
+    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
       py::object value_obj = py::reinterpret_borrow<py::object>(tensors[i]);
       torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(value_obj.ptr());
       int64_t output_number = input_refit_embedding_tensor.numel();

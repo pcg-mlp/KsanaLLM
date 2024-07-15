@@ -21,7 +21,7 @@ class ThreadPool {
  public:
   using Task = std::function<void()>;
 
-  ThreadPool(size_t size) : size_(size) {}
+  explicit ThreadPool(size_t size) : size_(size) {}
 
   ~ThreadPool() {}
 

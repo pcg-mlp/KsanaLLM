@@ -36,9 +36,9 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   // TODO(karlluo): our kernel is more efficient when big n
   if (k < CUBE_CORE_NUM) {
     T* bias_device = nullptr;
-    llm_kernels::ascend::InvokeMatMul<T>(m, n, k, (T*)matmul_input_buf_ptr, (T*)matmul_weight, bias_device,
-                                         (T*)matmul_output_buf_ptr, context_->GetComputeStreams()[rank_].Get(),
-                                         GetWorkSpaceFunc());
+    llm_kernels::ascend::InvokeMatMul<T>(
+        m, n, k, reinterpret_cast<T*>(matmul_input_buf_ptr), reinterpret_cast<T*>(matmul_weight), bias_device,
+        reinterpret_cast<T*>(matmul_output_buf_ptr), context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   } else {
     int mm_type = 0;
     llm_kernels::ascend::MatMul(matmul_input, matmul_weight, mm_type, &matmul_output,
