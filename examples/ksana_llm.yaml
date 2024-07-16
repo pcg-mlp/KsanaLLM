@@ -63,4 +63,4 @@ model_spec:
   # 基础模型配置，只能有一个
   base_model:
     # 模型路径
-    model_dir: /model/llama-hf/13B/
+    model_dir: /model/qwen2-hf/0.5B
