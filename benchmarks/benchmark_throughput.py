@@ -91,24 +91,24 @@ class BenchmarkStreamMetrics:
     avg_first_token_latency: float = 0.  # TTFT
     median_first_token_latency: float = 0.
     p99_first_token_latency: float = 0.
-    avg_latency_per_out_token: float = 0.  # TPOT
-    median_latency_per_out_token: float = 0.
-    p99_latency_per_out_token: float = 0.
     avg_inter_token_latency: float = 0.  # ITL
     median_inter_token_latency: float = 0.
     p99_inter_token_latency: float = 0.
+    avg_latency_per_out_token: float = 0.  # TPOT
+    median_latency_per_out_token: float = 0.
+    p99_latency_per_out_token: float = 0.
 
     def __str__(self):
         return '\n'.join([
             f"Average TTFT: {self.avg_first_token_latency:.3f} s",
             f"Median TTFT: {self.median_first_token_latency:.3f} s",
             f"P99 TTFT: {self.p99_first_token_latency:.3f} s",
-            f"Average TPOT: {self.avg_latency_per_out_token:.3f} s",
-            f"Median TPOT: {self.median_latency_per_out_token:.3f} s",
-            f"P99 TPOT: {self.p99_latency_per_out_token:.3f} s",
             f"Average ITL: {self.avg_inter_token_latency:.3f} s",
             f"Median ITL: {self.median_inter_token_latency:.3f} s",
             f"P99 ITL: {self.p99_inter_token_latency:.3f} s",
+            f"Average TPOT: {self.avg_latency_per_out_token:.3f} s",
+            f"Median TPOT: {self.median_latency_per_out_token:.3f} s",
+            f"P99 TPOT: {self.p99_latency_per_out_token:.3f} s",
         ])
 
 
@@ -129,19 +129,22 @@ def args_config():
                         help='col_idx to be read from the input csv')
     parser.add_argument('--output_csv',
                         type=str,
-                        default="",
+                        default=None,
                         help='output csv file path')
     parser.add_argument('--perf_csv',
                         type=str,
-                        default="",
+                        default=None,
                         help='performance result csv file path')
     parser.add_argument("--request_rate",
                         type=float,
                         default=float("inf"),
                         help="Number of requests per second. If this is inf, "
                         "then all the requests are sent at time 0. "
-                        "Otherwise, we use Poisson process to synthesize "
-                        "the request arrival times.")
+                        "Otherwise, we synthesize the request arrival times.")
+    parser.add_argument("--seed", type=int, default=0, help="random seed")
+    parser.add_argument("--random",
+                        action="store_true",
+                        help="Randomize request arrival time.")
     parser.add_argument("--request_rate_step",
                         type=float,
                         default=1.0,
@@ -266,6 +269,7 @@ async def generate_prompt_async(
     input_requests: List[str],
     request_rate: float,
     concurrency: int,
+    random: bool,
 ) -> AsyncGenerator[str, None]:
     input_requests = enumerate(input_requests)
     # Number of requests already sent at the same time
@@ -283,8 +287,12 @@ async def generate_prompt_async(
             continue
         request_num = 0
 
-        # Sample the request interval from the exponential distribution.
-        interval = np.random.exponential(1.0 / (request_rate / concurrency))
+        if random:
+            # Sample the request interval from the exponential distribution.
+            interval = np.random.exponential(1.0 / (request_rate / concurrency))
+        else:
+            # Request arrives uniformly.
+            interval = 1.0 / (request_rate / concurrency)
         # The next request will be sent after the interval.
         await asyncio.sleep(interval)
 
@@ -469,12 +477,13 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
     # Asynchronously generate prompts with the specified request rate
     async for req_id, prompt in generate_prompt_async(inputs,
                                                       args.request_rate,
-                                                      args.concurrency):
+                                                      args.concurrency,
+                                                      args.random):
         # Format the prompt using the affix dictionary for the specified model type
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
-            send_request_async(args, prompt, api_url, req_id, result_list, pbar, 
+            send_request_async(args, prompt, api_url, req_id, result_list, pbar,
                                 tokenizer))
         # Add the task to the list of tasks
         tasks.append(task)
@@ -494,7 +503,8 @@ async def benchmark_sync(args: argparse.Namespace, api_url: str,
     result_list = [""] * len(inputs)
     # Asynchronously generate prompts with the specified request rate
     async for req_id, prompt in generate_prompt_async(inputs, args.request_rate,
-                                                      args.concurrency):
+                                                      args.concurrency,
+                                                      args.random):
         # Format the prompt using the affix dictionary for the specified model type
         prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Await until last request finished
@@ -535,6 +545,8 @@ def run_benchmark(args: argparse.Namespace, api_url: str, inputs: List[str],
 
 def main(args: argparse.Namespace):
     global REQUEST_LATENCY
+
+    np.random.seed(args.seed)
 
     tokenizer = None
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
@@ -625,6 +637,14 @@ def main(args: argparse.Namespace):
             stream_metrics.median_first_token_latency = np.median(first_token_latencies)
             stream_metrics.p99_first_token_latency = np.percentile(first_token_latencies, 99)
 
+            inter_token_latencies = [
+                inter_token_latency for _, _, _, _, _, _, inter_token_latencies in REQUEST_LATENCY
+                for inter_token_latency in inter_token_latencies
+            ]
+            stream_metrics.avg_inter_token_latency = np.mean(inter_token_latencies)
+            stream_metrics.median_inter_token_latency = np.median(inter_token_latencies)
+            stream_metrics.p99_inter_token_latency = np.percentile(inter_token_latencies, 99)
+
             latencies_per_out_token = [
                 (latency - first_token_latency) / (output_tokens_num - 1)
                 for _, _, _, output_tokens_num, latency, first_token_latency, _ in REQUEST_LATENCY
@@ -635,27 +655,19 @@ def main(args: argparse.Namespace):
                 stream_metrics.median_latency_per_out_token = np.median(latencies_per_out_token)
                 stream_metrics.p99_latency_per_out_token = np.percentile(latencies_per_out_token, 99)
 
-            inter_token_latencies = [
-                inter_token_latency for _, _, _, _, _, _, inter_token_latencies in REQUEST_LATENCY
-                for inter_token_latency in inter_token_latencies
-            ]
-            stream_metrics.avg_inter_token_latency = np.mean(inter_token_latencies)
-            stream_metrics.median_inter_token_latency = np.median(inter_token_latencies)
-            stream_metrics.p99_inter_token_latency = np.percentile(inter_token_latencies, 99)
-
             print(stream_metrics)
 
         perf_result_list.append((metrics, stream_metrics))
         REQUEST_LATENCY.clear()
 
-    if args.output_csv != "":
+    if args.output_csv is not None:
         with open(args.output_csv, "w", newline='') as fs:
             writer = csv.writer(fs)
             for idx in range(len(result_list)):
                 result = result_list[idx]
                 writer.writerow([result.replace("</s>", "")])
 
-    if args.perf_csv != "":
+    if args.perf_csv is not None:
         with open(args.perf_csv, "w", newline='') as fs:
             writer = csv.writer(fs)
             header = ["Request rate", "Concurrency", "Total latency", "Request throughput", "Avg latency",
@@ -663,8 +675,8 @@ def main(args: argparse.Namespace):
                       "Token throughput"]
             if args.stream:
                 header.extend(["Avg TTFT", "Median TTFT", "P99 TTFT",
-                               "Avg TPOT", "Median TPOT", "P99 TPOT",
-                               "Avg ITL", "Median ITL", "P99 ITL"])
+                               "Avg ITL", "Median ITL", "P99 ITL",
+                               "Avg TPOT", "Median TPOT", "P99 TPOT"])
             writer.writerow(header)
             for (metrics, stream_metrics) in perf_result_list:
                 row = [f"{value:.2f}" for value in metrics.__dict__.values()]
