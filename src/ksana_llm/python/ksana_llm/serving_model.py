@@ -290,10 +290,10 @@ class ServingModel(object):
             """
             value = getattr(generation_config, key, default_val)
             return default_val if value is None else value
+        
         sampling_config.num_beams = \
-            get_generation_value(generation_config, 'num_beams', 1)
-        sampling_config.topk = \
-            get_generation_value(generation_config, 'top_k', 1)
+            get_generation_value(generation_config, 'num_beams', 1) 
+        sampling_config.topk = get_generation_value(generation_config, 'top_k', 1)
         sampling_config.topp = \
             get_generation_value(generation_config, 'top_p', 0.0)
         sampling_config.temperature = \
@@ -312,6 +312,8 @@ class ServingModel(object):
             get_generation_value(generation_config, 'stop_token_ids', [])
         sampling_config.ignore_eos = \
             get_generation_value(generation_config, 'ignore_eos', False)
+        
+        self._check_do_sample_params(generation_config, sampling_config, get_generation_value)
 
         if 'input_refit_embedding' in kwargs and 'pos' in kwargs['input_refit_embedding']:
             ksana_python_input.input_refit_embedding.pos = kwargs['input_refit_embedding']['pos']
@@ -331,3 +333,18 @@ class ServingModel(object):
         else:
             _, streaming_iterator = self._serving.generate_streaming(ksana_python_input)
             return PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
+
+    def _check_do_sample_params(self, generation_config, sampling_config, get_generation_value):
+        do_sample = True
+        if get_generation_value(generation_config, 'do_sample', None) is False or (sampling_config.topk == 1):
+            do_sample = False
+        
+        if sampling_config.topk == 1 and get_generation_value(generation_config, 'do_sample', None) is True:
+            print(f"Generation parameter topk cannot be 1 when do_sample is explicitly set to True!")
+        
+        # if do_sample=False, then set topk, topp and temperature to default value
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/generation/configuration_utils.py#L560
+        if not do_sample:
+            sampling_config.topk = 1
+            sampling_config.topp = 1.0
+            sampling_config.temperature = 1.0
