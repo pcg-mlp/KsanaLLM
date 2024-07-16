@@ -9,7 +9,7 @@
 #include "csrc/kernels/ascend/rmsnorm/rmsnorm_tiling.h"
 #include "csrc/utils/ascend/common.h"
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
 #include "atb/infer_op_params.h"
 #include "atb/operation.h"
 #endif
@@ -64,7 +64,7 @@ template void InvokeRmsLayerNorm(float* out, float* input, float* gamma, float* 
                                  const int32_t m, const int32_t n, aclrtStream& stream,
                                  void (*ws_func)(size_t, void**));
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
 template <typename DTYPE>
 void InvokeATBRmsNorm(DTYPE* out, DTYPE* input, DTYPE* gamma, DTYPE* beta, const float layernorm_eps, const int32_t m,
                       const int32_t n, aclrtStream& stream, void (*ws_func)(size_t, void**)) {

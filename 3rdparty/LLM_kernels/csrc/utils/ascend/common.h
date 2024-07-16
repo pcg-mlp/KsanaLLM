@@ -16,7 +16,7 @@
 #include "acl/acl_op_compiler.h"
 #include "aclnn/acl_meta.h"
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
 #  include "atb/types.h"
 #endif
 
@@ -42,7 +42,7 @@ namespace utils {
     printf(message, ##__VA_ARGS__); \
   } while (0)
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
 #  define ATB_CHECK_RET(expr)                                                          \
     do {                                                                               \
       atb::Status ret = (expr);                                                        \
@@ -137,5 +137,55 @@ struct AscendNPUDeviceAttribute {
 
 void LoadDeviceAttribute(const std::string& platform_config_path, AscendNPUDeviceAttribute& device_attr);
 
+// ACLNNMatmulComputeType(int8_t, Calculation Input): Integer type on the Host side, determines which calculation logic
+// the Cube unit uses for operations. The data type supports INT8, and the supported enumeration values are as follows:
+// 0: KEEP_DTYPE - Keep the input data type for calculation. When the input is FLOAT, the Cube calculation unit of the
+// Atlas training series products does not support it. An error will occur if 0 is selected. 1:
+// ALLOW_FP32_DOWN_PRECISION - Allow the input data to be downcast for calculation. When the input is FLOAT, the Atlas
+// training series products convert it to FLOAT16 for calculation, and the Atlas A2 training series products convert it
+// to HFLOAT32 for calculation. 2: USE_FP16 - Allow conversion to the data type FLOAT16 for calculation. When the input
+// data type is FLOAT, it is converted to FLOAT16 for calculation. 3: USE_HF32 - Allow conversion to the data type
+// HFLOAT32 for calculation. When the input is FLOAT, the Cube calculation unit of the Atlas training series products
+// does not support it. An error will occur if 3 is selected. The Atlas A2 training series products convert it to
+// HFLOAT32 for calculation.
+enum ACLNNMatmulComputeType { KEEP_DTYPE = 0, ALLOW_FP32_DOWN_PRECISION = 1, USE_FP16 = 2, USE_HF32 = 3 };
+
+#ifdef ENABLE_ACL_ATB
+static const std::string GetATBErrorString(atb::ErrorType error) {
+  static const std::unordered_map<atb::ErrorType, std::string> error_to_string_map{
+      {atb::NO_ERROR, "NO_ERROR"},
+      {atb::ERROR_INVALID_PARAM, "ERROR_INVALID_PARAM"},
+      {atb::ERROR_INVALID_GRAPH, "ERROR_INVALID_GRAPH"},
+      {atb::ERROR_INTERNAL_ERROR, "ERROR_INTERNAL_ERROR"},
+      {atb::ERROR_RT_FAIL, "ERROR_RT_FAIL"},
+      {atb::ERROR_INVALID_IN_TENSOR_NUM, "ERROR_INVALID_IN_TENSOR_NUM"},
+      {atb::ERROR_INVALID_TENSOR_DTYPE, "ERROR_INVALID_TENSOR_DTYPE"},
+      {atb::ERROR_INVALID_TENSOR_FORMAT, "ERROR_INVALID_TENSOR_FORMAT"},
+      {atb::ERROR_INVALID_TENSOR_DIM, "ERROR_INVALID_TENSOR_DIM"},
+      {atb::ERROR_INVALID_TENSOR_SIZE, "ERROR_INVALID_TENSOR_SIZE"},
+      {atb::ERROR_OPERATION_NULL_RUNNER, "ERROR_OPERATION_NULL_RUNNER"},
+      {atb::ERROR_GRAPH_INFERSHAPE_FUNC_FAIL, "ERROR_GRAPH_INFERSHAPE_FUNC_FAIL"},
+      {atb::ERROR_CANN_ERROR, "ERROR_CANN_ERROR"},
+      {atb::ERROR_INVALID_TENSOR_INI_MATCH, "ERROR_INVALID_TENSOR_INI_MATCH"}};
+  if (error_to_string_map.count(error) != 0ul) {
+    return error_to_string_map.at(error);
+  } else {
+    return "UNKOWN, refer: "
+           "https://www.hiascend.com/document/detail/zh/mindie/1.0.RC1/mindiert/rtdev/ascendtb_01_0008.html";
+  }
+}
+
+template <typename T>
+void CheckATBError(T result, const char* func, const char* file, const int line) {
+  if (result != ACL_SUCCESS) {
+    std::ostringstream ss;
+    ss << "ATB runtime error " << result << ": " << GetATBErrorString(result) << " " << file << ":" << line << "@"
+       << func;
+    throw std::runtime_error(ss.str());
+  }
+}
+
+#  define ATB_CHECK(val) CheckATBError((val), #val, __FILE__, __LINE__)
+#endif  // ENABLE_ACL_ATB
 }  // namespace utils
 }  // namespace llm_kernels

@@ -9,6 +9,13 @@
 namespace ksana_llm {
 
 template <typename T>
+Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  context_ = context;
+  rank_ = rank;
+  return Status();
+}
+
+template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   InvokeMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_],
                   static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
@@ -18,7 +25,6 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
                   context_->GetComputeStreams()[rank_].Get());
   output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
   output_tensors[0].dtype = input_tensors[0].dtype;
-
   return Status();
 }
 

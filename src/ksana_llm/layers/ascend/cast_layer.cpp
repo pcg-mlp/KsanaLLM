@@ -14,9 +14,9 @@ namespace ksana_llm {
 template <typename SRC_DTYPE>
 Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   GetBlockManager()->SetDeviceId(rank_);
-  Tensor* input_tensor_ptr = const_cast<Tensor*>(&(input_tensors[0]));
-  aclTensor* input_device_tensor_ptr = input_tensor_ptr->GetDeviceTensor();
-  std::vector<int64_t> input_shape = GetAclTensorShape(input_device_tensor_ptr);
+  std::vector<int64_t> input_shape(input_tensors[0].shape.size(), 0);
+  std::copy(input_tensors[0].shape.begin(), input_tensors[0].shape.end(), input_shape.begin());
+
   aclTensor* output_device_tensor_ptr = nullptr;
   void* output_buffer_space_ptr = output_tensors[0].GetPtr<void>();
   void* input_buffer_space_ptr = input_tensors[0].GetPtr<void>();
@@ -34,10 +34,7 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
   llm_kernels::ascend::InvokeCast<SRC_DTYPE, float>(
       reinterpret_cast<SRC_DTYPE*>(input_buffer_space_ptr), reinterpret_cast<float*>(output_buffer_space_ptr), seq_len,
       hidden_units_num, context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
-
-  if (input_tensors.size() == 1) {
-    output_tensors[0].shape = input_tensors[0].shape;
-  }
+  output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = DataType::TYPE_FP32;
   output_tensors[0].ResetDeviceTensor(output_device_tensor_ptr);
   return Status();

@@ -142,4 +142,7 @@ class GetDataTypeT {
   static DataType impl();
 };
 
+template <int T>
+void* GetRuntimeContextT(int device_id);
+
 }  // namespace ksana_llm

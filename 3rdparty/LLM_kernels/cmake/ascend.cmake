@@ -28,7 +28,7 @@ endif()
 set(ATB_VER "")
 
 if(EXISTS "${ATB_HOME_PATH}/set_env.sh")
-  add_definitions("-DWITH_ACL_ATB")
+  add_definitions("-DENABLE_ACL_ATB")
 
   # awk -F: '{ gsub(/ /, "", $0); if ($1 == "Ascend-mindie-atbVersion") print $2 }' /usr/local/Ascend/mindie/latest/mindie-rt/mindie-atb/version.info
   execute_process(COMMAND /bin/sh -c "\"${AWK}\" -F: '\{ gsub(/ /, \"\", $0); if ($1 == \"Ascend-mindie-atbVersion\") print $2 \}' ${ATB_HOME_PATH}/../version.info" OUTPUT_VARIABLE ATB_VER OUTPUT_STRIP_TRAILING_WHITESPACE)

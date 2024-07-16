@@ -139,4 +139,7 @@ class GetDataTypeT<DEVICE_TYPE_NVIDIA> {
   static DataType GetIntType();
 };
 
+template <>
+void* GetRuntimeContextT<DEVICE_TYPE_NVIDIA>(int device_id);
+
 }  // namespace ksana_llm

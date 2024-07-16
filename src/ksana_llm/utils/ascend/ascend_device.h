@@ -5,8 +5,8 @@
 
 #include "ksana_llm/utils/common_device.h"
 
-#ifdef WITH_ACL_ATB
-#  include "atb/context.h"
+#ifdef ENABLE_ACL_ATB
+#include "atb/context.h"
 #endif
 
 #include <unordered_map>
@@ -21,14 +21,14 @@ class AscendDeviceContextManager {
   // Get aclrtContext of device_id
   aclrtContext& GetDeviceContext(int device_id);
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
   // Get atb::Context of device_id
   atb::Context* GetDeviceATBContext(int device_id);
 #endif
 
  private:
   std::unordered_map<int, aclrtContext> acl_contexts_;
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
   // device_id => context
   // TODO(karlluo): maybe reuse aclrtContext and aclrtStream
   std::unordered_map<int, atb::Context*> acl_atb_contexts_;
@@ -158,5 +158,8 @@ class GetDataTypeT<DEVICE_TYPE_ASCEND> {
   template <class U>
   static DataType impl();
 };
+
+template <>
+void* GetRuntimeContextT<DEVICE_TYPE_ASCEND>(int device_id);
 
 }  // namespace ksana_llm

@@ -233,6 +233,15 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
                                             {static_cast<size_t>(shared_matmul_workspace_buffer_size)}, TYPE_UINT8));
   }
 
+#ifdef ENABLE_ACL
+  attn_qkv_proj_layer_->Init({}, context_, rank_);
+  attn_o_proj_layer_->Init({}, context_, rank_);
+  mlp_gate_proj_layer_->Init({}, context_, rank_);
+  mlp_up_proj_layer_->Init({}, context_, rank_);
+  mlp_down_proj_layer_->Init({}, context_, rank_);
+  lm_head_proj_layer_->Init({}, context_, rank_);
+#endif
+
   // set matumul workspace buffer
   attn_qkv_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
   attn_o_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);

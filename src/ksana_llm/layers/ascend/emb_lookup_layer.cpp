@@ -42,7 +42,7 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
     aclTensor* position_tensor = position_table.ResetDeviceTensor(
         DataType::TYPE_FP16,
         {static_cast<int64_t>(position_table.shape[0]), static_cast<int64_t>(position_table.shape[1])});
-    LookupEmbedding(input_tensor, position_tensor, position_table.GetDeviceTensor(), output_tensor,
+    LookupEmbedding(input_tensor, position_tensor, position_tensor, output_tensor,
                     context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   } else {
     LookupEmbedding(input_tensor, embedding_tensor, nullptr, output_tensor, context_->GetComputeStreams()[rank_].Get(),

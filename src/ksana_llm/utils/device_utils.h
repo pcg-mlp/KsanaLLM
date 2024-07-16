@@ -72,3 +72,5 @@ using Event = EventT<ACTIVE_DEVICE_TYPE>;
 #define Memcpy2DAsync Memcpy2DAsyncT<ACTIVE_DEVICE_TYPE>
 
 #define GetDataType GetDataTypeT<ACTIVE_DEVICE_TYPE>::impl
+
+#define GetRuntimeContext GetRuntimeContextT<ACTIVE_DEVICE_TYPE>

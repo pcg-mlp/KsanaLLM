@@ -247,4 +247,9 @@ template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<__nv_bfloat16>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<__nv_fp8_e4m3>();
 #endif
 
+template <>
+void* GetRuntimeContextT<DEVICE_TYPE_NVIDIA>(int device_id) {
+  return nullptr;
+}
+
 }  // namespace ksana_llm

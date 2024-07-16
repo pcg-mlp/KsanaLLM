@@ -15,7 +15,7 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
 #include "atb/types.h"
 #endif
 
@@ -111,45 +111,6 @@ void CheckACLError(T result, const char* func, const char* file, const int line)
 }
 
 #define ACL_CHECK(val) CheckACLError((val), #val, __FILE__, __LINE__)
-
-#ifdef WITH_ACL_ATB
-static const std::string GetATBErrorString(atb::ErrorType error) {
-  static const std::unordered_map<atb::ErrorType, std::string> error_to_string_map{
-      {NO_ERROR, "NO_ERROR"},
-      {ERROR_INVALID_PARAM, "ERROR_INVALID_PARAM"},
-      {ERROR_INVALID_GRAPH, "ERROR_INVALID_GRAPH"},
-      {ERROR_INTERNAL_ERROR, "ERROR_INTERNAL_ERROR"},
-      {ERROR_RT_FAIL, "ERROR_RT_FAIL"},
-      {ERROR_INVALID_IN_TENSOR_NUM, "ERROR_INVALID_IN_TENSOR_NUM"},
-      {ERROR_INVALID_TENSOR_DTYPE, "ERROR_INVALID_TENSOR_DTYPE"},
-      {ERROR_INVALID_TENSOR_FORMAT, "ERROR_INVALID_TENSOR_FORMAT"},
-      {ERROR_INVALID_TENSOR_DIM, "ERROR_INVALID_TENSOR_DIM"},
-      {ERROR_INVALID_TENSOR_SIZE, "ERROR_INVALID_TENSOR_SIZE"},
-      {ERROR_OPERATION_NULL_RUNNER, "ERROR_OPERATION_NULL_RUNNER"},
-      {ERROR_GRAPH_INFERSHAPE_FUNC_FAIL, "ERROR_GRAPH_INFERSHAPE_FUNC_FAIL"},
-      {ERROR_CANN_ERROR, "ERROR_CANN_ERROR"},
-      {ERROR_INVALID_TENSOR_INI_MATCH, "ERROR_INVALID_TENSOR_INI_MATCH"}};
-  if (error_to_string_map.count(error) != 0ul) {
-    return error_to_string_map.at(error);
-  } else {
-    return "UNKOWN, refer: "
-           "https://www.hiascend.com/document/detail/zh/mindie/1.0.RC1/mindiert/rtdev/ascendtb_01_0008.html";
-  }
-}
-
-template <typename T>
-void CheckATBError(T result, const char* func, const char* file, const int line) {
-  if (result != ACL_SUCCESS) {
-    NLLM_LOG_ERROR << fmt::format("ATB runtime error {}: {} {}:{}@{}", result, GetATBErrorString(result), file, line,
-                                  func);
-    abort();
-    exit(RetCode::RET_INVALID_ARGUMENT);
-  }
-}
-
-#define ATB_CHECK(val) CheckATBError((val), #val, __FILE__, __LINE__)
-
-#endif
 
 std::vector<int>& GetPaddedTokenSize();
 

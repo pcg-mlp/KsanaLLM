@@ -15,7 +15,7 @@ template <typename DTYPE>
 void InvokeRmsLayerNorm(DTYPE* out, DTYPE* input, DTYPE* gamma, DTYPE* beta, const float layernorm_eps, const int32_t m,
                         const int32_t n, aclrtStream& stream, void (*ws_func)(size_t, void**));
 
-#ifdef WITH_ACL_ATB
+#ifdef ENABLE_ACL_ATB
 template <typename DTYPE>
 void InvokeATBRmsNorm(DTYPE* out, DTYPE* input, DTYPE* gamma, DTYPE* beta, const float layernorm_eps, const int32_t m,
                       const int32_t n, aclrtStream& stream, void (*ws_func)(size_t, void**));
