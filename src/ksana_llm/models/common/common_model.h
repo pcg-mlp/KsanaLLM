@@ -112,9 +112,6 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // Whether to add bias values during the QKV calculation.
   bool qkv_add_bias_;
 
-  // Whether or not the model use GQA
-  bool is_gqa_;
-
   Tensor tensor_buffer_0_;
   Tensor tensor_buffer_1_;
   Tensor tensor_buffer_2_;

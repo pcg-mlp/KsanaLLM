@@ -376,11 +376,6 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
         "The number of key-value heads must exceed that of TP and must be an integer multiple of TP.");
   }
 
-  // TODO(zezhao): Model with GQA not supported prefix caching currently.
-  if (model_config.head_num != model_config.num_key_value_heads) {
-    block_manager_config_.prefix_cache_len = 0;
-  }
-
   if (batch_manager_config_.batch_scheduler_config.max_token_len > 0) {
     if (batch_manager_config_.batch_scheduler_config.max_token_len > model_config.max_token_num) {
       NLLM_LOG_ERROR << fmt::format(

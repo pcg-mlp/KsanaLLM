@@ -41,7 +41,6 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   int head_num_per_tp = head_num / tensor_para_size;
   int num_kv_heads_per_tp = model_config_.num_key_value_heads / tensor_para_size;
   int stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
-  is_gqa_ = (num_kv_heads_per_tp != head_num_per_tp);
   int max_position_embeddings = model_config_.max_position_embeddings;
   float rope_theta = model_config_.rope_theta;
 
@@ -259,13 +258,13 @@ Status CommonModel<T>::AddPrefixCache(std::vector<Tensor>& mmha_origin_input, st
   // and populate them into the mmha prefix input tensor.
   size_t total_token_num = 0;
   size_t dtype_size = GetTypeSize(mmha_origin_input[0].dtype);
-  size_t per_size = mmha_origin_input[0].shape[1] / 3 * dtype_size;
+  size_t size_per_token = mmha_origin_input[0].shape[1] * dtype_size;
   for (size_t idx = 0; idx < model_input_->batch_size; ++idx) {
-    size_t src_offset = (model_input_->input_offset_list[idx] - model_input_->input_prefix_list[idx]) * per_size * 3;
+    size_t src_offset = (model_input_->input_offset_list[idx] - model_input_->input_prefix_list[idx]) * size_per_token;
     size_t input_token_num = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
     size_t prefix_token_num = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
-    size_t copy_size = (input_token_num - prefix_token_num) * per_size * 3;
-    size_t dst_offset = (model_input_->input_offset_list[idx] + prefix_token_num) * per_size * 3;
+    size_t copy_size = (input_token_num - prefix_token_num) * size_per_token;
+    size_t dst_offset = (model_input_->input_offset_list[idx] + prefix_token_num) * size_per_token;
     MemcpyAsync(mmha_prefix_input[0].GetPtr<void>() + dst_offset, mmha_origin_input[0].GetPtr<void>() + src_offset,
                 copy_size, MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
     total_token_num += input_token_num;
@@ -283,12 +282,12 @@ Status CommonModel<T>::RemovePrefixCache(std::vector<Tensor>& mmha_prefix_output
   size_t dst_offset = 0;
   size_t src_offset = 0;
   size_t dtype_size = GetTypeSize(mmha_prefix_output[0].dtype);
-  size_t per_size = mmha_prefix_output[0].shape[1] * dtype_size;
+  size_t size_per_token = mmha_prefix_output[0].shape[1] * dtype_size;
   for (size_t idx = 0; idx < model_input_->batch_size; ++idx) {
     size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
     size_t input_length = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
-    src_offset += prefix_length * per_size;
-    size_t copy_size = per_size * (input_length - prefix_length);
+    src_offset += prefix_length * size_per_token;
+    size_t copy_size = size_per_token * (input_length - prefix_length);
 
     MemcpyAsync(mmha_output[0].GetPtr<void>() + dst_offset, mmha_prefix_output[0].GetPtr<void>() + src_offset,
                 copy_size, MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
@@ -305,12 +304,7 @@ bool CommonModel<T>::IsPrefixCachingComputationReuse() {
   // NPU device does not currently support prefix caching for computation reuse.
   return false;
 #endif
-
-  // When the model uses GQA, the PrefixCaching computation reuse optimization is not currently supported.
-  if (GetBlockManager()->GetPrefixCacheBlocksNumber() == 0 || is_gqa_) {
-    return false;
-  }
-  return true;
+  return GetBlockManager()->GetPrefixCacheBlocksNumber() > 0;
 }
 
 template <typename T>
