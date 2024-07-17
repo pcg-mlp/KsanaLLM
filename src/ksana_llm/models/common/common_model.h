@@ -84,22 +84,22 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // The model communicator.
   std::shared_ptr<ModelCommunicator<T>> model_communicator_;
 
-  std::shared_ptr<EmbLookupLayer<T>> emb_lookup_layer_;
-  std::shared_ptr<CpuEmbLookupLayer<T>> cpu_emb_lookup_layer_;
-  std::shared_ptr<LayernormLayer<T>> layernorm_layer_;
+  std::shared_ptr<BaseLayer> emb_lookup_layer_;
+  std::shared_ptr<BaseLayer> cpu_emb_lookup_layer_;
+  std::shared_ptr<BaseLayer> layernorm_layer_;
   std::vector<std::shared_ptr<BaseLayer>> flash_attention_layers_;
   std::vector<std::shared_ptr<BaseLayer>> paged_attention_layers_;
-  std::shared_ptr<AddLayer<T>> add_layer_;
-  std::shared_ptr<SiluMulLayer<T>> silu_mul_layer_;
+  std::shared_ptr<BaseLayer> add_layer_;
+  std::shared_ptr<BaseLayer> silu_mul_layer_;
   std::shared_ptr<BaseLayer> attn_qkv_proj_layer_;
   std::shared_ptr<BaseLayer> attn_o_proj_layer_;
   std::shared_ptr<BaseLayer> mlp_gate_proj_layer_;
   std::shared_ptr<BaseLayer> mlp_up_proj_layer_;
   std::shared_ptr<BaseLayer> mlp_down_proj_layer_;
   std::shared_ptr<BaseLayer> lm_head_proj_layer_;
-  std::shared_ptr<AssembleLastTokenLayer<T>> assemble_last_token_layer_;
-  std::shared_ptr<CastLayer<T>> cast_layer_;
-  std::shared_ptr<InputRefitLayer<T>> input_refit_layer_;
+  std::shared_ptr<BaseLayer> assemble_last_token_layer_;
+  std::shared_ptr<BaseLayer> cast_layer_;
+  std::shared_ptr<BaseLayer> input_refit_layer_;
 
   std::shared_ptr<py::object> plugin_;
 

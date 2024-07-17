@@ -50,17 +50,18 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
   int max_tokens = input_tensors[7].shape[1];
   int batch_size = input_tensors[7].shape[0];
   int total_tokens = input_tensors[0].shape[0];
-  void** k_list = (kv_list.GetPtr<void*>()) + (size_t)layer_index_ * layer_block_num * 2;
+  void** k_list = (kv_list.GetPtr<void*>()) + (size_t)this->layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
   Tensor& out = output_tensors[0];
   out.dtype = query.dtype;
-  out.shape = {query.shape[0], num_heads_ * (size_t)head_size_};
+  out.shape = {query.shape[0], this->num_heads_ * (size_t)this->head_size_};
   InvokePagedAttention<SCALAR_T, CACHE_T, FP8_E5M2>(
       out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(), max_tokens,
-      context_->GetComputeStreams()[rank_].Get(), cache_offset.GetPtr<void>(), batch_size, num_heads_, head_size_,
-      num_kv_heads_, stride_size_, block_token_num_, batch_size, rotary_embedding_pos.GetPtr<void>(),
-      rotary_embedding_mask.GetPtr<void>(), total_tokens, rotary_embedding_cuda_, workspace.GetPtr<void>(),
-      workspace.GetTotalBytes(), rank_, alibi_slopes_, qkv_workspace.GetPtr<void>());
+      this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(),
+      batch_size, this->num_heads_, this->head_size_, this->num_kv_heads_, this->stride_size_,
+      this->block_token_num_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
+      total_tokens, this->rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(),
+      this->rank_, this->alibi_slopes_, qkv_workspace.GetPtr<void>());
   return Status();
 }
 

@@ -42,11 +42,11 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
   int total_block_num = input_tensors[7].shape[2];
 
   this->ascend_paged_attn_->Forward(output, qkv_tensor, seq_offset, reinterpret_cast<void**>(kv_list), block_offset,
-                                    rope_pos, batch_size, total_token_num, total_block_num, layer_index_, true,
-                                    context_->GetComputeStreams()[rank_].Get());
+                                    rope_pos, batch_size, total_token_num, total_block_num, this->layer_index_, true,
+                                    this->context_->GetComputeStreams()[this->rank_].Get());
 
   output_tensors[0].shape[0] = input_tensors[0].shape[0];
-  output_tensors[0].shape[1] = num_heads_ * head_size_;
+  output_tensors[0].shape[1] = this->num_heads_ * this->head_size_;
   output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();

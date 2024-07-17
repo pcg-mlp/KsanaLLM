@@ -11,10 +11,8 @@ from concurrent import futures
 import torch
 from transformers.generation.streamers import BaseStreamer
 from transformers.modeling_utils import PreTrainedModel
-from transformers.configuration_utils import PretrainedConfig
 from transformers.generation.configuration_utils import GenerationConfig
 
-from transformers.generation.utils import GenerateOutput
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 
@@ -67,7 +65,7 @@ class KsanaPlugin(object):
                 return KsanaPlugin()
             else:
                 return None
-        except Exception as e:
+        except Exception:
             # TODO: need a better log
             return None
 

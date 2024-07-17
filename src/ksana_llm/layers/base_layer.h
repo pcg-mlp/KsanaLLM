@@ -25,6 +25,8 @@ class BaseLayer {
 
   virtual void SetWorkSpaceBuffer(Tensor buffer) { workspace_buffer_ = buffer; }
 
+  virtual void Clear() {}
+
  protected:
   int rank_;
   std::shared_ptr<Context> context_;
