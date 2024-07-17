@@ -183,6 +183,16 @@ GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
 #endif
 #undef GET_TORCH_DATA_TYPE
 
+// Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
+// intended for use in testing accuracy outcomes only.
+static bool kContextDecodeUseFP8Cache = []() -> bool {
+  const char* val = std::getenv("ContextDecodeUseFP8Cache");
+  if (val != nullptr) {
+    return true;
+  }
+  return false;
+}();
+
 template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens,
@@ -239,6 +249,14 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   c10::optional<at::Tensor> alibi_slopes_tensor = c10::nullopt;
   if (alibi_slopes.has_value()) {
     alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
+  }
+  // Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
+  // intended for use in testing accuracy outcomes only.
+  if (kContextDecodeUseFP8Cache && FP8_E5M2) {
+    llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
+        reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), k_tensor.size(0), k_tensor.size(1), stride_size, stream);
+    llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
+        reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), v_tensor.size(0), v_tensor.size(1), stride_size, stream);
   }
   std::vector<at::Tensor> mha_output =
       mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
