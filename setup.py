@@ -4,6 +4,7 @@
 
 import os
 import pathlib
+import shutil
 from distutils.file_util import copy_file
 
 from setuptools import setup, Extension, find_packages
@@ -84,6 +85,21 @@ class build_ext(build_ext_orig):
             # for wheel pacakge
             copy_file(str(build_temp_lib.joinpath(target_lib)),
                       str(extdir.parent.absolute()))
+        # copy optional weight map to cwd for wheel package
+        need_dirs = [
+            'weight_map', 
+            'ksana_plugin'
+        ]
+        for need_dir in need_dirs:
+            src_dir = os.path.join('src/ksana_llm/python', need_dir)
+            dst_dir = os.path.join(extdir.parent.absolute(), os.path.join("ksana_llm", need_dir))
+            shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
+        need_files = ["serving_server.py", "serving_generate_client.py", "serving_forward_client.py"]
+        for need_file in need_files:
+            src_dir = os.path.join('src/ksana_llm/python', need_file)
+            dst_dir = os.path.join(extdir.parent.absolute(), "ksana_llm")
+            copy_file(src_dir, dst_dir)
 
 
 setup(name='ksana_llm',
@@ -97,7 +113,6 @@ setup(name='ksana_llm',
       package_dir={
           '': 'src/ksana_llm/python',
       },
-      package_data={"": ["weight_map/*.json", "ksana_plugin/*.*"]},
       ext_modules=[CMakeExtension('ksana_llm')],
       python_requires='>=3',
       cmdclass={
