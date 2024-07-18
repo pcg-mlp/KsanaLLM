@@ -103,7 +103,7 @@ static const std::string GetACLErrorString(aclError error) {
 template <typename T>
 void CheckACLError(T result, const char* func, const char* file, const int line) {
   if (result != ACL_SUCCESS) {
-    NLLM_LOG_ERROR << fmt::format("ACL runtime error {}: {} {}:{}@{}", result, GetACLErrorString(result), file, line,
+    KLLM_LOG_ERROR << fmt::format("ACL runtime error {}: {} {}:{}@{}", result, GetACLErrorString(result), file, line,
                                   func);
     abort();
     exit(RetCode::RET_INVALID_ARGUMENT);

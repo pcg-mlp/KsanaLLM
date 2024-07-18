@@ -31,7 +31,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
   //   8: 用于存储 qk 的临时空间(TODO:)
   // output_tensors:
   //   0: paged attention output
-  // NLLM_LOG_WARNING <<"";
+  // KLLM_LOG_WARNING <<"";
   const Tensor& query = input_tensors[0];
   const Tensor& context_lens = input_tensors[1];
   // 块的位移情况

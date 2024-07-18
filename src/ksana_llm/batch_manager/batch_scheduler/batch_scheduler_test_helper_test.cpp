@@ -26,7 +26,7 @@ class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
 
     // 使用配置创建一个 BlockManagerSimulator 对象
     env_simulator = new BatchSchedulerEvironmentSimulator(block_manager_config, device_num);
-    NLLM_LOG_INFO << "Simulator start";
+    KLLM_LOG_INFO << "Simulator start";
   }
 
   // 在每个测试用例执行之后调用的函数
@@ -39,18 +39,18 @@ class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
     // Allocate all blocks at the beginning;
     int block_token_num = block_manager_config.device_allocator_config.block_token_num;
     int total_block_num = (req->input_tokens.size() + output_token_num + block_token_num - 1) / block_token_num;
-    NLLM_LOG_INFO << "Start init req " << req->req_id << ", block num =" << total_block_num;
-    NLLM_CHECK_WITH_INFO(req->kv_cache_blocks.size() == (size_t)device_num,
+    KLLM_LOG_INFO << "Start init req " << req->req_id << ", block num =" << total_block_num;
+    KLLM_CHECK_WITH_INFO(req->kv_cache_blocks.size() == (size_t)device_num,
                          FormatStr("req->kv_cache_blocks.size()=%d", req->kv_cache_blocks.size()));
     for (int i = 0; i < device_num; i++) {
       std::vector<int> blocks;
       GetBlockManager()->SetDeviceId(i);
       GetBlockManager()->AllocateBlocks(total_block_num, blocks);
       req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
-      NLLM_LOG_INFO << "req " << req->req_id << ", kv_cache_blocks[" << i
+      KLLM_LOG_INFO << "req " << req->req_id << ", kv_cache_blocks[" << i
                     << "].size()=" << req->kv_cache_blocks[i].size();
     }
-    NLLM_LOG_INFO << "Init infer request " << req->req_id << " block=" << total_block_num;
+    KLLM_LOG_INFO << "Init infer request " << req->req_id << " block=" << total_block_num;
   }
 
  protected:
@@ -127,10 +127,10 @@ TEST_F(BatchSchedulerEvironmentSimulatorTest, BasicTokenGenerationTest) {
     }
 
     if (scheduled_reqs.empty()) break;
-    NLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
+    KLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
     env_simulator->RunAStep(scheduled_reqs);
     for (auto req : scheduled_reqs) {
-      NLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
+      KLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
                      << ", output_token.size()=" << req->output_tokens.size()
                      << ", last output token= " << req->output_tokens.back();
     }
@@ -214,10 +214,10 @@ TEST_F(BatchSchedulerEvironmentSimulatorTest, SwapTokenGenerationTest) {
       scheduled_reqs.push_back(infer_req2);
     }
     if (scheduled_reqs.empty()) break;
-    NLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
+    KLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
     env_simulator->RunAStep(scheduled_reqs);
     for (auto req : scheduled_reqs) {
-      NLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
+      KLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
                      << ", output_token.size()=" << req->output_tokens.size()
                      << ", last output token= " << req->output_tokens.back();
     }

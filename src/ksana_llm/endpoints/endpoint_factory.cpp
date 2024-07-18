@@ -27,7 +27,7 @@ std::shared_ptr<RpcEndpoint> EndpointFactory::CreateRpcEndpoint(
     case EndpointType::ENDPOINT_TRPC:
       return std::make_shared<TrpcEndpoint>(endpoint_config, request_queue);
     default:
-      NLLM_LOG_ERROR << "Rpc endpoint type " << endpoint_config.type << " is not supported.";
+      KLLM_LOG_ERROR << "Rpc endpoint type " << endpoint_config.type << " is not supported.";
       break;
   }
   return nullptr;
@@ -39,7 +39,7 @@ std::shared_ptr<LocalEndpoint> EndpointFactory::CreateLocalEndpoint(
     case EndpointType::ENDPOINT_LOCAL:
       return std::make_shared<LocalEndpoint>(endpoint_config, request_queue);
     default:
-      NLLM_LOG_ERROR << "Local endpoint type " << endpoint_config.type << " is not supported.";
+      KLLM_LOG_ERROR << "Local endpoint type " << endpoint_config.type << " is not supported.";
       break;
   }
   return nullptr;

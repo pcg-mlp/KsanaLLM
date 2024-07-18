@@ -291,13 +291,13 @@ if __name__ == "__main__":
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.
-    log_level = os.getenv("NLLM_LOG_LEVEL", "INFO").upper()
+    log_level = os.getenv("KLLM_LOG_LEVEL", "INFO").upper()
     if log_level in ["DEBUG", "INFO", "ERROR"]:
         log_level = log_level.lower()
     else:
         log_level = "info"
         print(
-            f"Uvicorn's logging not support env: NLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
+            f"Uvicorn's logging not support env: KLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
         )
     app.root_path = args.root_path
     uvicorn.run(app,

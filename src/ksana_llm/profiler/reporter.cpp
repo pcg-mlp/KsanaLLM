@@ -28,7 +28,7 @@ inline time_t TimeReporter::GetCurrentByUnit(TimeUnit time_unit) {
     case TimeUnit::TIME_NS:
       return ProfileTimer::GetCurrentTimeInNs();
     default:
-      NLLM_CHECK_WITH_INFO(false, "time unit is not supported.");
+      KLLM_CHECK_WITH_INFO(false, "time unit is not supported.");
       break;
   }
   return 0;

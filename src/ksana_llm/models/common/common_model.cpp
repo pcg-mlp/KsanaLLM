@@ -51,7 +51,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
   size_t max_token_num = model_config_.max_scheduler_token_num;
   qkv_add_bias_ = model_run_config.qkv_add_bias;
-  NLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}",
+  KLLM_LOG_DEBUG << fmt::format("Max_Batch_Size = {}, Max Seq Len = {}, Max Token Num = {}",
                                 model_config_.max_batch_size, model_config_.max_token_num, max_token_num);
 
   int inter_size_per_tp = model_config_.inter_size / tensor_para_size;
@@ -89,7 +89,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 
-  NLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
+  KLLM_LOG_DEBUG << "Total buffer tensors memory used: " << (GetBufferTensorsMemoryUsed() >> 20) << " MB";
 
   // Initialize instances for each layer.
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
@@ -175,7 +175,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
     plugin_ = std::make_shared<py::object>(module.attr("KsanaPlugin")());
 
-    NLLM_LOG_INFO << "Using Plugin";
+    KLLM_LOG_INFO << "Using Plugin";
   } catch (const py::error_already_set& e) {
     PyErr_Clear();
   }

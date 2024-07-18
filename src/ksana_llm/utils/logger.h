@@ -19,7 +19,7 @@ enum Level { DEBUG = 0, INFO = 1, WARNING = 2, ERROR = 3, FATAL = 4 };
 // Get log level from environment, this function called only once.
 static Level GetLogLevel() {
   const char* default_log_level = "INFO";
-  const char* env_log_level = std::getenv("NLLM_LOG_LEVEL");
+  const char* env_log_level = std::getenv("KLLM_LOG_LEVEL");
   std::string log_level_str = env_log_level ? env_log_level : default_log_level;
 
   std::unordered_map<std::string, Level> log_name_to_level = {
@@ -35,7 +35,7 @@ static Level GetLogLevel() {
 // Get log filename from environment, called once.
 static std::string GetLogFile() {
   const char* default_log_file = "log/ksana_llm.log";
-  const char* env_log_file = std::getenv("NLLM_LOG_FILE");
+  const char* env_log_file = std::getenv("KLLM_LOG_FILE");
   return env_log_file ? env_log_file : default_log_file;
 }
 
@@ -80,14 +80,14 @@ inline void InitLoguru() {
 
 #define NO_CC_IF if  // For CodeCC compatibility.
 
-#define NLLM_LOG_DEBUG LOG_S(1)
-#define NLLM_LOG_INFO LOG_S(INFO)
-#define NLLM_LOG_WARNING LOG_S(WARNING)
-#define NLLM_LOG_ERROR LOG_S(ERROR)
-#define NLLM_LOG_FATAL LOG_S(FATAL)
+#define KLLM_LOG_DEBUG LOG_S(1)
+#define KLLM_LOG_INFO LOG_S(INFO)
+#define KLLM_LOG_WARNING LOG_S(WARNING)
+#define KLLM_LOG_ERROR LOG_S(ERROR)
+#define KLLM_LOG_FATAL LOG_S(FATAL)
 
 [[noreturn]] inline void ThrowRuntimeError(const char* const file, int const line, std::string const& info = "") {
-  throw std::runtime_error(std::string("[NLLM][ERROR] ") + info + " Assertion fail: " + file + ":" +
+  throw std::runtime_error(std::string("[KLLM][ERROR] ") + info + " Assertion fail: " + file + ":" +
                            std::to_string(line) + " \n");
 }
 
@@ -103,8 +103,8 @@ inline uint64_t GetCurrentTimeInMs() {
       .count();
 }
 
-#define NLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__)
-#define NLLM_CHECK_WITH_INFO(val, info)                                 \
+#define KLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__)
+#define KLLM_CHECK_WITH_INFO(val, info)                                 \
   do {                                                                  \
     bool is_valid_val = (val);                                          \
     if (!is_valid_val) {                                                \
@@ -112,6 +112,6 @@ inline uint64_t GetCurrentTimeInMs() {
     }                                                                   \
   } while (0)
 
-#define NLLM_THROW(info) ThrowRuntimeError(__FILE__, __LINE__, info)
+#define KLLM_THROW(info) ThrowRuntimeError(__FILE__, __LINE__, info)
 
 }  // namespace ksana_llm

@@ -9,7 +9,7 @@ namespace ksana_llm {
 
 static std::string GetStatFile() {
   const char* default_stat_file = "log/ksana_stat.log";
-  const char* env_stat_file = std::getenv("NLLM_STAT_FILE");
+  const char* env_stat_file = std::getenv("KLLM_STAT_FILE");
   return env_stat_file ? env_stat_file : default_stat_file;
 }
 

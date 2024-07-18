@@ -22,7 +22,7 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
     model_ = torch.attr("load")(file_name_, "cpu");
   } catch (const py::error_already_set& e) {
     PyErr_Clear();
-    NLLM_LOG_ERROR << fmt::format("Failed to load file {}", file_name_);
+    KLLM_LOG_ERROR << fmt::format("Failed to load file {}", file_name_);
     return;
   }
   py::dict state_dict;
@@ -35,7 +35,7 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
   for (auto& item : state_dict) {
     std::string tensor_name = py::str(item.first);
     tensor_name_list_.push_back(tensor_name);
-    NLLM_LOG_DEBUG << "read " << tensor_name << std::endl;
+    KLLM_LOG_DEBUG << "read " << tensor_name << std::endl;
     py::object value_obj = py::reinterpret_borrow<py::object>(item.second);
     pytorch_tensor_map_[tensor_name] = THPVariable_Unpack(value_obj.ptr());
 #ifdef ENABLE_ACL

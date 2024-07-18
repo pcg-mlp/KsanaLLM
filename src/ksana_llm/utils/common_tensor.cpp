@@ -87,7 +87,7 @@ std::string TensorT<T>::GetNumpyType() const {
 
 template <int T>
 void TensorT<T>::SaveToFile(const std::string& file_path) {
-  NLLM_LOG_DEBUG << fmt::format("Save {} To File {}", ToString(), file_path);
+  KLLM_LOG_DEBUG << fmt::format("Save {} To File {}", ToString(), file_path);
 
   size_t total_size = GetTotalBytes();
   void* cpu_data = malloc(total_size);
@@ -98,13 +98,13 @@ void TensorT<T>::SaveToFile(const std::string& file_path) {
 
   std::filesystem::path dir_path = std::filesystem::path(file_path).parent_path();
   if (!std::filesystem::exists(dir_path)) {
-    NLLM_LOG_WARNING << fmt::format("Do not exists the saved path {}", dir_path.string());
+    KLLM_LOG_WARNING << fmt::format("Do not exists the saved path {}", dir_path.string());
     std::filesystem::create_directories(dir_path);
   }
 
   std::ofstream file(file_path, std::ios::binary);
   if (!file.is_open()) {
-    NLLM_LOG_ERROR << fmt::format("Could not open file {}", file_path);
+    KLLM_LOG_ERROR << fmt::format("Could not open file {}", file_path);
     return;
   }
   // Header of numpy file

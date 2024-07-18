@@ -27,10 +27,10 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
 
   // Get inference result
-  NLLM_LOG_DEBUG << "LocalEndpoint::Handle start Wait.";
+  KLLM_LOG_DEBUG << "LocalEndpoint::Handle start Wait.";
   waiter->Wait();
 
-  NLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
+  KLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
   for (auto &[output, req_logprobs, total_score] : req->output_group) {
     std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
     ksana_python_output.output_tokens.emplace_back(req_output);
@@ -39,7 +39,7 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
     }
   }
   ksana_python_output.response = std::move(req->response);
-  NLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
+  KLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
 }
 

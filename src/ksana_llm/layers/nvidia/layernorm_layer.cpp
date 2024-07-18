@@ -13,7 +13,7 @@ Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   rank_ = rank;
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
-  NLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);
+  KLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);
   return Status();
 }
 

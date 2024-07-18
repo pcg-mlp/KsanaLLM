@@ -28,7 +28,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
   //   14~15: ascend kvcache buffers: [max_token_num, hidden_units]
   // output_tensors:
   //   0: paged attention output
-  // NLLM_LOG_WARNING <<"";
+  // KLLM_LOG_WARNING <<"";
   // 块的位移情况
   // 如上kv_list的情况
   // 一块有8个token时

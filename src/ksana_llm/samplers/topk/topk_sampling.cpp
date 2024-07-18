@@ -24,7 +24,7 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandSta
                                                  static_cast<int>(max_vocab_size), nullptr, nullptr, nullptr,
                                                  static_cast<int>(max_batch_size), 0, nullptr, false, false);
 
-  NLLM_LOG_DEBUG << "TopkSampling workspace_size_ " << workspace_size_;
+  KLLM_LOG_DEBUG << "TopkSampling workspace_size_ " << workspace_size_;
 
   GetBlockManager()->AllocateContiguous(workspace_size_ + sizeof(uint64_t) * max_batch_size, workspace_block_id_);
   GetBlockManager()->GetContiguousPtr(workspace_block_id_, workspace_);

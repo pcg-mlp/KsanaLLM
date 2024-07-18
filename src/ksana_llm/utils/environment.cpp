@@ -69,7 +69,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   }
   if (derived_max_model_len == std::numeric_limits<float>::infinity()) {
     std::string possible_keys_str = Vector2Str<std::string>(possible_keys);
-    NLLM_LOG_ERROR << fmt::format(
+    KLLM_LOG_ERROR << fmt::format(
         "The model's config.json does not contain any of the following keys to determine"
         " the original maximum length of the model: {}",
         possible_keys_str);
@@ -80,7 +80,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   if (!rope_scaling_setting.is_null()) {
     model_config.rope_scaling_factor_config.type = rope_scaling_setting.value("type", "default");
     model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
-    NLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
+    KLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
                                   model_config.rope_scaling_factor_config.factor);
 
     if (model_config.rope_scaling_factor_config.type != "su") {
@@ -92,7 +92,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   }
 
   model_config.max_token_num = static_cast<int>(derived_max_model_len);
-  NLLM_LOG_DEBUG << "Model Max Token Num = " << model_config.max_token_num;
+  KLLM_LOG_DEBUG << "Model Max Token Num = " << model_config.max_token_num;
 }
 
 void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig &model_config) {
@@ -118,7 +118,7 @@ void PrepareCommonModelAttirbutes(const nlohmann::json &config_json, ModelConfig
     if (model_config.quant_config.method == "gptq") {
       model_config.quant_config.bits = config_json["quantization_config"].at("bits");
       model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
-      NLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
+      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
                                    model_config.quant_config.method, model_config.quant_config.bits,
                                    model_config.quant_config.group_size);
     }
@@ -160,7 +160,7 @@ void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &mo
     if (model_config.quant_config.method == "gptq") {
       model_config.quant_config.bits = config_json["quantization_config"].at("bits");
       model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
-      NLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
+      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}",
                                    model_config.quant_config.method, model_config.quant_config.bits,
                                    model_config.quant_config.group_size);
     }
@@ -185,7 +185,7 @@ void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_
   nlohmann::json config_json;
   std::ifstream file(config_file);
   if (!file.is_open()) {
-    NLLM_LOG_WARNING << fmt::format("Load generation config file: {} error.", config_file) << std::endl;
+    KLLM_LOG_WARNING << fmt::format("Load generation config file: {} error.", config_file) << std::endl;
     return;
   } else {
     file >> config_json;
@@ -207,7 +207,7 @@ void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_
     end_ids.push_back(config_json.at("eos_token_id"));
   }
   if (end_ids != model_config.end_ids) {
-    NLLM_LOG_WARNING << fmt::format("eos_token_id: {} in model config is ignored by {} in generation config",
+    KLLM_LOG_WARNING << fmt::format("eos_token_id: {} in model config is ignored by {} in generation config",
                                     model_config.end_ids.front(), fmt::join(end_ids, ", "))
                      << std::endl;
     model_config.end_ids = end_ids;
@@ -218,7 +218,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   YamlReader yaml_reader;
   Status status = yaml_reader.LoadFile(config_file);
   if (!status.OK()) {
-    NLLM_LOG_ERROR << "Load yaml config error." << status.GetMessage() << std::endl;
+    KLLM_LOG_ERROR << "Load yaml config error." << status.GetMessage() << std::endl;
     return status;
   }
 
@@ -238,7 +238,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   }
 
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
-    NLLM_LOG_ERROR << fmt::format("Tensor Para Size {} and Pipeline Para Size {} should > 0", tensor_parallel_size_,
+    KLLM_LOG_ERROR << fmt::format("Tensor Para Size {} and Pipeline Para Size {} should > 0", tensor_parallel_size_,
                                   pipeline_parallel_size_);
     throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");
   }
@@ -291,7 +291,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
     int retrieve_prefix_ceche_len =
         std::floor(prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num) *
         block_manager_config_.device_allocator_config.block_token_num;
-    NLLM_LOG_WARNING << "prefix_cache_len " << prefix_cache_len << " cannot round up block token num "
+    KLLM_LOG_WARNING << "prefix_cache_len " << prefix_cache_len << " cannot round up block token num "
                      << block_manager_config_.device_allocator_config.block_token_num
                      << " retrieve the prefix cache num to " << retrieve_prefix_ceche_len;
     prefix_cache_len = retrieve_prefix_ceche_len;
@@ -345,7 +345,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   nlohmann::json config_json;
   std::ifstream file(config_file);
   if (!file.is_open()) {
-    NLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file) << std::endl;
+    KLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file) << std::endl;
     return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load model config file: {} error.", config_file));
   } else {
     file >> config_json;
@@ -368,7 +368,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
 
   if (tensor_parallel_size_ > model_config.num_key_value_heads ||
       model_config.num_key_value_heads % tensor_parallel_size_ != 0) {
-    NLLM_LOG_ERROR << fmt::format(
+    KLLM_LOG_ERROR << fmt::format(
         "The size of key_value_heads cannot be evenly divided by the size of tensor_parallel_size_. "
         "{} % {} != 0 ",
         model_config.num_key_value_heads, tensor_parallel_size_);
@@ -378,7 +378,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
 
   if (batch_manager_config_.batch_scheduler_config.max_token_len > 0) {
     if (batch_manager_config_.batch_scheduler_config.max_token_len > model_config.max_token_num) {
-      NLLM_LOG_ERROR << fmt::format(
+      KLLM_LOG_ERROR << fmt::format(
           "The max_token_num configured in the model's config.json is less than the "
           "max_token_len configured in the ksana yaml file. {} < {}",
           batch_manager_config_.batch_scheduler_config.max_token_len, model_config.max_token_num);
@@ -399,7 +399,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_step_tokens;
   model_configs_[model_config.name] = model_config;
 
-  NLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
+  KLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
   return Status();
 }
 
@@ -414,7 +414,7 @@ Status Environment::ParseOptions(int argc, char **argv) {
 
   Status status = ParseConfig(FLAGS_config_file);
   if (!status.OK()) {
-    NLLM_LOG_ERROR << fmt::format("Parse config file {} error: {}", FLAGS_config_file, status.GetMessage())
+    KLLM_LOG_ERROR << fmt::format("Parse config file {} error: {}", FLAGS_config_file, status.GetMessage())
                    << std::endl;
     return status;
   }
@@ -423,7 +423,7 @@ Status Environment::ParseOptions(int argc, char **argv) {
 }
 
 void Environment::InitializeBlockManagerConfig() {
-  NLLM_CHECK_WITH_INFO(model_configs_.size() > 0, "No model configed.");
+  KLLM_CHECK_WITH_INFO(model_configs_.size() > 0, "No model configed.");
   const ModelConfig &model_config = model_configs_.begin()->second;
 
   size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *

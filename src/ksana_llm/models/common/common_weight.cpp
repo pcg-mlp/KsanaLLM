@@ -52,7 +52,7 @@ CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::sh
   model_path_ = model_config.path;
   rank_ = rank;
   if (!GetModelInfo(model_config).OK()) {
-    NLLM_LOG_ERROR << fmt::format("Load model config file error.");
+    KLLM_LOG_ERROR << fmt::format("Load model config file error.");
     exit(-1);
   }
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
@@ -136,7 +136,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     size_t weight_size;
     std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
     if (weight_ptr == nullptr) {
-      NLLM_LOG_DEBUG << fmt::format("The {}' weight_ptr is null", weight_name);
+      KLLM_LOG_DEBUG << fmt::format("The {}' weight_ptr is null", weight_name);
     }
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
 
@@ -153,11 +153,11 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
         weight_cpu_tensor = in.to(torch::kBFloat16);
         weight_ptr = weight_cpu_tensor.data_ptr();
       } else {
-        NLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
+        KLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
                          << weight_data_type_;
       }
     } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16) {
-      NLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
+      KLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
     }
 
     if (quant_weight_slover_->LoadQuantWeight(tensor_name, weight_shape, weight_data_type, weight_ptr)) {
@@ -209,7 +209,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
          * "model.embed_tokens.weight" and "lm_head.weight" share the same data space. Therefore, it is necessary
          * to load the data from "weight_ptr" twice and store it in the corresponding device spaces of the two weights.
          */
-        NLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
+        KLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
         std::vector<size_t> embed_tokens_shape = weights_map_["model.embed_tokens.weight"].shape;
         std::vector<size_t> lm_head_shape = {(size_t)(DivRoundUp(embed_tokens_shape[0], tensor_para_size_)),
                                              embed_tokens_shape[1] * tensor_para_size_};
@@ -264,7 +264,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
                   weight_ptr + kv_para_offset + (q_size + qkv_pitch) * tensor_para_size_, qkv_pitch,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
-      NLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
+      KLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
   }
   return Status();
@@ -479,7 +479,7 @@ std::string CommonWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_
 template <typename T>
 Tensor CommonWeight<T>::GetModelWeights(const std::string& weight_name) {
   if (!weights_map_.count(weight_name)) {
-    NLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
+    KLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
     return Tensor();
   }
   return weights_map_[weight_name];
@@ -513,7 +513,7 @@ void CommonWeight<T>::ProcessWeights() {
   }
 
   if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
-    NLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
+    KLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
     auto weight_name = "model.embed_tokens.weight";
     Tensor& tensor = weights_map_[weight_name];
     int block_id = 0;

@@ -19,7 +19,7 @@ Status HttpEndpoint::Accept(std::shared_ptr<Request> &req) {
   if (terminated_) {
     return Status(RET_TERMINATED);
   }
-  NLLM_LOG_DEBUG << "Accept a req.";
+  KLLM_LOG_DEBUG << "Accept a req.";
 
   SamplingConfig sampling_config;
   req->sampling_config = sampling_config;
@@ -70,12 +70,12 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
 
     return Status();
   }
-  NLLM_LOG_ERROR << "Invalid http request [input_tokens not exists].";
+  KLLM_LOG_ERROR << "Invalid http request [input_tokens not exists].";
   return Status(RET_INVALID_ARGUMENT, "Invalid http request.");
 }
 
 Status HttpEndpoint::Start() {
-  NLLM_LOG_DEBUG << "Listen on port " << endpoint_config_.port;
+  KLLM_LOG_DEBUG << "Listen on port " << endpoint_config_.port;
 
   // define generate
   // TODO(karlluo): should also support stream mode
@@ -93,7 +93,7 @@ Status HttpEndpoint::Start() {
 }
 
 Status HttpEndpoint::Stop() {
-  NLLM_LOG_DEBUG << "Close http endpoint.";
+  KLLM_LOG_DEBUG << "Close http endpoint.";
   http_server_.stop();
   terminated_ = true;
   return Status();

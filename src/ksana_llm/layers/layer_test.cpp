@@ -50,7 +50,7 @@ class LayerTest : public testing::Test {
     block_manager_config.device_allocator_config.block_size =
         block_manager_config.host_allocator_config.block_token_num * 2 * model_config.head_num *
         model_config.size_per_head * model_config.num_layer * sizeof(float16);
-    NLLM_LOG_INFO << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
+    KLLM_LOG_INFO << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
     context_ = std::make_shared<Context>(1, 1);

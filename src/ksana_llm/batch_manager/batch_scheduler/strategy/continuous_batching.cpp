@@ -38,26 +38,26 @@ ContinuousBatchingStrategy::~ContinuousBatchingStrategy() { threadpool_->Stop();
 void ContinuousBatchingStrategy::SwapOutAsync(std::shared_ptr<InferRequest> req, const int host_block_num_to_add) {
   req->swap_pending = true;
   req->swap_future = threadpool_->Submit([=]() {
-    NLLM_LOG_DEBUG << "Start to async swapout req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
+    KLLM_LOG_DEBUG << "Start to async swapout req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
     {
       REPORT_TIME_US(batch_scheduler_swapout_us);
       req->SwapOutAsync(host_block_num_to_add);
       req->swap_pending = false;
     }
-    NLLM_LOG_DEBUG << "Finish to async swapout req " << req->req_id;
+    KLLM_LOG_DEBUG << "Finish to async swapout req " << req->req_id;
   });
 }
 
 void ContinuousBatchingStrategy::SwapInAsync(std::shared_ptr<InferRequest> req) {
   req->swap_pending = true;
   req->swap_future = threadpool_->Submit([=]() {
-    NLLM_LOG_DEBUG << "Start to async swapin req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
+    KLLM_LOG_DEBUG << "Start to async swapin req " << req->req_id << ", block size:" << req->GetCurrentBlockNumber();
     {
       REPORT_TIME_US(batch_scheduler_swapin_us);
       req->SwapInAsync();
       req->swap_pending = false;
     }
-    NLLM_LOG_DEBUG << "Finish to async swapin req " << req->req_id;
+    KLLM_LOG_DEBUG << "Finish to async swapin req " << req->req_id;
   });
 }
 
@@ -98,13 +98,13 @@ void ContinuousBatchingStrategy::PrepareRunningRequests(std::vector<size_t> &ste
                                                         std::vector<size_t> &curr_block_num_list) {
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end();) {
     auto &req = *it;
-    NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in running_queue_";
+    KLLM_LOG_DEBUG << "prepare req " << req->req_id << " in running_queue_";
 
     req->AdjustInferStage();
 
     // Check if finished.
     if (CheckBeamSearchRequestFinish(req)) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
+      KLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
 
       req->finish_status = Status(RET_SUCCESS);
       req->FreeBlocks();
@@ -116,7 +116,7 @@ void ContinuousBatchingStrategy::PrepareRunningRequests(std::vector<size_t> &ste
 
     // Check timeout
     if (CheckRequestTimeout(req)) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " timeout in running.";
+      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in running.";
 
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       req->finished = true;
@@ -141,11 +141,11 @@ void ContinuousBatchingStrategy::PrepareSwappedRequests(std::vector<size_t> &ste
                                                         std::vector<size_t> &curr_block_num_list, bool skip_collect) {
   for (auto it = batch_state_->swapped_queue.begin(); it != batch_state_->swapped_queue.end();) {
     auto &req = *it;
-    NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in swapped_queue_";
+    KLLM_LOG_DEBUG << "prepare req " << req->req_id << " in swapped_queue_";
 
     // Check timeout, no finished req in swapped queue.
     if (CheckRequestTimeout(req)) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " timeout in swapped.";
+      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in swapped.";
 
       req->DropSwappedAsync();
 
@@ -168,11 +168,11 @@ void ContinuousBatchingStrategy::PrepareWaitingRequests(std::vector<size_t> &ste
                                                         std::vector<size_t> &total_block_num_list, bool skip_collect) {
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto &req = *it;
-    NLLM_LOG_DEBUG << "prepare req " << req->req_id << " in waiting_queue_";
+    KLLM_LOG_DEBUG << "prepare req " << req->req_id << " in waiting_queue_";
 
     // Check timeout
     if (CheckRequestTimeout(req)) {
-      NLLM_LOG_DEBUG << "req " << req->req_id << " timeout in waiting.";
+      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in waiting.";
 
       req->finish_status = Status(RET_TIMEOUT, "running timeout.");
       req->finished = true;
@@ -193,13 +193,13 @@ void ContinuousBatchingStrategy::MergePendingSwapoutRequest() {
   for (auto it = swapout_pending_queue_.begin(); it != swapout_pending_queue_.end();) {
     auto &req = *it;
     if (!req->swap_pending) {
-      NLLM_LOG_DEBUG << "Merge swapout req " << req->req_id << " to swapped.";
+      KLLM_LOG_DEBUG << "Merge swapout req " << req->req_id << " to swapped.";
       batch_state_->swapped_queue.insert(batch_state_->swapped_queue.begin(), req);
       it = swapout_pending_queue_.erase(it);
       continue;
     }
 
-    NLLM_LOG_DEBUG << "swapout req " << req->req_id << " is pending, skip merge";
+    KLLM_LOG_DEBUG << "swapout req " << req->req_id << " is pending, skip merge";
     ++it;
   }
 }
@@ -208,13 +208,13 @@ void ContinuousBatchingStrategy::MergePendingSwapinRequests() {
   for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end();) {
     auto &req = *it;
     if (!req->swap_pending) {
-      NLLM_LOG_DEBUG << "Merge swapin req " << req->req_id << " to running.";
+      KLLM_LOG_DEBUG << "Merge swapin req " << req->req_id << " to running.";
       if (CheckBeamSearch(req)) batch_state_->running_queue.push_back(req);
       it = swapin_pending_queue_.erase(it);
       continue;
     }
 
-    NLLM_LOG_DEBUG << "swapin req " << req->req_id << " is pending, skip merge";
+    KLLM_LOG_DEBUG << "swapin req " << req->req_id << " is pending, skip merge";
     ++it;
   }
 }
@@ -232,11 +232,11 @@ void ContinuousBatchingStrategy::WaitPendingSwapoutDone() {
   for (auto it = swapout_pending_queue_.begin(); it != swapout_pending_queue_.end(); ++it) {
     auto &req = *it;
     if (req->swap_pending) {
-      NLLM_LOG_DEBUG << "Wait until swapout req " << req->req_id << " done.";
+      KLLM_LOG_DEBUG << "Wait until swapout req " << req->req_id << " done.";
       try {
         req->swap_future.get();
       } catch (const std::exception &e) {
-        NLLM_LOG_FATAL << "Exception in swapout, info: " << e.what();
+        KLLM_LOG_FATAL << "Exception in swapout, info: " << e.what();
       }
     }
   }
@@ -246,11 +246,11 @@ void ContinuousBatchingStrategy::WaitPendingSwapinDone() {
   for (auto it = swapin_pending_queue_.begin(); it != swapin_pending_queue_.end(); ++it) {
     auto &req = *it;
     if (req->swap_pending) {
-      NLLM_LOG_DEBUG << "Wait until swapin req " << req->req_id << " done.";
+      KLLM_LOG_DEBUG << "Wait until swapin req " << req->req_id << " done.";
       try {
         req->swap_future.get();
       } catch (const std::exception &e) {
-        NLLM_LOG_FATAL << "Exception in swapin, info: " << e.what();
+        KLLM_LOG_FATAL << "Exception in swapin, info: " << e.what();
       }
     }
   }
@@ -410,12 +410,12 @@ bool ContinuousBatchingStrategy::CheckBeamSearch(std::shared_ptr<InferRequest> r
   if (req->sampling_config.num_beams > 1) {
     for (auto &beam_req : req->req_group) {
       if (req->output_tokens.size() > beam_req->output_tokens.size()) {
-        NLLM_LOG_DEBUG << "CheckBeamSearch false";
+        KLLM_LOG_DEBUG << "CheckBeamSearch false";
         return false;
       }
     }
   }
-  NLLM_LOG_DEBUG << "CheckBeamSearch true";
+  KLLM_LOG_DEBUG << "CheckBeamSearch true";
   return true;
 }
 
@@ -424,7 +424,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     MergePendingSwapinRequests();
   }
   if (batch_state_->running_queue.empty()) {
-    NLLM_LOG_DEBUG << "Empty running queue after MergePendingSwapinRequests, skip.";
+    KLLM_LOG_DEBUG << "Empty running queue after MergePendingSwapinRequests, skip.";
     return;
   }
 
@@ -434,7 +434,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
   running_curr_block_num_list_.clear();
   PrepareRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_);
   if (batch_state_->running_queue.empty()) {
-    NLLM_LOG_DEBUG << "Empty running queue after PrepareRunningRequests, skip.";
+    KLLM_LOG_DEBUG << "Empty running queue after PrepareRunningRequests, skip.";
     return;
   }
 
@@ -445,7 +445,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     step_token_num_sum_tmp = step_token_num_sum;
     ProcessRunningRequests(running_step_token_num_list_, running_step_block_num_list_, running_curr_block_num_list_,
                            running_swapped_indexes_, step_token_num_sum_tmp);
-    NLLM_LOG_DEBUG << "Process running requests, swapped size:" << running_swapped_indexes_.size();
+    KLLM_LOG_DEBUG << "Process running requests, swapped size:" << running_swapped_indexes_.size();
     if (swapout_done) {
       break;
     }
@@ -459,7 +459,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
       } else {
         // No block for next step. no request pending in swapout queue.
         // This case should not happen. Blocks for a request should be less than total memory.
-        NLLM_LOG_WARNING << "Bad state in ScheduleRunning";
+        KLLM_LOG_WARNING << "Bad state in ScheduleRunning";
         break;
       }
     } else {
@@ -480,7 +480,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     // Allocate blocks according to actual needs to avoid duplicate allocation of hosts and devices.
     size_t step_block_num = req->GetTotalBlockNumber() - req->GetCurrentBlockNumber();
     if (visit_idx < swapout_pos && CheckBeamSearch(req)) {
-      NLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
+      KLLM_LOG_DEBUG << "running req " << req->req_id << " continue running.";
       if (step_block_num > 0) {
         for (int i = 0; i < tp_num_; ++i) {
           std::vector<int> blocks;
@@ -488,15 +488,15 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
           Status status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
           if (!status.OK()) {
             if (!swapout_pending_queue_.empty()) {
-              NLLM_LOG_DEBUG << "No more blocks, waiting util all swapout reqs done.";
+              KLLM_LOG_DEBUG << "No more blocks, waiting util all swapout reqs done.";
               WaitPendingSwapoutDone();
               status = GetBlockManager()->AllocateBlocks(step_block_num, blocks);
               if (!status.OK()) {
-                NLLM_LOG_ERROR << "No more blocks after all swapout reqs done, exit.";
+                KLLM_LOG_ERROR << "No more blocks after all swapout reqs done, exit.";
                 abort();
               }
             } else {
-              NLLM_LOG_ERROR << "No more blocks, and no pending swapout reqs, exit.";
+              KLLM_LOG_ERROR << "No more blocks, and no pending swapout reqs, exit.";
               abort();
             }
           }
@@ -507,7 +507,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
     } else {
       bool swap_success = false;
       if (batch_scheduler_config_.preempt_mode == SWAP) {
-        NLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
+        KLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async.";
         size_t swap_size = req->kv_cache_blocks[0].size() + step_block_num;
         swap_success = host_free_num > swap_size;
         if (swap_success) {
@@ -526,7 +526,7 @@ void ContinuousBatchingStrategy::ScheduleRunning(size_t &step_token_num_sum, boo
       }
 
       if (!swap_success || batch_scheduler_config_.preempt_mode == RECOMPUTE) {
-        NLLM_LOG_DEBUG << "running req " << req->req_id << " recompute.";
+        KLLM_LOG_DEBUG << "running req " << req->req_id << " recompute.";
         req->FreeBlocks();
         req->kv_cache_blocks.resize(tp_num_);
         req->infer_stage = InferStage::STAGE_CONTEXT;
@@ -543,7 +543,7 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
                                                  bool &skip_other) {
   MergePendingSwapoutRequest();
   if (batch_state_->swapped_queue.empty()) {
-    NLLM_LOG_DEBUG << "Empty swapped queue after merge, skip.";
+    KLLM_LOG_DEBUG << "Empty swapped queue after merge, skip.";
     return;
   }
 
@@ -551,7 +551,7 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
   swapped_curr_block_num_list_.clear();
   PrepareSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, skip_other);
   if (skip_other || batch_state_->swapped_queue.empty()) {
-    NLLM_LOG_DEBUG << "Empty swapped queue after prepare, skip.";
+    KLLM_LOG_DEBUG << "Empty swapped queue after prepare, skip.";
     return;
   }
 
@@ -564,7 +564,7 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
     curr_block_num_sum_tmp = curr_block_num_sum;
     ProcessSwappedRequests(swapped_step_token_num_list_, swapped_curr_block_num_list_, swapped_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
-    NLLM_LOG_DEBUG << "Process swapped requests, running size:" << swapped_running_indexes_.size();
+    KLLM_LOG_DEBUG << "Process swapped requests, running size:" << swapped_running_indexes_.size();
     if (swapout_done) {
       break;
     }
@@ -575,7 +575,7 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
         WaitPendingSwapoutDone();
         swapout_done = true;
       } else {
-        NLLM_LOG_WARNING << "Bad state in ScheduleSwapped";
+        KLLM_LOG_WARNING << "Bad state in ScheduleSwapped";
         break;
       }
     } else {
@@ -590,7 +590,7 @@ void ContinuousBatchingStrategy::ScheduleSwapped(size_t &step_token_num_sum, siz
   for (size_t idx = 0; idx < batch_state_->swapped_queue.size();) {
     auto &req = batch_state_->swapped_queue[idx];
     if (visit_idx < swapin_pos) {
-      NLLM_LOG_DEBUG << "swapped req " << req->req_id << " swapin async.";
+      KLLM_LOG_DEBUG << "swapped req " << req->req_id << " swapin async.";
       SwapInAsync(req);
       swapin_pending_queue_.push_back(req);
       batch_state_->swapped_queue.erase(batch_state_->swapped_queue.begin() + idx);
@@ -609,7 +609,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
   MergeRecomputeQueue();
 
   if (batch_state_->waiting_queue.empty()) {
-    NLLM_LOG_DEBUG << "Empty waiting queue after merge, skip.";
+    KLLM_LOG_DEBUG << "Empty waiting queue after merge, skip.";
     return;
   }
 
@@ -617,7 +617,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
   waiting_total_block_num_list_.clear();
   PrepareWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, skip_other);
   if (skip_other || batch_state_->waiting_queue.empty()) {
-    NLLM_LOG_DEBUG << "Empty waiting queue after prepare, skip.";
+    KLLM_LOG_DEBUG << "Empty waiting queue after prepare, skip.";
     return;
   }
 
@@ -630,7 +630,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
     curr_block_num_sum_tmp = curr_block_num_sum;
     ProcessWaitingRequests(waiting_step_token_num_list_, waiting_total_block_num_list_, waiting_running_indexes_,
                            step_token_num_sum_tmp, curr_block_num_sum_tmp);
-    NLLM_LOG_DEBUG << "Process waiting requests, running size:" << waiting_running_indexes_.size();
+    KLLM_LOG_DEBUG << "Process waiting requests, running size:" << waiting_running_indexes_.size();
     if (swapout_done) {
       break;
     }
@@ -641,7 +641,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
         WaitPendingSwapoutDone();
         swapout_done = true;
       } else {
-        NLLM_LOG_WARNING << "Bad state in ScheduleWaiting";
+        KLLM_LOG_WARNING << "Bad state in ScheduleWaiting";
         break;
       }
     } else {
@@ -658,7 +658,7 @@ void ContinuousBatchingStrategy::ScheduleWaiting(size_t &step_token_num_sum, siz
     auto &req = batch_state_->waiting_queue[idx];
     if (!CheckBeamSearch(req)) continue;
     if (visit_idx < launch_pos) {
-      NLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch.";
+      KLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch.";
       size_t total_block_num = waiting_total_block_num_list_[visit_idx];
       if (total_block_num > 0) {
         for (int i = 0; i < tp_num_; ++i) {
@@ -688,7 +688,7 @@ void ContinuousBatchingStrategy::SchedulePending() {
       }
       MergePendingSwapinRequests();
       if (!swapin_pending_queue_.empty()) {
-        NLLM_CHECK_WITH_INFO(false, "Wait and merge pending swapin error.");
+        KLLM_CHECK_WITH_INFO(false, "Wait and merge pending swapin error.");
       }
     }
 
@@ -701,7 +701,7 @@ void ContinuousBatchingStrategy::SchedulePending() {
         }
         MergePendingSwapoutRequest();
         if (!swapout_pending_queue_.empty()) {
-          NLLM_CHECK_WITH_INFO(false, "Wait and merge pending swapout error.");
+          KLLM_CHECK_WITH_INFO(false, "Wait and merge pending swapout error.");
         }
       }
     }

@@ -29,16 +29,16 @@ ServingOp::ServingOp() {}
 ServingOp::~ServingOp() { serving_impl_->Stop(); }
 
 void ServingOp::InitServing(const std::string &config_file) {
-  NLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
+  KLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
 
   InitLoguru();
-  NLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
+  KLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
 
-  NLLM_LOG_INFO << "InitServing with config file: " << config_file;
+  KLLM_LOG_INFO << "InitServing with config file: " << config_file;
   Status status = Singleton<Environment>::GetInstance()->ParseConfig(config_file);
   if (!status.OK()) {
     std::cerr << status.ToString() << std::endl;
-    NLLM_LOG_FATAL << "InitServing error, " << status.ToString();
+    KLLM_LOG_FATAL << "InitServing error, " << status.ToString();
   }
 
   ModelConfig model_config;
@@ -46,18 +46,18 @@ void ServingOp::InitServing(const std::string &config_file) {
   plugin_path_ = model_config.path;
   serving_impl_ = std::make_shared<ServingImpl>();
   serving_impl_->Start();
-  NLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
+  KLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
 }
 
 Status ServingOp::Generate(const ksana_llm::KsanaPythonInput &ksana_python_input,
                            ksana_llm::KsanaPythonOutput &ksana_python_output) {
-  NLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
+  KLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
   return serving_impl_->Handle(ksana_python_input, ksana_python_output);
 }
 
 Status ServingOp::GenerateStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  NLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
+  KLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
   return serving_impl_->HandleStreaming(ksana_python_input, streaming_iterator);
 }
 

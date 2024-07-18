@@ -97,14 +97,14 @@ class ModelInstance {
 
   template <template <class> class ModelType, template <class> class WeightType>
   void CreateModelInstance(const std::string model_name) {
-    NLLM_LOG_INFO << "Start to init model instance " << model_name;
+    KLLM_LOG_INFO << "Start to init model instance " << model_name;
     for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      NLLM_LOG_INFO << "Start to create empty model weight on device " << worker_id;
+      KLLM_LOG_INFO << "Start to create empty model weight on device " << worker_id;
       weights_.push_back(CreateModelWeight<WeightType>(worker_id));
     }
     LoadWeightsAndModelsMap();
     for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      NLLM_LOG_INFO << "Start to create model on device " << worker_id;
+      KLLM_LOG_INFO << "Start to create model on device " << worker_id;
       models_.push_back(CreateModel<ModelType>(worker_id, weights_[worker_id]));
     }
   }

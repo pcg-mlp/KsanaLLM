@@ -26,7 +26,7 @@ void BeamSearchSampling::Update(std::vector<std::shared_ptr<InferRequest>>& req_
       std::vector<void*> src_addrs, dst_addrs;
       GetBlockManager()->GetBlockPtrs(src_req->kv_cache_blocks[device_id], src_addrs);
       GetBlockManager()->GetBlockPtrs(dst_req->kv_cache_blocks[device_id], dst_addrs);
-      NLLM_LOG_DEBUG << " device_id " << device_id << " src_addrs size " << src_addrs.size() << " dst_addrs size "
+      KLLM_LOG_DEBUG << " device_id " << device_id << " src_addrs size " << src_addrs.size() << " dst_addrs size "
                      << dst_addrs.size() << " src step " << src_req->step;
       // TODO(zakwang): Exception handling
       for (size_t block_idx = 0; block_idx < block_nums && block_idx < src_addrs.size() && block_idx < dst_addrs.size();
@@ -48,7 +48,7 @@ Status BeamSearchSampling::Sampling(SamplingRequest& sampling_req) {
   if (num_beams > 1) {
     for (auto& beam_req : req_group) {
       if (sampling_req.output_tokens->size() > beam_req->output_tokens.size()) {
-        NLLM_LOG_DEBUG << "CheckBeamSearch false";
+        KLLM_LOG_DEBUG << "CheckBeamSearch false";
         return Status();
       }
     }

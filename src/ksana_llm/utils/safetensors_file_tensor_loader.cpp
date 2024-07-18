@@ -39,11 +39,11 @@ DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensor
 void SafeTensorsLoader::LoadSafeTensors() {
   std::ifstream safetensors_file(file_name_, std::ios::binary | std::ios::ate);
   if (!safetensors_file.is_open()) {
-    NLLM_LOG_ERROR << fmt::format("Can't open safetensors file: {}", file_name_);
+    KLLM_LOG_ERROR << fmt::format("Can't open safetensors file: {}", file_name_);
   }
   int64_t file_size = safetensors_file.tellg();
   if (file_size == -1) {
-    NLLM_LOG_ERROR << fmt::format("Invalid safetensors file size: -1, filename: {}", file_name_);
+    KLLM_LOG_ERROR << fmt::format("Invalid safetensors file size: -1, filename: {}", file_name_);
   }
   safetensors_file.seekg(0, std::ios::beg);
 
@@ -53,7 +53,7 @@ void SafeTensorsLoader::LoadSafeTensors() {
   std::string tensor_dict_str;
   tensor_dict_str.resize(header_size);
   safetensors_file.read(&tensor_dict_str[0], header_size);
-  NLLM_LOG_DEBUG << fmt::format("Safetensors file {} Header = {}", file_name_, tensor_dict_str);
+  KLLM_LOG_DEBUG << fmt::format("Safetensors file {} Header = {}", file_name_, tensor_dict_str);
 
   size_t data_size = file_size - header_size - sizeof(size_t);
   weights_buffer_ = new char[data_size];
@@ -75,7 +75,7 @@ void SafeTensorsLoader::LoadSafeTensors() {
 
     std::string tensor_dtype_str = tensor_data["dtype"];
     tensor_data_type_map_[tensor_name] = ConvertDtypeToDataType(tensor_dtype_str);
-    NLLM_LOG_DEBUG << fmt::format("SafeTensors Loader: tensor_name = {}, dtype = {}", tensor_name, tensor_dtype_str);
+    KLLM_LOG_DEBUG << fmt::format("SafeTensors Loader: tensor_name = {}, dtype = {}", tensor_name, tensor_dtype_str);
     tensor_shape_map_[tensor_name] = {};
     for (size_t dim : tensor_data["shape"]) {
       tensor_shape_map_[tensor_name].emplace_back(dim);

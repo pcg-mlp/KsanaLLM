@@ -19,11 +19,11 @@ Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWei
 
   switch (stage) {
     case InferStage::STAGE_CONTEXT:
-      NLLM_LOG_DEBUG << "ContextDecode infer on work_id: " << rank_;
+      KLLM_LOG_DEBUG << "ContextDecode infer on work_id: " << rank_;
       model->ContextDecode(weight, forward_reqs);
       break;
     case InferStage::STATE_DECODE:
-      NLLM_LOG_DEBUG << "Decode infer on work_id: " << rank_;
+      KLLM_LOG_DEBUG << "Decode infer on work_id: " << rank_;
       model->Decode(weight, forward_reqs);
       break;
     default:
@@ -66,7 +66,7 @@ WorkerGroup::~WorkerGroup() { threadpool_->Stop(); }
 
 std::shared_ptr<Worker> WorkerGroup::GetWorker(int rank) {
   if (rank < 0 || rank >= static_cast<int>(workers_.size())) {
-    NLLM_LOG_FATAL << "The worker rank " << rank << " exceed worker size " << workers_.size();
+    KLLM_LOG_FATAL << "The worker rank " << rank << " exceed worker size " << workers_.size();
   }
   return workers_[rank];
 }

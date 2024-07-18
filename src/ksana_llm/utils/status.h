@@ -49,7 +49,7 @@ class Status {
 #define STATUS_CHECK_RETURN(status)          \
   {                                          \
     if (!status.OK()) {                      \
-      NLLM_LOG_ERROR << status.GetMessage(); \
+      KLLM_LOG_ERROR << status.GetMessage(); \
       return status;                         \
     }                                        \
   }
@@ -57,8 +57,8 @@ class Status {
 #define STATUS_CHECK_FAILURE(status)         \
   {                                          \
     if (!status.OK()) {                      \
-      NLLM_LOG_ERROR << status.GetMessage(); \
-      NLLM_THROW(status.GetMessage());       \
+      KLLM_LOG_ERROR << status.GetMessage(); \
+      KLLM_THROW(status.GetMessage());       \
     }                                        \
   }
 

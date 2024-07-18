@@ -22,12 +22,12 @@ class ClientSimulator {
   }
 
   ~ClientSimulator() {
-    NLLM_LOG_INFO << "~ClientSimulator IsAllRequestFinished=" << IsAllRequestFinished();
+    KLLM_LOG_INFO << "~ClientSimulator IsAllRequestFinished=" << IsAllRequestFinished();
     is_destroying_ = true;
     if (!IsAllRequestFinished()) {
       for (auto& it : client_req_map_) {
         it.second.req_group[0]->waiter->Notify();
-        NLLM_LOG_INFO << "Notify unfinished req: " << it.second.req_group[0]->req_id;
+        KLLM_LOG_INFO << "Notify unfinished req: " << it.second.req_group[0]->req_id;
       }
     }
     threadpool_.Stop();
@@ -35,10 +35,10 @@ class ClientSimulator {
 
   void AddInferRequests(int req_group_id, std::vector<std::shared_ptr<InferRequest>>& infer_reqs) {
     std::unordered_map<int, ClientRequest>::iterator iter;
-    NLLM_CHECK_WITH_INFO(infer_reqs.size() > 0, FormatStr("infer_reqs.size()==%d, must >0.", infer_reqs.size()));
+    KLLM_CHECK_WITH_INFO(infer_reqs.size() > 0, FormatStr("infer_reqs.size()==%d, must >0.", infer_reqs.size()));
     {
       std::lock_guard<std::mutex> guard(mux_);
-      NLLM_CHECK_WITH_INFO(client_req_map_.find(req_group_id) == client_req_map_.end(),
+      KLLM_CHECK_WITH_INFO(client_req_map_.find(req_group_id) == client_req_map_.end(),
                            FormatStr("req_group_id %d exists.", req_group_id));
       ClientRequest dummy_req;
       client_req_map_[req_group_id] = dummy_req;
@@ -119,7 +119,7 @@ class ParallelTester {
    public:
     explicit DefaultResultCheckHook(BatchSchedulerEvironmentSimulator* env_simulator) : env_simulator_(env_simulator) {}
     ~DefaultResultCheckHook() {
-      NLLM_LOG_INFO << "~DefaultResultCheckHook, after_exe_num=" << after_exe_num;
+      KLLM_LOG_INFO << "~DefaultResultCheckHook, after_exe_num=" << after_exe_num;
       EXPECT_GT(after_exe_num,
                 0);  // CheckRequestsAfterExecution must be invoked. Maybe this hook is not added to hook list.
     }
@@ -150,8 +150,8 @@ class ParallelTester {
 
   void DoParallelRequestAndCheck(int client_num, std::vector<RequestInfo>& reqs, std::vector<ExeHookInterface*>& hooks,
                                  int timeout = 5) {
-    NLLM_LOG_INFO << "DoParallelRequestAndCheck start.  client_num=" << client_num << ", request_num=" << reqs.size();
-    NLLM_CHECK_WITH_INFO(hooks.size() > 0, "There must be some hooks");
+    KLLM_LOG_INFO << "DoParallelRequestAndCheck start.  client_num=" << client_num << ", request_num=" << reqs.size();
+    KLLM_CHECK_WITH_INFO(hooks.size() > 0, "There must be some hooks");
 
     time_t start_time = ProfileTimer::GetCurrentTime();
     ClientSimulator client_simulator(client_num, batch_scheduler_);
@@ -167,12 +167,12 @@ class ParallelTester {
       scheduled_reqs = batch_scheduler_->Schedule();
       if (scheduled_reqs.empty()) {
         if (client_simulator.IsAllRequestFinished()) {
-          NLLM_LOG_INFO << "All requests finished";
+          KLLM_LOG_INFO << "All requests finished";
           break;
         }
         time_t cur_time = ProfileTimer::GetCurrentTime();
         if ((cur_time - start_time) > timeout) {
-          NLLM_LOG_INFO << "Test Timeout. timeout=" << timeout << " seconds";
+          KLLM_LOG_INFO << "Test Timeout. timeout=" << timeout << " seconds";
           break;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -189,7 +189,7 @@ class ParallelTester {
     for (auto hook : hooks) {
       hook->CheckRequestsAfterExecution(reqs);
     }
-    NLLM_LOG_INFO << "DoParallelRequestAndCheck finished";
+    KLLM_LOG_INFO << "DoParallelRequestAndCheck finished";
   }
 
  private:
@@ -201,7 +201,7 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
  public:
   explicit PrintStepHook(bool print_all_blocks = false) : print_all_blocks_(print_all_blocks) {}
   ~PrintStepHook() {
-    NLLM_LOG_INFO << "~PrintStepHook, before_step_num=" << before_step_num;
+    KLLM_LOG_INFO << "~PrintStepHook, before_step_num=" << before_step_num;
     EXPECT_GT(before_step_num, 0);
   }
 
@@ -222,7 +222,7 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
         }
       }
       ss << "} ";
-      NLLM_LOG_INFO << ss.str();
+      KLLM_LOG_INFO << ss.str();
     }
   }
 

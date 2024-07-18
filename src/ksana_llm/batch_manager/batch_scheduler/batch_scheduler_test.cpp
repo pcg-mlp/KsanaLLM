@@ -37,12 +37,12 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   void GenerateRequests(int request_num, int min_expect_output_num, int max_expect_output_num, int min_input_num,
                         int max_input_num, std::vector<ParallelTester::RequestInfo>& reqs) {
-    NLLM_CHECK_WITH_INFO(
+    KLLM_CHECK_WITH_INFO(
         min_expect_output_num < max_expect_output_num,
         FormatStr("min_expect_output_num % should be larger than 0 and less than max_expect_output_num %d.",
                   min_expect_output_num, max_expect_output_num));
 
-    NLLM_CHECK_WITH_INFO(
+    KLLM_CHECK_WITH_INFO(
         min_input_num < max_input_num,
         FormatStr("min_input_num % should be less than max_input_num %d.", min_input_num, max_input_num));
 

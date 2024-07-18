@@ -61,7 +61,7 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
   }
-  NLLM_LOG_DEBUG << "Get model instance size: " << model_configs.size();
+  KLLM_LOG_DEBUG << "Get model instance size: " << model_configs.size();
 
   size_t max_batch_size = 0;
   size_t max_vocab_size = 0;
@@ -72,7 +72,7 @@ Status InferenceEngine::Initialize() {
   }
   batch_manager_config.batch_scheduler_config.max_batch_size = max_batch_size;
   batch_manager_config.batch_scheduler_config.max_vocab_size = max_vocab_size;
-  NLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size = " << max_batch_size
+  KLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size = " << max_batch_size
                  << " Max Vocab Size = " << max_vocab_size;
   batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
 
@@ -89,7 +89,7 @@ Status InferenceEngine::Initialize() {
 }
 
 Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
-  NLLM_LOG_DEBUG << "Handle request id " << req->req_id;
+  KLLM_LOG_DEBUG << "Handle request id " << req->req_id;
   Status handle_req_status = batch_manager_->Enqueue(req);
   if (!handle_req_status.OK()) {
     return handle_req_status;
@@ -98,7 +98,7 @@ Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
 }
 
 Status InferenceEngine::HandleLoop() {
-  NLLM_LOG_DEBUG << "Start handler";
+  KLLM_LOG_DEBUG << "Start handler";
 
   while (!terminated_) {
     std::pair<Status, std::shared_ptr<Request>> req_pair;
@@ -154,14 +154,14 @@ Status InferenceEngine::Stop() {
   handle_thread_.join();
 
   // Wait all request done.
-  NLLM_LOG_DEBUG << "Waiting all running request.";
+  KLLM_LOG_DEBUG << "Waiting all running request.";
   Status status = batch_manager_->WaitAllDone();
   if (!status.OK()) {
-    NLLM_LOG_ERROR << "Wait all requests done error:" << status.ToString();
+    KLLM_LOG_ERROR << "Wait all requests done error:" << status.ToString();
   }
 
   // Stop the batch manger.
-  NLLM_LOG_DEBUG << "Stop batch manager.";
+  KLLM_LOG_DEBUG << "Stop batch manager.";
   batch_manager_->Stop();
 
   // Stop profiler, after profiler.

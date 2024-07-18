@@ -10,7 +10,7 @@ constexpr int CUDA_MEMPOOL_MIN_DRIVER_VERSION = 11030;
 
 template <int T>
 void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
-  NLLM_LOG_DEBUG << "Init nvidia memroy pool on worker " << worker_id;
+  KLLM_LOG_DEBUG << "Init nvidia memroy pool on worker " << worker_id;
   CUDA_CHECK(cudaDriverGetVersion(&cuda_driver_version_));
   if (cuda_driver_version_ >= CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
     int device_supports_memory_pools = 0;
@@ -30,7 +30,7 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
         int can_access = 0;
         CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, access_id, worker_id));
         if (can_access == 0) {
-          NLLM_LOG_ERROR << "GPU " << access_id << " is not capable of directly accessing memory of peer GPU "
+          KLLM_LOG_ERROR << "GPU " << access_id << " is not capable of directly accessing memory of peer GPU "
                          << worker_id;
           exit(-1);
         }
@@ -43,7 +43,7 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
 
 template <int T>
 void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
-  NLLM_LOG_DEBUG << "Init nvidia cublas/cublasLt on worker " << worker_id;
+  KLLM_LOG_DEBUG << "Init nvidia cublas/cublasLt on worker " << worker_id;
   cublasHandle_t cublas_handle;
   cublasLtHandle_t cublaslt_handle;
   CUDA_CHECK(cublasCreate(&cublas_handle));
@@ -57,7 +57,7 @@ void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
 
 template <int T>
 void NvidiaContextExtension<T>::InitNcclParam() {
-  NLLM_LOG_DEBUG << "Init nvidia nccl param.";
+  KLLM_LOG_DEBUG << "Init nvidia nccl param.";
   reduce_metas_.resize(max_reduce_inputs_num_);
   reduce_buffers_.resize(base_ptr_->tensor_parallel_size_);
   reduce_inputs_.resize(max_reduce_inputs_num_);
@@ -84,7 +84,7 @@ void NvidiaContextExtension<T>::Initialize() {
   CUDA_CHECK(cudaDriverGetVersion(&base_ptr_->driver_version_));
 
   for (int worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
-    NLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
+    KLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
 
     CUDA_CHECK(cudaSetDevice(worker_id));
 

@@ -36,7 +36,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
     size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
     max_block_num = std::min(max_block_num, (device_free - reserved_memory_size) / GetBlockManager()->GetBlockSize());
   }
-  NLLM_LOG_INFO << "max_block_num " << max_block_num;
+  KLLM_LOG_INFO << "max_block_num " << max_block_num;
 
   size_t extra_token_number = 0;
   size_t extra_block_number = 0;
@@ -108,7 +108,7 @@ ModelInput::~ModelInput() {
 
 void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage) {
   batch_size = forward_reqs.size();
-  NLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
+  KLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
     std::invalid_argument(fmt::format("ModelInput empty forward requests."));
   } else if (batch_size > (size_t)model_config_.max_batch_size) {
@@ -134,7 +134,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
   MemcpyAsync(kv_cache_offset_tensor.GetPtr<void>(), kv_cache_offset_list.data(),
               kv_cache_offset_list.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
-  NLLM_LOG_DEBUG << " Total Block Num " << total_block_num;
+  KLLM_LOG_DEBUG << " Total Block Num " << total_block_num;
 
   if (is_context_stage) {
     PrepareKVCacheBlocks(forward_reqs);
@@ -261,7 +261,7 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   std::vector<size_t> input_prefix_list_uint64(batch_size + 1, 0ul);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     if (forward_reqs[idx].output_tokens->size() < (size_t)forward_reqs[idx].prefix_cache_len) {
-      NLLM_LOG_ERROR << fmt::format("Forward Request input tokens {} < prefix cache len {}",
+      KLLM_LOG_ERROR << fmt::format("Forward Request input tokens {} < prefix cache len {}",
                                     forward_reqs[idx].output_tokens->size(), forward_reqs[idx].prefix_cache_len);
       throw std::runtime_error(fmt::format("Forward Request input tokens {} < prefix cache len {}",
                                            forward_reqs[idx].output_tokens->size(),

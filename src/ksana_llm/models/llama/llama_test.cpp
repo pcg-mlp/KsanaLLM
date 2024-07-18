@@ -32,7 +32,7 @@ class LlamaTest : public testing::Test {
 
     BlockManagerConfig block_manager_config;
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-    NLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
+    KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
     block_manager = new BlockManager(block_manager_config, context_);
     block_manager->PreAllocateBlocks();
@@ -54,7 +54,7 @@ TEST_F(LlamaTest, ForwardTest) {
 
   std::filesystem::path model_path(model_config.path);
   if (!std::filesystem::exists(model_path)) {
-    NLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
+    KLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
     EXPECT_TRUE(std::filesystem::exists(model_path));
   }
   Event start;
@@ -119,7 +119,7 @@ TEST_F(LlamaTest, ForwardTest) {
   forward.kv_cache_ptrs.resize(1);
   GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
   Memset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
-  NLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
+  KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
                                 forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
   std::vector<ForwardRequest> forward_reqs = {forward};
   EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());

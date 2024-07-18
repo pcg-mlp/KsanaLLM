@@ -109,7 +109,7 @@ Status BaseAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<v
       addrs.push_back(it->second.address);
       continue;
     }
-    NLLM_LOG_ERROR << "Get block id " << block_id << " address error on device " << allocator_config_.device;
+    KLLM_LOG_ERROR << "Get block id " << block_id << " address error on device " << allocator_config_.device;
     return Status(RET_SEGMENT_FAULT, FormatStr("Get block address error, block id ", block_id));
   }
   return Status();

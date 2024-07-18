@@ -64,7 +64,7 @@ class OptionalFile {
 
   bool FileExists() {
     bool is_exists = std::filesystem::exists(target_file);
-    NLLM_LOG_DEBUG << fmt::format("File {} is exists? {}", target_file, is_exists);
+    KLLM_LOG_DEBUG << fmt::format("File {} is exists? {}", target_file, is_exists);
     return is_exists;
   }
 

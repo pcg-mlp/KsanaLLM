@@ -28,7 +28,7 @@ Status GetCustomNameList(std::vector<std::string>& weight_name_list, std::vector
   nlohmann::json weight_map_json;
   std::ifstream file(weight_path);
   if (!file.is_open()) {
-    NLLM_LOG_ERROR << fmt::format("Load weight map json: {} error.", weight_path) << std::endl;
+    KLLM_LOG_ERROR << fmt::format("Load weight map json: {} error.", weight_path) << std::endl;
     return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load weight map json: {} error.", weight_path));
   } else {
     file >> weight_map_json;

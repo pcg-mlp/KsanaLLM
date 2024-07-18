@@ -57,7 +57,7 @@ static const char* GetErrorString(cudaError_t error) { return cudaGetErrorString
 template <typename T>
 void CheckCUDAError(T result, const char* func, const char* file, const int line) {
   if (result) {
-    NLLM_LOG_ERROR << fmt::format("CUDA runtime error: {} {}:{}@{}", GetErrorString(result), file, line, func);
+    KLLM_LOG_ERROR << fmt::format("CUDA runtime error: {} {}:{}@{}", GetErrorString(result), file, line, func);
     abort();
     exit(RetCode::RET_INVALID_ARGUMENT);
   }

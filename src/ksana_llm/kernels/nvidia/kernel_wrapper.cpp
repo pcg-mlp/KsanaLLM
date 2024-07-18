@@ -264,7 +264,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                      seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
                      max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
   if (seqlenq_ngroups_swapped) {
-    NLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, set the output tensor to nullptr.";
+    KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, set the output tensor to nullptr.";
     at::Tensor& out_data = mha_output[0];
     size_t total_size = out_data.numel() * out_data.element_size();
     CUDA_CHECK(cudaMemcpyAsync(out, out_data.data_ptr(), total_size, cudaMemcpyDeviceToDevice, stream));
@@ -416,7 +416,7 @@ void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data,
   llm_kernels::nvidia::CustomAllreduce* reduce_op = static_cast<llm_kernels::nvidia::CustomAllreduce*>(*ptr);
   // hack buffer registration
   if (input != input_handles[rank]) {
-    NLLM_LOG_ERROR << "input != input_handles[rank]";
+    KLLM_LOG_ERROR << "input != input_handles[rank]";
   }
   std::vector<std::string> handles;
   handles.reserve(tp_size);
@@ -470,7 +470,7 @@ ncclDataType_t GetNcclDataType<__nv_bfloat16>() {
 template <typename T>
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
                    cudaStream_t& stream) {
-  NLLM_CHECK_WITH_INFO(input_shape.size() <= 4ul,
+  KLLM_CHECK_WITH_INFO(input_shape.size() <= 4ul,
                        fmt::format("input shape dims number {} > 4 is not supported", input_shape.size()));
   if (input_shape.empty()) {
     return;

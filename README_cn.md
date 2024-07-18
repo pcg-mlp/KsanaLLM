@@ -100,7 +100,7 @@ git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
 
 # change the model_dir in ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml if needed
 
-# set environment variable `NLLM_LOG_LEVEL=DEBUG` before run to get more log info
+# set environment variable `KLLM_LOG_LEVEL=DEBUG` before run to get more log info
 # the serving log locate in log/ksana_llm.log
 
 # ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml's tensor_para_size equal the GPUs/NPUs number

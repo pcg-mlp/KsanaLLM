@@ -37,18 +37,18 @@ Status BatchManager::Initialize() {
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
-  NLLM_LOG_DEBUG << "register model instance " << model_instance->name << " : " << model_instance.get();
+  KLLM_LOG_DEBUG << "register model instance " << model_instance->name << " : " << model_instance.get();
   model_instances_[model_instance->name] = model_instance;
   return Status();
 }
 
 Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
-  NLLM_LOG_DEBUG << "batch manager enqueue req id " << req->req_id;
+  KLLM_LOG_DEBUG << "batch manager enqueue req id " << req->req_id;
 
   Status enqueue_status = Status(RetCode::RET_SUCCESS);
 
   if (model_instances_.find(req->model_name) == model_instances_.end()) {
-    NLLM_LOG_ERROR << "req->model_name=" << req->model_name << " not found!";
+    KLLM_LOG_ERROR << "req->model_name=" << req->model_name << " not found!";
     req->finish_status = Status(RET_INVALID_ARGUMENT, fmt::format("Model {} not found.", req->model_name));
     req->waiter->Notify();
     return req->finish_status;
@@ -82,7 +82,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
         infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
         GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
         // NOTE(karlluo): preallocate prefix kv cache for infer request
-        NLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
+        KLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
       }
     }
   }
@@ -93,10 +93,10 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
   enqueue_status = batch_scheduler_->AddInferRequest(infer_request_group);
   if (enqueue_status.OK()) {
-    NLLM_LOG_DEBUG << "batch scheduler: added req id " << req->req_id << " and "
+    KLLM_LOG_DEBUG << "batch scheduler: added req id " << req->req_id << " and "
                    << infer_request_group[0]->input_tokens.size() << " input tokens";
   } else {
-    NLLM_LOG_ERROR << "batch scheduler: add req id " << req->req_id << " and "
+    KLLM_LOG_ERROR << "batch scheduler: add req id " << req->req_id << " and "
                    << infer_request_group[0]->input_tokens.size()
                    << " input tokens failed, message: " << enqueue_status.ToString();
     if (req->sampling_config.num_beams > 1) {
@@ -135,7 +135,7 @@ Status BatchManager::Process() {
       REPORT_TIME_US(batch_manager_step_us);
       Status status = llm_runtime_->Step(scheduled_reqs);
       if (!status.OK()) {
-        NLLM_LOG_ERROR << status.ToString();
+        KLLM_LOG_ERROR << status.ToString();
       }
     }
   }
@@ -147,7 +147,7 @@ Status BatchManager::Start() {
   // Check config here, because the block number is determined after all models loaded.
   size_t total_token_num = GetBlockManager()->GetDeviceFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum();
 #ifdef ENABLE_CUDA
-  NLLM_CHECK_WITH_INFO(total_token_num >= (batch_manager_config_.batch_scheduler_config.max_token_len),
+  KLLM_CHECK_WITH_INFO(total_token_num >= (batch_manager_config_.batch_scheduler_config.max_token_len),
                        "Total device block_num * block_token_size must large than max_token_len.");
 #endif
 
@@ -157,7 +157,7 @@ Status BatchManager::Start() {
 }
 
 Status BatchManager::Stop() {
-  NLLM_LOG_DEBUG << "Stop batch manager.";
+  KLLM_LOG_DEBUG << "Stop batch manager.";
 
   terminated_ = true;
 
@@ -168,7 +168,7 @@ Status BatchManager::Stop() {
     batch_manager_thread_->join();
   }
 
-  NLLM_LOG_DEBUG << "batch manager stopped.";
+  KLLM_LOG_DEBUG << "batch manager stopped.";
   return Status();
 }
 

@@ -25,11 +25,11 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
     device_num_ = tp_num;
     g_cur_device_id = 0;
-    NLLM_LOG_INFO << "device_num=" << device_num_ << ", block_token_num=" << block_token_num_
+    KLLM_LOG_INFO << "device_num=" << device_num_ << ", block_token_num=" << block_token_num_
                   << ", host_block_num=" << host_block_num_ << ", device_block_num=" << device_block_num_;
-    NLLM_CHECK_WITH_INFO((host_block_num_ <= DEVICE_ID_OFFSET) && (device_block_num_ < DEVICE_ID_OFFSET),
+    KLLM_CHECK_WITH_INFO((host_block_num_ <= DEVICE_ID_OFFSET) && (device_block_num_ < DEVICE_ID_OFFSET),
                          FormatStr("block_num should be less than DEVICE_ID_OFFSET=%d", DEVICE_ID_OFFSET));
-    NLLM_CHECK_WITH_INFO((device_num_ <= HOST_DEVICE_ID),
+    KLLM_CHECK_WITH_INFO((device_num_ <= HOST_DEVICE_ID),
                          FormatStr("device_num should be less than HOST_DEVICE_ID=%d", HOST_DEVICE_ID));
     // Init free block ids and kv cache contents
     for (int i = 0; i < host_block_num_; i++) {
@@ -63,7 +63,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
       PreparePrefixCacheBlocks();
     }
 
-    NLLM_LOG_DEBUG << "BlockManagerSimulator started";
+    KLLM_LOG_DEBUG << "BlockManagerSimulator started";
   }
 
   ~BlockManagerSimulator() {}
@@ -77,7 +77,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
   // This function maybe called concurrently from different threads.
   // DO NOT store the device id in variable.
   void SetDeviceId(int device_id) {
-    NLLM_LOG_DEBUG << "SetDeviceId from " << g_cur_device_id << " to " << device_id;
+    KLLM_LOG_DEBUG << "SetDeviceId from " << g_cur_device_id << " to " << device_id;
     g_cur_device_id = device_id;
   }
 
@@ -86,7 +86,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // The data type of the memory block allocated.
   DataType GetDtype() {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return TYPE_INVALID;
   }
 
@@ -98,7 +98,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Allocate contiguous memory on device.
   Status AllocateContiguous(int64_t size, int& block_id) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
@@ -110,25 +110,25 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Free contiguous memory on device.
   Status FreeContiguous(int block_id) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
   // Check contiguous memory is in used.
   bool IsContiguousUsed(const int block_id) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return false;
   }
 
   // Get memory addresses of blocked memory on device.
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
   // Get memory address of contiguous memory on device.
   Status GetContiguousPtr(int block_id, void*& addr) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
@@ -146,7 +146,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Allocate contiguous memory on host.
   Status AllocateHostContiguous(int64_t size, int& block_id) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
@@ -157,19 +157,19 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Free contiguous memory on host.
   Status FreeHostContiguous(int block_id) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
   // Get memory addresses of blocked memory on host.
   Status GetHostBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
   // Get memory address of contiguous memory on host.
   Status GetHostContiguousPtr(int block_id, void*& addr) {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return Status();
   }
 
@@ -184,7 +184,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
   Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
                  const int host_block_num_to_add) {
     int device_id = GetDeviceId();
-    NLLM_LOG_DEBUG << "SwapOut on device " << device_id << " device_blocks.size()=" << device_blocks.size()
+    KLLM_LOG_DEBUG << "SwapOut on device " << device_id << " device_blocks.size()=" << device_blocks.size()
                    << ", host_blocks.size()=" << host_blocks.size()
                    << ", host_block_num_to_add=" << host_block_num_to_add;
     AllocateHostBlocks(device_blocks.size() + host_block_num_to_add, host_blocks);
@@ -205,7 +205,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
   // Swap in blocks from host to device.
   Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) {
     int device_id = GetDeviceId();
-    NLLM_LOG_DEBUG << "SwapIn on device " << device_id << ", host_blocks.size()=" << host_blocks.size()
+    KLLM_LOG_DEBUG << "SwapIn on device " << device_id << ", host_blocks.size()=" << host_blocks.size()
                    << ", device_blocks.size()=" << device_blocks.size();
     AllocateBlocks(host_blocks.size(), device_blocks);
 
@@ -218,7 +218,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
 
     FreeHostBlocks(host_blocks);
-    NLLM_LOG_DEBUG << "SwapIn finished on device " << device_id << ". host_blocks.size()=" << host_blocks.size()
+    KLLM_LOG_DEBUG << "SwapIn finished on device " << device_id << ". host_blocks.size()=" << host_blocks.size()
                    << ", device_blocks.size()=" << device_blocks.size();
     stat_.swapin_succ_num += host_blocks.size();
     return Status();
@@ -232,7 +232,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Get the size in bytes for one block.
   size_t GetBlockSize() const {
-    NLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "Not implemented");
     return 0;
   }
 
@@ -304,7 +304,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
         CollectKvCacheContentFromDevice(d_i, req->kv_cache_blocks[d_i], kv_cache_token_num, temp_contents);
         // Check results
         for (int i = 0; i < kv_cache_token_num; i++) {
-          NLLM_CHECK_WITH_INFO(
+          KLLM_CHECK_WITH_INFO(
               kv_cache_contents[i] == temp_contents[i] - d_i,
               FormatStr("Kv cache content diff between device 0 and device %d, token_idx=%d.", d_i, i));
         }
@@ -320,12 +320,12 @@ class BlockManagerSimulator : public BlockManagerInterface {
     int offset_in_block = offset % block_token_num_;
     for (int d_i = 0; d_i < device_num_; d_i++) {
       std::vector<int>& kv_cache_blocks = req->kv_cache_blocks[d_i];
-      NLLM_CHECK_WITH_INFO(
+      KLLM_CHECK_WITH_INFO(
           kv_cache_blocks.size() > (size_t)block_offset,
           FormatStr("Block not exist. Req id %d, block offset=%d, device_idx=%d, kv_cache_blocks.size()=%d.",
                     req->req_id, block_offset, d_i, kv_cache_blocks.size()));
       int block_idx = kv_cache_blocks[block_offset];
-      NLLM_CHECK_WITH_INFO(device_kv_cache_contents_[d_i].find(block_idx) != device_kv_cache_contents_[d_i].end(),
+      KLLM_CHECK_WITH_INFO(device_kv_cache_contents_[d_i].find(block_idx) != device_kv_cache_contents_[d_i].end(),
                            FormatStr("Block kv cache content not exist on device %d. Req id %d, block idx=%d.", d_i,
                                      req->req_id, block_idx));
       device_kv_cache_contents_[d_i][block_idx][offset_in_block] = output_token + d_i;
@@ -349,7 +349,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
     for (int i = 0; i < token_num; i++) {
       int block_offset = i / block_token_num_;
       int offset_in_block = i % block_token_num_;
-      NLLM_CHECK_WITH_INFO((size_t)block_offset < block_list.size(),
+      KLLM_CHECK_WITH_INFO((size_t)block_offset < block_list.size(),
                            FormatStr("block list on device %d is broken. size=%d, visiting block idx=%d.", device_idx,
                                      block_list.size(), block_offset));
       int block_idx = block_list[block_offset];
@@ -361,7 +361,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
                      std::unordered_set<int>& used_blocks) {
     std::lock_guard<std::recursive_mutex> guard(mux_);
     if (block_num > free_blocks.size()) {
-      NLLM_LOG_DEBUG << "Failed to alloc on device " << device_id << ", block_num=" << block_num
+      KLLM_LOG_DEBUG << "Failed to alloc on device " << device_id << ", block_num=" << block_num
                      << ", free_blocks.size()=" << free_blocks.size();
       return Status(RET_ALLOCATE_FAIL,
                     FormatStr("No more free blocks, expect %d, free %d", block_num, free_blocks.size()));
@@ -379,7 +379,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
     for (auto block_id : blocks) {
       ss_blocks << block_id << ", ";
     }
-    NLLM_LOG_DEBUG << "Alloc OK on device " << device_id << ", alloc block num=" << blocks.size()
+    KLLM_LOG_DEBUG << "Alloc OK on device " << device_id << ", alloc block num=" << blocks.size()
                    << ", free_blocks.size()=" << free_blocks.size() << ", used_blocks.size()=" << used_blocks.size()
                    << ", blocks={ " << ss_blocks.str();
     return Status();
@@ -394,7 +394,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
         free_blocks.insert(*it);
         used_blocks.erase(it);
       } else {
-        NLLM_CHECK_WITH_INFO(false, "Double free");
+        KLLM_CHECK_WITH_INFO(false, "Double free");
         return Status(RET_FREE_FAIL, fmt::format("Double free error, block id {}", block_id));
       }
     }
@@ -403,7 +403,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
       ss_blocks << block_id << ", ";
     }
 
-    NLLM_LOG_DEBUG << "Free OK on device " << device_id << ", block num=" << blocks.size()
+    KLLM_LOG_DEBUG << "Free OK on device " << device_id << ", block num=" << blocks.size()
                    << ", free_blocks.size()=" << free_blocks.size() << ", used_blocks.size()=" << used_blocks.size()
                    << ", blocks={" << ss_blocks.str();
     return Status();
@@ -413,16 +413,16 @@ class BlockManagerSimulator : public BlockManagerInterface {
                            std::map<int, std::vector<int>>& src_kv_contents,
                            std::map<int, std::vector<int>>& dst_kv_contents) {
     std::lock_guard<std::recursive_mutex> guard(mux_);
-    NLLM_CHECK_WITH_INFO(src_blks.size() <= dst_blks.size(),
+    KLLM_CHECK_WITH_INFO(src_blks.size() <= dst_blks.size(),
                          FormatStr("src_blks.size > dst_blks.size(), %d, %d", src_blks.size(), dst_blks.size()));
     for (size_t i = 0; i < src_blks.size(); i++) {
       int src_blk = src_blks[i];
       int dst_blk = dst_blks[i];
       auto src_content_it = src_kv_contents.find(src_blk);
       auto dst_content_it = dst_kv_contents.find(dst_blk);
-      NLLM_CHECK_WITH_INFO(src_content_it != src_kv_contents.end(),
+      KLLM_CHECK_WITH_INFO(src_content_it != src_kv_contents.end(),
                            FormatStr("Kv cache content of src block %d does not exist", src_blk));
-      NLLM_CHECK_WITH_INFO(dst_content_it != dst_kv_contents.end(),
+      KLLM_CHECK_WITH_INFO(dst_content_it != dst_kv_contents.end(),
                            FormatStr("Kv cache content of dst block %d does not exist", dst_blk));
       for (int j = 0; j < block_token_num_; j++) {
         dst_content_it->second[j] = src_content_it->second[j];
@@ -434,7 +434,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
     std::lock_guard<std::recursive_mutex> guard(mux_);
     for (auto blk : blks) {
       auto content_it = kv_contents.find(blk);
-      NLLM_CHECK_WITH_INFO(content_it != kv_contents.end(),
+      KLLM_CHECK_WITH_INFO(content_it != kv_contents.end(),
                            FormatStr("Kv cache content of block %d does not exist", blk));
       for (int i = 0; i < block_token_num_; i++) {
         content_it->second[i] = DEFAULT_KV_CONTENT;
@@ -513,7 +513,7 @@ class BatchSchedulerEvironmentSimulator {
 
       // Generate a token
       int output_token = GetEndId();
-      NLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) != req_output_num_map_.end(),
+      KLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) != req_output_num_map_.end(),
                            FormatStr("Req id %d is not exist in req_output_num_map.", req->req_id));
       if ((req->output_tokens.size() - req->input_tokens.size()) < (size_t)(req_output_num_map_[req->req_id] - 1)) {
         std::vector<int> kv_contents;
@@ -558,7 +558,7 @@ class BatchSchedulerEvironmentSimulator {
   std::vector<std::shared_ptr<InferRequest>> InitRequest(int req_id, int input_token_num, int expected_output_token_num,
                                                          std::shared_ptr<Request>& req,
                                                          const std::vector<std::pair<int, int>>& seeds) {
-    NLLM_LOG_DEBUG << "Init req " << req_id << ", input_token_num=" << input_token_num
+    KLLM_LOG_DEBUG << "Init req " << req_id << ", input_token_num=" << input_token_num
                    << ", expect_output_token_num=" << expected_output_token_num;
     ksana_llm::KsanaPythonInput ksana_python_input;
     ksana_python_input.sampling_config.num_beams = 0;
@@ -588,7 +588,7 @@ class BatchSchedulerEvironmentSimulator {
   void CheckRequestOutput(const std::shared_ptr<InferRequest>& req) {
     // Check request results
     int expected_output_token_num = req_output_num_map_[req->req_id];
-    NLLM_LOG_DEBUG << "Checking req_id=" << req->req_id << ", input_tokens.size=" << req->input_tokens.size()
+    KLLM_LOG_DEBUG << "Checking req_id=" << req->req_id << ", input_tokens.size=" << req->input_tokens.size()
                    << ", output_tokens.size=" << req->output_tokens.size()
                    << ", expected_output_token_num=" << expected_output_token_num;
     std::vector<int> expect_output_tokens;
@@ -608,22 +608,22 @@ class BatchSchedulerEvironmentSimulator {
 
  private:
   void SetRequestOutputTokenNum(std::shared_ptr<InferRequest>& req, int output_token_num) {
-    NLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) == req_output_num_map_.end(),
+    KLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) == req_output_num_map_.end(),
                          FormatStr("SetRequestOutputTokenNum: Req id %d is already set.", req->req_id));
     req_output_num_map_[req->req_id] = output_token_num;
   }
 
   void SetRequestGenerationSeeds(int req_id, const std::vector<std::pair<int, int>>& seeds) {
-    NLLM_CHECK_WITH_INFO(req_generation_seeds_.find(req_id) == req_generation_seeds_.end(),
+    KLLM_CHECK_WITH_INFO(req_generation_seeds_.find(req_id) == req_generation_seeds_.end(),
                          FormatStr("SetRequestGenerationSeed: Req id %d is already set.", req_id));
-    NLLM_CHECK_WITH_INFO(seeds.size() > 0,
+    KLLM_CHECK_WITH_INFO(seeds.size() > 0,
                          FormatStr("SetRequestGenerationSeed: Trying to set empty seed for req %d.", req_id));
-    NLLM_CHECK_WITH_INFO(seeds[0].first == 0, "SetRequestGenerationSeed: First offset must be 0.");
+    KLLM_CHECK_WITH_INFO(seeds[0].first == 0, "SetRequestGenerationSeed: First offset must be 0.");
 
     if (seeds.size() > 0) {
       int last_offset = 0;
       for (size_t i = 1; i < seeds.size(); i++) {
-        NLLM_CHECK_WITH_INFO(seeds[i].first > last_offset, "SetRequestGenerationSeed: Wrong offset order.");
+        KLLM_CHECK_WITH_INFO(seeds[i].first > last_offset, "SetRequestGenerationSeed: Wrong offset order.");
         last_offset = seeds[i].first;
       }
     }
@@ -637,7 +637,7 @@ class BatchSchedulerEvironmentSimulator {
   }
 
   int GetSeed(int offset, const std::vector<std::pair<int, int>>& seeds) {
-    NLLM_CHECK_WITH_INFO(offset >= 0, "");
+    KLLM_CHECK_WITH_INFO(offset >= 0, "");
     int seed = -1;
     for (auto& it : seeds) {
       if (offset >= it.first) {

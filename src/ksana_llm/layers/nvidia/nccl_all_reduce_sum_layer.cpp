@@ -26,7 +26,7 @@ Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
                       input_tensors[0].GetElementNumber(), GetNcclDataType<T>(), ncclSum,
                       context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
-      NLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
+      KLLM_LOG_DEBUG << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
     }
     NCCL_CHECK(ncclGroupEnd());
   } else {

@@ -30,7 +30,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
           sizeof(float) * batch_schedule_config_.max_vocab_size + (sizeof(float) + sizeof(float*)) * max_batch_size,
       device_buffer_block_id_);
   GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
-  NLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
+  KLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
                  << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(RandState) + sizeof(int*)) * max_batch_size +
                         sizeof(float) * batch_schedule_config_.max_vocab_size + sizeof(float) * max_batch_size;
   device_output_tokens_ = static_cast<uint32_t*>(device_buffer_);
@@ -47,7 +47,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
 
   if (sizeof(uint32_t) != sizeof(int)) {
-    NLLM_LOG_ERROR << fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int));
+    KLLM_LOG_ERROR << fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int));
     abort();
     exit(RetCode::RET_SEGMENT_FAULT);
   }

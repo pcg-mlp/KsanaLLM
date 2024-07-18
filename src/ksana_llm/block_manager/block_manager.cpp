@@ -21,7 +21,7 @@ namespace ksana_llm {
 
 BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context)
     : block_manager_config_(block_manager_config), context_(context) {
-  NLLM_CHECK_WITH_INFO(
+  KLLM_CHECK_WITH_INFO(
       block_manager_config.device_allocator_config.block_size == block_manager_config.host_allocator_config.block_size,
       FormatStr("The block size of host and device must be equal, %d vs %d",
                 block_manager_config.device_allocator_config.block_size,
@@ -52,23 +52,23 @@ Status BlockManager::ResetPreAllocatedBlocks() {
 
   Status status = CalculateBlockNumber(device_blocks_num, host_block_num);
   if (!status.OK()) {
-    NLLM_LOG_ERROR << "Calculate block num error.";
+    KLLM_LOG_ERROR << "Calculate block num error.";
     return status;
   }
 
-  NLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_block_num;
+  KLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_block_num;
 
-  NLLM_LOG_INFO << "Start to preallocate host blocks.";
+  KLLM_LOG_INFO << "Start to preallocate host blocks.";
   host_allocator_->ResetPreAllocatedBlocks(host_block_num);
-  NLLM_LOG_INFO << "Finish to preallocate host blocks.";
+  KLLM_LOG_INFO << "Finish to preallocate host blocks.";
 
   for (auto& allocator : device_allocators_) {
-    NLLM_LOG_INFO << "Start to preallocate device blocks on " << allocator->GetDeviceId();
+    KLLM_LOG_INFO << "Start to preallocate device blocks on " << allocator->GetDeviceId();
     allocator->ResetPreAllocatedBlocks(device_blocks_num);
-    NLLM_LOG_INFO << "Finish to preallocate device blocks on " << allocator->GetDeviceId();
+    KLLM_LOG_INFO << "Finish to preallocate device blocks on " << allocator->GetDeviceId();
   }
 
-  NLLM_LOG_INFO << "Reset block num finish.";
+  KLLM_LOG_INFO << "Reset block num finish.";
   return Status();
 }
 
@@ -87,13 +87,13 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
     return status;
   }
 
-  NLLM_LOG_INFO << "Get memory info, host_total:" << host_total << ", host_free:" << host_free
+  KLLM_LOG_INFO << "Get memory info, host_total:" << host_total << ", host_free:" << host_free
                 << ", device_total:" << device_total << ", device_free:" << device_free;
 
-  NLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
+  KLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
                        "reserved_device_memory_ratio must be large than 0.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0, "lora_host_memory_factor should >= 1.0");
-  NLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 0.0, "block_host_memory_factor should >= 0.0");
+  KLLM_CHECK_WITH_INFO(block_manager_config_.lora_host_memory_factor >= 1.0, "lora_host_memory_factor should >= 1.0");
+  KLLM_CHECK_WITH_INFO(block_manager_config_.block_host_memory_factor >= 0.0, "block_host_memory_factor should >= 0.0");
 
   const size_t alignment_bytes = 8;
   size_t device_block_memory_size = 0;
@@ -138,7 +138,7 @@ int BlockManager::GetDeviceId() {
 
 std::shared_ptr<DeviceAllocator>& BlockManager::GetDeviceAllocator() {
   size_t device_id = static_cast<size_t>(GetDeviceId());
-  NLLM_CHECK_WITH_INFO(device_id < device_allocators_.size(), fmt::format("Invalid device id {}", device_id));
+  KLLM_CHECK_WITH_INFO(device_id < device_allocators_.size(), fmt::format("Invalid device id {}", device_id));
   return device_allocators_[device_id];
 }
 
@@ -258,10 +258,10 @@ size_t BlockManager::GetBlockTokenNum() const { return block_manager_config_.dev
 
 Status BlockManager::PreparePrefixCacheBlocks() {
   if (block_manager_config_.prefix_cache_len == 0) {
-    NLLM_LOG_DEBUG << "Disable prefix cache";
+    KLLM_LOG_DEBUG << "Disable prefix cache";
     return Status();
   } else if (block_manager_config_.prefix_cache_len > 0) {
-    NLLM_LOG_DEBUG << "Prefix cache token number " << block_manager_config_.prefix_cache_len;
+    KLLM_LOG_DEBUG << "Prefix cache token number " << block_manager_config_.prefix_cache_len;
   } else if (block_manager_config_.prefix_cache_len == -1) {
     throw std::invalid_argument("Not support prefix_cache_len == -1, autofix mode");
   } else {

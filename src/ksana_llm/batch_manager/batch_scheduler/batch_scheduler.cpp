@@ -30,7 +30,7 @@ namespace ksana_llm {
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, int tp_num)
     : batch_scheduler_config_(batch_scheduler_config) {
   // Config validation.
-  NLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens > batch_scheduler_config_.max_token_len,
+  KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens > batch_scheduler_config_.max_token_len,
                        FormatStr("The max_step_tokens must large than max_token_len, %d vs %d.",
                                  batch_scheduler_config_.max_step_tokens, batch_scheduler_config_.max_token_len));
 
@@ -40,10 +40,10 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
 
 Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
   std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
-  NLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
+  KLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
                  << infer_request->sampling_config.max_new_tokens;
   if (CheckWaitingQueueFull(infer_request_group.size())) {
-    NLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
+    KLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
 
     infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
     for (auto& infer_request : infer_request_group) {
@@ -55,7 +55,7 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   }
 
   if (CheckRequestExceedLength(infer_request)) {
-    NLLM_LOG_DEBUG << "input len or logits_custom_length is too long, req " << infer_request->req_id << " failed.";
+    KLLM_LOG_DEBUG << "input len or logits_custom_length is too long, req " << infer_request->req_id << " failed.";
 
     infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length or logits_custom_length exceeds the limit.");
     for (auto& infer_request : infer_request_group) {
@@ -93,7 +93,7 @@ inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<Infer
 }
 
 std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
-  NLLM_LOG_DEBUG << "Try scheduler loop.";
+  KLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(batch_state_->queue_mutex);
 
   schedule_strategy_->Schedule();
@@ -119,7 +119,7 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
   REPORT_METRIC(block_manager_free, GetBlockManager()->GetDeviceFreeBlockNumber());
   REPORT_METRIC(block_manager_used, GetBlockManager()->GetDeviceUsedBlockNumber());
 
-  NLLM_LOG_DEBUG << "batch scheduler result: " << batch_state_->running_queue.size();
+  KLLM_LOG_DEBUG << "batch scheduler result: " << batch_state_->running_queue.size();
   return batch_state_->running_queue;
 }
 

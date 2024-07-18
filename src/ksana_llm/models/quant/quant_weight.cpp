@@ -82,7 +82,7 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
   if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos) {
     if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
       if (weight_shape[0] % tensor_para_size_ != 0) {
-        NLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
+        KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
         exit(-1);
       }
 
@@ -94,7 +94,7 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       if (weight_shape[1] % tensor_para_size_ != 0) {
-        NLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
+        KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
         exit(-1);
       }
 

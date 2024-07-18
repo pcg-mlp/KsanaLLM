@@ -17,7 +17,7 @@ class TensorManager {
 
   Status AddWeightTensor(std::string weight_name, std::vector<size_t> shapes, DataType dtype) {
     if (weights_map_.count(weight_name)) {
-      NLLM_LOG_WARNING << fmt::format("The weight named {} has already been created. Skip creating the weight tensor.",
+      KLLM_LOG_WARNING << fmt::format("The weight named {} has already been created. Skip creating the weight tensor.",
                                       weight_name);
       return Status();
     }
@@ -35,7 +35,7 @@ class TensorManager {
 
   Status CreateTensorWithSameShape(const std::string& origin_tensor_name, const std::string& copy_tensor_name) {
     if (!weights_map_.count(origin_tensor_name)) {
-      NLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
+      KLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
                                     origin_tensor_name);
       exit(-1);
     }

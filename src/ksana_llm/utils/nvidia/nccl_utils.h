@@ -18,7 +18,7 @@ namespace ksana_llm {
     do {                                                                                                              \
         ncclResult_t r = cmd;                                                                                         \
         if (r != ncclSuccess) {                                                                                       \
-            NLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__);  \
+            KLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__);  \
             exit(RetCode::RET_INVALID_ARGUMENT);                                                                      \
         }                                                                                                             \
     } while (0)
@@ -59,7 +59,7 @@ ncclDataType_t CastToNCCLDataType() {
   } else if (std::is_same<T, bool>::value) {
     nccl_data_type = ncclInt8;
   } else {
-    NLLM_LOG_ERROR << "Not supported type for casting to NCCL data type";
+    KLLM_LOG_ERROR << "Not supported type for casting to NCCL data type";
     exit(RetCode::RET_INVALID_ARGUMENT);
   }
   return nccl_data_type;

@@ -107,7 +107,7 @@ void AutoBatchingStrategy::FinishBatchRequests(Status finish_status) {
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end(); ++it) {
     auto &req = *it;
 
-    NLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
+    KLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
     req->finish_status = finish_status;
     req->finished = true;
     req->Notify();
