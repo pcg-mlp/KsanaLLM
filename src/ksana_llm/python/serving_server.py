@@ -12,6 +12,7 @@ from typing import Dict, Any
 from functools import partial
 from concurrent import futures
 
+import logging
 import ksana_llm
 import yaml
 import uvicorn
@@ -292,18 +293,31 @@ if __name__ == "__main__":
 
     # Use multithread to support parallelism.
     log_level = os.getenv("KLLM_LOG_LEVEL", "INFO").upper()
-    if log_level in ["DEBUG", "INFO", "ERROR"]:
-        log_level = log_level.lower()
-    else:
-        log_level = "info"
+    if log_level not in ["DEBUG", "INFO", "ERROR"]:
+        log_level = "INFO"
         print(
-            f"Uvicorn's logging not support env: KLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
+            f"Uvicorn's logging not support env: KLLM_LOG_LEVEL={log_level}, keep it as defalt(INFO)."
         )
+    #log_path = os.getenv("KLLM_LOG_FILE", "./log/app.log") 
+    ksana_log_path = os.getenv("KLLM_LOG_FILE", "./log/ksana_llm.log")
+    log_path = os.path.join(os.path.dirname(os.path.abspath(ksana_log_path)), "uvicorn.log")
+
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["handlers"] = {
+        "default": {"formatter": "default", "class": "logging.FileHandler", "filename": log_path},
+    }
+    log_config["loggers"] = {
+        "uvicorn": {"handlers": ["default"], "level": log_level, "propagate": 0},
+        "py.warnings": {"handlers": ["default"], "level": "WARNING", "propagate": 0},
+    }
+    # capture warning log
+    logging.captureWarnings(True)    
+
     app.root_path = args.root_path
     uvicorn.run(app,
                 host=args.host,
                 port=args.port,
-                log_level=log_level,
+                log_config=log_config,
                 timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
                 ssl_keyfile=args.ssl_keyfile,
                 ssl_certfile=args.ssl_certfile)
