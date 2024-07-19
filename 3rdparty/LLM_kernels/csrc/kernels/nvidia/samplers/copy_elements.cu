@@ -11,7 +11,7 @@
 namespace llm_kernels {
 namespace nvidia {
 template <typename T>
-__global__ void CopyElementsKernel(T** src_ptrs, T* dest, u_int64_t num_elements) {
+__global__ void CopyElementsKernel(T** src_ptrs, T* dest, size_t num_elements) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < num_elements) {
     dest[idx] = *src_ptrs[idx];
@@ -19,15 +19,17 @@ __global__ void CopyElementsKernel(T** src_ptrs, T* dest, u_int64_t num_elements
 }
 
 template <typename T>
-void InvokeCopyElements(T** src_ptrs, T* dest, u_int64_t num_elements, cudaStream_t& stream) {
-  dim3 grid((num_elements + llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM - 1) /
-            llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
-  dim3 block(llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
-  CopyElementsKernel<<<grid, block, 0, stream>>>(src_ptrs, dest, num_elements);
+void InvokeCopyElements(T** src_ptrs, T* dest, size_t num_elements, cudaStream_t& stream) {
+  if (num_elements != 0) {
+    dim3 grid((num_elements + llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM - 1) /
+              llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
+    dim3 block(llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
+    CopyElementsKernel<<<grid, block, 0, stream>>>(src_ptrs, dest, num_elements);
+  }
 }
 
 #define INSTANTIATE_INVOKE_COPY_ELEMENTS(T) \
-  template void InvokeCopyElements(T** src_ptrs, T* dest, u_int64_t num_elements, cudaStream_t& stream);
+  template void InvokeCopyElements(T** src_ptrs, T* dest, size_t num_elements, cudaStream_t& stream);
 
 INSTANTIATE_INVOKE_COPY_ELEMENTS(float);
 INSTANTIATE_INVOKE_COPY_ELEMENTS(half);

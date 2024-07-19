@@ -42,7 +42,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   device_output_tokens_ptrs_ = reinterpret_cast<int**>(device_curandstates_ + max_batch_size);
   device_inv_repetition_penalties_ = reinterpret_cast<float*>(device_output_tokens_ptrs_ + max_batch_size);
   device_prob_ = reinterpret_cast<float*>(device_inv_repetition_penalties_ + batch_schedule_config_.max_vocab_size);
-  device_prob_ptrs_ = reinterpret_cast<float**>(device_inv_repetition_penalties_ + max_batch_size);
+  device_prob_ptrs_ = reinterpret_cast<float**>(device_prob_ + max_batch_size);
 
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
 
