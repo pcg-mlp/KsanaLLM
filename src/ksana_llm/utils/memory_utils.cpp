@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 
@@ -18,6 +19,35 @@ static BlockManagerInterface* g_block_manager = nullptr;
 void SetBlockManager(BlockManagerInterface* block_manager) { g_block_manager = block_manager; }
 
 BlockManagerInterface* GetBlockManager() { return g_block_manager; }
+
+AlignedMemoryQueue::AlignedMemoryQueue(size_t alignment, Allocator allocator)
+    : alignment_(alignment), allocator_(allocator) {
+  if (!IsPowerOfTwo(alignment_)) {
+    std::string error_str = "Alignment must be a power of two. Current value: " + std::to_string(alignment_);
+    KLLM_LOG_ERROR << error_str;
+    throw std::invalid_argument(error_str);
+  }
+}
+
+void AlignedMemoryQueue::AllocateAndAlign() {
+  size_t totalSize = 0;
+  for (const auto& item : queue_) {
+    totalSize += AlignSize(item.second);
+  }
+
+  void* base = allocator_(totalSize);
+  size_t offset = 0;
+
+  for (auto& item : queue_) {
+    *(item.first) = item.second == 0 ? nullptr : static_cast<void*>(base + offset);
+    offset += AlignSize(item.second);
+  }
+  queue_.clear();
+}
+
+size_t AlignedMemoryQueue::AlignSize(size_t size) { return ((size + alignment_ - 1) / alignment_) * alignment_; }
+
+bool AlignedMemoryQueue::IsPowerOfTwo(size_t x) { return x && !(x & (x - 1)); }
 
 Status GetDeviceMemoryInfo(MemoryDevice device, size_t* free, size_t* total) {
   MemGetInfo(free, total);

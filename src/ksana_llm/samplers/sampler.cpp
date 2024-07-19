@@ -16,6 +16,8 @@
 
 namespace ksana_llm {
 
+static size_t kCudaMemAlignmentSize = alignof(std::max_align_t);
+
 Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context)
     : beam_search_sampling_(context) {
   batch_schedule_config_ = batch_scheduler_config;
@@ -24,25 +26,24 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   auto max_batch_size = batch_scheduler_config.max_batch_size;
   // need to allocate device buffer for sampling
   GetBlockManager()->SetDeviceId(rank_);
-
-  GetBlockManager()->AllocateContiguous(
-      (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(float) * 2 + sizeof(RandState) + sizeof(int*)) * max_batch_size +
-          sizeof(float) * batch_schedule_config_.max_vocab_size + (sizeof(float) + sizeof(float*)) * max_batch_size,
-      device_buffer_block_id_);
-  GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
-  KLLM_LOG_DEBUG << "AllocateContiguous device_buffer_ " << device_buffer_ << " size "
-                 << (sizeof(uint32_t) * 2 + sizeof(int) + sizeof(RandState) + sizeof(int*)) * max_batch_size +
-                        sizeof(float) * batch_schedule_config_.max_vocab_size + sizeof(float) * max_batch_size;
-  device_output_tokens_ = static_cast<uint32_t*>(device_buffer_);
-  device_offset_ = device_output_tokens_ + max_batch_size;
-  device_topKs_ = reinterpret_cast<int*>(device_offset_ + max_batch_size);
-  device_topPs_ = reinterpret_cast<float*>(device_topKs_ + max_batch_size);
-  device_temperatures_ = reinterpret_cast<float*>(device_topPs_ + max_batch_size);
-  device_curandstates_ = reinterpret_cast<RandState*>(device_temperatures_ + max_batch_size);
-  device_output_tokens_ptrs_ = reinterpret_cast<int**>(device_curandstates_ + max_batch_size);
-  device_inv_repetition_penalties_ = reinterpret_cast<float*>(device_output_tokens_ptrs_ + max_batch_size);
-  device_prob_ = reinterpret_cast<float*>(device_inv_repetition_penalties_ + batch_schedule_config_.max_vocab_size);
-  device_prob_ptrs_ = reinterpret_cast<float**>(device_prob_ + max_batch_size);
+  auto allocator = [this](size_t size) -> void* {
+    GetBlockManager()->SetDeviceId(rank_);
+    GetBlockManager()->AllocateContiguous(size, device_buffer_block_id_);
+    GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
+    return device_buffer_;
+  };
+  AlignedMemoryQueue aligned_memory_queue(kCudaMemAlignmentSize, allocator);
+  aligned_memory_queue.Add(device_output_tokens_, max_batch_size);
+  aligned_memory_queue.Add(device_offset_, max_batch_size);
+  aligned_memory_queue.Add(device_topKs_, max_batch_size);
+  aligned_memory_queue.Add(device_topPs_, max_batch_size);
+  aligned_memory_queue.Add(device_temperatures_, max_batch_size);
+  aligned_memory_queue.Add(device_curandstates_, max_batch_size);
+  aligned_memory_queue.Add(device_output_tokens_ptrs_, max_batch_size);
+  aligned_memory_queue.Add(device_inv_repetition_penalties_, batch_schedule_config_.max_vocab_size);
+  aligned_memory_queue.Add(device_prob_, max_batch_size);
+  aligned_memory_queue.Add(device_prob_ptrs_, max_batch_size);
+  aligned_memory_queue.AllocateAndAlign();
 
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
 
@@ -131,7 +132,6 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
 // Copies the probabilities from the logits buffer to the output vector for each sampling request.
 std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
                                                std::vector<std::vector<float>>& probs_output) {
-  float* logits_buf = sampling_reqs[0].logits_buf[rank_];
   // Vectors to hold source and destination pointers for copying.
   std::vector<float*> src_ptr_vector;
   std::vector<float*> dst_ptr_vector;
@@ -146,7 +146,7 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
           size_t req_logits_offset = (sampling_reqs[i].logits_offset + probs_index) * vocab_size;
           // Add destination and source pointers for copying.
           dst_ptr_vector.push_back(probs_output[i].data() + probs_index);
-          src_ptr_vector.push_back(logits_buf + req_logits_offset + input_tokens[index + 1]);
+          src_ptr_vector.push_back(sampling_reqs[i].logits_buf[rank_] + req_logits_offset + input_tokens[index + 1]);
           probs_index++;
         }
       }
@@ -163,7 +163,7 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
   MemcpyAsync(dst_vector.data(), device_prob_, sizeof(float) * src_ptr_vector.size(), MEMCPY_DEVICE_TO_HOST, stream);
 #endif
   return [dst_vector = std::move(dst_vector), dst_ptr_vector = std::move(dst_ptr_vector)]() mutable {
-    for (int i = 0; i < dst_ptr_vector.size(); i++) {
+    for (size_t i = 0; i < dst_ptr_vector.size(); i++) {
       *dst_ptr_vector[i] = dst_vector[i];
     }
   };
