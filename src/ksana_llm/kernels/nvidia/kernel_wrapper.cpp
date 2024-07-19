@@ -252,11 +252,13 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
   // Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
   // intended for use in testing accuracy outcomes only.
-  if (kContextDecodeUseFP8Cache && FP8_E5M2) {
-    llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
-        reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), k_tensor.size(0), k_tensor.size(1), stride_size, stream);
-    llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
-        reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), v_tensor.size(0), v_tensor.size(1), stride_size, stream);
+  if constexpr (FP8_E5M2) {
+    if (kContextDecodeUseFP8Cache) {
+      llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
+          reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), k_tensor.size(0), k_tensor.size(1), stride_size, stream);
+      llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
+          reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), v_tensor.size(0), v_tensor.size(1), stride_size, stream);
+    }
   }
   std::vector<at::Tensor> mha_output =
       mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
