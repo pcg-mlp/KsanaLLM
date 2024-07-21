@@ -6,17 +6,16 @@
 #include <sstream>
 #include <unordered_map>
 
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler.h"
+#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_interface.h"
 #include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_helper.h"
 #include "ksana_llm/profiler/timer.h"
-#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/threadpool.h"
 
 namespace ksana_llm {
 
 class ClientSimulator {
  public:
-  ClientSimulator(int thread_num, BatchScheduler* batch_scheduler)
+  ClientSimulator(int thread_num, BatchSchedulerInterface* batch_scheduler)
       : scheduler_(batch_scheduler), thread_num_(thread_num), threadpool_(thread_num), is_destroying_(false) {
     threadpool_.Start();
   }
@@ -80,7 +79,7 @@ class ClientSimulator {
     Status enqueue_status;
   };
 
-  BatchScheduler* scheduler_;
+  BatchSchedulerInterface* scheduler_;
   int thread_num_;
   ThreadPool threadpool_;
   bool is_destroying_;
@@ -91,7 +90,7 @@ class ClientSimulator {
 
 class ParallelTester {
  public:
-  ParallelTester(BatchScheduler* batch_scheduler, BatchSchedulerEvironmentSimulator* env_simulator)
+  ParallelTester(BatchSchedulerInterface* batch_scheduler, BatchSchedulerEvironmentSimulator* env_simulator)
       : batch_scheduler_(batch_scheduler), env_simulator_(env_simulator) {}
 
   struct RequestInfo {
@@ -137,6 +136,30 @@ class ParallelTester {
     BatchSchedulerEvironmentSimulator* env_simulator_;
   };
 
+  // Generate RequestInfos
+  void GenerateRequests(int request_num, int min_expect_output_num, int max_expect_output_num, int min_input_num,
+                        int max_input_num, std::vector<ParallelTester::RequestInfo>& reqs) {
+    KLLM_CHECK_WITH_INFO(
+        min_expect_output_num < max_expect_output_num,
+        FormatStr("min_expect_output_num % should be larger than 0 and less than max_expect_output_num %d.",
+                  min_expect_output_num, max_expect_output_num));
+
+    KLLM_CHECK_WITH_INFO(
+        min_input_num < max_input_num,
+        FormatStr("min_input_num % should be less than max_input_num %d.", min_input_num, max_input_num));
+
+    std::srand(10);
+    for (int i = 0; i < request_num; i++) {
+      ParallelTester::RequestInfo info;
+      info.req_id = i;
+      info.expect_output_token_num =
+          std::rand() % (max_expect_output_num - min_expect_output_num) + min_expect_output_num;
+      info.input_token_num = std::rand() % (max_input_num - min_input_num) + min_input_num;
+      reqs.push_back(info);
+    }
+  }
+
+  // Add RequestInfo by single pair seeds
   void InitRequestInfoListByDefault(std::vector<RequestInfo>& reqs) {
     std::vector<std::pair<int, int>> seeds;
     seeds.resize(1);
@@ -148,6 +171,7 @@ class ParallelTester {
     }
   }
 
+  // Run requests in parallel and check
   void DoParallelRequestAndCheck(int client_num, std::vector<RequestInfo>& reqs, std::vector<ExeHookInterface*>& hooks,
                                  int timeout = 5) {
     KLLM_LOG_INFO << "DoParallelRequestAndCheck start.  client_num=" << client_num << ", request_num=" << reqs.size();
@@ -193,7 +217,7 @@ class ParallelTester {
   }
 
  private:
-  BatchScheduler* batch_scheduler_;
+  BatchSchedulerInterface* batch_scheduler_;
   BatchSchedulerEvironmentSimulator* env_simulator_;
 };
 
@@ -228,6 +252,210 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
 
  private:
   bool print_all_blocks_;
+};
+
+class FixPrefixTestCase {
+ public:
+  FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num)
+      : prefix_block_num_(prefix_block_num), device_num_(device_num) {
+    // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEvironmentSimulator
+    block_manager_config_.host_allocator_config.blocks_num = 100;
+    block_manager_config_.device_allocator_config.blocks_num = 100;
+    block_manager_config_.device_allocator_config.block_token_num = block_token_num;
+
+    // 使用配置创建一个 BlockManagerSimulator 对象
+    env_simulator_ = new BatchSchedulerEvironmentSimulator(block_manager_config_, device_num_);
+    KLLM_LOG_INFO << "Simulator start";
+  }
+
+  ~FixPrefixTestCase() { delete env_simulator_; }
+
+  void SetBatchScheduler(BatchSchedulerInterface* batch_scheduler) { batch_scheduler_ = batch_scheduler; }
+
+  BatchSchedulerEvironmentSimulator* GetEnvSimulator() { return env_simulator_; }
+
+  void RunTestNoSwapTriggered() {
+    int block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+    int block_num = block_manager_config_.device_allocator_config.blocks_num;
+
+    int prefix_token_num = prefix_block_num_ * block_manager_config_.device_allocator_config.block_token_num;
+
+    int request_num = 10;
+    int client_num = 3;
+    int min_expect_output_num = 3;
+    int max_expect_output_num = min_expect_output_num + 3;
+    int min_input_num = prefix_token_num;
+    int max_input_num = 10 + prefix_token_num;
+
+    // check request token num can not trigger swapout
+    ASSERT_LT(client_num * (max_input_num + max_expect_output_num), block_num * block_token_num);
+
+    RunTest(request_num, client_num, min_expect_output_num, max_expect_output_num, min_input_num, max_input_num,
+            prefix_token_num);
+
+    auto& stat = env_simulator_->GetBlockManagerStat();
+    EXPECT_EQ(stat.swapout_succ_num, 0);
+    EXPECT_EQ(stat.swapout_fail_num, 0);
+    EXPECT_EQ(stat.swapin_succ_num, 0);
+    EXPECT_EQ(stat.swapin_fail_num, 0);
+  }
+
+  void RunTestSwapTriggered() {
+    int block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+    int block_num = block_manager_config_.device_allocator_config.blocks_num;
+
+    int prefix_token_num = prefix_block_num_ * block_manager_config_.device_allocator_config.block_token_num;
+
+    int request_num = 100;
+    int client_num = 10;
+    int min_expect_output_num = 3;
+    int max_expect_output_num = min_expect_output_num + 300;
+    int min_input_num = prefix_token_num;
+    int max_input_num = 10 + prefix_token_num;
+
+    // check request token num can trigger swapout
+    ASSERT_LT((max_input_num + max_expect_output_num), block_num * block_token_num);
+    ASSERT_GT(client_num * (min_input_num + min_expect_output_num), block_num * block_token_num);
+    ASSERT_GT(request_num, client_num);
+
+    RunTest(request_num, client_num, min_expect_output_num, max_expect_output_num, min_input_num, max_input_num,
+            prefix_token_num);
+
+    auto& stat = env_simulator_->GetBlockManagerStat();
+    EXPECT_GT(stat.swapout_succ_num, 0);
+    EXPECT_EQ(stat.swapout_fail_num, 0);
+    EXPECT_GT(stat.swapin_succ_num, 0);
+    EXPECT_EQ(stat.swapin_fail_num, 0);
+  }
+
+ private:
+  // In current implementation, requests will not share blocks in first step.
+  // Test: all requests have same prefix token
+  class SamePrefixCacheNoMergeBeforeFirstBatchCheckHook : public ParallelTester::ExeHookInterface {
+   public:
+    SamePrefixCacheNoMergeBeforeFirstBatchCheckHook(int prefix_block_num, int tp_num)
+        : prefix_block_num_(prefix_block_num), tp_num_(tp_num) {
+      prefix_blocks_.resize(tp_num_);
+      for (int i = 0; i < tp_num_; i++) {
+        prefix_blocks_[i].resize(prefix_block_num_);
+      }
+    }
+
+    ~SamePrefixCacheNoMergeBeforeFirstBatchCheckHook() {
+      KLLM_LOG_INFO << "~SamePrefixCacheNoMergeBeforeFirstBatchCheckHook, before_step_num=" << before_step_num;
+      EXPECT_GT(before_step_num, 0);
+      EXPECT_GT(cache_hit_num_, 0);
+    }
+
+    void CheckRequestsBeforeAStep(const std::vector<std::shared_ptr<InferRequest>>& reqs) override {
+      before_step_num++;
+      ASSERT_GT(reqs.size(), 0);
+      if (!is_cache_set_) {
+        if (reqs_in_first_step_.size() == 0) {
+          // record requests in first step. Their kv cache will be reused.
+          for (auto& req : reqs) {
+            reqs_in_first_step_[req->req_id] = req;
+          }
+
+          // Requests should not share same prefix cache blocks
+          for (size_t i = 1; i < reqs.size(); i++) {
+            EXPECT_FALSE(CheckBlocksSame(reqs[0]->kv_cache_blocks, reqs[i]->kv_cache_blocks, prefix_block_num_));
+          }
+          return;
+        }
+
+        // Blocks should be merged in second step.
+        StorePrefixCache(reqs[0]);
+        for (size_t i = 1; i < reqs.size(); i++) {
+          EXPECT_TRUE(IsRequestPrefixCacheHit(reqs[i]));
+        }
+        return;
+      }
+
+      // All request should use same prefix caching after cache is set
+      for (auto& req : reqs) {
+        EXPECT_TRUE(IsRequestPrefixCacheHit(req));
+        cache_hit_num_++;
+      }
+    }
+
+   private:
+    bool IsRequestPrefixCacheHit(const std::shared_ptr<InferRequest>& req) {
+      return CheckBlocksSame(req->kv_cache_blocks, prefix_blocks_, prefix_block_num_);
+    }
+
+    bool CheckBlocksSame(const std::vector<std::vector<int>>& this_blocks,
+                         const std::vector<std::vector<int>>& that_blocks, int block_num) {
+      for (int i = 0; i < tp_num_; i++) {
+        for (int j = 0; j < block_num; j++) {
+          if (this_blocks[i][j] != that_blocks[i][j]) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+
+    void StorePrefixCache(const std::shared_ptr<InferRequest>& req) {
+      ASSERT_FALSE(is_cache_set_);
+      auto& kv_cache_blocks = req->kv_cache_blocks;
+      for (int i = 0; i < tp_num_; i++) {
+        std::copy(kv_cache_blocks[i].begin(), kv_cache_blocks[i].end(), prefix_blocks_[i].begin());
+      }
+      is_cache_set_ = true;
+    }
+
+   private:
+    int prefix_block_num_;
+    int tp_num_;
+    std::vector<std::vector<int>> prefix_blocks_;
+
+    bool is_cache_set_ = false;
+
+    std::unordered_map<int, std::shared_ptr<InferRequest>> reqs_in_first_step_;
+
+    int cache_hit_num_ = 0;
+  };
+
+  void RunTest(int request_num, int client_num, int min_expect_output_num, int max_expect_output_num, int min_input_num,
+               int max_input_num, int prefix_token_num) {
+    ParallelTester tester(batch_scheduler_, env_simulator_);
+
+    std::vector<ParallelTester::ExeHookInterface*> hooks;
+    ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+    PrintStepHook print_hook(true);
+    SamePrefixCacheNoMergeBeforeFirstBatchCheckHook prefix_check_hook(
+        prefix_token_num / block_manager_config_.device_allocator_config.block_token_num, device_num_);
+    hooks.push_back(&default_hook);
+    hooks.push_back(&print_hook);
+    hooks.push_back(&prefix_check_hook);
+
+    std::vector<ParallelTester::RequestInfo> req_list;
+    tester.GenerateRequests(request_num, min_expect_output_num, max_expect_output_num, prefix_token_num, max_input_num,
+                            req_list);
+
+    // Init requests with same prefix tokens.
+    std::vector<std::pair<int, int>> seeds;
+    seeds.resize(2);
+    seeds[0].first = 0;
+    seeds[0].second = 1;
+    seeds[1].first = prefix_token_num;
+    for (auto& info : req_list) {
+      seeds[1].second = info.req_id;
+      info.infer_req_group =
+          env_simulator_->InitRequest(info.req_id, info.input_token_num, info.expect_output_token_num, info.req, seeds);
+    }
+
+    tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+  }
+
+ private:
+  int prefix_block_num_;
+  int device_num_;
+
+  BatchSchedulerInterface* batch_scheduler_ = nullptr;
+  BatchSchedulerEvironmentSimulator* env_simulator_ = nullptr;
+  BlockManagerConfig block_manager_config_;
 };
 
 }  // namespace ksana_llm

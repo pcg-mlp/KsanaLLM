@@ -7,16 +7,17 @@
 #include <mutex>
 #include <vector>
 
+#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_interface.h"
+
 #include "ksana_llm/batch_manager/batch_scheduler/state/batch_state.h"
 #include "ksana_llm/batch_manager/batch_scheduler/strategy/strategy_factory.h"
-#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
 
-class BatchScheduler {
+class BatchScheduler : public BatchSchedulerInterface {
  public:
   BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, int tp_num);
   ~BatchScheduler() {}

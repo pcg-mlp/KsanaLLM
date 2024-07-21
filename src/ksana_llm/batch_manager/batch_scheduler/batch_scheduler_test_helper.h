@@ -18,7 +18,8 @@ thread_local int g_cur_device_id;
 // Note: Functions for contiguous memory are not supported.
 class BlockManagerSimulator : public BlockManagerInterface {
  public:
-  BlockManagerSimulator(const BlockManagerConfig& block_manager_config, int tp_num) {
+  BlockManagerSimulator(const BlockManagerConfig& block_manager_config, int tp_num)
+      : block_manager_config_(block_manager_config) {
     block_token_num_ = block_manager_config.device_allocator_config.block_token_num;
     host_block_num_ = block_manager_config.host_allocator_config.blocks_num;
     device_block_num_ = block_manager_config.device_allocator_config.blocks_num;
@@ -341,6 +342,8 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   const Statistics& GetStatistics() { return stat_; }
 
+  const BlockManagerConfig& GetConfig() { return block_manager_config_; }
+
  private:
   void CollectKvCacheContentFromDevice(int device_idx, std::vector<int>& block_list, int token_num,
                                        std::vector<int>& kv_cache_contents) {
@@ -388,24 +391,27 @@ class BlockManagerSimulator : public BlockManagerInterface {
   Status FreeBlocks(int device_id, const std::vector<int>& blocks, std::unordered_set<int>& free_blocks,
                     std::unordered_set<int>& used_blocks) {
     std::lock_guard<std::recursive_mutex> guard(mux_);
+    std::stringstream ss_blocks;
+    for (auto block_id : blocks) {
+      ss_blocks << block_id << ", ";
+    }
+
+    KLLM_LOG_DEBUG << "Free start on device " << device_id << ", block num=" << blocks.size()
+                   << ", free_blocks.size()=" << free_blocks.size() << ", used_blocks.size()=" << used_blocks.size()
+                   << ", blocks={" << ss_blocks.str();
+
     for (auto block_id : blocks) {
       auto it = used_blocks.find(block_id);
       if (it != used_blocks.end()) {
         free_blocks.insert(*it);
         used_blocks.erase(it);
       } else {
+        assert(false);
         KLLM_CHECK_WITH_INFO(false, "Double free");
         return Status(RET_FREE_FAIL, fmt::format("Double free error, block id {}", block_id));
       }
     }
-    std::stringstream ss_blocks;
-    for (auto block_id : blocks) {
-      ss_blocks << block_id << ", ";
-    }
-
-    KLLM_LOG_DEBUG << "Free OK on device " << device_id << ", block num=" << blocks.size()
-                   << ", free_blocks.size()=" << free_blocks.size() << ", used_blocks.size()=" << used_blocks.size()
-                   << ", blocks={" << ss_blocks.str();
+    KLLM_LOG_DEBUG << "Free OK on device " << device_id;
     return Status();
   }
 
@@ -605,6 +611,7 @@ class BatchSchedulerEvironmentSimulator {
   }
 
   const BlockManagerSimulator::Statistics& GetBlockManagerStat() { return blk_mgr_->GetStatistics(); }
+  const BlockManagerConfig& GetBlockManagerConfig() { return blk_mgr_->GetConfig(); }
 
  private:
   void SetRequestOutputTokenNum(std::shared_ptr<InferRequest>& req, int output_token_num) {

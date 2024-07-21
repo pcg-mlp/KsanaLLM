@@ -35,28 +35,6 @@ class BatchSchedulerTest : public testing::Test {
   }
 
  protected:
-  void GenerateRequests(int request_num, int min_expect_output_num, int max_expect_output_num, int min_input_num,
-                        int max_input_num, std::vector<ParallelTester::RequestInfo>& reqs) {
-    KLLM_CHECK_WITH_INFO(
-        min_expect_output_num < max_expect_output_num,
-        FormatStr("min_expect_output_num % should be larger than 0 and less than max_expect_output_num %d.",
-                  min_expect_output_num, max_expect_output_num));
-
-    KLLM_CHECK_WITH_INFO(
-        min_input_num < max_input_num,
-        FormatStr("min_input_num % should be less than max_input_num %d.", min_input_num, max_input_num));
-
-    std::srand(10);
-    for (int i = 0; i < request_num; i++) {
-      ParallelTester::RequestInfo info;
-      info.req_id = i;
-      info.expect_output_token_num =
-          std::rand() % (max_expect_output_num - min_expect_output_num) + min_expect_output_num;
-      info.input_token_num = std::rand() % (max_input_num - min_input_num) + min_input_num;
-      reqs.push_back(info);
-    }
-  }
-
   void InitDefaultConfig() {
     tp_num = 4;
     int device_block_num = 100;
@@ -80,7 +58,7 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   // 定义一个 BlockManager 指针，用于在测试用例中使用
   BatchSchedulerEvironmentSimulator* env_simulator;
-  BatchScheduler* batch_scheduler;
+  BatchSchedulerInterface* batch_scheduler;
 
   BlockManagerConfig block_manager_config;
   BatchSchedulerConfig batch_scheduler_config;
@@ -101,7 +79,7 @@ TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
   int max_expect_output_num = 100;
   int max_input_num = 400;
   std::vector<ParallelTester::RequestInfo> req_list;
-  GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
 
@@ -127,7 +105,7 @@ TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
   int max_expect_output_num = 40;
   int max_input_num = 60;
   std::vector<ParallelTester::RequestInfo> req_list;
-  GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
 
@@ -153,7 +131,7 @@ TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   int max_expect_output_num = 400;
   int max_input_num = 100;
   std::vector<ParallelTester::RequestInfo> req_list;
-  GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
 
