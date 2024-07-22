@@ -5,7 +5,7 @@
 
 #include "ksana_llm/models/base/base_weight.h"
 #include "ksana_llm/models/quant/quant_weight.h"
-#include "ksana_llm/models/tensor_manager.h"
+#include "ksana_llm/utils/tensor_manager.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/utils.h"
 

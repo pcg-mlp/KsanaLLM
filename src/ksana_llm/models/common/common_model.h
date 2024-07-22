@@ -9,7 +9,7 @@
 #include "ksana_llm/layers/cast_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
-#include "ksana_llm/layers/gptq_matmul_layer.h"
+#include "ksana_llm/layers/group_matmul_layer.h"
 #include "ksana_llm/layers/input_refit_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/matmul_layer_factory.h"

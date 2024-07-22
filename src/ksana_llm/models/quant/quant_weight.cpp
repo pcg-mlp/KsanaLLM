@@ -31,7 +31,7 @@ namespace ksana_llm {
 template <typename T>
 QuantWeight<T>::QuantWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context,
                             std::unordered_map<std::string, Tensor>& weights_map)
-    : model_config_(model_config), rank_(rank), context_(context), weights_map_(weights_map) {
+    : weights_map_(weights_map), rank_(rank), context_(context), model_config_(model_config) {
   enable_ = CheckQuantModel();
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
   tensor_para_size_ = model_config.tensor_para_size;
@@ -89,7 +89,58 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
 
 #ifdef ENABLE_CUDA
   if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos) {
-    if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
+    if (tensor_name.find("W_pack") != std::string::npos) {
+      size_t q_proj_size = model_config_.size_per_head * model_config_.head_num;
+      size_t kv_proj_size = model_config_.size_per_head * model_config_.num_key_value_heads;
+
+      if (q_proj_size % tensor_para_size_ != 0 || kv_proj_size % tensor_para_size_ != 0) {
+        KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
+        exit(-1);
+      }
+
+      const std::string prefix_name = tensor_name.substr(0, tensor_name.find("W_pack"));
+      const std::string suffix_name =
+          tensor_name.substr(tensor_name.find("W_pack") + sizeof("W_pack"), tensor_name.length() - 1);
+      std::string q_proj_name = prefix_name + "q_proj." + suffix_name;
+      std::string k_proj_name = prefix_name + "k_proj." + suffix_name;
+      std::string v_proj_name = prefix_name + "v_proj." + suffix_name;
+
+      std::vector<size_t> q_proj_shape = {weight_shape[0], q_proj_size / tensor_para_size_};
+      std::vector<size_t> kv_proj_shape = {weight_shape[0], kv_proj_size / tensor_para_size_};
+
+      tensor_manager_->AddWeightTensor(q_proj_name, q_proj_shape, weight_data_type);
+      tensor_manager_->AddWeightTensor(k_proj_name, kv_proj_shape, weight_data_type);
+      tensor_manager_->AddWeightTensor(v_proj_name, kv_proj_shape, weight_data_type);
+
+      auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
+      if (tensor_name.find(".scales") != std::string::npos) {
+        options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kHalf);
+      }
+      torch::Tensor tensor = torch::from_blob(
+          weight_ptr, {static_cast<int64_t>(weight_shape[0]), static_cast<int64_t>(weight_shape[1])}, options);
+      // TODO(jinxcwu): use Memcpy2DAsync to the usage of torch
+      auto tensors = torch::split(
+          tensor,
+          {static_cast<int64_t>(q_proj_size), static_cast<int64_t>(kv_proj_size), static_cast<int64_t>(kv_proj_size)},
+          1);
+
+      q_proj_size /= tensor_para_size_;
+      kv_proj_size /= tensor_para_size_;
+
+      tensors[0] = tensors[0].slice(1, rank_ * q_proj_size, (rank_ + 1) * q_proj_size).contiguous();
+      tensors[1] = tensors[1].slice(1, rank_ * kv_proj_size, (rank_ + 1) * kv_proj_size).contiguous();
+      tensors[2] = tensors[2].slice(1, rank_ * kv_proj_size, (rank_ + 1) * kv_proj_size).contiguous();
+
+      MemcpyAsync(weights_map_[q_proj_name].GetPtr<void>(), tensors[0].data_ptr(),
+                  weights_map_[q_proj_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+      MemcpyAsync(weights_map_[k_proj_name].GetPtr<void>(), tensors[1].data_ptr(),
+                  weights_map_[k_proj_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+      MemcpyAsync(weights_map_[v_proj_name].GetPtr<void>(), tensors[2].data_ptr(),
+                  weights_map_[v_proj_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+    } else if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
       if (weight_shape[0] % tensor_para_size_ != 0) {
         KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
         exit(-1);
@@ -111,7 +162,8 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
       if (tensor_name.find(".scales") != std::string::npos) {
         options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kHalf);
       }
-      torch::Tensor tensor = torch::from_blob(weight_ptr, {weight_shape[0], weight_shape[1]}, options);
+      torch::Tensor tensor = torch::from_blob(
+          weight_ptr, {static_cast<int64_t>(weight_shape[0]), static_cast<int64_t>(weight_shape[1])}, options);
       size_t single_size = weight_shape[1] / tensor_para_size_;
       tensor = tensor.slice(1, rank_ * single_size, (rank_ + 1) * single_size);
       tensor = tensor.contiguous();
@@ -156,7 +208,7 @@ torch::Tensor QuantWeight<T>::PackInt8TensorToPackedInt4(torch::Tensor weight) {
   int8_t* unpacked_ptr = reinterpret_cast<int8_t*>(weight.data_ptr());
   int8_t* packed_ptr = reinterpret_cast<int8_t*>(packed_weight.data_ptr());
 
-  for (size_t packed_idx = 0; packed_idx < packed_weight.numel(); ++packed_idx) {
+  for (int64_t packed_idx = 0; packed_idx < packed_weight.numel(); ++packed_idx) {
     int8_t packed_int4s = 0;
     int8_t elt_0 = unpacked_ptr[2 * packed_idx + 0];
     int8_t elt_1 = unpacked_ptr[2 * packed_idx + 1];
@@ -188,7 +240,7 @@ torch::Tensor QuantWeight<T>::PreprocessWeightsForMixedGemmWarpper(torch::Tensor
 }
 
 template <typename T>
-torch::Tensor QuantWeight<T>::ConvertGPTQLayout(torch::Tensor qweight_int32) {
+torch::Tensor QuantWeight<T>::ConvertGroupLayout(torch::Tensor qweight_int32) {
   torch::Tensor qweight_unpacked_int8 = UnpackInt32IntoInt8(qweight_int32.clone().t()).t().contiguous() - 8;
   torch::Tensor qweight_packed_int4 = PackInt8TensorToPackedInt4(qweight_unpacked_int8);
   torch::Tensor processed_tensor = PreprocessWeightsForMixedGemmWarpper(
@@ -198,7 +250,7 @@ torch::Tensor QuantWeight<T>::ConvertGPTQLayout(torch::Tensor qweight_int32) {
 #endif
 
 template <typename T>
-Status QuantWeight<T>::ConvertGPTQTensor(int hidden_units, int inter_size, int num_layer) {
+Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int num_layer) {
   if (!enable_) {
     return Status();
   }
@@ -221,15 +273,22 @@ Status QuantWeight<T>::ConvertGPTQTensor(int hidden_units, int inter_size, int n
           fmt::format("model.layers.{}.self_attn.query_key_value.{}", layer_idx, needed_slove_weight_name);
 
       torch::Tensor q_tensor_gpu = torch::from_blob(
-          weights_map_[q_name].GetPtr<void>(), {weights_map_[q_name].shape[0], weights_map_[q_name].shape[1]}, options);
+          weights_map_[q_name].GetPtr<void>(),
+          {static_cast<int64_t>(weights_map_[q_name].shape[0]), static_cast<int64_t>(weights_map_[q_name].shape[1])},
+          options);
       torch::Tensor k_tensor_gpu = torch::from_blob(
-          weights_map_[k_name].GetPtr<void>(), {weights_map_[k_name].shape[0], weights_map_[k_name].shape[1]}, options);
+          weights_map_[k_name].GetPtr<void>(),
+          {static_cast<int64_t>(weights_map_[k_name].shape[0]), static_cast<int64_t>(weights_map_[k_name].shape[1])},
+          options);
       torch::Tensor v_tensor_gpu = torch::from_blob(
-          weights_map_[v_name].GetPtr<void>(), {weights_map_[v_name].shape[0], weights_map_[v_name].shape[1]}, options);
+          weights_map_[v_name].GetPtr<void>(),
+          {static_cast<int64_t>(weights_map_[v_name].shape[0]), static_cast<int64_t>(weights_map_[v_name].shape[1])},
+          options);
       torch::Tensor qkv_tensor_gpu = torch::cat({q_tensor_gpu, k_tensor_gpu, v_tensor_gpu}, -1);
 
-      tensor_manager_->AddWeightTensor(qkv_name, {qkv_tensor_gpu.size(0), qkv_tensor_gpu.size(1)},
-                                       weights_map_[q_name].dtype);
+      tensor_manager_->AddWeightTensor(
+          qkv_name, {static_cast<size_t>(qkv_tensor_gpu.size(0)), static_cast<size_t>(qkv_tensor_gpu.size(1))},
+          weights_map_[q_name].dtype);
       MemcpyAsync(weights_map_[qkv_name].GetPtr<void>(), qkv_tensor_gpu.data_ptr(),
                   weights_map_[qkv_name].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
                   context_->GetMemoryManageStreams()[rank_]);
@@ -253,13 +312,16 @@ Status QuantWeight<T>::ConvertGPTQTensor(int hidden_units, int inter_size, int n
       std::string weight_name = fmt::format("model.layers.{}.{}.weight", layer_idx, needed_slove_weight_name);
 
       auto options = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
-      torch::Tensor qweight_int32_gpu =
-          torch::from_blob(weights_map_[qweight_name].GetPtr<void>(),
-                           {weights_map_[qweight_name].shape[0], weights_map_[qweight_name].shape[1]}, options);
+      torch::Tensor qweight_int32_gpu = torch::from_blob(weights_map_[qweight_name].GetPtr<void>(),
+                                                         {static_cast<int64_t>(weights_map_[qweight_name].shape[0]),
+                                                          static_cast<int64_t>(weights_map_[qweight_name].shape[1])},
+                                                         options);
       torch::Tensor qweight_int32 = qweight_int32_gpu.to(torch::kCPU);
-      torch::Tensor processed_tensor = ConvertGPTQLayout(qweight_int32);
+      torch::Tensor processed_tensor = ConvertGroupLayout(qweight_int32);
 
-      tensor_manager_->AddWeightTensor(weight_name, {processed_tensor.size(0), processed_tensor.size(1)}, TYPE_INT8);
+      tensor_manager_->AddWeightTensor(
+          weight_name, {static_cast<size_t>(processed_tensor.size(0)), static_cast<size_t>(processed_tensor.size(1))},
+          TYPE_INT8);
       MemcpyAsync(weights_map_[weight_name].GetPtr<void>(), processed_tensor.data_ptr(),
                   weights_map_[weight_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
                   context_->GetMemoryManageStreams()[rank_]);

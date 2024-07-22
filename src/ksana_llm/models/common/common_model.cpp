@@ -249,6 +249,14 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
   mlp_down_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
   lm_head_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
 
+  // matmul layer preprocess
+  attn_qkv_proj_layer_->Preprocess(model_config_);
+  attn_o_proj_layer_->Preprocess(model_config_);
+  mlp_gate_proj_layer_->Preprocess(model_config_);
+  mlp_up_proj_layer_->Preprocess(model_config_);
+  mlp_down_proj_layer_->Preprocess(model_config_);
+  lm_head_proj_layer_->Preprocess(model_config_);
+
   return Status();
 }
 

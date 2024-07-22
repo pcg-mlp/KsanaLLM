@@ -213,7 +213,7 @@ void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_
   nlohmann::json config_json;
   std::ifstream file(config_file);
   if (!file.is_open()) {
-    KLLM_LOG_WARNING << fmt::format("Load generation config file: {} error.", config_file) << std::endl;
+    KLLM_LOG_WARNING << fmt::format("Load generation config file: {} error.", config_file);
     return;
   } else {
     file >> config_json;
@@ -236,8 +236,7 @@ void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_
   }
   if (end_ids != model_config.end_ids) {
     KLLM_LOG_WARNING << fmt::format("eos_token_id: {} in model config is ignored by {} in generation config",
-                                    model_config.end_ids.front(), fmt::join(end_ids, ", "))
-                     << std::endl;
+                                    model_config.end_ids.front(), fmt::join(end_ids, ", "));
     model_config.end_ids = end_ids;
   }
 }
@@ -246,7 +245,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   YamlReader yaml_reader;
   Status status = yaml_reader.LoadFile(config_file);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "Load yaml config error." << status.GetMessage() << std::endl;
+    KLLM_LOG_ERROR << "Load yaml config error." << status.GetMessage();
     return status;
   }
 
@@ -377,7 +376,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   nlohmann::json config_json;
   std::ifstream file(config_file);
   if (!file.is_open()) {
-    KLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file) << std::endl;
+    KLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file);
     return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load model config file: {} error.", config_file));
   } else {
     file >> config_json;
@@ -446,8 +445,7 @@ Status Environment::ParseOptions(int argc, char **argv) {
 
   Status status = ParseConfig(FLAGS_config_file);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << fmt::format("Parse config file {} error: {}", FLAGS_config_file, status.GetMessage())
-                   << std::endl;
+    KLLM_LOG_ERROR << fmt::format("Parse config file {} error: {}", FLAGS_config_file, status.GetMessage());
     return status;
   }
 

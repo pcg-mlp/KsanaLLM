@@ -25,6 +25,8 @@ class BaseLayer {
 
   virtual void SetWorkSpaceBuffer(Tensor buffer) { workspace_buffer_ = buffer; }
 
+  virtual Status Preprocess(ModelConfig& model_config_) { return Status(); }
+
   virtual void Clear() {}
 
  protected:

@@ -4,7 +4,7 @@
 #pragma once
 
 #include "ksana_llm/models/base/base_weight.h"
-#include "ksana_llm/models/tensor_manager.h"
+#include "ksana_llm/utils/tensor_manager.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/utils.h"
 
@@ -14,6 +14,7 @@
 
 namespace ksana_llm {
 
+// Load quantized weights, used together with CommonWeight
 template <typename T>
 class QuantWeight {
  public:
@@ -21,12 +22,19 @@ class QuantWeight {
               std::unordered_map<std::string, Tensor>& weights_map);
   ~QuantWeight();
 
+  // Enable quantized loading if the model is a quantized model
   bool IsEnable();
 
+  // Determine if weights need to be filtered, e.g. in gptq model, "*.g_idx" is unnecessary and should be filtered out.
   bool FilterOutQuantWeight(const std::string& tensor_name);
 
-  Status ConvertGPTQTensor(int hidden_units, int inter_size, int num_layer);
+  // Group weight conversion for weight transformation, partitioning, transposition, etc.
+  Status ConvertGroupTensor(int hidden_units, int inter_size, int num_layer);
 
+  // Load the weight if it is a quantized weight.
+  // Currently, for q/k/v, they are loaded separately first,
+  // then merged into qkv in ConvertGroupTensor, and finally q/k/v are deleted.
+  // This is because weight layout conversion requires individual weight processing.
   bool LoadQuantWeight(std::string& tensor_name, std::vector<size_t>& weight_shape, DataType& weight_data_type,
                        void* weight_ptr);
 
@@ -45,13 +53,16 @@ class QuantWeight {
   torch::Tensor PreprocessWeightsForMixedGemmWarpper(torch::Tensor row_major_quantized_weight,
                                                      llm_kernels::nvidia::QuantType quant_type);
 
-  torch::Tensor ConvertGPTQLayout(torch::Tensor qweight_int32);
+  torch::Tensor ConvertGroupLayout(torch::Tensor qweight_int32);
 #endif
 
+  // Check if the model is a quantized model
   bool CheckQuantModel();
 
+  // Weigth list for storing model weights, it needs to come from CommonWeight
   std::unordered_map<std::string, Tensor>& weights_map_;
 
+  // TensorManager for adding weights, it needs to come from CommonWeight
   std::shared_ptr<TensorManager> tensor_manager_;
 
   int tensor_para_size_ = 1;

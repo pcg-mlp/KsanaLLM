@@ -86,7 +86,7 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
     return Status();
   }
   if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find(".bias") != std::string::npos ||
-      tensor_name.find("self_attn.W_pack") != std::string::npos ||
+      tensor_name.find("self_attn.W_pack.weight") != std::string::npos ||
       tensor_name.find("embed_tokens") != std::string::npos ||
       tensor_name.find("lm_head.weight") != std::string::npos) {
     tensor_para_offset = rank_;
@@ -528,7 +528,7 @@ void CommonWeight<T>::ProcessWeights() {
   }
 
   if (quant_weight_slover_->IsEnable()) {
-    quant_weight_slover_->ConvertGPTQTensor(hidden_units, inter_size, num_layer);
+    quant_weight_slover_->ConvertGroupTensor(hidden_units, inter_size, num_layer);
   } else {  // roll back to common weight slover
     ConvertCommonTensor(hidden_units, inter_size, num_layer, vocab_size);
   }
