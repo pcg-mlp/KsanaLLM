@@ -20,8 +20,6 @@ from tqdm.asyncio import tqdm
 # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
 from transformers import AutoTokenizer 
 
-import prefix_cache_reader
-
 # (prompt len, output len, input token num, output token num,
 #  request latency, first token latency, inter token latencies)
 REQUEST_LATENCY: List[Tuple[int, int, int, int, float, float, List[float]]] = []
@@ -153,6 +151,14 @@ def args_config():
                         type=int,
                         default=1,
                         help="Number of iterations for changing the request rate.")
+    parser.add_argument("--max_avg_latency",
+                        type=float,
+                        default=float("inf"),
+                        help="The max average latency(seconds).")
+    parser.add_argument("--max_first_token_latency",
+                        type=float,
+                        default=float("inf"),
+                        help="The max average first token latency(seconds).")
     parser.add_argument("--concurrency",
                         type=int,
                         default=1,
@@ -192,9 +198,6 @@ def args_config():
         choices=['llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'chatglm', 'empty'],
         help=
         'serving model type, used to add prefixes and suffixes to the prompt.')
-    parser.add_argument('--use_prefix_cache_prompts',
-                        action='store_true',
-                        help='test with prompts with very long prefix cache')
     parser.add_argument('--max_new_tokens',
                         type=int,
                         default=1024,
@@ -519,6 +522,7 @@ async def benchmark_sync(args: argparse.Namespace, api_url: str,
 def adjust_list_length(inputs: List[str], args: argparse.Namespace):
     if args.prompt_num == 0:
         # 如果args.prompt_num为0，不做任何改变
+        args.prompt_num = len(inputs)
         return inputs
     elif args.prompt_num > len(inputs):
         # 如果args.prompt_num大于列表长度，尝试复制列表
@@ -541,6 +545,36 @@ def run_benchmark(args: argparse.Namespace, api_url: str, inputs: List[str],
     else:
         # Run the synchronous benchmark
         return asyncio.run(benchmark_sync(args, api_url, inputs, tokenizer))
+
+
+def search_request_rate(args: argparse.Namespace, request_rate_list: List[Tuple[float, float]]):
+    def round_to_tenth(number):
+        # When searching for the optimal request rate, the minimum precision is 0.1.
+        return max(round(number * 10) / 10, 0.1)
+    step = len(request_rate_list)
+    request_rate = -1
+    if step < args.request_rate_num_iters:
+        request_rate = args.request_rate + (args.request_rate_step if step > 0 else 0)
+    elif args.max_avg_latency != float("inf") or args.max_first_token_latency != float("inf"):
+        request_rate_list.sort(key=lambda x: x[0])
+        if request_rate_list[-1][1] <= args.max_avg_latency and \
+           request_rate_list[-1][2] <= args.max_first_token_latency:
+            request_rate = min(request_rate_list[-1][0] * 2, args.prompt_num)
+        elif request_rate_list[0][1] > args.max_avg_latency or \
+             request_rate_list[0][2] > args.max_first_token_latency:
+            request_rate = round_to_tenth(request_rate_list[0][0] / 2)
+        else:
+            rate_left = max(filter(lambda x: x[1] <= args.max_avg_latency and \
+                                             x[2] <= args.max_first_token_latency, request_rate_list),
+                                   key=lambda x: x[0])[0]
+            rate_right = min(filter(lambda x: x[1] > args.max_avg_latency or \
+                                              x[2] > args.max_first_token_latency, request_rate_list),
+                                    key=lambda x: x[0])[0]
+            request_rate = round_to_tenth((rate_left + rate_right) / 2)
+        if any(ite[0] == request_rate for ite in request_rate_list):
+            print(f"Duplicate request rate detected: {request_rate}. Terminating the search prematurely.")
+            request_rate = -1
+    return request_rate
 
 
 def main(args: argparse.Namespace):
@@ -567,24 +601,21 @@ def main(args: argparse.Namespace):
             use_fast=True
         )
 
-    # Initialize inputs to None
-    inputs = None
-    # If the use_prefix_cache_prompts flag is set, load prompts from the prefix cache
-    if args.use_prefix_cache_prompts:
-        # Load prompts from the prefix cache using the input CSV file
-        _, inputs = prefix_cache_reader.load_prompts(input_csv=args.input_csv)
-    else:
-        # Otherwise, read inputs from the input CSV file
-        inputs = read_from_csv(args.input_csv, args.col_idx)
+    # Read inputs from the input CSV file
+    inputs = read_from_csv(args.input_csv, args.col_idx)
     # Adjust the length of the input list based on the provided arguments
     inputs = adjust_list_length(inputs, args)
 
     perf_result_list: List[Tuple[BenchmarkMetrics, BenchmarkStreamMetrics]] = []
-    for i in range(0, args.request_rate_num_iters):
+    # requst_rate_list: List[Tuple[request_rate, avg_latency, avg_TTFT]]
+    request_rate_list: List[Tuple[float, float, float]] = []
+    while True:
         metrics = BenchmarkMetrics()
-        metrics.request_rate = args.request_rate + i * args.request_rate_step
+        metrics.request_rate = search_request_rate(args, request_rate_list)
+        args.request_rate = metrics.request_rate
+        if metrics.request_rate == -1:
+            break
         metrics.concurrency = args.concurrency
-
         for iter in range(args.warmup_num_iters):
             print(f"Start warmup iteration {iter} with request rate {metrics.request_rate:.3f}")
             run_benchmark(args, api_url, inputs, tokenizer)
@@ -658,6 +689,7 @@ def main(args: argparse.Namespace):
             print(stream_metrics)
 
         perf_result_list.append((metrics, stream_metrics))
+        request_rate_list.append((metrics.request_rate, metrics.avg_latency, stream_metrics.avg_first_token_latency))
         REQUEST_LATENCY.clear()
 
     if args.output_csv is not None:
