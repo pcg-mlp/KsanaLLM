@@ -567,8 +567,7 @@ void CommonWeight<T>::ProcessWeights() {
 
   // The chatglm model does not contain up_proj.weight, but its gate_proj.weight includes up_proj.weight.
   // We need chunk them for the convenience of later decoding.
-  std::string up_proj_name = "model.layers.0.mlp.up_proj.weight";
-  if (weights_map_.find(up_proj_name) == weights_map_.end()) {
+  if (model_config_.type == "chatglm") {
     ChunkGateWeight(num_layer);
   }
 

@@ -177,7 +177,7 @@ void PrepareChatglmAttirbutes(const nlohmann::json &config_json, ModelConfig &mo
   model_config.vocab_size = config_json.value("padded_vocab_size", model_config.vocab_size);  // for glm4 config
   model_config.num_layer = config_json.value("num_layers", 28);
   model_config.hidden_units = config_json.at("hidden_size");
-  model_config.rope_theta = config_json.at("rope_ratio");
+  model_config.rope_theta = config_json.value("rope_ratio", 1.0f);
   model_config.rope_theta = model_config.rope_theta * 10000;
   model_config.layernorm_eps = config_json.value("layernorm_epsilon", 1e-5);
   model_config.start_id = config_json.value("bos_token_id", 1);
