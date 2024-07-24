@@ -8,5 +8,25 @@
   "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.weight": "model.layers.$1.mlp.gate_proj.weight",
   "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.weight": "model.layers.$1.mlp.down_proj.weight",
   "transformer.encoder.final_layernorm.weight": "model.norm.weight",
-  "transformer.output_layer.weight":"lm_head.weight"
+  "transformer.output_layer.weight":"lm_head.weight",
+
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.g_idx": "model.layers.$1.self_attn.W_pack.g_idx",
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.qweight": "model.layers.$1.self_attn.W_pack.qweight",
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.qzeros": "model.layers.$1.self_attn.W_pack.qzeros",
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.scales": "model.layers.$1.self_attn.W_pack.scales",
+
+  "transformer.encoder.layers.(\\d+).self_attention.dense.g_idx": "model.layers.$1.self_attn.o_proj.g_idx",
+  "transformer.encoder.layers.(\\d+).self_attention.dense.qweight": "model.layers.$1.self_attn.o_proj.qweight",
+  "transformer.encoder.layers.(\\d+).self_attention.dense.qzeros": "model.layers.$1.self_attn.o_proj.qzeros",
+  "transformer.encoder.layers.(\\d+).self_attention.dense.scales": "model.layers.$1.self_attn.o_proj.scales",
+
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.g_idx": "model.layers.$1.mlp.gate_proj.g_idx",
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.qweight": "model.layers.$1.mlp.gate_proj.qweight",
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.qzeros": "model.layers.$1.mlp.gate_proj.qzeros",
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.scales": "model.layers.$1.mlp.gate_proj.scales",
+
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.g_idx": "model.layers.$1.mlp.down_proj.g_idx",
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.qweight": "model.layers.$1.mlp.down_proj.qweight",
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.qzeros": "model.layers.$1.mlp.down_proj.qzeros",
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.scales": "model.layers.$1.mlp.down_proj.scales"
 }

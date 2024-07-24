@@ -164,16 +164,38 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
       }
       torch::Tensor tensor = torch::from_blob(
           weight_ptr, {static_cast<int64_t>(weight_shape[0]), static_cast<int64_t>(weight_shape[1])}, options);
-      size_t single_size = weight_shape[1] / tensor_para_size_;
-      tensor = tensor.slice(1, rank_ * single_size, (rank_ + 1) * single_size);
-      tensor = tensor.contiguous();
 
-      weight_shape[1] /= tensor_para_size_;
-      tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type);
+      if (model_config_.type == "chatglm" && tensor_name.find("gate_proj") != std::string::npos) {
+        const std::string gate_name = tensor_name;
+        const std::string up_name = std::regex_replace(gate_name, std::regex("gate"), "up");
 
-      MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), tensor.data_ptr(),
-                  weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[rank_]);
+        auto tensors = torch::chunk(tensor, 2, -1);
+
+        weight_shape[1] = weight_shape[1] / 2 / tensor_para_size_;
+        tensor_manager_->AddWeightTensor(gate_name, weight_shape, weight_data_type);
+        tensor_manager_->AddWeightTensor(up_name, weight_shape, weight_data_type);
+
+        const size_t single_size = weight_shape[1];
+        torch::Tensor gate_tensor = tensors[0].slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
+        torch::Tensor up_tensor = tensors[1].slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
+
+        MemcpyAsync(weights_map_[gate_name].GetPtr<void>(), gate_tensor.data_ptr(),
+                    weights_map_[gate_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+        MemcpyAsync(weights_map_[up_name].GetPtr<void>(), up_tensor.data_ptr(),
+                    weights_map_[up_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+      } else {
+        size_t single_size = weight_shape[1] / tensor_para_size_;
+        tensor = tensor.slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
+
+        weight_shape[1] /= tensor_para_size_;
+        tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type);
+
+        MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), tensor.data_ptr(),
+                    weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+      }
     }
     return true;
   }

@@ -567,7 +567,7 @@ void CommonWeight<T>::ProcessWeights() {
 
   // The chatglm model does not contain up_proj.weight, but its gate_proj.weight includes up_proj.weight.
   // We need chunk them for the convenience of later decoding.
-  if (model_config_.type == "chatglm") {
+  if (!quant_weight_slover_->IsEnable() && model_config_.type == "chatglm") {
     ChunkGateWeight(num_layer);
   }
 
