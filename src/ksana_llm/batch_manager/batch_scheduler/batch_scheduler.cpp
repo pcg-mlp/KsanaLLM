@@ -30,8 +30,8 @@ namespace ksana_llm {
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, int tp_num)
     : batch_scheduler_config_(batch_scheduler_config) {
   // Config validation.
-  KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens > batch_scheduler_config_.max_token_len,
-                       FormatStr("The max_step_tokens must large than max_token_len, %d vs %d.",
+  KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_tokens >= batch_scheduler_config_.max_token_len,
+                       FormatStr("The max_step_tokens must larger or equal than max_token_len, %d vs %d.",
                                  batch_scheduler_config_.max_step_tokens, batch_scheduler_config_.max_token_len));
 
   batch_state_ = std::make_shared<BatchState>(batch_scheduler_config_);
