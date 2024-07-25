@@ -158,7 +158,8 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
   MemcpyAsync(device_prob_ptrs_, src_ptr_vector.data(), sizeof(float*) * src_ptr_vector.size(), MEMCPY_HOST_TO_DEVICE,
               stream);
   // Invoke kernel to copy elements from source to a temporary device buffer.
-  llm_kernels::nvidia::InvokeCopyElements(device_prob_ptrs_, device_prob_, src_ptr_vector.size(), stream.Get());
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeCopyElements(
+                            device_prob_ptrs_, device_prob_, src_ptr_vector.size(), stream.Get()));
   // Copy the temporary device buffer to host memory asynchronously.
   MemcpyAsync(dst_vector.data(), device_prob_, sizeof(float) * src_ptr_vector.size(), MEMCPY_DEVICE_TO_HOST, stream);
 #endif

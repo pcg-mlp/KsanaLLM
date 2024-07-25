@@ -97,10 +97,11 @@ template <typename T>
 void LookupEmbedding(const void* ids, const void* offsets, const void* prefix_offsets, const void* emb, const void* pos,
                      void* output, int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,
                      void* workspace_ptr) {
-  llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T>(
-      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), {},
-      reinterpret_cast<const int32_t*>(ids), step, reinterpret_cast<const size_t*>(offsets),
-      reinterpret_cast<const size_t*>(prefix_offsets), bs, hidden_size, vocab_size, vocab_id, stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T>(
+                            reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb),
+                            reinterpret_cast<const T*>(pos), {}, reinterpret_cast<const int32_t*>(ids), step,
+                            reinterpret_cast<const size_t*>(offsets), reinterpret_cast<const size_t*>(prefix_offsets),
+                            bs, hidden_size, vocab_size, vocab_id, stream));
 }
 #define LOOKUP_EMBEDDING(T)                                                                                           \
   template void LookupEmbedding<T>(const void* ids, const void* offsets, const void* prefix_offsets, const void* emb, \
@@ -117,8 +118,9 @@ template <typename T>
 void InvokeLayerNorm(const void* input, const void* weight, const float layernorm_eps, const int m, const int n,
                      void* output, cudaStream_t stream) {
   T* beta = nullptr;
-  llm_kernels::nvidia::InvokeLayerNorm<T>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input),
-                                          reinterpret_cast<const T*>(weight), beta, layernorm_eps, m, n, stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeLayerNorm<T>(
+                            reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input),
+                            reinterpret_cast<const T*>(weight), beta, layernorm_eps, m, n, stream));
 }
 #define INVOKE_LAYER_NORM(T)                                                                                      \
   template void InvokeLayerNorm<T>(const void* input, const void* weight, const float layernorm_eps, const int m, \
@@ -148,9 +150,10 @@ INVOKE_MATMUL(__nv_bfloat16, CUDA_R_16BF);
 template <typename T>
 void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
                            void* output, cudaStream_t stream) {
-  llm_kernels::nvidia::InvokeAddBiasResidual<T>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input_a),
-                                                reinterpret_cast<const T*>(input_b), nullptr,
-                                                reinterpret_cast<const T*>(bias), nullptr, nullptr, m, n, stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeAddBiasResidual<T>(
+                            reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input_a),
+                            reinterpret_cast<const T*>(input_b), nullptr,
+                            reinterpret_cast<const T*>(bias), nullptr, nullptr, m, n, stream));
 }
 
 #define INVOKE_ADD_BIAS_RESIDUAL(T)                                                                               \
@@ -176,9 +179,10 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
   const float* activation_in = nullptr;
   const float* activation_out = nullptr;
   CUDA_CHECK(cudaMemcpyAsync(output, input, sizeof(T) * m * n, cudaMemcpyDeviceToDevice, stream));
-  llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, T, T>(
-      reinterpret_cast<T*>(output), bias, reinterpret_cast<const T*>(gated_weights), gated_bias, ia3_tasks, ia3_weights,
-      m, n, int8_mode, activation_in, activation_out, padding_offsets, seq_len, stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, T, T>(
+                            reinterpret_cast<T*>(output), bias, reinterpret_cast<const T*>(gated_weights),
+                            gated_bias, ia3_tasks, ia3_weights, m, n, int8_mode, activation_in, activation_out,
+                            padding_offsets, seq_len, stream));
 }
 
 #define INVOKE_SILU_ACTIVATION(T)                                                                               \
@@ -234,11 +238,12 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   torch::Tensor k_tensor = tt[1];
   torch::Tensor v_tensor = tt[2];
 
-  llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
-      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
-      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
-      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
+                            reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()),
+                            reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()),
+                            k_list, v_list, reinterpret_cast<size_t*>(seqlen),
+                            reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<int*>(block_offsets),
+                            block_size, batch, total_tokens, num_kv_heads, head_size, stride_size, stream));
 
   if (!alibi_slopes.has_value()) {
     rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
@@ -248,11 +253,12 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     rotary_embedding_cuda.Forward();
   }
 
-  llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
-      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
-      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
-      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
+                            reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()),
+                            reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()),
+                            k_list, v_list, reinterpret_cast<size_t*>(seqlen),
+                            reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<int*>(block_offsets),
+                            block_size, batch, total_tokens, num_kv_heads, head_size, stride_size, stream));
 
 // flash attention 2 or flash attention 1
 #ifdef ENABLE_FLASH_ATTN_2
@@ -276,10 +282,12 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   // intended for use in testing accuracy outcomes only.
   if constexpr (FP8_E5M2) {
     if (kContextDecodeUseFP8Cache) {
-      llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
-          reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), k_tensor.size(0), k_tensor.size(1), stride_size, stream);
-      llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
-          reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), v_tensor.size(0), v_tensor.size(1), stride_size, stream);
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
+                                reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()),
+                                k_tensor.size(0), k_tensor.size(1), stride_size, stream));
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(
+                                reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()),
+                                v_tensor.size(0), v_tensor.size(1), stride_size, stream));
     }
   }
   std::vector<at::Tensor> mha_output =
@@ -381,11 +389,11 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     rotary_embedding_cuda.Forward();
   }
 
-  llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
-      reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
-      value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
-      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, kv_heads_num, head_size, stride_size,
-      stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, FP8_E5M2>(
+                            reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr),
+                            key_cache_ptrs, value_cache_ptrs, rotary_embedding_pos,
+                            reinterpret_cast<size_t*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
+                            block_size, batch, total_tokens, kv_heads_num, head_size, stride_size, stream));
 
   PagedAttention<SCALAR_T, CACHE_T, FP8_E5M2>(heads_num, head_size, kv_heads_num, stride_size, block_size, output_ptr,
                                               q_tensor_ptr, key_cache_ptrs, value_cache_ptrs, cache_offsets_ptr,
@@ -414,10 +422,11 @@ RUN_PAGED_ATTENTION(__nv_bfloat16, uint8_t, true);
 template <typename T>
 void AssembleLastToken(const void* inputs, const void* offsets, const void* prefix_offsets, const int batch_size,
                        const int hidden_units_num, void* output, cudaStream_t& stream) {
-  llm_kernels::nvidia::AssembleLastToken<T>(reinterpret_cast<const T*>(inputs),
-                                            reinterpret_cast<const size_t*>(offsets),
-                                            reinterpret_cast<const size_t*>(prefix_offsets), batch_size,
-                                            hidden_units_num, reinterpret_cast<T*>(output), stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::AssembleLastToken<T>(reinterpret_cast<const T*>(inputs),
+                                                                  reinterpret_cast<const size_t*>(offsets),
+                                                                  reinterpret_cast<const size_t*>(prefix_offsets),
+                                                                  batch_size, hidden_units_num,
+                                                                  reinterpret_cast<T*>(output), stream));
 }
 
 #define ASSEMBEL_LAST_TOKEN(T)                                                                            \
@@ -505,7 +514,8 @@ void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, s
   for (size_t i = permutation.size(); i < 4; ++i) {
     permutation.push_back(i);
   }
-  llm_kernels::nvidia::InvokePermute<4ul, sizeof(T)>(input, output, input_shape, permutation, stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokePermute<4ul, sizeof(T)>(input, output, input_shape,
+                                                                           permutation, stream));
 }
 #define INVOKE_PERMUTE(T)                                                                    \
   template void InvokePermute<T>(void* input, void* output, std::vector<size_t> input_shape, \
@@ -520,30 +530,32 @@ INVOKE_PERMUTE(__nv_bfloat16);
 template <>
 void DataToFloat<float>(const void* input, const int data_size, void* output, cudaStream_t& stream) {
   if (input != output) {
-    cudaMemcpyAsync(output, input, data_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    CUDA_CHECK(cudaMemcpyAsync(output, input, data_size * sizeof(float), cudaMemcpyDeviceToDevice, stream));
   }
 }
 template <>
 void DataToFloat<half>(const void* input, const int data_size, void* output, cudaStream_t& stream) {
-  llm_kernels::nvidia::HalfToFloat(reinterpret_cast<const half*>(input), data_size, reinterpret_cast<float*>(output),
-                                   stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::HalfToFloat(reinterpret_cast<const half*>(input), data_size,
+                                                         reinterpret_cast<float*>(output), stream));
 }
 #ifdef ENABLE_BFLOAT16
 template <>
 void DataToFloat<__nv_bfloat16>(const void* input, const int data_size, void* output, cudaStream_t& stream) {
-  llm_kernels::nvidia::BFloat16ToFloat(reinterpret_cast<const __nv_bfloat16*>(input), data_size,
-                                       reinterpret_cast<float*>(output), stream);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFloat16ToFloat(reinterpret_cast<const __nv_bfloat16*>(input), data_size,
+                                                             reinterpret_cast<float*>(output), stream));
 }
 #endif
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
   if (tensor.dtype == DataType::TYPE_BF16 && target_dtype == DataType::TYPE_FP16) {
 #ifdef ENABLE_BFLOAT16
-    llm_kernels::nvidia::BFP16ToFP16(tensor.GetPtr<void>(), tensor.GetElementNumber(), stream.Get());
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFP16ToFP16(tensor.GetPtr<void>(), tensor.GetElementNumber(),
+                                                           stream.Get()));
 #endif
   } else if (tensor.dtype == DataType::TYPE_FP16 && target_dtype == DataType::TYPE_BF16) {
 #ifdef ENABLE_BFLOAT16
-    llm_kernels::nvidia::FP16ToBFP16(tensor.GetPtr<void>(), tensor.GetElementNumber(), stream.Get());
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FP16ToBFP16(tensor.GetPtr<void>(), tensor.GetElementNumber(),
+                                                           stream.Get()));
 #endif
   } else if (tensor.dtype == target_dtype) {
     // No need to convert
@@ -607,7 +619,8 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
 template <typename T>
 Status ArgMax(const T* input, const uint32_t* ids_offsets, const int32_t batch_size, const int32_t vocab_size,
               uint32_t* result, Stream& stream, void* workspace_ptr) {
-  llm_kernels::nvidia::InvokeArgMaxReduce(input, ids_offsets, batch_size, vocab_size, result, stream.Get());
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeArgMaxReduce(input, ids_offsets, batch_size, vocab_size, result,
+                                                                stream.Get()));
   return Status();
 }
 
@@ -628,9 +641,11 @@ INSTANTIATE_ARG_MAX(__nv_bfloat16);
     template <>                                                                                                       \
     void Fp8DynamicQuantize<T>(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr,               \
                                float* scale_ptr, cudaStream_t& stream) {                                              \
-      llm_kernels::utils::InvokeComputeFP8QuantizeScale<T>(scale_ptr, input_ptr, num_channels, channel_size, stream); \
-      llm_kernels::utils::InvokeQuantizeMatrix<__nv_fp8_e4m3, T>(static_cast<__nv_fp8_e4m3*>(quant_ptr), scale_ptr,   \
-                                                                 input_ptr, num_channels, channel_size, stream);      \
+      CUDA_CHECK_LAST_ERROR(llm_kernels::utils::InvokeComputeFP8QuantizeScale<T>(                                     \
+                                scale_ptr, input_ptr, num_channels, channel_size, stream));                           \
+      CUDA_CHECK_LAST_ERROR(llm_kernels::utils::InvokeQuantizeMatrix<__nv_fp8_e4m3, T>(                               \
+                                static_cast<__nv_fp8_e4m3*>(quant_ptr), scale_ptr,                                    \
+                                input_ptr, num_channels, channel_size, stream));                                      \
     }
 INSTANTIATE_FP8_DYNAMIC_QUANTIZE(float);
 INSTANTIATE_FP8_DYNAMIC_QUANTIZE(half);

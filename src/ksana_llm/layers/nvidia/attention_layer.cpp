@@ -47,8 +47,9 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
                                      head_size_, num_heads_, num_kv_heads_, stride_size_, is_neox,
                                      context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
   } else {
-    llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr), num_heads_ * tensor_para_size_,
-                                            context_->GetComputeStreams()[rank_].Get());
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(
+                              reinterpret_cast<float*>(cos_sin_cache_ptr), num_heads_ * tensor_para_size_,
+                              context_->GetComputeStreams()[rank_].Get()));
     alibi_slopes_ = reinterpret_cast<void*>(cos_sin_cache_ptr) + num_heads_ * rank_ * sizeof(float);
   }
   StreamSynchronize(context_->GetComputeStreams()[rank_]);

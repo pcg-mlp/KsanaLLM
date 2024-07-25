@@ -65,4 +65,10 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
 
 #define CUDA_CHECK(val) CheckCUDAError((val), #val, __FILE__, __LINE__)
 
+#define CUDA_CHECK_LAST_ERROR(...) do {                               \
+        (__VA_ARGS__);                                                \
+        cudaError_t result = cudaGetLastError();                      \
+        CheckCUDAError(result, #__VA_ARGS__, __FILE__, __LINE__);     \
+        } while (0)
+
 }  // namespace ksana_llm
