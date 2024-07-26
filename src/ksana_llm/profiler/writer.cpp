@@ -15,7 +15,7 @@ static std::string GetStatFile() {
 
 ProfileWriter::ProfileWriter() {
   profiler_file_ = GetStatFile();
-  profiler_stream_.open(profiler_file_.c_str());
+  profiler_stream_.open(profiler_file_.c_str(), std::ios::app);
 }
 
 ProfileWriter::~ProfileWriter() {

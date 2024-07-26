@@ -465,6 +465,15 @@ void Environment::InitializeBlockManagerConfig() {
   block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
   block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
 
+  KLLM_LOG_INFO << fmt::format("Init block num for key or value: ({} / {}) * ({} / {}) * {} = {}",
+                               model_config.num_layer, GetPipeLineParallelSize(),
+                               model_config.num_key_value_heads, GetTensorParallelSize(),
+                               model_config.size_per_head, token_size);
+
+  KLLM_LOG_INFO << fmt::format("Init token size (bytes) of init block for both key and value: {} * {} * 2 * {} = {}",
+                               token_size, block_token_num, block_dtype_size,
+                               block_manager_config_.device_allocator_config.block_size);
+
   block_manager_config_.host_allocator_config.device = MemoryDevice::MEMORY_HOST;
   block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
 
