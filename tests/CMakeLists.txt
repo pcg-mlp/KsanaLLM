@@ -15,7 +15,7 @@ set(INTEGRATION_TEST_CODE "")
 if(WITH_CUDA)
   set(INTEGRATION_TEST_CONFIG ${PROJECT_SOURCE_DIR}/tests/model/llama_test.yaml)
   set(INTEGRATION_TEST_CONFIG ${PROJECT_SOURCE_DIR}/examples/ksana_llm.yaml)
-  set(INTEGRATION_TEST_MODEL /model/qwen2-hf/0.5B)
+  set(INTEGRATION_TEST_MODEL /model/qwen1.5-hf/0.5B-Chat)
   set(INTEGRATION_TEST_CODE ${PROJECT_SOURCE_DIR}/tests/model/qwen2_integration_test.py)
 endif()
 

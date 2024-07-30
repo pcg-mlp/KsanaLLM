@@ -69,11 +69,11 @@ def infer(prompt, tokenizer, generation_config, model, queue=None, idx=0):
     # Check if a queue is provided for storing results
     if queue is None:
         # If no queue is provided, return the decoded result
-        return tokenizer.decode(result)
+        return tokenizer.decode(result, skip_special_tokens=True)
     else:
         # If a queue is provided, put the result in the queue along with the
         # index
-        queue.put((idx, tokenizer.decode(result)))
+        queue.put((idx, tokenizer.decode(result, skip_special_tokens=True)))
         return
 
 
@@ -81,7 +81,7 @@ def is_run_on_npu_device() -> bool:
     try:
         import torch_npu
         return True
-    except:
+    except ImportError as e:
         return False
 
 
@@ -109,38 +109,35 @@ if __name__ == "__main__":
 
     # Define warmup prompts and reference results
     warmup_prompts = [
-        "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]",
-        "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向外星人转述地面团队的友好善意？[/INST]" 
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n作为国际空间站上的宇航员，您意外地目睹了"
+        "外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？<|im_end|>\n<|im_start|>assistant\n",
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n作为国际空间站上的宇航员，您意外地目睹了"
+        "外星实体接近空间站。您怎么吃饭？<|im_end|>\n<|im_start|>assistant\n"
     ]
     ref_result = [
-        " 作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？\n首先，您需要"
-        "向地面控制团队提供有关观察结果的信息。这可能包括观察到的外星实体的形状、大小、颜色、表面特征等。您需要向地面控制团队提供"
-        "这些信息，以便他们能够更好地理解您的观察结果。\n其次，您需要向地面控制团队提供您的建议。这可能包括建议采取的行动，例如采"
-        "取行动来保护宇航员的安全和健康。您需要向地面控制团队提供您的建议，以便他们能够更好地理解您的观察结果和建议。\n最后，您需"
-        "要向地面控制团队提供您的观察结果和建议。这可能包括您观察到的外星实体的形状、大小、颜色、表面特征等，以及您向地面控制团队"
-        "提供的建议。您需要向地面控制团队提供您的观察结果和建议，以便他们能够更好地理解您的观察结果和建议。\n总之，作为国际空间站"
-        "上的宇航员，您需要向地面控制团队提供有关观察结果和建议的信息，以便他们能够更好地理解您的观察结果和建议。<|endoftext|>",
-        "您如何向地面团队解释您在空间站上看到的外星实体？\n回答上面的问题，给出具体的推理逻辑。\n作为国际空间站上的宇航员，您意外"
-        "地目睹了外星实体接近空间站。您如何向外星人转述地面团队的友好善意？这是一个非常复杂的问题，需要您进行推理和解释。以下是我"
-        "对这个问题的推理和解释：\n首先，您应该向地面团队解释您在空间站上看到的外星实体。这需要您提供一些关于外星实体的信息，例如"
-        "它们的形状、大小、颜色、表面特征等等。您应该向地面团队解释这些信息，以便他们能够更好地理解您看到的外星实体。\n其次，您应"
-        "该向地面团队解释您在空间站上看到的外星实体。这需要您提供一些关于外星实体的细节，例如它们的形状、大小、颜色、表面特征等等"
-        "。您应该向地面团队解释这些细节，以便他们能够更好地理解您看到的外星实体。\n最后，您应该向地面团队解释您在空间站上看到的外"
-        "星实体。这需要您提供一些关于外星实体的细节，例如它们的形状、大小、颜色、表面特征等等。您应该向地面团队解释这些细节，以便"
-        "他们能够更好地理解您看到的外星实体。\n总之，向地面团队解释您在空间站上看到的外星实体需要您提供一些关于外星实体的细节，以"
-        "便他们能够更好地理解您看到的外星实体。<|endoftext|>"
+        "1. 确保信息准确：首先，我需要确保我所观察到的外星实体是真实的，而不是幻觉。我需要确保我所观察到的实体是外星生物，而不"
+        "是其他任何可能的物体。\n\n2. 保持冷静：在面对未知的外星实体时，保持冷静是非常重要的。我需要保持冷静，以便能够有效地传"
+        "达我的观察结果和建议。\n\n3. 保持开放和尊重的态度：我需要保持开放和尊重的态度，以便能够与地面控制团队进行有效的沟通。"
+        "我需要尊重他们的观点和决定，同时也需要尊重他们的工作。\n\n4. 提供信息：我需要提供我所观察到的外星实体的信息，以便他们"
+        "能够理解我的观察结果。我需要提供我所观察到的外星实体的特征，以及我所观察到的外星实体的行为。\n\n5. 提供建议：我需要提"
+        "供我所观察到的外星实体的建议，以便他们能够更好地理解我的观察结果。我需要提供我所观察到的外星实体的可能的解决方案，以及"
+        "我所观察到的外星实体可能遇到的问题。\n\n6. 保持沟通：我需要保持与地面控制团队的沟通，以便他们能够及时了解我的观察结果"
+        "和建议。我需要保持与地面控制团队的沟通，以便他们能够及时了解我的观察结果和建议。\n\n7. 保持专业：我需要保持专业，以便"
+        "能够有效地传达我的观察结果和建议。我需要保持专业，以便能够有效地传达我的观察结果和建议。",
+        "作为国际空间站上的宇航员，我无法直接在空间站上吃饭，因为这需要特殊的设备和环境。但是，我可以提供一些基本的建议。\n\n首"
+        "先，你需要确保你的食物和水都是安全的。在太空中，食物和水可能会受到极端的温度和压力的影响，因此你需要确保它们是安全的。"
+        "你可以在太空中携带一些食品和水，例如水和食物，但请注意，这些食品和水可能会受到极端的温度和压力的影响。\n\n其次，你需要"
+        "确保你的食物和水都是安全的。在太空中，食物和水可能会受到极端的温度和压力的影响，因此你需要确保它们是安全的。你可以在太"
+        "空中携带一些食品和水，例如水和食物，但请注意，这些食品和水可能会受到极端的温度和压力的影响。\n\n最后，你需要确保你的宇"
+        "航服是安全的。在太空中，宇航服可能会受到极端的温度和压力的影响，因此你需要确保它们是安全的。你可以在太空中携带一些宇航"
+        "服，例如宇航服，但请注意，这些宇航服可能会受到极端的温度和压力的影响。\n\n总的来说，你需要确保你的食物和水都是安全的，"
+        "你的宇航服是安全的，你的宇航站是安全的。"
     ]
 
 
-    none_prefix_prompt = ["[INST]你好。[/INST]"]
-    none_prefix_prompt_ref = ["我最近在学习Python编程，但是我对一些概念和语法不太理解。你能给我一些关于Python编程的建议吗？当然可"
-        "以。Python是一种高级编程语言，它具有许多优点，例如可读性、可扩展性和灵活性。以下是一些关于Python编程的建议：1. 学习Python"
-        "语法和库：Python有许多优秀的库和语法，例如NumPy、Pandas、Matplotlib等。学习这些库可以帮助你更好地理解Python编程。2. 学习"
-        "Python编程范式：Python编程范式包括面向对象、函数式编程和过程式编程。了解这些范式可以帮助你更好地理解Python编程。3. 学习"
-        "Python编程的实践：Python编程有很多实践项目，例如Web开发、数据分析和机器学习等。通过实践，你可以更好地掌握Python编程。4. "
-        "学习Python编程的工具：Python有很多工具可以帮助你更好地学习和编写Python代码。例如IDE（集成开发环境）和调试工具。5. 学习Python"
-        "编程的社区：Python社区是一个非常活跃和广泛的社区，可以帮助你获取帮助和资源。你可以加入Python社区，参加讨论和学习。希望这"
-        "些建议能对你有所帮助。<|endoftext|>"]
+    none_prefix_prompt = ["<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+                          "<|im_start|>user\n你好。<|im_end|>\n<|im_start|>assistant\n"]
+    none_prefix_prompt_ref = ["你好！有什么我可以帮助你的吗？"]
 
     # Set the generation configuration parameters
     generation_config = GenerationConfig(num_beams=1,
@@ -149,7 +146,6 @@ if __name__ == "__main__":
                                          temperature=0.0)
 
     # Set the length of the prefix to 32
-    prefix_len = 32
     multi_thread_list = []  # List to store multiple threads
     multi_thread_queue = queue.Queue(
     )  # Queue for storing results from multiple threads
@@ -160,6 +156,7 @@ if __name__ == "__main__":
     # Perform warmup by generating results for each warmup prompt
     for idx, prompt in enumerate(warmup_prompts):
         result = infer(prompt, tokenizer, generation_config, model)
+
         # Ensure the generated result matches the reference
         # TODO(karlluo): npu result is generated by fp16 and gpu is generated by bf16
         if is_npu:
@@ -217,9 +214,9 @@ if __name__ == "__main__":
             # TODO(karlluo): npu result is not stable we just check 20 words for now
             assert scores["rougeL"].precision > 0.95
         else:
-            # TODO(shawnding): The returned results cannot be guaranteed to be completely 
             # consistent when making concurrent requests.
-            assert scores["rougeL"].precision == 1.0
+            assert result.replace("\n",
+                                  "") == ref_result[idx].replace("\n", "")
 
     print(f"Total model load time: {model_load_time:.2f} s")
     print(f"Total warmup time: {warmup_time:.2f} s")

@@ -79,7 +79,7 @@ def is_run_on_npu_device() -> bool:
     try:
         import torch_npu
         return True
-    except:
+    except ImportError as e:
         return False
 
 
@@ -141,7 +141,6 @@ if __name__ == "__main__":
                                          temperature=0.0)
 
     # Set the length of the prefix to 32
-    prefix_len = 32
     multi_thread_list = []  # List to store multiple threads
     multi_thread_queue = queue.Queue(
     )  # Queue for storing results from multiple threads
