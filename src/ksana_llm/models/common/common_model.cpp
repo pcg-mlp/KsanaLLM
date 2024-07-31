@@ -30,6 +30,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   GetBlockManager()->SetDeviceId(rank_);
 
   num_layer_ = model_config_.num_layer;
+  vocab_size_ = model_config_.vocab_size;
   vocab_size_pad_ =
       DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
 
@@ -658,7 +659,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   model_communicator_->AllGather({lm_head_output[0], temp_buffer_1[0]}, lm_head_output);
 
   // Cast to float & Copy to logits buffer
-  forward_shape_.shape = {forward_reqs[0].logits_offset * vocab_size_pad_ * sizeof(float)};
+  forward_shape_.shape = {forward_reqs[0].logits_offset * vocab_size_ * sizeof(float), vocab_size_, vocab_size_pad_};
   std::vector<Tensor> logits_buffer{model_output_->logits_tensor};
   STATUS_CHECK_RETURN(cast_layer_->Forward({lm_head_output[0], forward_shape_}, logits_buffer));
   StreamSynchronize(context_->GetComputeStreams()[rank_]);

@@ -86,7 +86,8 @@ template <typename T>
 ncclDataType_t GetNcclDataType();
 
 template <typename T>
-void DataToFloat(const void* input, const int data_size, void* output, cudaStream_t& stream);
+void DataToFloat(const void* input, const int data_size, const size_t vocab_size, const size_t vocab_size_pad,
+                 void* output, cudaStream_t& stream);
 
 template <typename T>
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,

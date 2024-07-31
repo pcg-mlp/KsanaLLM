@@ -26,19 +26,26 @@ using namespace llm_kernels::utils;
 namespace llm_kernels {
 namespace nvidia {
 
-__global__ void ConvertHalfToFloat(const half* input, float* output, int32_t size) {
-  int32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-  if (idx < size) {
+__global__ void ConvertHalfToFloat(const half* input, float* output, int32_t input_length,
+                                   const size_t input_stride = 1, const size_t output_stride = 1) {
+  size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx < input_length) {
+    size_t batch = idx / input_stride;
+    size_t input_idx = idx % input_stride;
+    if (input_idx >= output_stride) {
+      return;
+    }
     half val = input[idx];
     float floatVal = __half2float(val);
-    output[idx] = floatVal;
+    output[batch * output_stride + input_idx] = floatVal;
   }
 }
 
-void HalfToFloat(const half* input, int32_t input_length, float* output, cudaStream_t& stream) {
+void HalfToFloat(const half* input, int32_t input_length, float* output, cudaStream_t& stream,
+                 const size_t input_stride, const size_t output_stride) {
   dim3 grid((input_length + DEFAULT_CUDA_BLOCK_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_THREADS_NUM);
   dim3 block(DEFAULT_CUDA_BLOCK_THREADS_NUM);
-  ConvertHalfToFloat<<<grid, block, 0, stream>>>(input, output, input_length);
+  ConvertHalfToFloat<<<grid, block, 0, stream>>>(input, output, input_length, input_stride, output_stride);
 }
 
 __global__ void ConvertFloatToHalf(const float* input, half* output, int32_t size) {
@@ -71,19 +78,26 @@ void FloatToBFloat16(const float* input, int32_t input_length, __nv_bfloat16* ou
   ConvertFloatToBFloat16<<<grid, block, 0, stream>>>(input, output, input_length);
 }
 
-__global__ void ConvertBFloat16ToFloat(const __nv_bfloat16* input, float* output, int32_t size) {
-  int32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-  if (idx < size) {
+__global__ void ConvertBFloat16ToFloat(const __nv_bfloat16* input, float* output, int32_t input_length,
+                                       const size_t input_stride = 1, const size_t output_stride = 1) {
+  size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx < input_length) {
+    size_t batch = idx / input_stride;
+    size_t input_idx = idx % input_stride;
+    if (input_idx >= output_stride) {
+      return;
+    }
     __nv_bfloat16 val = input[idx];
     float floatVal = __bfloat162float(val);
-    output[idx] = floatVal;
+    output[batch * output_stride + input_idx] = floatVal;
   }
 }
 
-void BFloat16ToFloat(const __nv_bfloat16* input, int32_t input_length, float* output, cudaStream_t& stream) {
+void BFloat16ToFloat(const __nv_bfloat16* input, int32_t input_length, float* output, cudaStream_t& stream,
+                     const size_t input_stride, const size_t output_stride) {
   dim3 grid((input_length + DEFAULT_CUDA_BLOCK_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_THREADS_NUM);
   dim3 block(DEFAULT_CUDA_BLOCK_THREADS_NUM);
-  ConvertBFloat16ToFloat<<<grid, block, 0, stream>>>(input, output, input_length);
+  ConvertBFloat16ToFloat<<<grid, block, 0, stream>>>(input, output, input_length, input_stride, output_stride);
 }
 
 __global__ void ConvertFP16ToBFP16(half* input, __nv_bfloat16* output, int32_t size) {

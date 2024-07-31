@@ -528,21 +528,30 @@ INVOKE_PERMUTE(__nv_bfloat16);
 #undef INVOKE_PERMUTE
 
 template <>
-void DataToFloat<float>(const void* input, const int data_size, void* output, cudaStream_t& stream) {
+void DataToFloat<float>(const void* input, const int data_size, const size_t vocab_size, const size_t vocab_size_pad,
+                        void* output, cudaStream_t& stream) {
   if (input != output) {
+    if (vocab_size != vocab_size_pad) {
+      // It should be implemented when supporting float inference.
+      KLLM_LOG_ERROR << "Float to float does not support Stride.";
+    }
     CUDA_CHECK(cudaMemcpyAsync(output, input, data_size * sizeof(float), cudaMemcpyDeviceToDevice, stream));
   }
 }
 template <>
-void DataToFloat<half>(const void* input, const int data_size, void* output, cudaStream_t& stream) {
+void DataToFloat<half>(const void* input, const int data_size, const size_t vocab_size, const size_t vocab_size_pad,
+                       void* output, cudaStream_t& stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::HalfToFloat(reinterpret_cast<const half*>(input), data_size,
-                                                         reinterpret_cast<float*>(output), stream));
+                                                         reinterpret_cast<float*>(output), stream, vocab_size_pad,
+                                                         vocab_size));
 }
 #ifdef ENABLE_BFLOAT16
 template <>
-void DataToFloat<__nv_bfloat16>(const void* input, const int data_size, void* output, cudaStream_t& stream) {
+void DataToFloat<__nv_bfloat16>(const void* input, const int data_size, const size_t vocab_size,
+                                const size_t vocab_size_pad, void* output, cudaStream_t& stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFloat16ToFloat(reinterpret_cast<const __nv_bfloat16*>(input), data_size,
-                                                             reinterpret_cast<float*>(output), stream));
+                                                             reinterpret_cast<float*>(output), stream, vocab_size_pad,
+                                                             vocab_size));
 }
 #endif
 

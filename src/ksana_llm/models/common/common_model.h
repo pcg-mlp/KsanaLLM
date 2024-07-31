@@ -106,6 +106,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // The layer number of the model
   int num_layer_;
 
+  // The original vocab size of the model
+  size_t vocab_size_;
+
   // Vocab size aligned and padded with tensor_para_size
   size_t vocab_size_pad_;
 
