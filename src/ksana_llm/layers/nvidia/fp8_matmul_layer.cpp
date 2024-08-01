@@ -38,13 +38,13 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   int n = input_tensors[1].shape[0];
   const T* input = static_cast<const T*>(input_tensors[0].GetPtr<void>());
   size_t workspace_size = GetWorkSpaceSize(m, k);
-  if (workspace_size > workspace_buffer_.GetTotalBytes()) {
+  if (workspace_size > workspace_buffer_->GetTotalBytes()) {
     KLLM_LOG_ERROR << fmt::format("workspace size {} > buffer size {}", workspace_size,
-                                  workspace_buffer_.GetTotalBytes());
+                                  workspace_buffer_->GetTotalBytes());
     throw std::runtime_error(
-        fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_.GetTotalBytes()));
+        fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_->GetTotalBytes()));
   }
-  void* input_quant = workspace_buffer_.GetPtr<void>();
+  void* input_quant = workspace_buffer_->GetPtr<void>();
   float* input_scale = static_cast<float*>(input_quant + GetTypeSize(TYPE_FP8_E4M3) * m * k);
   const void* weight_quant = input_tensors[1].GetPtr<const void>();
   const void* weight_scale = input_tensors[1].scales->GetPtr<const void>();

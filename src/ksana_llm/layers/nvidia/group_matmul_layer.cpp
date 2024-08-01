@@ -3,6 +3,7 @@
 ==============================================================================*/
 #include "ksana_llm/layers/group_matmul_layer.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/utils/utils.h"
 
 namespace ksana_llm {
 
@@ -22,7 +23,7 @@ Status GroupMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, st
 
 template <typename T, DataType WT>
 size_t GroupMatMulLayer<T, WT>::GetWorkSpaceSize() {
-  if constexpr (WT == TYPE_I4_G128) {
+  if constexpr (WT == TYPE_I4_GROUP) {
     size_t max_ws_bytes;
     GetFpAIntBGroupGemmWorkspaceSize<T, llm_kernels::nvidia::WeightType::INT4>(max_m, max_n, max_k, max_ws_bytes);
     return max_ws_bytes;
@@ -34,7 +35,7 @@ size_t GroupMatMulLayer<T, WT>::GetWorkSpaceSize() {
 
 template <typename T, DataType WT>
 Status GroupMatMulLayer<T, WT>::Preprocess(ModelConfig& model_config_) {
-  if constexpr (WT == TYPE_I4_G128) {
+  if constexpr (WT == TYPE_I4_GROUP) {
     size_t n = max_n;
     size_t k = max_k;
 
@@ -49,12 +50,12 @@ Status GroupMatMulLayer<T, WT>::Preprocess(ModelConfig& model_config_) {
     CreateTensor(buffer_input_scales, {k / groupsize, n}, DataType::TYPE_FP16, rank_, MemoryDevice::MEMORY_DEVICE);
     CreateTensor(buffer_output, {max_m, n}, DataType::TYPE_FP16, rank_, MemoryDevice::MEMORY_DEVICE);
 
-    const size_t warmup_iters = 2;
-    const size_t record_iters = 5;
+    const size_t warmup_iters = GetEnvAsPositiveInt("QUANT_WARMUP", 2);
+    const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 5);
     for (size_t m = 1; m <= static_cast<size_t>(model_config_.max_batch_size); m++) {
       size_t best_config_index = InvokeFpAIntBGroupGemmConfigProfile<T, llm_kernels::nvidia::WeightType::INT4>(
           warmup_iters, record_iters, buffer_output.GetPtr<void>(), buffer_input_activation.GetPtr<void>(),
-          buffer_input_weight.GetPtr<void>(), buffer_input_scales.GetPtr<void>(), workspace_buffer_.GetPtr<void>(), m,
+          buffer_input_weight.GetPtr<void>(), buffer_input_scales.GetPtr<void>(), workspace_buffer_->GetPtr<void>(), m,
           n, k, groupsize, context_->GetComputeStreams()[rank_].Get());
       config_map_[{m, n, k}] = best_config_index;
       KLLM_LOG_DEBUG << fmt::format("The best config index for mnk=({},{},{}) is {}", m, n, k, best_config_index);
@@ -80,7 +81,7 @@ Status GroupMatMulLayer<T, WT>::Preprocess(ModelConfig& model_config_) {
 
 template <typename T, DataType WT>
 Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  if constexpr (WT == TYPE_I4_G128) {
+  if constexpr (WT == TYPE_I4_GROUP) {
     const Tensor& weight_tensor = input_tensors[1];
     const void* p_qweight_tensor = weight_tensor.GetPtr<void>();
     const void* p_scales_tensor = weight_tensor.scales->GetPtr<void>();
@@ -96,7 +97,7 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
 
     InvokeFpAIntBGroupGemm<T, llm_kernels::nvidia::WeightType::INT4>(
         output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
-        workspace_buffer_.GetPtr<void>(), m, n, k, groupsize, best_config_index,
+        workspace_buffer_->GetPtr<void>(), m, n, k, groupsize, best_config_index,
         context_->GetComputeStreams()[rank_].Get());
     output_tensors[0].shape = {m, n};
     output_tensors[0].dtype = input_tensors[0].dtype;
@@ -107,10 +108,10 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
   }
 }
 
-template class GroupMatMulLayer<float, TYPE_I4_G128>;
-template class GroupMatMulLayer<half, TYPE_I4_G128>;
+template class GroupMatMulLayer<float, TYPE_I4_GROUP>;
+template class GroupMatMulLayer<half, TYPE_I4_GROUP>;
 #ifdef ENABLE_BFLOAT16
-template class GroupMatMulLayer<__nv_bfloat16, TYPE_I4_G128>;
+template class GroupMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
 #endif
 
 }  // namespace ksana_llm
