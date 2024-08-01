@@ -79,7 +79,7 @@ Status BaseAllocator::AllocateContiguous(size_t size, int& block_id) {
   AllocateMemory(&memory_ptr, size);
 
   block_id = id_generator_.Gen();
-  MemoryBlock block = {block_id, allocator_config_.block_size, 0, allocator_config_.device, memory_ptr};
+  MemoryBlock block = {block_id, size, 0, allocator_config_.device, memory_ptr};
   used_contiguous_.insert({block_id, block});
 
   return Status();

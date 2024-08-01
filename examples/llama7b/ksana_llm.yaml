@@ -11,7 +11,7 @@ setting:
     max_token_len: 2048
   block_manager:
     block_token_num: 16
-    reserved_device_memory_ratio: 0.2
+    reserved_device_memory_ratio: 0.01
     lora_deivce_memory_ratio: 0.0
     lora_host_memory_factor: 10.0
     block_device_memory_ratio: -1.0

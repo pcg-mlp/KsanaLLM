@@ -15,7 +15,7 @@ setting:
     lora_deivce_memory_ratio: 0.0
     lora_host_memory_factor: 10.0
     block_device_memory_ratio: -1.0
-    block_host_memory_factor: 10.0
+    block_host_memory_factor: 2.0
 model_spec:
   base_model:
     model_dir: ./Llama-2-7b-hf
