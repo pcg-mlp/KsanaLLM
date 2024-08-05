@@ -156,8 +156,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
         KLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
                          << weight_data_type_;
       }
-    } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16 &&
-               (model_config_.quant_config.method != QUANT_GPTQ || weight_data_type != TYPE_INT32)) {
+    } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16) {
       KLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
     }
 

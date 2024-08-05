@@ -23,7 +23,7 @@ class BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
-  virtual void SetWorkSpaceBuffer(std::shared_ptr<Tensor> workspace_buffer) { workspace_buffer_ = workspace_buffer; }
+  virtual void SetWorkSpaceBuffer(Tensor buffer) { workspace_buffer_ = buffer; }
 
   virtual Status Preprocess(ModelConfig& model_config_) { return Status(); }
 
@@ -32,7 +32,7 @@ class BaseLayer {
  protected:
   int rank_;
   std::shared_ptr<Context> context_;
-  std::shared_ptr<Tensor> workspace_buffer_;
+  Tensor workspace_buffer_;
 };
 
 }  // namespace ksana_llm

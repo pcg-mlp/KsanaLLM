@@ -202,21 +202,36 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
   DataType output_type = weight_type;
 
   // auto create matmul layers
-  matmul_layer_factory_ =
-      std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_, rank_, context_);
+  auto matmul_layer_factory = MatMulLayerFactory<T>();
+  attn_qkv_proj_layer_ =
+      matmul_layer_factory.AutoCreateLayer(base_weight, "model.layers.0.self_attn.query_key_value.weight", weight_type,
+                                           input_type, output_type, model_config_, {}, context_, rank_);
+  attn_o_proj_layer_ =
+      matmul_layer_factory.AutoCreateLayer(base_weight, "model.layers.0.self_attn.o_proj.weight", weight_type,
+                                           input_type, output_type, model_config_, {}, context_, rank_);
+  mlp_gate_proj_layer_ =
+      matmul_layer_factory.AutoCreateLayer(base_weight, "model.layers.0.mlp.gate_proj.weight", weight_type, input_type,
+                                           output_type, model_config_, {}, context_, rank_);
+  mlp_up_proj_layer_ =
+      matmul_layer_factory.AutoCreateLayer(base_weight, "model.layers.0.mlp.up_proj.weight", weight_type, input_type,
+                                           output_type, model_config_, {}, context_, rank_);
+  mlp_down_proj_layer_ =
+      matmul_layer_factory.AutoCreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight", weight_type, input_type,
+                                           output_type, model_config_, {}, context_, rank_);
+  lm_head_proj_layer_ = matmul_layer_factory.AutoCreateLayer(base_weight, "lm_head.weight", weight_type, input_type,
+                                                             output_type, model_config_, {}, context_, rank_);
 
-  attn_qkv_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(
-      base_weight, "model.layers.0.self_attn.query_key_value.weight", weight_type, input_type, output_type, {});
-  attn_o_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.self_attn.o_proj.weight",
-                                                              weight_type, input_type, output_type, {});
-  mlp_gate_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.gate_proj.weight",
-                                                                weight_type, input_type, output_type, {});
-  mlp_up_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.up_proj.weight",
-                                                              weight_type, input_type, output_type, {});
-  mlp_down_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight",
-                                                                weight_type, input_type, output_type, {});
-  lm_head_proj_layer_ =
-      matmul_layer_factory_->AutoCreateLayer(base_weight, "lm_head.weight", weight_type, input_type, output_type, {});
+  // get maximum matmul workspace size and malloc workspace buffer
+  std::vector<size_t> each_size = {
+      attn_qkv_proj_layer_->GetWorkSpaceSize(), attn_o_proj_layer_->GetWorkSpaceSize(),
+      mlp_gate_proj_layer_->GetWorkSpaceSize(), mlp_up_proj_layer_->GetWorkSpaceSize(),
+      mlp_down_proj_layer_->GetWorkSpaceSize(), lm_head_proj_layer_->GetWorkSpaceSize(),
+  };
+  size_t shared_matmul_workspace_buffer_size = *std::max_element(each_size.begin(), each_size.end());
+  if (shared_matmul_workspace_buffer_size > 0) {
+    STATUS_CHECK_FAILURE(CreateBufferTensor(shared_matmul_workspace_buffer_,
+                                            {static_cast<size_t>(shared_matmul_workspace_buffer_size)}, TYPE_UINT8));
+  }
 
 #ifdef ENABLE_ACL
   attn_qkv_proj_layer_->Init({}, context_, rank_);
@@ -226,6 +241,22 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
   mlp_down_proj_layer_->Init({}, context_, rank_);
   lm_head_proj_layer_->Init({}, context_, rank_);
 #endif
+
+  // set matumul workspace buffer
+  attn_qkv_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
+  attn_o_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
+  mlp_gate_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
+  mlp_up_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
+  mlp_down_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
+  lm_head_proj_layer_->SetWorkSpaceBuffer(shared_matmul_workspace_buffer_);
+
+  // matmul layer preprocess
+  attn_qkv_proj_layer_->Preprocess(model_config_);
+  attn_o_proj_layer_->Preprocess(model_config_);
+  mlp_gate_proj_layer_->Preprocess(model_config_);
+  mlp_up_proj_layer_->Preprocess(model_config_);
+  mlp_down_proj_layer_->Preprocess(model_config_);
+  lm_head_proj_layer_->Preprocess(model_config_);
 
   return Status();
 }
