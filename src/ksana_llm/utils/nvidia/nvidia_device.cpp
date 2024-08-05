@@ -87,7 +87,21 @@ void EventElapsedTimeT<DEVICE_TYPE_NVIDIA>(float* ms, EventT<DEVICE_TYPE_NVIDIA>
 
 template <>
 void MemGetInfoT<DEVICE_TYPE_NVIDIA>(size_t* free, size_t* total) {
-  CUDA_CHECK(cudaMemGetInfo(free, total));
+  int device_id;
+  CUDA_CHECK(cudaGetDevice(&device_id));
+  cudaMemPool_t mempool;
+  CUDA_CHECK(cudaDeviceGetDefaultMemPool(&mempool, device_id));
+  size_t mempool_used;
+  size_t mempool_reserved;
+  // cudaMemPoolAttrReservedMemCurrent is the current total physical GPU memory consumed by the pool.
+  CUDA_CHECK(cudaMemPoolGetAttribute(mempool, cudaMemPoolAttrUsedMemCurrent, &mempool_used));
+  // cudaMemPoolAttrUsedMemCurrent is the total size of all of the memory allocated from the pool
+  // and not available for reuse.
+  CUDA_CHECK(cudaMemPoolGetAttribute(mempool, cudaMemPoolAttrReservedMemCurrent, &mempool_reserved));
+  size_t mempool_free = (mempool_reserved - mempool_used);
+  size_t device_free;
+  CUDA_CHECK(cudaMemGetInfo(&device_free, total));
+  *free = device_free + mempool_free;
 }
 
 template <>
