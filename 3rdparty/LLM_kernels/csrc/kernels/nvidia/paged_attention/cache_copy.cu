@@ -27,42 +27,42 @@ __global__ void CacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list,
     j:           Represents the offset of the head_size to be processed within a single chunk.
   */
   int x = k_chunk_size / sizeof(SCALAR_T);
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int hs_i = blockIdx.y;
-  int head_size_i = hs_i / x;
-  int j = hs_i % x;
+  int idx = blockIdx.y;
   if (idx < total_len) {
-    int block_idx = 0;
-    for (block_idx = 0; block_idx < bs; block_idx++) {
-      if (idx < input_offsets[block_idx + 1]) {
+    int batch_idx = 0;
+    for (batch_idx = 0; batch_idx < bs; batch_idx++) {
+      if (idx < input_offsets[batch_idx + 1]) {
         break;
       }
     }
-    size_t prefix_limit = prefix_offsets[block_idx + 1] - prefix_offsets[block_idx] + input_offsets[block_idx];
+    size_t prefix_limit = prefix_offsets[batch_idx + 1] - prefix_offsets[batch_idx] + input_offsets[batch_idx];
     if (idx < prefix_limit) {
       return;
     }
-    int cur_block_offset = (idx - input_offsets[block_idx]) / block_size;
-    int cur_batch_offset = (idx - input_offsets[block_idx]) % block_size;
-    CACHE_T* k_dst_base = reinterpret_cast<CACHE_T*>(k_list[block_offsets[block_idx] + cur_block_offset]);
-    CACHE_T* v_dst_base = reinterpret_cast<CACHE_T*>(v_list[block_offsets[block_idx] + cur_block_offset]);
+    int cur_block_offset = (idx - input_offsets[batch_idx]) / block_size;
+    int cur_batch_offset = (idx - input_offsets[batch_idx]) % block_size;
+    CACHE_T* k_dst_base = reinterpret_cast<CACHE_T*>(k_list[block_offsets[batch_idx] + cur_block_offset]);
+    CACHE_T* v_dst_base = reinterpret_cast<CACHE_T*>(v_list[block_offsets[batch_idx] + cur_block_offset]);
     SCALAR_T* k_src_ptr = k_src + idx * stride_size;
     SCALAR_T* v_src_ptr = v_src + idx * stride_size;
-
-    for (int num_head_i = threadIdx.y; num_head_i < num_heads; num_head_i += blockDim.y) {
-      int k_src_index = num_head_i * head_size + head_size_i * x + j;
-      int k_dst_index =
-          num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + cur_batch_offset * x + j;
-      int i = head_size_i * x + j;
-      int v_src_index = num_head_i * head_size + i;
-      int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
-      // Assignment operation
-      if constexpr (FP8_E5M2) {
-        k_dst_base[k_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(k_src_ptr[k_src_index]);
-        v_dst_base[v_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(v_src_ptr[v_src_index]);
-      } else {
-        k_dst_base[k_dst_index] = k_src_ptr[k_src_index];
-        v_dst_base[v_dst_index] = v_src_ptr[v_src_index];
+    for (int hs_i = threadIdx.x; hs_i < head_size; hs_i += blockDim.x) {
+      int head_size_i = hs_i / x;
+      int j = hs_i % x;
+      for (int num_head_i = blockIdx.x; num_head_i < num_heads; num_head_i += gridDim.x) {
+        int k_src_index = num_head_i * head_size + head_size_i * x + j;
+        int k_dst_index =
+            num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + cur_batch_offset * x + j;
+        int i = head_size_i * x + j;
+        int v_src_index = num_head_i * head_size + i;
+        int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
+        // Assignment operation
+        if constexpr (FP8_E5M2) {
+          k_dst_base[k_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(k_src_ptr[k_src_index]);
+          v_dst_base[v_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(v_src_ptr[v_src_index]);
+        } else {
+          k_dst_base[k_dst_index] = k_src_ptr[k_src_index];
+          v_dst_base[v_dst_index] = v_src_ptr[v_src_index];
+        }
       }
     }
   }
@@ -86,42 +86,43 @@ __global__ void ReverseCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** 
     j:           Represents the offset of the head_size to be processed within a single chunk.
   */
   int x = k_chunk_size / sizeof(SCALAR_T);
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int hs_i = blockIdx.y;
-  int head_size_i = hs_i / x;
-  int j = hs_i % x;
+  int idx = blockIdx.y;
   if (idx < total_len) {
-    int block_idx = 0;
-    for (block_idx = 0; block_idx < bs; block_idx++) {
-      if (idx < input_offsets[block_idx + 1]) {
+    int batch_idx = 0;
+    for (batch_idx = 0; batch_idx < bs; batch_idx++) {
+      if (idx < input_offsets[batch_idx + 1]) {
         break;
       }
     }
-    size_t prefix_limit = prefix_offsets[block_idx + 1] - prefix_offsets[block_idx] + input_offsets[block_idx];
+    size_t prefix_limit = prefix_offsets[batch_idx + 1] - prefix_offsets[batch_idx] + input_offsets[batch_idx];
     if (idx >= prefix_limit) {
       return;
     }
-    int cur_block_offset = (idx - input_offsets[block_idx]) / block_size;
-    int cur_batch_offset = (idx - input_offsets[block_idx]) % block_size;
-    CACHE_T* k_dst_base = reinterpret_cast<CACHE_T*>(k_list[block_offsets[block_idx] + cur_block_offset]);
-    CACHE_T* v_dst_base = reinterpret_cast<CACHE_T*>(v_list[block_offsets[block_idx] + cur_block_offset]);
+    int cur_block_offset = (idx - input_offsets[batch_idx]) / block_size;
+    int cur_batch_offset = (idx - input_offsets[batch_idx]) % block_size;
+    CACHE_T* k_dst_base = reinterpret_cast<CACHE_T*>(k_list[block_offsets[batch_idx] + cur_block_offset]);
+    CACHE_T* v_dst_base = reinterpret_cast<CACHE_T*>(v_list[block_offsets[batch_idx] + cur_block_offset]);
     SCALAR_T* k_src_ptr = k_src + idx * stride_size;
     SCALAR_T* v_src_ptr = v_src + idx * stride_size;
 
-    for (int num_head_i = threadIdx.y; num_head_i < num_heads; num_head_i += blockDim.y) {
-      int k_src_index = num_head_i * head_size + head_size_i * x + j;
-      int k_dst_index =
-          num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + cur_batch_offset * x + j;
-      int i = head_size_i * x + j;
-      int v_src_index = num_head_i * head_size + i;
-      int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
-      // Reverse assignment operation
-      if constexpr (FP8_E5M2) {
-        k_src_ptr[k_src_index] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(k_dst_base[k_dst_index]);
-        v_src_ptr[v_src_index] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(v_dst_base[v_dst_index]);
-      } else {
-        k_src_ptr[k_src_index] = k_dst_base[k_dst_index];
-        v_src_ptr[v_src_index] = v_dst_base[v_dst_index];
+    for (int hs_i = threadIdx.x; hs_i < head_size; hs_i += blockDim.x) {
+      int head_size_i = hs_i / x;
+      int j = hs_i % x;
+      for (int num_head_i = blockIdx.x; num_head_i < num_heads; num_head_i += gridDim.x) {
+        int k_src_index = num_head_i * head_size + head_size_i * x + j;
+        int k_dst_index =
+            num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + cur_batch_offset * x + j;
+        int i = head_size_i * x + j;
+        int v_src_index = num_head_i * head_size + i;
+        int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
+        // Reverse assignment operation
+        if constexpr (FP8_E5M2) {
+          k_src_ptr[k_src_index] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(k_dst_base[k_dst_index]);
+          v_src_ptr[v_src_index] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(v_dst_base[v_dst_index]);
+        } else {
+          k_src_ptr[k_src_index] = k_dst_base[k_dst_index];
+          v_src_ptr[v_src_index] = v_dst_base[v_dst_index];
+        }
       }
     }
   }
@@ -142,10 +143,7 @@ __global__ void CachePosCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_li
     j:           Represents the offset of the head_size to be processed within a single chunk.
   */
   int x = k_chunk_size / sizeof(SCALAR_T);
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int hs_i = blockIdx.y;
-  int head_size_i = hs_i / x;
-  int j = hs_i % x;
+  int idx = blockIdx.y;
   if (idx < total_len) {
     int input_len = reinterpret_cast<int64_t*>(pos)[idx];
     int cur_block_offset = input_len / block_size;
@@ -155,20 +153,24 @@ __global__ void CachePosCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_li
     SCALAR_T* k_src_ptr = k_src + idx * stride_size;
     SCALAR_T* v_src_ptr = v_src + idx * stride_size;
 
-    for (int num_head_i = threadIdx.y; num_head_i < num_heads; num_head_i += blockDim.y) {
-      int k_src_index = num_head_i * head_size + head_size_i * x + j;
-      int k_dst_index =
-          num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + cur_batch_offset * x + j;
-      int i = head_size_i * x + j;
-      int v_src_index = num_head_i * head_size + i;
-      int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
-      //  赋值操作
-      if constexpr (FP8_E5M2) {
-        k_dst_base[k_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(k_src_ptr[k_src_index]);
-        v_dst_base[v_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(v_src_ptr[v_src_index]);
-      } else {
-        k_dst_base[k_dst_index] = k_src_ptr[k_src_index];
-        v_dst_base[v_dst_index] = v_src_ptr[v_src_index];
+    for (int hs_i = threadIdx.x; hs_i < head_size; hs_i += blockDim.x) {
+      int head_size_i = hs_i / x;
+      int j = hs_i % x;
+      for (int num_head_i = blockIdx.x; num_head_i < num_heads; num_head_i += gridDim.x) {
+        int k_src_index = num_head_i * head_size + head_size_i * x + j;
+        int k_dst_index =
+            num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + cur_batch_offset * x + j;
+        int i = head_size_i * x + j;
+        int v_src_index = num_head_i * head_size + i;
+        int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
+        //  赋值操作
+        if constexpr (FP8_E5M2) {
+          k_dst_base[k_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(k_src_ptr[k_src_index]);
+          v_dst_base[v_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(v_src_ptr[v_src_index]);
+        } else {
+          k_dst_base[k_dst_index] = k_src_ptr[k_src_index];
+          v_dst_base[v_dst_index] = v_src_ptr[v_src_index];
+        }
       }
     }
   }
@@ -178,11 +180,8 @@ template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void CacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,
                int head_size, int stride_size, cudaStream_t stream) {
-  int threadsPerBlock = 32;
-  int min_num_heads = std::min(MAX_THREADS_PER_BLOCK / threadsPerBlock, num_heads);
-  int blocks = (total_len + threadsPerBlock - 1) / threadsPerBlock;
-  dim3 grid_shape(blocks, head_size);
-  dim3 block_shape(threadsPerBlock, min_num_heads);
+  dim3 grid_shape(num_heads, total_len);
+  dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
   CacheCopyKernel<SCALAR_T, CACHE_T, FP8_E5M2><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
       head_size, stride_size);
@@ -192,11 +191,8 @@ template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void ReverseCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                       size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,
                       int head_size, int stride_size, cudaStream_t stream) {
-  int threadsPerBlock = 32;
-  int min_num_heads = std::min(MAX_THREADS_PER_BLOCK / threadsPerBlock, num_heads);
-  int blocks = (total_len + threadsPerBlock - 1) / threadsPerBlock;
-  dim3 grid_shape(blocks, head_size);
-  dim3 block_shape(threadsPerBlock, min_num_heads);
+  dim3 grid_shape(num_heads, total_len);
+  dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
   ReverseCacheCopyKernel<SCALAR_T, CACHE_T, FP8_E5M2><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
       head_size, stride_size);
@@ -206,11 +202,8 @@ template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
 void CachePosCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, void* pos, size_t* input_offsets,
                   int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size,
                   int stride_size, cudaStream_t stream) {
-  int threadsPerBlock = 32;
-  int min_num_heads = std::min(MAX_THREADS_PER_BLOCK / threadsPerBlock, num_heads);
-  int blocks = (total_len + threadsPerBlock - 1) / threadsPerBlock;
-  dim3 grid_shape(blocks, head_size);
-  dim3 block_shape(threadsPerBlock, min_num_heads);
+  dim3 grid_shape(num_heads, total_len);
+  dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
   CachePosCopyKernel<SCALAR_T, CACHE_T, FP8_E5M2>
       <<<grid_shape, block_shape, 0, stream>>>(k_src, v_src, k_list, v_list, pos, input_offsets, block_offsets,
                                                block_size, bs, total_len, num_heads, head_size, stride_size);
