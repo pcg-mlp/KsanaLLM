@@ -98,15 +98,17 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::vector<std::shared_ptr<BaseLayer>> paged_attention_layers_;
   std::shared_ptr<BaseLayer> add_layer_;
   std::shared_ptr<BaseLayer> silu_mul_layer_;
+  std::shared_ptr<BaseLayer> assemble_last_token_layer_;
+  std::shared_ptr<BaseLayer> cast_layer_;
+  std::shared_ptr<BaseLayer> input_refit_layer_;
+
+  std::shared_ptr<MatMulLayerFactory<T>> matmul_layer_factory_;
   std::shared_ptr<BaseLayer> attn_qkv_proj_layer_;
   std::shared_ptr<BaseLayer> attn_o_proj_layer_;
   std::shared_ptr<BaseLayer> mlp_gate_proj_layer_;
   std::shared_ptr<BaseLayer> mlp_up_proj_layer_;
   std::shared_ptr<BaseLayer> mlp_down_proj_layer_;
   std::shared_ptr<BaseLayer> lm_head_proj_layer_;
-  std::shared_ptr<BaseLayer> assemble_last_token_layer_;
-  std::shared_ptr<BaseLayer> cast_layer_;
-  std::shared_ptr<BaseLayer> input_refit_layer_;
 
   std::shared_ptr<py::object> plugin_;
 
@@ -160,7 +162,7 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   Tensor cpu_input_tokens_tensor_;
   Tensor cpu_tokens_emb_tensor_;
 
-  Tensor shared_matmul_workspace_buffer_;
+  std::shared_ptr<Tensor> shared_matmul_workspace_buffer_ = nullptr;
 
 #ifdef ENABLE_ACL
   // Used for ascend attention.

@@ -7,7 +7,7 @@ namespace ksana_llm {
 
 template <typename T, DataType WT>
 Status GroupMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                    int rank) {
+                                     int rank) {
   return Status(RET_RUNTIME, "GroupMatMulLayer is not supported in ascend\n");
 }
 
@@ -17,7 +17,7 @@ size_t GroupMatMulLayer<T, WT>::GetWorkSpaceSize() {
 }
 
 template <typename T, DataType WT>
-Status GroupMatMulLayer<T, WT>::Preprocess(ModelConfig& model_config_) {
+Status GroupMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
   return Status(RET_RUNTIME, "GroupMatMulLayer is not supported in ascend\n");
 }
 
@@ -26,6 +26,6 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
   return Status(RET_RUNTIME, "GroupMatMulLayer is not supported in ascend\n");
 }
 
-template class GroupMatMulLayer<float, TYPE_I4_G128>;
-template class GroupMatMulLayer<float16, TYPE_I4_G128>;
+template class GroupMatMulLayer<float, TYPE_I4_GROUP>;
+template class GroupMatMulLayer<float16, TYPE_I4_GROUP>;
 }  // namespace ksana_llm
