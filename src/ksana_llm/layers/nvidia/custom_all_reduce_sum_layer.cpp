@@ -14,10 +14,14 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
                                         int rank) {
   context_ = context;
   rank_ = rank;
+  // No need to initialize custom reduce sum when `tp == 1`.
+  if (context_->GetTensorParallelSize() == 1) {
+    return Status();
+  }
+
   int parameter_index = 0;
   void* meta = std::any_cast<void*>(parameters[parameter_index++]);
   buffer_ = std::any_cast<void*>(parameters[parameter_index++]);
-  buffer_size_ = std::any_cast<size_t>(parameters[parameter_index++]);
   rank_data_ = std::any_cast<void*>(parameters[parameter_index++]);
   rank_data_sz_ = std::any_cast<size_t>(parameters[parameter_index++]);
   void* input = std::any_cast<void*>(parameters[parameter_index++]);

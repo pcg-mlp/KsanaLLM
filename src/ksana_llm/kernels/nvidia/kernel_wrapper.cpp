@@ -169,6 +169,9 @@ INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
 template <typename T>
 void InvokeSiluActivation(const void* input, const void* gated_weights, const int m, const int n, void* output,
                           cudaStream_t stream) {
+  if (output != input) {
+    throw std::runtime_error("Activation is an in-place operation, `output` must be the same as `input`.");
+  }
   const int* ia3_tasks = nullptr;
   const T* bias = nullptr;
   const T* ia3_weights = nullptr;
@@ -178,7 +181,6 @@ void InvokeSiluActivation(const void* input, const void* gated_weights, const in
   const int seq_len = 0;
   const float* activation_in = nullptr;
   const float* activation_out = nullptr;
-  CUDA_CHECK(cudaMemcpyAsync(output, input, sizeof(T) * m * n, cudaMemcpyDeviceToDevice, stream));
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, T, T>(
                             reinterpret_cast<T*>(output), bias, reinterpret_cast<const T*>(gated_weights),
                             gated_bias, ia3_tasks, ia3_weights, m, n, int8_mode, activation_in, activation_out,

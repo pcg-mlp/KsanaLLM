@@ -15,15 +15,14 @@
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
-#include "ksana_llm/utils/context.h"
-#include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/optional_file.h"
-
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/models/base/model_communicator.h"
 #include "ksana_llm/models/base/model_input.h"
 #include "ksana_llm/models/base/model_output.h"
 #include "ksana_llm/models/llama/llama_weight.h"
+#include "ksana_llm/utils/context.h"
+#include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/optional_file.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/utils.h"
@@ -33,6 +32,9 @@ namespace ksana_llm {
 // The positional encoding.
 enum PositionEncoding { ROPE = 0, ALIBI = 1 };
 
+// The layernorm position type.
+enum class LayerNormPosition { PRE_NORM = 0, POST_NORM = 1 };
+
 // Describe the model architecture.
 struct ModelRunConfig {
   // The model position embedding
@@ -41,9 +43,11 @@ struct ModelRunConfig {
   bool is_neox = true;
   // Whether add a bias on qkv output.
   bool qkv_add_bias = false;
+  // Use pre-norm or post-norm
+  LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
 };
 
-// A common implement of transfer based model.
+// A common implement of transformer based model.
 template <typename T>
 class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
  public:
@@ -74,6 +78,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   // The model config.
   ModelConfig model_config_;
+
+  // The model run config.
+  ModelRunConfig model_run_config_;
 
   // The model input information.
   std::shared_ptr<ModelInput> model_input_;
@@ -112,13 +119,42 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // Vocab size aligned and padded with tensor_para_size
   size_t vocab_size_pad_;
 
-  // Whether to add bias values during the QKV calculation.
-  bool qkv_add_bias_;
+  /**
+   * The following 4 buffers are used as temporary buffers during the whole model inference:
+   * 1. `hidden_buffer_0_` and `hidden_buffer_1_` serve as the input and output for each layer.
+   *    We assume that the input of each layer is taken from `hidden_buffer_0_`, the output is
+   *    put into `hidden_buffer_1_`, and then swapped with `hidden_buffer_0_`. This convention
+   *    makes each layer independent and pluggable.
+   * 2. `residual_buffer_` is dedicated to storing the output used for residual connection.
+   * 3. `shared_buffer_` is shared to store the output of the up layer for gated activation
+   *    (`gated_buffer_`), as the fixed input buffer for custom reduce sum (`reduce_buffer_`),
+   *    and as the extra workspace for paged attention (`paged_buffer_`).
+   *
+   * Below is an example of how these buffers are used:
+   *
+   * ```
+   * // The input for layernorm is used for residual connection, so is stored in `residual_buffer_`.
+   * layernorm_layer->Forward(residual_buffer_, hidden_buffer_0_);
+   *
+   * // Normally, a non-inplace layer takes input from `hidden_buffer_0_`, puts the output to `hidden_buffer_1_`.
+   * attention_layer->Forward(hidden_buffer_0_, hidden_buffer_1_);
+   * // Swap `hidden_buffer_1_` with `hidden_buffer_0` to ensure the next layer's input is in `hidden_buffer_0_`.
+   * std::swap(hidden_buffer_1_, hidden_buffer_0_);
+   *
+   * // Residual layer takes the input from `hidden_buffer_0_` and `residual_buffer_`, and places the ouput
+   * // to `residual_buffer_` for the residual connection after mlp.
+   * residual_add_layer->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, residual_buffer_);
+   * ```
+   *
+   */
+  std::vector<Tensor> hidden_buffer_0_{1};
+  std::vector<Tensor> hidden_buffer_1_{1};
+  std::vector<Tensor> residual_buffer_{1};
+  std::vector<Tensor> shared_buffer_{1};
+  std::vector<Tensor>& gated_buffer_{shared_buffer_};
+  std::vector<Tensor>& reduce_buffer_{shared_buffer_};
+  std::vector<Tensor>& paged_buffer_{shared_buffer_};
 
-  Tensor tensor_buffer_0_;
-  Tensor tensor_buffer_1_;
-  Tensor tensor_buffer_2_;
-  Tensor up_matmul_tensor_buffer_;
   Tensor forward_shape_;
   Tensor cos_sin_cache_tensor_;
   Tensor cpu_input_tokens_tensor_;
@@ -141,32 +177,38 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
  private:
   Status CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight);
 
-  Status AddPrefixCache(std::vector<Tensor>& mmha_origin_input, std::vector<Tensor>& mmha_prefix_input);
+  Status AddAttentionPrefixCache();
 
-  Status RemovePrefixCache(std::vector<Tensor>& mmha_prefix_output, std::vector<Tensor>& mmha_output);
+  Status RemoveAttentionPrefixCache();
 
   bool IsPrefixCachingComputationReuse();
 
-  Status FlashAttentionForward(std::vector<Tensor>& flash_attention_input, std::vector<Tensor>& flash_attention_output,
-                               int layer_idx);
+  Status FlashAttentionForward(const int layer_idx);
+
+  Status PagedAttentionForward(const int layer_idx);
+
+  Status LayernormForward(const std::string& layer_name, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                          const std::vector<Tensor>& layernorm_input, std::vector<Tensor>& layernorm_output);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L257
   Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         Tensor& hidden_states, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
-                         std::vector<Tensor>& output_2, const bool is_context_stage);
+                         const std::vector<Tensor>& attention_input, const bool is_context_stage);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L211
   Status CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                   Tensor& post_layernorm_output, std::vector<Tensor>& output_0, std::vector<Tensor>& output_1,
-                   std::vector<Tensor>& output_2);
+                   const std::vector<Tensor>& mlp_input, const bool is_context_stage);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L694
-  Status CommonDecoder(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                       std::vector<Tensor>& temp_buffer_0, std::vector<Tensor>& temp_buffer_1,
-                       std::vector<Tensor>& temp_buffer_2, const bool is_context_stage);
+  Status CommonDecoderPreNorm(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                              const bool is_context_stage);
+
+  // refer to
+  // github huggingface/transformers main/src/transformers/models/openai/modeling_openai.py#L247
+  Status CommonDecoderPostNorm(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                               const bool is_context_stage);
 
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
@@ -174,7 +216,7 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
                        const bool is_context_stage);
 
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                           const bool is_context_stage, std::vector<Tensor>& temp_buffer_0);
+                           const bool is_context_stage);
 
   Status PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs);
 };

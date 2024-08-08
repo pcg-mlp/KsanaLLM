@@ -21,7 +21,6 @@ class CustomAllReduceSumLayer : public BaseLayer {
  private:
   void** metas_;
   void* buffer_;
-  size_t buffer_size_;
   void* rank_data_;
   size_t rank_data_sz_;
   void** data_handles_;

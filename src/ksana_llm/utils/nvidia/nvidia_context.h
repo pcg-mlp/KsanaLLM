@@ -70,7 +70,7 @@ class NvidiaContextExtension {
   std::vector<void*> reduce_buffers_;
   std::vector<void*> reduce_metas_;
 
-  // The max reduce inputs num for custom reduce..
+  // The max reduce inputs num for custom reduce.
   int max_reduce_inputs_num_{2};
 
   // The reduce inputs used for nccl.

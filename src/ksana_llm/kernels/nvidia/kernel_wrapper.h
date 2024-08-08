@@ -45,6 +45,7 @@ template <typename T>
 void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
                            void* output, cudaStream_t stream);
 
+// Invoke activation in-place, `output` must be the same as `input`.
 template <typename T>
 void InvokeSiluActivation(const void* input, const void* bias, const int m, const int n, void* output,
                           cudaStream_t stream);

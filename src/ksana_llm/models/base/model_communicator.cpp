@@ -19,7 +19,7 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
   nccl_all_gather_layer_->Init({}, context_, rank_);
 
   // TODO(catheywang): CustomAllReduceSum not supported on more than two PCIe-only GPUs.
-  enable_custom_all_reduce_ = enable_custom_all_reduce_ && (context->GetTensorParallelSize() <= 2);
+  enable_custom_all_reduce_ &= context->GetTensorParallelSize() == 2;
   if (enable_custom_all_reduce_) {
     custom_all_reduce_sum_layer_0_ = std::make_shared<CustomAllReduceSumLayer<T>>();
 
@@ -37,7 +37,7 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
 
     MemsetAsync(reduce_tensor_.GetPtr<void>(), 0, reduce_buffer_size, context_->GetMemoryManageStreams()[rank_]);
 
-    custom_all_reduce_sum_layer_0_->Init({reduce_tensor_.GetPtr<void>(), buffer_->GetPtr<void>(), reduce_buffer_size,
+    custom_all_reduce_sum_layer_0_->Init({reduce_tensor_.GetPtr<void>(), buffer_->GetPtr<void>(),
                                           rank_tensor_0_.GetPtr<void>(), rank_data_sz, input_->GetPtr<void>(), 0},
                                          context_, rank_);
     EventDestroy(create_reduce_tensor_event);
@@ -80,7 +80,7 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
     STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
   } else {
     if (enable_custom_all_reduce_ && use_custom) {
-      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_0_->Forward({input_tensors[0]}, output_tensors));
+      STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_0_->Forward(input_tensors, output_tensors));
     } else {
       STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
     }
