@@ -29,6 +29,8 @@ template <typename T>
 void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
   GetBlockManager()->SetDeviceId(rank_);
 
+  preifx_caching_enabled_ = Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled();
+
   model_run_config_ = model_run_config;
 
   num_layer_ = model_config_.num_layer;
@@ -303,17 +305,8 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
 }
 
 template <typename T>
-bool CommonModel<T>::IsPrefixCachingComputationReuse() {
-#ifdef ENABLE_ACL
-  // NPU device does not currently support prefix caching for computation reuse.
-  return false;
-#endif
-  return GetBlockManager()->GetPrefixCacheBlocksNumber() > 0;
-}
-
-template <typename T>
 Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
-  bool reuse_prefix_caching = IsPrefixCachingComputationReuse();
+  bool reuse_prefix_caching = preifx_caching_enabled_;
 
   if (reuse_prefix_caching) {
     AddAttentionPrefixCache();

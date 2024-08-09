@@ -76,6 +76,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   using BaseModel::context_;
   using BaseModel::rank_;
 
+  // Whether auto prefix caching is enabled.
+  bool preifx_caching_enabled_;
+
   // The model config.
   ModelConfig model_config_;
 

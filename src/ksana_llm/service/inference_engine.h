@@ -5,7 +5,9 @@
 
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/block_manager/block_manager.h"
+#include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/profiler/collector.h"
+#include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/status.h"
 
@@ -52,6 +54,15 @@ class InferenceEngine {
 
   // The batch manager for the whole inference.
   std::shared_ptr<BatchManager> batch_manager_ = nullptr;
+
+  // The batch scheduler used for inference engine.
+  std::shared_ptr<BatchScheduler> batch_scheduler_ = nullptr;
+
+  // The runtime instance used for inference engine.
+  std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
+
+  // The cache manager inference used for inference engine.
+  std::shared_ptr<CacheManagerInterface> cache_manager_ = nullptr;
 
   // The model instances this service support.
   std::vector<std::shared_ptr<ModelInstance>> model_instances_;

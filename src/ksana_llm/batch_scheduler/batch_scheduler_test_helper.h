@@ -60,10 +60,6 @@ class BlockManagerSimulator : public BlockManagerInterface {
       }
     }
 
-    if (block_manager_config_.prefix_cache_len > 0) {
-      PreparePrefixCacheBlocks();
-    }
-
     KLLM_LOG_DEBUG << "BlockManagerSimulator started";
   }
 
@@ -180,15 +176,15 @@ class BlockManagerSimulator : public BlockManagerInterface {
   // Get number of used blocked memory on host.
   size_t GetHostUsedBlockNumber() { return host_alloc_block_.size(); }
 
-  // Swap out blocks from device to host,
-  // it could be swapped in later and keep block id not changed.
-  Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
-                 const int host_block_num_to_add) {
+  // The swap out/in for single block, the device block has been allocated on current device.
+  // Do not free memory after swapness, the caller will do that.
+  Status SwapOut(int host_block_id, int device_block_id) {
     int device_id = GetDeviceId();
-    KLLM_LOG_DEBUG << "SwapOut on device " << device_id << " device_blocks.size()=" << device_blocks.size()
-                   << ", host_blocks.size()=" << host_blocks.size()
-                   << ", host_block_num_to_add=" << host_block_num_to_add;
-    AllocateHostBlocks(device_blocks.size() + host_block_num_to_add, host_blocks);
+    KLLM_LOG_DEBUG << "SwapOut on device " << device_id << " device_blockid=" << device_block_id
+                   << ", host_block_id=" << host_block_id;
+
+    std::vector<int> device_blocks{device_block_id};
+    std::vector<int> host_blocks{host_block_id};
 
     // Copy kv-cache contents
     CopyKvCacheContents(device_blocks, host_blocks, device_kv_cache_contents_[device_id], host_kv_cache_contents_);
@@ -198,17 +194,17 @@ class BlockManagerSimulator : public BlockManagerInterface {
     // TODO(robertyuan): Simulate communication delay
     std::this_thread::sleep_for(std::chrono::microseconds(1));
 
-    FreeBlocks(device_blocks);
     stat_.swapout_succ_num += device_blocks.size();
     return Status();
   }
 
-  // Swap in blocks from host to device.
-  Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) {
+  Status SwapIn(int device_block_id, int host_block_id) {
     int device_id = GetDeviceId();
-    KLLM_LOG_DEBUG << "SwapIn on device " << device_id << ", host_blocks.size()=" << host_blocks.size()
-                   << ", device_blocks.size()=" << device_blocks.size();
-    AllocateBlocks(host_blocks.size(), device_blocks);
+    KLLM_LOG_DEBUG << "SwapIn on device " << device_id << ", host_block_id=" << host_block_id
+                   << ", device_block_id=" << device_block_id;
+
+    std::vector<int> device_blocks{device_block_id};
+    std::vector<int> host_blocks{host_block_id};
 
     // Copy kv-cache contents
     CopyKvCacheContents(host_blocks, device_blocks, host_kv_cache_contents_, device_kv_cache_contents_[device_id]);
@@ -218,9 +214,8 @@ class BlockManagerSimulator : public BlockManagerInterface {
     // TODO(robertyuan): Simulate communication delay
     std::this_thread::sleep_for(std::chrono::microseconds(1));
 
-    FreeHostBlocks(host_blocks);
-    KLLM_LOG_DEBUG << "SwapIn finished on device " << device_id << ". host_blocks.size()=" << host_blocks.size()
-                   << ", device_blocks.size()=" << device_blocks.size();
+    KLLM_LOG_DEBUG << "SwapIn finished on device " << device_id << ". host_block_id=" << host_block_id
+                   << ", device_block_id=" << device_block_id;
     stat_.swapin_succ_num += host_blocks.size();
     return Status();
   }
@@ -239,54 +234,6 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Get the token number for one block.
   size_t GetBlockTokenNum() const { return block_token_num_; }
-
-  // Prepare blocks for prefix cache
-  Status PreparePrefixCacheBlocks() {
-    int block_num =
-        block_manager_config_.prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num;
-
-    for (int device_id = 0; device_id < tp_num_; ++device_id) {
-      SetDeviceId(device_id);
-      std::vector<int> prefix_cache_block_tmp;
-      AllocateBlocks(block_num, prefix_cache_block_tmp);
-      prefix_cache_blocks_.emplace_back(std::move(prefix_cache_block_tmp));
-    }
-    return Status();
-  }
-
-  // Get the prefix cache tokens numbers
-  int GetPrefixCacheTokensNumber() const { return block_manager_config_.prefix_cache_len; }
-
-  // Get the prefix cache blocks numbers
-  size_t GetPrefixCacheBlocksNumber() const { return prefix_cache_blocks_[0].size(); }
-
-  // Check the input token is valid for prefix cache
-  bool CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) {
-    if (block_manager_config_.prefix_cache_len <= 0 ||
-        input_tokens.size() < static_cast<size_t>(block_manager_config_.prefix_cache_len)) {
-      return false;
-    }
-
-    if (prefix_cache_tokens_.empty()) {
-      // init with the first request
-      prefix_cache_tokens_.resize(block_manager_config_.prefix_cache_len, 0);
-      std::copy(input_tokens.begin(), input_tokens.begin() + block_manager_config_.prefix_cache_len,
-                prefix_cache_tokens_.begin());
-    } else {
-      for (int token_idx = 0; token_idx < block_manager_config_.prefix_cache_len; ++token_idx) {
-        if (prefix_cache_tokens_[token_idx] != input_tokens[token_idx]) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-
-  // Fill prefix kv cache to input blocks vector
-  Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) {
-    kv_cache_blocks = prefix_cache_blocks_;
-    return Status();
-  }
 
   // Get block manager config
   const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
@@ -384,7 +331,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
     }
     KLLM_LOG_DEBUG << "Alloc OK on device " << device_id << ", alloc block num=" << blocks.size()
                    << ", free_blocks.size()=" << free_blocks.size() << ", used_blocks.size()=" << used_blocks.size()
-                   << ", blocks={ " << ss_blocks.str();
+                   << ", blocks=[" << ss_blocks.str() << "].";
     return Status();
   }
 
@@ -398,7 +345,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
     KLLM_LOG_DEBUG << "Free start on device " << device_id << ", block num=" << blocks.size()
                    << ", free_blocks.size()=" << free_blocks.size() << ", used_blocks.size()=" << used_blocks.size()
-                   << ", blocks={" << ss_blocks.str();
+                   << ", blocks=[" << ss_blocks.str() << "].";
 
     for (auto block_id : blocks) {
       auto it = used_blocks.find(block_id);
@@ -484,9 +431,9 @@ class BlockManagerSimulator : public BlockManagerInterface {
 };
 
 //
-class BatchSchedulerEvironmentSimulator {
+class BatchSchedulerEnvironmentSimulator {
  public:
-  BatchSchedulerEvironmentSimulator(const BlockManagerConfig& block_manager_config, int tp_num) : tp_num_(tp_num) {
+  BatchSchedulerEnvironmentSimulator(const BlockManagerConfig& block_manager_config, int tp_num) : tp_num_(tp_num) {
     blk_mgr_ = new BlockManagerSimulator(block_manager_config, tp_num);
     SetBlockManager(blk_mgr_);
     ProfilerConfig profiler_config;
@@ -496,7 +443,7 @@ class BatchSchedulerEvironmentSimulator {
     SetProfileCollector(profile_collector_);
     profile_collector_->Start();
   }
-  ~BatchSchedulerEvironmentSimulator() {
+  ~BatchSchedulerEnvironmentSimulator() {
     delete blk_mgr_;
     profile_collector_->Stop();
     delete profile_collector_;
@@ -566,9 +513,9 @@ class BatchSchedulerEvironmentSimulator {
                                                          const std::vector<std::pair<int, int>>& seeds) {
     KLLM_LOG_DEBUG << "Init req " << req_id << ", input_token_num=" << input_token_num
                    << ", expect_output_token_num=" << expected_output_token_num;
-    ksana_llm::KsanaPythonInput ksana_python_input;
-    ksana_python_input.sampling_config.num_beams = 0;
-    ksana_python_input.sampling_config.num_return_sequences = 1;
+    std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
+    ksana_python_input->sampling_config.num_beams = 0;
+    ksana_python_input->sampling_config.num_return_sequences = 1;
     req = std::make_shared<Request>(ksana_python_input);
     req->req_id = req_id;
     req->model_name = "llama";

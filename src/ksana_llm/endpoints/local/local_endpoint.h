@@ -20,11 +20,11 @@ class LocalEndpoint : public BaseEndpoint {
   virtual ~LocalEndpoint() override {}
 
   // Handle a request.
-  virtual Status Handle(const ksana_llm::KsanaPythonInput& ksana_python_input,
+  virtual Status Handle(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                         ksana_llm::KsanaPythonOutput& ksana_python_output);
 
   // handle a streaming request.
-  virtual Status HandleStreaming(const ksana_llm::KsanaPythonInput& ksana_python_input,
+  virtual Status HandleStreaming(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                                  std::shared_ptr<StreamingIterator>& streaming_iterator);
 };
 

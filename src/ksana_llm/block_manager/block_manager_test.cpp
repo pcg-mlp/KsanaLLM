@@ -119,14 +119,14 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
     GTEST_SKIP_("This test is just for 2 GPUs");
   }
   // 在 device 上分配两个 block
-  std::vector<int> blocks;
-  Status status = block_manager->AllocateBlocks(2, blocks);
+  std::vector<int> device_blocks;
+  Status status = block_manager->AllocateBlocks(2, device_blocks);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(blocks.size(), 2);
+  EXPECT_EQ(device_blocks.size(), 2);
 
   // 获取 block 的指针
   std::vector<void*> addrs;
-  block_manager->GetBlockPtrs(blocks, addrs);
+  block_manager->GetBlockPtrs(device_blocks, addrs);
 
   // 将数据从 host 复制到 block 中
   std::string string_a = "string_a";
@@ -134,12 +134,16 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   Memcpy(addrs[0], string_a.data(), string_a.size(), MEMCPY_HOST_TO_DEVICE);
   Memcpy(addrs[1], string_b.data(), string_b.size(), MEMCPY_HOST_TO_DEVICE);
 
-  // 将 block 从 device 交换到 host
+  // 在 host 上分配两个 block
   std::vector<int> host_blocks;
-  status = block_manager->SwapOut(blocks, host_blocks, 0);
+  status = block_manager->AllocateHostBlocks(2, host_blocks);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 0);
-  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 2);
+  EXPECT_EQ(host_blocks.size(), 2);
+
+  // 将 block 从 device 交换到 host
+  status = block_manager->SwapOut(host_blocks[0], device_blocks[0]);
+  status = block_manager->SwapOut(host_blocks[1], device_blocks[1]);
+  EXPECT_TRUE(status.OK());
 
   // 修改 block 中的数据
   string_a = "string_x";
@@ -148,11 +152,9 @@ TEST_F(BlockManagerTest, SwapInAndSwapOut) {
   Memcpy(addrs[1], string_b.data(), string_b.size(), MEMCPY_HOST_TO_DEVICE);
 
   // 将 block 从 host 交换回 device
-  std::vector<int> device_blocks;
-  status = block_manager->SwapIn(host_blocks, device_blocks);
+  status = block_manager->SwapIn(device_blocks[0], host_blocks[0]);
+  status = block_manager->SwapIn(device_blocks[1], host_blocks[1]);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(block_manager->GetHostFreeBlockNumber(), 1);
-  EXPECT_EQ(block_manager->GetDeviceFreeBlockNumber(), 0);
 
   // 获取 block 的指针
   block_manager->GetBlockPtrs(device_blocks, addrs);

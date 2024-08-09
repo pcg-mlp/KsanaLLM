@@ -23,11 +23,11 @@ class ServingOp : public torch::jit::CustomClassHolder {
   void InitServing(const std::string &mode_dir);
 
   // Generate a response.
-  Status Generate(const ksana_llm::KsanaPythonInput &ksana_python_input,
+  Status Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                   ksana_llm::KsanaPythonOutput &ksana_python_output);
 
   // Generate a response, in streaming mode.
-  Status GenerateStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
+  Status GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                            std::shared_ptr<StreamingIterator> &streaming_iterator);
 
  public:

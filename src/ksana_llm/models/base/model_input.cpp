@@ -38,20 +38,15 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   }
   KLLM_LOG_INFO << "max_block_num " << max_block_num;
 
-  size_t extra_token_number = 0;
-  size_t extra_block_number = 0;
-  int prefix_cache_tokens_number =
-      block_manager_config.prefix_cache_len > 0 ? block_manager_config.prefix_cache_len : 0;
-  if (prefix_cache_tokens_number > 0) {
-    extra_token_number = prefix_cache_tokens_number * max_batch_size_;
-    extra_block_number = extra_token_number / GetBlockManager()->GetBlockTokenNum();
+  // For prefix caching, the token will be used multiple times, reset it to max possible value.
+  if (Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled()) {
+    max_block_num = (max_token_num_ * max_batch_size_) / GetBlockManager()->GetBlockTokenNum();
   }
 
   STATUS_CHECK_FAILURE(CreateTensor(kv_cache_offset_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(input_ids, {max_token_num_}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
-      CreateTensor(input_ids, {max_token_num_ + extra_token_number}, TYPE_INT32, rank_, MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(CreateTensor(kv_list, {static_cast<uint64_t>(num_layer_), max_block_num + extra_block_number, 2},
-                                    TYPE_POINTER, rank_, MEMORY_DEVICE));
+      CreateTensor(kv_list, {static_cast<uint64_t>(num_layer_), max_block_num, 2}, TYPE_POINTER, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(kv_cache_buffer,
@@ -67,10 +62,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 
   STATUS_CHECK_FAILURE(
       CreateTensor(input_tokens_int32_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(
-      CreateTensor(rotary_embedding_pos, {max_token_num_ + extra_token_number}, TYPE_INT64, rank_, MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(
-      CreateTensor(rotary_embedding_mask, {max_token_num_ + extra_token_number}, TYPE_INT64, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(rotary_embedding_pos, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(rotary_embedding_mask, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(input_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
@@ -123,10 +116,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   kv_cache_offset_list = {0};
   for (size_t idx = 0; idx < batch_size; ++idx) {
     total_seq_len += forward_reqs[idx].output_tokens->size();
-    // TODO(zezhao): First version of Prefix Cache: Only the first request is supported for cache generation.
-    if (forward_reqs[idx].req_id != 1) {
-      total_prefix_len += forward_reqs[idx].prefix_cache_len;
-    }
+    total_prefix_len += forward_reqs[idx].prefix_cache_len;
     total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
     kv_cache_offset_list.push_back(total_block_num);
   }

@@ -95,10 +95,6 @@ struct ModelConfig {
   std::unordered_map<std::string, std::string> model_attributes;
 };
 
-struct RequestBatchingConfig {};
-
-struct ContextCachingConfig {};
-
 enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
 
 enum ScheduleStrategy { CONTINUOUS_BATCHING = 0, AUTO_BATCHING = 1 };
@@ -135,14 +131,9 @@ struct BatchSchedulerConfig {
   // The launch block threshold.
   float launch_block_threshold = 2.0;
 
-  // The threadpool size used for swap in/out.
-  size_t swap_threadpool_size = 8;
-
   // The preempt mode in case of insufficient GPU blocks.
   PreemptMode preempt_mode = SWAP;
 };
-
-struct LoraCoordinatorConfig {};
 
 struct AllocatorConfig {
   // The preallocated blocks.
@@ -179,27 +170,21 @@ struct BlockManagerConfig {
 
   // The scale fator of block host memory.
   float block_host_memory_factor = 10.0;
-
-  // Prefix cache length cache token numbers of prompt prefix
-  // default is 0, disable this function
-  // positve integer is the real length of this prompt prefix
-  // TODO(karlluo): -1 is autofix mode
-  int prefix_cache_len = 0;
 };
 
-// The config of batch manager.
-struct BatchManagerConfig {
-  // The config of request batching.
-  RequestBatchingConfig request_batching_config;
+// For cached manager, used for auto-prefix-caching.
+struct CacheManagerConfig {
+  // The token number of every block, not changed after created.
+  size_t block_token_num = 16;
 
-  // The config of context cache.
-  ContextCachingConfig context_caching_config;
+  // The tp num, cache manager use this to allocat blocks for every token.
+  size_t tensor_para_size = 2;
 
-  // The config of batch schedule.
-  BatchSchedulerConfig batch_scheduler_config;
+  // The thread number used for async swap in/out.
+  size_t swap_threadpool_size = 2;
 
-  // The config of multi lora.
-  LoraCoordinatorConfig lora_coordinator_config;
+  // Whether enable prefix caching.
+  bool enable_preifx_caching = false;
 };
 
 // The endpoint type.
@@ -248,8 +233,14 @@ class Environment {
   // Get the model config by name.
   Status GetModelConfig(const std::string &model_name, ModelConfig &model_config);
 
-  // Get the config of a batch manager.
-  Status GetBatchManagerConfig(BatchManagerConfig &batch_manager_config);
+  // Get the config of batch manager.
+  Status GetBatchSchedulerConfig(BatchSchedulerConfig &batch_manager_config);
+
+  // Get the config of cached manager.
+  Status GetCacheManagerConfig(CacheManagerConfig &cache_manager_config);
+
+  // Whether the auto-prefix-caching is enabled.
+  bool IsPrefixCachingEnabled();
 
   // Get the config of block manager.
   Status GetBlockManagerConfig(BlockManagerConfig &block_manager_config);
@@ -277,8 +268,11 @@ class Environment {
   // The model list that should be loaded.
   std::unordered_map<std::string, ModelConfig> model_configs_;
 
-  // The config of batch manager.
-  BatchManagerConfig batch_manager_config_;
+  // The config of batch schedule.
+  BatchSchedulerConfig batch_scheduler_config_;
+
+  // The config used by cache manager.
+  CacheManagerConfig cache_manager_config_;
 
   // The config of block manager.
   BlockManagerConfig block_manager_config_;

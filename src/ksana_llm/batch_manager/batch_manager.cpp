@@ -18,22 +18,9 @@
 
 namespace ksana_llm {
 
-BatchManager::BatchManager(const BatchManagerConfig &batch_manager_config, std::shared_ptr<Context> context) {
-  batch_manager_config_ = batch_manager_config;
+BatchManager::BatchManager(std::shared_ptr<Context> context) {
   context_ = context;
-
-  Initialize();
-}
-
-Status BatchManager::Initialize() {
-  batch_scheduler_ =
-      std::make_shared<BatchScheduler>(batch_manager_config_.batch_scheduler_config, context_->GetTensorParallelSize());
-
-  llm_runtime_ = std::make_shared<LlmRuntime>(batch_manager_config_.batch_scheduler_config, context_);
-
   queue_waiter_ = std::make_shared<Waiter>(1);
-
-  return Status();
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
@@ -41,6 +28,12 @@ Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> 
   model_instances_[model_instance->name] = model_instance;
   return Status();
 }
+
+void BatchManager::SetBatchScheduler(std::shared_ptr<BatchSchedulerInterface> batch_scheduler) {
+  batch_scheduler_ = batch_scheduler;
+}
+
+void BatchManager::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) { llm_runtime_ = llm_runtime; }
 
 Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   KLLM_LOG_DEBUG << "batch manager enqueue req id " << req->req_id;
@@ -73,18 +66,6 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     infer_req->pad_id = infer_req->model_instance->GetModelConfig().pad_id;
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
     infer_req->step = 0;
-
-    // check if this request qualify to use prefix cache
-    if (GetBlockManager()->GetPrefixCacheBlocksNumber() > 0) {
-      infer_req->is_use_prefix_cache = GetBlockManager()->CheckReqIsValidForPrefixCache(infer_req->input_tokens);
-      if (infer_req->is_use_prefix_cache) {
-        infer_req->prefix_cache_len = GetBlockManager()->GetPrefixCacheTokensNumber();
-        infer_req->prefix_cache_blocks_number = GetBlockManager()->GetPrefixCacheBlocksNumber();
-        GetBlockManager()->FillPrefixCacheBlocks(infer_req->kv_cache_blocks);
-        // NOTE(karlluo): preallocate prefix kv cache for infer request
-        KLLM_LOG_DEBUG << "req id " << infer_req->req_id << " is use prefix cache " << infer_req->is_use_prefix_cache;
-      }
-    }
   }
 
   for (auto &infer_req : infer_request_group) {
@@ -124,7 +105,7 @@ Status BatchManager::Process() {
     }
 
     if (scheduled_reqs.empty()) {
-      if (batch_scheduler_->WaitingBufferEmpty() && batch_scheduler_->SwappedQueueEmtpy()) {
+      if (batch_scheduler_->IsIdle()) {
         queue_waiter_->Wait();
         queue_waiter_->Reset(1);
       }
@@ -144,15 +125,7 @@ Status BatchManager::Process() {
 }
 
 Status BatchManager::Start() {
-  // Check config here, because the block number is determined after all models loaded.
-  size_t total_token_num = GetBlockManager()->GetDeviceFreeBlockNumber() * GetBlockManager()->GetBlockTokenNum();
-#ifdef ENABLE_CUDA
-  KLLM_CHECK_WITH_INFO(total_token_num >= (batch_manager_config_.batch_scheduler_config.max_token_len),
-                       "Total device block_num * block_token_size must large than max_token_len.");
-#endif
-
   batch_manager_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::Process, this));
-
   return Status();
 }
 

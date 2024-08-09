@@ -8,6 +8,7 @@
 
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
@@ -19,7 +20,7 @@ class BlockManagerInterface {
   // Preallocate blocks.
   virtual Status PreAllocateBlocks() = 0;
 
-  // Reset the preallocated blocks for device & hosg.
+  // Reset the preallocated blocks for device & host.
   virtual Status ResetPreAllocatedBlocks() = 0;
 
   // This function maybe called concurrently from different threads.
@@ -83,13 +84,10 @@ class BlockManagerInterface {
   // Get number of used blocked memory on host.
   virtual size_t GetHostUsedBlockNumber() = 0;
 
-  // Swap out blocks from device to host,
-  // it could be swapped in later and keep block id not changed.
-  virtual Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
-                         const int host_block_num_to_add) = 0;
-
-  // Swap in blocks from host to device.
-  virtual Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) = 0;
+  // The swap out/in for single block, the device block has been allocated on current device.
+  // Do not free memory after swapness, the caller will do that.
+  virtual Status SwapOut(int host_block_id, int device_block_id) { return Status(); }
+  virtual Status SwapIn(int device_block_id, int host_block_id) { return Status(); }
 
   // Drop the swapped blocks on host, and the block ids could be resued.
   virtual Status SwapDrop(const std::vector<int>& host_blocks) = 0;
@@ -99,21 +97,6 @@ class BlockManagerInterface {
 
   // Get the token number for one block.
   virtual size_t GetBlockTokenNum() const = 0;
-
-  // Prepare blocks for prefix cache
-  virtual Status PreparePrefixCacheBlocks() = 0;
-
-  // Get the prefix cache tokens numbers
-  virtual int GetPrefixCacheTokensNumber() const = 0;
-
-  // Get the prefix cache blocks numbers
-  virtual size_t GetPrefixCacheBlocksNumber() const = 0;
-
-  // Check the input token is valid for prefix cache
-  virtual bool CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) = 0;
-
-  // Fill prefix kv cache to input blocks vector
-  virtual Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) = 0;
 
   // Get block manager config
   virtual const BlockManagerConfig& GetBlockManagerConfig() const = 0;

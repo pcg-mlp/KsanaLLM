@@ -3,8 +3,11 @@
 ==============================================================================*/
 
 #include "ksana_llm/service/inference_engine.h"
+
 #include <memory>
 #include <thread>
+
+#include "ksana_llm/cache_manager/cache_manager_factory.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 
@@ -49,12 +52,6 @@ Status InferenceEngine::Initialize() {
   profile_collector_ = new ProfileCollector(profiler_config);
   SetProfileCollector(profile_collector_);
 
-  BatchManagerConfig batch_manager_config;
-  status = env->GetBatchManagerConfig(batch_manager_config);
-  if (!status.OK()) {
-    return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
-  }
-
   // Load model instances.
   std::unordered_map<std::string, ModelConfig> model_configs;
   status = env->GetModelConfigs(model_configs);
@@ -69,12 +66,21 @@ Status InferenceEngine::Initialize() {
     max_batch_size = std::max(max_batch_size, (size_t)model_config.max_batch_size);
     max_vocab_size = std::max(max_vocab_size, (size_t)model_config.vocab_size);
   }
-  batch_manager_config.batch_scheduler_config.max_batch_size = max_batch_size;
-  batch_manager_config.batch_scheduler_config.max_vocab_size = max_vocab_size;
+
+  // Create batch manager.
+  BatchSchedulerConfig batch_scheduler_config;
+  status = env->GetBatchSchedulerConfig(batch_scheduler_config);
+  if (!status.OK()) {
+    return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
+  }
+
+  batch_scheduler_config.max_batch_size = max_batch_size;
+  batch_scheduler_config.max_vocab_size = max_vocab_size;
   KLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size = " << max_batch_size
                  << " Max Vocab Size = " << max_vocab_size;
-  batch_manager_ = std::make_shared<BatchManager>(batch_manager_config, context_);
+  batch_manager_ = std::make_shared<BatchManager>(context_);
 
+  // Register model instance.
   for (auto &[model_name, model_config] : model_configs) {
     std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(model_config, context_);
     model_instance->Load();
@@ -83,6 +89,21 @@ Status InferenceEngine::Initialize() {
     model_instances_.push_back(model_instance);
     batch_manager_->RegisterModelInstance(model_instance);
   }
+
+  // Create cache manager.
+  CacheManagerConfig cache_manager_config;
+  status = env->GetCacheManagerConfig(cache_manager_config);
+  cache_manager_ = CacheManagerFactory::CreateCacheManager(cache_manager_config);
+
+  // Create batch scheduler.
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, context_->GetTensorParallelSize());
+  batch_scheduler_->SetCacheManager(cache_manager_);
+
+  // Create llm runtime
+  llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, context_);
+
+  batch_manager_->SetBatchScheduler(batch_scheduler_);
+  batch_manager_->SetLlmRuntime(llm_runtime_);
 
   return Status();
 }
@@ -132,8 +153,15 @@ Status InferenceEngine::Start() {
   // Reset block num via device memory usage.
   block_manager_->ResetPreAllocatedBlocks();
 
-  // Prepare prefix cache tokens if need
-  block_manager_->PreparePrefixCacheBlocks();
+  // Check block number, the block number is determined after all models loaded.
+  BatchSchedulerConfig batch_scheduler_config;
+  Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
+  KLLM_CHECK_WITH_INFO((block_manager_->GetDeviceFreeBlockNumber() * block_manager_->GetBlockTokenNum()) >=
+                           (batch_scheduler_config.max_token_len),
+                       "Total device block_num * block_token_size must large than max_token_len.");
+
+  // Initialize blocks from block manager.
+  cache_manager_->InitializeCachedBlocks();
 
   // Start batch manager.
   batch_manager_->Start();

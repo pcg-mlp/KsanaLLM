@@ -6,8 +6,8 @@
 #include <sstream>
 #include <unordered_map>
 
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_interface.h"
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_helper.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler_interface.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
 #include "ksana_llm/profiler/timer.h"
 #include "ksana_llm/runtime/threadpool.h"
 
@@ -90,7 +90,7 @@ class ClientSimulator {
 
 class ParallelTester {
  public:
-  ParallelTester(BatchSchedulerInterface* batch_scheduler, BatchSchedulerEvironmentSimulator* env_simulator)
+  ParallelTester(BatchSchedulerInterface* batch_scheduler, BatchSchedulerEnvironmentSimulator* env_simulator)
       : batch_scheduler_(batch_scheduler), env_simulator_(env_simulator) {}
 
   struct RequestInfo {
@@ -116,7 +116,8 @@ class ParallelTester {
   // This hook checks results when  all requests are finished as expected.
   class DefaultResultCheckHook : public ExeHookInterface {
    public:
-    explicit DefaultResultCheckHook(BatchSchedulerEvironmentSimulator* env_simulator) : env_simulator_(env_simulator) {}
+    explicit DefaultResultCheckHook(BatchSchedulerEnvironmentSimulator* env_simulator)
+        : env_simulator_(env_simulator) {}
     ~DefaultResultCheckHook() {
       KLLM_LOG_INFO << "~DefaultResultCheckHook, after_exe_num=" << after_exe_num;
       EXPECT_GT(after_exe_num,
@@ -133,7 +134,7 @@ class ParallelTester {
     }
 
    private:
-    BatchSchedulerEvironmentSimulator* env_simulator_;
+    BatchSchedulerEnvironmentSimulator* env_simulator_;
   };
 
   // Generate RequestInfos
@@ -218,7 +219,7 @@ class ParallelTester {
 
  private:
   BatchSchedulerInterface* batch_scheduler_;
-  BatchSchedulerEvironmentSimulator* env_simulator_;
+  BatchSchedulerEnvironmentSimulator* env_simulator_;
 };
 
 class PrintStepHook : public ParallelTester::ExeHookInterface {
@@ -256,23 +257,35 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
 
 class FixPrefixTestCase {
  public:
-  FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num)
+  FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num, bool init_env_simulator = true)
       : prefix_block_num_(prefix_block_num), device_num_(device_num) {
-    // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEvironmentSimulator
+    // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEnvironmentSimulator
     block_manager_config_.host_allocator_config.blocks_num = 100;
     block_manager_config_.device_allocator_config.blocks_num = 100;
     block_manager_config_.device_allocator_config.block_token_num = block_token_num;
 
+    init_env_simulator_ = init_env_simulator;
+
     // 使用配置创建一个 BlockManagerSimulator 对象
-    env_simulator_ = new BatchSchedulerEvironmentSimulator(block_manager_config_, device_num_);
-    KLLM_LOG_INFO << "Simulator start";
+    if (init_env_simulator_) {
+      env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, device_num_);
+      KLLM_LOG_INFO << "Simulator start";
+    }
   }
 
-  ~FixPrefixTestCase() { delete env_simulator_; }
+  ~FixPrefixTestCase() {
+    if (init_env_simulator_) {
+      delete env_simulator_;
+    }
+  }
+
+  const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
 
   void SetBatchScheduler(BatchSchedulerInterface* batch_scheduler) { batch_scheduler_ = batch_scheduler; }
 
-  BatchSchedulerEvironmentSimulator* GetEnvSimulator() { return env_simulator_; }
+  void SetEnvSimulator(BatchSchedulerEnvironmentSimulator* env_simulator) { env_simulator_ = env_simulator; }
+
+  BatchSchedulerEnvironmentSimulator* GetEnvSimulator() { return env_simulator_; }
 
   void RunTestNoSwapTriggered() {
     int block_token_num = block_manager_config_.device_allocator_config.block_token_num;
@@ -311,7 +324,7 @@ class FixPrefixTestCase {
     int min_expect_output_num = 3;
     int max_expect_output_num = min_expect_output_num + 300;
     int min_input_num = prefix_token_num;
-    int max_input_num = 10 + prefix_token_num;
+    int max_input_num = 100 + prefix_token_num;
 
     // check request token num can trigger swapout
     ASSERT_LT((max_input_num + max_expect_output_num), block_num * block_token_num);
@@ -400,7 +413,8 @@ class FixPrefixTestCase {
       ASSERT_FALSE(is_cache_set_);
       auto& kv_cache_blocks = req->kv_cache_blocks;
       for (int i = 0; i < tp_num_; i++) {
-        std::copy(kv_cache_blocks[i].begin(), kv_cache_blocks[i].end(), prefix_blocks_[i].begin());
+        std::copy(kv_cache_blocks[i].begin(), kv_cache_blocks[i].begin() + prefix_block_num_,
+                  prefix_blocks_[i].begin());
       }
       is_cache_set_ = true;
     }
@@ -446,7 +460,7 @@ class FixPrefixTestCase {
           env_simulator_->InitRequest(info.req_id, info.input_token_num, info.expect_output_token_num, info.req, seeds);
     }
 
-    tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+    tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 10);
   }
 
  private:
@@ -454,8 +468,10 @@ class FixPrefixTestCase {
   int device_num_;
 
   BatchSchedulerInterface* batch_scheduler_ = nullptr;
-  BatchSchedulerEvironmentSimulator* env_simulator_ = nullptr;
+  BatchSchedulerEnvironmentSimulator* env_simulator_ = nullptr;
   BlockManagerConfig block_manager_config_;
+
+  bool init_env_simulator_ = true;
 };
 
 }  // namespace ksana_llm

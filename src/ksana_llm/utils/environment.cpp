@@ -271,27 +271,25 @@ Status Environment::ParseConfig(const std::string &config_file) {
   }
 
   // Read batch scheduler config.
-  batch_manager_config_.batch_scheduler_config.schedule_strategy = static_cast<ScheduleStrategy>(
+  batch_scheduler_config_.schedule_strategy = static_cast<ScheduleStrategy>(
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.schedule_strategy", 0));
-  batch_manager_config_.batch_scheduler_config.waiting_timeout_in_ms =
+  batch_scheduler_config_.waiting_timeout_in_ms =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
-  batch_manager_config_.batch_scheduler_config.max_waiting_queue_len =
+  batch_scheduler_config_.max_waiting_queue_len =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 256);
-  batch_manager_config_.batch_scheduler_config.max_token_len =
+  batch_scheduler_config_.max_token_len =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 0);
-  batch_manager_config_.batch_scheduler_config.max_step_tokens =
+  batch_scheduler_config_.max_step_tokens =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
-  batch_manager_config_.batch_scheduler_config.max_batch_size =
+  batch_scheduler_config_.max_batch_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 8);
-  batch_manager_config_.batch_scheduler_config.swapout_block_threshold =
+  batch_scheduler_config_.swapout_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
-  batch_manager_config_.batch_scheduler_config.swapin_block_threshold =
+  batch_scheduler_config_.swapin_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapin_block_threshold", 2.0);
-  batch_manager_config_.batch_scheduler_config.launch_block_threshold =
+  batch_scheduler_config_.launch_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
-  batch_manager_config_.batch_scheduler_config.swap_threadpool_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 8);
-  batch_manager_config_.batch_scheduler_config.preempt_mode = static_cast<PreemptMode>(
+  batch_scheduler_config_.preempt_mode = static_cast<PreemptMode>(
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
 
   // Read block manager config.
@@ -310,21 +308,13 @@ Status Environment::ParseConfig(const std::string &config_file) {
   block_manager_config_.block_host_memory_factor =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
 
-#ifdef ENABLE_CUDA
-  // NPU device does not currently support prefix caching for computation reuse.
-  int prefix_cache_len =
-      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.prefix_cache_len", 0);
-  if (prefix_cache_len % block_manager_config_.device_allocator_config.block_token_num != 0) {
-    int retrieve_prefix_ceche_len =
-        std::floor(prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num) *
-        block_manager_config_.device_allocator_config.block_token_num;
-    KLLM_LOG_WARNING << "prefix_cache_len " << prefix_cache_len << " cannot round up block token num "
-                     << block_manager_config_.device_allocator_config.block_token_num
-                     << " retrieve the prefix cache num to " << retrieve_prefix_ceche_len;
-    prefix_cache_len = retrieve_prefix_ceche_len;
-  }
-  block_manager_config_.prefix_cache_len = prefix_cache_len;
-#endif
+  // Load cache manager config
+  cache_manager_config_.swap_threadpool_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 2);
+  cache_manager_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+  cache_manager_config_.tensor_para_size = tensor_parallel_size_;
+  cache_manager_config_.enable_preifx_caching =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_auto_prefix_cache", false);
 
   // Read profiler config.
   profiler_config_.stat_interval_second =
@@ -407,27 +397,26 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
         "The number of key-value heads must exceed that of TP and must be an integer multiple of TP.");
   }
 
-  if (batch_manager_config_.batch_scheduler_config.max_token_len > 0) {
-    if (batch_manager_config_.batch_scheduler_config.max_token_len > model_config.max_token_num) {
+  if (batch_scheduler_config_.max_token_len > 0) {
+    if (batch_scheduler_config_.max_token_len > model_config.max_token_num) {
       KLLM_LOG_ERROR << fmt::format(
           "The max_token_num configured in the model's config.json is less than the "
           "max_token_len configured in the ksana yaml file. {} < {}",
-          batch_manager_config_.batch_scheduler_config.max_token_len, model_config.max_token_num);
+          batch_scheduler_config_.max_token_len, model_config.max_token_num);
       return Status(RetCode::RET_INVALID_ARGUMENT,
                     fmt::format("Load model config file: {} error. The max_token_num configured in the model's "
                                 "config.json is less than the max_token_len configured in the ksana yaml file."
                                 " {} < {}",
-                                config_file, batch_manager_config_.batch_scheduler_config.max_token_len,
-                                model_config.max_token_num));
+                                config_file, batch_scheduler_config_.max_token_len, model_config.max_token_num));
     }
-    model_config.max_token_num = batch_manager_config_.batch_scheduler_config.max_token_len;
+    model_config.max_token_num = batch_scheduler_config_.max_token_len;
   }
-  batch_manager_config_.batch_scheduler_config.max_token_len = model_config.max_token_num;
-  batch_manager_config_.batch_scheduler_config.max_step_tokens =
-      std::max(batch_manager_config_.batch_scheduler_config.max_step_tokens, model_config.max_token_num + 1);
+  batch_scheduler_config_.max_token_len = model_config.max_token_num;
+  batch_scheduler_config_.max_step_tokens =
+      std::max(batch_scheduler_config_.max_step_tokens, model_config.max_token_num + 1);
   model_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
-  model_config.max_batch_size = batch_manager_config_.batch_scheduler_config.max_batch_size;
-  model_config.max_scheduler_token_num = batch_manager_config_.batch_scheduler_config.max_step_tokens;
+  model_config.max_batch_size = batch_scheduler_config_.max_batch_size;
+  model_config.max_scheduler_token_num = batch_scheduler_config_.max_step_tokens;
   model_configs_[model_config.name] = model_config;
 
   KLLM_LOG_DEBUG << fmt::format("Load model {} from config file: {} success.", model_config.name, model_config.path);
@@ -508,8 +497,13 @@ Status Environment::GetModelConfig(const std::string &model_name, ModelConfig &m
   return Status();
 }
 
-Status Environment::GetBatchManagerConfig(BatchManagerConfig &batch_manager_config) {
-  batch_manager_config = batch_manager_config_;
+Status Environment::GetBatchSchedulerConfig(BatchSchedulerConfig &batch_scheduler_config) {
+  batch_scheduler_config = batch_scheduler_config_;
+  return Status();
+}
+
+Status Environment::GetCacheManagerConfig(CacheManagerConfig &cache_manager_config) {
+  cache_manager_config = cache_manager_config_;
   return Status();
 }
 
@@ -527,5 +521,7 @@ Status Environment::GetProfilerConfig(ProfilerConfig &profiler_config) {
   profiler_config = profiler_config_;
   return Status();
 }
+
+bool Environment::IsPrefixCachingEnabled() { return cache_manager_config_.enable_preifx_caching; }
 
 }  // namespace ksana_llm

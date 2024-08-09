@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/batch_manager/batch_scheduler/strategy/base_strategy.h"
+#include "ksana_llm/batch_scheduler/strategy/base_strategy.h"
 
 namespace ksana_llm {
 

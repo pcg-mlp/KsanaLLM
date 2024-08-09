@@ -111,7 +111,7 @@ struct KsanaPythonOutput {
 
 class Request {
  public:
-  explicit Request(const ksana_llm::KsanaPythonInput& ksana_python_input);
+  explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input);
 
   // The unique id of a request.
   int64_t req_id;
@@ -155,11 +155,17 @@ class Request {
   // The waiter notified when step finished.
   std::shared_ptr<Waiter> step_waiter = nullptr;
 
+  // The waiter notified when request abortd.
+  std::shared_ptr<Waiter> abort_waiter = nullptr;
+
   // TODO(zakwang): Replace finished
   std::deque<bool> finisheds;
 
   // Whether the request is finished.
   bool& finished;
+
+  // Whether the request hve been aborted by client.
+  bool aborted = false;
 
   // The finish statu of this request.
   Status finish_status;

@@ -9,6 +9,7 @@ function(cpp_test TARGET_NAME)
   if(WITH_TESTING)
     set(oneValueArgs "")
     set(multiValueArgs SRCS DEPS ARGS)
+    add_compile_options(-fno-access-control -g -O0)
     cmake_parse_arguments(cpp_test "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     add_executable(${TARGET_NAME} ${cpp_test_SRCS})
     target_link_libraries(${TARGET_NAME} ${cpp_test_DEPS}

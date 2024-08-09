@@ -163,12 +163,11 @@ class LlamaTest : public testing::Test {
     sample_config.temperature = 0;
     sample_config.repetition_penalty = 1;
     sample_req.sampling_config = &sample_config;
-    BatchManagerConfig batch_manager_config;
-    Singleton<Environment>::GetInstance()->GetBatchManagerConfig(batch_manager_config);
+    BatchSchedulerConfig batch_scheduler_config;
+    Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
 
     std::vector<SamplingRequest> sample_reqs = {sample_req};
-    std::shared_ptr<Sampler> sampler =
-        std::make_shared<Sampler>(batch_manager_config.batch_scheduler_config, device_id, context_);
+    std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context_);
     sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
 

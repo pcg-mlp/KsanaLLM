@@ -4,10 +4,55 @@
 
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
 
+#include <thread>
+
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
+
+static std::unordered_map<int, std::shared_ptr<DyingRequest>> dying_requests;
+static std::mutex dying_mutex;
+
+StreamingIterator::~StreamingIterator() {
+  // Process dying only if request is not finished.
+  if (!all_finished) {
+    KLLM_LOG_DEBUG << "StreamingIterator client disconnected, req " << request_->req_id;
+
+    std::shared_ptr<DyingRequest> dying_req = std::make_shared<DyingRequest>();
+    dying_req->request = request_;
+    dying_req->ksana_python_input = ksana_python_input_;
+
+    int req_id = request_->req_id;
+
+    {
+      std::lock_guard<std::mutex> guard(dying_mutex);
+      dying_requests[req_id] = dying_req;
+    }
+
+    std::thread([req_id]() {
+      std::shared_ptr<DyingRequest> dr = nullptr;
+      {
+        std::lock_guard<std::mutex> guard(dying_mutex);
+        auto it = dying_requests.find(req_id);
+        if (it == dying_requests.end()) {
+          return;
+        }
+        dr = it->second;
+      }
+
+      // Delay exist if client is aborted.
+      dr->request->aborted = true;
+      dr->request->abort_waiter->Wait();
+
+      {
+        KLLM_LOG_DEBUG << "StreamingIterator disconnected req " << req_id << " finished.";
+        std::lock_guard<std::mutex> guard(dying_mutex);
+        dying_requests.erase(req_id);
+      }
+    }).detach();
+  }
+}
 
 bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_output) {
   size_t total_token_nums = 0;

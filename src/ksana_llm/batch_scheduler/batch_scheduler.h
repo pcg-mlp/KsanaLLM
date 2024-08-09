@@ -7,13 +7,16 @@
 #include <mutex>
 #include <vector>
 
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_interface.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler_interface.h"
+#include "ksana_llm/batch_scheduler/state/batch_state.h"
+#include "ksana_llm/batch_scheduler/strategy/strategy_factory.h"
 
-#include "ksana_llm/batch_manager/batch_scheduler/state/batch_state.h"
-#include "ksana_llm/batch_manager/batch_scheduler/strategy/strategy_factory.h"
+#include "ksana_llm/cache_manager/cache_manager_interface.h"
+
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
@@ -28,11 +31,11 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Add infer request to waiting list.
   Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
 
-  // Check whether the waiting buffer is empty.
-  bool WaitingBufferEmpty();
+  // Set the cache manager instance of batch scheduler.
+  void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
 
-  // Check whether the swapped queue is empty.
-  bool SwappedQueueEmtpy();
+  // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
+  bool IsIdle();
 
  private:
   // True if waiting queue is already full.

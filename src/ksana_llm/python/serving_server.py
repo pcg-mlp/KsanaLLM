@@ -79,10 +79,14 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
                 # Decode the output tokens using the tokenizer
                 request_output = request_output[len(input_tokens):]
                 output_token_ids.append(request_output)
-                output_text = tokenizer.decode(
-                    request_output,
-                    skip_special_tokens=True  # skip special tokens
-                ).rstrip('\ufffd')
+                try:
+                    output_text = tokenizer.decode(
+                        request_output,
+                        skip_special_tokens=True  # skip special tokens
+                    ).rstrip('\ufffd')
+                except:
+                    print("except occurred, invalid token ids:", tokens)
+                    raise ValueError("Invalid token ids!")
                 output_texts.append(output_text)
             ret = {
                 "texts": output_texts,
@@ -111,7 +115,11 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
     # Decode the output tokens into a human-readable text using the tokenizer
     output_text = []
     for tokens in ksana_python_output.output_tokens:
-        output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
+        try:
+            output_text.append(tokenizer.decode(tokens, skip_special_tokens=True))
+        except:
+            print("except occurred, invalid token ids:", tokens)
+            raise ValueError("Invalid token ids!")
 
     # Create a return for the forward interface
     if (len(ksana_python_output.response) > 0):

@@ -25,11 +25,11 @@ class ServingImpl {
   Status Stop();
 
   // Handle serving request.
-  Status Handle(const ksana_llm::KsanaPythonInput &ksana_python_input,
+  Status Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                 ksana_llm::KsanaPythonOutput &ksana_python_output);
 
   // Handle serving request, in streaming mode.
-  Status HandleStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
+  Status HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                          std::shared_ptr<StreamingIterator> &streaming_iterator);
 
  private:

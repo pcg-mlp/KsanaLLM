@@ -22,7 +22,9 @@ include_directories(
 )
 
 add_subdirectory(batch_manager)
+add_subdirectory(batch_scheduler)
 add_subdirectory(block_manager)
+add_subdirectory(cache_manager)
 add_subdirectory(endpoints)
 add_subdirectory(kernels)
 add_subdirectory(layers)
@@ -43,7 +45,9 @@ target_link_libraries(ksana_llm_libs INTERFACE
   service
   utils
   batch_manager
+  batch_scheduler
   block_manager
+  cache_manager
   runtime
   endpoints
   samplers

@@ -2,7 +2,7 @@
 
 ==============================================================================*/
 
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler.h"
 
 #include <algorithm>
 #include <future>
@@ -36,6 +36,10 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
 
   batch_state_ = std::make_shared<BatchState>(batch_scheduler_config_);
   schedule_strategy_ = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, tp_num, batch_state_);
+}
+
+void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) {
+  schedule_strategy_->SetCacheManager(cache_manager);
 }
 
 Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
@@ -73,14 +77,20 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   return Status();
 }
 
-bool BatchScheduler::WaitingBufferEmpty() {
-  std::lock_guard<std::mutex> guard(batch_state_->queue_buffer_mutex);
-  return batch_state_->waiting_buffer_queue.empty();
-}
+bool BatchScheduler::IsIdle() {
+  bool waiting_buffer_emtpy = false;
+  {
+    std::lock_guard<std::mutex> guard(batch_state_->queue_buffer_mutex);
+    waiting_buffer_emtpy = batch_state_->waiting_buffer_queue.empty();
+  }
 
-bool BatchScheduler::SwappedQueueEmtpy() {
-  std::lock_guard<std::mutex> guard(batch_state_->queue_mutex);
-  return batch_state_->swapped_queue.empty();
+  bool swapped_queue_empty = false;
+  {
+    std::lock_guard<std::mutex> guard(batch_state_->queue_mutex);
+    swapped_queue_empty = batch_state_->swapped_queue.empty();
+  }
+
+  return (waiting_buffer_emtpy && swapped_queue_empty);
 }
 
 bool BatchScheduler::CheckWaitingQueueFull(int num) {

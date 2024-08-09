@@ -87,13 +87,10 @@ class BlockManager : public BlockManagerInterface {
   // Get number of used blocked memory on host.
   size_t GetHostUsedBlockNumber();
 
-  // Swap out blocks from device to host,
-  // it could be swapped in later and keep block id not changed.
-  Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
-                 const int host_block_num_to_swap);
-
-  // Swap in blocks from host to device.
-  Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks);
+  // The swap out/in for single block, the device block has been allocated on current device.
+  // Do not free memory after swapness, the caller will do that.
+  Status SwapOut(int host_block_id, int device_block_id);
+  Status SwapIn(int device_block_id, int host_block_id);
 
   // Drop the swapped blocks on host, and the block ids could be resued.
   Status SwapDrop(const std::vector<int>& host_blocks);
@@ -103,21 +100,6 @@ class BlockManager : public BlockManagerInterface {
 
   // Get the token number for one block.
   size_t GetBlockTokenNum() const;
-
-  // Prepare blocks for prefix cache
-  Status PreparePrefixCacheBlocks();
-
-  // Get the prefix cache tokens numbers
-  int GetPrefixCacheTokensNumber() const;
-
-  // Get the prefix cache blocks numbers
-  size_t GetPrefixCacheBlocksNumber() const;
-
-  // Check the input token is valid for prefix cache
-  bool CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens);
-
-  // Fill prefix kv cache to input blocks vector
-  Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks);
 
   // Get block manager config
   const BlockManagerConfig& GetBlockManagerConfig() const;

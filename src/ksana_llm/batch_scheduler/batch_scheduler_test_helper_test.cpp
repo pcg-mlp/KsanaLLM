@@ -2,8 +2,8 @@
 
 ==============================================================================*/
 
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_helper.h"
-#include "ksana_llm/batch_manager/batch_scheduler/batch_scheduler_test_client.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler_test_client.h"
 
 #include <memory>
 #include "ksana_llm/utils/logger.h"
@@ -12,21 +12,21 @@
 
 using namespace ksana_llm;
 
-// 定义一个 BlockSchedulerTest 类，用于测试BatchSchedulerEvironmentSimulator
-class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
+// 定义一个 BlockSchedulerTest 类，用于测试BatchSchedulerEnvironmentSimulator
+class BatchSchedulerEnvironmentSimulatorTest : public testing::Test {
  protected:
   static void SetUpTestSuite() { InitLoguru(); }
 
   // 在每个测试用例执行之前调用的函数
   void CommonSetUp() {
-    // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEvironmentSimulator
+    // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEnvironmentSimulator
     block_manager_config.host_allocator_config.blocks_num = 100;
     block_manager_config.device_allocator_config.blocks_num = 100;
     block_manager_config.device_allocator_config.block_token_num = 6;
     device_num = 2;
 
     // 使用配置创建一个 BlockManagerSimulator 对象
-    env_simulator = new BatchSchedulerEvironmentSimulator(block_manager_config, device_num);
+    env_simulator = new BatchSchedulerEnvironmentSimulator(block_manager_config, device_num);
     KLLM_LOG_INFO << "Simulator start";
   }
 
@@ -57,16 +57,15 @@ class BatchSchedulerEvironmentSimulatorTest : public testing::Test {
   }
 
  protected:
-  // 定义一个 BatchSchedulerEvironmentSimulator 指针，用于在测试用例中使用
-  BatchSchedulerEvironmentSimulator* env_simulator = nullptr;
+  // 定义一个 BatchSchedulerEnvironmentSimulator 指针，用于在测试用例中使用
+  BatchSchedulerEnvironmentSimulator* env_simulator = nullptr;
 
   BlockManagerConfig block_manager_config;
   int device_num;
 };
 
-TEST_F(BatchSchedulerEvironmentSimulatorTest, BasicTokenGenerationTest) {
+TEST_F(BatchSchedulerEnvironmentSimulatorTest, BasicTokenGenerationTest) {
   CommonSetUp();
-  return;
   int expected_output_token_num1 = 30;
   int input_token_num1 = 20;
 
@@ -174,67 +173,6 @@ TEST_F(BatchSchedulerEvironmentSimulatorTest, BasicTokenGenerationTest) {
   }
 }
 
-TEST_F(BatchSchedulerEvironmentSimulatorTest, SwapTokenGenerationTest) {
-  CommonSetUp();
-  return;
-  // 创建两个请求
-  int expected_output_token_num1 = 23;
-  int input_token_num1 = 20;
-  int expected_output_token_num2 = 12;
-  int input_token_num2 = 30;
-  std::shared_ptr<Request> req1, req2;
-
-  std::vector<std::pair<int, int>> seeds;
-  seeds.resize(1);
-  seeds[0].first = 0;
-  seeds[0].second = 1;
-  std::vector<std::shared_ptr<InferRequest>> infer_req_list1 =
-      env_simulator->InitRequest(1, input_token_num1, expected_output_token_num1, req1, seeds);
-  seeds[0].second = 2;
-  std::vector<std::shared_ptr<InferRequest>> infer_req_list2 =
-      env_simulator->InitRequest(2, input_token_num2, expected_output_token_num2, req2, seeds);
-
-  std::shared_ptr<InferRequest> infer_req1 = infer_req_list1[0];
-  std::shared_ptr<InferRequest> infer_req2 = infer_req_list2[0];
-
-  // Simple memory strategy, init all blocks at the beginning
-  InitRequestBlock(infer_req1, expected_output_token_num1);
-  InitRequestBlock(infer_req2, expected_output_token_num2);
-
-  int max_output_step = 2 * std::max(expected_output_token_num1, expected_output_token_num2) + 1;
-
-  for (int i = 0; i < max_output_step; i++) {
-    std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
-    if (!env_simulator->IsRequestFinished(infer_req1)) {
-      if (i >= 4 && i < 10) {
-        if (i % 2 == 0) {
-          infer_req1->SwapOutAsync(0);
-        } else {
-          infer_req1->SwapInAsync();
-          scheduled_reqs.push_back(infer_req1);
-        }
-      } else {
-        scheduled_reqs.push_back(infer_req1);
-      }
-    }
-    if (!env_simulator->IsRequestFinished(infer_req2)) {
-      scheduled_reqs.push_back(infer_req2);
-    }
-    if (scheduled_reqs.empty()) break;
-    KLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
-    env_simulator->RunAStep(scheduled_reqs);
-    for (auto req : scheduled_reqs) {
-      KLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
-                     << ", output_token.size()=" << req->output_tokens.size()
-                     << ", last output token= " << req->output_tokens.back();
-    }
-  }
-
-  // Check request results
-  env_simulator->CheckRequestOutput(infer_req1);
-  env_simulator->CheckRequestOutput(infer_req2);
-}
-
 std::string KvCaches2Str(const std::vector<std::vector<int>>& kv_cache_blocks) {
   std::ostringstream ss;
   ss << "blocks={ ";
@@ -253,7 +191,7 @@ std::string KvCaches2Str(const std::vector<std::vector<int>>& kv_cache_blocks) {
 // Requests should not trigger swapout or rerun
 class FixPrefixBatchScheduler : public BatchSchedulerInterface {
  public:
-  FixPrefixBatchScheduler(BatchSchedulerEvironmentSimulator* env_simulator, int prefix_token_num, int tp_num)
+  FixPrefixBatchScheduler(BatchSchedulerEnvironmentSimulator* env_simulator, int prefix_token_num, int tp_num)
       : env_simulator_(env_simulator), prefix_token_num_(prefix_token_num), tp_num_(tp_num) {
     block_token_num_ = env_simulator_->GetBlockManagerConfig().device_allocator_config.block_token_num;
     KLLM_CHECK_WITH_INFO(
@@ -336,16 +274,16 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
     return running_reqs;
   }
 
-  virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
+  virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) override {
     for (auto& req : infer_request_group) {
       AddAnInferRequest(req);
     }
     return Status();
   }
 
-  bool WaitingBufferEmpty() { return waiting_reqs.size() == 0; }
+  virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) override {}
 
-  bool SwappedQueueEmtpy() { return false; }
+  virtual bool IsIdle() override { return false; }
 
  private:
   Status AddAnInferRequest(std::shared_ptr<InferRequest>& infer_req) {
@@ -428,7 +366,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
   }
 
  private:
-  BatchSchedulerEvironmentSimulator* env_simulator_;
+  BatchSchedulerEnvironmentSimulator* env_simulator_;
   int prefix_token_num_;
   int tp_num_;
   int block_token_num_;
@@ -444,7 +382,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
   std::mutex mux_;
 };
 
-TEST_F(BatchSchedulerEvironmentSimulatorTest, FixPrefixCacheScheduleTest) {
+TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {
   int prefix_block_num = 3;
   int block_token_num = 6;
   int device_num = 4;

@@ -6,7 +6,8 @@
 #include <memory>
 #include <vector>
 
-#include "ksana_llm/batch_manager/batch_scheduler/state/batch_state.h"
+#include "ksana_llm/batch_scheduler/state/batch_state.h"
+#include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
 
 namespace ksana_llm {
@@ -20,9 +21,15 @@ class BaseScheduleStrategy {
   // Get the next infer reqs that ready to run.
   virtual void Schedule() = 0;
 
+  // Set the cache manager instance of scheduler strategy.
+  void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
+
  protected:
   // The batch state informations, include some queues and mutexes.
   std::shared_ptr<BatchState> batch_state_ = nullptr;
+
+  // Used to manager kv cache block, auto-batching strategy do not use this.
+  std::shared_ptr<CacheManagerInterface> cache_manager_ = nullptr;
 
   // the config and context.
   BatchSchedulerConfig batch_scheduler_config_;

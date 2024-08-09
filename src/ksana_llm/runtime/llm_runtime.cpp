@@ -71,8 +71,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.output_tokens = &(req_ptr->output_tokens);
     forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
-    // For the first request, it is enforced to be non-reusable computation.
-    forward_req.prefix_cache_len = req_ptr->req_id == 1 ? 0 : req_ptr->prefix_cache_len;
+    forward_req.prefix_cache_len = req_ptr->prefix_cache_len;
     forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;
     grouped_reqs[key][stage].push_back(forward_req);
   }

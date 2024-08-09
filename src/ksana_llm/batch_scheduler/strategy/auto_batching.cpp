@@ -2,7 +2,7 @@
 
 ==============================================================================*/
 
-#include "ksana_llm/batch_manager/batch_scheduler/strategy/auto_batching.h"
+#include "ksana_llm/batch_scheduler/strategy/auto_batching.h"
 
 #include <iterator>
 #include <vector>
@@ -96,7 +96,7 @@ void AutoBatchingStrategy::PaddingRequests() {
 void AutoBatchingStrategy::AdjustInferStage() {
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end(); ++it) {
     auto &req = *it;
-    req->AdjustInferStage();
+    req->infer_stage = InferStage::STATE_DECODE;
 
     // Notify streaming iterator if needed.
     req->NotifyStep();

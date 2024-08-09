@@ -43,53 +43,6 @@ class InferRequest {
   // Get addr ptr of blocks.
   std::vector<std::vector<void *>> GetBlockPtrs();
 
-  // Adjust the infer stage.
-  void AdjustInferStage();
-
-  // Get the next token number for next step.
-  // For all waiting queue's reqs(context decoding stage), it is 1 + input token number.
-  // For all otheqr queue's reqs(decoding stage), it is always 1.
-  size_t GetStepTokenNumber();
-
-  // Get the total token number.
-  // that is, the current tokens and the next token.
-  size_t GetTotalTokenNumber();
-
-  // Get the next wanted block number for next step.
-  // It is determited by next token number.
-  size_t GetStepBlockNumber();
-
-  // Get the total block number for current request.
-  // that is, the current tokens and the next token.
-  size_t GetTotalBlockNumber();
-
-  // Get the current block number
-  // Include all the generated tokens, except the next token.
-  size_t GetCurrentBlockNumber();
-
-  // Swap in/out this request asynchronous.
-  Status SwapInAsync();
-  Status SwapOutAsync(const int host_block_num_to_add);
-
-  // Drop this swapped request.
-  Status DropSwappedAsync();
-
-  // Free blocks this request hold.
-  Status FreeBlocks();
-
-  // Check whether the model instance enable lora.
-  bool CheckLoraEnable();
-
-  // Get the block number for lora weights.
-  size_t GetLoraBlockNumber();
-
-  // Swap in/out request's lora weights.
-  Status SwapInLoraAsync();
-  Status SwapOutLoraAsync();
-
-  // Allocate blocks for next step.
-  Status AllocateStepBlocks();
-
  public:
   // The req id of the user's request.
   int64_t &req_id;
@@ -130,8 +83,14 @@ class InferRequest {
   // The waiter used to notify when step finished.
   std::shared_ptr<Waiter> &step_waiter;
 
+  // The waiter used to notify when request aborted..
+  std::shared_ptr<Waiter> &abort_waiter;
+
   // Whether the request is finished.
   bool &finished;
+
+  // whether the request is aborted.
+  bool& aborted;
 
   // The final status of this request.
   Status &finish_status;

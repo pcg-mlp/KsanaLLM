@@ -2,10 +2,10 @@
 
 ==============================================================================*/
 
-#include "ksana_llm/batch_manager/batch_scheduler/strategy/strategy_factory.h"
+#include "ksana_llm/batch_scheduler/strategy/strategy_factory.h"
 
-#include "ksana_llm/batch_manager/batch_scheduler/strategy/auto_batching.h"
-#include "ksana_llm/batch_manager/batch_scheduler/strategy/continuous_batching.h"
+#include "ksana_llm/batch_scheduler/strategy/auto_batching.h"
+#include "ksana_llm/batch_scheduler/strategy/continuous_batching.h"
 
 namespace ksana_llm {
 

@@ -49,13 +49,13 @@ void ServingOp::InitServing(const std::string &config_file) {
   KLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
 }
 
-Status ServingOp::Generate(const ksana_llm::KsanaPythonInput &ksana_python_input,
+Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                            ksana_llm::KsanaPythonOutput &ksana_python_output) {
   KLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
   return serving_impl_->Handle(ksana_python_input, ksana_python_output);
 }
 
-Status ServingOp::GenerateStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
+Status ServingOp::GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
   KLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
   return serving_impl_->HandleStreaming(ksana_python_input, streaming_iterator);
@@ -160,19 +160,20 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def("init_serving", &ksana_llm::ServingOp::InitServing)
       .def_readwrite("plugin_path", &ksana_llm::ServingOp::plugin_path_)
       .def("generate",
-           [](std::shared_ptr<ksana_llm::ServingOp> &self, const ksana_llm::KsanaPythonInput &ksana_python_input) {
+           [](std::shared_ptr<ksana_llm::ServingOp> &self,
+              const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input) {
              pybind11::gil_scoped_release release;
              ksana_llm::KsanaPythonOutput ksana_python_output;
              ksana_llm::Status status = self->Generate(ksana_python_input, ksana_python_output);
              pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, std::move(ksana_python_output));
            })
-      .def("generate_streaming",
-           [](std::shared_ptr<ksana_llm::ServingOp> &self, const ksana_llm::KsanaPythonInput &ksana_python_input) {
-             pybind11::gil_scoped_release release;
-             std::shared_ptr<ksana_llm::StreamingIterator> streaming_iterator;
-             ksana_llm::Status status = self->GenerateStreaming(ksana_python_input, streaming_iterator);
-             pybind11::gil_scoped_acquire acquire;
-             return std::make_tuple(status, streaming_iterator);
-           });
+      .def("generate_streaming", [](std::shared_ptr<ksana_llm::ServingOp> &self,
+                                    const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input) {
+        pybind11::gil_scoped_release release;
+        std::shared_ptr<ksana_llm::StreamingIterator> streaming_iterator;
+        ksana_llm::Status status = self->GenerateStreaming(ksana_python_input, streaming_iterator);
+        pybind11::gil_scoped_acquire acquire;
+        return std::make_tuple(status, streaming_iterator);
+      });
 }

@@ -15,11 +15,11 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
                              Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
     : BaseEndpoint(endpoint_config, request_queue) {}
 
-Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_input,
+Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                              ksana_llm::KsanaPythonOutput &ksana_python_output) {
   std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input);
   for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    output = ksana_python_input.input_tokens;
+    output = ksana_python_input->input_tokens;
   }
   req->waiter = std::make_shared<Waiter>(1);
   Status status = Status();
@@ -34,7 +34,7 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
   for (auto &[output, req_logprobs, total_score] : req->output_group) {
     std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
     ksana_python_output.output_tokens.emplace_back(req_output);
-    if (ksana_python_input.sampling_config.logprobs_num > 0) {
+    if (ksana_python_input->sampling_config.logprobs_num > 0) {
       ksana_python_output.logprobs.emplace_back(req_logprobs);
     }
   }
@@ -43,15 +43,16 @@ Status LocalEndpoint::Handle(const ksana_llm::KsanaPythonInput &ksana_python_inp
   return req->finish_status;
 }
 
-Status LocalEndpoint::HandleStreaming(const ksana_llm::KsanaPythonInput &ksana_python_input,
+Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                       std::shared_ptr<StreamingIterator> &streaming_iterator) {
   std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input);
   for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    output = ksana_python_input.input_tokens;
+    output = ksana_python_input->input_tokens;
   }
   req->step_waiter = std::make_shared<Waiter>(1);
+  req->abort_waiter = std::make_shared<Waiter>(1);
 
-  streaming_iterator = std::make_shared<StreamingIterator>(req, ksana_python_input.sampling_config.logprobs_num > 0);
+  streaming_iterator = std::make_shared<StreamingIterator>(req, ksana_python_input);
 
   Status status = Status();
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));

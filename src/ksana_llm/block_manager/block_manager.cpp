@@ -198,55 +198,39 @@ size_t BlockManager::GetHostUsedBlockNumber() {
   return GetHostAllocator()->GetUsedBlockNumber() / context_->GetTensorParallelSize();
 }
 
-Status BlockManager::SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
-                             const int host_block_num_to_add) {
-  // Allocate memory on host.
-  STATUS_CHECK_FAILURE(host_allocator_->AllocateBlocks(device_blocks.size() + host_block_num_to_add, host_blocks));
-
+Status BlockManager::SwapOut(int host_block_id, int device_block_id) {
   // Get host and device address.
-  std::vector<void*> host_addrs;
-  STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
+  std::vector<void*> host_addrs(1, nullptr);
+  STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs({host_block_id}, host_addrs));
 
   int device_id = GetDeviceId();
-  int block_size = block_manager_config_.device_allocator_config.block_size;
-
-  std::vector<void*> device_addrs;
-  STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs(device_blocks, device_addrs));
+  std::vector<void*> device_addrs(1, nullptr);
+  STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs({device_block_id}, device_addrs));
 
   // Copy from device to host.
   Stream& stream = context_->GetD2HStreams()[device_id];
-  for (size_t i = 0; i < device_blocks.size(); i++) {
-    MemcpyAsync(host_addrs[i], device_addrs[i], block_size, MEMCPY_DEVICE_TO_HOST, stream);
-  }
+  int block_size = block_manager_config_.device_allocator_config.block_size;
+  MemcpyAsync(host_addrs[0], device_addrs[0], block_size, MEMCPY_DEVICE_TO_HOST, stream);
   StreamSynchronize(stream);
 
-  // Free device blocks.
-  device_allocators_[device_id]->FreeBlocks(device_blocks);
   return Status();
 }
 
-Status BlockManager::SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) {
+Status BlockManager::SwapIn(int device_block_id, int host_block_id) {
+  // Get host and device address.
+  std::vector<void*> host_addrs(1, nullptr);
+  STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs({host_block_id}, host_addrs));
+
   int device_id = GetDeviceId();
-  int block_size = block_manager_config_.device_allocator_config.block_size;
-
-  // Allocate memory on device.
-  STATUS_CHECK_FAILURE(device_allocators_[device_id]->AllocateBlocks(host_blocks.size(), device_blocks));
-
-  std::vector<void*> device_addrs;
-  STATUS_CHECK_FAILURE(GetBlockPtrs(device_blocks, device_addrs));
-
-  std::vector<void*> host_addrs;
-  STATUS_CHECK_FAILURE(host_allocator_->GetBlockPtrs(host_blocks, host_addrs));
+  std::vector<void*> device_addrs(1, nullptr);
+  STATUS_CHECK_FAILURE(device_allocators_[device_id]->GetBlockPtrs({device_block_id}, device_addrs));
 
   // Copy from host to device.
   Stream& stream = context_->GetH2DStreams()[device_id];
-  for (size_t i = 0; i < host_blocks.size(); i++) {
-    MemcpyAsync(device_addrs[i], host_addrs[i], block_size, MEMCPY_HOST_TO_DEVICE, stream);
-  }
+  int block_size = block_manager_config_.device_allocator_config.block_size;
+  MemcpyAsync(device_addrs[0], host_addrs[0], block_size, MEMCPY_HOST_TO_DEVICE, stream);
   StreamSynchronize(stream);
 
-  // Free host blocks.
-  host_allocator_->FreeBlocks(host_blocks);
   return Status();
 }
 
@@ -255,73 +239,6 @@ Status BlockManager::SwapDrop(const std::vector<int>& host_blocks) { return host
 size_t BlockManager::GetBlockSize() const { return block_manager_config_.device_allocator_config.block_size; }
 
 size_t BlockManager::GetBlockTokenNum() const { return block_manager_config_.device_allocator_config.block_token_num; }
-
-Status BlockManager::PreparePrefixCacheBlocks() {
-  if (block_manager_config_.prefix_cache_len == 0) {
-    KLLM_LOG_DEBUG << "Disable prefix cache";
-    return Status();
-  } else if (block_manager_config_.prefix_cache_len > 0) {
-    KLLM_LOG_DEBUG << "Prefix cache token number " << block_manager_config_.prefix_cache_len;
-  } else if (block_manager_config_.prefix_cache_len == -1) {
-    throw std::invalid_argument("Not support prefix_cache_len == -1, autofix mode");
-  } else {
-    throw std::invalid_argument(
-        fmt::format("Not support prefix_cache_len setting {}", block_manager_config_.prefix_cache_len));
-  }
-  int block_num =
-      block_manager_config_.prefix_cache_len / block_manager_config_.device_allocator_config.block_token_num;
-
-  // TODO(karlluo): support pipeline parallel
-  // prepare prefixed cache blocks
-  for (int device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
-    SetDeviceId(device_id);
-    std::vector<int> prefix_cache_block_tmp;
-    AllocateBlocks(block_num, prefix_cache_block_tmp);
-    prefix_cache_blocks_.emplace_back(std::move(prefix_cache_block_tmp));
-  }
-  prefix_cache_block_num_ = block_num;
-  return Status();
-}
-
-int BlockManager::GetPrefixCacheTokensNumber() const { return block_manager_config_.prefix_cache_len; }
-
-size_t BlockManager::GetPrefixCacheBlocksNumber() const { return prefix_cache_block_num_; }
-
-bool BlockManager::CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) {
-  if (block_manager_config_.prefix_cache_len <= 0 ||
-      input_tokens.size() < static_cast<size_t>(block_manager_config_.prefix_cache_len)) {
-    return false;
-  }
-
-  if (prefix_cache_tokens_.empty()) {
-    // init with the first request
-    prefix_cache_tokens_.resize(block_manager_config_.prefix_cache_len, 0);
-    std::copy(input_tokens.begin(), input_tokens.begin() + block_manager_config_.prefix_cache_len,
-              prefix_cache_tokens_.begin());
-  } else {
-    for (int token_idx = 0; token_idx < block_manager_config_.prefix_cache_len; ++token_idx) {
-      if (prefix_cache_tokens_[token_idx] != input_tokens[token_idx]) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-Status BlockManager::FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) {
-  // TODO(karlluo): support pipeline parallel
-  // prepare prefixed cache blocks
-  for (int device_id = 0; device_id < context_->GetTensorParallelSize(); ++device_id) {
-    if (kv_cache_blocks[device_id].size() == 0) {
-      std::copy(prefix_cache_blocks_[device_id].begin(), prefix_cache_blocks_[device_id].end(),
-                std::back_inserter(kv_cache_blocks[device_id]));
-    } else {
-      std::copy(prefix_cache_blocks_[device_id].begin(), prefix_cache_blocks_[device_id].end(),
-                kv_cache_blocks[device_id].begin());
-    }
-  }
-  return Status();
-}
 
 const BlockManagerConfig& BlockManager::GetBlockManagerConfig() const { return block_manager_config_; }
 

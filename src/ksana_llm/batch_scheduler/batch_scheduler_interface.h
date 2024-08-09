@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
 
 namespace ksana_llm {
@@ -20,11 +21,11 @@ class BatchSchedulerInterface {
   // Add infer request to waiting list.
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) = 0;
 
-  // Check whether the waiting buffer is empty.
-  virtual bool WaitingBufferEmpty() = 0;
+  // Set the cache manager instance of batch scheduler.
+  virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) = 0;
 
-  // Check whether the swapped queue is empty.
-  virtual bool SwappedQueueEmtpy() = 0;
+  // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
+  virtual bool IsIdle() = 0;
 };
 
 }  // namespace ksana_llm
