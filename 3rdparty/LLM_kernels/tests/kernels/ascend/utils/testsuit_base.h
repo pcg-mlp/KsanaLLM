@@ -16,6 +16,10 @@
 
 #include "csrc/utils/ascend/common.h"
 
+#ifdef ENABLE_ACL_ATB
+#  include "atb/operation.h"
+#endif
+
 namespace llm_kernels {
 namespace ascend {
 namespace test {
@@ -24,26 +28,33 @@ class AscendTestSuitBase : public testing::Test {
  public:
   static void SetUpTestCase() { ACL_CHECK_RET(aclInit(nullptr)); }
 
-  void SetUp() override { Init(&context, &stream); }
+  void SetUp() override { Init(); }
 
   void TearDown() override {
     if (is_inited) {
       ACL_CHECK_RET(aclrtSetDevice(device));
       ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+#ifdef ENABLE_ACL_ATB
+      ATB_CHECK_RET(atb::DestroyContext(atb_context));
+#endif
       ACL_CHECK_RET(aclrtDestroyStream(stream));
       ACL_CHECK_RET(aclrtDestroyContext(context));
     }
   }
 
-  void Init(aclrtContext* context, aclrtStream* stream) {
+  void Init() {
     // init acl resource
     ACL_CHECK_RET(aclrtSetDevice(default_device));
-    ACL_CHECK_RET(aclrtCreateContext(context, default_device));
-    ACL_CHECK_RET(aclrtSetCurrentContext(*context));
-    ACL_CHECK_RET(aclrtCreateStream(stream));
+    ACL_CHECK_RET(aclrtCreateContext(&context, default_device));
+    ACL_CHECK_RET(aclrtSetCurrentContext(context));
+    ACL_CHECK_RET(aclrtCreateStream(&stream));
     aclrtRunMode runMode;
     ACL_CHECK_RET(aclrtGetRunMode(&runMode));
     is_inited = (runMode == ACL_DEVICE);
+#ifdef ENABLE_ACL_ATB
+    ATB_CHECK_RET(atb::CreateContext(&atb_context));
+    atb_context->SetExecuteStream(stream);
+#endif
   }
 
  protected:
@@ -52,6 +63,9 @@ class AscendTestSuitBase : public testing::Test {
   aclrtStream stream;
   aclrtContext context;
   bool is_inited = false;
+#ifdef ENABLE_ACL_ATB
+  atb::Context* atb_context{nullptr};
+#endif
 };
 
 static const float HALF_FLT_MAX = 65504.F;

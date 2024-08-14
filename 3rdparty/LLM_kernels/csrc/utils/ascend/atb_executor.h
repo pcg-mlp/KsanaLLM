@@ -31,6 +31,14 @@ class ATBOperationExecutor {
 
   void Run(atb::Context* context, void (*ws_func)(size_t, void**));
 
+  void SetOperation(atb::Operation* operation) { operation_ = operation; }
+
+  atb::Operation* GetOperation() { return operation_; }
+
+  void SetRank(int rank) { rank_ = rank; }
+
+  int GetRank() { return rank_; }
+
  private:
   int rank_{0};
   atb::Operation* operation_{nullptr};

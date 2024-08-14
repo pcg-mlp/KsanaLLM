@@ -18,7 +18,11 @@ target_link_libraries(llm_kernels_ascend_paged_attention PUBLIC paged_attention_
 add_dependencies(paged_attention_host_stub llm_kernels_ascend_core_paged_attention)
 add_dependencies(llm_kernels_ascend_paged_attention llm_kernels_ascend_core_paged_attention)
 
-include(/usr/local/Ascend/latest/x86_64-linux/tikcpp/ascendc_kernel_cmake/function.cmake)
+if("${CANN_VER}" STREQUAL "7.3.T8.0.B514:8.0.T13")
+  include(/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/tikcpp/ascendc_kernel_cmake/function.cmake)
+elseif("${CANN_VER}" STREQUAL "7.3.0.1.231:8.0.RC2")
+  include(/usr/local/Ascend/ascend-toolkit/8.0.RC2/x86_64-linux/tikcpp/ascendc_kernel_cmake/function.cmake)
+endif()
 
 ascendc_compile_definitions(llm_kernels_ascend_core_paged_attention PRIVATE
   $<$<BOOL:$<IN_LIST:${SOC_VERSION},${CUSTOM_ASCEND310P_LIST}>>:CUSTOM_ASCEND310P>

@@ -52,6 +52,8 @@ class AttentionLayer : public BaseLayer {
   int head_size_;
   int stride_size_;
   int tensor_para_size_;
+  int max_position_embeddings_;
+  float base_;
 
   // kv_cache storage type
   DataType kv_cache_dtype_;
@@ -68,6 +70,11 @@ class AttentionLayer : public BaseLayer {
   size_t workspace_size_{0ul};
 
   void PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr);
+#endif
+
+#ifdef ENABLE_ACL_ATB
+  size_t max_batch_size_;
+  bool is_context_stage_;
 #endif
 };
 

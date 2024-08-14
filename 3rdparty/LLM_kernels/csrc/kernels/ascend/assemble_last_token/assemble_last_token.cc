@@ -5,6 +5,7 @@
 #include "csrc/kernels/ascend/assemble_last_token/assemble_last_token.h"
 #include <type_traits>
 
+#include "3rdparty/half/include/half.hpp"
 #include "aclrtlaunch_InvokeAssembleLastTokenFloatKernel.h"
 #include "aclrtlaunch_InvokeAssembleLastTokenHalfKernel.h"
 #include "csrc/kernels/ascend/assemble_last_token/assemble_last_token_tiling.h"
@@ -26,18 +27,19 @@ void InvokeAssembleLastToken(DTYPE* input, size_t* ids_offsets, size_t* prefix_o
   AssembleLastTokenTiling* buf = &assemble_last_token_tiling;
   void* tiling_device = nullptr;
   ws_func(sizeof(AssembleLastTokenTiling), &tiling_device);
-  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_device, sizeof(AssembleLastTokenTiling), (void*)buf,
+  ACL_CHECK_RET(aclrtMemcpyAsync(tiling_device, sizeof(AssembleLastTokenTiling), reinterpret_cast<void*>(buf),
                                  sizeof(AssembleLastTokenTiling), ACL_MEMCPY_HOST_TO_DEVICE, stream));
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   if (std::is_same<DTYPE, aclFloat16>::value) {
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeAssembleLastTokenHalfKernel)(
-        batch_size, stream, (uint8_t*)input, (uint8_t*)ids_offsets, (uint8_t*)output, tiling_device));
+        batch_size, stream, reinterpret_cast<uint8_t*>(input), reinterpret_cast<uint8_t*>(ids_offsets),
+        reinterpret_cast<uint8_t*>(output), reinterpret_cast<uint8_t*>(tiling_device)));
   } else if (std::is_same<DTYPE, float>::value) {
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeAssembleLastTokenFloatKernel)(
-        batch_size, stream, (uint8_t*)input, (uint8_t*)ids_offsets, (uint8_t*)output, tiling_device));
+        batch_size, stream, reinterpret_cast<uint8_t*>(input), reinterpret_cast<uint8_t*>(ids_offsets),
+        reinterpret_cast<uint8_t*>(output), reinterpret_cast<uint8_t*>(tiling_device)));
   } else {
-    throw std::invalid_argument(
-        "Invalid assemble last token compute type in InvokeAssembleLastToken, only support float16 or float32.");
+    throw std::invalid_argument("Not support assemble last token dtype, only support float16 and float32");
   }
 }
 

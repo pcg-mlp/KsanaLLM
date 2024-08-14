@@ -60,6 +60,8 @@ class ModelInstance {
 
   size_t GetMaxTokenNum() { return model_config_.max_token_num; }
 
+  uint32_t GetLayerNum() {return model_config_.num_layer; }
+
  private:
   // Create the object and return a shared pointer.
   template <template <class> class ClassT, class BaseT, class... Args>

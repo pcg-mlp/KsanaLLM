@@ -20,13 +20,14 @@ class CMakeExtension(Extension):
 
 def is_run_on_npu_device() -> bool:
     try:
+        # pylint: disable-next=unused-import
         import torch_npu
         return True
-    except:
+    except ModuleNotFoundError:
         return False
 
 
-class build_ext(build_ext_orig):
+class BuildExt(build_ext_orig):
 
     def run(self):
         for ext in self.extensions:
@@ -116,5 +117,5 @@ setup(name='ksana_llm',
       ext_modules=[CMakeExtension('ksana_llm')],
       python_requires='>=3',
       cmdclass={
-          'build_ext': build_ext,
+          'build_ext': BuildExt,
       })

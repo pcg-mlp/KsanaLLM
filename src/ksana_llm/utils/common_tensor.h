@@ -33,8 +33,14 @@ class TensorT {
 
   TensorT<T>* scales = nullptr;
 
+  // Tensor's base ptr can shared with others
+  void* refer_ptr = nullptr;
+
   TensorT();
   TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, int block_id,
+          const std::vector<int64_t>& strides = {}, DataFormat data_format = FORMAT_DEFAULT);
+  // Init Tensor with raw pointer
+  TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, void* refer_ptr,
           const std::vector<int64_t>& strides = {}, DataFormat data_format = FORMAT_DEFAULT);
 
   size_t GetElementNumber() const;
@@ -49,9 +55,13 @@ class TensorT {
   // Get pointer of block
   template <typename TP>
   inline TP* GetPtr() const {
-    KLLM_CHECK_WITH_INFO(block_id >= 0, fmt::format("Tensor GetPtr() error, invalid block id {}.", block_id));
-    if (device == MEMORY_HOST) return GetHostContiguousPtr<TP>(block_id);
-    return GetContiguousPtr<TP>(block_id);
+    if (refer_ptr != nullptr) {
+      return reinterpret_cast<TP*>(refer_ptr);
+    } else {
+      KLLM_CHECK_WITH_INFO(block_id >= 0, fmt::format("Tensor GetPtr() error, invalid block id {}.", block_id));
+      if (device == MEMORY_HOST) return GetHostContiguousPtr<TP>(block_id);
+      return GetContiguousPtr<TP>(block_id);
+    }
   }
 
   // Get the device tensor.

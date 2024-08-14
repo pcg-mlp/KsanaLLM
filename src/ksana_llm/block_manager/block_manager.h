@@ -104,6 +104,15 @@ class BlockManager : public BlockManagerInterface {
   // Get block manager config
   const BlockManagerConfig& GetBlockManagerConfig() const;
 
+  // Get block base ptr
+  void* GetBlockBasePtr();
+
+  // Get block manager's related allocator's config
+  const AllocatorConfig& GetAllocatorConfig();
+
+  // Get the first allocated block id from continuous blocks memory space
+  int GetBlocksBaseId();
+
  private:
   // Calculate the block number.
   Status CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num);

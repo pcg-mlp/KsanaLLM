@@ -40,6 +40,10 @@ class ModelInput {
 
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
 
+#ifdef ENABLE_ACL_ATB
+  void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage);
+#endif
+
  public:
   // The input batch size.
   size_t batch_size;
@@ -102,6 +106,30 @@ class ModelInput {
   Event kvcache_offset_event;
   Event rotary_embedding_event;
   Event input_ids_event;
+
+#ifdef ENABLE_ACL_ATB
+  // record all reqs token number on host, shape: [batch_size]
+  Tensor seq_len_host;
+  // Tensor to save kv cache base. detail doc please refer:
+  // docs/Technology/kvcache-relationship-between-ascend-atb-and-ksana.md shape: [total_k/v_blocks, block_token_num,
+  // kv_head_num, head_dim]
+  Tensor k_cache_blocks_base;
+  Tensor v_cache_blocks_base;
+
+  // for prefill stage: layers_slot_mapping shape is [num_layers, all_reqs_tokens_num]
+  // for decode stage: layers_block_table shape is [num_layers, batch_size]
+  std::vector<int32_t> layers_slot_mapping_host;
+  Tensor layers_slot_mapping;
+
+  // only used for decode stage: layers_block_table shape is [num_layers, batch_size * max_num_blocks_per_query]
+  std::vector<int32_t> layers_block_table_host;
+  Tensor layers_block_table;
+
+  // since layer's forward only support Tensor as input (nothing to do with karlluo), such crappy design ignore runtime
+  // attribute, so we need a tensor to be attribute.
+  // shape: [2]; 0: layers_slot_mapping_dim_1; 1: max_num_blocks_per_query
+  Tensor atb_attention_attr;
+#endif
 
  private:
   ModelConfig model_config_;

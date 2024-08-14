@@ -1,6 +1,8 @@
-/*
- * Copyright 2024 Tencent Inc.  All rights reserved.
- */
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+Partialy modify from
+https://github.com/PaddlePaddle/PaddleCustomDevice/blob/develop/backends/npu/custom_op/llama_infer/atb_ops
+
+==============================================================================*/
 
 #include "slice.h"
 
@@ -119,6 +121,108 @@ void Slice2<T>::Forward(void* output, void* input, int start, int length, int st
 
 template class Slice2<aclFloat16>;
 template class Slice2<float>;
+
+#ifdef ENABLE_ACL_ATB
+void CreateSplitQKVATBOperation(const uint32_t total_token_num, const uint32_t head_size, const uint32_t kv_head_size,
+                                const uint32_t head_dim, atb::Operation** operation, const std::string& op_name) {
+  uint32_t tensor_idx = 0;
+  uint32_t input_qkv_tensor = tensor_idx++;  // [ntokens, 3 * head_num * head_dim] or [ntokens,
+                                             // (head_num + 2 * kv_head_num) * head_dim]
+  uint32_t output_q_tensor = tensor_idx++;   // [ntokens, head_num * head_dim]
+  uint32_t output_k_tensor = tensor_idx++;
+  uint32_t output_v_tensor = tensor_idx++;
+  auto kv_head_num = (kv_head_size > 0 && kv_head_size != head_size) ? kv_head_size : 0;
+
+  uint32_t node_idx = 0;
+  atb::GraphParam op_graph;
+  op_graph.name = "SplitQKV_" + op_name;
+  op_graph.inTensorNum = 1;
+  op_graph.outTensorNum = 3;
+  op_graph.internalTensorNum = 0;
+  op_graph.nodes.resize(kv_head_num > 0 ? 3 : 1);
+
+  if (kv_head_num > 0) {
+    // for kv_head_size != head_size
+    {
+      atb::Node& op_node = op_graph.nodes.at(node_idx++);
+      atb::infer::SliceParam op_param;
+      op_param.offsets.resize(2);
+      op_param.size.resize(2);
+      op_param.offsets[0] = 0;
+      op_param.offsets[1] = 0;
+      op_param.size[0] = -1;
+      op_param.size[1] = head_size * head_dim;
+      atb::CreateOperation(op_param, &op_node.operation);
+      op_node.inTensorIds = {input_qkv_tensor};
+      op_node.outTensorIds = {output_q_tensor};
+    }
+    {
+      atb::Node& op_node = op_graph.nodes.at(node_idx++);
+      atb::infer::SliceParam op_param;
+      op_param.offsets.resize(2);
+      op_param.size.resize(2);
+      op_param.offsets[0] = 0;
+      op_param.offsets[1] = head_size * head_dim;
+      op_param.size[0] = -1;
+      op_param.size[1] = kv_head_size * head_dim;
+      atb::CreateOperation(op_param, &op_node.operation);
+      op_node.inTensorIds = {input_qkv_tensor};
+      op_node.outTensorIds = {output_k_tensor};
+    }
+    {
+      atb::Node& op_node = op_graph.nodes.at(node_idx++);
+      atb::infer::SliceParam op_param;
+      op_param.offsets.resize(2);
+      op_param.size.resize(2);
+      op_param.offsets[0] = 0;
+      op_param.offsets[1] = (head_size + kv_head_size) * head_dim;
+      op_param.size[0] = -1;
+      op_param.size[1] = kv_head_size * head_dim;
+      atb::CreateOperation(op_param, &op_node.operation);
+      op_node.inTensorIds = {input_qkv_tensor};
+      op_node.outTensorIds = {output_v_tensor};
+    }
+    op_graph.inferShapeFunc = [=](const atb::SVector<atb::TensorDesc>& input_tensor_descs,
+                                  atb::SVector<atb::TensorDesc>& output_tensor_descs) {
+      output_tensor_descs.resize(3);
+      output_tensor_descs.at(0) = input_tensor_descs.at(0);
+      output_tensor_descs.at(0).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(0).shape.dims[1] = head_size * head_dim;
+      output_tensor_descs.at(1) = input_tensor_descs.at(0);
+      output_tensor_descs.at(1).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(1).shape.dims[1] = kv_head_size * head_dim;
+      output_tensor_descs.at(2) = input_tensor_descs.at(0);
+      output_tensor_descs.at(2).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(2).shape.dims[1] = kv_head_size * head_dim;
+      return atb::NO_ERROR;
+    };
+  } else {
+    // for kv_head_size == head_size
+    atb::Node& op_node = op_graph.nodes.at(node_idx++);
+    atb::infer::SplitParam op_param;
+    op_param.splitDim = 1;
+    op_param.splitNum = 3;  // only fp16
+    atb::CreateOperation(op_param, &op_node.operation);
+    op_node.inTensorIds = {input_qkv_tensor};
+    op_node.outTensorIds = {output_q_tensor, output_k_tensor, output_v_tensor};
+    op_graph.inferShapeFunc = [=](const atb::SVector<atb::TensorDesc>& input_tensor_descs,
+                                  atb::SVector<atb::TensorDesc>& output_tensor_descs) {
+      output_tensor_descs.resize(3);
+      output_tensor_descs.at(0) = input_tensor_descs.at(0);
+      output_tensor_descs.at(0).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(0).shape.dims[1] = head_size * head_dim;
+      output_tensor_descs.at(1) = input_tensor_descs.at(0);
+      output_tensor_descs.at(1).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(1).shape.dims[1] = head_size * head_dim;
+      output_tensor_descs.at(2) = input_tensor_descs.at(0);
+      output_tensor_descs.at(2).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(2).shape.dims[1] = head_size * head_dim;
+      return atb::NO_ERROR;
+    };
+  }
+  atb::CreateOperation(op_graph, operation);
+}
+#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

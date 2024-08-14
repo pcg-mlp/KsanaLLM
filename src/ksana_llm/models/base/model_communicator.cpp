@@ -65,10 +65,9 @@ Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors,
 #endif
 
 #ifdef ENABLE_ACL
-  Memcpy(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
-         MEMCPY_DEVICE_TO_DEVICE);
+  MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+              MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
 #endif
-
   return Status();
 }
 
@@ -92,8 +91,8 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
 #endif
 
 #ifdef ENABLE_ACL
-  Memcpy(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
-         MEMCPY_DEVICE_TO_DEVICE);
+  MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+              MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
 #endif

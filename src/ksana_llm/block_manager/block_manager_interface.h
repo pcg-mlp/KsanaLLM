@@ -100,6 +100,15 @@ class BlockManagerInterface {
 
   // Get block manager config
   virtual const BlockManagerConfig& GetBlockManagerConfig() const = 0;
+
+  // Get block base ptr
+  virtual void* GetBlockBasePtr() = 0;
+
+  // Get block manager's related allocator's config.
+  virtual const AllocatorConfig& GetAllocatorConfig() = 0;
+
+  // Get the first allocated block id
+  virtual int GetBlocksBaseId() = 0;
 };
 
 }  // namespace ksana_llm

@@ -10,6 +10,10 @@
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
 
+#ifdef ENABLE_ACL_ATB
+#  include "csrc/utils/ascend/atb_executor.h"
+#endif
+
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
@@ -27,6 +31,171 @@ class LlamaAscendSliceTestSuit : public AscendTestSuitBase {
   using AscendTestSuitBase::default_device;
   using AscendTestSuitBase::is_inited;
   using AscendTestSuitBase::stream;
+
+#ifdef ENABLE_ACL_ATB
+  template <typename DTYPE>
+  void TestATBQKVSlice() {
+    constexpr uint32_t ntokens{512};
+    constexpr uint32_t kv_head_size{40};
+    constexpr uint32_t head_size{40};
+    constexpr uint32_t head_dim{128};
+    aclDataType aclnn_dtype = aclDataType::ACL_FLOAT16;
+    if (std::is_same<DTYPE, float>::value) {
+      aclnn_dtype = aclDataType::ACL_FLOAT;
+    } else if (std::is_same<DTYPE, aclFloat16>::value || std::is_same<DTYPE, half_float::half>::value) {
+      aclnn_dtype = aclDataType::ACL_FLOAT16;
+    } else {
+      GTEST_SKIP_("This test is just supported float and float16.");
+    }
+
+    // for input
+    void* qkv_tensor_device_ptr = nullptr;
+    size_t qkv_elem_nums = ntokens * ((head_size + 2 * kv_head_size) * head_dim);
+    size_t qkv_size = qkv_elem_nums * sizeof(DTYPE);
+    ACL_CHECK_RET(aclrtMalloc(&qkv_tensor_device_ptr, qkv_size, ACL_MEM_MALLOC_HUGE_FIRST));
+    std::vector<DTYPE> qkv_tensor_host_vec(qkv_elem_nums);
+    for (size_t i = 0; i < qkv_elem_nums; ++i) {
+      if (std::is_same<DTYPE, aclFloat16>::value) {
+        qkv_tensor_host_vec[i] = aclFloatToFloat16(float(std::cos(i)));
+      } else if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+        qkv_tensor_host_vec[i] = DTYPE(std::cos(i));
+      } else {
+        throw std::invalid_argument("Invalid QKVSlice compute type, only support float16 or float32.");
+      }
+    }
+    ACL_CHECK_RET(
+        aclrtMemcpy(qkv_tensor_device_ptr, qkv_size, qkv_tensor_host_vec.data(), qkv_size, ACL_MEMCPY_HOST_TO_DEVICE));
+
+    // for output
+    void* q_tensor_ptr = nullptr;
+    size_t q_elem_nums = ntokens * (head_size * head_dim);
+    size_t q_size = q_elem_nums * sizeof(DTYPE);
+    ACL_CHECK_RET(aclrtMalloc(&q_tensor_ptr, q_size, ACL_MEM_MALLOC_HUGE_FIRST));
+    void* k_tensor_ptr = nullptr;
+    size_t k_elem_nums = ntokens * (kv_head_size * head_dim);
+    size_t k_size = k_elem_nums * sizeof(DTYPE);
+    ACL_CHECK_RET(aclrtMalloc(&k_tensor_ptr, q_size, ACL_MEM_MALLOC_HUGE_FIRST));
+    void* v_tensor_ptr = nullptr;
+    size_t v_elem_nums = ntokens * (kv_head_size * head_dim);
+    size_t v_size = v_elem_nums * sizeof(DTYPE);
+    ACL_CHECK_RET(aclrtMalloc(&v_tensor_ptr, v_size, ACL_MEM_MALLOC_HUGE_FIRST));
+    std::vector<DTYPE> q_tensor_host_ptr(q_elem_nums);
+    std::vector<DTYPE> k_tensor_host_ptr(k_elem_nums);
+    std::vector<DTYPE> v_tensor_host_ptr(v_elem_nums);
+
+    // for ref output
+    std::vector<DTYPE> q_tensor_ref_host_ptr(q_elem_nums);
+    std::vector<DTYPE> k_tensor_ref_host_ptr(k_elem_nums);
+    std::vector<DTYPE> v_tensor_ref_host_ptr(v_elem_nums);
+
+    // create run graph
+    uint64_t tensor_idx = 0;
+    uint64_t input_qkv_tensor = tensor_idx++;  // [ntokens, 3 * head_num * head_dim] or [ntokens,
+                                               // (head_num + 2 * kv_head_num) * head_dim]
+    uint64_t output_q_tensor = tensor_idx++;   // [ntokens, head_num * head_dim]
+    uint64_t output_k_tensor = tensor_idx++;
+    uint64_t output_v_tensor = tensor_idx++;
+    atb::GraphParam op_graph;
+    op_graph.name = "TestATBQKVSlice";
+    op_graph.inTensorNum = 1;
+    op_graph.outTensorNum = 3;
+    op_graph.internalTensorNum = 0;
+    op_graph.nodes.resize(1);
+    uint64_t node_idx = 0;
+    atb::Node& op_node = op_graph.nodes.at(node_idx++);
+    CreateSplitQKVATBOperation(ntokens, head_size, kv_head_size, head_dim, &op_node.operation);
+    op_node.inTensorIds = {input_qkv_tensor};
+    op_node.outTensorIds = {output_q_tensor, output_k_tensor, output_v_tensor};
+    op_graph.inferShapeFunc = [=](const atb::SVector<atb::TensorDesc>& input_tensor_descs,
+                                  atb::SVector<atb::TensorDesc>& output_tensor_descs) {
+      output_tensor_descs.resize(3);
+      output_tensor_descs.at(0) = input_tensor_descs.at(0);
+      output_tensor_descs.at(0).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(0).shape.dims[1] = head_size * head_dim;
+      output_tensor_descs.at(1) = input_tensor_descs.at(0);
+      output_tensor_descs.at(1).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(1).shape.dims[1] = kv_head_size * head_dim;
+      output_tensor_descs.at(2) = input_tensor_descs.at(0);
+      output_tensor_descs.at(2).shape.dims[0] = input_tensor_descs.at(0).shape.dims[0];
+      output_tensor_descs.at(2).shape.dims[1] = kv_head_size * head_dim;
+      return atb::NO_ERROR;
+    };
+
+    llm_kernels::utils::ATBOperationExecutor atb_op_executor;
+    atb_op_executor.Init(default_device, op_graph);
+    atb_op_executor.ResetVariantPack();
+    atb_op_executor.SetInputTensor(qkv_tensor_device_ptr, {ntokens, (head_size + 2 * kv_head_size) * head_dim},
+                                   aclnn_dtype);
+    atb_op_executor.SetOutputTensor(q_tensor_ptr, {ntokens, head_size * head_dim}, aclnn_dtype);
+    atb_op_executor.SetOutputTensor(k_tensor_ptr, {ntokens, kv_head_size * head_dim}, aclnn_dtype);
+    atb_op_executor.SetOutputTensor(v_tensor_ptr, {ntokens, kv_head_size * head_dim}, aclnn_dtype);
+
+    atb_op_executor.Run(atb_context, llm_kernels::utils::GetTestWorkSpaceFunc);
+    ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+
+    ACL_CHECK_RET(aclrtMemcpy(q_tensor_host_ptr.data(), q_size, q_tensor_ptr, q_size, ACL_MEMCPY_DEVICE_TO_HOST));
+    ACL_CHECK_RET(aclrtMemcpy(k_tensor_host_ptr.data(), k_size, k_tensor_ptr, k_size, ACL_MEMCPY_DEVICE_TO_HOST));
+    ACL_CHECK_RET(aclrtMemcpy(v_tensor_host_ptr.data(), v_size, v_tensor_ptr, v_size, ACL_MEMCPY_DEVICE_TO_HOST));
+
+    for (size_t token_idx = 0; token_idx < ntokens; ++token_idx) {
+      float val = 0.0f;
+      float ref_val = 0.0f;
+      // for q
+      for (size_t idx = 0; idx < (head_size * head_dim); ++idx) {
+        if (std::is_same<DTYPE, aclFloat16>::value) {
+          val = aclFloat16ToFloat(q_tensor_host_ptr[token_idx * (head_size * head_dim) + idx]);
+          ref_val =
+              aclFloat16ToFloat(qkv_tensor_host_vec[token_idx * ((head_size + 2 * kv_head_size) * head_dim) + idx]);
+        } else if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+          val = float(q_tensor_host_ptr[token_idx * (head_size * head_dim) + idx]);
+          ref_val = float(qkv_tensor_host_vec[token_idx * ((head_size + 2 * kv_head_size) * head_dim) + idx]);
+        } else {
+          throw std::invalid_argument("Invalid QKVSlice compute type, only support float16 or float32.");
+        }
+
+        EXPECT_EQ(val, ref_val) << "q tensor token id: " << token_idx << ", idx: " << idx << " is different: " << val
+                                << " v.s " << ref_val;
+      }
+      // for k
+      for (size_t idx = 0; idx < (kv_head_size * head_dim); ++idx) {
+        if (std::is_same<DTYPE, aclFloat16>::value) {
+          val = aclFloat16ToFloat(k_tensor_host_ptr[token_idx * (kv_head_size * head_dim) + idx]);
+          ref_val = aclFloat16ToFloat(qkv_tensor_host_vec[token_idx * ((head_size + 2 * kv_head_size) * head_dim) +
+                                                          (head_size * head_dim) + idx]);
+        } else if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+          val = float(k_tensor_host_ptr[token_idx * (kv_head_size * head_dim) + idx]);
+          ref_val = float(qkv_tensor_host_vec[token_idx * ((head_size + 2 * kv_head_size) * head_dim) +
+                                              (head_size * head_dim) + idx]);
+        } else {
+          throw std::invalid_argument("Invalid QKVSlice compute type, only support float16 or float32.");
+        }
+        EXPECT_EQ(val, ref_val) << "k tensor token id: " << token_idx << ", idx: " << idx << " is different: " << val
+                                << " v.s " << ref_val;
+      }
+      // for v
+      for (size_t idx = 0; idx < (kv_head_size * head_dim); ++idx) {
+        if (std::is_same<DTYPE, aclFloat16>::value) {
+          val = aclFloat16ToFloat(v_tensor_host_ptr[token_idx * (kv_head_size * head_dim) + idx]);
+          ref_val = aclFloat16ToFloat(qkv_tensor_host_vec[token_idx * ((head_size + 2 * kv_head_size) * head_dim) +
+                                                          ((head_size + kv_head_size) * head_dim) + idx]);
+        } else if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+          val = float(v_tensor_host_ptr[token_idx * (kv_head_size * head_dim) + idx]);
+          ref_val = float(qkv_tensor_host_vec[token_idx * ((head_size + 2 * kv_head_size) * head_dim) +
+                                              ((head_size + kv_head_size) * head_dim) + idx]);
+        } else {
+          throw std::invalid_argument("Invalid QKVSlice compute type, only support float16 or float32.");
+        }
+        EXPECT_EQ(val, ref_val) << "v tensor token id: " << token_idx << ", idx: " << idx << " is different: " << val
+                                << " v.s " << ref_val;
+      }
+    }
+
+    ACL_CHECK_RET(aclrtFree(v_tensor_ptr));
+    ACL_CHECK_RET(aclrtFree(k_tensor_ptr));
+    ACL_CHECK_RET(aclrtFree(q_tensor_ptr));
+    ACL_CHECK_RET(aclrtFree(qkv_tensor_device_ptr));
+  }
+#endif
 };
 
 TEST_F(LlamaAscendSliceTestSuit, SliceTest) {
@@ -111,6 +280,10 @@ TEST_F(LlamaAscendSliceTestSuit, SliceKernelTest) {
     }
   }
 }
+
+#ifdef ENABLE_ACL_ATB
+TEST_F(LlamaAscendSliceTestSuit, ATBSliceTest) { TestATBQKVSlice<half_float::half>(); }
+#endif
 
 }  // namespace test
 }  // namespace ascend

@@ -170,9 +170,14 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(model_run_config_.position_encoding == PositionEncoding::ALIBI);
     attention_param.push_back(std::any(cos_sin_cache_ptr));
     attention_param.push_back(model_config_.rope_scaling_factor_config);
-
-    flash_attention_layers_[idx]->Init(attention_param, context_, rank_);
-    paged_attention_layers_[idx]->Init(attention_param, context_, rank_);
+    attention_param.push_back(max_batch_size);
+    std::vector<std::any> flash_attention_param = attention_param;
+    std::vector<std::any> paged_attention_param = attention_param;
+    // NOTE(karlluo): bool for is_context_decode_stage
+    flash_attention_param.push_back(true);
+    paged_attention_param.push_back(false);
+    flash_attention_layers_[idx]->Init(flash_attention_param, context_, rank_);
+    paged_attention_layers_[idx]->Init(paged_attention_param, context_, rank_);
   }
 
   // search optional plugin
@@ -323,6 +328,7 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
 #endif
       },
       hidden_buffer_1_));
+
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
 
   if (reuse_prefix_caching) {

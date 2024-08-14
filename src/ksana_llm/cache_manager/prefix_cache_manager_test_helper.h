@@ -249,6 +249,12 @@ class FakedBlockManager : public BlockManagerInterface {
   // Get block manager config
   const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
 
+  void* GetBlockBasePtr() { return nullptr; }
+
+  const AllocatorConfig& GetAllocatorConfig() { return block_manager_config_.device_allocator_config; }
+
+  int GetBlocksBaseId() { return 0; }
+
  private:
   BlockManagerConfig block_manager_config_;
 

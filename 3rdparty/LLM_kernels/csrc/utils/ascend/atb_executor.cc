@@ -32,7 +32,7 @@ void ATBOperationExecutor::SetInputTensor(void* addr_ptr, const std::vector<size
   }
   atb_tensor.desc.dtype = dtype;
   atb_tensor.dataSize = atb::Utils::GetTensorSize(atb_tensor);
-  atb_tensor.hostData = nullptr;
+  atb_tensor.hostData = const_cast<void*>(addr_ptr);
   atb_tensor.deviceData = const_cast<void*>(addr_ptr);
 }
 
@@ -46,7 +46,7 @@ void ATBOperationExecutor::SetOutputTensor(void* addr_ptr, const std::vector<siz
   }
   atb_tensor.desc.dtype = dtype;
   atb_tensor.dataSize = atb::Utils::GetTensorSize(atb_tensor);
-  atb_tensor.hostData = nullptr;
+  atb_tensor.hostData = const_cast<void*>(addr_ptr);
   atb_tensor.deviceData = const_cast<void*>(addr_ptr);
 }
 

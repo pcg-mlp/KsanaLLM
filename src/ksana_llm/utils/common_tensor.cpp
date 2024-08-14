@@ -21,30 +21,18 @@ TensorT<T>::TensorT(const MemoryDevice device, const DataType dtype, const std::
 }
 
 template <int T>
+TensorT<T>::TensorT(const MemoryDevice device, const DataType dtype, const std::vector<size_t> shape, void* refer_ptr,
+                    const std::vector<int64_t>& strides, DataFormat data_format)
+    : device(device), dtype(dtype), shape(shape), refer_ptr(refer_ptr), strides(strides), data_format(data_format) {}
+
+template <int T>
 size_t TensorT<T>::GetElementNumber() const {
-  std::vector<int64_t> device_tensor_shape = GetDeviceTensorShape();
-  if (device_tensor_shape.empty() && shape.empty()) {
-    return 0;
-  } else if (!device_tensor_shape.empty()) {
-    return std::accumulate(device_tensor_shape.begin(), device_tensor_shape.end(), static_cast<size_t>(1),
-                           std::multiplies<size_t>());
-  } else {
-#ifdef ENABLE_CUDA
-    return std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
-#else
-    // NOTE(karlluo): seems tensor in acl is destory before here
-    return 0ul;
-#endif
-  }
+  return std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
 }
 
 template <int T>
 size_t TensorT<T>::GetTotalBytes() const {
-  DataType tensor_dtype = GetDeviceTensorDataType();
-  if (tensor_dtype == TYPE_INVALID) {
-    tensor_dtype = dtype;
-  }
-  return GetElementNumber() * GetTypeSize(tensor_dtype);
+  return GetElementNumber() * GetTypeSize(dtype);
 }
 
 template <int T>

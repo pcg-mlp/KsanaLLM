@@ -25,9 +25,11 @@ model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
+# pylint: disable=invalid-name
 model = None
 tokenizer = None
 model_config = None
+# pylint: enable=invalid-name
 
 
 def args_config():
@@ -282,6 +284,7 @@ async def forward(request: Request):
         request_dict["sampling_config"] = {"max_new_tokens" : 1}
         response_data = await process_request(request_dict)
         return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
+    # pylint: disable-next=broad-except
     except Exception as e:
         print(traceback.format_exc())
         return Response(content=msgpack.packb(str(e)), media_type="application/x-msgpack")
@@ -299,19 +302,19 @@ if __name__ == "__main__":
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.
-    log_level = os.getenv("KLLM_LOG_LEVEL", "INFO").upper()
-    if log_level in ["DEBUG", "INFO", "ERROR"]:
-        log_level = log_level.lower()
+    LOG_LEVEL = os.getenv("KLLM_LOG_LEVEL", "INFO").upper()
+    if LOG_LEVEL in ["DEBUG", "INFO", "ERROR"]:
+        LOG_LEVEL = LOG_LEVEL.lower()
     else:
-        log_level = "info"
+        LOG_LEVEL = "info"
         print(
-            f"Uvicorn's logging not support env: KLLM_LOG_LEVEL={log_level}, keep it as defalt(info)."
+            f"Uvicorn's logging not support env: KLLM_LOG_LEVEL={LOG_LEVEL}, keep it as defalt(info)."
         )
     app.root_path = args.root_path
     uvicorn.run(app,
                 host=args.host,
                 port=args.port,
-                log_level=log_level,
+                LOG_LEVEL=LOG_LEVEL,
                 timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
                 ssl_keyfile=args.ssl_keyfile,
                 ssl_certfile=args.ssl_certfile)

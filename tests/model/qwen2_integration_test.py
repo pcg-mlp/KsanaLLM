@@ -79,9 +79,10 @@ def infer(prompt, tokenizer, generation_config, model, queue=None, idx=0):
 
 def is_run_on_npu_device() -> bool:
     try:
+        # pylint: disable-next=unused-import
         import torch_npu
         return True
-    except ImportError as e:
+    except ImportError:
         return False
 
 
@@ -89,6 +90,7 @@ def is_run_on_npu_device() -> bool:
 if __name__ == "__main__":
     # Load the configuration arguments
     args = args_config()
+    # pylint: disable-next=invalid-name
     is_npu = is_run_on_npu_device()
 
     # Start loading the tokenizer

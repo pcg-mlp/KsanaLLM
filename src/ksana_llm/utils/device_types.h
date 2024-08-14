@@ -106,7 +106,7 @@ enum DataType {
 #endif
 };
 
-static std::string GetTypeString(DataType dtype) {
+__attribute__((unused)) static std::string GetTypeString(DataType dtype) {
   static const std::unordered_map<DataType, std::string> type_map{
       {TYPE_INVALID, "invalid"}, {TYPE_BOOL, "bool"},     {TYPE_BYTES, "bytes"},   {TYPE_UINT8, "uint8"},
       {TYPE_UINT16, "uint16"},   {TYPE_UINT32, "uint32"}, {TYPE_UINT64, "uint64"}, {TYPE_INT8, "int8"},

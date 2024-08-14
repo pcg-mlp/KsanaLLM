@@ -21,6 +21,7 @@ class ContextTest : public testing::Test {
   void TearDown() override {}
 };
 
+#ifdef ENABLE_CUDA
 TEST_F(ContextTest, NvidiaInitTest) {
   EXPECT_THROW(
       {
@@ -46,8 +47,8 @@ TEST_F(ContextTest, NvidiaInitTest) {
 }
 
 TEST_F(ContextTest, NvidiaCommonTest) {
-  const int tensor_parallel_size = 2;
-  const int pipeline_parallel_size = 1;
+  constexpr int tensor_parallel_size = 2;
+  constexpr int pipeline_parallel_size = 1;
   std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, pipeline_parallel_size);
   size_t total_rank_num = tensor_parallel_size * pipeline_parallel_size;
 
@@ -86,5 +87,6 @@ TEST_F(ContextTest, NvidiaCommonTest) {
     EXPECT_NE(context->ext->GetCublasLtHandles()[rank_idx], nullptr);
   }
 }
+#endif
 
 }  // namespace ksana_llm

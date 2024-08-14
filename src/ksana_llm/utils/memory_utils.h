@@ -12,9 +12,11 @@
 
 namespace ksana_llm {
 
-static int64_t DivRoundUp(int64_t dividend, int64_t divisor) { return (dividend + divisor - 1) / divisor; }
+__attribute__((unused)) static int64_t DivRoundUp(int64_t dividend, int64_t divisor) {
+  return (dividend + divisor - 1) / divisor;
+}
 
-static int64_t DivRoundDown(int64_t dividend, int64_t divisor) { return dividend / divisor; }
+__attribute__((unused)) static int64_t DivRoundDown(int64_t dividend, int64_t divisor) { return dividend / divisor; }
 
 /**
  * The AlignedMemoryQueue class is designed to facilitate the allocation and alignment of memory blocks

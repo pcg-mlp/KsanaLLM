@@ -12,6 +12,10 @@
 #include "tests/references/matmul.h"
 #include "tiling/tiling_api.h"
 
+#ifdef ENABLE_ACL_ATB
+#  include "csrc/utils/ascend/atb_executor.h"
+#endif
+
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
@@ -105,12 +109,92 @@ class LlamaAscendMatmulTestSuit : public AscendTestSuitBase {
     ACL_CHECK_RET(aclrtFree(output_workspace));
     ACL_CHECK_RET(aclrtFree(other_workspace));
   }
+
+#ifdef ENABLE_ACL_ATB
+  template <typename DTYPE>
+  void RunATBLinearTest() {
+    aclDataType aclnn_dtype = aclDataType::ACL_FLOAT16;
+    if (std::is_same<DTYPE, float>::value) {
+      aclnn_dtype = aclDataType::ACL_FLOAT;
+    } else if (std::is_same<DTYPE, aclFloat16>::value || std::is_same<DTYPE, half_float::half>::value) {
+      aclnn_dtype = aclDataType::ACL_FLOAT16;
+    } else {
+      GTEST_SKIP_("This test is just supported float and float16.");
+    }
+
+    atb::infer::LinearParam linear_param;
+    linear_param.transposeA = false;
+    linear_param.transposeB = false;
+    linear_param.hasBias = false;
+    linear_param.outDataType = ACL_DT_UNDEFINED;
+    llm_kernels::utils::ATBOperationExecutor atb_op_executor;
+    atb_op_executor.Init(default_device, linear_param);
+    atb_op_executor.ResetVariantPack();
+
+    size_t m = 128;
+    size_t n = 1024;
+    size_t k = 1024;
+
+    const std::vector<size_t> input_shape = {static_cast<size_t>(m), static_cast<size_t>(k)};
+    void *input_workspace = nullptr;
+    ACL_CHECK_RET(aclrtMalloc(&input_workspace, m * k * sizeof(DTYPE), ACL_MEM_MALLOC_HUGE_FIRST));
+    std::vector<DTYPE> input_host_vec(m * k);
+    const std::vector<size_t> weight_shape = {static_cast<size_t>(k), static_cast<size_t>(n)};
+    void *weight_workspace = nullptr;
+    ACL_CHECK_RET(aclrtMalloc(&weight_workspace, k * n * sizeof(DTYPE), ACL_MEM_MALLOC_HUGE_FIRST));
+    std::vector<DTYPE> weight_host_vec(k * n);
+    const std::vector<size_t> output_shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
+    void *output_workspace = nullptr;
+    void *output_host_workspace = nullptr;
+    ACL_CHECK_RET(aclrtMalloc(&output_workspace, m * n * sizeof(DTYPE), ACL_MEM_MALLOC_HUGE_FIRST));
+    ACL_CHECK_RET(aclrtMallocHost((void **)(&output_host_workspace), m * n * sizeof(DTYPE)));
+    std::vector<DTYPE> output_host_vec(m * n);
+    for (size_t i = 0; i < m * k; ++i) {
+      if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+        input_host_vec[i] = DTYPE(std::sin(float(i)));
+      } else {
+        input_host_vec[i] = aclFloatToFloat16(std::sin(float(i)));
+      }
+    }
+    for (size_t i = 0; i < k * n; ++i) {
+      if (std::is_same<DTYPE, float>::value || std::is_same<DTYPE, half_float::half>::value) {
+        weight_host_vec[i] = DTYPE(std::cos(float(i)));
+      } else {
+        weight_host_vec[i] = aclFloatToFloat16(std::cos(float(i)));
+      }
+    }
+    ACL_CHECK_RET(aclrtMemcpy(input_workspace, m * k * sizeof(DTYPE), input_host_vec.data(), m * k * sizeof(DTYPE),
+                              ACL_MEMCPY_HOST_TO_DEVICE));
+    ACL_CHECK_RET(aclrtMemcpy(weight_workspace, k * n * sizeof(DTYPE), weight_host_vec.data(), k * n * sizeof(DTYPE),
+                              ACL_MEMCPY_HOST_TO_DEVICE));
+    CalcMatmulRef<DTYPE>(input_host_vec.data(), weight_host_vec.data(), output_host_vec.data(), m, n, k);
+
+    atb_op_executor.SetInputTensor(input_workspace, input_shape, aclnn_dtype);
+    atb_op_executor.SetInputTensor(weight_workspace, weight_shape, aclnn_dtype);
+    atb_op_executor.SetOutputTensor(output_workspace, output_shape, aclnn_dtype);
+    atb_op_executor.Run(atb_context, llm_kernels::utils::GetTestWorkSpaceFunc);
+    ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+    ACL_CHECK_RET(aclrtMemcpy(output_host_workspace, m * n * sizeof(DTYPE), output_workspace, m * n * sizeof(DTYPE),
+                              ACL_MEMCPY_DEVICE_TO_HOST));
+    for (size_t i = 0; i < m * n; ++i) {
+      EXPECT_NEAR(output_host_vec[i], reinterpret_cast<DTYPE *>(output_host_workspace)[i], 1e-1);
+    }
+
+    ACL_CHECK_RET(aclrtFree(output_workspace));
+    ACL_CHECK_RET(aclrtFree(weight_workspace));
+    ACL_CHECK_RET(aclrtFree(input_workspace));
+  }
+#endif
 };
 
 TEST_F(LlamaAscendMatmulTestSuit, AclNNMatmulTest) {
   RunAclNNMatmulTest<half_float::half>();
   RunAclNNMatmulTest<float>();
 }
+
+#ifdef ENABLE_ACL_ATB
+TEST_F(LlamaAscendMatmulTestSuit, ATBMatmulTest) { RunATBLinearTest<half_float::half>(); }
+#endif
 
 }  // namespace test
 }  // namespace ascend

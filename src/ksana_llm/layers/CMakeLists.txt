@@ -31,6 +31,7 @@ if(WITH_ACL)
     llm_kernels_ascend_paged_attention
     llm_kernels_ascend_cast
     llm_kernels_ascend_silu_mul
+    llm_kernels_ascend_assemble_last_token
     llm_kernels_ascend_rmsnorm)
 endif()
 

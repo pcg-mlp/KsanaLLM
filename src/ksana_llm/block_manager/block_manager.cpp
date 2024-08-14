@@ -242,4 +242,19 @@ size_t BlockManager::GetBlockTokenNum() const { return block_manager_config_.dev
 
 const BlockManagerConfig& BlockManager::GetBlockManagerConfig() const { return block_manager_config_; }
 
+void* BlockManager::GetBlockBasePtr() {
+  int device_id = GetDeviceId();
+  return device_allocators_[device_id]->GetBlocksBasePtr();
+}
+
+const AllocatorConfig& BlockManager::GetAllocatorConfig() {
+  int device_id = GetDeviceId();
+  return device_allocators_[device_id]->GetAllocatorConfig();
+}
+
+int BlockManager::GetBlocksBaseId() {
+  int device_id = GetDeviceId();
+  return device_allocators_[device_id]->GetBlocksBaseId();
+}
+
 }  // namespace ksana_llm

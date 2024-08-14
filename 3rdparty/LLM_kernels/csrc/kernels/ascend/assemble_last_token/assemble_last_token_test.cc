@@ -79,12 +79,21 @@ class LlamaAscendAssembleLastTokenTestSuit : public AscendTestSuitBase {
     ACL_CHECK_RET(aclrtMemcpy(output_host, output_size, output_device, output_size, ACL_MEMCPY_DEVICE_TO_HOST));
 
     DTYPE* ouput = ((DTYPE*)output_host);
+    bool is_break = false;
     for(int32_t batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
       size_t batch_offset = seq_len_offset[batch_idx] * hidden_units_num;
       size_t batch_seq_len = seq_len_offset[batch_idx + 1] - seq_len_offset[batch_idx];
       for(int32_t hidden_elem_idx = 0; hidden_elem_idx < hidden_units_num; ++hidden_elem_idx) {
         DTYPE ref_val = input_ref[batch_offset + (batch_seq_len - 1) * hidden_units_num + hidden_elem_idx];
         DTYPE val = ouput[batch_idx * hidden_units_num + hidden_elem_idx];
+        EXPECT_EQ(ref_val, val) << "[" << batch_idx << ", " << hidden_elem_idx << "] ref_val: " << ref_val << ", val: " << val;
+        if (ref_val != val) {
+          is_break = true;
+          break;
+        }
+      }
+      if (is_break) {
+        break;
       }
     }
 

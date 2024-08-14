@@ -15,11 +15,28 @@ BaseAllocator::BaseAllocator(const AllocatorConfig& allocator_config, std::share
     : allocator_config_(allocator_config), context_(context) {}
 
 void BaseAllocator::PreAllocateBlocks() {
-  void* memory_ptr;
+  void* memory_ptr = nullptr;
+  bool is_continuous_mode = false;
+  void* base_mem_ptr = nullptr;
+#ifdef ENABLE_ACL_ATB
+  if (allocator_config_.device == MEMORY_DEVICE) {
+    is_continuous_mode = true;
+    // NOTE(karlluo): allocator_config_.block_size shape: 2 x layer_num x block_size x head_dim x head_size x 2 x
+    // sizeof(DTYPE)
+    AllocateMemory(&base_mem_ptr, allocator_config_.blocks_num * allocator_config_.block_size);
+    blocks_base_ptr = base_mem_ptr;
+  }
+#endif
   for (int64_t i = 0; i < allocator_config_.blocks_num; ++i) {
-    AllocateMemory(&memory_ptr, allocator_config_.block_size);
-
     int block_id = id_generator_.Gen();
+    if (is_continuous_mode) {
+      memory_ptr = base_mem_ptr + i * allocator_config_.block_size;
+      if (i == 0) {
+        block_base_id = block_id;
+      }
+    } else {
+      AllocateMemory(&memory_ptr, allocator_config_.block_size);
+    }
     MemoryBlock block = {block_id, allocator_config_.block_size, 0, allocator_config_.device, memory_ptr};
     free_blocks_.insert({block_id, block});
   }
@@ -135,5 +152,11 @@ size_t BaseAllocator::GetUsedBlockNumber() {
   std::unique_lock<std::mutex> lock(block_mutex_);
   return used_blocks_.size();
 }
+
+void* BaseAllocator::GetBlocksBasePtr() { return blocks_base_ptr; }
+
+const AllocatorConfig& BaseAllocator::GetAllocatorConfig() { return allocator_config_; }
+
+int BaseAllocator::GetBlocksBaseId() {return block_base_id;}
 
 }  // namespace ksana_llm

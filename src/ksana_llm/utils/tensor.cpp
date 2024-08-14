@@ -25,20 +25,24 @@ Status DestroyTensor(Tensor& tensor, const int rank) {
 }
 
 Status CreateTensor(Tensor& tensor, const std::vector<size_t> shape, const DataType dtype, const int rank,
-                    const MemoryDevice memory_device) {
+                    const MemoryDevice memory_device, void* refer_ptr) {
   if (shape.empty()) {
     return Status();
   }
   size_t total_bytes = std::accumulate(shape.begin(), shape.end(), 1ul, std::multiplies<size_t>()) * GetTypeSize(dtype);
 
-  int block_id;
-  GetBlockManager()->SetDeviceId(rank);
-  if (memory_device == MemoryDevice::MEMORY_DEVICE) {
-    GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+  if (refer_ptr == nullptr) {
+    int block_id;
+    GetBlockManager()->SetDeviceId(rank);
+    if (memory_device == MemoryDevice::MEMORY_DEVICE) {
+      GetBlockManager()->AllocateContiguous(total_bytes, block_id);
+    } else {
+      GetBlockManager()->AllocateHostContiguous(total_bytes, block_id);
+    }
+    tensor = Tensor(memory_device, dtype, shape, block_id);
   } else {
-    GetBlockManager()->AllocateHostContiguous(total_bytes, block_id);
+    tensor = Tensor(memory_device, dtype, shape, refer_ptr);
   }
-  tensor = Tensor(memory_device, dtype, shape, block_id);
   return Status();
 }
 

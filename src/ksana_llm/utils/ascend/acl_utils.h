@@ -16,7 +16,7 @@
 #include "ksana_llm/utils/ret_code.h"
 
 #ifdef ENABLE_ACL_ATB
-#include "atb/types.h"
+#  include "atb/types.h"
 #endif
 
 namespace ksana_llm {
@@ -27,7 +27,7 @@ DataType GetAclTensorDataType(aclTensor* tensor);
 
 // ref:
 // https://www.hiascend.com/document/detail/zh/canncommercial/700/inferapplicationdev/aclcppdevg/aclcppdevg_03_1251.html
-static const std::string GetACLErrorString(aclError error) {
+__attribute__((unused)) static const std::string GetACLErrorString(aclError error) {
   static const std::unordered_map<aclError, std::string> error_to_string_map{
       {ACL_SUCCESS, "ACL_SUCCESS"},
       {ACL_ERROR_INVALID_DUMP_CONFIG, "ACL_ERROR_INVALID_DUMP_CONFIG"},

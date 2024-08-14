@@ -77,6 +77,65 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&input_ids_event, EVENT_DISABLE_TIMING);
+#ifdef ENABLE_ACL_ATB
+  // NOTE(karlluo): for ATb, all device blocks locate on a flatten plane memory space.
+  // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
+  // guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,
+  // head_dim], where 2 represents key and value. The Ascend ATB kv cache consists of kcache and vcache, which are
+  // independent contiguous storage spaces. The shapes of kcache and vcache are [num_blocks * layer_num,
+  // block_token_num, head_num, head_dim]. Each block has a size of [block_token_num, head_num, head_dim]. To
+  // interface with the NPU, Ascend ATB (hereinafter referred to as ATB) needs to be used. In order for the NPU's
+  // self/paged attention to utilize Ksana's kv cache and share the underlying memory/GPU memory management
+  // capabilities, the Ksana kv cache needs to be converted to the Ascend ATB kv cache format.
+  // 1. Change the block allocation method so that the blocks are contiguous in physical memory, while the upper-level
+  // pointers point to different storage spaces. Originally, each block in the Ksana kv cache called malloc once. This
+  // should be changed to pre-allocate a contiguous storage space of size [num_blocks, 2, layer_num, block_token_num,
+  // head_num, head_dim]. The pointers of each block should then point to cache_base_ptr + (block index * 2 *
+  // layer_num * block_token_num * head_num * head_dim * sizeof(DTYPE)).
+  // 2. During each inference process, each prompt will carry an array of block IDs, which can be used to obtain the
+  // pointers to the storage space. For ATB, conversion is required to use these pointers. The conversion process is
+  // as follows:
+  //    - Given a block ID array [b0, b1, b2, b3, b4] and the base address pointer of the Ksana kv cache after the
+  //    modification in step 1, cache_base_ptr.
+  //    - For ATB: The Ksana kv cache has a total of num_blocks * 2 * layer_num blocks.
+  //    - Therefore, the block ID array for ATB is [b0 * layer_num * 2, b1 * layer_num * 2, b2 * layer_num * 2, b3 *
+  //    layer_num * 2, b4 * layer_num * 2].
+  //    - Ksana's kv cache swaps memory/GPU memory at the block level, so to reuse Ksana's kv cache's underlying
+  //    memory/GPU memory management capabilities, ATB's kcache and vcache share the same Ksana kv cache.
+  //    - Since each block in Ksana is divided into K and V parts, each part having a size of [layer_num,
+  //    block_token_num, head_num, head_dim].
+  //    - To allow ATB's kcache and vcache to share the same block ID array, the kcache pointer is cache_base_ptr, and
+  //    the vcache pointer is cache_base_ptr + (layer_num * block_token_num * head_num * head_dim * sizeof(DTYPE)).
+  //    - Therefore, the block ID array for kcache/vcache is [b0 * layer_num * 2 + layer_idx, b1 * layer_num * 2 +
+  //    layer_idx, b2 * layer_num * 2 + layer_idx, b3 * layer_num * 2 + layer_idx, b4 * layer_num * 2 + layer_idx].
+  STATUS_CHECK_FAILURE(
+      CreateTensor(seq_len_host, {static_cast<uint64_t>(max_batch_size_)}, TYPE_INT32, rank_, MEMORY_HOST));
+  STATUS_CHECK_FAILURE(CreateTensor(
+      layers_slot_mapping, {static_cast<uint64_t>(model_config.num_layer), static_cast<uint64_t>(max_token_num_)},
+      TYPE_INT32, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(
+      layers_block_table,
+      {static_cast<uint64_t>(model_config.num_layer), static_cast<uint64_t>(max_batch_size_ * max_block_num)},
+      TYPE_INT32, rank_, MEMORY_DEVICE));
+  GetBlockManager()->SetDeviceId(rank);
+  void* cur_rank_block_base_ptr = GetBlockManager()->GetBlockBasePtr();
+  void* k_cache_base_ptr = cur_rank_block_base_ptr;
+  void* v_cache_base_ptr = cur_rank_block_base_ptr + (block_size_ / 2);
+  // https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/developmentguide/acce/ascendtb/ascendtb_01_0070.html
+  // k/v_cache_blocks_base only support float16
+  STATUS_CHECK_FAILURE(CreateTensor(
+      k_cache_blocks_base,
+      {GetBlockManager()->GetBlockManagerConfig().device_allocator_config.blocks_num * 2 * model_config.num_layer,
+       model_config.block_token_num, model_config.head_num, model_config.size_per_head},
+      TYPE_FP16, rank, MEMORY_DEVICE, k_cache_base_ptr));
+  STATUS_CHECK_FAILURE(CreateTensor(
+      v_cache_blocks_base,
+      {GetBlockManager()->GetBlockManagerConfig().device_allocator_config.blocks_num * 2 * model_config.num_layer,
+       model_config.block_token_num, model_config.head_num, model_config.size_per_head},
+      TYPE_FP16, rank, MEMORY_DEVICE, v_cache_base_ptr));
+  // 0: layers_slot_mapping_dim_1, 1: max_num_blocks_per_query
+  STATUS_CHECK_FAILURE(CreateTensor(atb_attention_attr, {2}, TYPE_UINT64, rank, MEMORY_HOST));
+#endif
 }
 
 ModelInput::~ModelInput() {
@@ -100,6 +159,7 @@ ModelInput::~ModelInput() {
 }
 
 void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage) {
+  // NOTE(karlluo): check batch size
   batch_size = forward_reqs.size();
   KLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
@@ -125,6 +185,10 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   MemcpyAsync(kv_cache_offset_tensor.GetPtr<void>(), kv_cache_offset_list.data(),
               kv_cache_offset_list.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   KLLM_LOG_DEBUG << " Total Block Num " << total_block_num;
+
+#ifdef ENABLE_ACL_ATB
+  PrepareATBKVCache(forward_reqs, is_context_stage);
+#endif
 
   if (is_context_stage) {
     PrepareKVCacheBlocks(forward_reqs);
@@ -220,6 +284,84 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
   cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape = {cpu_input_refit_pos_pair_idx / 2};
   cpu_input_refit_tensor.pos_pair_tensor.shape = {cpu_input_refit_pos_pair_idx / 2, 2};
 }
+
+#ifdef ENABLE_ACL_ATB
+void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage) {
+  // NOTE(karlluo): block manager will change the block number in
+  // ResetPreAllocatedBlocks, block_managr's allocator's blocks_num is difference from the allocator's member config, so
+  // we need get it from allocator instance.
+  size_t total_block_num = GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * model_config_.num_layer;
+  if (total_block_num != k_cache_blocks_base.shape[0]) {
+    k_cache_blocks_base.shape[0] = total_block_num;
+    v_cache_blocks_base.shape[0] = total_block_num;
+  }
+
+  uint32_t batch_size = forward_reqs.size();
+  layers_slot_mapping_host.clear();
+  layers_block_table_host.clear();
+  size_t max_num_blocks_per_query = 0;
+  // for prefill stage: slot_mapping shape is [num_layers, all_reqs_tokens]
+  // for decode stage: slot_mapping shape is [num_layers, batch_size]
+  size_t slot_mapping_dim_1 = is_context_stage ? 0ul : batch_size;
+  for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
+    seq_len_host.GetPtr<int32_t>()[f_req_idx] = forward_reqs[f_req_idx].output_tokens->size();
+    if (is_context_stage) {
+      slot_mapping_dim_1 += forward_reqs[f_req_idx].output_tokens->size();
+    } else {
+      max_num_blocks_per_query =
+          std::max(max_num_blocks_per_query, forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].size());
+    }
+  }
+
+  layers_slot_mapping_host.resize(model_config_.num_layer * slot_mapping_dim_1, 0);
+  if (is_context_stage) {
+    size_t layers_slot_mapping_offset = 0;
+    for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
+      for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+        for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx].output_tokens->size(); ++token_idx) {
+          int32_t inner_block_offset = token_idx % model_config_.block_token_num;
+          layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset + token_idx] =
+              (forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_][token_idx / model_config_.block_token_num] +
+               layer_idx) *
+                  model_config_.block_token_num +
+              inner_block_offset;
+        }
+      }
+      layers_slot_mapping_offset += forward_reqs[f_req_idx].output_tokens->size();
+    }
+  } else {
+    layers_block_table_host.resize(model_config_.num_layer * batch_size * max_num_blocks_per_query, -1);
+    for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
+      size_t cur_query_blocks_num = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].size();
+      for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+        for (uint32_t base_block_idx = 0; base_block_idx < cur_query_blocks_num; ++base_block_idx) {
+          layers_block_table_host[layer_idx * batch_size * max_num_blocks_per_query +
+                                  f_req_idx * max_num_blocks_per_query + base_block_idx] =
+              forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_][base_block_idx] + layer_idx;
+        }
+      }
+      for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+        int32_t inner_block_offset = seq_len_host.GetPtr<int32_t>()[f_req_idx];
+        int32_t base_block_idx = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].size() - 1;
+        layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + f_req_idx] =
+            layers_block_table_host[layer_idx * batch_size * max_num_blocks_per_query +
+                                    f_req_idx * max_num_blocks_per_query + base_block_idx] *
+                model_config_.block_token_num +
+            inner_block_offset;
+      }
+    }
+    MemcpyAsync(layers_block_table.GetPtr<void>(), layers_block_table_host.data(),
+                layers_block_table_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+                context_->GetH2DStreams()[rank_]);
+  }
+  MemcpyAsync(layers_slot_mapping.GetPtr<void>(), layers_slot_mapping_host.data(),
+              layers_slot_mapping_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
+
+  atb_attention_attr.GetPtr<uint64_t>()[0] = slot_mapping_dim_1;
+  atb_attention_attr.GetPtr<uint64_t>()[1] = max_num_blocks_per_query;
+}
+#endif
 
 void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& forward_reqs) {
   std::vector<int64_t> cpu_rotary_pos(batch_size);

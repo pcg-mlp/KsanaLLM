@@ -42,47 +42,22 @@ namespace utils {
     printf(message, ##__VA_ARGS__); \
   } while (0)
 
-#ifdef ENABLE_ACL_ATB
-#  define ATB_CHECK_RET(expr)                                                          \
-    do {                                                                               \
-      atb::Status ret = (expr);                                                        \
-      if (ret != ACL_SUCCESS) {                                                        \
-        FATAL_LOG("Atb return error %s:%d, with ERROR %d\n", __FILE__, __LINE__, ret); \
-        throw std::runtime_error("Failed with ACL return error.");                     \
-      }                                                                                \
-    } while (0)
-#endif
+template <typename T>
+void InnerCheckACLError(T result, const char* func, const char* file, const int line) {
+  if (result != ACL_SUCCESS) {
+    std::ostringstream ss;
+    ss << "ACL runtime error code: " << result << std::endl << file << ":" << line << "@" << func;
+    throw std::runtime_error(ss.str());
+  }
+}
 
-#define ACL_CHECK_RET(expr)                                                          \
-  do {                                                                               \
-    aclError ret = (expr);                                                           \
-    if (ret != ACL_SUCCESS) {                                                        \
-      FATAL_LOG("Acl return error %s:%d, with ERROR %d\n", __FILE__, __LINE__, ret); \
-      throw std::runtime_error("Failed with ACL return error.");                     \
-    }                                                                                \
-  } while (0)
+#define ACL_CHECK_RET(val) llm_kernels::utils::InnerCheckACLError((val), #val, __FILE__, __LINE__)
 
-#define ACL_CHECK_OP(a, b, op)                                                                                \
-  do {                                                                                                        \
-    int64_t ret_a = (a);                                                                                      \
-    int64_t ret_b = (b);                                                                                      \
-    if (!(ret_a op ret_b)) {                                                                                  \
-      FATAL_LOG("Acl check %s(%d) %s %s(%d) fail at %s:%d\n", #a, ret_a, #op, #b, ret_b, __FILE__, __LINE__); \
-      throw std::runtime_error("Failed with ACL return error.");                                              \
-    }                                                                                                         \
-  } while (0)
-
-#define ACL_CHECK_EQ(a, b) ACL_CHECK_OP(a, b, ==)
-#define ACL_CHECK_GE(a, b) ACL_CHECK_OP(a, b, >=)
-#define ACL_CHECK_GT(a, b) ACL_CHECK_OP(a, b, >)
-#define ACL_CHECK_LT(a, b) ACL_CHECK_OP(a, b, <)
-#define ACL_CHECK_LE(a, b) ACL_CHECK_OP(a, b, <=)
-
-const std::unordered_map<aclDataType, size_t> DT2LONG = {{aclDataType::ACL_FLOAT16, sizeof(uint16_t)},
-                                                         {aclDataType::ACL_INT64, sizeof(int64_t)},
-                                                         {aclDataType::ACL_FLOAT, sizeof(float)},
-                                                         {aclDataType::ACL_BOOL, sizeof(bool)},
-                                                         {aclDataType::ACL_UINT8, sizeof(uint8_t)}};
+static const std::unordered_map<aclDataType, size_t> SizeOfAclDataType = {{aclDataType::ACL_FLOAT16, sizeof(uint16_t)},
+                                                                          {aclDataType::ACL_INT64, sizeof(int64_t)},
+                                                                          {aclDataType::ACL_FLOAT, sizeof(float)},
+                                                                          {aclDataType::ACL_BOOL, sizeof(bool)},
+                                                                          {aclDataType::ACL_UINT8, sizeof(uint8_t)}};
 
 int64_t GetShapeSize(const std::vector<int64_t>& shape);
 
@@ -112,14 +87,10 @@ void LoadNpyToPtr(const std::string& filename, T* data_ptr, std::vector<size_t>&
 
 std::string GetNumpyTypeDesc(aclDataType dtype);
 
-void PrintTensor(const aclTensor* src, aclrtStream& stream, const char* name = "");
-
-void Random(aclTensor* input_tensor, void* workspace_ptr, uint64_t workspace_size, int64_t from, int64_t to,
-            int64_t seed, int64_t offset, aclrtStream& stream);
-
-// Define a function to create kernel workspace.
+// Define a function to create kernel workspace for test
 typedef void (*WorkSpaceFunc)(size_t, void**);
 
+// Define a function to create kernel workspace for test
 void GetTestWorkSpaceFunc(size_t size, void** ws_addr);
 
 struct AscendNPUDeviceAttribute {
@@ -135,6 +106,7 @@ struct AscendNPUDeviceAttribute {
   size_t l1_size{0};
 };
 
+// Loading hardware from local config
 void LoadDeviceAttribute(const std::string& platform_config_path, AscendNPUDeviceAttribute& device_attr);
 
 // ACLNNMatmulComputeType(int8_t, Calculation Input): Integer type on the Host side, determines which calculation logic
@@ -151,7 +123,7 @@ void LoadDeviceAttribute(const std::string& platform_config_path, AscendNPUDevic
 enum ACLNNMatmulComputeType { KEEP_DTYPE = 0, ALLOW_FP32_DOWN_PRECISION = 1, USE_FP16 = 2, USE_HF32 = 3 };
 
 #ifdef ENABLE_ACL_ATB
-static const std::string GetATBErrorString(atb::ErrorType error) {
+__attribute__((unused)) static const std::string GetATBErrorString(atb::ErrorType error) {
   static const std::unordered_map<atb::ErrorType, std::string> error_to_string_map{
       {atb::NO_ERROR, "NO_ERROR"},
       {atb::ERROR_INVALID_PARAM, "ERROR_INVALID_PARAM"},
@@ -177,15 +149,18 @@ static const std::string GetATBErrorString(atb::ErrorType error) {
 
 template <typename T>
 void CheckATBError(T result, const char* func, const char* file, const int line) {
-  if (result != ACL_SUCCESS) {
+  if (result != atb::NO_ERROR) {
     std::ostringstream ss;
-    ss << "ATB runtime error " << result << ": " << GetATBErrorString(result) << " " << file << ":" << line << "@"
-       << func;
+    ss << "ATB runtime error code: " << result << std::endl
+       << GetATBErrorString(result) << std::endl
+       << file << ":" << line << "@" << func;
     throw std::runtime_error(ss.str());
   }
 }
 
-#  define ATB_CHECK(val) CheckATBError((val), #val, __FILE__, __LINE__)
+#  define ATB_CHECK_RET(val) \
+    llm_kernels::utils::CheckATBError<atb::ErrorType>(static_cast<atb::ErrorType>(val), #val, __FILE__, __LINE__)
+
 #endif  // ENABLE_ACL_ATB
 }  // namespace utils
 }  // namespace llm_kernels

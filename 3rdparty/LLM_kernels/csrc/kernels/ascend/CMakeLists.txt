@@ -93,6 +93,7 @@ add_subdirectory(silu_mul)
 add_subdirectory(rmsnorm)
 add_subdirectory(rotary_embedding)
 add_subdirectory(add)
+add_subdirectory(assemble_last_token)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")

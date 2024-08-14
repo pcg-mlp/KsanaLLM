@@ -37,8 +37,8 @@ class KsanaPlugin:
             spec = importlib.util.spec_from_file_location(modelpath, f'{modelpath}/visual.py')
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            VisionTransformer = getattr(module, "VisionTransformer")
-            visual = VisionTransformer(**self.config.visual)
+            vision_transformer = getattr(module, "VisionTransformer")
+            visual = vision_transformer(**self.config.visual)
 
             # read weight map
             weight_map_json = glob(os.path.join(modelpath, "*index.json"))

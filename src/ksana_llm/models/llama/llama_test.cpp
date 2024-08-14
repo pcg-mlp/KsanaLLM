@@ -122,6 +122,19 @@ class LlamaTest : public testing::Test {
     GetBlockManager()->AllocateBlocks(1, block_ids);
     forward.kv_cache_ptrs.resize(1);
     GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
+#ifdef ENABLE_ACL_ATB
+    // for rank_0
+    forward.atb_kv_cache_base_blk_ids.clear();
+    forward.atb_kv_cache_base_blk_ids.resize(1);
+    // prepare base block ids in rank_0
+    int32_t origin_block_id =
+        (uintptr_t(forward.kv_cache_ptrs[0][0]) - uintptr_t(GetBlockManager()->GetBlockBasePtr())) /
+        (2 * model_config.num_layer * model_config.block_token_num * model_config.head_num *
+         model_config.size_per_head) /
+        sizeof(float16);
+    forward.atb_kv_cache_base_blk_ids[0].push_back(
+        {static_cast<int32_t>(origin_block_id * 2 * model_config.num_layer)});
+#endif
     Memset(forward.kv_cache_ptrs[0][0], 0, GetBlockManager()->GetBlockSize());
     KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
                                   forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
@@ -136,13 +149,13 @@ class LlamaTest : public testing::Test {
     EventRecord(stop, context_->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
     EventElapsedTime(&milliseconds, start, stop);
-    std::cout << "ContextDecode milliseconds / 10 is: " << milliseconds / 10 << std::endl;
+    std::cout << "ContextDecode milliseconds / " << rounds << " is: " << milliseconds / rounds << std::endl;
 
 #ifdef ENABLE_CUDA
-    EXPECT_TRUE((milliseconds / 10) < 35);
+    EXPECT_TRUE((milliseconds / rounds) < 35);
 #else
     // NOTE(karlluo): ACL inference is slower than CUDA
-    EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;
+    EXPECT_TRUE((milliseconds / rounds) < 300) << "milliseconds / " << rounds << " is: " << milliseconds / rounds;
 #endif
 
     // Sampling
@@ -189,10 +202,10 @@ class LlamaTest : public testing::Test {
     EventRecord(stop, context_->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
     EventElapsedTime(&milliseconds, start, stop);
-    std::cout << "Decode milliseconds / 10 is: " << milliseconds / 10 << std::endl;
+    std::cout << "Decode milliseconds / " << rounds << " is: " << milliseconds / rounds << std::endl;
 
 #ifdef ENABLE_CUDA
-    EXPECT_TRUE((milliseconds / 10) < 30);
+    EXPECT_TRUE((milliseconds / rounds) < 30);
 
     // Test logits_custom_length
     std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
@@ -219,7 +232,7 @@ class LlamaTest : public testing::Test {
     EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
 #else
     // NOTE(karlluo): ACL inference is slower than CUDA
-    EXPECT_TRUE((milliseconds / 10) < 300) << "milliseconds / 10 is: " << milliseconds / 10;
+    EXPECT_TRUE((milliseconds / rounds) < 300) << "milliseconds / " << rounds << " is: " << milliseconds / rounds;
 #endif
 
     llama.reset();

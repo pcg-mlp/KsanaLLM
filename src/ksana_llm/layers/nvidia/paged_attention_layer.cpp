@@ -7,6 +7,12 @@
 
 namespace ksana_llm {
 
+template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+Status PagedAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Init(const std::vector<std::any>& parameters,
+                                                              std::shared_ptr<Context> context, int rank) {
+  return AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
+}
+
 /*
 kv_list  [layers_num * (total_blocks * 2)]
 |              layer1               |
@@ -57,11 +63,11 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
   out.shape = {query.shape[0], this->num_heads_ * (size_t)this->head_size_};
   InvokePagedAttention<SCALAR_T, CACHE_T, FP8_E5M2>(
       out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(), max_tokens,
-      this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(),
-      batch_size, this->num_heads_, this->head_size_, this->num_kv_heads_, this->stride_size_,
-      this->block_token_num_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
-      total_tokens, this->rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(),
-      this->rank_, this->alibi_slopes_, qkv_workspace.GetPtr<void>());
+      this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), batch_size, this->num_heads_,
+      this->head_size_, this->num_kv_heads_, this->stride_size_, this->block_token_num_, batch_size,
+      rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), total_tokens,
+      this->rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_,
+      this->alibi_slopes_, qkv_workspace.GetPtr<void>());
   return Status();
 }
 

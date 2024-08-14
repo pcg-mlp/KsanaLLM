@@ -238,6 +238,12 @@ class BlockManagerSimulator : public BlockManagerInterface {
   // Get block manager config
   const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
 
+  void* GetBlockBasePtr() { return nullptr; }
+
+  const AllocatorConfig& GetAllocatorConfig() { return block_manager_config_.device_allocator_config; }
+
+  int GetBlocksBaseId() { return 0; }
+
  public:  // Functions not in BlockManagerInferface
   void CollectKvCacheContent(std::shared_ptr<InferRequest>& req, std::vector<int>& kv_cache_contents) {
     std::lock_guard<std::recursive_mutex> guard(mux_);

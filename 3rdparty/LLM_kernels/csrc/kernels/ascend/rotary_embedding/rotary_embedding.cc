@@ -57,9 +57,6 @@ void RotaryEmbeddingAscendC<T>::SetConfig(T* cos_sin_cache, const int rotary_dim
       if (std::is_same<T, aclFloat16>::value) {
         cos_sin_cache_host[pos * rotary_dim + rid] = aclFloatToFloat16(std::cos(freq));
         cos_sin_cache_host[pos * rotary_dim + rotary_dim / 2 + rid] = aclFloatToFloat16(std::sin(freq));
-
-        // cos_sin_cache_host[pos * rotary_dim + rid] = aclFloatToFloat16(1.0f);
-        // cos_sin_cache_host[pos * rotary_dim + rotary_dim / 2 + rid] = aclFloatToFloat16(1.0f);
       } else if (std::is_same<T, float>::value) {
         cos_sin_cache_host[pos * rotary_dim + rid] = std::cos(freq);
         cos_sin_cache_host[pos * rotary_dim + rotary_dim / 2 + rid] = std::sin(freq);

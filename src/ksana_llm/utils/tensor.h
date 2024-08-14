@@ -21,6 +21,6 @@ using Tensor = TensorT<ACTIVE_DEVICE_TYPE>;
 Status DestroyTensor(Tensor& tensor, const int rank);
 
 Status CreateTensor(Tensor& tensor, const std::vector<size_t> shape, const DataType dtype, const int rank,
-                    const MemoryDevice memory_device);
+                    const MemoryDevice memory_device, void* refer_ptr = nullptr);
 
 }  // namespace ksana_llm

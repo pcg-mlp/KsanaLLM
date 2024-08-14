@@ -49,6 +49,15 @@ class BaseAllocator {
   // Check whether contiguous is in used
   bool IsContiguousUsed(const int block_id);
 
+  // Used for ATB mode, all blocks is part of a whole flatten memory space
+  void* GetBlocksBasePtr();
+
+  // Used for ATB mode, return allocator config
+  const AllocatorConfig& GetAllocatorConfig();
+
+  // Used for ATB mode, return the first allocated block id
+  int GetBlocksBaseId();
+
  protected:
   // pre-allocate all blocks.
   void PreAllocateBlocks();
@@ -79,6 +88,11 @@ class BaseAllocator {
   // Make thread-safe.
   std::mutex block_mutex_;
   std::mutex contiguous_mutex_;
+
+  // blocks base pointer used for project kvcache mem to NPU k/vcache mem
+  void* blocks_base_ptr = nullptr;
+  // blocks base id for project kvcache mem to NPU k/vcache mem
+  int block_base_id = 0;
 };
 
 }  // namespace ksana_llm

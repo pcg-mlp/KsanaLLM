@@ -9,8 +9,6 @@ import asyncio
 from concurrent import futures
 
 import torch
-from transformers.generation.streamers import BaseStreamer
-from transformers.modeling_utils import PreTrainedModel
 from transformers.generation.configuration_utils import GenerationConfig
 
 from transformers.generation.logits_process import LogitsProcessorList
@@ -61,10 +59,11 @@ class KsanaPlugin(object):
             spec.loader.exec_module(module)
             class_name = "KsanaPlugin"
             if hasattr(module, class_name):
-                KsanaPlugin = getattr(module, class_name)
-                return KsanaPlugin()
+                ksana_plugin = getattr(module, class_name)
+                return ksana_plugin()
             else:
                 return None
+        # pylint: disable-next=broad-except
         except Exception:
             # TODO: need a better log
             return None

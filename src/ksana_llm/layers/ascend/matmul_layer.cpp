@@ -29,13 +29,7 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared
   linear_param.transposeA = false;
   linear_param.transposeB = false;
   linear_param.hasBias = false;
-  if (std::is_same<T, float>::value) {
-    linear_param.outDataType = ACL_FLOAT;
-  } else if (std::is_same<T, aclFloat16>::value) {
-    linear_param.outDataType = ACL_FLOAT16;
-  } else {
-    throw std::invalid_argument("Not support matmul dtype, only support float16 and float32");
-  }
+  linear_param.outDataType = ACL_DT_UNDEFINED;
   atb_op_executor_.Init(rank, linear_param);
 #endif
 
@@ -45,7 +39,13 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared
 template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // TODO(karlluo): support bias
+  int64_t m = input_tensors[0].shape[0];
+  int64_t k = input_tensors[0].shape[1];
+  int64_t n = input_tensors[1].shape[1];
+  output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
 #ifdef ENABLE_ACL_ATB
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+      ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
   atb_op_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
                                   static_cast<aclDataType>(input_tensors[0].dtype));
@@ -54,10 +54,8 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
                                    static_cast<aclDataType>(output_tensors[0].dtype));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
+  ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
 #else
-  int64_t m = input_tensors[0].shape[0];
-  int64_t k = input_tensors[0].shape[1];
-  int64_t n = input_tensors[1].shape[1];
   std::vector<int64_t> matmul_input_shape = {m, k};
   std::vector<int64_t> matmul_weight_shape = {k, n};
   std::vector<int64_t> matmul_output_shape = {m, n};
@@ -77,9 +75,9 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
                                          context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   output_tensors[0].shape = {m, n};
   output_tensors[0].dtype = input_tensors[0].dtype;
-  output_tensors[0].ResetDeviceTensor(matmul_output);
   ACL_CHECK(aclDestroyTensor(matmul_input));
   ACL_CHECK(aclDestroyTensor(matmul_weight));
+  ACL_CHECK_RET(aclrtSynchronizeStream(context_->GetComputeStreams()[rank_].Get()));
 #endif  // ENABLE_ACL_ATB
   return Status();
 }

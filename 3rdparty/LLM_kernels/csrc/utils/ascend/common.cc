@@ -48,7 +48,7 @@ void ReallocWorkspace(const uint64_t new_size, uint64_t& old_size, void** ws_dev
 
 void CreateAclTensor(const int64_t hostData, const std::vector<int64_t>& shape, void** deviceAddr, aclDataType dataType,
                      aclFormat dataFormat, aclTensor** tensor) {
-  auto size = GetShapeSize(shape) * DT2LONG.at(dataType);
+  auto size = GetShapeSize(shape) * SizeOfAclDataType.at(dataType);
   ACL_CHECK_RET(aclrtMalloc(deviceAddr, size, ACL_MEM_MALLOC_HUGE_FIRST));
   ACL_CHECK_RET(aclrtMemcpy(*deviceAddr, size, &hostData, size, ACL_MEMCPY_HOST_TO_DEVICE));
   std::vector<int64_t> strides(shape.size(), 1);
@@ -61,7 +61,7 @@ void CreateAclTensor(const int64_t hostData, const std::vector<int64_t>& shape, 
 
 void CreateAclTensor(const std::vector<int64_t>& shape, void** deviceAddr, aclDataType dataType, aclFormat dataFormat,
                      aclTensor** tensor) {
-  auto size = GetShapeSize(shape) * DT2LONG.at(dataType);
+  auto size = GetShapeSize(shape) * SizeOfAclDataType.at(dataType);
   ACL_CHECK_RET(aclrtMalloc(deviceAddr, size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
   std::vector<int64_t> strides(shape.size(), 1);
   for (int64_t i = shape.size() - 2; i >= 0; i--) {
@@ -73,7 +73,7 @@ void CreateAclTensor(const std::vector<int64_t>& shape, void** deviceAddr, aclDa
 
 void CreateAclTensorWithData(const std::vector<int64_t>& shape, void** deviceAddr, aclDataType dataType,
                              aclFormat dataFormat, aclTensor** tensor) {
-  auto size = GetShapeSize(shape) * DT2LONG.at(dataType);
+  auto size = GetShapeSize(shape) * SizeOfAclDataType.at(dataType);
   std::vector<int64_t> strides;
   CalShapeStrides(shape, strides);
   *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, dataFormat, shape.data(),
@@ -240,7 +240,6 @@ int32_t ParseNpyHeader(FILE*& f_ptr, uint32_t header_len, std::vector<size_t>& s
 template <typename T>
 void LoadNpyToPtr(const std::string& filename, T* data_ptr, std::vector<size_t>& tensor_shape, bool is_on_host) {
   std::vector<size_t> shape;
-
   FILE* f_ptr = fopen(filename.c_str(), "rb");
   if (f_ptr == nullptr) {
     throw std::runtime_error("Could not open file " + filename);
@@ -309,69 +308,6 @@ void SaveNpy(const aclTensor* tensor, const void* tensor_workspace_ptr, const st
   if (is_on_device) {
     ACL_CHECK_RET(aclrtFreeHost(host_buffer_ptr));
   }
-}
-
-void PrintTensor(const aclTensor* src, aclrtStream& stream, const char* name) {
-  void* ws_dev = nullptr;
-  aclDataType src_dtype;
-  aclDataType dst_dtype = aclDataType::ACL_FLOAT;
-  ACL_CHECK_RET(aclGetDataType(src, &src_dtype));
-  int64_t* src_shape = nullptr;
-  uint64_t dim = 0;
-  ACL_CHECK_RET(aclGetViewShape(src, &src_shape, &dim));
-  std::vector<int64_t> shape(dim);
-  LOG_PRINT("%s tensor shape: [", name);
-  for (uint64_t i = 0; i < dim; ++i) {
-    shape[i] = src_shape[i];
-    std::cout << shape[i] << ",";
-  }
-  std::cout << "] dtype: " << src_dtype << std::endl;
-
-  aclTensor* dst = nullptr;
-  void* dstDev = nullptr;
-  CreateAclTensor(shape, &dstDev, dst_dtype, aclFormat::ACL_FORMAT_ND, &dst);
-
-  uint64_t ws_size = 0;
-  aclOpExecutor* executor = nullptr;
-  ACL_CHECK_RET(aclnnCastGetWorkspaceSize(src, dst_dtype, dst, &ws_size, &executor));
-  if (ws_size > 0) {
-    ACL_CHECK_RET(aclrtMalloc(&ws_dev, ws_size, ACL_MEM_MALLOC_NORMAL_ONLY));
-  }
-  ACL_CHECK_RET(aclnnCast(ws_dev, ws_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
-
-  auto elemsize = GetShapeSize(shape);
-  std::vector<float> fp32(elemsize);
-  ACL_CHECK_RET(
-      aclrtMemcpy(fp32.data(), elemsize * sizeof(float), dstDev, elemsize * sizeof(float), ACL_MEMCPY_DEVICE_TO_HOST));
-  aclDestroyTensor(dst);
-  aclrtFree(dstDev);
-  dstDev = nullptr;
-  if (ws_dev) {
-    aclrtFree(ws_dev);
-    ws_dev = nullptr;
-  }
-  size_t show_n = std::min(5ul, fp32.size());
-  LOG_PRINT("%s first %d:", name, show_n);
-  for (size_t i = 0; i < show_n; ++i) {
-    std::cout << fp32[i] << ",";
-  }
-  LOG_PRINT(" ... last %d:", show_n);
-  for (size_t i = 0; i < show_n; ++i) {
-    std::cout << fp32[fp32.size() - 1 - show_n + 1 + i] << ",";
-  }
-  std::cout << std::endl;
-}
-
-void Random(aclTensor* input_tensor, void* workspace_ptr, uint64_t workspace_size, int64_t from, int64_t to,
-            int64_t seed, int64_t offset, aclrtStream& stream) {
-  aclOpExecutor* executor = nullptr;
-  uint64_t new_workspace_size = 0ul;
-  ACL_CHECK_RET(
-      aclnnInplaceRandomGetWorkspaceSize(input_tensor, from, to, seed, offset, &new_workspace_size, &executor));
-  ACL_CHECK_RET(workspace_size >= new_workspace_size);
-  ACL_CHECK_RET(aclnnInplaceRandom(workspace_ptr, new_workspace_size, executor, stream));
-  ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 }
 
 void GetTestWorkSpaceFunc(size_t size, void** ws_addr) {

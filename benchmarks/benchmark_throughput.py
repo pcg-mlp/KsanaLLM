@@ -255,7 +255,8 @@ def args_config():
     parser.add_argument('--tokenizer_path',
                         type=str,
                         default=None,
-                        help="mindie-service wont return tokens, we need encode tokens to get output tokens")
+                        help="mindie-service/TensorRT-LLM wont return tokens, we need"
+                             " encode tokens to get output tokens")
     args = parser.parse_args()
     return args
 
@@ -431,7 +432,14 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
     if args.backend == "ksana":
         output_text = output.get("texts", [""])[0].strip()
     elif args.backend == "trt-llm":
+        prompt_len = len(prompt)
         output_text = output.get("text_output", "").strip()
+        if tokenizer is None:
+            input_token_num = 0
+            output_token_num = 0
+        else:
+            input_token_num = len(tokenizer.encode(prompt))
+            output_token_num = len(tokenizer.encode(output_text))
     elif args.backend == "vllm":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
@@ -590,8 +598,8 @@ def main(args: argparse.Namespace):
     elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
         args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
-    # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
-    elif args.backend == "mindie-service":
+    # NOTE(karlluo): mindie-service/TensorRT-LLM wont return tokens, we need encode tokens to get output tokens
+    elif args.backend in ["mindie-service", "trt-llm"]:
         tokenizer = AutoTokenizer.from_pretrained(
             args.tokenizer_path,
             revision=None,

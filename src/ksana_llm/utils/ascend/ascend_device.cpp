@@ -142,8 +142,7 @@ void MemGetInfoT<DEVICE_TYPE_ASCEND>(size_t* free, size_t* total) {
 
 template <>
 void MallocT<DEVICE_TYPE_ASCEND>(void** dev_ptr, size_t size) {
-  // NOTE(karlluo): 910B only have HBM
-  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
 template <>
@@ -163,8 +162,7 @@ void FreeHostT<DEVICE_TYPE_ASCEND>(void* host_ptr) {
 
 template <>
 void MallocAsyncT<DEVICE_TYPE_ASCEND>(void** dev_ptr, size_t size, StreamT<DEVICE_TYPE_ASCEND> stream) {
-  // NOTE(karlluo): 910B only have HBM
-  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_TYPE_HIGH_BAND_WIDTH));
+  ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
 template <>
@@ -224,13 +222,15 @@ DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl() {
     return TYPE_FP32;
   } else if (std::is_same<U, aclFloat16>::value || std::is_same<U, const aclFloat16>::value) {
     return TYPE_FP16;
-  } else if (std::is_same<U, int>::value || std::is_same<U, const int>::value) {
+  } else if (std::is_same<U, int32_t>::value || std::is_same<U, const int32_t>::value) {
     return TYPE_INT32;
+  } else if (std::is_same<U, int64_t>::value || std::is_same<U, const int64_t>::value) {
+    return TYPE_INT64;
   } else if (std::is_same<U, int8_t>::value || std::is_same<U, const int8_t>::value) {
     return TYPE_INT8;
   } else if (std::is_same<U, uint8_t>::value || std::is_same<U, const uint8_t>::value) {
     return TYPE_UINT8;
-  } else if (std::is_same<U, unsigned int>::value || std::is_same<U, const unsigned int>::value) {
+  } else if (std::is_same<U, uint32_t>::value || std::is_same<U, const uint32_t>::value) {
     return TYPE_UINT32;
   } else if (std::is_same<U, uint64_t>::value || std::is_same<U, const uint64_t>::value) {
     return TYPE_UINT64;
@@ -247,11 +247,11 @@ DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl() {
 
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<float>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<aclFloat16>();
-template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int>();
+template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int32_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<int8_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<uint8_t>();
-template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned int>();
-template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<unsigned uint64_t>();
+template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<uint32_t>();
+template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<uint64_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<bool>();
 template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<char>();
 
