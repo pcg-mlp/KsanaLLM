@@ -39,6 +39,9 @@ class InferenceEngine {
   // Execute the handle loop.
   Status HandleLoop();
 
+  // Do warmup run
+  Status DoWarmupRun();
+
  private:
   // The channel used to pass request from endpoint.
   Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue_;
