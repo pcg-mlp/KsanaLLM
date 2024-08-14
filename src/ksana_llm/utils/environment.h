@@ -79,6 +79,8 @@ struct ModelConfig {
   int max_batch_size;
   int max_position_embeddings;
   int block_token_num;
+  std::vector<float> k_scales;
+  std::vector<float> v_scales;
 
   RoPEScalingFactor rope_scaling_factor_config;
 

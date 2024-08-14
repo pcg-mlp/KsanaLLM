@@ -2,8 +2,8 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <stdio.h>
-#include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
-#include "csrc/kernels/nvidia/paged_attention/quant_utils.cuh"
+#include "cache_copy.h"
+#include "quant_utils.cuh"
 namespace llm_kernels {
 namespace nvidia {
 
@@ -16,10 +16,10 @@ __device__ int k_chunk_size = 16;
   prefix_offsets: Records the prefix length for each batch size (bs)
                   (accumulated from 0 to the current batch).         [bs + 1,]
 */
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 __global__ void CacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                                 size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len,
-                                int num_heads, int head_size, int stride_size) {
+                                int num_heads, int head_size, int stride_size, float k_scale, float v_scale) {
   /*
     x:           In PagedAttention storage, KV-Blocks are divided into chunks to store head_size.
                  The variable x represents the size of each chunk.
@@ -56,12 +56,12 @@ __global__ void CacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list,
         int v_src_index = num_head_i * head_size + i;
         int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
         // Assignment operation
-        if constexpr (FP8_E5M2) {
-          k_dst_base[k_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(k_src_ptr[k_src_index]);
-          v_dst_base[v_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(v_src_ptr[v_src_index]);
-        } else {
+        if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
           k_dst_base[k_dst_index] = k_src_ptr[k_src_index];
           v_dst_base[v_dst_index] = v_src_ptr[v_src_index];
+        } else {
+          k_dst_base[k_dst_index] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(k_src_ptr[k_src_index], k_scale);
+          v_dst_base[v_dst_index] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(v_src_ptr[v_src_index], v_scale);
         }
       }
     }
@@ -74,11 +74,11 @@ __global__ void CacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list,
   prefix_offsets: Records the prefix length for each batch size (bs)
                   (accumulated from 0 to the current batch).         [bs + 1,]
 */
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 __global__ void ReverseCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list,
                                        size_t* input_offsets, size_t* prefix_offsets, int* block_offsets,
                                        int block_size, int bs, int total_len, int num_heads, int head_size,
-                                       int stride_size) {
+                                       int stride_size, float k_scale, float v_scale) {
   /*
     x:           In PagedAttention storage, KV-Blocks are divided into chunks to store head_size.
                  The variable x represents the size of each chunk.
@@ -116,12 +116,12 @@ __global__ void ReverseCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** 
         int v_src_index = num_head_i * head_size + i;
         int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
         // Reverse assignment operation
-        if constexpr (FP8_E5M2) {
-          k_src_ptr[k_src_index] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(k_dst_base[k_dst_index]);
-          v_src_ptr[v_src_index] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(v_dst_base[v_dst_index]);
-        } else {
+        if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
           k_src_ptr[k_src_index] = k_dst_base[k_dst_index];
           v_src_ptr[v_src_index] = v_dst_base[v_dst_index];
+        } else {
+          k_src_ptr[k_src_index] = fp8::scaled_convert<SCALAR_T, CACHE_T, KV_DTYPE>(k_dst_base[k_dst_index], k_scale);
+          v_src_ptr[v_src_index] = fp8::scaled_convert<SCALAR_T, CACHE_T, KV_DTYPE>(v_dst_base[v_dst_index], v_scale);
         }
       }
     }
@@ -132,10 +132,10 @@ __global__ void ReverseCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** 
   block_size:    Number of tokens stored in each block.
   block_offsets: Records the number of blocks for each batch size   [bs + 1,]
 */
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 __global__ void CachePosCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, void* pos,
                                    size_t* input_offsets, int* block_offsets, int block_size, int bs, int total_len,
-                                   int num_heads, int head_size, int stride_size) {
+                                   int num_heads, int head_size, int stride_size, float k_scale, float v_scale) {
   /*
     x:           In PagedAttention storage, KV-Blocks are divided into chunks to store head_size.
                  The variable x represents the size of each chunk.
@@ -164,96 +164,99 @@ __global__ void CachePosCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_li
         int v_src_index = num_head_i * head_size + i;
         int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + cur_batch_offset;
         //  赋值操作
-        if constexpr (FP8_E5M2) {
-          k_dst_base[k_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(k_src_ptr[k_src_index]);
-          v_dst_base[v_dst_index] = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(v_src_ptr[v_src_index]);
-        } else {
+        if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
           k_dst_base[k_dst_index] = k_src_ptr[k_src_index];
           v_dst_base[v_dst_index] = v_src_ptr[v_src_index];
+        } else {
+          k_dst_base[k_dst_index] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(k_src_ptr[k_src_index], k_scale);
+          v_dst_base[v_dst_index] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(v_src_ptr[v_src_index], v_scale);
         }
       }
     }
   }
 }
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void CacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,
-               int head_size, int stride_size, cudaStream_t stream) {
+               int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
   dim3 grid_shape(num_heads, total_len);
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
-  CacheCopyKernel<SCALAR_T, CACHE_T, FP8_E5M2><<<grid_shape, block_shape, 0, stream>>>(
+  CacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
-      head_size, stride_size);
+      head_size, stride_size, k_scale, v_scale);
 }
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void ReverseCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                       size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,
-                      int head_size, int stride_size, cudaStream_t stream) {
+                      int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
   dim3 grid_shape(num_heads, total_len);
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
-  ReverseCacheCopyKernel<SCALAR_T, CACHE_T, FP8_E5M2><<<grid_shape, block_shape, 0, stream>>>(
+  ReverseCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
-      head_size, stride_size);
+      head_size, stride_size, k_scale, v_scale);
 }
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void CachePosCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, void* pos, size_t* input_offsets,
                   int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size,
-                  int stride_size, cudaStream_t stream) {
+                  int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
   dim3 grid_shape(num_heads, total_len);
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
-  CachePosCopyKernel<SCALAR_T, CACHE_T, FP8_E5M2>
-      <<<grid_shape, block_shape, 0, stream>>>(k_src, v_src, k_list, v_list, pos, input_offsets, block_offsets,
-                                               block_size, bs, total_len, num_heads, head_size, stride_size);
+  CachePosCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
+      k_src, v_src, k_list, v_list, pos, input_offsets, block_offsets, block_size, bs, total_len, num_heads, head_size,
+      stride_size, k_scale, v_scale);
 }
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
-__global__ void ConvertFP8AndBackKernel(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size) {
-  if constexpr (!FP8_E5M2) {
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+__global__ void ConvertFP8AndBackKernel(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size, float scale) {
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
     return;
   }
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < dim0 * dim1) {
     // FP16 to FP8
     auto data_idx = idx / dim1 * stride_size + idx % dim1;
-    CACHE_T temp = fp8_e5m2_unscaled::vec_conversion<CACHE_T, SCALAR_T>(data[data_idx]);
+    CACHE_T temp = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(data[data_idx], scale);
     // FP8 back to FP16
-    data[data_idx] = fp8_e5m2_unscaled::vec_conversion<SCALAR_T, CACHE_T>(temp);
+    data[data_idx] = fp8::scaled_convert<SCALAR_T, CACHE_T, KV_DTYPE>(temp, scale);
   }
 }
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
-void ConvertFP8AndBack(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size, cudaStream_t stream) {
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void ConvertFP8AndBack(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size, float scale, cudaStream_t stream) {
   int threads_per_block = 256;
   int blocks_per_grid = (dim0 * dim1 + threads_per_block - 1) / threads_per_block;
-  ConvertFP8AndBackKernel<SCALAR_T, CACHE_T, FP8_E5M2>
-      <<<blocks_per_grid, threads_per_block, 0, stream>>>(data, dim0, dim1, stride_size);
+  ConvertFP8AndBackKernel<SCALAR_T, CACHE_T, KV_DTYPE>
+      <<<blocks_per_grid, threads_per_block, 0, stream>>>(data, dim0, dim1, stride_size, scale);
 }
 
-#define CACHE_COPY_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, FP8_E5M2)                                                   \
-  template void CacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(                                                                \
+#define CACHE_COPY_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                                   \
+  template void CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                                \
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, size_t* input_offsets, size_t* prefix_offsets, \
       int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size,        \
-      cudaStream_t stream);                                                                                            \
-  template void ReverseCacheCopy<SCALAR_T, CACHE_T, FP8_E5M2>(                                                         \
+      float k_scale, float v_scale, cudaStream_t stream);                                                              \
+  template void ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                         \
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, size_t* input_offsets, size_t* prefix_offsets, \
       int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size,        \
-      cudaStream_t stream);                                                                                            \
-  template void CachePosCopy<SCALAR_T, CACHE_T, FP8_E5M2>(                                                             \
+      float k_scale, float v_scale, cudaStream_t stream);                                                              \
+  template void CachePosCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                             \
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, void* pos, size_t* input_offsets,              \
       int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size,        \
-      cudaStream_t stream);                                                                                            \
-  template void ConvertFP8AndBack<SCALAR_T, CACHE_T, FP8_E5M2>(SCALAR_T * data, size_t dim0, size_t dim1,              \
-                                                               int stride_size, cudaStream_t stream);
+      float k_scale, float v_scale, cudaStream_t stream);                                                              \
+  template void ConvertFP8AndBack<SCALAR_T, CACHE_T, KV_DTYPE>(SCALAR_T * data, size_t dim0, size_t dim1,              \
+                                                               int stride_size, float scale, cudaStream_t stream);
 
-CACHE_COPY_FUNCTION_DECLARATION(float, float, false);
-CACHE_COPY_FUNCTION_DECLARATION(float, uint8_t, true);
-CACHE_COPY_FUNCTION_DECLARATION(half, half, false);
-CACHE_COPY_FUNCTION_DECLARATION(half, uint8_t, true);
-CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, __nv_bfloat16, false);
-CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, true);
+CACHE_COPY_FUNCTION_DECLARATION(float, float, llm_kernels::utils::KVCacheType::kAuto);
+CACHE_COPY_FUNCTION_DECLARATION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+CACHE_COPY_FUNCTION_DECLARATION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+CACHE_COPY_FUNCTION_DECLARATION(half, half, llm_kernels::utils::KVCacheType::kAuto);
+CACHE_COPY_FUNCTION_DECLARATION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+CACHE_COPY_FUNCTION_DECLARATION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #undef CACHE_COPY_FUNCTION_DECLARATION
 
 }  // namespace nvidia

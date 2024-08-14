@@ -54,8 +54,9 @@ setting:
   quantization_config:
     # block中kv cache的量化
     kv_cache:
-      # 支持fp8_e5m2和auto
-      #dtype: fp8_e5m2 # fp8_e5m2为fp8的一种存储格式
+      # 支持fp8_e5m2, fp8_e4m3和auto
+      # dtype: fp8_e5m2 # fp8_e5m2为fp8的一种存储格式，对比auto速度提高约30%，精度下降约0.5%
+      # dtype: fp8_e4m3 # fp8_e4m3为fp8的一种存储格式，对比auto速度提高约20%，精度损失微小
       dtype: auto # 默认值，跟随推理精度
     weight:
       # quant_method支持fp8_e4m3和auto

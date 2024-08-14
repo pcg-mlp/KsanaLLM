@@ -7,7 +7,7 @@
 
 namespace ksana_llm {
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 class FlashAttentionLayer : public AttentionLayer<SCALAR_T> {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;

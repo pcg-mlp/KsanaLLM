@@ -14,17 +14,22 @@
 #  include "csrc/kernels/ascend/paged_attention/paged_attention.h"
 #endif
 
+#include "csrc/utils/quant_type.h"
 #include "ksana_llm/layers/base_layer.h"
 
 namespace ksana_llm {
 
-template <typename T, template <typename, typename, bool> class ATTENTION_LAYER>
+template <typename T, template <typename, typename, llm_kernels::utils::KVCacheType> class ATTENTION_LAYER>
 std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
   switch (kv_cache_dtype) {
+#ifdef ENABLE_CUDA
     case TYPE_FP8_E5M2:
-      return std::make_shared<ATTENTION_LAYER<T, uint8_t, true>>();
+      return std::make_shared<ATTENTION_LAYER<T, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2>>();
+    case TYPE_FP8_E4M3:
+      return std::make_shared<ATTENTION_LAYER<T, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>>();
+#endif
     default:
-      return std::make_shared<ATTENTION_LAYER<T, T, false>>();
+      return std::make_shared<ATTENTION_LAYER<T, T, llm_kernels::utils::KVCacheType::kAuto>>();
   }
 }
 
@@ -55,8 +60,10 @@ class AttentionLayer : public BaseLayer {
   int max_position_embeddings_;
   float base_;
 
-  // kv_cache storage type
+  // kv_cache storage type and kv scale
   DataType kv_cache_dtype_;
+  float k_scale_;
+  float v_scale_;
 
   bool is_causal_{true};
 #ifdef ENABLE_CUDA

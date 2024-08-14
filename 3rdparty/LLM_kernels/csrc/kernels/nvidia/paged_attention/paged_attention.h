@@ -2,10 +2,11 @@
 
 #pragma once
 #include <cuda_runtime.h>
+#include "csrc/utils/quant_type.h"
 namespace llm_kernels {
 namespace nvidia {
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 struct PagedAttentionParams {
  public:
   SCALAR_T* out_;           // [num_seqs, num_heads, head_size]
@@ -18,6 +19,8 @@ struct PagedAttentionParams {
   int head_size_;
   int q_stride_;
   int kv_head_stride_;
+  float k_scale_;
+  float v_scale_;
   float scale_;
   const int* cache_offsets_;  // [num_seqs]
   const int* context_lens_;   // [num_seqs]
@@ -43,10 +46,11 @@ struct PagedAttentionParams {
   void SetWorkSpace(void* workspace, size_t work_size);
 };
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 class PagedAttentionCuda {
  public:
-  void SetConfig(int num_kv_heads, int num_heads, int head_size, int block_size, int stride_size);
+  void SetConfig(int num_kv_heads, int num_heads, int head_size, int block_size,
+                 int stride_size, float k_scale, float v_scale);
   size_t GetWorkSpaceSize(int num_seqs, int max_context_len);
   void SetInput(SCALAR_T* out,             // [num_seqs, num_heads, head_size]
                 const SCALAR_T* query,     // [num_seqs, num_heads, head_size]
@@ -59,7 +63,7 @@ class PagedAttentionCuda {
   void Forward();
 
  private:
-  PagedAttentionParams<SCALAR_T, CACHE_T, FP8_E5M2> params_;
+  PagedAttentionParams<SCALAR_T, CACHE_T, KV_DTYPE> params_;
 };
 
 }  // namespace nvidia

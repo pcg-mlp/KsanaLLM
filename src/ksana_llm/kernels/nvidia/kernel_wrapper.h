@@ -10,6 +10,7 @@
 
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+#include "csrc/utils/quant_type.h"
 
 #include "ksana_llm/utils/nvidia/nccl_utils.h"
 
@@ -20,12 +21,12 @@ void GetFpAIntBGroupGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_b
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 void InvokeFpAIntBGroupGemm(void* output, const void* input, const void* weight, const void* scales, void* ws, size_t m,
-                           size_t n, size_t k, size_t groupsize, size_t config_index, cudaStream_t stream);
+                            size_t n, size_t k, size_t groupsize, size_t config_index, cudaStream_t stream);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 size_t InvokeFpAIntBGroupGemmConfigProfile(size_t warmup, size_t iter, void* output, const void* input,
-                                          const void* weight, const void* scales, void* ws, size_t m,
-                                          size_t n, size_t k, size_t groupsize, cudaStream_t stream);
+                                           const void* weight, const void* scales, void* ws, size_t m, size_t n,
+                                           size_t k, size_t groupsize, cudaStream_t stream);
 
 // Invoke the lookup embedding.
 template <typename T>
@@ -54,15 +55,15 @@ template <typename T>
 void AssembleLastToken(const void* inputs, const void* offsets, const void* prefix_offsets, const int batch_size,
                        const int hidden_units_num, void* output, cudaStream_t& stream);
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
                  llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens,
                  int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size,
-                 int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,
-                 void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
-                 cudaStream_t stream);
+                 float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size,
+                 void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
+                 const std::optional<void*>& alibi_slopes, cudaStream_t stream);
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]
                           void* query,              // [num_seqs, num_heads, head_size]
                           void** key_cache_ptrs,    // num_seqs,[seq_blocks]
@@ -71,7 +72,8 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           int max_context_len, cudaStream_t stream,
                           void* cache_offsets_ptr,  // num_seqs
                           int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
-                          int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,
+                          float k_scale, float v_scale, int batch, void* rotary_embedding_pos,
+                          void* rotary_embedding_mask, int total_tokens,
                           llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, void* workspace,
                           size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
 

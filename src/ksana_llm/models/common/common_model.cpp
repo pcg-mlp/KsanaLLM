@@ -164,6 +164,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(stride_size);
     attention_param.push_back(tensor_para_size);
     attention_param.push_back(GetBlockManager()->GetDtype());
+    attention_param.push_back(model_config_.k_scales[idx]);
+    attention_param.push_back(model_config_.v_scales[idx]);
     attention_param.push_back(rotary_embedding);
     attention_param.push_back(rope_theta);
     attention_param.push_back(model_run_config_.is_neox);

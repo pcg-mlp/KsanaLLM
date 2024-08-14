@@ -18,6 +18,8 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   stride_size_ = std::any_cast<const int>(parameters[parameter_index++]);
   tensor_para_size_ = std::any_cast<const int>(parameters[parameter_index++]);
   kv_cache_dtype_ = std::any_cast<DataType>(parameters[parameter_index++]);
+  k_scale_ = std::any_cast<const float>(parameters[parameter_index++]);
+  v_scale_ = std::any_cast<const float>(parameters[parameter_index++]);
   uint32_t rotary_dim = std::any_cast<const int>(parameters[parameter_index++]);
   float base = std::any_cast<const float>(parameters[parameter_index++]);
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);

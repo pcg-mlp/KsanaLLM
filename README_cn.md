@@ -152,6 +152,10 @@ python -c "import ksana_llm"
 自定义插件可以做特殊预处理和后处理。使用时，你需要把ksana_plugin.py放在模型目录下。
 [样例](examples/qwenvl/ksana_plugin.py)
 
+#### 6.3 KV Cache缩放因子
+
+打开FP8 E4M3 KV Cache量化时，为保证推理精度需要提供缩放因子。想要获取更详细的信息，请参考: [Optional KV Scale Guide](src/ksana_llm/python/kv_scale_files/README.md)。
+
 #### 7. 联系我们
 ##### 微信群
 <img src=doc/img/webchat-github.jpg width="200px">

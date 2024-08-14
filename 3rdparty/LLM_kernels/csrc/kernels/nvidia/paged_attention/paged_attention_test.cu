@@ -28,6 +28,8 @@ class LlamaNvidiaPagedAttentionTestSuit : public NvidiaTestSuitBase {
   int head_size{128};
   int max_context_len{1024};
   int stride_size{5120};
+  float k_scale{1.0};
+  float v_scale{1.0};
 };
 
 template <typename T>
@@ -113,8 +115,8 @@ TEST_F(LlamaNvidiaPagedAttentionTestSuit, LlamaPagedAttentionHalfTest) {
               num_seqs * seq_blocks, num_kv_heads * head_size * block_size, stream);
 
   // run paged_attention(..., stream);
-  PagedAttentionCuda<DataType, DataType, false> op;
-  op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size);
+  PagedAttentionCuda<DataType, DataType, llm_kernels::utils::KVCacheType::kAuto> op;
+  op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size, k_scale, v_scale);
   size_t work_size = op.GetWorkSpaceSize(num_seqs, max_context_len);
   BufferMeta workspace_meta = CreateBuffer<char>(MemoryType::MEMORY_GPU, {work_size});
   op.SetInput(reinterpret_cast<DataType*>(out_meta.data_ptr), reinterpret_cast<DataType*>(query_meta.data_ptr),
@@ -154,6 +156,8 @@ TEST(CacheCopyTest, CacheCopyTest) {
   int x = 16 / sizeof(float);
   int token_data_size = num_heads * head_size;
   int stride_size = num_heads * head_size;
+  float k_scale = 1.0f;
+  float v_scale = 1.0f;
   std::vector<int> inputs = {17, 41};
   for (int i = 0; i < bs; i++) {
     h_input_offsets.push_back(inputs[i] + h_input_offsets.back());
@@ -203,8 +207,9 @@ TEST(CacheCopyTest, CacheCopyTest) {
   cudaMemcpy(d_v_list, h_v_list_ptrs.data(), h_v_list_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice);
 
   // 调用核函数
-  CacheCopy<float, float, false>(d_src, d_src, d_k_list, d_v_list, d_input_offsets, d_prefix_offsets, d_block_offsets,
-                                 block_size, bs, total_len, num_heads, head_size, stride_size, nullptr);
+  CacheCopy<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+      d_src, d_src, d_k_list, d_v_list, d_input_offsets, d_prefix_offsets, d_block_offsets, block_size, bs, total_len,
+      num_heads, head_size, stride_size, k_scale, v_scale, nullptr);
   cudaDeviceSynchronize();
 
   // 将结果从设备复制回主机并验证

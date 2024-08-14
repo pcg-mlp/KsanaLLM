@@ -7,14 +7,14 @@
 
 namespace ksana_llm {
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
-Status FlashAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Init(const std::vector<std::any>& parameters,
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
                                                               std::shared_ptr<Context> context, int rank) {
   return AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
 }
 
-template <typename SCALAR_T, typename CACHE_T, bool FP8_E5M2>
-Status FlashAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vector<Tensor>& input_tensors,
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
                                                                  std::vector<Tensor>& output_tensors) {
   // input_tensors:
   //     0: qkv_tensor shape [total_token_num, hidden_units * 3], type same as weight
@@ -35,12 +35,12 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
 
   void** k_list = (input_tensors[2].GetPtr<void*>()) + this->layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
-  AttenVarlen<SCALAR_T, CACHE_T, FP8_E5M2>(
+  AttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
       input_tensors[0].GetPtr<void>(), input_tensors[5].GetPtr<void>(), input_tensors[6].GetPtr<void>(),
       output_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), this->rotary_embedding_cuda_, total_tokens,
       max_tokens, batch_size, this->num_heads_, this->num_kv_heads_, this->head_size_, this->stride_size_,
-      this->tensor_para_size_, this->is_causal_, this->rank_, this->block_token_num_, k_list, v_list,
-      input_tensors[3].GetPtr<void>(), input_tensors[4].GetPtr<void>(), this->alibi_slopes_,
+      this->k_scale_, this->v_scale_, this->tensor_para_size_, this->is_causal_, this->rank_, this->block_token_num_,
+      k_list, v_list, input_tensors[3].GetPtr<void>(), input_tensors[4].GetPtr<void>(), this->alibi_slopes_,
       this->context_->GetComputeStreams()[this->rank_].Get());
   output_tensors[0].shape[0] = input_tensors[0].shape[0];
   output_tensors[0].shape[1] = this->num_heads_ * this->head_size_;
@@ -48,13 +48,17 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, FP8_E5M2>::Forward(const std::vect
   return Status();
 }
 
-template class FlashAttentionLayer<float, float, false>;
-template class FlashAttentionLayer<float, uint8_t, true>;
-template class FlashAttentionLayer<half, half, false>;
-template class FlashAttentionLayer<half, uint8_t, true>;
+using llm_kernels::utils::KVCacheType;
+template class FlashAttentionLayer<float, float, KVCacheType::kAuto>;
+template class FlashAttentionLayer<float, uint8_t, KVCacheType::kFp8E4M3>;
+template class FlashAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
+template class FlashAttentionLayer<half, half, KVCacheType::kAuto>;
+template class FlashAttentionLayer<half, uint8_t, KVCacheType::kFp8E4M3>;
+template class FlashAttentionLayer<half, uint8_t, KVCacheType::kFp8E5M2>;
 #ifdef ENABLE_BFLOAT16
-template class FlashAttentionLayer<__nv_bfloat16, __nv_bfloat16, false>;
-template class FlashAttentionLayer<__nv_bfloat16, uint8_t, true>;
+template class FlashAttentionLayer<__nv_bfloat16, __nv_bfloat16, KVCacheType::kAuto>;
+template class FlashAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
+template class FlashAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
 #endif
 
 }  // namespace ksana_llm

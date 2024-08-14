@@ -155,6 +155,12 @@ For more detailed information, please refer to the following link: [Optional Wei
 Custom plugins can perform some special pre-process and post-processing. You need to place ksana_plugin.py in the model directory.
 [Example](examples/qwenvl/ksana_plugin.py)
 
+#### 6.3 KV Cache Scaling Factors
+
+When enabling FP8 E4M3 KV Cache quantization, it is necessary to provide scaling factors to ensure inference accuracy.
+
+For more detailed information, please refer to the following link: [Optional KV Scale Guide](src/ksana_llm/python/kv_scale_files/README.md)
+
 #### 7. Contact Us
 ##### WeChat Group
 <img src=doc/img/webchat-github.jpg width="200px">

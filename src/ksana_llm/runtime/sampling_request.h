@@ -22,7 +22,7 @@ struct SamplingRequest {
   // The sampling config.
   SamplingConfig* sampling_config;
 
-  // The logitst buf and offset.
+  // The logits buf and offset.
   std::vector<float*> logits_buf;
   size_t logits_offset;
 
