@@ -88,7 +88,10 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     return enqueue_status;
   }
 
-  queue_waiter_->Notify();
+  // Notify the scheduler only after the current batch of requests has been enqueued.
+  if (req->last_in_batch) {
+    queue_waiter_->Notify();
+  }
   return Status();
 }
 

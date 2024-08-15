@@ -33,7 +33,7 @@ struct SamplingConfig {
 
   // Whether to ignore the EOS token and continue generating
   // tokens after the EOS token is generated.
-  bool ignore_eos;
+  bool ignore_eos = false;
 
   // The maximum numbers of tokens to generate, ignoring the number of tokens in the prompt.
   int max_new_tokens = 1024;
@@ -57,7 +57,17 @@ struct __attribute__((visibility("default"))) EmbeddingSlice {
 enum TokenReduceMode {
   GATHER_ALL,
   GATHER_TOKEN_ID,
+  INVALID_TYPE,
 };
+
+inline TokenReduceMode GetTokenReduceMode(const std::string& token_reduce_mode_str) {
+  if (token_reduce_mode_str == "GATHER_ALL") {
+    return TokenReduceMode::GATHER_ALL;
+  } else if (token_reduce_mode_str == "GATHER_TOKEN_ID") {
+    return TokenReduceMode::GATHER_TOKEN_ID;
+  }
+  return TokenReduceMode::INVALID_TYPE;
+}
 
 struct TargetDescribe {
   // The IDs of special tokens in the request target. Based on these IDs, the corresponding target tensor (hidden state,
@@ -65,7 +75,7 @@ struct TargetDescribe {
   std::vector<int> token_id;
   // The position intervals (inclusive of both ends) of token segments in the request target. The target tensor (hidden
   // state, logits, etc.) should be returned based on the defined intervals.
-  std::vector<std::pair<size_t, size_t>> slice_pos;
+  std::vector<std::pair<int, int>> slice_pos;
   // The reduction operation mode for each token_id when returning values.
   TokenReduceMode token_reduce_mode;
 };
@@ -86,6 +96,10 @@ struct KsanaPythonInput {
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
   std::map<std::string, TargetDescribe> request_target;
+
+  // Verifiy that the above `request_target` describes valid targets.
+  // This function also converts negative `slice_pos` parameters to their corresponding positive values, if exist.
+  Status VerifyRequestTarget();
 };
 
 // In the Python environment, define tensor class.
@@ -95,22 +109,9 @@ struct PythonTensor {
   std::string dtype;
 };
 
-struct KsanaPythonOutput {
-  // The output tokens of this request.
-  std::vector<std::vector<int>> output_tokens;
-
-  // Store token and their corresponding float probability values.
-  std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
-
-  // Embedding value for plugin output
-  std::vector<std::vector<float>> embedding;
-
-  // The result of request_target.
-  std::map<std::string, PythonTensor> response;
-};
-
 class Request {
  public:
+  // Build Request based on the given KsanaPythonInput.
   explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input);
 
   // The unique id of a request.
@@ -167,7 +168,7 @@ class Request {
   // Whether the request hve been aborted by client.
   bool aborted = false;
 
-  // The finish statu of this request.
+  // The finish status of this request.
   Status finish_status;
 
   // Protect parallel access for output token.
@@ -180,9 +181,31 @@ class Request {
   // The result of request_target.
   std::map<std::string, PythonTensor> response;
 
+  // Whether this request is the last one in a batch of requests.
+  bool last_in_batch = true;
+
  private:
   // The id generator
-  static IdGenerator id_generator_;
+  inline static IdGenerator id_generator_;
+};
+
+struct KsanaPythonOutput {
+  KsanaPythonOutput() = default;
+
+  // Build KsanaPythonOutput based on the specified Request.
+  explicit KsanaPythonOutput(std::shared_ptr<Request> req);
+
+  // The output tokens of this request.
+  std::vector<std::vector<int>> output_tokens;
+
+  // Store token and their corresponding float probability values.
+  std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
+
+  // Embedding value for plugin output
+  std::vector<std::vector<float>> embedding;
+
+  // The result of request_target.
+  std::map<std::string, PythonTensor> response;
 };
 
 }  // namespace ksana_llm

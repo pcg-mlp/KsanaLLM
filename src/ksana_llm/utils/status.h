@@ -46,20 +46,21 @@ class Status {
   std::shared_ptr<State> state_ = nullptr;
 };
 
-#define STATUS_CHECK_RETURN(status)          \
-  {                                          \
-    if (!status.OK()) {                      \
-      KLLM_LOG_ERROR << status.GetMessage(); \
-      return status;                         \
-    }                                        \
-  }
+#define STATUS_CHECK_RETURN(status)           \
+  do {                                        \
+    auto &&_status = (status);                \
+    if (!_status.OK()) {                      \
+      KLLM_LOG_ERROR << _status.GetMessage(); \
+      return _status;                         \
+    }                                         \
+  } while (0)
 
-#define STATUS_CHECK_FAILURE(status)         \
-  {                                          \
-    if (!status.OK()) {                      \
-      KLLM_LOG_ERROR << status.GetMessage(); \
-      KLLM_THROW(status.GetMessage());       \
-    }                                        \
-  }
+#define STATUS_CHECK_FAILURE(status)          \
+  do {                                        \
+    auto &&_status = (status);                \
+    if (!_status.OK()) {                      \
+      KLLM_THROW(_status.GetMessage());       \
+    }                                         \
+  } while (0)
 
 }  // namespace ksana_llm

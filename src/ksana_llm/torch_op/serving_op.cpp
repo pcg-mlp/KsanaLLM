@@ -11,9 +11,8 @@
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/singleton.h"
-
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/singleton.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -29,10 +28,10 @@ ServingOp::ServingOp() {}
 ServingOp::~ServingOp() { serving_impl_->Stop(); }
 
 void ServingOp::InitServing(const std::string &config_file) {
-  KLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
-
   InitLoguru();
   KLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
+
+  KLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
 
   KLLM_LOG_INFO << "InitServing with config file: " << config_file;
   Status status = Singleton<Environment>::GetInstance()->ParseConfig(config_file);
@@ -44,6 +43,12 @@ void ServingOp::InitServing(const std::string &config_file) {
   ModelConfig model_config;
   Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
   plugin_path_ = model_config.path;
+  try {
+    request_packer_.InitTokenizer(model_config.path);
+  } catch (const py::error_already_set &e) {
+    PyErr_Clear();
+    KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
+  }
   serving_impl_ = std::make_shared<ServingImpl>();
   serving_impl_->Start();
   KLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
@@ -61,6 +66,17 @@ Status ServingOp::GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksa
   return serving_impl_->HandleStreaming(ksana_python_input, streaming_iterator);
 }
 
+Status ServingOp::Forward(const std::string &request_bytes, std::string &response_bytes) {
+  KLLM_LOG_DEBUG << "ServingOp::Forward invoked.";
+  std::vector<std::shared_ptr<KsanaPythonInput>> ksana_python_inputs;
+  STATUS_CHECK_RETURN(request_packer_.Unpack(request_bytes, ksana_python_inputs));
+
+  std::vector<KsanaPythonOutput> ksana_python_outputs;
+  STATUS_CHECK_RETURN(serving_impl_->HandleBatch(ksana_python_inputs, ksana_python_outputs));
+  STATUS_CHECK_RETURN(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_bytes));
+  return Status();
+}
+
 }  // namespace ksana_llm
 
 PYBIND11_MODULE(libtorch_serving, m) {
@@ -76,6 +92,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
   // Export `RetCode` to python, only export the values used in python.
   pybind11::enum_<ksana_llm::RetCode>(m, "RetCode", pybind11::arithmetic())
       .value("RET_SUCCESS", ksana_llm::RetCode::RET_SUCCESS)
+      .value("RET_INVALID_ARGUMENT", ksana_llm::RetCode::RET_INVALID_ARGUMENT)
       .value("RET_STOP_ITERATION", ksana_llm::RetCode::RET_STOP_ITERATION)
       .export_values();
 
@@ -168,12 +185,20 @@ PYBIND11_MODULE(libtorch_serving, m) {
              pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, std::move(ksana_python_output));
            })
-      .def("generate_streaming", [](std::shared_ptr<ksana_llm::ServingOp> &self,
-                                    const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input) {
+      .def("generate_streaming",
+           [](std::shared_ptr<ksana_llm::ServingOp> &self,
+              const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input) {
+             pybind11::gil_scoped_release release;
+             std::shared_ptr<ksana_llm::StreamingIterator> streaming_iterator;
+             ksana_llm::Status status = self->GenerateStreaming(ksana_python_input, streaming_iterator);
+             pybind11::gil_scoped_acquire acquire;
+             return std::make_tuple(status, streaming_iterator);
+           })
+      .def("forward", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &request_bytes) {
         pybind11::gil_scoped_release release;
-        std::shared_ptr<ksana_llm::StreamingIterator> streaming_iterator;
-        ksana_llm::Status status = self->GenerateStreaming(ksana_python_input, streaming_iterator);
+        std::string response_bytes;
+        ksana_llm::Status status = self->Forward(request_bytes, response_bytes);
         pybind11::gil_scoped_acquire acquire;
-        return std::make_tuple(status, streaming_iterator);
+        return std::make_tuple(status, py::bytes(response_bytes));
       });
 }

@@ -6,8 +6,6 @@
 
 namespace ksana_llm {
 
-IdGenerator Request::id_generator_;
-
 Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input)
     : req_id(0),
       req_ids(),
@@ -31,7 +29,8 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input)
       output_mutex(),
       request_target(ksana_python_input->request_target),
       response() {
-  for (auto output : output_group) {
+  for (auto& [output, req_logprobs, total_score] : output_group) {
+    output = ksana_python_input->input_tokens;
     req_ids.push_back(id_generator_.Gen());
   }
   req_id = req_ids[0];
@@ -41,6 +40,111 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input)
       logits_custom_length += (r - l + 1);
     }
   }
+}
+
+KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
+  for (const auto& [output, req_logprobs, total_score] : req->output_group) {
+    std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
+    output_tokens.emplace_back(req_output);
+    if (req->sampling_config.logprobs_num > 0) {
+      logprobs.emplace_back(req_logprobs);
+    }
+  }
+  response = std::move(req->response);
+}
+
+Status KsanaPythonInput::VerifyRequestTarget() {
+  /**
+   * Verify each target specified by 'request_target' in this KsanaPythonInput object.
+   *
+   * This function iterates through each target description of a request, checks its validity, and throws a
+   * std::runtime_error if:
+   *   1. 'target_name' is missing.
+   *   2. 'slice_pos' does not represent valid ordered intervals.
+   *   3. both 'token_id' and 'slice_pos' are specified for the same target.
+   *   4. 'token_reduce_mode" is invalid.
+   *   5. GATHER_TOKEN_ID is specified for a transformer or layernorm target.
+   *   6. 'token_ids' or the last logits is specified in a logits target.
+   */
+
+  // Iterate through each target
+  for (auto& [target_name, target_desc] : request_target) {
+    // Ensure 'target_name' is specified
+    if (target_name.empty()) {
+      KLLM_THROW("Missing 'target_name' in target description.");
+    }
+    // 'target_name' should be 'transformer', 'layernorm' or 'logits'
+    if (!std::unordered_set<std::string>{"transformer", "layernorm", "logits"}.count(target_name)) {
+      KLLM_THROW(fmt::format("Invalid target name {}.", target_name));
+    }
+
+    const int input_tokens_num = static_cast<int>(input_tokens.size());
+
+    // Validate 'slice_pos' is a valid ordered intervals if specified
+    if (!target_desc.slice_pos.empty()) {
+      int min_required_begin = 0;
+      for (auto& [slice_begin, slice_end] : target_desc.slice_pos) {
+        // We allow negative indices to count from the end
+        slice_begin = slice_begin < 0 ? slice_begin + input_tokens_num : slice_begin;
+        slice_end = slice_end < 0 ? slice_end + input_tokens_num : slice_end;
+        // Check if the end position is greater than or equal to the begin position
+        if (slice_end < slice_begin) {
+          KLLM_THROW(fmt::format("Error: The end position of interval [{}, {}] is less than its start position.",
+                                 slice_begin, slice_end));
+        }
+        // Validate that the end position does not exceed the number of input tokens
+        if (slice_end >= input_tokens_num) {
+          KLLM_THROW(
+              fmt::format("Error: The end position of interval [{}, {}] exceeds the total number of input tokens ({}).",
+                          slice_begin, slice_end, input_tokens_num));
+        }
+        // Check for overlap with the previous interval
+        if (slice_begin < min_required_begin) {
+          KLLM_THROW(fmt::format("Error: Interval [{}, {}] overlaps with the previous interval ending at position {}.",
+                                 slice_begin, slice_end, min_required_begin - 1));
+        }
+        min_required_begin = slice_end + 1;
+      }
+    }
+
+    // Ensure that 'token_id' and 'slice_pos' are not both set for the same target
+    if (!target_desc.token_id.empty() && !target_desc.slice_pos.empty()) {
+      KLLM_THROW("Unable to set both token_id and slice_pos at the same time.");
+    }
+
+    // Validate the token reduce mode
+    if (target_desc.token_reduce_mode == TokenReduceMode::INVALID_TYPE) {
+      KLLM_THROW(fmt::format("The specified token reduce mode in {} is invalid.", target_name));
+    }
+    if (target_desc.token_reduce_mode == TokenReduceMode::GATHER_TOKEN_ID) {
+      // Ensure GATHER_TOKEN_ID is not used with transformer, layernorm targets
+      if (target_name == "transformer" || target_name == "layernorm") {
+        KLLM_THROW(fmt::format("The output of the {} does not support 'GATHER_TOKEN_ID'.", target_name));
+      }
+    }
+
+    // TODO(zakwang): Enhance support for additional request parameters
+    if (target_name == "logits") {
+      // Verify that the GATHER_ALL token reduce mode is not used, as it's unsupported for logits output
+      if (target_desc.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
+        KLLM_THROW(fmt::format("The output for {} does not support the 'GATHER_ALL' reduction mode.", target_name));
+      }
+      // Verify that no token IDs are specified, as they are not supported for logits output.
+      if (!target_desc.token_id.empty()) {
+        KLLM_THROW(fmt::format("Specifying token_id for {} output is not supported.", target_name));
+      }
+      // Ensure the GATHER_TOKEN_ID reduce mode does not use the last logits, as it might be unsupported or
+      // not intended.
+      if (target_desc.token_reduce_mode == TokenReduceMode::GATHER_TOKEN_ID && !target_desc.slice_pos.empty() &&
+          target_desc.slice_pos.back().second + 1 == input_tokens_num) {
+        KLLM_THROW(
+            fmt::format("Get the last position is not supported for {} in the 'GATHER_TOKEN_ID' token reduction mode.",
+                        target_name));
+      }
+    }
+  }
+
+  return Status();
 }
 
 }  // namespace ksana_llm

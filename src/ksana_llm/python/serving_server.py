@@ -5,21 +5,17 @@
 import argparse
 import json
 import os
-import traceback
-import base64
 import asyncio
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from functools import partial
 from concurrent import futures
 
 import ksana_llm
 import yaml
 import uvicorn
-import msgpack
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from transformers import GenerationConfig, AutoTokenizer, AutoConfig
-from fastapi import FastAPI
+from transformers import GenerationConfig, AutoTokenizer, PreTrainedTokenizerFast
 
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
@@ -28,7 +24,6 @@ app = FastAPI()
 # pylint: disable=invalid-name
 model = None
 tokenizer = None
-model_config = None
 # pylint: enable=invalid-name
 
 
@@ -87,7 +82,7 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
                         skip_special_tokens=True  # skip special tokens
                     ).rstrip('\ufffd')
                 except:
-                    print("except occurred, invalid token ids:", tokens)
+                    print("except occurred, invalid token ids:", input_tokens)
                     raise ValueError("Invalid token ids!")
                 output_texts.append(output_text)
             ret = {
@@ -122,23 +117,6 @@ def batch_generate(model_name, input_tokens, generation_config, **kwargs):
         except:
             print("except occurred, invalid token ids:", tokens)
             raise ValueError("Invalid token ids!")
-
-    # Create a return for the forward interface
-    if (len(ksana_python_output.response) > 0):
-        response = []
-        for target, python_tensor in ksana_python_output.response.items():
-            response.append({
-                "target_name": target,
-                "tensor": {
-                    "data": base64.b64encode(bytes(python_tensor.data)).decode('utf-8'),
-                    "shape": python_tensor.shape,
-                    "dtype": python_tensor.dtype,
-                }
-            })
-        return {
-            "input_token_ids": input_tokens,  # the input token IDs
-            "response": response  # The processed response containing tensor data
-        }
 
     # Create a JSON response with the generated text and token IDs
     return {
@@ -178,16 +156,12 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
     kwargs = {
         "input_refit_embedding": {}
     }
-    
+
     if input_refit_embedding is not None and "pos" in input_refit_embedding:
         kwargs['input_refit_embedding']["pos"] = input_refit_embedding["pos"]
 
     if input_refit_embedding is not None and "embeddings" in input_refit_embedding:
         kwargs['input_refit_embedding']["embeddings"] = input_refit_embedding["embeddings"]
-
-    request_target = request_dict.pop("request_target", None)
-    if request_target is not None:
-        kwargs['request_target'] = request_target
 
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)
@@ -231,9 +205,9 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
                 streaming_generate,  # partial function to call
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
-                generation_config=generation_config,
+                generation_config=generation_config,  # pass generation config as an argument
                 **kwargs,
-            )  # pass generation config as an argument
+            )
         )
     else:
         # Use batch generation
@@ -244,13 +218,30 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
                 batch_generate,  # partial function to call
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
-                generation_config=generation_config,
+                generation_config=generation_config,  # pass generation config as an argument
                 **kwargs,
-            )  # pass generation config as an argument
+            )
         )
 
     # Return the results of the generation
     return results
+
+
+async def forward_request(request_bytes: bytes) -> Optional[bytes]:
+    """Forward the raw request bytes to the serving model.
+    """
+
+    # Get the current event loop
+    loop = asyncio.get_event_loop()
+
+    response_bytes = await loop.run_in_executor(
+        model_executor,  # specify the executor to use
+        partial(
+            model.forward,  # partial function to call
+            request_bytes  # pass request_bytes as an argument
+        )
+    )
+    return response_bytes
 
 
 @app.post("/generate")
@@ -273,21 +264,17 @@ async def generate(request: Request) -> Response:
 
 @app.post("/forward")
 async def forward(request: Request):
-    """Generate completion for the request.
+    """Generate next token for the request.
 
-    The request should be a JSON object packaged with msgpack.
+    The request should be a JSON object packed by msgpack.
     """
-    try:
-        request_body_bytes = await request.body()
-        request_dict = msgpack.unpackb(request_body_bytes, raw=False)
-        request_dict["stream"] = False
-        request_dict["sampling_config"] = {"max_new_tokens" : 1}
-        response_data = await process_request(request_dict)
-        return Response(content=msgpack.packb(response_data), media_type="application/x-msgpack")
-    # pylint: disable-next=broad-except
-    except Exception as e:
-        print(traceback.format_exc())
-        return Response(content=msgpack.packb(str(e)), media_type="application/x-msgpack")
+    request_bytes = await request.body()
+    response_bytes = await forward_request(request_bytes)
+    if response_bytes is not None:
+        return Response(content=response_bytes, media_type="application/x-msgpack")
+    else:  # Bad request
+        return Response(status_code=status.HTTP_400_BAD_REQUEST, media_type="application/x-msgpack")
+
 
 if __name__ == "__main__":
     args = args_config()
@@ -295,10 +282,13 @@ if __name__ == "__main__":
         with open(args.config_file, "r") as yaml_file:
             yaml_data = yaml.safe_load(yaml_file)
             args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
-    model_config = AutoConfig.from_pretrained(args.tokenizer_dir, 
-                                              trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
+    if not isinstance(tokenizer, PreTrainedTokenizerFast):
+        print(
+            "Using a slow tokenizer. This might cause a significant "
+            "slowdown. Consider using a fast tokenizer instead."
+        )
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Use multithread to support parallelism.

@@ -39,6 +39,11 @@ Status ServingImpl::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksa
   return endpoint_->HandleStreaming(ksana_python_input, streaming_iterator);
 }
 
+Status ServingImpl::HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>> &ksana_python_inputs,
+                                std::vector<KsanaPythonOutput> &ksana_python_outputs) {
+  return endpoint_->HandleBatch(ksana_python_inputs, ksana_python_outputs);
+}
+
 Status ServingImpl::Start() {
   inference_engine_->Start();
   return Status();

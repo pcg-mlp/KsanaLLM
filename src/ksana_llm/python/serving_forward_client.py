@@ -19,17 +19,22 @@ def args_config():
                         default="localhost",
                         help='server host address')
     parser.add_argument('--port', type=int, default=8888, help='server port')
+    parser.add_argument('--api', type=str, default="forward", help='server api')
     args = parser.parse_args()
     return args
 
 
 def post_request_msgpack(serv, data, queue=None):
     packed_data = msgpack.packb(data)
-    response = requests.post(serv, data=packed_data, headers={'Content-Type': 'application/msgpack'})
-    if queue is None:
-        return msgpack.unpackb(response.content)
+    responses = requests.post(serv, data=packed_data, headers={'Content-Type': 'application/x-msgpack'})
+    if responses.status_code == 200:
+        result = msgpack.unpackb(responses.content)
     else:
-        queue.put(msgpack.unpackb(response.content))
+        result = f"Failed to get response: {responses}"
+    if queue is None:
+        return result
+    else:
+        queue.put(result)
 
 
 def python_tensor_to_numpy(python_tensor):
@@ -57,7 +62,7 @@ def python_tensor_to_numpy(python_tensor):
     """
     # Extract data, shape, and dtype from the python_tensor dictionary
     data, shape, dtype = python_tensor["data"], python_tensor["shape"], python_tensor["dtype"]
-    
+
     # Map the specified string data type to its corresponding NumPy data type
     if dtype == "float32":
         np_dtype = np.float32
@@ -73,7 +78,7 @@ def python_tensor_to_numpy(python_tensor):
 
     # Create a NumPy array from the raw data buffer using the specified data type
     data_array = np.frombuffer(base64.b64decode(data), dtype=np_dtype)
-    
+
     # Reshape the NumPy array according to the specified shape
     numpy_array = data_array.reshape(shape)
 
@@ -85,20 +90,25 @@ def python_tensor_to_numpy(python_tensor):
     return numpy_array
 
 
-def show_response(data, result):
-    if isinstance(result, dict) and "response" in result:
-        for response in result["response"]:
-            target = response["target_name"]
-            python_tensor = response["tensor"]
-            print(
-                f"input_token_ids : {result['input_token_ids']}, target : {target}, "
-                f"tensor : \n{python_tensor_to_numpy(python_tensor)}")
+def show_response(result):
+    if isinstance(result, dict) and "responses" in result:
+        for batch_result in result["responses"]:
+            if isinstance(batch_result, dict) and "response" in batch_result:
+                input_token_ids = batch_result["input_token_ids"]
+                for response in batch_result["response"]:
+                    target = response["target_name"]
+                    python_tensor = response["tensor"]
+                    print(
+                        f"input_token_ids : {input_token_ids}, target : {target}, "
+                        f"tensor : \n{python_tensor_to_numpy(python_tensor)}"
+                    )
     else:
         print(result)
 
+
 if __name__ == "__main__":
     args = args_config()
-    serv = "http://" + args.host + ":" + str(args.port) + "/forward"
+    serv = "http://" + args.host + ":" + str(args.port) + "/" + args.api
 
     text_list = [
         "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n你好。<|im_end|>\n"
@@ -115,25 +125,30 @@ if __name__ == "__main__":
 
         # Create a data dictionary to pass to the post_request function
         data = {
-            # Set the prompt for the request
-            "prompt": prompt,
-            # "input_refit_embedding": {
-            #     "pos": [20,285,550],
-            #     "embeddings": [[1.0,2.0,...],[3.0,4.0,...],[5.0,6.0,...]],
-            # },
-            "request_target": [
+            "requests": [  # Set requests, multiple are allowed
                 {
-                    "target_name": "layernorm",
-                    "token_id": [13],
-                    # "slice_pos" : [[0,0],[2,5],[7,7]],
-                    "token_reduce_mode": "GATHER_ALL",
-                    # "token_reduce_mode" : "GATHER_TOKEN_ID",
+                    "prompt": prompt,  # Set the prompt for the request
+                    # "input_tokens": [1,22,13],  # Or set the input tokens for the request
+                    # "input_refit_embedding": {
+                    #     "pos": [20,285,550],
+                    #     "embeddings": [[1.0,2.0,...],[3.0,4.0,...],[5.0,6.0,...]],
+                    # },
+                    "request_target": [  # Specify the target, multiple are allowed
+                        {
+                            "target_name": "layernorm",  # The target can be "layernorm", "transformer" or "logits"
+                            "token_id": [
+                                13
+                            ],  # Provide specific token ids (only permitted in "layernorm" and "transformer")
+                            # "slice_pos" : [[0,0],[2,5],[7,7]], # Set sorted intervals (negative indices are allowed)
+                            "token_reduce_mode": "GATHER_ALL",  # For "layernorm" and "transformer"
+                            # "token_reduce_mode" : "GATHER_TOKEN_ID", # For "logits"
+                        },
+                    ],
                 },
-            ],
+            ]
         }
 
         # Create a new process to handle the post request
-
         proc = multiprocessing.Process(
             target=post_request_msgpack,  # function to call
             args=(  # arguments to pass
@@ -149,7 +164,7 @@ if __name__ == "__main__":
     # Wait for the responses from the processes
     for i in range(len(text_list)):
         # Get the response from the queue and display it
-        show_response(text_list[i], multi_proc_queue.get())
+        show_response(multi_proc_queue.get())
 
     # Wait for all processes to finish
     for proc in multi_proc_list:

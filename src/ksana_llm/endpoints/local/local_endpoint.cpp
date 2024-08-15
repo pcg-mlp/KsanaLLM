@@ -18,9 +18,6 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
 Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                              ksana_llm::KsanaPythonOutput &ksana_python_output) {
   std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input);
-  for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    output = ksana_python_input->input_tokens;
-  }
   req->waiter = std::make_shared<Waiter>(1);
   Status status = Status();
   std::shared_ptr<Waiter> waiter = req->waiter;
@@ -29,16 +26,9 @@ Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_pyth
   // Get inference result
   KLLM_LOG_DEBUG << "LocalEndpoint::Handle start Wait.";
   waiter->Wait();
-
   KLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
-  for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
-    ksana_python_output.output_tokens.emplace_back(req_output);
-    if (ksana_python_input->sampling_config.logprobs_num > 0) {
-      ksana_python_output.logprobs.emplace_back(req_logprobs);
-    }
-  }
-  ksana_python_output.response = std::move(req->response);
+
+  ksana_python_output = KsanaPythonOutput(req);
   KLLM_LOG_DEBUG << "LocalEndpoint::Handle Fetch result.";
   return req->finish_status;
 }
@@ -46,9 +36,6 @@ Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_pyth
 Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                       std::shared_ptr<StreamingIterator> &streaming_iterator) {
   std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input);
-  for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    output = ksana_python_input->input_tokens;
-  }
   req->step_waiter = std::make_shared<Waiter>(1);
   req->abort_waiter = std::make_shared<Waiter>(1);
 
@@ -57,6 +44,35 @@ Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &k
   Status status = Status();
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
   return status;
+}
+
+Status LocalEndpoint::HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>> &ksana_python_inputs,
+                                  std::vector<KsanaPythonOutput> &ksana_python_outputs) {
+  const size_t batch_size = ksana_python_inputs.size();
+  auto waiter = std::make_shared<Waiter>(batch_size);
+  std::vector<std::pair<Status, std::shared_ptr<Request>>> reqs;
+  reqs.reserve(batch_size);
+  for (size_t i = 0; i < batch_size; i++) {
+    const auto &ksana_python_input = ksana_python_inputs[i];
+    auto req = std::make_shared<Request>(ksana_python_input);
+    req->waiter = waiter;
+    req->last_in_batch = (i == batch_size - 1);
+    reqs.emplace_back(Status(), std::move(req));
+  }
+  // Write the batch of requests once
+  request_queue_.Write(reqs.data(), batch_size);
+
+  // Get inference result
+  KLLM_LOG_DEBUG << "LocalEndpoint::HandleBatch start Wait.";
+  waiter->Wait();
+  KLLM_LOG_DEBUG << "LocalEndpoint::HandleBatch Wait finished.";
+
+  ksana_python_outputs.reserve(batch_size);
+  for (const auto &[_, req] : reqs) {
+    ksana_python_outputs.emplace_back(req);
+  }
+  KLLM_LOG_DEBUG << "LocalEndpoint::HandleBatch Fetch result.";
+  return Status();
 }
 
 }  // namespace ksana_llm

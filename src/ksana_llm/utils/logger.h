@@ -86,12 +86,13 @@ inline void InitLoguru() {
 #define KLLM_LOG_ERROR LOG_S(ERROR)
 #define KLLM_LOG_FATAL LOG_S(FATAL)
 
-[[noreturn]] inline void ThrowRuntimeError(const char* const file, int const line, std::string const& info = "") {
-  throw std::runtime_error(std::string("[KLLM][ERROR] ") + info + " Assertion fail: " + file + ":" +
-                           std::to_string(line) + " \n");
+[[noreturn]] inline void ThrowRuntimeError(const char* const file, int const line, std::string const& info) {
+  const std::string message = fmt::format("{} ({}:{})", info, file, line);
+  KLLM_LOG_ERROR << message;
+  throw std::runtime_error(message);
 }
 
-inline void CheckAssert(bool result, const char* const file, int const line, std::string const& info = "") {
+inline void CheckAssert(bool result, const char* const file, int const line, std::string const& info) {
   if (!result) {
     ThrowRuntimeError(file, line, info);
   }
@@ -103,13 +104,13 @@ inline uint64_t GetCurrentTimeInMs() {
       .count();
 }
 
-#define KLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__)
-#define KLLM_CHECK_WITH_INFO(val, info)                                 \
-  do {                                                                  \
-    bool is_valid_val = (val);                                          \
-    if (!is_valid_val) {                                                \
-      ksana_llm::CheckAssert(is_valid_val, __FILE__, __LINE__, (info)); \
-    }                                                                   \
+#define KLLM_CHECK(val) CheckAssert(val, __FILE__, __LINE__, "Assertion failed")
+#define KLLM_CHECK_WITH_INFO(val, info)                                                           \
+  do {                                                                                            \
+    bool is_valid_val = (val);                                                                    \
+    if (!is_valid_val) {                                                                          \
+      CheckAssert(is_valid_val, __FILE__, __LINE__, fmt::format("Assertion failed: {}", (info))); \
+    }                                                                                             \
   } while (0)
 
 #define KLLM_THROW(info) ThrowRuntimeError(__FILE__, __LINE__, info)

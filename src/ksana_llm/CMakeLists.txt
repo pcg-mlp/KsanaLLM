@@ -12,6 +12,8 @@ include(external/httplib)
 include(external/pybind11)
 include(external/yaml-cpp)
 include(external/nlohmann_json)
+include(external/base64)
+include(external/msgpack)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src

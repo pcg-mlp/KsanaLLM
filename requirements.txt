@@ -1,6 +1,6 @@
 transformers==4.39.2
 sentencepiece==0.2.0
-uvicorn==0.29.0
+uvicorn[standard]==0.29.0
 fastapi==0.110.0
 protobuf==4.24.4
 rouge_score==0.1.2

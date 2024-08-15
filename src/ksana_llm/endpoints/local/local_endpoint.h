@@ -23,9 +23,13 @@ class LocalEndpoint : public BaseEndpoint {
   virtual Status Handle(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                         ksana_llm::KsanaPythonOutput& ksana_python_output);
 
-  // handle a streaming request.
+  // Handle a streaming request.
   virtual Status HandleStreaming(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                                  std::shared_ptr<StreamingIterator>& streaming_iterator);
+
+  // Handle a batch request.
+  virtual Status HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
+                             std::vector<KsanaPythonOutput>& ksana_python_outputs);
 };
 
 }  // namespace ksana_llm

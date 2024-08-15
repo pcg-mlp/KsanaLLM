@@ -32,6 +32,10 @@ class ServingImpl {
   Status HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                          std::shared_ptr<StreamingIterator> &streaming_iterator);
 
+  // Handle serving batch request.
+  Status HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>> &ksana_python_inputs,
+                     std::vector<KsanaPythonOutput> &ksana_python_outputs);
+
  private:
   // The inference engine.
   std::shared_ptr<InferenceEngine> inference_engine_ = nullptr;

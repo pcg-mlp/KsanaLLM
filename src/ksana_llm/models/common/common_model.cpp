@@ -565,7 +565,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
     ret &= req.request_target->size() == req.response->size();
     if (rank_ != 0) continue;
     int output_len = 0;
-    std::vector<std::pair<size_t, size_t>> slice_pos = it->second.slice_pos;
+    std::vector<std::pair<int, int>> slice_pos = it->second.slice_pos;
     // If specific token IDs are provided, add their positions to slice_pos.
     if (it->second.token_id.size() != 0) {
       std::set<int> token_id_set(it->second.token_id.begin(), it->second.token_id.end());
