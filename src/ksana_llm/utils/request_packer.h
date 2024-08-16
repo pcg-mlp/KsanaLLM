@@ -5,7 +5,6 @@
 #include <pybind11/embed.h>
 #include <pybind11/stl.h>
 #include "ksana_llm/utils/request.h"
-#include "ksana_llm/utils/request_serial.h"
 
 namespace py = pybind11;
 
@@ -15,6 +14,7 @@ namespace ksana_llm {
 // bytes into corresponding KsanaPythonInput and KsanaPythonOutput objects.
 class __attribute__((visibility("hidden"))) RequestPacker {
  public:
+  // Initialize the tokenizer from the given tokenizer_path.
   void InitTokenizer(const std::string& tokenizer_path);
 
   // Unpack a serialized request into KsanaPythonInput objects.

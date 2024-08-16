@@ -45,8 +45,7 @@ TEST_F(RequestPackerTest, SimpleUnpack) {
   std::string request_bytes(sbuf.data(), sbuf.size());
   ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs).OK());
   ASSERT_EQ(ksana_python_inputs.size(), 1ul);
-  // Forward interface
-  ASSERT_EQ(ksana_python_inputs[0]->sampling_config.max_new_tokens, 1);
+  ASSERT_EQ(ksana_python_inputs[0]->sampling_config.max_new_tokens, 1);  // forward interface
   ASSERT_EQ(ksana_python_inputs[0]->request_target.size(), 1);
   ASSERT_TRUE(ksana_python_inputs[0]->request_target.count(target.target_name));
   ASSERT_EQ(ksana_python_inputs[0]->request_target[target.target_name].slice_pos, target.slice_pos);

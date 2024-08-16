@@ -10,7 +10,6 @@
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
-#include "ksana_llm/endpoints/local/local_endpoint.h"
 #include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
@@ -149,23 +148,19 @@ Status InferenceEngine::StartHandler() {
 
 Status InferenceEngine::DoWarmupRun() {
   KLLM_LOG_INFO << "Start to do warmup run";
-  ksana_llm::KsanaPythonInput warmup_run_input;
-  ksana_llm::KsanaPythonOutput warmup_run_output;
-  std::shared_ptr<Request> req = std::make_shared<Request>(std::make_shared<KsanaPythonInput>(warmup_run_input));
-  std::vector<int> input_tokens = {1};
-  req->input_tokens = input_tokens;
-  for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    output = warmup_run_input.input_tokens;
-  }
-  req->output_tokens = input_tokens;
+  auto warmup_run_input = std::make_shared<KsanaPythonInput>();
+  // Prepare the warm up input.
+  warmup_run_input->input_tokens = std::vector<int>{1};
+  auto req = std::make_shared<Request>(warmup_run_input);
   req->waiter = std::make_shared<Waiter>(1);
-  std::shared_ptr<Waiter> waiter = req->waiter;
   HandleRequest(req);
-  waiter->Wait();
-  for (auto &[output, req_logprobs, total_score] : req->output_group) {
-    std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
-    KLLM_CHECK_WITH_INFO(req_output.size() > 1,
-                       "Ksana warmup run generate empty output tokens. Warmup inference run failed");
+
+  // Wait the warm up.
+  req->waiter->Wait();
+
+  for (const auto &[output, req_logprobs, total_score] : req->output_group) {
+    KLLM_CHECK_WITH_INFO(req->input_tokens.size() + req->padded_size < output.size(),
+                         "Ksana warmup run generate empty output tokens. Warmup inference run failed");
   }
   KLLM_LOG_INFO << "End to do warmup run";
   return Status();
