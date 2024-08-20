@@ -147,6 +147,7 @@ Status InferenceEngine::StartHandler() {
 }
 
 Status InferenceEngine::DoWarmupRun() {
+  pybind11::gil_scoped_release release;
   KLLM_LOG_INFO << "Start to do warmup run";
   auto warmup_run_input = std::make_shared<KsanaPythonInput>();
   // Prepare the warm up input.
@@ -163,6 +164,7 @@ Status InferenceEngine::DoWarmupRun() {
                          "Ksana warmup run generate empty output tokens. Warmup inference run failed");
   }
   KLLM_LOG_INFO << "End to do warmup run";
+  pybind11::gil_scoped_acquire acquire;
   return Status();
 }
 
