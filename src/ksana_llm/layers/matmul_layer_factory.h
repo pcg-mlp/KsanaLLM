@@ -57,6 +57,7 @@ class MatMulLayerFactory {
         group_matmul_param.push_back(base_weight->GetModelWeights(weight_name).shape[1] * 2);
         group_matmul_param.push_back(base_weight->GetModelWeights(weight_name).shape[0]);
         group_matmul_param.push_back(model_config_.quant_config.group_size);
+        group_matmul_param.push_back(true);
         return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ);
       }
     }

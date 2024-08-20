@@ -35,62 +35,99 @@
 namespace ksana_llm {
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-void GetFpAIntBGroupGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes) {
-  auto gemm = llm_kernels::nvidia::FpAIntBGroupGemmWrapper<T, WT>();
+void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes) {
+  auto gemm = llm_kernels::nvidia::FpAIntBGroupCutlassGemmWrapper<T, WT>();
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
-#define GET_FPA_INTB_CONFIG(T, WT) \
-  template void GetFpAIntBGroupGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
-GET_FPA_INTB_CONFIG(float, llm_kernels::nvidia::WeightType::INT4);
-GET_FPA_INTB_CONFIG(float, llm_kernels::nvidia::WeightType::INT8);
-GET_FPA_INTB_CONFIG(half, llm_kernels::nvidia::WeightType::INT4);
-GET_FPA_INTB_CONFIG(half, llm_kernels::nvidia::WeightType::INT8);
+#define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
+GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
+GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT8);
 #ifdef ENABLE_BFLOAT16
-GET_FPA_INTB_CONFIG(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
-GET_FPA_INTB_CONFIG(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
 #endif
-#undef GET_FPA_INTB_CONFIG
+#undef GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-void InvokeFpAIntBGroupGemm(void* output, const void* input, const void* weight, const void* scales, void* ws, size_t m,
-                            size_t n, size_t k, size_t groupsize, size_t config_index, cudaStream_t stream) {
-  auto gemm = llm_kernels::nvidia::FpAIntBGroupGemmWrapper<T, WT>();
-  gemm.Gemm(output, input, weight, scales, ws, m, n, k, groupsize, config_index, stream);
+void InvokeFpAIntBGroupCutlassGemm(void* output, const void* input, const void* weight, const void* scales, void* ws,
+                                   size_t m, size_t n, size_t k, size_t groupsize, size_t config_index,
+                                   cudaStream_t stream) {
+  auto gemm = llm_kernels::nvidia::FpAIntBGroupCutlassGemmWrapper<T, WT>();
+  CUDA_CHECK_LAST_ERROR(gemm.Gemm(output, input, weight, scales, ws, m, n, k, groupsize, config_index, stream));
 }
-#define INVOKE_FPA_INTB_GROUP_GEMM(T, WT)                                                                              \
-  template void InvokeFpAIntBGroupGemm<T, WT>(void* output, const void* input, const void* weight, const void* scales, \
-                                              void* ws, size_t m, size_t n, size_t k, size_t groupsize,                \
-                                              size_t config_index, cudaStream_t stream)
-INVOKE_FPA_INTB_GROUP_GEMM(float, llm_kernels::nvidia::WeightType::INT4);
-INVOKE_FPA_INTB_GROUP_GEMM(float, llm_kernels::nvidia::WeightType::INT8);
-INVOKE_FPA_INTB_GROUP_GEMM(half, llm_kernels::nvidia::WeightType::INT4);
-INVOKE_FPA_INTB_GROUP_GEMM(half, llm_kernels::nvidia::WeightType::INT8);
+#define INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(T, WT)                                                                \
+  template void InvokeFpAIntBGroupCutlassGemm<T, WT>(void* output, const void* input, const void* weight,        \
+                                                     const void* scales, void* ws, size_t m, size_t n, size_t k, \
+                                                     size_t groupsize, size_t config_index, cudaStream_t stream)
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(float, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(float, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(half, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(half, llm_kernels::nvidia::WeightType::INT8);
 #ifdef ENABLE_BFLOAT16
-INVOKE_FPA_INTB_GROUP_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
-INVOKE_FPA_INTB_GROUP_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
 #endif
-#undef INVOKE_FPA_INTB_GROUP_GEMM
+#undef INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-size_t InvokeFpAIntBGroupGemmConfigProfile(size_t warmup, size_t iter, void* output, const void* input,
-                                           const void* weight, const void* scales, void* ws, size_t m, size_t n,
-                                           size_t k, size_t groupsize, cudaStream_t stream) {
-  auto gemm = llm_kernels::nvidia::FpAIntBGroupGemmWrapper<T, WT>();
+size_t InvokeFpAIntBGroupCutlassGemmConfigProfile(size_t warmup, size_t iter, void* output, const void* input,
+                                                  const void* weight, const void* scales, void* ws, size_t m, size_t n,
+                                                  size_t k, size_t groupsize, cudaStream_t stream) {
+  auto gemm = llm_kernels::nvidia::FpAIntBGroupCutlassGemmWrapper<T, WT>();
   return gemm.GetBestConfigIndex(warmup, iter, output, input, weight, scales, ws, m, n, k, groupsize, stream);
 }
-#define INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(T, WT)                                                             \
-  template size_t InvokeFpAIntBGroupGemmConfigProfile<T, WT>(                                                        \
+#define INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(T, WT)                                                     \
+  template size_t InvokeFpAIntBGroupCutlassGemmConfigProfile<T, WT>(                                                 \
       size_t warmup, size_t iter, void* output, const void* input, const void* weight, const void* scales, void* ws, \
       size_t m, size_t n, size_t k, size_t groupsize, cudaStream_t stream)
-INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(float, llm_kernels::nvidia::WeightType::INT4);
-INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(float, llm_kernels::nvidia::WeightType::INT8);
-INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(half, llm_kernels::nvidia::WeightType::INT4);
-INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(half, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(float, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(float, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(half, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(half, llm_kernels::nvidia::WeightType::INT8);
 #ifdef ENABLE_BFLOAT16
-INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
-INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
 #endif
-#undef INVOKE_FPA_INTB_GROUP_GEMM_CONFIG_PROGILE
+#undef INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+bool GetFpAIntBGroupCudaGemmSupported() {
+  auto gemm = llm_kernels::nvidia::FpAIntBGroupCudaGemmWrapper<T, WT>();
+  return gemm.IsSupport();
+}
+#define GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(T, WT) template bool GetFpAIntBGroupCudaGemmSupported<T, WT>()
+GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(float, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(float, llm_kernels::nvidia::WeightType::INT8);
+GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(half, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(half, llm_kernels::nvidia::WeightType::INT8);
+#ifdef ENABLE_BFLOAT16
+GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+#endif
+#undef GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+void InvokeFpAIntBGroupCudaGemm(void* output, const void* input, const void* weight, const void* scales, size_t m,
+                                size_t n, size_t k, size_t groupsize, cudaStream_t stream) {
+  auto gemm = llm_kernels::nvidia::FpAIntBGroupCudaGemmWrapper<T, WT>();
+  CUDA_CHECK_LAST_ERROR(gemm.Gemm(output, input, weight, scales, m, n, k, groupsize, stream));
+}
+#define INVOKE_FPA_INTB_GROUP_CUDA_GEMM(T, WT)                                                                        \
+  template void InvokeFpAIntBGroupCudaGemm<T, WT>(void* output, const void* input, const void* weight,                \
+                                                  const void* scales, size_t m, size_t n, size_t k, size_t groupsize, \
+                                                  cudaStream_t stream)
+INVOKE_FPA_INTB_GROUP_CUDA_GEMM(float, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUDA_GEMM(float, llm_kernels::nvidia::WeightType::INT8);
+INVOKE_FPA_INTB_GROUP_CUDA_GEMM(half, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUDA_GEMM(half, llm_kernels::nvidia::WeightType::INT8);
+#ifdef ENABLE_BFLOAT16
+INVOKE_FPA_INTB_GROUP_CUDA_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
+INVOKE_FPA_INTB_GROUP_CUDA_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
+#endif
+#undef INVOKE_FPA_INTB_GROUP_CUDA_GEMM
 
 template <typename T>
 void LookupEmbedding(const void* ids, const void* offsets, const void* prefix_offsets, const void* emb, const void* pos,

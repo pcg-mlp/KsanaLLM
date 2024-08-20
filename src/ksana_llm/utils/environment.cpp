@@ -390,6 +390,12 @@ Status Environment::ParseConfig(const std::string &config_file) {
       KLLM_LOG_INFO
           << "When quant_method is fp8_e4m3, reserved_device_memory_ratio is set to at least 0.02 to prevent oom.";
     }
+  } else if (model_configs_[""].is_quant == true && model_configs_[""].quant_config.method == QUANT_GPTQ) {
+    if (block_manager_config_.reserved_device_memory_ratio < 0.02) {
+      block_manager_config_.reserved_device_memory_ratio = 0.02;
+      KLLM_LOG_INFO
+          << "When quant_method is gptq, reserved_device_memory_ratio is set to at least 0.02 to prevent oom.";
+    }
   }
 
   auto kv_cache_dtype_str = yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(),

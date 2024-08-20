@@ -11,3 +11,10 @@ target_link_libraries(llm_kernels_nvidia_kernel_asymmetric_gemm PUBLIC -lcublas 
 add_subdirectory(moe_gemm)
 add_subdirectory(int8_gemm)
 add_subdirectory(fpA_intB_gemm)
+add_subdirectory(weightOnlyBatchedGemv)
+
+# for test
+file(GLOB_RECURSE ADD_TEST_SRCS asymmetric_gemm_test.cu)
+cc_test(llm_kernels_nvidia_kernel_asymmetric_gemm_test SRCS ${ADD_TEST_SRCS} DEPS 
+    llm_kernels_nvidia_utils
+    llm_kernels_nvidia_kernel_asymmetric_gemm)

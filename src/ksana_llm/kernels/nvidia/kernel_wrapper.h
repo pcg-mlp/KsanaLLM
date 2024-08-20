@@ -17,16 +17,24 @@
 namespace ksana_llm {
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-void GetFpAIntBGroupGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
+void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-void InvokeFpAIntBGroupGemm(void* output, const void* input, const void* weight, const void* scales, void* ws, size_t m,
-                            size_t n, size_t k, size_t groupsize, size_t config_index, cudaStream_t stream);
+void InvokeFpAIntBGroupCutlassGemm(void* output, const void* input, const void* weight, const void* scales, void* ws,
+                                   size_t m, size_t n, size_t k, size_t groupsize, size_t config_index,
+                                   cudaStream_t stream);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-size_t InvokeFpAIntBGroupGemmConfigProfile(size_t warmup, size_t iter, void* output, const void* input,
-                                           const void* weight, const void* scales, void* ws, size_t m, size_t n,
-                                           size_t k, size_t groupsize, cudaStream_t stream);
+size_t InvokeFpAIntBGroupCutlassGemmConfigProfile(size_t warmup, size_t iter, void* output, const void* input,
+                                                  const void* weight, const void* scales, void* ws, size_t m, size_t n,
+                                                  size_t k, size_t groupsize, cudaStream_t stream);
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+bool GetFpAIntBGroupCudaGemmSupported();
+
+template <typename T, llm_kernels::nvidia::WeightType WT>
+void InvokeFpAIntBGroupCudaGemm(void* output, const void* input, const void* weight, const void* scales, size_t m,
+                                size_t n, size_t k, size_t groupsize, cudaStream_t stream);
 
 // Invoke the lookup embedding.
 template <typename T>

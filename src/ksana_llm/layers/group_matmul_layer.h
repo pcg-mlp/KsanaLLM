@@ -20,10 +20,12 @@ class GroupMatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
-  size_t max_m, max_n, max_k;
-  size_t groupsize;
+  size_t max_m_, max_n_, max_k_;
+  size_t groupsize_;
 
-  std::map<std::array<size_t, 3>, size_t> config_map_;
+  bool use_gemv_cuda_core_;
+
+  std::vector<size_t> config_map_;
 };
 
 }  // namespace ksana_llm
