@@ -61,7 +61,7 @@ class BaseCacheManager {
 
     // Move reusable node to free list.
     for (CachedBlockType* cb : swapout_blocks) {
-      free_cached_blocks_.push_back(cb);
+      free_cached_blocks_.push(cb);
     }
 
     // Remove from finished queue.
@@ -185,7 +185,7 @@ class BaseCacheManager {
   CacheManagerConfig cache_manager_config_;
 
   // The cached blocks that have no computed data, and could be reused freely.
-  std::list<CachedBlockType*> free_cached_blocks_;
+  std::queue<CachedBlockType*> free_cached_blocks_;
 
   // All requests, the key is request id.
   std::unordered_map<int64_t, CachedRequestType*> cached_requests_;

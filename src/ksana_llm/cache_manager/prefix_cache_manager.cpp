@@ -44,7 +44,7 @@ void PrefixCacheManager::InitializeCachedBlocks() {
       GetBlockManager()->AllocateBlocks(1, blocks);
       cached_block->memory_block_ids[j] = blocks[0];
     }
-    free_cached_blocks_.push_back(cached_block);
+    free_cached_blocks_.push(cached_block);
   }
   KLLM_LOG_DEBUG << "PrefixCacheManager initialized, device num:" << cache_manager_config_.tensor_para_size
                  << ", device block num:" << free_cached_blocks_.size()
@@ -213,7 +213,7 @@ void PrefixCacheManager::FreeCachedBlockRecursively(PrefixCachedBlock* cached_bl
     reusable_cached_blocks_.erase(cached_block);
 
     ResetCachedBlock(cached_block);
-    free_cached_blocks_.push_back(cached_block);
+    free_cached_blocks_.push(cached_block);
     free_blocks.push_back(cached_block);
     free_num += 1;
     return;
@@ -230,7 +230,7 @@ void PrefixCacheManager::FreeCachedBlockRecursively(PrefixCachedBlock* cached_bl
   reusable_cached_blocks_.erase(cached_block);
 
   ResetCachedBlock(cached_block);
-  free_cached_blocks_.push_back(cached_block);
+  free_cached_blocks_.push(cached_block);
   free_blocks.push_back(cached_block);
   free_num += 1;
 }
@@ -338,7 +338,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   // Try to allocate from free list.
   for (size_t i = 0; i < block_num; ++i) {
     PrefixCachedBlock* cached_block = free_cached_blocks_.front();
-    free_cached_blocks_.pop_front();
+    free_cached_blocks_.pop();
 
     // Fill memory block ids,
     for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
@@ -369,7 +369,7 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
       // Move unfilled block to free list if existed.
       if (!cached_block->is_shareable) {
         ResetCachedBlock(cached_block);
-        free_cached_blocks_.push_back(cached_block);
+        free_cached_blocks_.push(cached_block);
         cached_request->cached_blocks.pop_back();
         continue;
       }
@@ -436,7 +436,7 @@ Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_r
 
         // Reset it and move to free list.
         ResetCachedBlock(cached_block);
-        free_cached_blocks_.push_back(cached_block);
+        free_cached_blocks_.push(cached_block);
         return Status();
       }
     }
@@ -502,7 +502,7 @@ Status PrefixCacheManager::AppendSwapinCachedBlock(PrefixCachedRequest* cached_r
 
         // Reset it and move to free list.
         ResetCachedBlock(cached_block);
-        free_cached_blocks_.push_back(cached_block);
+        free_cached_blocks_.push(cached_block);
         return Status();
       }
     }
@@ -790,7 +790,7 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   for (size_t i = 0; i < swapin_host_blocks.size(); ++i) {
     // Pick a empty cached block, replace it.
     PrefixCachedBlock* cached_block = free_cached_blocks_.front();
-    free_cached_blocks_.pop_front();
+    free_cached_blocks_.pop();
     swapin_dev_blocks.push_back(cached_block);
 
     // Append to buffer list.
@@ -800,7 +800,7 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   // Allocate next step block.
   for (size_t i = 0; i < step_block_num; ++i) {
     PrefixCachedBlock* cached_block = free_cached_blocks_.front();
-    free_cached_blocks_.pop_front();
+    free_cached_blocks_.pop();
 
     // Fill memory block ids,
     for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {

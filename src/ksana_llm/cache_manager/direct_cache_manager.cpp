@@ -36,7 +36,7 @@ void DirectCacheManager::InitializeCachedBlocks() {
       GetBlockManager()->AllocateBlocks(1, blocks);
       cached_block->memory_block_ids[j] = blocks[0];
     }
-    free_cached_blocks_.push_back(cached_block);
+    free_cached_blocks_.push(cached_block);
   }
   KLLM_LOG_DEBUG << "DirectCacheManager initialized, device num:" << cache_manager_config_.tensor_para_size
                  << ", device block num:" << free_cached_blocks_.size()
@@ -110,7 +110,7 @@ Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   // Try to allocate from free list.
   for (size_t i = 0; i < block_num; ++i) {
     DirectCachedBlock* cached_block = free_cached_blocks_.front();
-    free_cached_blocks_.pop_front();
+    free_cached_blocks_.pop();
 
     // Fill memory block ids,
     for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
@@ -134,7 +134,7 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
   DirectCachedRequest* cached_request = it->second;
 
   for (size_t i = 0; i < cached_request->cached_blocks.size(); ++i) {
-    free_cached_blocks_.push_back(cached_request->cached_blocks[i]);
+    free_cached_blocks_.push(cached_request->cached_blocks[i]);
   }
 
   // Remove blocks from request.
@@ -252,7 +252,7 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   for (size_t i = 0; i < swapin_host_blocks.size(); ++i) {
     // Pick a empty cached block, replace it.
     DirectCachedBlock* cached_block = free_cached_blocks_.front();
-    free_cached_blocks_.pop_front();
+    free_cached_blocks_.pop();
     swapin_dev_blocks.push_back(cached_block);
 
     // Append to buffer list.
@@ -262,7 +262,7 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   // Allocate next step block.
   for (size_t i = 0; i < step_block_num; ++i) {
     DirectCachedBlock* cached_block = free_cached_blocks_.front();
-    free_cached_blocks_.pop_front();
+    free_cached_blocks_.pop();
 
     // Fill memory block ids,
     for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
