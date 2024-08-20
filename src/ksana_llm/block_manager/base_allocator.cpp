@@ -27,7 +27,7 @@ void BaseAllocator::PreAllocateBlocks() {
     blocks_base_ptr = base_mem_ptr;
   }
 #endif
-  for (int64_t i = 0; i < allocator_config_.blocks_num; ++i) {
+  for (size_t i = 0; i < allocator_config_.blocks_num; ++i) {
     int block_id = id_generator_.Gen();
     if (is_continuous_mode) {
       memory_ptr = base_mem_ptr + i * allocator_config_.block_size;

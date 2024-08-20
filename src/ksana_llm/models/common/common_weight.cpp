@@ -554,6 +554,8 @@ void CommonWeight<T>::ProcessWeights() {
       } else if (tensor.dtype == DataType::TYPE_BF16) {
         torch_dtype = torch::kBFloat16;
 #endif
+      } else {
+        throw std::runtime_error(fmt::format("Unsupported Tensor type {}.", tensor.dtype));
       }
       auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
       torch::Tensor in =

@@ -172,19 +172,19 @@ class LlamaAscendRotaryEmbeddingTestSuit : public AscendTestSuitBase {
   template <typename DTYPE>
   void TestATBRotaryEmbedding() {
     // following config is loaded from llama2-13B
-    int rotary_dim{128};
-    int max_position_embeddings{2048};
-    int num_tokens{512};
-    int num_kv_heads{40};
-    int num_heads{40};
-    int head_dim{128};
+    size_t rotary_dim{128};
+    size_t max_position_embeddings{2048};
+    size_t num_tokens{512};
+    size_t num_kv_heads{40};
+    size_t num_heads{40};
+    size_t head_dim{128};
     float rope_base{10000};
     bool is_neox{true};
     size_t batch_size{1ul};
     RotaryEmbeddingType scaling_type{RotaryEmbeddingType::DEFAULT};
     float scaling_factor{1.0f};
-    int query_stride = num_heads * head_dim;
-    int key_stride = num_kv_heads * head_dim;
+    size_t query_stride = num_heads * head_dim;
+    size_t key_stride = num_kv_heads * head_dim;
 
     aclDataType aclnn_dtype = aclDataType::ACL_FLOAT16;
     if (std::is_same<DTYPE, float>::value) {

@@ -72,20 +72,26 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   STATUS_CHECK_FAILURE(CreateBufferTensor(residual_buffer_[0], {residual_buffer_size}, weight_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(shared_buffer_[0], {shared_buffer_size}, weight_type));
 
-  STATUS_CHECK_FAILURE(CreateBufferTensor(cos_sin_cache_tensor_,
-                                          {(size_t)rotary_embedding, (size_t)max_position_embeddings}, weight_type));
+  STATUS_CHECK_FAILURE(CreateBufferTensor(
+      cos_sin_cache_tensor_, {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings)},
+      weight_type));
 #ifdef ENABLE_ACL
-  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_0_, {max_token_num, hidden_units}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_1_, {max_token_num, hidden_units}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_2_, {max_token_num, hidden_units}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_3_, {max_token_num, hidden_units}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(CreateBufferTensor(ascend_buffer_4_, {max_token_num, hidden_units}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(ascend_buffer_0_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(ascend_buffer_1_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(ascend_buffer_2_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(ascend_buffer_3_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
+  STATUS_CHECK_FAILURE(
+      CreateBufferTensor(ascend_buffer_4_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
 
   for (int idx = 0; idx < num_layer_; ++idx) {
     Tensor key_cache;
     Tensor val_cache;
-    STATUS_CHECK_FAILURE(CreateBufferTensor(key_cache, {max_token_num, hidden_units}, TYPE_FP16));
-    STATUS_CHECK_FAILURE(CreateBufferTensor(val_cache, {max_token_num, hidden_units}, TYPE_FP16));
+    STATUS_CHECK_FAILURE(CreateBufferTensor(key_cache, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
+    STATUS_CHECK_FAILURE(CreateBufferTensor(val_cache, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
 
     ascend_key_caches_.push_back(key_cache);
     ascend_val_caches_.push_back(val_cache);
@@ -615,7 +621,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
 
   // create forward shape tensor
   forward_shape_.shape = {model_input_->batch_size, model_input_->max_tokens,
-                          (size_t)model_input_->kv_cache_offset_list.back()};
+                          static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
 
   StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
 

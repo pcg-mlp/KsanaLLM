@@ -4,7 +4,7 @@
 
 #include "kernel_operator.h"
 #include "kernel_tiling/kernel_tiling.h"
-#include "lib/rmsnorm/kernel_operator_rmsnorm_intf.h"
+#include "lib/rmsnorm/rmsnorm.h"
 using namespace AscendC;
 
 constexpr int32_t RMSNORM_BUFFER_NUM = 1;  // tensor num for each queue

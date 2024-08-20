@@ -38,7 +38,7 @@ void PrefixCacheManager::InitializeCachedBlocks() {
     PrefixCachedBlock* cached_block = CreateCachedBlock(i);
 
     // allocate memory block on every device.
-    for (int j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
       std::vector<int> blocks;
       GetBlockManager()->SetDeviceId(j);
       GetBlockManager()->AllocateBlocks(1, blocks);
@@ -235,7 +235,7 @@ void PrefixCacheManager::FreeCachedBlockRecursively(PrefixCachedBlock* cached_bl
   free_num += 1;
 }
 
-bool PrefixCacheManager::FreeCachedBlocks(int block_num, size_t& free_block_num,
+bool PrefixCacheManager::FreeCachedBlocks(size_t block_num, size_t& free_block_num,
                                           const std::vector<PrefixCachedBlock*>& reserved_blocks) {
   free_block_num = 0;
   std::vector<PrefixCachedBlock*> free_blocks;

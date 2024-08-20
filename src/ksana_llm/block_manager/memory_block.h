@@ -13,10 +13,10 @@ struct MemoryBlock {
   int64_t block_id;
 
   // block size, in bytes.
-  int64_t block_size;
+  size_t block_size;
 
   // The reference count of current block.
-  uint64_t ref_count = 0;
+  size_t ref_count = 0;
 
   // /The device of this block, CPU or GPU or NPU.
   MemoryDevice device;

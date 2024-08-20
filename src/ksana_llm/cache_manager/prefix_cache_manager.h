@@ -165,7 +165,7 @@ class PrefixCacheManager : public CacheManagerInterface,
   void ResetCachedBlock(PrefixCachedBlock* cached_block);
 
   // Free at least block_num cached blocks that could resued, reserve some blocks if needed.
-  bool FreeCachedBlocks(int block_num, size_t& free_block_num,
+  bool FreeCachedBlocks(size_t block_num, size_t& free_block_num,
                         const std::vector<PrefixCachedBlock*>& reserved_blocks = {});
 
   // Recursive free block and its all children.

@@ -57,7 +57,6 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   output_tensors[0].dtype = input_tensors[0].dtype;
   void* qkv_tensor = input_tensors[0].GetPtr<void>();
   int64_t batch_size = input_tensors[7].shape[0];
-  int64_t hidden_units = input_tensors[0].shape[1] / 3;
 
   void* seq_offset = input_tensors[1].GetPtr<void>();
   void* kv_list = input_tensors[2].GetPtr<void>();

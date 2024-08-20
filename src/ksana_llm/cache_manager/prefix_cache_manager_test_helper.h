@@ -275,7 +275,7 @@ class FakedTokenGenerator {
   void GeneratePromptTokens(const std::vector<std::pair<int, int>>& seeds, std::vector<int>& token_ids) {
     for (auto& pair : seeds) {
       std::srand(pair.first);
-      for (size_t i = 0; i < pair.second; ++i) {
+      for (int i = 0; i < pair.second; ++i) {
         token_ids.push_back(std::rand() % vocab_size);
       }
     }

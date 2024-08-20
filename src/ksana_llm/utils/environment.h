@@ -78,7 +78,7 @@ struct ModelConfig {
   size_t num_key_value_heads;
   int max_batch_size;
   int max_position_embeddings;
-  int block_token_num;
+  size_t block_token_num;
   std::vector<float> k_scales;
   std::vector<float> v_scales;
 
@@ -139,10 +139,10 @@ struct BatchSchedulerConfig {
 
 struct AllocatorConfig {
   // The preallocated blocks.
-  int64_t blocks_num = 0;
+  size_t blocks_num = 0;
 
   // The block size, in bytes.
-  int64_t block_size;
+  size_t block_size;
 
   // kv_cache storage type
   DataType kv_cache_dtype;

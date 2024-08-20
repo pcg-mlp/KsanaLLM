@@ -40,7 +40,9 @@ template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // TODO(karlluo): support bias
   int64_t m = input_tensors[0].shape[0];
+#ifndef ENABLE_ACL_ATB
   int64_t k = input_tensors[0].shape[1];
+#endif
   int64_t n = input_tensors[1].shape[1];
   output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
 #ifdef ENABLE_ACL_ATB

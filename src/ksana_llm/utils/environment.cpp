@@ -248,6 +248,8 @@ void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
   // TODO(zhongzhicao): 当前仅尝试从模型文件夹下读取，后续需要从python_dir/kv_scales下读取，并校验模型是否相同
   std::string &kv_scale_path = optional_file->GetOptionalFile(model_dir, "kv_scales", "kv_cache_scales.json");
   if (kv_scale_path == "") {
+    KLLM_LOG_WARNING << fmt::format(
+        "Loading KV cache scaling factors file error. File not found. Using defalt value 1.0 ");
     return;
   }
   KLLM_LOG_INFO << fmt::format("Found KV cache scaling factors file at {}.", kv_scale_path);
@@ -257,7 +259,7 @@ void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
   if (!kv_scale_file.is_open()) {
     // TODO(zhongzhicao): load kv scale from model weights
     KLLM_LOG_WARNING << fmt::format(
-        "Loading KV cache scaling factors file: {} error. File not found.Using defalt value 1.0 ", kv_scale_path);
+        "Failed opening KV cache scaling factors file: {}. Using defalt value 1.0 ", kv_scale_path);
   } else {
     kv_scale_file >> kv_scale_json;
     kv_scale_file.close();
@@ -272,14 +274,14 @@ void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
   }
 
   // TODO(zhongzhicao): load kv scale for tensor_para_size > 1
-  KLLM_LOG_INFO << fmt::format(
-      "Loading KV cache scaling factors from TP=0. Currently only tp_size = 1 is supported.");
   int tensor_parallel_size_kv_ = kv_scale_json.at("kv_cache").at("scaling_factor").size();
-  if (tensor_parallel_size_kv_ == 0) {
-    for (uint32_t i = 0; i < model_config.num_layer; ++i) {
-      model_config.k_scales[i] = model_config.v_scales[i] =
-          kv_scale_json.at("kv_cache").at("scaling_factor").at("0").at(std::to_string(i));
-    }
+  if (tensor_parallel_size_kv_ != 1) {
+    KLLM_LOG_WARNING << fmt::format(
+        "Loading KV cache scaling factors from TP=0. Currently only tp_size = 1 is supported.");
+  }
+  for (uint32_t i = 0; i < model_config.num_layer; ++i) {
+    model_config.k_scales[i] = model_config.v_scales[i] =
+        kv_scale_json.at("kv_cache").at("scaling_factor").at("0").at(std::to_string(i));
   }
 
   KLLM_LOG_INFO << fmt::format(

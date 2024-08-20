@@ -37,6 +37,13 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   is_context_stage_ = std::any_cast<const bool>(parameters[parameter_index++]);
 #endif
 
+  // TODO(zhongzhicao): The cast should be removed after implementing ROPE.
+  // Cast the unused variables to void to suppress the -Wunused-value warnings.
+  (void)rotary_dim;
+  (void)is_neox;
+  (void)is_alibi;
+  (void)cos_sin_cache_ptr;
+
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
 

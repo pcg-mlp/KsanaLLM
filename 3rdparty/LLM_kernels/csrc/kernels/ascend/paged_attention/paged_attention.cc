@@ -21,7 +21,7 @@ https://github.com/PaddlePaddle/PaddleCustomDevice/blob/develop/backends/npu/cus
 #include "acl/acl_op_compiler.h"
 #include "aclnn/acl_meta.h"
 
-#include "tiling/softmax/softmax_tiling_intf.h"
+#include "tiling/softmax/softmax_tiling.h"
 #include "tiling/tiling_api.h"
 
 #include "csrc/kernels/ascend/paged_attention/paged_attention_tiling.h"

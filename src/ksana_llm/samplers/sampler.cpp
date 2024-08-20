@@ -105,8 +105,10 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
                                         SamplingDevideParameter& sampling_devide_parameter, Stream& stream) {
   for (auto& sampling_req : sampling_reqs) {
     auto& logprobs_num = sampling_req.sampling_config->logprobs_num;
+#ifdef ENABLE_CUDA
     auto& offset = sampling_req.logits_offset;
     auto& vocab_size = sampling_devide_parameter.vocab_size_padded;
+#endif
 
     if (logprobs_num == 0) {
       std::unique_lock<std::mutex> lock(*sampling_req.output_mutex);

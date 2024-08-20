@@ -89,19 +89,19 @@ class LlamaAscendSliceTestSuit : public AscendTestSuitBase {
     std::vector<DTYPE> v_tensor_ref_host_ptr(v_elem_nums);
 
     // create run graph
-    uint64_t tensor_idx = 0;
-    uint64_t input_qkv_tensor = tensor_idx++;  // [ntokens, 3 * head_num * head_dim] or [ntokens,
+    unsigned int tensor_idx = 0;
+    unsigned int input_qkv_tensor = tensor_idx++;  // [ntokens, 3 * head_num * head_dim] or [ntokens,
                                                // (head_num + 2 * kv_head_num) * head_dim]
-    uint64_t output_q_tensor = tensor_idx++;   // [ntokens, head_num * head_dim]
-    uint64_t output_k_tensor = tensor_idx++;
-    uint64_t output_v_tensor = tensor_idx++;
+    unsigned int output_q_tensor = tensor_idx++;   // [ntokens, head_num * head_dim]
+    unsigned int output_k_tensor = tensor_idx++;
+    unsigned int output_v_tensor = tensor_idx++;
     atb::GraphParam op_graph;
     op_graph.name = "TestATBQKVSlice";
     op_graph.inTensorNum = 1;
     op_graph.outTensorNum = 3;
     op_graph.internalTensorNum = 0;
     op_graph.nodes.resize(1);
-    uint64_t node_idx = 0;
+    unsigned int node_idx = 0;
     atb::Node& op_node = op_graph.nodes.at(node_idx++);
     CreateSplitQKVATBOperation(ntokens, head_size, kv_head_size, head_dim, &op_node.operation);
     op_node.inTensorIds = {input_qkv_tensor};
