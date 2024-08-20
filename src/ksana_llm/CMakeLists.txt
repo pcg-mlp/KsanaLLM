@@ -37,6 +37,7 @@ add_subdirectory(samplers)
 add_subdirectory(service)
 add_subdirectory(profiler)
 add_subdirectory(utils)
+add_subdirectory(periphery)
 
 add_library(ksana_llm_libs INTERFACE)
 target_link_libraries(ksana_llm_libs INTERFACE
@@ -56,6 +57,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   profiler
   loguru
   gflags
+  periphery
   ${NCCL_LIBRARIES}
 )
 

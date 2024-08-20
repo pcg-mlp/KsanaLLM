@@ -305,6 +305,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
   embed_tokens_use_cpu_ =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.embed_tokens_use_cpu", false);
+  is_version_report_ =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.is_version_report", true);
   if (tensor_parallel_size_ == 0) {
     int device_size = -1;
     GetDeviceCount(&device_size);

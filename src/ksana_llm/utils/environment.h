@@ -259,6 +259,8 @@ class Environment {
 
   bool EmbedTokensUseCpu() { return embed_tokens_use_cpu_; }
 
+  bool IsReportVersion() { return is_version_report_; }
+
  private:
   // Calculate block size via model configs.
   void InitializeBlockManagerConfig();
@@ -296,6 +298,7 @@ class Environment {
 
   // Embed_tokens gather operation is processed on the CPU.
   bool embed_tokens_use_cpu_ = false;
+  bool is_version_report_ = true;
 };
 
 }  // namespace ksana_llm
