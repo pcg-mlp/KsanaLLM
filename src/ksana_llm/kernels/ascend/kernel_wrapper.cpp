@@ -34,12 +34,14 @@ void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_tabl
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
   if (tensor.dtype == DataType::TYPE_BF16 || target_dtype == DataType::TYPE_BF16) {
-    throw std::invalid_argument("Invalid cast compute type, only support float16 to float32 or float32 to float16.");
+    KLLM_THROW(
+        fmt::format("Invalid cast compute type bfloat16, only support float16 to float32 or float32 to float16. "
+                    "Tensor type is {}, target type is {}.",
+                    tensor.dtype, target_dtype));
   } else if (tensor.dtype == target_dtype) {
     // No need to convert
   } else {
-    throw std::runtime_error(
-        fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+    KLLM_THROW(fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
   }
   tensor.dtype = target_dtype;
   return Status();
@@ -81,8 +83,7 @@ template <typename T>
 Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
               uint32_t* result, Stream& stream, void* workspace_ptr) {
   if (ids_offset != nullptr) {
-    throw std::runtime_error("Not supported ids offset");
-    return Status(RET_RUNTIME, "argmax not supported ids offset");
+    KLLM_THROW("Not supported ids offset.");
   }
   llm_kernels::ascend::InvokeArgmax<T>(input, ids_offset, batch_size, vocab_size, result, stream.Get(),
                                        llm_kernels::utils::GetTestWorkSpaceFunc);

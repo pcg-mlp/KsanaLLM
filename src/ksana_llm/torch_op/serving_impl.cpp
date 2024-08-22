@@ -15,13 +15,13 @@ ServingImpl::ServingImpl() {
 
   std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
   if (!env) {
-    throw std::runtime_error("The Environment is nullptr.");
+    KLLM_THROW("The Environment is nullptr.");
   }
 
   EndpointConfig endpoint_config;
   Status status = env->GetEndpointConfig(endpoint_config);
   if (!status.OK()) {
-    throw std::runtime_error("Get endpoint config error:" + status.ToString());
+    KLLM_THROW("Get endpoint config error:" + status.ToString());
   }
 
   // Create local endpoint.

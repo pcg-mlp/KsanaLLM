@@ -39,18 +39,14 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   const T* input = static_cast<const T*>(input_tensors[0].GetPtr<void>());
   size_t workspace_size = GetWorkSpaceSize(m, k);
   if (workspace_size > workspace_buffer_->GetTotalBytes()) {
-    KLLM_LOG_ERROR << fmt::format("workspace size {} > buffer size {}", workspace_size,
-                                  workspace_buffer_->GetTotalBytes());
-    throw std::runtime_error(
-        fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_->GetTotalBytes()));
+    KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_->GetTotalBytes()));
   }
   void* input_quant = workspace_buffer_->GetPtr<void>();
   float* input_scale = static_cast<float*>(input_quant + GetTypeSize(TYPE_FP8_E4M3) * m * k);
   const void* weight_quant = input_tensors[1].GetPtr<const void>();
   const void* weight_scale = input_tensors[1].scales->GetPtr<const void>();
   if (weight_scale == nullptr) {
-    KLLM_LOG_ERROR << "weight_scale is nullptr.";
-    throw std::runtime_error(fmt::format("weight_scale is nullptr."));
+    KLLM_THROW("Cannot load weight_scale. Weight_scale is nullptr.");
   }
   T* output = static_cast<T*>(output_tensors[0].GetPtr<void>());
   output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};

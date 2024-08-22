@@ -80,7 +80,7 @@ class ModelInstance {
         model_obj = std::make_shared<ClassT<float>>(model_config_, rank, context_, std::forward<Args>(args)...);
         break;
       default:
-        throw std::runtime_error("Unsupported Tensor type.");
+        KLLM_THROW(fmt::format("Unsupported Tensor type: {}.", model_config_.weight_data_type));
     }
     return model_obj;
   }

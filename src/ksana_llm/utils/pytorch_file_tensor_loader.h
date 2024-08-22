@@ -29,6 +29,8 @@ class __attribute__((visibility("hidden"))) PytorchFileTensorLoader : public Bas
 
   DataType GetTensorDataType(const std::string& tensor_name);
 
+  std::string GetTensorFileName();
+
   std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
 
  private:

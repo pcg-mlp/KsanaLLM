@@ -111,8 +111,8 @@ class MatMulLayerFactory {
 
       return layer;
     } else {
-      throw std::runtime_error(fmt::format("Not support weight_type {}, input_type {}, output_type {}, quant_mode {}.",
-                                           weight_type, input_type, output_type, quant_mode));
+      KLLM_THROW(fmt::format("Not support weight_type {}, input_type {}, output_type {}, quant_mode {}.", weight_type,
+                             input_type, output_type, quant_mode));
     }
   }
 

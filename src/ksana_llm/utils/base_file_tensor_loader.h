@@ -25,6 +25,8 @@ class BaseFileTensorLoader {
 
   virtual DataType GetTensorDataType(const std::string& tensor_name) = 0;
 
+  virtual std::string GetTensorFileName() = 0;
+
   virtual std::vector<std::size_t> GetTensorShape(const std::string& tensor_name) = 0;
 
  protected:

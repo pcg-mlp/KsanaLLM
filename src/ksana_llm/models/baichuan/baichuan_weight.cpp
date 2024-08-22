@@ -20,8 +20,7 @@ Status BaichuanWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoad
                                               std::vector<std::string>& weight_name_list,
                                               std::vector<std::string>& custom_name_list) {
   if (!common_weight_->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list).OK()) {
-    KLLM_LOG_ERROR << fmt::format("Load weight file error.");
-    exit(-1);
+    KLLM_THROW(fmt::format("Load weight file {} error.", weights_loader->GetTensorFileName()));
   }
   return Status();
 }

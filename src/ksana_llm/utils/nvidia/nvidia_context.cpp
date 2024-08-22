@@ -31,9 +31,8 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
         int can_access = 0;
         CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, access_id, worker_id));
         if (can_access == 0) {
-          KLLM_LOG_ERROR << "GPU " << access_id << " is not capable of directly accessing memory of peer GPU "
-                         << worker_id;
-          exit(-1);
+          KLLM_THROW(
+              fmt::format("GPU {} is not capable of directly accessing memory of peer GPU {}.", access_id, worker_id));
         }
         CUDA_CHECK(cudaMemPoolSetAccess(mempool, &desc, 1));
       }

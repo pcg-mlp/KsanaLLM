@@ -27,8 +27,7 @@ Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWei
       model->Decode(weight, forward_reqs);
       break;
     default:
-      throw std::invalid_argument("Invalid infer stage.");
-      break;
+      KLLM_THROW(fmt::format("Invalid infer stage: {}. Valid stages include STAGE_CONTEXT and STATE_DECODE", stage));
   }
 
   return Status();

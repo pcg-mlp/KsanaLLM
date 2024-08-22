@@ -204,7 +204,7 @@ template <typename T>
 void InvokeSiluActivation(const void* input, const void* gated_weights, const int m, const int n, void* output,
                           cudaStream_t stream) {
   if (output != input) {
-    throw std::runtime_error("Activation is an in-place operation, `output` must be the same as `input`.");
+    KLLM_THROW("Activation is an in-place operation, `output` must be the same as `input`.");
   }
   const int* ia3_tasks = nullptr;
   const T* bias = nullptr;
@@ -611,8 +611,7 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
   } else if (tensor.dtype == target_dtype) {
     // No need to convert
   } else {
-    throw std::runtime_error(
-        fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+    KLLM_THROW(fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
   }
   tensor.dtype = DataType::TYPE_FP16;
   return Status();
@@ -631,10 +630,10 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
     InvokePermute<__nv_bfloat16>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape,
                                  permutation, stream.Get());
 #else
-    throw std::runtime_error(fmt::format("Permute of type {} is not yet implement", input_tensor.dtype));
+    KLLM_THROW(fmt::format("Permute of type {} is not yet implement", input_tensor.dtype));
 #endif
   } else {
-    throw std::runtime_error(fmt::format("Permute of type {} is not yet implement", input_tensor.dtype));
+    KLLM_THROW(fmt::format("Permute of type {} is not yet implement", input_tensor.dtype));
   }
   return Status();
 }

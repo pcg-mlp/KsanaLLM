@@ -21,7 +21,7 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared
     aclnn_mm_type_ = llm_kernels::utils::ACLNNMatmulComputeType::KEEP_DTYPE;
     aclnn_dtype_ = aclDataType::ACL_FLOAT;
   } else {
-    throw std::invalid_argument("Invalid matmul type type, only support float16 or float32.");
+    KLLM_THROW("Invalid matmul type, only support float16 or float32.");
   }
 
 #ifdef ENABLE_ACL_ATB

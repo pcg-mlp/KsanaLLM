@@ -163,10 +163,10 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   batch_size = forward_reqs.size();
   KLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
-    std::invalid_argument(fmt::format("ModelInput empty forward requests."));
+    KLLM_THROW(fmt::format("ModelInput empty forward requests, batch_size == 0"));
   } else if (batch_size > (size_t)model_config_.max_batch_size) {
-    std::invalid_argument(
-        fmt::format("ModelInput bs exceed max bs. {} > {}", batch_size, model_config_.max_batch_size));
+    KLLM_THROW(
+        fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size, model_config_.max_batch_size));
   }
 
   max_tokens = 0;
@@ -393,11 +393,8 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
   std::vector<size_t> input_prefix_list_uint64(batch_size + 1, 0ul);
   for (size_t idx = 0; idx < batch_size; ++idx) {
     if (forward_reqs[idx].output_tokens->size() < (size_t)forward_reqs[idx].prefix_cache_len) {
-      KLLM_LOG_ERROR << fmt::format("Forward Request input tokens {} < prefix cache len {}",
-                                    forward_reqs[idx].output_tokens->size(), forward_reqs[idx].prefix_cache_len);
-      throw std::runtime_error(fmt::format("Forward Request input tokens {} < prefix cache len {}",
-                                           forward_reqs[idx].output_tokens->size(),
-                                           forward_reqs[idx].prefix_cache_len));
+      KLLM_THROW(fmt::format("Forward Request input tokens {} < prefix cache len {}",
+                             forward_reqs[idx].output_tokens->size(), forward_reqs[idx].prefix_cache_len));
     }
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t prefix_offset = forward_reqs[idx].prefix_cache_len;

@@ -52,8 +52,7 @@ CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::sh
   model_path_ = model_config.path;
   rank_ = rank;
   if (!GetModelInfo(model_config).OK()) {
-    KLLM_LOG_ERROR << fmt::format("Load model config file error.");
-    exit(-1);
+    KLLM_THROW(fmt::format("Load model config file error."));
   }
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
   quant_weight_slover_ = std::make_shared<QuantWeight<T>>(model_config, rank, context, weights_map_);
@@ -555,7 +554,7 @@ void CommonWeight<T>::ProcessWeights() {
         torch_dtype = torch::kBFloat16;
 #endif
       } else {
-        throw std::runtime_error(fmt::format("Unsupported Tensor type {}.", tensor.dtype));
+        KLLM_THROW(fmt::format("Unsupported Tensor type {}.", tensor.dtype));
       }
       auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
       torch::Tensor in =
@@ -579,8 +578,7 @@ void CommonWeight<T>::ProcessWeights() {
 #ifdef ENABLE_FP8
     quant_weight_slover_->ConvertFp8E4m3(num_layer);
 #else
-    KLLM_LOG_ERROR << "Device not support Fp8";
-    throw std::runtime_error("Device not support Fp8");
+    KLLM_THROW("Device not support Fp8");
 #endif
   }
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);

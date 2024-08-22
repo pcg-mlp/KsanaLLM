@@ -75,7 +75,7 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
                               stream.Get(), static_cast<int>(sampling_devide_parameter.bs), 0, nullptr, false,
                               logitHasProbs));
 #else
-    throw std::runtime_error("Not support topk in Ascend NPU.");
+    KLLM_THROW("Not support topk in Ascend NPU.");
 #endif
   }
 

@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ksana_llm/utils/logger.h"
+
 namespace ksana_llm {
 
 // / The thread pool
@@ -67,7 +69,7 @@ class ThreadPool {
   template <class Fun, class... Args>
   auto Submit(Fun&& f, Args&&... args) -> std::future<decltype(f(args...))> {
     if (stopped_.load()) {
-      throw std::runtime_error("Submit on stopped threadpool.");
+      KLLM_THROW("Submit on stopped threadpool.");
     }
 
     using RetType = decltype(f(args...));

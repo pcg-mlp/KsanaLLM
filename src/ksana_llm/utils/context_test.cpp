@@ -28,7 +28,8 @@ TEST_F(ContextTest, NvidiaInitTest) {
         try {
           std::shared_ptr<Context> context = std::make_shared<Context>(1, 2);
         } catch (const std::runtime_error& e) {
-          EXPECT_STREQ("Only support pipeline_parallel_size == 1", e.what());
+          EXPECT_THAT(e.what(), testing::HasSubstr(
+                                    "Only support pipeline_parallel_size == 1. Current pipeline_parallel_size_ is:"));
           throw;
         }
       },

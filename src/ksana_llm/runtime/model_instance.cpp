@@ -56,7 +56,7 @@ void ModelInstance::Load() {
       type = "llama";
       CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);
     } else {
-      throw std::runtime_error(fmt::format("Model type {} is not supported.", unified_model_type));
+      KLLM_THROW(fmt::format("Model type {} is not supported.", unified_model_type));
     }
   }
 }

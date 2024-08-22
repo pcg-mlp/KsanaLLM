@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 TEST(AlignedMemoryQueueTest, ConstructorThrowsWhenAlignmentIsNotPowerOfTwo) {
-  EXPECT_THROW({ AlignedMemoryQueue queue(3, [](size_t) -> void* { return nullptr; }); }, std::invalid_argument);
+  EXPECT_THROW({ AlignedMemoryQueue queue(3, [](size_t) -> void* { return nullptr; }); }, std::runtime_error);
 }
 
 TEST(AlignedMemoryQueueTest, AllocateAndAlignCorrectlyAllocatesMemory) {

@@ -21,6 +21,8 @@ class SafeTensorsLoader : public BaseFileTensorLoader {
 
   DataType GetTensorDataType(const std::string& tensor_name);
 
+  std::string GetTensorFileName();
+
   std::vector<std::size_t> GetTensorShape(const std::string& tensor_name);
 
  private:

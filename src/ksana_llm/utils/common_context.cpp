@@ -8,6 +8,7 @@
 #include "fmt/core.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
 
@@ -15,13 +16,14 @@ template <int T>
 ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_parallel_size)
     : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
   if (pipeline_parallel_size_ != 1) {
-    throw std::runtime_error("Only support pipeline_parallel_size == 1");
+    KLLM_THROW(fmt::format("Only support pipeline_parallel_size == 1. Current pipeline_parallel_size_ is: {}",
+                           pipeline_parallel_size_));
   }
 
   GetDeviceCount(&device_num_);
   if (device_num_ < tensor_parallel_size_ * pipeline_parallel_size_) {
-    throw std::runtime_error(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
-                                         tensor_parallel_size_, device_num_));
+    KLLM_THROW(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}", tensor_parallel_size_,
+                           device_num_));
   }
 
   memory_manage_streams_.reserve(tensor_parallel_size_);

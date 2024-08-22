@@ -42,9 +42,8 @@ class TensorManager {
   // Create a tensor with the same size, similar to ```copy_tensor_name = torch.empty_like(origin_tensor_name)```
   Status CreateTensorWithSameShape(const std::string& origin_tensor_name, const std::string& copy_tensor_name) {
     if (!weights_map_.count(origin_tensor_name)) {
-      KLLM_LOG_ERROR << fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name,
-                                    origin_tensor_name);
-      exit(-1);
+      KLLM_THROW(
+          fmt::format("Create tensor {} faild: tensor {} not in weights map", copy_tensor_name, origin_tensor_name));
     }
     Tensor& origin_tensor = weights_map_[origin_tensor_name];
     AddWeightTensor(copy_tensor_name, origin_tensor.shape, origin_tensor.dtype);

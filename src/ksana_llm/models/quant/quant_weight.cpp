@@ -84,9 +84,7 @@ bool QuantWeight<T>::CheckQuantModel() {
     }
     if (model_config_.quant_config.method == QUANT_FP8_E4M3) {
       if (model_config_.quant_config.is_checkpoint_fp8_serialized) {
-        KLLM_LOG_ERROR << "Loading of fp8 weights from checkpoint is not supported.";
-        throw std::runtime_error("Loading of fp8 weights from checkpoint is not supported.");
-        // return true;
+        KLLM_THROW("Loading of fp8 weights from checkpoint is not supported.");
       } else {
         return false;
       }
@@ -109,8 +107,11 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
       size_t kv_proj_size = model_config_.size_per_head * model_config_.num_key_value_heads;
 
       if (q_proj_size % tensor_para_size_ != 0 || kv_proj_size % tensor_para_size_ != 0) {
-        KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
-        exit(-1);
+        KLLM_THROW(
+            fmt::format("Model can't run with tensor_para_size == {}. "
+                        "The size of q_proj_size {} or kv_proj_size {} cannot be evenly divided by the size of "
+                        "tensor_parallel_size_.",
+                        tensor_para_size_, q_proj_size, kv_proj_size));
       }
 
       const std::string prefix_name = tensor_name.substr(0, tensor_name.find("W_pack"));
@@ -157,8 +158,10 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
                   context_->GetMemoryManageStreams()[rank_]);
     } else if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
       if (weight_shape[0] % tensor_para_size_ != 0) {
-        KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
-        exit(-1);
+        KLLM_THROW(
+            fmt::format("Model can't run with tensor_para_size == {}."
+                        "The size of weight_shape[0] {} cannot be evenly divided by the size of tensor_para_size_",
+                        tensor_para_size_, weight_shape[0]));
       }
 
       weight_shape[0] /= tensor_para_size_;
@@ -169,8 +172,10 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       if (weight_shape[1] % tensor_para_size_ != 0) {
-        KLLM_LOG_ERROR << fmt::format("Model can't run with tensor_para_size == {}", tensor_para_size_);
-        exit(-1);
+        KLLM_THROW(
+            fmt::format("Model can't run with tensor_para_size == {}."
+                        "The size of weight_shape[1] {} cannot be evenly divided by the size of tensor_para_size_",
+                        tensor_para_size_, weight_shape[1]));
       }
 
       auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
@@ -197,9 +202,8 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
         MemcpyAsync(weights_map_[gate_name].GetPtr<void>(), gate_tensor.data_ptr(),
                     weights_map_[gate_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
                     context_->GetMemoryManageStreams()[rank_]);
-        MemcpyAsync(weights_map_[up_name].GetPtr<void>(), up_tensor.data_ptr(),
-                    weights_map_[up_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[rank_]);
+        MemcpyAsync(weights_map_[up_name].GetPtr<void>(), up_tensor.data_ptr(), weights_map_[up_name].GetTotalBytes(),
+                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
       } else {
         size_t single_size = weight_shape[1] / tensor_para_size_;
         tensor = tensor.slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
@@ -391,8 +395,7 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
 template <typename T>
 Status QuantWeight<T>::ConvertFp8E4m3(const int num_layer) {
   if (!context_->IsGemmFp8Supported()) {
-    KLLM_LOG_ERROR << "Cublas is insufficient to support FP8.";
-    throw std::runtime_error("Cublas is insufficient to support FP8.");
+    KLLM_THROW("Cublas is insufficient to support FP8.");
   }
   DataType quant_type = TYPE_FP8_E4M3;
   KLLM_LOG_INFO << "Converting weight to fp8_e4m3";

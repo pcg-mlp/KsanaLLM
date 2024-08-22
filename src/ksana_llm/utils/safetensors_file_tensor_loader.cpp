@@ -107,6 +107,10 @@ DataType SafeTensorsLoader::GetTensorDataType(const std::string& tensor_name) {
   return tensor_data_type_map_[tensor_name];
 }
 
+std::string SafeTensorsLoader::GetTensorFileName() {
+  return file_name_;
+}
+
 std::vector<size_t> SafeTensorsLoader::GetTensorShape(const std::string& tensor_name) {
   if (!tensor_data_type_map_.count(tensor_name)) {
     return {};

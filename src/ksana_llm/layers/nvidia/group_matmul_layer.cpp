@@ -34,8 +34,7 @@ size_t GroupMatMulLayer<T, WT>::GetWorkSpaceSize() {
                                                                                       max_ws_bytes);
     return max_ws_bytes;
   } else {
-    KLLM_LOG_ERROR << "Not supported weight data type.";
-    exit(-1);
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. GroupMatMul only supports TYPE_I4_GROUP.", WT));
   }
 }
 
@@ -82,8 +81,7 @@ Status GroupMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
 
     return Status();
   } else {
-    KLLM_LOG_ERROR << "Not supported weight data type.";
-    exit(-1);
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. GroupMatMul only supports TYPE_I4_GROUP.", WT));
   }
 }
 
@@ -119,8 +117,7 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
     output_tensors[0].dtype = input_tensors[0].dtype;
     return Status();
   } else {
-    KLLM_LOG_ERROR << "Not supported weight data type.";
-    exit(-1);
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. GroupMatMul only supports TYPE_I4_GROUP.", WT));
   }
 }
 

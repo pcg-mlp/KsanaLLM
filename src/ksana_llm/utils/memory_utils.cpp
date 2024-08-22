@@ -24,8 +24,7 @@ AlignedMemoryQueue::AlignedMemoryQueue(size_t alignment, Allocator allocator)
     : alignment_(alignment), allocator_(allocator) {
   if (!IsPowerOfTwo(alignment_)) {
     std::string error_str = "Alignment must be a power of two. Current value: " + std::to_string(alignment_);
-    KLLM_LOG_ERROR << error_str;
-    throw std::invalid_argument(error_str);
+    KLLM_THROW(error_str);
   }
 }
 

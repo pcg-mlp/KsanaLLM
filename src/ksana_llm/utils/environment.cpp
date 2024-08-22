@@ -48,7 +48,7 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
     return DataType::TYPE_FP16;
 #endif
   } else {
-    throw std::runtime_error("Not supported model data type.");
+    KLLM_THROW(fmt::format("Not supported model data type: {}.", unified_data_type_raw_str));
   }
 }
 
@@ -65,8 +65,7 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
                                    model_config.quant_config.bits, model_config.quant_config.group_size);
     } else if (quant_method == "fp8") {
       // TODO(catheywang): support fp8 quantized weight loading.
-      KLLM_LOG_ERROR << "Loading of fp8 weights from checkpoint is not supported.";
-      throw std::runtime_error("Loading of fp8 weights from checkpoint is not supported.");
+      KLLM_THROW("Loading of fp8 weights from checkpoint is not supported.");
       model_config.quant_config.method = QUANT_FP8_E4M3;
       model_config.quant_config.is_checkpoint_fp8_serialized = true;
       model_config.quant_config.is_activation_scheme_static =
@@ -76,8 +75,7 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
           quant_method, model_config.quant_config.is_checkpoint_fp8_serialized,
           model_config.quant_config.is_activation_scheme_static);
     } else {
-      KLLM_LOG_ERROR << fmt::format("Not support quant_method {}.", quant_method);
-      throw std::runtime_error(fmt::format("Not support quant_method {}.", quant_method));
+      KLLM_THROW(fmt::format("Not support quant_method {}.", quant_method));
     }
   } else if (yaml_weight_quant_method != "auto") {
     if (yaml_weight_quant_method == "fp8_e4m3") {
@@ -92,8 +90,7 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
           yaml_weight_quant_method, model_config.quant_config.is_checkpoint_fp8_serialized,
           model_config.quant_config.is_activation_scheme_static);
     } else {
-      KLLM_LOG_ERROR << fmt::format("Not support quant_method {}.", yaml_weight_quant_method);
-      throw std::runtime_error(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
+      KLLM_THROW(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
     }
   }
 }
@@ -116,11 +113,10 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   }
   if (derived_max_model_len == std::numeric_limits<float>::infinity()) {
     std::string possible_keys_str = Vector2Str<std::string>(possible_keys);
-    KLLM_LOG_ERROR << fmt::format(
-        "The model's config.json does not contain any of the following keys to determine"
-        " the original maximum length of the model: {}",
-        possible_keys_str);
-    throw std::runtime_error("The model's config.json does not contain the maximum length of the model");
+    KLLM_THROW(
+        fmt::format("The model's config.json does not contain any of the following keys to determine"
+                    " the original maximum length of the model: {}",
+                    possible_keys_str));
   }
 
   auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
@@ -258,8 +254,8 @@ void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
   std::ifstream kv_scale_file(kv_scale_path);
   if (!kv_scale_file.is_open()) {
     // TODO(zhongzhicao): load kv scale from model weights
-    KLLM_LOG_WARNING << fmt::format(
-        "Failed opening KV cache scaling factors file: {}. Using defalt value 1.0 ", kv_scale_path);
+    KLLM_LOG_WARNING << fmt::format("Failed opening KV cache scaling factors file: {}. Using defalt value 1.0 ",
+                                    kv_scale_path);
   } else {
     kv_scale_file >> kv_scale_json;
     kv_scale_file.close();
@@ -305,8 +301,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_lora_adapter", false);
   embed_tokens_use_cpu_ =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.embed_tokens_use_cpu", false);
-  is_version_report_ =
-      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.is_version_report", true);
+  is_version_report_ = yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.is_version_report", true);
   if (tensor_parallel_size_ == 0) {
     int device_size = -1;
     GetDeviceCount(&device_size);
@@ -314,9 +309,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
   }
 
   if (!(pipeline_parallel_size_ > 0 && tensor_parallel_size_ > 0)) {
-    KLLM_LOG_ERROR << fmt::format("Tensor Para Size {} and Pipeline Para Size {} should > 0", tensor_parallel_size_,
-                                  pipeline_parallel_size_);
-    throw std::runtime_error("tensor_para_size and pipeline_para_size should > 0");
+    KLLM_THROW(fmt::format("Tensor Para Size {} and Pipeline Para Size {} should > 0", tensor_parallel_size_,
+                           pipeline_parallel_size_));
   }
 
   // Read batch scheduler config.
@@ -457,12 +451,10 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
 
   if (tensor_parallel_size_ > model_config.num_key_value_heads ||
       model_config.num_key_value_heads % tensor_parallel_size_ != 0) {
-    KLLM_LOG_ERROR << fmt::format(
-        "The size of key_value_heads cannot be evenly divided by the size of tensor_parallel_size_. "
-        "{} % {} != 0 ",
-        model_config.num_key_value_heads, tensor_parallel_size_);
-    throw std::runtime_error(
-        "The number of key-value heads must exceed that of TP and must be an integer multiple of TP.");
+    KLLM_THROW(
+        fmt::format("The size of key_value_heads cannot be evenly divided by the size of tensor_parallel_size_. "
+                    "{} % {} != 0 ",
+                    model_config.num_key_value_heads, tensor_parallel_size_));
   }
 
   if (batch_scheduler_config_.max_token_len > 0) {
