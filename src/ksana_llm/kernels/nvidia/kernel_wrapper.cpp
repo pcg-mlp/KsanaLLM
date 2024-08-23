@@ -130,18 +130,28 @@ INVOKE_FPA_INTB_GROUP_CUDA_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::
 #undef INVOKE_FPA_INTB_GROUP_CUDA_GEMM
 
 template <typename T>
-void LookupEmbedding(const void* ids, const void* offsets, const void* prefix_offsets, const void* emb, const void* pos,
-                     void* output, int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,
-                     void* workspace_ptr) {
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T>(
-      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), {},
-      reinterpret_cast<const int32_t*>(ids), step, reinterpret_cast<const size_t*>(offsets),
-      reinterpret_cast<const size_t*>(prefix_offsets), bs, hidden_size, vocab_size, vocab_id, stream));
+void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, const void* emb,
+                     const void* pos, const void* steps, void* output, const T emb_scale, int vocab_size,
+                     int hidden_size, int bs, int vocab_id, cudaStream_t stream, void* workspace_ptr) {
+  const bool do_position_encoding = (pos != nullptr) && (steps != nullptr);
+  if (do_position_encoding) {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, true>(
+        reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), emb_scale, {},
+        reinterpret_cast<const int32_t*>(input_ids), reinterpret_cast<const size_t*>(steps),
+        reinterpret_cast<const size_t*>(ids_offsets), reinterpret_cast<const size_t*>(prefix_offsets), bs, hidden_size,
+        vocab_size, vocab_id, stream));
+  } else {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, false>(
+        reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), /* pos */ nullptr, emb_scale, {},
+        reinterpret_cast<const int32_t*>(input_ids), /* steps */ nullptr, reinterpret_cast<const size_t*>(ids_offsets),
+        reinterpret_cast<const size_t*>(prefix_offsets), bs, hidden_size, vocab_size, vocab_id, stream));
+  }
 }
-#define LOOKUP_EMBEDDING(T)                                                                                           \
-  template void LookupEmbedding<T>(const void* ids, const void* offsets, const void* prefix_offsets, const void* emb, \
-                                   const void* pos, void* output, int vocab_size, int hidden_size, int bs, int step,  \
-                                   int vocab_id, cudaStream_t stream, void* workspace_ptr)
+#define LOOKUP_EMBEDDING(T)                                                                                    \
+  template void LookupEmbedding<T>(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, \
+                                   const void* emb, const void* pos, const void* steps, void* output,          \
+                                   const T emb_scale, int vocab_size, int hidden_size, int bs, int vocab_id,   \
+                                   cudaStream_t stream, void* workspace_ptr)
 LOOKUP_EMBEDDING(float);
 LOOKUP_EMBEDDING(half);
 #ifdef ENABLE_BFLOAT16
@@ -150,16 +160,15 @@ LOOKUP_EMBEDDING(__nv_bfloat16);
 #undef LOOKUP_EMBEDDING
 
 template <typename T>
-void InvokeLayerNorm(const void* input, const void* weight, const float layernorm_eps, const int m, const int n,
-                     void* output, cudaStream_t stream) {
-  T* beta = nullptr;
-  CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::InvokeLayerNorm<T>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input),
-                                              reinterpret_cast<const T*>(weight), beta, layernorm_eps, m, n, stream));
+void InvokeLayerNorm(const void* input, const void* weight, const void* bias, const float layernorm_eps, const int m,
+                     const int n, void* output, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeLayerNorm<T>(
+      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), reinterpret_cast<const T*>(weight),
+      reinterpret_cast<const T*>(bias), layernorm_eps, m, n, stream));
 }
-#define INVOKE_LAYER_NORM(T)                                                                                      \
-  template void InvokeLayerNorm<T>(const void* input, const void* weight, const float layernorm_eps, const int m, \
-                                   const int n, void* output, cudaStream_t stream)
+#define INVOKE_LAYER_NORM(T)                                                                                           \
+  template void InvokeLayerNorm<T>(const void* input, const void* weight, const void* bias, const float layernorm_eps, \
+                                   const int m, const int n, void* output, cudaStream_t stream)
 INVOKE_LAYER_NORM(float);
 INVOKE_LAYER_NORM(half);
 #ifdef ENABLE_BFLOAT16
@@ -200,35 +209,46 @@ INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
 #endif
 #undef INVOKE_ADD_BIAS_RESIDUAL
 
-template <typename T>
-void InvokeSiluActivation(const void* input, const void* gated_weights, const int m, const int n, void* output,
-                          cudaStream_t stream) {
+template <template <typename T> class Activation, typename T>
+void InvokeGatedActivation(const void* input, const void* bias, const void* gated_weights, const void* gated_bias,
+                           const int m, const int n, void* output, cudaStream_t stream) {
   if (output != input) {
     KLLM_THROW("Activation is an in-place operation, `output` must be the same as `input`.");
   }
   const int* ia3_tasks = nullptr;
-  const T* bias = nullptr;
   const T* ia3_weights = nullptr;
-  const T* gated_bias = nullptr;
   const int int8_mode = 0;
   const int* padding_offsets = nullptr;
   const int seq_len = 0;
   const float* activation_in = nullptr;
   const float* activation_out = nullptr;
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeGenericActivation<llm_kernels::nvidia::SiluActivation, T, T>(
-      reinterpret_cast<T*>(output), bias, reinterpret_cast<const T*>(gated_weights), gated_bias, ia3_tasks, ia3_weights,
-      m, n, int8_mode, activation_in, activation_out, padding_offsets, seq_len, stream));
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeGenericActivation<Activation, T, T>(
+      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(bias), reinterpret_cast<const T*>(gated_weights),
+      reinterpret_cast<const T*>(gated_bias), ia3_tasks, ia3_weights, m, n, int8_mode, activation_in, activation_out,
+      padding_offsets, seq_len, stream));
 }
 
-#define INVOKE_SILU_ACTIVATION(T)                                                                               \
-  template void InvokeSiluActivation<T>(const void* input, const void* gated_weights, const int m, const int n, \
-                                        void* output, cudaStream_t stream)
-INVOKE_SILU_ACTIVATION(float);
-INVOKE_SILU_ACTIVATION(half);
+#define INVOKE_GATED_ACTIVATION(Activation, T)                                                                       \
+  template void InvokeGatedActivation<Activation, T>(const void* input, const void* bias, const void* gated_weights, \
+                                                     const void* gated_bias, const int m, const int n, void* output, \
+                                                     cudaStream_t stream)
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::GeluActivation, float);
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::GeluActivation, half);
 #ifdef ENABLE_BFLOAT16
-INVOKE_SILU_ACTIVATION(__nv_bfloat16);
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::GeluActivation, __nv_bfloat16);
 #endif
-#undef INVOKE_SILU_ACTIVATION
+
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, float);
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, half);
+#ifdef ENABLE_BFLOAT16
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, __nv_bfloat16);
+#endif
+
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, float);
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, half);
+#ifdef ENABLE_BFLOAT16
+INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, __nv_bfloat16);
+#endif
 
 template <typename T>
 torch::ScalarType GetTorchDataType();
@@ -256,10 +276,10 @@ static bool kContextDecodeUseFP8Cache = []() -> bool {
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
-                 llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens,
-                 int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size,
-                 float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size,
-                 void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
+                 std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
+                 int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,
+                 int stride_size, float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank,
+                 int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
                  const std::optional<void*>& alibi_slopes, cudaStream_t stream) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
@@ -279,12 +299,12 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
       k_scale, v_scale, stream));
 
-  if (!alibi_slopes.has_value()) {
-    rotary_embedding_cuda.SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                   reinterpret_cast<int64_t*>(rotary_embedding_mask),
-                                   reinterpret_cast<SCALAR_T*>(q_tensor.data_ptr()),
-                                   reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda.Forward());
+  if (rotary_embedding_cuda.has_value()) {
+    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask),
+                                    reinterpret_cast<SCALAR_T*>(q_tensor.data_ptr()),
+                                    reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), total_tokens, stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
   }
 
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
@@ -347,9 +367,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 #define ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                  \
   template void AttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                          \
       void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,             \
-      llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens, int max_tokens, \
-      int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, float k_scale, float v_scale,    \
-      int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,                \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens,  \
+      int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, float k_scale,   \
+      float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list, \
       void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
@@ -404,7 +424,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                           int seqs_num, int heads_num, int head_size, int kv_heads_num, int stride_size, int block_size,
                           float k_scale, float v_scale, int batch, void* rotary_embedding_pos,
                           void* rotary_embedding_mask, int total_tokens,
-                          llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda,
+                          std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
                           void* workspace_ptr, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
                           void* qkv_workspace) {
   const float* alibi_slopes_ptr =
@@ -421,12 +441,12 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   void* k_tensor_ptr = k_tensor.data_ptr();
   void* v_tensor_ptr = v_tensor.data_ptr();
 
-  if (!alibi_slopes.has_value()) {
+  if (rotary_embedding_cuda.has_value()) {
     // When the alibi_slopes parameter is empty, execute the rotary embedding.
-    rotary_embedding_cuda.SetInput(
+    rotary_embedding_cuda->SetInput(
         reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
         reinterpret_cast<SCALAR_T*>(q_tensor_ptr), reinterpret_cast<SCALAR_T*>(k_tensor_ptr), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda.Forward());
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
   }
 
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
@@ -447,7 +467,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
       int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int heads_num, int head_size, \
       int kv_heads_num, int stride_size, int block_size, float k_scale, float v_scale, int batch,                    \
       void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,                                     \
-      llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, void* workspace_ptr,                \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr, \
       size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace)
 RUN_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);

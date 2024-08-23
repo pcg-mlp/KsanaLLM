@@ -7,7 +7,22 @@
 
 namespace ksana_llm {
 
-template <typename T>
+enum class ActivationType {
+  Gelu = 0,
+  Relu = 1,
+  Geglu = 2,
+  Swiglu = 3,
+};
+
+template <ActivationType ACTIVATION_TYPE>
+constexpr bool IsGatedActivation() {
+  if constexpr (ACTIVATION_TYPE == ActivationType::Geglu || ACTIVATION_TYPE == ActivationType::Swiglu) {
+    return true;
+  }
+  return false;
+}
+
+template <ActivationType ACTIVATION_TYPE, typename T>
 class ActivationLayer : public BaseLayer {
  public:
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;

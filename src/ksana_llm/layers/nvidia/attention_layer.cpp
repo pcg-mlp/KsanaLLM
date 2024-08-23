@@ -23,14 +23,14 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   uint32_t rotary_dim = std::any_cast<const int>(parameters[parameter_index++]);
   float base = std::any_cast<const float>(parameters[parameter_index++]);
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);
-  bool is_alibi = std::any_cast<const bool>(parameters[parameter_index++]);
+  PositionEncoding position_encoding = std::any_cast<const PositionEncoding>(parameters[parameter_index++]);
   void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
 
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
 
   // setting scaling factor and mode
-  if (!is_alibi) {
+  if (position_encoding == PositionEncoding::ROPE) {
     RoPEScalingFactor rope_scaling_factor_config =
         std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
     llm_kernels::nvidia::RotaryEmbeddingType rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT;
@@ -45,10 +45,11 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
       KLLM_THROW(fmt::format("Unsupport rope scaling type: {}.", rope_scaling_factor_config.type));
     }
 
-    rotary_embedding_cuda_.SetConfig(static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base,
+    rotary_embedding_cuda_.emplace();
+    rotary_embedding_cuda_->SetConfig(static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base,
                                      head_size_, num_heads_, num_kv_heads_, stride_size_, is_neox,
                                      context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
-  } else {
+  } else if (position_encoding == PositionEncoding::ALIBI) {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(
                               reinterpret_cast<float*>(cos_sin_cache_ptr), num_heads_ * tensor_para_size_,
                               context_->GetComputeStreams()[rank_].Get()));

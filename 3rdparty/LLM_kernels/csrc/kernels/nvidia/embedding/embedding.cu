@@ -9,11 +9,11 @@ using namespace llm_kernels::utils;
 namespace llm_kernels {
 namespace nvidia {
 
-template <typename T>
+template <typename T, bool DO_POSITION_ENCODING>
 __global__ void LookupFusedEmbeddingKernelWithCSRKernel(T* output_hidden_units, const T* embedding_table,
-                                                        const T* pos_table,
+                                                        const T* pos_table, const T emb_scale,
                                                         InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param,
-                                                        const int32_t* input_ids, const int32_t start_step,
+                                                        const int32_t* input_ids, const size_t* steps,
                                                         const size_t* ids_offsets, const size_t* prefix_offsets,
                                                         const int32_t batch_size, const uint32_t hidden_units,
                                                         const size_t vocab_size, const size_t vocab_id) {
@@ -23,7 +23,7 @@ __global__ void LookupFusedEmbeddingKernelWithCSRKernel(T* output_hidden_units, 
   size_t input_ids_idx_offset = ids_offsets[blockIdx.x] - prefix_offsets[blockIdx.x];
   size_t next_ids_offset = ids_offsets[blockIdx.x + 1] - prefix_offsets[blockIdx.x + 1];
   size_t ids_num = next_ids_offset - input_ids_idx_offset;
-  int32_t step = start_step + blockIdx.y;
+  size_t step = 0ul;
 
   // TODO(karlluo): optimization unroll ?
 #pragma unroll
@@ -34,24 +34,31 @@ __global__ void LookupFusedEmbeddingKernelWithCSRKernel(T* output_hidden_units, 
     if (real_token_id >= ((vocab_id + 1) * vocab_size) || real_token_id < (vocab_id * vocab_size)) {
       continue;
     }
-    step = start_step + token_id;
+    if constexpr (DO_POSITION_ENCODING) {
+      step = steps[input_ids_idx_offset + token_id];
+    }
 
     // copy emb vec value
     // TODO(karlluo): optimization veterize ?
 #pragma unroll
     for (uint32_t emb_id = threadIdx.x; emb_id < hidden_units; emb_id += blockDim.x) {
       T emb_vec_val = embedding_table[(real_token_id - vocab_id * vocab_size) * hidden_units + emb_id];
-      T pos_emb_vec_val = pos_table == nullptr ? (T)0.f : pos_table[(step - 1) * hidden_units + emb_id];
       // NOTE(karlluo): half has not static cast in kernel
-      output_hidden_units[(input_ids_idx_offset + token_id) * hidden_units + emb_id] = emb_vec_val + pos_emb_vec_val;
+      if constexpr (DO_POSITION_ENCODING) {
+        T pos_emb_vec_val = pos_table[step * hidden_units + emb_id];
+        output_hidden_units[(input_ids_idx_offset + token_id) * hidden_units + emb_id] =
+            emb_vec_val * emb_scale + pos_emb_vec_val;
+      } else {
+        output_hidden_units[(input_ids_idx_offset + token_id) * hidden_units + emb_id] = emb_vec_val;
+      }
     }
   }
 }
 
-template <typename T>
+template <typename T, bool DO_POSITION_ENCODING>
 void LookupFusedEmbeddingWithCSRInputs(T* output_hidden_units, const T* embedding_table, const T* pos_table,
-                                       InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param,
-                                       const int32_t* input_ids, const int32_t start_step, const size_t* ids_offsets,
+                                       const T emb_scale, InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param,
+                                       const int32_t* input_ids, const size_t* steps, const size_t* ids_offsets,
                                        const size_t* prefix_offsets, const int32_t batch_size,
                                        const uint32_t hidden_units, const size_t vocab_size, const size_t vocab_id,
                                        cudaStream_t stream) {
@@ -60,22 +67,25 @@ void LookupFusedEmbeddingWithCSRInputs(T* output_hidden_units, const T* embeddin
   dim3 grid(min(static_cast<int32_t>(batch_size), DEFAULT_CUDA_GPU_DEVICE_MAX_BLOCKS_NUM), tokens_stride);
   dim3 block(min(hidden_units, DEFAULT_CUDA_BLOCK_THREADS_NUM));
 
-  LookupFusedEmbeddingKernelWithCSRKernel<T>
-      <<<grid, block, 0, stream>>>(output_hidden_units, embedding_table, pos_table, prompt_param, input_ids, start_step,
-                                   ids_offsets, prefix_offsets, batch_size, hidden_units, vocab_size, vocab_id);
+  LookupFusedEmbeddingKernelWithCSRKernel<T, DO_POSITION_ENCODING>
+      <<<grid, block, 0, stream>>>(output_hidden_units, embedding_table, pos_table, emb_scale, prompt_param, input_ids,
+                                   steps, ids_offsets, prefix_offsets, batch_size, hidden_units, vocab_size, vocab_id);
 }
 
-#define INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(T)                                                      \
-  template void LookupFusedEmbeddingWithCSRInputs(                                                                 \
-      T* output_hidden_units, const T* embedding_table, const T* pos_table,                                        \
-      InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param, const int32_t* input_ids,                     \
-      const int32_t start_step, const size_t* ids_offsets, const size_t* prefix_offsets, const int32_t batch_size, \
-      const uint32_t hidden_units, const size_t vocab_size, const size_t vocab_id, cudaStream_t stream);
+#define INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(T, DO_POSITION_ENCODING)                                   \
+  template void LookupFusedEmbeddingWithCSRInputs<T, DO_POSITION_ENCODING>(                                           \
+      T * output_hidden_units, const T* embedding_table, const T* pos_table, const T emb_sclae,                       \
+      InvokeInputIdsEmbeddingLookupPosEncodingParam<T> prompt_param, const int32_t* input_ids, const size_t* steps,   \
+      const size_t* ids_offsets, const size_t* prefix_offsets, const int32_t batch_size, const uint32_t hidden_units, \
+      const size_t vocab_size, const size_t vocab_id, cudaStream_t stream);
 
-INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(float);
-INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(half);
+INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(float, true);
+INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(float, false);
+INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(half, true);
+INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(half, false);
 #ifdef ENABLE_BF16
-INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(__nv_bfloat16);
+INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(__nv_bfloat16, true);
+INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS(__nv_bfloat16, false);
 #endif
 
 #undef INSTANTIATE_LOOKUP_FUSED_EMBEDDING_WITH_CSR_INPUTS

@@ -5,8 +5,8 @@
 
 #include "ksana_llm/models/base/base_weight.h"
 #include "ksana_llm/models/quant/quant_weight.h"
-#include "ksana_llm/utils/tensor_manager.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/tensor_manager.h"
 #include "ksana_llm/utils/utils.h"
 
 namespace ksana_llm {
@@ -15,17 +15,18 @@ template <typename T>
 class CommonWeight : public BaseWeight {
  public:
   CommonWeight() {}
-  ~CommonWeight();
+  ~CommonWeight() override;
   explicit CommonWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
-  Tensor GetModelWeights(const std::string& weight_name);
+  Tensor GetModelWeights(const std::string& weight_name) override;
 
-  void ProcessWeights();
+  void ProcessWeights() override;
 
   Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                             std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list);
+                             std::vector<std::string>& weight_name_list,
+                             std::vector<std::string>& custom_name_list) override;
 
- private:
+ protected:
   Status ConvertCommonTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
 
   Status GetModelInfo(const ModelConfig& model_config);

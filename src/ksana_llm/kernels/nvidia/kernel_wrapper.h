@@ -38,13 +38,14 @@ void InvokeFpAIntBGroupCudaGemm(void* output, const void* input, const void* wei
 
 // Invoke the lookup embedding.
 template <typename T>
-void LookupEmbedding(const void* ids, const void* offsets, const void* emb, const void* pos, const void* prefix_offsets,
-                     void* output, int vocab_size, int hidden_size, int bs, int step, int vocab_id, cudaStream_t stream,
-                     void* workspace_ptr = nullptr);
+void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, const void* emb,
+                     const void* pos, const void* steps, void* output, const T emb_scale, int vocab_size,
+                     int hidden_size, int bs, int vocab_id, cudaStream_t stream, void* workspace_ptr = nullptr);
 
+// Layernorm without bias computes rmsnorm.
 template <typename T>
-void InvokeLayerNorm(const void* input, const void* weight, const float layernorm_eps, const int m, const int n,
-                     void* output, cudaStream_t stream);
+void InvokeLayerNorm(const void* input, const void* weight, const void* bias, const float layernorm_eps, const int m,
+                     const int n, void* output, cudaStream_t stream);
 
 template <typename T>
 void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
@@ -55,9 +56,9 @@ void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void*
                            void* output, cudaStream_t stream);
 
 // Invoke activation in-place, `output` must be the same as `input`.
-template <typename T>
-void InvokeSiluActivation(const void* input, const void* bias, const int m, const int n, void* output,
-                          cudaStream_t stream);
+template <template <typename T> class Activation, typename T>
+void InvokeGatedActivation(const void* input, const void* bias, const void* gated_weights, const void* gated_bias,
+                           const int m, const int n, void* output, cudaStream_t stream);
 
 template <typename T>
 void AssembleLastToken(const void* inputs, const void* offsets, const void* prefix_offsets, const int batch_size,
@@ -65,10 +66,10 @@ void AssembleLastToken(const void* inputs, const void* offsets, const void* pref
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
-                 llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, int total_tokens,
-                 int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size,
-                 float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size,
-                 void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
+                 std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
+                 int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,
+                 int stride_size, float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank,
+                 int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
                  const std::optional<void*>& alibi_slopes, cudaStream_t stream);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
@@ -82,8 +83,9 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           int num_seqs, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
                           float k_scale, float v_scale, int batch, void* rotary_embedding_pos,
                           void* rotary_embedding_mask, int total_tokens,
-                          llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>& rotary_embedding_cuda, void* workspace,
-                          size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace);
+                          std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
+                          void* workspace, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
+                          void* qkv_workspace);
 
 template <typename T>
 void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,

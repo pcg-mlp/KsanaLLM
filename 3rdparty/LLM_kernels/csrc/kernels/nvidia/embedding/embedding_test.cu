@@ -19,21 +19,6 @@ __global__ void InitTablesKernel(T* emb_table_ptr, T* pos_table_ptr) {
   pos_table_ptr[glb_thread_idx] = (T)(glb_thread_idx / 10000.0f);
 }
 
-template <typename T>
-__global__ void RefLookupEmbedding(T* emb_table_ptr, T* pos_table_ptr, const int32_t idx, const int32_t token_idx,
-                                   const int32_t start_step, T* result_ptr, const int64_t hidden_units) {
-  uint32_t glb_thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  size_t emb_id = glb_thread_idx % hidden_units;
-
-  int32_t real_idx = token_idx;
-  int32_t step = start_step + real_idx;
-
-  T embedding = emb_table_ptr[idx * hidden_units + emb_id];
-  T pos_embed = pos_table_ptr == nullptr ? (T)0.f : pos_table_ptr[(step - 1) * hidden_units + emb_id];
-
-  result_ptr[emb_id] = embedding + pos_embed;
-}
-
 class LlamaNvidiaEmbeddingTestSuit : public NvidiaTestSuitBase {
  public:
   void SetUp() override { NvidiaTestSuitBase::SetUp(); }
@@ -62,24 +47,6 @@ class LlamaNvidiaEmbeddingTestSuit : public NvidiaTestSuitBase {
     InitTablesKernel<T><<<grid, block, 0, stream>>>((T*)emb_table_meta.data_ptr, (T*)pos_table_meta.data_ptr);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   }
-
-  template <typename T>
-  void ReferLookupEmbedding(T* emb_table_ptr, T* pos_table_ptr, const int32_t idx, const int32_t token_idx,
-                            const int32_t start_step, T* result_ptr, const int64_t hidden_units) {
-    size_t total_nums = hidden_units;
-    size_t block_size = 512ul;
-    dim3 grid((total_nums + block_size - 1) / block_size);
-    dim3 block(block_size);
-    // input ids data: [[1,2], [1024, 3, 0]]
-    // for example token 1, idx = 1, token_idx = 0
-    // for example token 0, idx = 0, token_idx = 2
-    if (idx < 0 || idx >= vocab_size) {
-      return;
-    }
-    RefLookupEmbedding<T><<<grid, block, 0, stream>>>(emb_table_ptr, pos_table_ptr, idx, token_idx, start_step,
-                                                      result_ptr, hidden_units);
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-  }
 };
 
 TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
@@ -97,19 +64,25 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
   BufferMeta pos_table_meta = CreateBuffer<half>(MemoryType::MEMORY_GPU, {vocab_size, hidden_units});
   PrepareTables<half>(emb_table_meta, pos_table_meta);
 
-  int32_t start_step = 1;
   std::vector<size_t> ids_offsets_host(batch_size + 1, 0ul);
   size_t total_ids_num = 0ul;
   for (size_t tokens_idx = 0; tokens_idx < input_prompt_token_ids.size(); ++tokens_idx) {
     total_ids_num += input_prompt_token_ids[tokens_idx].size();
     ids_offsets_host[tokens_idx + 1] = ids_offsets_host[tokens_idx] + input_prompt_token_ids[tokens_idx].size();
   }
+  std::vector<size_t> steps_host(total_ids_num, 0ul);
+  for (size_t tokens_idx = 0; tokens_idx < input_prompt_token_ids.size(); ++tokens_idx) {
+    std::iota(steps_host.data() + ids_offsets_host[tokens_idx], steps_host.data() + ids_offsets_host[tokens_idx + 1],
+              0ul);
+  }
 
   int32_t* input_ids;
+  size_t* steps;
   size_t* ids_offsets;
   size_t* prefix_offsets;
   half* output_hidden_units;
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&input_ids, sizeof(int32_t) * total_ids_num));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&steps, sizeof(size_t) * total_ids_num));
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&ids_offsets, sizeof(size_t) * (batch_size + 1)));
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&prefix_offsets, sizeof(size_t) * (batch_size + 1)));
   CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&output_hidden_units, sizeof(float) * total_ids_num * hidden_units));
@@ -117,6 +90,9 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
     CHECK_NVIDIA_CUDA_ERROR(
         cudaMemcpy(input_ids + ids_offsets_host[tokens_idx], input_prompt_token_ids[tokens_idx].data(),
                    sizeof(int32_t) * input_prompt_token_ids[tokens_idx].size(), cudaMemcpyHostToDevice));
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaMemcpy(steps + ids_offsets_host[tokens_idx], steps_host.data() + ids_offsets_host[tokens_idx],
+                   sizeof(size_t) * input_prompt_token_ids[tokens_idx].size(), cudaMemcpyHostToDevice));
   }
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(ids_offsets, ids_offsets_host.data(), sizeof(size_t) * ids_offsets_host.size(),
                                      cudaMemcpyHostToDevice));
@@ -124,10 +100,12 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
   CHECK_NVIDIA_CUDA_ERROR(cudaMemset(output_hidden_units, 0x0, total_ids_num * hidden_units));
   CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
-  LookupFusedEmbeddingWithCSRInputs(
+  const float emb_scale = 1.f;
+  LookupFusedEmbeddingWithCSRInputs<half, /* DO_POSITION_ENCODING */ true>(
       reinterpret_cast<half*>(output_hidden_units), reinterpret_cast<const half*>(emb_table_meta.data_ptr),
-      reinterpret_cast<const half*>(pos_table_meta.data_ptr), InvokeInputIdsEmbeddingLookupPosEncodingParam<half>{},
-      input_ids, start_step, ids_offsets, prefix_offsets, batch_size, hidden_units, vocab_size, vocab_id, stream);
+      reinterpret_cast<const half*>(pos_table_meta.data_ptr), static_cast<half>(emb_scale),
+      InvokeInputIdsEmbeddingLookupPosEncodingParam<half>{}, input_ids, steps, ids_offsets, prefix_offsets, batch_size,
+      hidden_units, vocab_size, vocab_id, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
   for (int32_t prompt_id = 0; prompt_id < input_prompt_num; ++prompt_id) {
@@ -144,12 +122,12 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
     std::vector<float> host_ref_result_vec(input_prompt_token_ids[prompt_id].size() * hidden_units, 0.0f);
     for (size_t prompt_token_id = 0; prompt_token_id < input_prompt_token_ids[prompt_id].size(); ++prompt_token_id) {
       int32_t token_id = input_prompt_token_ids[prompt_id][prompt_token_id];
-      int32_t step = start_step + prompt_token_id;
+      size_t step = steps_host[ids_offsets_host[prompt_id] + prompt_token_id];
 
       for (size_t emb_id = 0; emb_id < hidden_units; ++emb_id) {
         float ref_emb_value = (float)((half_float::half)((token_id * hidden_units + emb_id) / 10000.0f));
-        float ref_pos_emb_value = (float)((half_float::half)(((step - 1) * hidden_units + emb_id) / 10000.0f));
-        float ref_value = ref_emb_value + ref_pos_emb_value;
+        float ref_pos_emb_value = (float)((half_float::half)((step * hidden_units + emb_id) / 10000.0f));
+        float ref_value = ref_emb_value * emb_scale + ref_pos_emb_value;
         if (static_cast<size_t>(token_id) > vocab_size) {
           ref_value = 0.0f;
         }
@@ -164,8 +142,9 @@ TEST_F(LlamaNvidiaEmbeddingTestSuit, LlamaFusedEmbeddingWithCSRHalfTest) {
   }
 
   CHECK_NVIDIA_CUDA_ERROR(cudaFree(output_hidden_units));
-  CHECK_NVIDIA_CUDA_ERROR(cudaFree(ids_offsets));
   CHECK_NVIDIA_CUDA_ERROR(cudaFree(prefix_offsets));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(ids_offsets));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(steps));
   CHECK_NVIDIA_CUDA_ERROR(cudaFree(input_ids));
 }
 

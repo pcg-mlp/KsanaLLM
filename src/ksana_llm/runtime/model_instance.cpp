@@ -16,11 +16,13 @@
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
 #include "ksana_llm/models/chatglm/chatglm_weight.h"
+#include "ksana_llm/models/gpt/gpt_weight.h"
 #include "ksana_llm/models/llama/llama_weight.h"
 #include "ksana_llm/models/qwen/qwen_weight.h"
 
 #include "ksana_llm/models/baichuan/baichuan_model.h"
 #include "ksana_llm/models/chatglm/chatglm_model.h"
+#include "ksana_llm/models/gpt/gpt_model.h"
 #include "ksana_llm/models/llama/llama_model.h"
 #include "ksana_llm/models/qwen/qwen_model.h"
 
@@ -47,6 +49,10 @@ void ModelInstance::Load() {
   } else if (unified_model_type.find("chatglm") != std::string::npos) {
     type = "chatglm";
     CreateModelInstance<ChatglmModel, ChatglmWeight>(unified_model_type);
+  } else if (unified_model_type.find("gpt") != std::string::npos ||
+             unified_model_type.find("fairseq-transformer") != std::string::npos) {
+    type = "gpt";
+    CreateModelInstance<GPTModel, GPTWeight>(unified_model_type);
   } else {
     // Optional weights map
     auto optional_file = Singleton<OptionalFile>::GetInstance();

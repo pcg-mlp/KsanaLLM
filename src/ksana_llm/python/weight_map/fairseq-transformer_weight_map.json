@@ -1,0 +1,19 @@
+{
+  "decoder.embed_tokens.weight": "model.embed_tokens.weight",
+  "decoder.layers.(\\d+).self_attn.q_proj.weight": "model.layers.$1.self_attn.q_proj.weight",
+  "decoder.layers.(\\d+).self_attn.q_proj.bias": "model.layers.$1.self_attn.q_proj.bias",
+  "decoder.layers.(\\d+).self_attn.k_proj.weight": "model.layers.$1.self_attn.k_proj.weight",
+  "decoder.layers.(\\d+).self_attn.k_proj.bias": "model.layers.$1.self_attn.k_proj.bias",
+  "decoder.layers.(\\d+).self_attn.v_proj.weight": "model.layers.$1.self_attn.v_proj.weight",
+  "decoder.layers.(\\d+).self_attn.v_proj.bias": "model.layers.$1.self_attn.v_proj.bias",
+  "decoder.layers.(\\d+).self_attn.out_proj.weight": "model.layers.$1.self_attn.o_proj.weight",
+  "decoder.layers.(\\d+).self_attn.out_proj.bias": "model.layers.$1.self_attn.o_proj.bias",
+  "decoder.layers.(\\d+).self_attn_layer_norm.weight": "model.layers.$1.input_layernorm.weight",
+  "decoder.layers.(\\d+).self_attn_layer_norm.bias": "model.layers.$1.input_layernorm.bias",
+  "decoder.layers.(\\d+).fc1.weight": "model.layers.$1.mlp.gate_proj.weight",
+  "decoder.layers.(\\d+).fc1.bias": "model.layers.$1.mlp.gate_proj.bias",
+  "decoder.layers.(\\d+).fc2.weight": "model.layers.$1.mlp.down_proj.weight",
+  "decoder.layers.(\\d+).fc2.bias": "model.layers.$1.mlp.down_proj.bias",
+  "decoder.layers.(\\d+).final_layer_norm.weight": "model.layers.$1.post_attention_layernorm.weight",
+  "decoder.layers.(\\d+).final_layer_norm.bias": "model.layers.$1.post_attention_layernorm.bias"
+}

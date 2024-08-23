@@ -8,13 +8,12 @@ namespace ksana_llm {
 
 template <typename T>
 Status CpuEmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // weigth_shape = input_tensors[2].
   // input_tensors:
-  //   0: input_ids
-  //   1: cpu_buffer
-  //   2: emb_weight
+  //   0: input_ids [token_num]
+  //   1: cpu_buffer [token_num, hidden_units]
+  //   2: emb_weight [vocab_size, hidden_units]
   // output_tensors:
-  //   0: emb_output
+  //   0: emb_output [token_num, hidden_units]
   size_t token_num = input_tensors[0].shape[0];
   size_t hidden_units = input_tensors[2].shape[1];
 

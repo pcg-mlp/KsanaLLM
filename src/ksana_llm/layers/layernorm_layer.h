@@ -7,6 +7,9 @@
 
 namespace ksana_llm {
 
+// The layernorm type.
+enum class NormType { LAYERNORM = 0, RMSNORM = 1 };
+
 template <typename T>
 class LayernormLayer : public BaseLayer {
  public:

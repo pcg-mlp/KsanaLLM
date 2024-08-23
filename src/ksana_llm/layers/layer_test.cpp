@@ -109,7 +109,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   EXPECT_TRUE(flash_attention_layer
                   .Init({static_cast<int>(0), static_cast<int>(2048), head_num, kv_head_num, size_per_head, stride_size,
                          static_cast<int>(1), TYPE_FP16, k_scale, v_scale, rotary_embedding, rope_theta, is_neox,
-                         static_cast<bool>(false), std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
+                         PositionEncoding::ROPE, std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
                         context, 0)
                   .OK());
 
@@ -159,7 +159,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   EXPECT_TRUE(attention_layer
                   .Init({static_cast<int>(1), static_cast<int>(2048), static_cast<int>(head_num), kv_head_num,
                          static_cast<int>(size_per_head), stride_size, static_cast<int>(1), TYPE_FP16, k_scale, v_scale,
-                         rotary_embedding, rope_theta, is_neox, static_cast<bool>(false),
+                         rotary_embedding, rope_theta, is_neox, PositionEncoding::ROPE,
                          std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
                         context, 0)
                   .OK());

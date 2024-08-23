@@ -1,0 +1,16 @@
+{
+  "tokens_embed.weight": "model.embed_tokens.weight",
+  "positions_embed.weight": "model.embed_positions.weight",
+  "h.(\\d+).ln_1.weight": "model.layers.$1.input_layernorm.weight",
+  "h.(\\d+).ln_1.bias": "model.layers.$1.input_layernorm.bias",
+  "h.(\\d+).attn.c_attn.weight": "model.layers.$1.self_attn.W_pack.weight",
+  "h.(\\d+).attn.c_attn.bias": "model.layers.$1.self_attn.query_key_value.bias",
+  "h.(\\d+).attn.c_proj.weight": "model.layers.$1.self_attn.o_proj.weight",
+  "h.(\\d+).attn.c_proj.bias": "model.layers.$1.self_attn.o_proj.bias",
+  "h.(\\d+).ln_2.weight": "model.layers.$1.post_attention_layernorm.weight",
+  "h.(\\d+).ln_2.bias": "model.layers.$1.post_attention_layernorm.bias",
+  "h.(\\d+).mlp.c_fc.weight": "model.layers.$1.mlp.gate_proj.weight",
+  "h.(\\d+).mlp.c_fc.bias": "model.layers.$1.mlp.gate_proj.bias",
+  "h.(\\d+).mlp.c_proj.weight": "model.layers.$1.mlp.down_proj.weight",
+  "h.(\\d+).mlp.c_proj.bias": "model.layers.$1.mlp.down_proj.bias"
+}

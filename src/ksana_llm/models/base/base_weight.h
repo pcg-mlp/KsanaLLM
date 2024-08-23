@@ -15,7 +15,7 @@ class BaseWeight {
  public:
   BaseWeight() {}
   explicit BaseWeight(const ModelConfig& model_config, int rank);
-  ~BaseWeight() {}
+  virtual ~BaseWeight() {}
 
   // 查表,返回 weights_map_[weight_name]
   virtual Tensor GetModelWeights(const std::string& weight_name) = 0;

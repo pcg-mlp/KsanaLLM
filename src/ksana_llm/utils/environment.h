@@ -86,6 +86,9 @@ struct ModelConfig {
 
   bool tie_word_embeddings;
 
+  // The activation function used.
+  std::string activation_function{"swiglu"};
+
   // Determines if the model is a visual llm model.
   bool is_visual;
 

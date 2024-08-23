@@ -19,6 +19,9 @@
 
 namespace ksana_llm {
 
+// The positional encoding.
+enum PositionEncoding { LEARNED_ABSOLUTE = 0, ROPE = 1, ALIBI = 2 };
+
 template <typename T, template <typename, typename, llm_kernels::utils::KVCacheType> class ATTENTION_LAYER>
 std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
   switch (kv_cache_dtype) {
@@ -67,8 +70,8 @@ class AttentionLayer : public BaseLayer {
 
   bool is_causal_{true};
 #ifdef ENABLE_CUDA
-  llm_kernels::nvidia::RotaryEmbeddingCuda<T> rotary_embedding_cuda_;
-  std::optional<void*> alibi_slopes_ = {};
+  std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<T>> rotary_embedding_cuda_;
+  std::optional<void*> alibi_slopes_;
 #endif
 
 #ifdef ENABLE_ACL

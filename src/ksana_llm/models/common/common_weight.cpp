@@ -84,18 +84,21 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
       tensor_name.find("embed_tokens") != std::string::npos) {
     return Status();
   }
-  if (tensor_name.find("_proj.weight") != std::string::npos || tensor_name.find(".bias") != std::string::npos ||
-      tensor_name.find("self_attn.W_pack.weight") != std::string::npos ||
-      tensor_name.find("embed_tokens") != std::string::npos ||
-      tensor_name.find("lm_head.weight") != std::string::npos) {
-    tensor_para_offset = rank_;
-    if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos ||
-        tensor_name.find("embed_tokens") != std::string::npos) {
-      transpose_first = true;
-      weight_shape[1] /= tensor_para_size_;
-    } else {
-      weight_shape[0] = DivRoundUp(weight_shape[0], tensor_para_size_);
-    }
+  // Layernorm, o_proj bias and down_proj bias do not require slicing
+  if (tensor_name.find("norm.") != std::string::npos || tensor_name.find("o_proj.bias") != std::string::npos ||
+      tensor_name.find("down_proj.bias") != std::string::npos) {
+    return Status();
+  }
+
+  tensor_para_offset = rank_;
+  if (tensor_name.find(".bias") != std::string::npos || tensor_name.find("o_proj") != std::string::npos ||
+      tensor_name.find("down_proj") != std::string::npos || tensor_name.find("embed_") != std::string::npos) {
+    transpose_first = true;
+  }
+  if (transpose_first) {
+    weight_shape[1] /= tensor_para_size_;
+  } else {
+    weight_shape[0] = DivRoundUp(weight_shape[0], tensor_para_size_);
   }
   return Status();
 }
@@ -125,17 +128,22 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       continue;
     }
 
+    if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu() &&
+        tensor_name.find("embed_positions") != std::string::npos) {
+      KLLM_THROW("CPU embedding lookup does not support learned absolute position encoding, please turn it off.");
+    }
+
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
     size_t tensor_para_offset = 0;
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
-    STATUS_CHECK_RETURN(PrepareLoadOpMeta(tensor_para_offset, weight_shape, transpose_first, tensor_name));
 
     // get weight's data ptr
     void* weight_ptr;
     size_t weight_size;
     std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
     if (weight_ptr == nullptr) {
-      KLLM_LOG_DEBUG << fmt::format("The {}' weight_ptr is null", weight_name);
+      KLLM_LOG_DEBUG << fmt::format("The {}'s weight_ptr is null", weight_name);
+      continue;
     }
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
 
@@ -160,6 +168,29 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       KLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
     }
 
+    // GPT-1 and GPT-2 use Conv1D instead of Linear, we need to do an extra transpose.
+    if ((model_config_.type == "openai-gpt" || model_config_.type == "gpt2") &&
+        (tensor_name.find("self_attn.W_pack.weight") != std::string::npos ||
+         tensor_name.find("o_proj.weight") != std::string::npos ||
+         tensor_name.find("gate_proj.weight") != std::string::npos ||
+         tensor_name.find("down_proj.weight") != std::string::npos)) {
+      weight_cpu_tensor =
+          weight_cpu_tensor.view({static_cast<int64_t>(weight_shape[0]), static_cast<int64_t>(weight_shape[1])})
+              .t()
+              .reshape(-1);
+      std::swap(weight_shape[0], weight_shape[1]);
+      weight_ptr = weight_cpu_tensor.data_ptr();
+    }
+
+    bool is_bias = tensor_name.find(".bias") != std::string::npos;
+    // The Add-Bias-Residual Kernel uses the shape[0] of the input tensor to determine whether
+    // broadcasting is required.
+    if (is_bias && tensor_name.find("norm.bias") == std::string::npos) {
+      weight_shape.insert(weight_shape.begin(), 1);
+    }
+
+    STATUS_CHECK_RETURN(PrepareLoadOpMeta(tensor_para_offset, weight_shape, transpose_first, tensor_name));
+
     if (quant_weight_slover_->LoadQuantWeight(tensor_name, weight_shape, weight_data_type, weight_ptr)) {
       continue;
     }
@@ -169,20 +200,16 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     // copy host data to device
     int qkv_offset = CheckQKVWeight(tensor_name, head_num, num_kv_heads);
     if (qkv_offset >= 0) {
-      bool is_bias = (tensor_name.find("_proj.bias") != std::string::npos);
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
                              (is_bias ? ".bias" : ".weight");
       if (!weights_map_.count(qkv_name)) {
+        // Bias has been prepended with 1.
+        int first_dim = is_bias ? 1 : 0;
         if (qkv_offset == 0) {
           // For q_proj in the GQA scenario, the weight_shape is first transformed into k_proj.
-          weight_shape[0] /= head_num / num_kv_heads;
+          weight_shape[first_dim] /= head_num / num_kv_heads;
         }
-        weight_shape.insert(weight_shape.begin(), ((head_num / num_kv_heads) + 2));
-        if (is_bias) {
-          // The Add-Bias-Residual Kernel uses the shape[0] of the input tensor to determine whether
-          // broadcasting is required.
-          weight_shape.insert(weight_shape.begin(), 1);
-        }
+        weight_shape.insert(weight_shape.begin() + first_dim, ((head_num / num_kv_heads) + 2));
         tensor_manager_->AddWeightTensor(qkv_name, weight_shape, weight_data_type_);
       }
       weights_data_type_map_[qkv_name] = weight_data_type;
@@ -195,9 +222,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       tensor_para_offset *= single_proj_size;
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-    } else if (tensor_name.find("_proj.weight") != std::string::npos ||
-               tensor_name.find("_proj.bias") != std::string::npos ||
-               tensor_name.find("_layernorm.weight") != std::string::npos || tensor_name == "model.norm.weight" ||
+    } else if (tensor_name.find("_proj.") != std::string::npos || tensor_name.find("norm.") != std::string::npos ||
+               tensor_name == "model.embed_positions.weight" ||
                (tensor_name == "lm_head.weight" && !model_config_.tie_word_embeddings)) {
       LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
                         weight_size);
@@ -244,7 +270,6 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
 
     } else if (tensor_name.find("query_key_value.bias") != std::string::npos) {
       weights_data_type_map_[tensor_name] = weight_data_type;
-      weight_shape.insert(weight_shape.begin(), 1);
       tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type_);
 
       Tensor& qkv_bias_tensor = weights_map_[tensor_name];
@@ -361,6 +386,7 @@ Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_down_up_tensor, Tensor& la
     CommonPermuteWeight(gate_proj_name, last_gate_tensor);
 
     std::string up_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.up_proj.weight";
+    // up_proj is optional
     if (weights_map_.find(up_proj_name) != weights_map_.end()) {
       CommonPermuteWeight(up_proj_name, last_down_up_tensor);
     }

@@ -19,7 +19,7 @@ class BaseModel {
   // Disable a default constructor
   BaseModel() {}
 
-  ~BaseModel();
+  virtual ~BaseModel();
 
   // The output logits pointer on device, used by sampler to avoid memory copy.
   virtual float* GetLogitsPtr() = 0;

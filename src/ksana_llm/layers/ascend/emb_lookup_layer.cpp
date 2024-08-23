@@ -10,6 +10,19 @@
 namespace ksana_llm {
 
 template <typename T>
+Status EmbLookupLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, context, rank);
+  size_t parameter_index = 0ul;
+  if (parameter_index < parameters.size()) {
+    emb_scale_ = std::any_cast<const T>(parameters[parameter_index++]);
+  }
+  if (parameter_index < parameters.size()) {
+    pos_weight_ = std::any_cast<void*>(parameters[parameter_index++]);
+  }
+  return Status();
+}
+
+template <typename T>
 Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // weigth_shape = input_tensors[2].
   // input_tensors:

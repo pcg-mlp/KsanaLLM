@@ -18,14 +18,23 @@ if __name__ == "__main__":
         inference_data_type = torch.bfloat16
 
     input = torch.Tensor(
-        np.load("rmsnorm_test_input.npy")).to(inference_data_type).cuda()
+        np.load("layernorm_test_input.npy")).to(inference_data_type).cuda()
     weight = torch.Tensor(
-        np.load("rmsnorm_test_weight.npy")).to(inference_data_type).cuda()
+        np.load("layernorm_test_weight.npy")).to(inference_data_type).cuda()
+    bias = torch.Tensor(
+        np.load("layernorm_test_bias.npy")).to(inference_data_type).cuda()
+
+    layernorm = torch.nn.LayerNorm(normalized_shape=input.shape[1], eps=args.variance_epsilon)
+    layernorm.weight.data = weight
+    layernorm.bias.data = bias
+    layernorm_output = layernorm(input)
+
+    np.save("layernorm_test_output.npy", layernorm_output.cpu().detach().numpy())
 
     input_dtype = input.dtype
     hidden_states = input.to(torch.float32)
     variance = hidden_states.pow(2).mean(-1, keepdim=True)
     hidden_states = hidden_states * torch.rsqrt(variance + args.variance_epsilon)
-    output = weight * hidden_states.to(input_dtype)
+    rmsnorm_output = weight * hidden_states.to(input_dtype)
 
-    np.save("rmsnorm_test_output.npy", output.cpu().numpy())
+    np.save("rmsnorm_test_output.npy", rmsnorm_output.cpu().numpy())

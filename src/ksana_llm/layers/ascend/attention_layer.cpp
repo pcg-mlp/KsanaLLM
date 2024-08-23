@@ -29,7 +29,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   uint32_t rotary_dim = std::any_cast<const int>(parameters[parameter_index++]);
   base_ = std::any_cast<const float>(parameters[parameter_index++]);
   bool is_neox = std::any_cast<const bool>(parameters[parameter_index++]);
-  bool is_alibi = std::any_cast<const bool>(parameters[parameter_index++]);
+  PositionEncoding position_encoding = std::any_cast<const PositionEncoding>(parameters[parameter_index++]);
   void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
   RoPEScalingFactor rope_scaling_factor_config = std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
 #ifdef ENABLE_ACL_ATB
@@ -41,7 +41,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   // Cast the unused variables to void to suppress the -Wunused-value warnings.
   (void)rotary_dim;
   (void)is_neox;
-  (void)is_alibi;
+  (void)position_encoding;
   (void)cos_sin_cache_ptr;
 
   block_size_ = GetBlockManager()->GetBlockSize();
