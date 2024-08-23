@@ -806,17 +806,5 @@ void PagedAttentionCuda<SCALAR_T, CACHE_T, KV_DTYPE>::Forward() {
   paged_attention_impl(params_);
 }
 
-#define PAGED_ATTENTION_CUDA(SCALAR_T, CACHE_T, KV_DTYPE) \
-  template class PagedAttentionCuda<SCALAR_T, CACHE_T, KV_DTYPE>;
-PAGED_ATTENTION_CUDA(float, float, llm_kernels::utils::KVCacheType::kAuto);
-PAGED_ATTENTION_CUDA(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
-PAGED_ATTENTION_CUDA(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-PAGED_ATTENTION_CUDA(uint16_t, uint16_t, llm_kernels::utils::KVCacheType::kAuto);
-PAGED_ATTENTION_CUDA(uint16_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
-PAGED_ATTENTION_CUDA(uint16_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-PAGED_ATTENTION_CUDA(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
-PAGED_ATTENTION_CUDA(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
-PAGED_ATTENTION_CUDA(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#undef PAGED_ATTENTION_CUDA
 }  // namespace nvidia
 }  // namespace llm_kernels
