@@ -5,17 +5,17 @@
 
 #pragma once
 
-struct VersionReportOption {};
+struct ReportOption {};
 
 namespace ksana_llm {
-class VersionReport {
+class VersionReporter {
  public:
   // Singleton instance getter
-  static VersionReport& GetInstance() {
-    static VersionReport instance;
+  static VersionReporter& GetInstance() {
+    static VersionReporter instance;
     return instance;
   }
   // Initialize version reporting with given options
-  void InitVersionReport(const VersionReportOption& option = VersionReportOption());
+  void Init(const ReportOption& option = ReportOption());
 };
 }  //  namespace ksana_llm

@@ -3,8 +3,8 @@
 
 ==============================================================================*/
 
-#include "ksana_llm/periphery/version_report.h"
+#include "ksana_llm/periphery/version_reporter.h"
 
 namespace ksana_llm {
-void VersionReport::InitVersionReport(const VersionReportOption &option) {}
+void VersionReporter::Init(const ReportOption &option) {}
 }  // namespace ksana_llm

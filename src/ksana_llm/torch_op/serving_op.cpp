@@ -10,7 +10,7 @@
 
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
-#include "ksana_llm/periphery/version_report.h"
+#include "ksana_llm/periphery/version_reporter.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/singleton.h"
@@ -54,7 +54,7 @@ void ServingOp::InitServing(const std::string &config_file) {
   serving_impl_->Start();
 
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
-        VersionReport::GetInstance().InitVersionReport();
+        VersionReporter::GetInstance().Init();
   }
 
   KLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
