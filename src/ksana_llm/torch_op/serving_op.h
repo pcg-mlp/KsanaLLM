@@ -31,7 +31,7 @@ class ServingOp : public torch::jit::CustomClassHolder {
   Status GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                            std::shared_ptr<StreamingIterator> &streaming_iterator);
 
-  /** 
+  /**
    * Generate responses for requests toward the forward interface.
    * This interface performs a single-step inference, i.e., the context phase.
    * It allows a batch of requests to be submitted at once, and each request

@@ -161,16 +161,15 @@ if __name__ == "__main__":
         # Add the process to the list of processes
         multi_proc_list.append(proc)
 
-    # Wait for the responses from the processes
-    for i in range(len(text_list)):
-        # Get the response from the queue and display it
-        show_response(multi_proc_queue.get())
-
     # Wait for all processes to finish
     for proc in multi_proc_list:
         # Join the process to ensure it has finished
         proc.join()
-
     end_time = time.time()
+
+    # Get the response of each process from the queue and display it
+    for i in range(len(text_list)):
+        show_response(multi_proc_queue.get())
+
     print("{} requests duration: {:.3f}s".format(len(text_list),
                                                  end_time - start_time))

@@ -38,6 +38,7 @@ add_subdirectory(service)
 add_subdirectory(profiler)
 add_subdirectory(utils)
 add_subdirectory(periphery)
+add_subdirectory(cpp)
 
 add_library(ksana_llm_libs INTERFACE)
 target_link_libraries(ksana_llm_libs INTERFACE
