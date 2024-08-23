@@ -25,6 +25,19 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // True if request finished, that is, arrive max output len or encounter eos.
   inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
 
+  // Destroy the request and add it to the begining of waiting queue to recompute.
+  void RecomputeRequest(std::shared_ptr<InferRequest> req);
+
+  // Set the finish status of the request to finished, timeout or aborted.
+  void StopRequest(std::shared_ptr<InferRequest> req, Status req_status);
+
+  // Update cache manager, process finished and timeout requests.
+  void UpdateRunningRequests(size_t &total_needed_block_num);
+
+  // Try to allocate request blocks. If failed, try the allocation again after all swapout finished.
+  Status AllocateRequestBlocksWithRetry(std::shared_ptr<InferRequest> req, size_t &total_needed_block_num,
+                                        size_t &step_block_num, bool &allocate_block_succ, bool &skip_swapout_check);
+
   // Schedule the running/swapped/waiting queue.
   void ProcessRunningQueue();
   void ProcessSwappedQueue();

@@ -35,6 +35,114 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
   return false;
 }
 
+void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> req) {
+  // Add request to the begining of waiting queue.
+  req->kv_cache_blocks.clear();
+  req->kv_cache_blocks.resize(tp_num_);
+  req->output_tokens = req->input_tokens;
+  req->infer_stage = InferStage::STAGE_CONTEXT;
+  req->step = 0;
+}
+
+void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status req_status) {
+  req->finish_status = req_status;
+  req->finished = true;
+  req->Notify();
+  if (req->aborted) {
+    req->abort_waiter->Notify();
+  }
+}
+
+void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_block_num) {
+  for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end();) {
+    auto req = *it;
+
+    // All req here should be decode now.
+    req->infer_stage = InferStage::STATE_DECODE;
+
+    // Always update cache manager, even if request is finished.
+    Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << "UpdateRequestTokens req " << req->req_id << " error, recompute it.";
+
+      cache_manager_->DestroyFinishedRequest(req->req_id);
+
+      RecomputeRequest(req);
+
+      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
+      it = batch_state_->running_queue.erase(it);
+
+      continue;
+    }
+
+    // Check if finished.
+    if (CheckRequestFinish(req)) {
+      KLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
+
+      cache_manager_->DestroyFinishedRequest(req->req_id);
+
+      StopRequest(req, Status(RET_SUCCESS));
+      it = batch_state_->running_queue.erase(it);
+      continue;
+    }
+
+    // Check timeout
+    if (CheckRequestTimeout(req)) {
+      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in running.";
+
+      cache_manager_->DestroyFinishedRequest(req->req_id);
+
+      StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
+      it = batch_state_->running_queue.erase(it);
+      continue;
+    }
+
+    // Check abort.
+    if (req->aborted) {
+      KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in running.";
+
+      cache_manager_->DestroyFinishedRequest(req->req_id);
+
+      StopRequest(req, Status(RET_TERMINATED, "client aborted."));
+      it = batch_state_->running_queue.erase(it);
+      continue;
+    }
+
+    // Not finished, notify streaming iterator.
+    req->NotifyStep();
+
+    total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id);
+
+    ++it;
+  }
+}
+
+Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_ptr<InferRequest> req,
+                                                                  size_t &total_needed_block_num,
+                                                                  size_t &step_block_num, bool &allocate_block_succ,
+                                                                  bool &skip_swapout_check) {
+  Status status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();
+    KLLM_LOG_DEBUG << "Waiting all pending swapout requests done, and retry.";
+    MergePendingSwapoutRequests(true, false);
+
+    // Try the allocation again after all swapout finished.
+    status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << "Alllocate blocks error again, recompute it, info: " << status.GetMessage();
+      allocate_block_succ = false;
+    } else {
+      total_needed_block_num -= step_block_num;
+      skip_swapout_check = true;
+    }
+  } else {
+    total_needed_block_num -= step_block_num;
+    skip_swapout_check = true;
+  }
+  return status;
+}
+
 void ContinuousBatchingStrategy::ProcessRunningQueue() {
   KLLM_LOG_DEBUG << "ProcessRunningQueue invoked, running queue size:" << batch_state_->running_queue.size()
                  << ", free block num:" << cache_manager_->GetUsableBlockNumber()
@@ -52,93 +160,20 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
   std::vector<std::shared_ptr<InferRequest>> recompute_requests;
 
   // Update cache manager, process finished and timeout requests.
-  for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end();) {
-    auto req = *it;
+  UpdateRunningRequests(total_needed_block_num);
 
-    // All req here should be decode now.
-    req->infer_stage = InferStage::STATE_DECODE;
-
-    // Always update cache manager, even if request is finished.
-    status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
-    if (!status.OK()) {
-      KLLM_LOG_ERROR << "UpdateRequestTokens req " << req->req_id << " error, recompute it.";
-
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-
-      req->kv_cache_blocks.clear();
-      req->kv_cache_blocks.resize(tp_num_);
-      req->output_tokens = req->input_tokens;
-      req->infer_stage = InferStage::STAGE_CONTEXT;
-      req->step = 0;
-
-      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      it = batch_state_->running_queue.erase(it);
-
-      continue;
-    }
-
-    // Check if finished.
-    if (CheckRequestFinish(req)) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
-
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-
-      req->finish_status = Status(RET_SUCCESS);
-      req->finished = true;
-      req->Notify();
-      it = batch_state_->running_queue.erase(it);
-      continue;
-    }
-
-    // Check timeout
-    if (CheckRequestTimeout(req)) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in running.";
-
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-
-      req->finish_status = Status(RET_TIMEOUT, "running timeout.");
-      req->finished = true;
-      req->Notify();
-      it = batch_state_->running_queue.erase(it);
-      continue;
-    }
-
-    // Check abort.
-    if (req->aborted) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in running.";
-
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-
-      req->finish_status = Status(RET_TERMINATED, "client aborted.");
-      req->finished = true;
-      req->Notify();
-      req->abort_waiter->Notify();
-      it = batch_state_->running_queue.erase(it);
-      continue;
-    }
-
-    // Not finished, notify streaming iterator.
-    req->NotifyStep();
-
-    total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id);
-
-    ++it;
-  }
-
-  if (batch_state_->running_queue.empty()) {
+  if (batch_state_->running_queue.empty() && batch_state_->waiting_queue.empty()) {
     // If running & waiting queue in current step is empty, wait all swapin jobs done if existed.
     // In order to make sure the schedule result not empty.
-    if (batch_state_->waiting_queue.empty()) {
-      if (!batch_state_->swapin_pending_requests_.empty()) {
-        Status status = MergePendingSwapinRequests(true, false);
-        if (!status.OK()) {
-          KLLM_LOG_ERROR << "MergePendingSwapinRequests error, info: " << status.GetMessage();
-        }
-
-        KLLM_LOG_DEBUG << "ProcessRunningQueue update, running queue size:" << batch_state_->running_queue.size()
-                       << ", free block num:" << cache_manager_->GetUsableBlockNumber()
-                       << ", future block num:" << cache_manager_->GetFutureBlockNumber();
+    if (!batch_state_->swapin_pending_requests_.empty()) {
+      Status status = MergePendingSwapinRequests(true, false);
+      if (!status.OK()) {
+        KLLM_LOG_ERROR << "MergePendingSwapinRequests error, info: " << status.GetMessage();
       }
+
+      KLLM_LOG_DEBUG << "ProcessRunningQueue update, running queue size:" << batch_state_->running_queue.size()
+                     << ", free block num:" << cache_manager_->GetUsableBlockNumber()
+                     << ", future block num:" << cache_manager_->GetFutureBlockNumber();
     }
   }
 
@@ -177,25 +212,9 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
                      << ", current_block_num:" << req->kv_cache_blocks[0].size()
                      << ", current_token_size:" << req->output_tokens.size();
 
-      status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
-      if (!status.OK()) {
-        KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();
-        KLLM_LOG_DEBUG << "Waiting all pending swapout requests done, and retry.";
-        MergePendingSwapoutRequests(true, false);
-
-        // Try the allocation again after all swapout finished.
-        status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
-        if (!status.OK()) {
-          KLLM_LOG_ERROR << "Alllocate blocks error again, recompute it, info: " << status.GetMessage();
-          allocate_block_succ = false;
-        } else {
-          total_needed_block_num -= step_block_num;
-          skip_swapout_check = true;
-          continue;
-        }
-      } else {
-        total_needed_block_num -= step_block_num;
-        skip_swapout_check = true;
+      status = AllocateRequestBlocksWithRetry(req, total_needed_block_num, step_block_num, allocate_block_succ,
+                                                     skip_swapout_check);
+      if (status.OK()) {
         continue;
       }
     }
@@ -293,9 +312,7 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
 
       cache_manager_->DestroySwapedRequest(req->req_id);
 
-      req->finish_status = Status(RET_TIMEOUT, "running timeout.");
-      req->finished = true;
-      req->Notify();
+      StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
       it = batch_state_->swapped_queue.erase(it);
       continue;
     }
@@ -306,10 +323,7 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
 
       cache_manager_->DestroySwapedRequest(req->req_id);
 
-      req->finish_status = Status(RET_TERMINATED, "client aborted.");
-      req->finished = true;
-      req->Notify();
-      req->abort_waiter->Notify();
+      StopRequest(req, Status(RET_TERMINATED, "client aborted."));
       it = batch_state_->swapped_queue.erase(it);
       continue;
     }
@@ -383,13 +397,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       total_logits_extra_length += logits_extra_length;
     }
 
-    // Check timeout
+    // Check timeout, no finished req in waiting queue.
     if (CheckRequestTimeout(req)) {
       KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in waiting.";
 
-      req->finish_status = Status(RET_TIMEOUT, "running timeout.");
-      req->finished = true;
-      req->Notify();
+      StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }
@@ -398,10 +410,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     if (req->aborted) {
       KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in waiting.";
 
-      req->finish_status = Status(RET_TERMINATED, "client aborted.");
-      req->finished = true;
-      req->Notify();
-      req->abort_waiter->Notify();
+      StopRequest(req, Status(RET_TERMINATED, "client aborted."));
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }
