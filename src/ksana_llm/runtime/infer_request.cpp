@@ -63,6 +63,9 @@ void InferRequest::Notify() {
   }
   if (waiter) {
     waiter->Notify();
+    // After the notification, the corresponding request may be destructed.
+    // So we return early to avoid accessing any variables referencing it.
+    return;
   }
   if (step_waiter) {
     step_waiter->Notify();

@@ -45,7 +45,7 @@ class InferRequest {
 
  public:
   // The req id of the user's request.
-  int64_t &req_id;
+  int64_t req_id;
 
   // The name of model instance.
   std::string &model_name;
@@ -90,7 +90,7 @@ class InferRequest {
   bool &finished;
 
   // whether the request is aborted.
-  bool& aborted;
+  bool &aborted;
 
   // The final status of this request.
   Status &finish_status;
