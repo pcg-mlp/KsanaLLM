@@ -97,6 +97,7 @@ cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 ln -s ${GIT_PROJECT_REPO_ROOT}/build/lib .
 
 # download huggingface model for example:
+# Note: Make sure git-lfs is installed.
 git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
 
 # change the model_dir in ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml if needed
@@ -117,7 +118,7 @@ Inference test with one shot conversation
 
 ```bash
 # open another session
-cd ${GIT_PROJECT_REPO_ROOT}/examples/llama7b
+cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 python serving_generate_client.py --port 8080
 ```
 

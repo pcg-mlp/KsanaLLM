@@ -443,7 +443,12 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
     elif args.backend == "vllm":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
-        output_token_num = len(output.get("output_token_ids", [[0]])[0])
+        if tokenizer is None:
+            input_token_num = 0
+            output_token_num = 0
+        else:
+            input_token_num = len(tokenizer.encode(prompt))
+            output_token_num = len(tokenizer.encode(output_text))
     elif args.backend == "evart":
         prompt_len = len(prompt)
         output_text = output["text"][0].strip()
@@ -598,8 +603,9 @@ def main(args: argparse.Namespace):
     elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
         args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
-    # NOTE(karlluo): mindie-service/TensorRT-LLM wont return tokens, we need encode tokens to get output tokens
-    elif args.backend in ["mindie-service", "trt-llm"]:
+    
+    # NOTE: mindie-service/TensorRT-LLM wont return tokens, we need encode tokens to get output tokens
+    if args.backend in ["mindie-service", "trt-llm", "vllm"]:
         tokenizer = AutoTokenizer.from_pretrained(
             args.tokenizer_path,
             revision=None,
