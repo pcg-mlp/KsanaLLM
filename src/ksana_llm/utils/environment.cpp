@@ -315,7 +315,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 2);
   cache_manager_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   cache_manager_config_.tensor_para_size = tensor_parallel_size_;
-  cache_manager_config_.enable_preifx_caching =
+  cache_manager_config_.enable_prefix_caching =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_auto_prefix_cache", false);
 
   // Read profiler config.
@@ -555,6 +555,6 @@ Status Environment::GetProfilerConfig(ProfilerConfig &profiler_config) {
   return Status();
 }
 
-bool Environment::IsPrefixCachingEnabled() { return cache_manager_config_.enable_preifx_caching; }
+bool Environment::IsPrefixCachingEnabled() { return cache_manager_config_.enable_prefix_caching; }
 
 }  // namespace ksana_llm
