@@ -11,7 +11,7 @@ namespace ksana_llm {
 
 std::shared_ptr<CacheManagerInterface> CacheManagerFactory::CreateCacheManager(
     const CacheManagerConfig& cache_manager_config) {
-  if (cache_manager_config.enable_preifx_caching) {
+  if (cache_manager_config.enable_prefix_caching) {
     return std::make_shared<PrefixCacheManager>(cache_manager_config);
   } else {
     return std::make_shared<DirectCacheManager>(cache_manager_config);
