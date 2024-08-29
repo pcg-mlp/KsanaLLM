@@ -29,7 +29,7 @@ template <typename T>
 void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
   GetBlockManager()->SetDeviceId(rank_);
 
-  preifx_caching_enabled_ = Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled();
+  prefix_caching_enabled_ = Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled();
 
   model_run_config_ = model_run_config;
 
@@ -332,7 +332,7 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
 
 template <typename T>
 Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
-  bool reuse_prefix_caching = preifx_caching_enabled_;
+  bool reuse_prefix_caching = prefix_caching_enabled_;
 
   if (reuse_prefix_caching) {
     AddAttentionPrefixCache();
