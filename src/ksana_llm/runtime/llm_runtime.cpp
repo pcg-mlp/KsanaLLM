@@ -198,6 +198,7 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
       sampling_req.sampling_config->topk =
           std::max(sampling_req.sampling_config->topk, sampling_req.sampling_config->num_beams);
     }
+    sampling_req.ngram_dict = &(req_ptr->ngram_dict);
     sampling_req.model_config = &(req_ptr->model_instance->GetModelConfig());
     sampling_reqs.push_back(sampling_req);
   }

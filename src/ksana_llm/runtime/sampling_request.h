@@ -48,6 +48,9 @@ struct SamplingRequest {
 
   // Model config
   const ModelConfig* model_config;
+
+  // The no_reapete_ngram sampling map
+  NgramDict* ngram_dict;
 };
 
 }  // namespace ksana_llm

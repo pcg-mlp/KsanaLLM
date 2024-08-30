@@ -182,6 +182,8 @@ async def process_request(request_dict: Dict[str, Any]) -> Response:
         logprobs_num=get_sampling_value(sampling_config, "logprobs", 0),
         repetition_penalty=get_sampling_value(sampling_config,
                                               "repetition_penalty", 1.0),
+        no_repeat_ngram_size=get_sampling_value(sampling_config,
+                                              "no_repeat_ngram_size", 0),
         num_beams=get_sampling_value(sampling_config,
                                               "num_beams", 1),
         num_return_sequences=get_sampling_value(sampling_config,

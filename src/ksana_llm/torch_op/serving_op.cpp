@@ -111,6 +111,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("max_new_tokens", &ksana_llm::SamplingConfig::max_new_tokens)
       .def_readwrite("logprobs_num", &ksana_llm::SamplingConfig::logprobs_num)
       .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty)
+      .def_readwrite("no_repeat_ngram_size", &ksana_llm::SamplingConfig::no_repeat_ngram_size)
       .def_readwrite("num_beams", &ksana_llm::SamplingConfig::num_beams)
       .def_readwrite("num_return_sequences", &ksana_llm::SamplingConfig::num_return_sequences)
       .def_readwrite("length_penalty", &ksana_llm::SamplingConfig::length_penalty)

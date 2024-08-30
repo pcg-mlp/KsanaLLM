@@ -139,21 +139,12 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
   return Status();
 }
 
-size_t PrefixCacheManager::CalcTokensHash(const int* start, size_t len) {
-  size_t hash_code = 0;
-  std::hash<int> hasher;
-  for (size_t i = 0; i < len; ++i) {
-    hash_code ^= hasher(*(start + i)) + 0x9e3779b9 + (hash_code << 6) + (hash_code >> 2);
-  }
-  return hash_code;
-}
-
 bool PrefixCacheManager::CheckSameTokens(const PrefixCachedBlock* block, const int* start, size_t len) {
   return std::memcmp(block->token_ids.data(), start, len * sizeof(int)) == 0;
 }
 
 PrefixCachedBlock* PrefixCacheManager::FindChildCacheBlock(PrefixCachedBlock* block, const int* start, size_t len) {
-  size_t hash_code = CalcTokensHash(start, len);
+  size_t hash_code = CalcIntVecHash(start, len);
 
   auto it = block->children.find(hash_code);
   if (it == block->children.end()) {
@@ -420,7 +411,7 @@ Status PrefixCacheManager::MergeFilledCachedBlocks(PrefixCachedRequest* cached_r
 Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
                                                    PrefixCachedBlock* cached_block,
                                                    std::vector<std::vector<int>>& req_block_ids) {
-  size_t hash_code = CalcTokensHash(cached_block->token_ids.data(), cache_manager_config_.block_token_num);
+  size_t hash_code = CalcIntVecHash(cached_block->token_ids.data(), cache_manager_config_.block_token_num);
 
   PrefixCachedBlock* shadow_parent =
       (block_index == 0) ? root_cached_block_ : cached_request->cached_blocks[block_index - 1];

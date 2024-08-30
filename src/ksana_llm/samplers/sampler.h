@@ -38,6 +38,10 @@ class Sampler {
   void CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
                                  std::vector<std::vector<float>>& probs_output, Stream& stream);
 
+  void NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
+                              const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
+                              Stream& stream);
+
  private:
   BatchSchedulerConfig batch_schedule_config_;
   int rank_;
@@ -51,7 +55,7 @@ class Sampler {
   float* device_topPs_;
   float* device_temperatures_;
   int** device_output_tokens_ptrs_;
-  float* device_inv_repetition_penalties_;
+  float* device_repetition_processor_;
   float* device_prob_;
   float** device_prob_ptrs_;
   RandState* device_curandstates_{nullptr};
@@ -66,6 +70,7 @@ class Sampler {
   // The context
   std::shared_ptr<Context> context_;
   std::vector<float> inv_repetition_penalties_;
+  std::vector<float> norepeat_ngrams_;
 };
 
 }  // namespace ksana_llm

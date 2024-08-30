@@ -8,6 +8,7 @@
 
 #include "ksana_llm/runtime/request_state.h"
 #include "ksana_llm/runtime/threadpool.h"
+#include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
@@ -146,9 +147,6 @@ class PrefixCacheManager : public CacheManagerInterface,
   void DestroyFinishedRequest(int64_t req_id);
 
  private:
-  // Calculate a hash code for specific token ids.
-  size_t CalcTokensHash(const int* start, size_t len);
-
   // Whether the block token is equal to specific ones.
   bool CheckSameTokens(const PrefixCachedBlock* block, const int* start, size_t len);
 

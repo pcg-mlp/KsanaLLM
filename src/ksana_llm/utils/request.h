@@ -39,6 +39,9 @@ struct SamplingConfig {
   int max_new_tokens = 1024;
 
   int logprobs_num = 0;
+
+  // The parameter for no_repeat_ngram_size.
+  int no_repeat_ngram_size = 0;
 };
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;

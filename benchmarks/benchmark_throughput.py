@@ -222,6 +222,10 @@ def args_config():
                         type=float,
                         default=1.0,
                         help="The parameter for repetition penalty. 1.0 means no penalty.")
+    parser.add_argument('--no_repeat_ngram_size',
+                        type=int,
+                        default=0,
+                        help=" If set to int > 0, all ngrams of that size can only occur once.")
     parser.add_argument('--length_penalty',
                         type=float,
                         default=1.0,
@@ -318,6 +322,7 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
                 "num_return_sequences": args.num_return_sequences,
                 "length_penalty": args.length_penalty,
                 "repetition_penalty": args.repetition_penalty,
+                "no_repeat_ngram_size": args.no_repeat_ngram_size,
                 "logprobs": args.logprobs,
                 "max_new_tokens": args.max_new_tokens,
                 "stop_token_ids": args.stop_token_ids

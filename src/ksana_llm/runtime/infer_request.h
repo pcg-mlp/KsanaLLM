@@ -11,6 +11,7 @@
 
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/model_instance.h"
+#include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"
@@ -145,6 +146,9 @@ class InferRequest {
 
   // The prefix cache blocks number
   int prefix_cache_blocks_number = 0;
+
+  // The no_repeate ngram sampling map
+  NgramDict ngram_dict;
 };
 
 }  // namespace ksana_llm

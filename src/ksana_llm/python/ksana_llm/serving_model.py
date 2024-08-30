@@ -189,6 +189,8 @@ class ServingModel(object):
             get_generation_value(generation_config, 'num_return_sequences', 1)
         sampling_config.repetition_penalty = \
             get_generation_value(generation_config, 'repetition_penalty', 1.0)
+        sampling_config.no_repeat_ngram_size = \
+            get_generation_value(generation_config, 'no_repeat_ngram_size', 0)
         sampling_config.length_penalty = \
             get_generation_value(generation_config, 'length_penalty', 1.0)
         sampling_config.stop_token_ids = \

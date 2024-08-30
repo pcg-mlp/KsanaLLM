@@ -40,12 +40,13 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   aligned_memory_queue.Add(device_temperatures_, max_batch_size);
   aligned_memory_queue.Add(device_curandstates_, max_batch_size);
   aligned_memory_queue.Add(device_output_tokens_ptrs_, max_batch_size);
-  aligned_memory_queue.Add(device_inv_repetition_penalties_, batch_schedule_config_.max_vocab_size);
+  aligned_memory_queue.Add(device_repetition_processor_, batch_schedule_config_.max_vocab_size);
   aligned_memory_queue.Add(device_prob_, max_batch_size);
   aligned_memory_queue.Add(device_prob_ptrs_, max_batch_size);
   aligned_memory_queue.AllocateAndAlign();
 
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
+  norepeat_ngrams_.resize(batch_schedule_config_.max_vocab_size);
 
   if (sizeof(uint32_t) != sizeof(int)) {
     KLLM_LOG_ERROR << fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int));
@@ -93,12 +94,52 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
     inv_repetition_penalties_[output_tokens->at(i)] = inv_repetition_penalty;
   }
   // copy inv_repetition_penalties_ to device
-  MemcpyAsync(device_inv_repetition_penalties_, inv_repetition_penalties_.data(), sizeof(float) * vocab_size,
+  MemcpyAsync(device_repetition_processor_, inv_repetition_penalties_.data(), sizeof(float) * vocab_size,
               MEMCPY_HOST_TO_DEVICE, stream);
-  // logits = mul(logits, device_inv_repetition_penalties_)
+  // logits = mul(logits, device_repetition_processor_)
 #ifdef ENABLE_CUDA
-  Mul(logits, device_inv_repetition_penalties_, logits, vocab_size, rank_);
+  Mul(logits, device_repetition_processor_, logits, vocab_size, rank_);
 #endif
+}
+
+void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
+                                     const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
+                                     Stream& stream) {
+  std::vector<int> repeat_ids;
+  int cur_output_size = output_tokens->size();
+  if (ngram_size > cur_output_size) {
+    KLLM_THROW(
+        fmt::format("The no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
+                    ngram_size, cur_output_size));
+  }
+  if (cur_output_size - input_tokens_size < ngram_size) {
+    return;
+  } else {
+    std::vector<int> sub_ngram(output_tokens->end() - ngram_size, output_tokens->end());
+    std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
+    int last_elem = sub_ngram.back();
+    (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
+  }
+
+  int start_idx = cur_output_size - ngram_size + 1;
+  std::vector<int> ngram_idx(output_tokens->begin() + start_idx, output_tokens->begin() + cur_output_size);
+  if (ngram_dict->find(ngram_idx) != ngram_dict->end()) {
+    repeat_ids = (*ngram_dict)[ngram_idx];
+  } else {
+    repeat_ids = {};
+  }
+
+  if (repeat_ids.size() > 0) {
+    std::fill(norepeat_ngrams_.begin(), norepeat_ngrams_.end(), 0.0f);
+    for (size_t i = 0; i < repeat_ids.size(); ++i) {
+      norepeat_ngrams_[repeat_ids[i]] = -std::numeric_limits<float>::infinity();
+    }
+    MemcpyAsync(device_repetition_processor_, norepeat_ngrams_.data(), sizeof(float) * vocab_size,
+                MEMCPY_HOST_TO_DEVICE, stream);
+#ifdef ENABLE_CUDA
+    InvokeAddBiasResidual<float>(logits, device_repetition_processor_, nullptr, 1, vocab_size, logits, stream.Get());
+#endif
+  }
 }
 
 void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
@@ -258,6 +299,13 @@ Status Sampler::PrepareDevideLogitsAndParameter(std::vector<SamplingRequest>& sa
       int vocab_size = batch_schedule_config_.max_vocab_size;
       ApplyRepetitionPenalty(logits + req_index * vocab_size, sampling_req.input_tokens, sampling_req.output_tokens,
                              vocab_size, sampling_config->repetition_penalty, stream);
+    }
+
+    if (sampling_config->no_repeat_ngram_size > 0) {
+      int vocab_size = batch_schedule_config_.max_vocab_size;
+      int input_tokens_size = sampling_req.input_tokens->size();
+      NoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
+                             sampling_req.output_tokens, sampling_req.ngram_dict, vocab_size, stream);
     }
     req_index++;
   }
