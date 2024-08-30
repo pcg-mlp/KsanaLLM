@@ -89,6 +89,10 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
       tensor_name.find("down_proj.bias") != std::string::npos) {
     return Status();
   }
+  // Quant Weight, Scales do not slicing here
+  if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos) {
+    return Status();
+  }
 
   tensor_para_offset = rank_;
   if (tensor_name.find(".bias") != std::string::npos || tensor_name.find("o_proj") != std::string::npos ||
