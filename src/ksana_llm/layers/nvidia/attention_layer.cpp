@@ -35,24 +35,34 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
         std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
     llm_kernels::nvidia::RotaryEmbeddingType rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT;
     float scaling_factor = 1.0f;
+    float low_freq_factor = 1.0f;
+    float high_freq_factor = 4.0f;
+    int original_max_position_embeddings = 8192;
     if (rope_scaling_factor_config.type == "dynamic") {
       rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
       scaling_factor = rope_scaling_factor_config.factor;
     } else if (rope_scaling_factor_config.type == "linear") {
       rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::LINEAR_SCALING;
       scaling_factor = rope_scaling_factor_config.factor;
+    } else if (rope_scaling_factor_config.type == "llama3") {
+      rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::MULTIFREQ_SCALING;
+      scaling_factor = rope_scaling_factor_config.factor;
+      low_freq_factor = rope_scaling_factor_config.low_freq_factor;
+      high_freq_factor = rope_scaling_factor_config.high_freq_factor;
+      original_max_position_embeddings = rope_scaling_factor_config.original_max_position_embeddings;
     } else if (rope_scaling_factor_config.type != "default") {
       KLLM_THROW(fmt::format("Unsupport rope scaling type: {}.", rope_scaling_factor_config.type));
     }
 
     rotary_embedding_cuda_.emplace();
     rotary_embedding_cuda_->SetConfig(static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base,
-                                     head_size_, num_heads_, num_kv_heads_, stride_size_, is_neox,
-                                     context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor);
+                                      head_size_, num_heads_, num_kv_heads_, stride_size_, is_neox,
+                                      context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor,
+                                      low_freq_factor, high_freq_factor, original_max_position_embeddings);
   } else if (position_encoding == PositionEncoding::ALIBI) {
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(
-                              reinterpret_cast<float*>(cos_sin_cache_ptr), num_heads_ * tensor_para_size_,
-                              context_->GetComputeStreams()[rank_].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr),
+                                                                  num_heads_ * tensor_para_size_,
+                                                                  context_->GetComputeStreams()[rank_].Get()));
     alibi_slopes_ = reinterpret_cast<void*>(cos_sin_cache_ptr) + num_heads_ * rank_ * sizeof(float);
   }
   StreamSynchronize(context_->GetComputeStreams()[rank_]);

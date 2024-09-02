@@ -123,6 +123,9 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
   auto rope_scaling_setting = config_json.value("rope_scaling", nlohmann::json());
   if (!rope_scaling_setting.is_null()) {
     model_config.rope_scaling_factor_config.type = rope_scaling_setting.value("type", "default");
+    // fit llama3.1 config
+    model_config.rope_scaling_factor_config.type =
+        rope_scaling_setting.value("rope_type", model_config.rope_scaling_factor_config.type);
     model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
     KLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
                                   model_config.rope_scaling_factor_config.factor);
@@ -132,6 +135,13 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
         derived_max_model_len = rope_scaling_setting.value("original_max_position_embeddings", derived_max_model_len);
       }
       derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
+    }
+
+    if (model_config.rope_scaling_factor_config.type == "llama3") {
+      model_config.rope_scaling_factor_config.low_freq_factor = rope_scaling_setting.value("low_freq_factor", 1.0f);
+      model_config.rope_scaling_factor_config.high_freq_factor = rope_scaling_setting.value("high_freq_factor", 4.0f);
+      model_config.rope_scaling_factor_config.original_max_position_embeddings =
+          rope_scaling_setting.value("original_max_position_embeddings", 8192);
     }
   }
 
@@ -150,7 +160,12 @@ void PrepareCommonModelAttributes(const nlohmann::json &config_json, ModelConfig
   model_config.layernorm_eps = config_json.value("rms_norm_eps", 1e-6);
   model_config.layernorm_eps = config_json.value("layer_norm_epsilon", model_config.layernorm_eps);
   model_config.start_id = config_json.value("bos_token_id", 1);
-  model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 2)};
+  // for llama3.1 config
+  if (config_json.contains("eos_token_id") && config_json["eos_token_id"].is_array()) {
+    model_config.end_ids = config_json["eos_token_id"].get<std::vector<int>>();
+  } else {
+    model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 2)};
+  }
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
   model_config.tie_word_embeddings = config_json.value("tie_word_embeddings", false);

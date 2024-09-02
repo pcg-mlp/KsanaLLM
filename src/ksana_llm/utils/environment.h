@@ -20,6 +20,9 @@ namespace ksana_llm {
 struct RoPEScalingFactor {
   std::string type{"default"};
   float factor{1.0f};
+  float low_freq_factor{1.0f};
+  float high_freq_factor{4.0f};
+  int original_max_position_embeddings{8192};
 };
 
 enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3 };
