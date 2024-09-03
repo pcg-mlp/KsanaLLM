@@ -727,7 +727,7 @@ INSTANTIATE_FP8_DYNAMIC_QUANTIZE(__nv_bfloat16);
     template <>                                                                                                     \
     void Fp8QuantizedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k, \
                                const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale,      \
-                               T* c_ptr, cudaStream_t& stream) {                                                    \
+                               T* c_ptr, cudaStream_t& stream, void* workspace) {                                   \
       CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                             \
           cublas_handle, cublaslt_handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, b_ptr, k, CUDA_R_8F_E4M3, a_ptr, k,    \
           CUDA_R_8F_E4M3, c_ptr, n, CUDA_TYPE, 1.0f, 0.f, CUDA_R_32F, stream, nullptr, nullptr, a_scale, b_scale)); \
@@ -740,4 +740,6 @@ INVOKE_FP8_QUANTIZED_MATMUL(__nv_bfloat16, CUDA_R_16BF);
 #  endif
 #  undef INVOKE_FP8_QUANTIZED_MATMUL
 #endif
+
+size_t InvokeGetCublasWorkspaceSize() { return llm_kernels::nvidia::GetCublasWorkspaceSize(); }
 }  // namespace ksana_llm

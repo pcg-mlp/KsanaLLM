@@ -64,13 +64,10 @@ class MatMulLayerFactory {
     // fp8 layer
     if (base_weight->GetModelWeights(weight_name).dtype == TYPE_FP8_E4M3) {
       std::vector<std::any> fp8_matmul_params;
+      // max_m_
       fp8_matmul_params.push_back(model_config_.max_scheduler_token_num);
-      size_t inter_size = model_config_.inter_size;
-      size_t head_num = model_config_.head_num;
-      size_t num_kv_heads = model_config_.num_key_value_heads;
-      size_t size_per_head = model_config_.size_per_head;
-      fp8_matmul_params.push_back(
-          std::max(std::max(inter_size, (head_num + 2 * num_kv_heads) * size_per_head), head_num * size_per_head * 2));
+      // weight is [n, k], k is shape[1]
+      fp8_matmul_params.push_back(base_weight->GetModelWeights(weight_name).shape[1]);
       return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_matmul_params, QUANT_FP8_E4M3);
     }
     // default layer

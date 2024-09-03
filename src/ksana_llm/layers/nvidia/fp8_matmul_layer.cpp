@@ -22,7 +22,8 @@ template <typename T>
 size_t Fp8MatMulLayer<T>::GetWorkSpaceSize(const int m, const int k) {
   size_t input_size = m * k * GetTypeSize(TYPE_FP8_E4M3);
   size_t scale_size = GetTypeSize(TYPE_FP32);
-  size_t workspace_size = input_size + scale_size;
+  size_t cublas_size = InvokeGetCublasWorkspaceSize();
+  size_t workspace_size = input_size + scale_size + cublas_size;
   return workspace_size;
 }
 
@@ -41,7 +42,8 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   if (workspace_size > workspace_buffer_->GetTotalBytes()) {
     KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_->GetTotalBytes()));
   }
-  void* input_quant = workspace_buffer_->GetPtr<void>();
+  void* cublas_workspace = workspace_buffer_->GetPtr<void>();
+  void* input_quant = cublas_workspace + InvokeGetCublasWorkspaceSize();
   float* input_scale = static_cast<float*>(input_quant + GetTypeSize(TYPE_FP8_E4M3) * m * k);
   const void* weight_quant = input_tensors[1].GetPtr<const void>();
   const void* weight_scale = input_tensors[1].scales->GetPtr<const void>();
@@ -54,7 +56,7 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   Fp8DynamicQuantize<T>(1, m * k, input, input_quant, input_scale, context_->GetComputeStreams()[rank_].Get());
   Fp8QuantizedMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_], m, n, k,
                         input_quant, input_scale, weight_quant, weight_scale, output,
-                        context_->GetComputeStreams()[rank_].Get());
+                        context_->GetComputeStreams()[rank_].Get(), cublas_workspace);
   return Status();
 }
 

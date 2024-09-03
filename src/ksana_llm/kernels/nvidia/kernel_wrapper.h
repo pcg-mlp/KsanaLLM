@@ -120,6 +120,8 @@ void Fp8DynamicQuantize(int num_channels, int channel_size, const T* input_ptr, 
 template <typename T>
 void Fp8QuantizedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
                         const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale, T* c_ptr,
-                        cudaStream_t& stream);
+                        cudaStream_t& stream, void* workspace);
 #endif
+
+size_t InvokeGetCublasWorkspaceSize();
 }  // namespace ksana_llm
