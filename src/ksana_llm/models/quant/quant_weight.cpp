@@ -83,6 +83,11 @@ bool QuantWeight<T>::CheckQuantModel() {
       return true;
     }
     if (model_config_.quant_config.method == QUANT_FP8_E4M3) {
+      if (context_->IsGemmFp8Supported()) {
+        KLLM_LOG_INFO << "Device is sufficient to support FP8 GEMM.";
+      } else {
+        KLLM_THROW("Device is insufficient to support FP8 GEMM.");
+      }
       if (model_config_.quant_config.is_checkpoint_fp8_serialized) {
         KLLM_THROW("Loading of fp8 weights from checkpoint is not supported.");
       } else {

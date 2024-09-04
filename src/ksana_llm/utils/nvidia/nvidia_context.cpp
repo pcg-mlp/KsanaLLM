@@ -51,7 +51,11 @@ void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
   cublas_handles_.emplace_back(cublas_handle);
   cublaslt_handles_.emplace_back(cublaslt_handle);
 
-  base_ptr_->is_gemm_fp8_supported_ = (cublasLtGetVersion() >= CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION);
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, worker_id);
+  // FP8 GEMM is supported when arch >= 89 and cublaslt >= 12.1.3.
+  base_ptr_->is_gemm_fp8_supported_ = (((prop.major >= 8 && prop.minor >= 9) || prop.major >= 9) &&
+                                       (cublasLtGetVersion() >= CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION));
 
   // binding compute stream to cublas
   CUDA_CHECK(cublasSetStream(cublas_handles_[worker_id], base_ptr_->compute_streams_[worker_id].Get()));
