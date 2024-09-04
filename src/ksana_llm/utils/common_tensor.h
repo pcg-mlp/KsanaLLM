@@ -32,6 +32,8 @@ class TensorT {
   std::vector<size_t> shape;
 
   TensorT<T>* scales = nullptr;
+  TensorT<T>* input_scales = nullptr;
+  TensorT<T>* weight_scales = nullptr;
 
   // Tensor's base ptr can shared with others
   void* refer_ptr = nullptr;

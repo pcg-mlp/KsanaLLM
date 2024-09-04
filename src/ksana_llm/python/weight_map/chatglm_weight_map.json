@@ -29,4 +29,14 @@
   "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.qweight": "model.layers.$1.mlp.down_proj.qweight",
   "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.qzeros": "model.layers.$1.mlp.down_proj.qzeros",
   "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.scales": "model.layers.$1.mlp.down_proj.scales"
+
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.weight_scale": "model.layers.$1.self_attn.W_pack.weight_scale",
+  "transformer.encoder.layers.(\\d+).self_attention.dense.weight_scale": "model.layers.$1.self_attn.o_proj.weight_scale",
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.weight_scale": "model.layers.$1.mlp.gate_proj.weight_scale",
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.weight_scale": "model.layers.$1.mlp.down_proj.weight_scale",
+
+  "transformer.encoder.layers.(\\d+).self_attention.query_key_value.input_scale": "model.layers.$1.self_attn.W_pack.input_scale",
+  "transformer.encoder.layers.(\\d+).self_attention.dense.input_scale": "model.layers.$1.self_attn.o_proj.input_scale",
+  "transformer.encoder.layers.(\\d+).mlp.dense_h_to_4h.input_scale": "model.layers.$1.mlp.gate_proj.input_scale",
+  "transformer.encoder.layers.(\\d+).mlp.dense_4h_to_h.input_scale": "model.layers.$1.mlp.down_proj.input_scale"
 }

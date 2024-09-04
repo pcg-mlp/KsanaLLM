@@ -707,21 +707,23 @@ INSTANTIATE_ARG_MAX(__nv_bfloat16);
 #undef INSTANTIATE_ARG_MAX
 
 #ifdef ENABLE_FP8
-#  define INSTANTIATE_FP8_DYNAMIC_QUANTIZE(T)                                                                        \
-    template <>                                                                                                      \
-    void Fp8DynamicQuantize<T>(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr,              \
-                               float* scale_ptr, cudaStream_t& stream) {                                             \
-      CUDA_CHECK_LAST_ERROR(llm_kernels::utils::InvokeComputeFP8QuantizeScale<T>(scale_ptr, input_ptr, num_channels, \
-                                                                                 channel_size, stream));             \
-      CUDA_CHECK_LAST_ERROR(llm_kernels::utils::InvokeQuantizeMatrix<__nv_fp8_e4m3, T>(                              \
-          static_cast<__nv_fp8_e4m3*>(quant_ptr), scale_ptr, input_ptr, num_channels, channel_size, stream));        \
+#  define INSTANTIATE_FP8_E4M3_QUANTIZE(T)                                                                             \
+    template <>                                                                                                        \
+    void Fp8E4m3Quantize<T>(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr, float* scale_ptr, \
+                            bool is_static, cudaStream_t& stream) {                                                    \
+      if (!is_static) {                                                                                                \
+        CUDA_CHECK_LAST_ERROR(llm_kernels::utils::InvokeComputeFP8QuantizeScale<T>(scale_ptr, input_ptr, num_channels, \
+                                                                                   channel_size, stream));             \
+      }                                                                                                                \
+      CUDA_CHECK_LAST_ERROR(llm_kernels::utils::InvokeQuantizeMatrix<__nv_fp8_e4m3, T>(                                \
+          static_cast<__nv_fp8_e4m3*>(quant_ptr), scale_ptr, input_ptr, num_channels, channel_size, stream));          \
     }
-INSTANTIATE_FP8_DYNAMIC_QUANTIZE(float);
-INSTANTIATE_FP8_DYNAMIC_QUANTIZE(half);
+INSTANTIATE_FP8_E4M3_QUANTIZE(float);
+INSTANTIATE_FP8_E4M3_QUANTIZE(half);
 #  ifdef ENABLE_BFLOAT16
-INSTANTIATE_FP8_DYNAMIC_QUANTIZE(__nv_bfloat16);
+INSTANTIATE_FP8_E4M3_QUANTIZE(__nv_bfloat16);
 #  endif
-#  undef INSTANTIATE_FP8_DYNAMIC_QUANTIZE
+#  undef INSTANTIATE_FP8_E4M3_QUANTIZE
 
 #  define INVOKE_FP8_QUANTIZED_MATMUL(T, CUDA_TYPE)                                                                 \
     template <>                                                                                                     \
@@ -739,6 +741,11 @@ INVOKE_FP8_QUANTIZED_MATMUL(half, CUDA_R_16F);
 INVOKE_FP8_QUANTIZED_MATMUL(__nv_bfloat16, CUDA_R_16BF);
 #  endif
 #  undef INVOKE_FP8_QUANTIZED_MATMUL
+
+void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
+                    cudaStream_t& stream) {
+  llm_kernels::utils::InvokeRescaleFp8E4m3(input, output, n, input_scale, output_scale, stream);
+}
 #endif
 
 size_t InvokeGetCublasWorkspaceSize() { return llm_kernels::nvidia::GetCublasWorkspaceSize(); }

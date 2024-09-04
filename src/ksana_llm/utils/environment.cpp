@@ -61,8 +61,6 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
       KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}", quant_method,
                                    model_config.quant_config.bits, model_config.quant_config.group_size);
     } else if (quant_method == "fp8") {
-      // TODO(catheywang): support fp8 quantized weight loading.
-      KLLM_THROW("Loading of fp8 weights from checkpoint is not supported.");
       model_config.quant_config.method = QUANT_FP8_E4M3;
       model_config.quant_config.is_checkpoint_fp8_serialized = true;
       model_config.quant_config.is_activation_scheme_static =

@@ -4,8 +4,8 @@
 #pragma once
 
 #include "ksana_llm/models/base/base_weight.h"
-#include "ksana_llm/utils/tensor_manager.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/tensor_manager.h"
 #include "ksana_llm/utils/utils.h"
 
 #ifdef ENABLE_CUDA
@@ -39,6 +39,16 @@ class QuantWeight {
                        void* weight_ptr);
 
 #ifdef ENABLE_FP8
+  // Copy scale from weights_loader_ to weights_map_
+  bool LoadFp8E4m3Scale(std::string& tensor_name, std::vector<size_t>& weight_shape, DataType& weight_data_type,
+                        void* weight_ptr);
+  // Bind scale to weight
+  Status BindFp8E4m3Scale(const int num_layer, const int num_heads, const int num_kv_heads);
+  Status BindFp8E4m3ScaleOfProjWeight(std::string name, const int num_layer);
+  Status BindFp8E4m3ScaleOfQkvWeight(std::string name, const int num_layer, const int num_heads,
+                                     const int num_kv_heads);
+  Status GetMaxScaleOfQkv(float* q_scale, float* k_scale, float* v_scale, float* qkv_scale);
+
   Status ConvertFp8E4m3Tensor(std::string& weight_name, DataType quant_type);
 
   Status ConvertFp8E4m3(const int num_layer);

@@ -44,16 +44,22 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   }
   void* cublas_workspace = workspace_buffer_->GetPtr<void>();
   void* input_quant = cublas_workspace + InvokeGetCublasWorkspaceSize();
-  float* input_scale = static_cast<float*>(input_quant + GetTypeSize(TYPE_FP8_E4M3) * m * k);
   const void* weight_quant = input_tensors[1].GetPtr<const void>();
-  const void* weight_scale = input_tensors[1].scales->GetPtr<const void>();
+  const void* weight_scale = input_tensors[1].weight_scales->GetPtr<const void>();
   if (weight_scale == nullptr) {
     KLLM_THROW("Cannot load weight_scale. Weight_scale is nullptr.");
   }
   T* output = static_cast<T*>(output_tensors[0].GetPtr<void>());
   output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
   output_tensors[0].dtype = input_tensors[0].dtype;
-  Fp8DynamicQuantize<T>(1, m * k, input, input_quant, input_scale, context_->GetComputeStreams()[rank_].Get());
+  float* input_scale = nullptr;
+  if (input_tensors[1].input_scales) {
+    input_scale = static_cast<float*>(input_tensors[1].input_scales->GetPtr<void>());
+    Fp8E4m3Quantize<T>(1, m * k, input, input_quant, input_scale, true, context_->GetComputeStreams()[rank_].Get());
+  } else {
+    input_scale = static_cast<float*>(input_quant + GetTypeSize(TYPE_FP8_E4M3) * m * k);
+    Fp8E4m3Quantize<T>(1, m * k, input, input_quant, input_scale, false, context_->GetComputeStreams()[rank_].Get());
+  }
   Fp8QuantizedMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_], m, n, k,
                         input_quant, input_scale, weight_quant, weight_scale, output,
                         context_->GetComputeStreams()[rank_].Get(), cublas_workspace);

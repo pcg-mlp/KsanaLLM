@@ -114,13 +114,16 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
 
 #ifdef ENABLE_FP8
 template <typename T>
-void Fp8DynamicQuantize(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr, float* scale_ptr,
-                        cudaStream_t& stream);
+void Fp8E4m3Quantize(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr, float* scale_ptr,
+                     bool is_static, cudaStream_t& stream);
 
 template <typename T>
 void Fp8QuantizedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
                         const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale, T* c_ptr,
                         cudaStream_t& stream, void* workspace);
+
+void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
+                    cudaStream_t& stream);
 #endif
 
 size_t InvokeGetCublasWorkspaceSize();

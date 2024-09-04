@@ -88,11 +88,6 @@ bool QuantWeight<T>::CheckQuantModel() {
       } else {
         KLLM_THROW("Device is insufficient to support FP8 GEMM.");
       }
-      if (model_config_.quant_config.is_checkpoint_fp8_serialized) {
-        KLLM_THROW("Loading of fp8 weights from checkpoint is not supported.");
-      } else {
-        return false;
-      }
     }
   }
   return false;
@@ -405,31 +400,13 @@ Status QuantWeight<T>::ConvertFp8E4m3(const int num_layer) {
   DataType quant_type = TYPE_FP8_E4M3;
   KLLM_LOG_INFO << "Converting weight to fp8_e4m3";
   GetBlockManager()->SetDeviceId(rank_);
-  std::string name;
-  name = ".mlp.gate_proj.weight";
+  std::vector<std::string> names = {".mlp.gate_proj.weight", ".mlp.up_proj.weight", ".mlp.down_proj.weight",
+                                    ".self_attn.o_proj.weight", ".self_attn.query_key_value.weight"};
   for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
-    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
-    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
-  }
-  name = ".mlp.up_proj.weight";
-  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
-    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
-    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
-  }
-  name = ".mlp.down_proj.weight";
-  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
-    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
-    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
-  }
-  name = ".self_attn.o_proj.weight";
-  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
-    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
-    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
-  }
-  name = ".self_attn.query_key_value.weight";
-  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
-    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
-    STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+    for (auto name : names) {
+      std::string weight_name = "model.layers." + std::to_string(layer_idx) + name;
+      STATUS_CHECK_RETURN(ConvertFp8E4m3Tensor(weight_name, quant_type));
+    }
   }
   return Status();
 }
@@ -466,15 +443,185 @@ Status QuantWeight<T>::ConvertFp8E4m3Tensor(std::string& weight_name, DataType q
   tensor_manager_->AddWeightTensor(scale_name, {1}, TYPE_FP32);
   Tensor& quant_tensor = weights_map_[quant_name];
   Tensor& scale_tensor = weights_map_[scale_name];
-  Fp8DynamicQuantize(1, trans_tensor.shape[0] * trans_tensor.shape[1],
-                     static_cast<const T*>(trans_tensor.GetPtr<void>()), quant_tensor.GetPtr<void>(),
-                     static_cast<float*>(scale_tensor.GetPtr<void>()), context_->GetMemoryManageStreams()[rank_].Get());
-  quant_tensor.scales = &scale_tensor;
+  Fp8E4m3Quantize(1, trans_tensor.shape[0] * trans_tensor.shape[1], static_cast<const T*>(trans_tensor.GetPtr<void>()),
+                  quant_tensor.GetPtr<void>(), static_cast<float*>(scale_tensor.GetPtr<void>()), false,
+                  context_->GetMemoryManageStreams()[rank_].Get());
+  quant_tensor.weight_scales = &scale_tensor;
   GetBlockManager()->FreeContiguous(weights_map_[weight_name].GetBlockId());
   GetBlockManager()->FreeContiguous(weights_map_[trans_name].GetBlockId());
   weights_map_[weight_name] = weights_map_[quant_name];
   weights_map_.erase(quant_name);
   weights_map_.erase(trans_name);
+  return Status();
+}
+
+template <typename T>
+bool QuantWeight<T>::LoadFp8E4m3Scale(std::string& tensor_name, std::vector<size_t>& weight_shape,
+                                      DataType& weight_data_type, void* weight_ptr) {
+  GetBlockManager()->SetDeviceId(rank_);
+  if (model_config_.quant_config.method != QUANT_FP8_E4M3) {
+    return false;
+  }
+  if (tensor_name.find(".weight_scale") == std::string::npos && tensor_name.find(".input_scale") == std::string::npos) {
+    return false;
+  }
+  // scale is float scalar
+  if (weight_data_type != TYPE_FP32) {
+    KLLM_THROW("Not support data type of scale:" + tensor_name);
+  }
+  // shape is empty or [1]
+  if (!weight_shape.empty() || (weight_shape.size() == 1 && weight_shape[0] == 1)) {
+    KLLM_THROW("Not support shape of scale:" + tensor_name);
+  }
+  weight_shape = {static_cast<size_t>(1)};
+  KLLM_LOG_DEBUG << "Start loading scale:" << tensor_name;
+  std::string weight_name;
+  if (tensor_name.find("self_attn.W_pack") != std::string::npos) {
+    // .weight_scale or .input_scale
+    std::string suffix = tensor_name.substr(tensor_name.find_last_of("."), tensor_name.length());
+    weight_name = tensor_name.substr(0, tensor_name.rfind("W_pack")) + "query_key_value" + suffix;
+    tensor_manager_->AddWeightTensor(weight_name, weight_shape, weight_data_type);
+    MemcpyAsync(weights_map_[weight_name].GetPtr<void>(), weight_ptr, sizeof(float), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[rank_]);
+  } else if (tensor_name.find("_proj")) {
+    weight_name = tensor_name;
+    tensor_manager_->AddWeightTensor(weight_name, weight_shape, weight_data_type);
+    MemcpyAsync(weights_map_[weight_name].GetPtr<void>(), weight_ptr, sizeof(float), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[rank_]);
+  } else {
+    KLLM_THROW("Not support scale:" + tensor_name);
+  }
+  KLLM_LOG_DEBUG << "Success loading scale:" << weight_name;
+  return true;
+}
+
+template <typename T>
+Status QuantWeight<T>::BindFp8E4m3Scale(const int num_layer, const int num_heads, const int num_kv_heads) {
+  KLLM_LOG_INFO << "Start binding scale";
+  GetBlockManager()->SetDeviceId(rank_);
+  std::vector<std::string> names = {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.down_proj.", ".self_attn.o_proj."};
+  for (auto name : names) {
+    BindFp8E4m3ScaleOfProjWeight(name, num_layer);
+  }
+
+  std::string name = ".self_attn.query_key_value.";
+  BindFp8E4m3ScaleOfQkvWeight(name, num_layer, num_heads, num_kv_heads);
+
+  KLLM_LOG_INFO << "Success binding scale";
+  return Status();
+}
+
+template <typename T>
+Status QuantWeight<T>::BindFp8E4m3ScaleOfProjWeight(std::string name, const int num_layer) {
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name + "weight";
+    std::string weight_scale_name = "model.layers." + std::to_string(layer_idx) + name + "weight_scale";
+    std::string input_scale_name = "model.layers." + std::to_string(layer_idx) + name + "input_scale";
+    if (weights_map_.find(weight_scale_name) != weights_map_.end()) {
+      KLLM_LOG_DEBUG << "Binding " << weight_scale_name << " to " << weight_name;
+      weights_map_[weight_name].weight_scales = &(weights_map_[weight_scale_name]);
+    }
+    if (weights_map_.find(input_scale_name) != weights_map_.end()) {
+      KLLM_LOG_DEBUG << "Binding " << input_scale_name << " to " << weight_name;
+      weights_map_[weight_name].input_scales = &(weights_map_[input_scale_name]);
+    }
+    if (weights_map_.find(weight_scale_name) == weights_map_.end()) {
+      std::string gate_name = ".mlp.gate_proj.";
+      std::string gate_weight_scale_name = "model.layers." + std::to_string(layer_idx) + gate_name + "weight_scale";
+      std::string gate_input_scale_name = "model.layers." + std::to_string(layer_idx) + gate_name + "input_scale";
+      if (weights_map_.find(gate_weight_scale_name) != weights_map_.end()) {
+        KLLM_LOG_DEBUG << "Binding " << gate_weight_scale_name << " to " << weight_name;
+        weights_map_[weight_name].weight_scales = &(weights_map_[gate_weight_scale_name]);
+      }
+      if (weights_map_.find(gate_input_scale_name) != weights_map_.end()) {
+        KLLM_LOG_DEBUG << "Binding " << gate_input_scale_name << " to " << weight_name;
+        weights_map_[weight_name].input_scales = &(weights_map_[gate_input_scale_name]);
+      }
+    }
+  }
+  return Status();
+}
+
+template <typename T>
+Status QuantWeight<T>::BindFp8E4m3ScaleOfQkvWeight(std::string name, const int num_layer, const int num_heads,
+                                                   const int num_kv_heads) {
+  for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
+    std::string weight_name = "model.layers." + std::to_string(layer_idx) + name + "weight";
+    std::string weight_scale_name = "model.layers." + std::to_string(layer_idx) + name + "weight_scale";
+    std::string input_scale_name = "model.layers." + std::to_string(layer_idx) + name + "input_scale";
+
+    std::string q_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.q_proj.";
+    std::string k_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.k_proj.";
+    std::string v_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.v_proj.";
+
+    std::string q_input_scale_name = q_name + "input_scale";
+    std::string k_input_scale_name = k_name + "input_scale";
+    std::string v_input_scale_name = v_name + "input_scale";
+    // If weights of q,k,v are saved independently,
+    // input_scale of qkv is max of q/k/v's input_scale
+    if (weights_map_.find(q_input_scale_name) != weights_map_.end() &&
+        weights_map_.find(k_input_scale_name) != weights_map_.end() &&
+        weights_map_.find(v_input_scale_name) != weights_map_.end() &&
+        weights_map_.find(input_scale_name) == weights_map_.end()) {
+      tensor_manager_->AddWeightTensor(input_scale_name, {1}, weights_map_[q_input_scale_name].dtype);
+      float* q_scale = static_cast<float*>(weights_map_[q_input_scale_name].GetPtr<void>());
+      float* k_scale = static_cast<float*>(weights_map_[k_input_scale_name].GetPtr<void>());
+      float* v_scale = static_cast<float*>(weights_map_[v_input_scale_name].GetPtr<void>());
+      float* qkv_scale = static_cast<float*>(weights_map_[input_scale_name].GetPtr<void>());
+      GetMaxScaleOfQkv(q_scale, k_scale, v_scale, qkv_scale);
+    }
+
+    std::string q_weight_scale_name = q_name + "weight_scale";
+    std::string k_weight_scale_name = k_name + "weight_scale";
+    std::string v_weight_scale_name = v_name + "weight_scale";
+    // If weights of q,k,v are saved independently,
+    // weight_scale of qkv is max of q/k/v's weight_scale,
+    // weight of qkv need to be Rescale.
+    if (weights_map_.find(q_weight_scale_name) != weights_map_.end() &&
+        weights_map_.find(k_weight_scale_name) != weights_map_.end() &&
+        weights_map_.find(v_weight_scale_name) != weights_map_.end() &&
+        weights_map_.find(weight_scale_name) == weights_map_.end()) {
+      tensor_manager_->AddWeightTensor(weight_scale_name, {1}, weights_map_[q_weight_scale_name].dtype);
+      float* q_scale = static_cast<float*>(weights_map_[q_weight_scale_name].GetPtr<void>());
+      float* k_scale = static_cast<float*>(weights_map_[k_weight_scale_name].GetPtr<void>());
+      float* v_scale = static_cast<float*>(weights_map_[v_weight_scale_name].GetPtr<void>());
+      float* qkv_scale = static_cast<float*>(weights_map_[weight_scale_name].GetPtr<void>());
+      GetMaxScaleOfQkv(q_scale, k_scale, v_scale, qkv_scale);
+
+      // q,k,v_weight * (q,k,v_scale / qkv_scale)
+      Tensor& weight = weights_map_[weight_name];
+      size_t n = weight.GetElementNumber() / (num_heads / num_kv_heads + 2);
+      size_t size = weight.GetTotalBytes() / (num_heads / num_kv_heads + 2);
+      void* q_weight = weight.GetPtr<void>();
+      void* k_weight = q_weight + size * num_heads / num_kv_heads;
+      void* v_weight = k_weight + size;
+      RescaleFp8E4m3(q_weight, q_weight, n * num_heads / num_kv_heads, q_scale, qkv_scale,
+                     context_->GetMemoryManageStreams()[rank_].Get());
+      RescaleFp8E4m3(k_weight, k_weight, n, k_scale, qkv_scale, context_->GetMemoryManageStreams()[rank_].Get());
+      RescaleFp8E4m3(v_weight, v_weight, n, v_scale, qkv_scale, context_->GetMemoryManageStreams()[rank_].Get());
+    }
+
+    if (weights_map_.find(weight_scale_name) != weights_map_.end()) {
+      KLLM_LOG_DEBUG << "Binding " << weight_scale_name << " to " << weight_name;
+      weights_map_[weight_name].weight_scales = &(weights_map_[weight_scale_name]);
+    }
+    if (weights_map_.find(input_scale_name) != weights_map_.end()) {
+      KLLM_LOG_DEBUG << "Binding " << input_scale_name << " to " << weight_name;
+      weights_map_[weight_name].input_scales = &(weights_map_[input_scale_name]);
+    }
+  }
+  return Status();
+}
+
+template <typename T>
+Status QuantWeight<T>::GetMaxScaleOfQkv(float* q_scale, float* k_scale, float* v_scale, float* qkv_scale) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch::kFloat32);
+  torch::Tensor q_scale_tensor = torch::from_blob(q_scale, {1}, options);
+  torch::Tensor k_scale_tensor = torch::from_blob(k_scale, {1}, options);
+  torch::Tensor v_scale_tensor = torch::from_blob(v_scale, {1}, options);
+  torch::Tensor qkv_scale_tensor = torch::from_blob(qkv_scale, {1}, options);
+  torch::max_out(qkv_scale_tensor, q_scale_tensor, k_scale_tensor);
+  torch::max_out(qkv_scale_tensor, qkv_scale_tensor, v_scale_tensor);
   return Status();
 }
 #endif

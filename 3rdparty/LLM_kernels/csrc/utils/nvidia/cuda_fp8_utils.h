@@ -151,6 +151,8 @@ template <typename T_IN>
 void InvokeComputeFP8QuantizeScale(float* output, const T_IN* input, const int32_t num_channels,
                                    const int32_t channel_size, cudaStream_t stream);
 
+void InvokeRescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
+                          cudaStream_t& stream);
 }  // namespace utils
 }  // namespace llm_kernels
 #endif  // ENABLE_FP8

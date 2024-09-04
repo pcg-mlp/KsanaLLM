@@ -63,6 +63,10 @@ DataType PytorchFileTensorLoader::GetTensorDataType(const std::string& tensor_na
     case torch::kInt32:
       data_type = TYPE_INT32;
       break;
+    // (TODO)catheywang: if torch>=2.3
+    // case c10::kFloat8_e4m3fn:
+    //  data_type = TYPE_FP8_E4M3;
+    //  break;
     default:
       break;
   }

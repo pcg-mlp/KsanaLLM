@@ -29,6 +29,9 @@ class CommonWeight : public BaseWeight {
  protected:
   Status ConvertCommonTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
 
+  Status ReshapeQkvTensor(int num_layer);
+  Status ConvertLmheadTensor();
+
   Status GetModelInfo(const ModelConfig& model_config);
 
   std::string ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias = false);

@@ -137,6 +137,21 @@ template void InvokeComputeFP8QuantizeScale(float* output, const __nv_bfloat16* 
 template void InvokeComputeFP8QuantizeScale(float* output, const float* input, const int32_t num_channels,
                                             const int32_t channel_size, cudaStream_t stream);
 
+__global__ void RescaleFp8E4m3Kernel(void* input, void* output, size_t n, const float* input_scale,
+                                     const float* output_scale) {
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx < n) {
+    float scale = *input_scale / *output_scale;
+    *((__nv_fp8_e4m3*)output + idx) = (__nv_fp8_e4m3)((float)*((__nv_fp8_e4m3*)input + idx) * scale);
+  }
+}
+
+void InvokeRescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
+                          cudaStream_t& stream) {
+  dim3 block(DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
+  dim3 grid((n + DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM - 1) / DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
+  RescaleFp8E4m3Kernel<<<grid, block, 0, stream>>>(input, output, n, input_scale, output_scale);
+}
 #endif  // ENABLE_FP8
 
 }  // namespace utils
