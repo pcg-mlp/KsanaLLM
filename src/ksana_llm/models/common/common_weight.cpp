@@ -94,7 +94,8 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
     return Status();
   }
   // Quant Weight, Scales do not slicing here
-  if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos) {
+  if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos ||
+      tensor_name.find(".qzeros") != std::string::npos) {
     return Status();
   }
 

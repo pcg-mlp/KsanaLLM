@@ -56,14 +56,22 @@ class QuantWeight {
 
  private:
 #ifdef ENABLE_CUDA
-  torch::Tensor UnpackInt32IntoInt8(const torch::Tensor& w_packed);
+  torch::Tensor AutoUnpack(const std::string& tensor_name, torch::Tensor& tensor);
 
-  torch::Tensor PackInt8TensorToPackedInt4(torch::Tensor weight);
+  torch::Tensor UnpackAWQ(const torch::Tensor& qweight, int bits, int group_size);
+
+  torch::Tensor GetReverseOrder(const torch::Tensor& iweights, int bits);
+
+  torch::Tensor UnpackQWeight(const torch::Tensor& qtensor, int bits);
+
+  torch::Tensor UnpackGPTQ(const torch::Tensor& qweight);
+
+  torch::Tensor PackInt8ToPackedInt4(torch::Tensor weight);
 
   torch::Tensor PreprocessWeightsForMixedGemmWarpper(torch::Tensor row_major_quantized_weight,
                                                      llm_kernels::nvidia::QuantType quant_type);
 
-  torch::Tensor ConvertGroupLayout(torch::Tensor qweight_int32);
+  Status AddWeightFromTorchTensor(const std::string& name, torch::Tensor& tensor);
 #endif
 
   // Check if the model is a quantized model

@@ -45,45 +45,63 @@ void FpAIntBGroupCutlassGemmWrapper<T, WT>::GetWorkspaceSize(size_t m, size_t n,
   if constexpr (!std::is_same_v<T, float>) {
     using weight_type = typename WeightTypeSelector<WT>::type;
     auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
-        T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
+        T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
     ws_bytes = gemm->GetWorkspaceSize(m, n, k);
   }
 }
 
 template <typename T, WeightType WT>
 void FpAIntBGroupCutlassGemmWrapper<T, WT>::Gemm(void* output, const void* input, const void* weight,
-                                                 const void* scales, void* ws, size_t m, size_t n, size_t k,
-                                                 size_t groupsize, size_t config_index, cudaStream_t stream) {
+                                                 const void* scales, const void* zeros, void* ws, size_t m, size_t n,
+                                                 size_t k, size_t groupsize, size_t config_index, cudaStream_t stream) {
   if constexpr (!std::is_same_v<T, float>) {
     using weight_type = typename WeightTypeSelector<WT>::type;
-    auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
-        T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
-    const size_t ws_bytes = gemm->GetWorkspaceSize(m, n, k);
-    gemm->Gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
-               reinterpret_cast<const T*>(scales),
-               nullptr,  // no zeros
-               nullptr,  // no bias
-               reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->GetConfigs()[config_index],
-               reinterpret_cast<char*>(ws), ws_bytes, stream);
+    if (zeros == nullptr) {
+      auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
+          T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
+      gemm->Gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
+                reinterpret_cast<const T*>(scales),
+                nullptr,  // no zeros
+                nullptr,  // no bias
+                reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->GetConfigs()[config_index],
+                reinterpret_cast<char*>(ws), gemm->GetWorkspaceSize(m, n, k), stream);
+    } else {
+      auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
+          T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
+      gemm->Gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
+                reinterpret_cast<const T*>(scales), reinterpret_cast<const T*>(zeros),
+                nullptr,  // no bias
+                reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->GetConfigs()[config_index],
+                reinterpret_cast<char*>(ws), gemm->GetWorkspaceSize(m, n, k), stream);
+    }
   }
 }
 
 template <typename T, WeightType WT>
 size_t FpAIntBGroupCutlassGemmWrapper<T, WT>::GetBestConfigIndex(size_t warmup, size_t iter, void* output,
                                                                  const void* input, const void* weight,
-                                                                 const void* scales, void* ws, size_t m, size_t n,
-                                                                 size_t k, size_t groupsize, cudaStream_t stream) {
+                                                                 const void* scales, const void* zeros, void* ws,
+                                                                 size_t m, size_t n, size_t k, size_t groupsize,
+                                                                 cudaStream_t stream) {
   if constexpr (!std::is_same_v<T, float>) {
     using weight_type = typename WeightTypeSelector<WT>::type;
-    auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
-        T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
+
+    std::vector<cutlass_extensions::CutlassGemmConfig> configs;
+    if (zeros == nullptr) {
+      auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
+          T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
+      configs = gemm->GetConfigs();
+    } else {
+      auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
+          T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
+      configs = gemm->GetConfigs();
+    }
 
     cudaEvent_t begin, end;
     cudaEventCreate(&begin);
     cudaEventCreate(&end);
 
     float fast_time = std::numeric_limits<float>::max();
-    auto configs = gemm->GetConfigs();
     int best_config_index = 0;
 
     for (size_t config_index = 0; config_index < configs.size(); config_index++) {
@@ -96,13 +114,13 @@ size_t FpAIntBGroupCutlassGemmWrapper<T, WT>::GetBestConfigIndex(size_t warmup, 
 
       // warm up
       for (size_t i = 0; i < warmup; ++i) {
-        Gemm(output, input, weight, scales, ws, m, n, k, groupsize, config_index, stream);
+        Gemm(output, input, weight, scales, zeros, ws, m, n, k, groupsize, config_index, stream);
       }
 
       // record time
       cudaEventRecord(begin, stream);
       for (size_t i = 0; i < iter; ++i) {
-        Gemm(output, input, weight, scales, ws, m, n, k, groupsize, config_index, stream);
+        Gemm(output, input, weight, scales, zeros, ws, m, n, k, groupsize, config_index, stream);
       }
       cudaEventRecord(end, stream);
       cudaEventSynchronize(end);
@@ -151,13 +169,14 @@ bool FpAIntBGroupCudaGemmWrapper<T, WT>::IsSupport() {
 
 template <typename T, WeightType WT>
 void FpAIntBGroupCudaGemmWrapper<T, WT>::Gemm(void* output, const void* input, const void* weight, const void* scales,
-                                              size_t m, size_t n, size_t k, size_t groupsize, cudaStream_t stream) {
+                                              const void* zeros, size_t m, size_t n, size_t k, size_t groupsize,
+                                              cudaStream_t stream) {
   if constexpr (WT == WeightType::INT4 && std::is_same_v<T, half>) {
     llm_kernels::nvidia::weight_only::Params params{reinterpret_cast<const void*>(input),
                                                     nullptr,
                                                     reinterpret_cast<const void*>(weight),
                                                     reinterpret_cast<const void*>(scales),
-                                                    nullptr,  // no zeros
+                                                    reinterpret_cast<const void*>(zeros),
                                                     nullptr,  // no bias
                                                     reinterpret_cast<void*>(output),
                                                     1.0f,

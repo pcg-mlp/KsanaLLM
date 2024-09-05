@@ -5,6 +5,7 @@
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <torch/script.h>
 #include <optional>
 #include <vector>
 
@@ -13,28 +14,33 @@
 #include "csrc/utils/quant_type.h"
 
 #include "ksana_llm/utils/nvidia/nccl_utils.h"
+#include "ksana_llm/utils/common_device.h"
 
 namespace ksana_llm {
+
+DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type);
+
+c10::ScalarType GetTorchTypeFromDataType(const DataType& data_type);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-void InvokeFpAIntBGroupCutlassGemm(void* output, const void* input, const void* weight, const void* scales, void* ws,
-                                   size_t m, size_t n, size_t k, size_t groupsize, size_t config_index,
-                                   cudaStream_t stream);
+void InvokeFpAIntBGroupCutlassGemm(void* output, const void* input, const void* weight, const void* scales,
+                                   const void* zeros, void* ws, size_t m, size_t n, size_t k, size_t groupsize,
+                                   size_t config_index, cudaStream_t stream);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 size_t InvokeFpAIntBGroupCutlassGemmConfigProfile(size_t warmup, size_t iter, void* output, const void* input,
-                                                  const void* weight, const void* scales, void* ws, size_t m, size_t n,
-                                                  size_t k, size_t groupsize, cudaStream_t stream);
+                                                  const void* weight, const void* scales, const void* zeros, void* ws,
+                                                  size_t m, size_t n, size_t k, size_t groupsize, cudaStream_t stream);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 bool GetFpAIntBGroupCudaGemmSupported();
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
-void InvokeFpAIntBGroupCudaGemm(void* output, const void* input, const void* weight, const void* scales, size_t m,
-                                size_t n, size_t k, size_t groupsize, cudaStream_t stream);
+void InvokeFpAIntBGroupCudaGemm(void* output, const void* input, const void* weight, const void* scales,
+                                const void* zeros, size_t m, size_t n, size_t k, size_t groupsize, cudaStream_t stream);
 
 // Invoke the lookup embedding.
 template <typename T>

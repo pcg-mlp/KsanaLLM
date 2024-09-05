@@ -22,17 +22,17 @@ struct RoPEScalingFactor {
   float factor{1.0f};
 };
 
-enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_FP8_E4M3 };
+enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3 };
 
 // The Quant informations.
 struct QuantConfig {
   // The quant method
   QuantMode method = QUANT_NONE;
 
-  // (gptq) The quant bits
+  // (gptq/awq) The quant bits
   size_t bits;
 
-  // (gptq) The quant group size
+  // (gptq/awq) The quant group size
   size_t group_size;
 
   // (fp8) Whether weight is quantized in checkpoint.

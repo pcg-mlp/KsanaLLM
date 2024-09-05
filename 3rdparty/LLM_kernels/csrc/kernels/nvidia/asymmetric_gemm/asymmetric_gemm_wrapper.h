@@ -20,12 +20,12 @@ class FpAIntBGroupCutlassGemmWrapper {
  public:
   void GetWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
 
-  void Gemm(void* output, const void* input, const void* weight, const void* scales, void* ws, size_t m, size_t n,
-            size_t k, size_t groupsize, size_t config_index, cudaStream_t stream);
+  void Gemm(void* output, const void* input, const void* weight, const void* scales, const void* zeros, void* ws,
+            size_t m, size_t n, size_t k, size_t groupsize, size_t config_index, cudaStream_t stream);
 
   size_t GetBestConfigIndex(size_t warmup, size_t iter, void* output, const void* input, const void* weight,
-                            const void* scales, void* ws, size_t m, size_t n, size_t k, size_t groupsize,
-                            cudaStream_t stream);
+                            const void* scales, const void* zeros, void* ws, size_t m, size_t n, size_t k,
+                            size_t groupsize, cudaStream_t stream);
 };
 
 template <typename T, WeightType WT>
@@ -35,8 +35,9 @@ class FpAIntBGroupCudaGemmWrapper {
 
   bool IsSupport();
 
-  void Gemm(void* output, const void* input, const void* weight, const void* scales, size_t m, size_t n, size_t k,
-            size_t groupsize, cudaStream_t stream);
+  void Gemm(void* output, const void* input, const void* weight, const void* scales, const void* zeros, size_t m,
+            size_t n, size_t k, size_t groupsize, cudaStream_t stream);
+
  private:
   int arch;
 };

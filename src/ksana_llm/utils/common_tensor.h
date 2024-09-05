@@ -32,6 +32,7 @@ class TensorT {
   std::vector<size_t> shape;
 
   TensorT<T>* scales = nullptr;
+  TensorT<T>* zeros = nullptr;
   TensorT<T>* input_scales = nullptr;
   TensorT<T>* weight_scales = nullptr;
 

@@ -35,6 +35,8 @@ class MatMulLayerFactory {
 #endif
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ}] =
         &MatMulLayerFactory<T>::BuildLayer<GroupMatMulLayer<T, TYPE_I4_GROUP>>;
+    builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ}] =
+        &MatMulLayerFactory<T>::BuildLayer<GroupMatMulLayer<T, TYPE_I4_GROUP>>;
   }
   ~MatMulLayerFactory() {
     if (workspace_buffer_) {
@@ -50,7 +52,8 @@ class MatMulLayerFactory {
                                              DataType weight_type, DataType input_type, DataType output_type,
                                              const std::vector<std::any>& init_params) {
     // gptq layer
-    if (model_config_.is_quant && model_config_.quant_config.method == QUANT_GPTQ) {
+    if (model_config_.is_quant &&
+        (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {
       if (weight_name.find("lm_head") == std::string::npos) {
         std::vector<std::any> group_matmul_param;
         group_matmul_param.push_back(model_config_.max_scheduler_token_num);

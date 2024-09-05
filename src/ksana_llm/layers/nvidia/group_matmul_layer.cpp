@@ -2,6 +2,7 @@
 
 ==============================================================================*/
 #include "ksana_llm/layers/group_matmul_layer.h"
+#include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_preprocessors.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/utils/utils.h"
 
@@ -51,19 +52,26 @@ Status GroupMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
     Tensor buffer_input_activation;
     Tensor buffer_input_weight;
     Tensor buffer_input_scales;
+    Tensor buffer_input_zeros;
     Tensor buffer_output;
     CreateTensor(buffer_input_activation, {max_m_, k}, DataType::TYPE_FP16, rank_, MemoryDevice::MEMORY_DEVICE);
     CreateTensor(buffer_input_weight, {k, n / 2}, DataType::TYPE_UINT8, rank_, MemoryDevice::MEMORY_DEVICE);
     CreateTensor(buffer_input_scales, {k / groupsize_, n}, DataType::TYPE_FP16, rank_, MemoryDevice::MEMORY_DEVICE);
+    CreateTensor(buffer_input_zeros, {k / groupsize_, n}, DataType::TYPE_FP16, rank_, MemoryDevice::MEMORY_DEVICE);
     CreateTensor(buffer_output, {max_m_, n}, DataType::TYPE_FP16, rank_, MemoryDevice::MEMORY_DEVICE);
+
+    void* zeros_ptr = buffer_input_zeros.GetPtr<void>();
+    if (model_config_.quant_config.method == QUANT_GPTQ) {
+      zeros_ptr = nullptr;
+    }
 
     const size_t warmup_iters = GetEnvAsPositiveInt("QUANT_WARMUP", 2);
     const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 5);
     for (size_t m = 1; m <= static_cast<size_t>(model_config_.max_batch_size); m++) {
       size_t best_config_index = InvokeFpAIntBGroupCutlassGemmConfigProfile<T, llm_kernels::nvidia::WeightType::INT4>(
           warmup_iters, record_iters, buffer_output.GetPtr<void>(), buffer_input_activation.GetPtr<void>(),
-          buffer_input_weight.GetPtr<void>(), buffer_input_scales.GetPtr<void>(), workspace_buffer_->GetPtr<void>(), m,
-          n, k, groupsize_, context_->GetComputeStreams()[rank_].Get());
+          buffer_input_weight.GetPtr<void>(), buffer_input_scales.GetPtr<void>(), zeros_ptr,
+          workspace_buffer_->GetPtr<void>(), m, n, k, groupsize_, context_->GetComputeStreams()[rank_].Get());
       config_map_[m] = best_config_index;
       KLLM_LOG_DEBUG << fmt::format("The best config index for mnk=({},{},{}) is {}", m, n, k, best_config_index);
     }
@@ -71,6 +79,7 @@ Status GroupMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
     DestroyTensor(buffer_input_activation, rank_);
     DestroyTensor(buffer_input_weight, rank_);
     DestroyTensor(buffer_input_scales, rank_);
+    DestroyTensor(buffer_input_zeros, rank_);
     DestroyTensor(buffer_output, rank_);
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -96,10 +105,15 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
     const size_t n = weight_tensor.scales->shape[1];
     const size_t k = input_tensors[0].shape[1];
 
+    void* p_zeros_tensor = nullptr;
+    if (weight_tensor.zeros != nullptr) {
+      p_zeros_tensor = weight_tensor.zeros->GetPtr<void>();
+    }
+
     if (use_gemv_cuda_core_ && m < 5) {
       InvokeFpAIntBGroupCudaGemm<T, llm_kernels::nvidia::WeightType::INT4>(
-          output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor, m, n, k,
-          groupsize_, context_->GetComputeStreams()[rank_].Get());
+          output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
+          p_zeros_tensor, m, n, k, groupsize_, context_->GetComputeStreams()[rank_].Get());
       output_tensors[0].shape = {m, n};
       output_tensors[0].dtype = input_tensors[0].dtype;
       return Status();
@@ -111,8 +125,9 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
     }
     InvokeFpAIntBGroupCutlassGemm<T, llm_kernels::nvidia::WeightType::INT4>(
         output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
-        workspace_buffer_->GetPtr<void>(), m, n, k, groupsize_, best_config_index,
+        p_zeros_tensor, workspace_buffer_->GetPtr<void>(), m, n, k, groupsize_, best_config_index,
         context_->GetComputeStreams()[rank_].Get());
+
     output_tensors[0].shape = {m, n};
     output_tensors[0].dtype = input_tensors[0].dtype;
     return Status();

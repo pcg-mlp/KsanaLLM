@@ -60,6 +60,12 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
       model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
       KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}", quant_method,
                                    model_config.quant_config.bits, model_config.quant_config.group_size);
+    } else if (quant_method == "awq") {
+      model_config.quant_config.method = QUANT_AWQ;
+      model_config.quant_config.bits = config_json["quantization_config"].at("bits");
+      model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
+      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}", quant_method,
+                                   model_config.quant_config.bits, model_config.quant_config.group_size);
     } else if (quant_method == "fp8") {
       model_config.quant_config.method = QUANT_FP8_E4M3;
       model_config.quant_config.is_checkpoint_fp8_serialized = true;

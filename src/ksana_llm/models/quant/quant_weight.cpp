@@ -65,12 +65,16 @@ bool QuantWeight<T>::FilterOutQuantWeight(const std::string& tensor_name) {
   if (!enable_) {
     return false;
   }
-  if (tensor_name.find(".g_idx") != std::string::npos || tensor_name.find(".qzeros") != std::string::npos ||
-      tensor_name.find(".o_proj.bias") != std::string::npos ||
-      tensor_name.find(".gate_proj.bias") != std::string::npos ||
-      tensor_name.find(".up_proj.bias") != std::string::npos ||
-      tensor_name.find(".down_proj.bias") != std::string::npos) {
-    return true;
+
+  std::vector<std::string> skip_lists = {".g_idx", ".o_proj.bias", ".gate_proj.bias", ".up_proj.bias",
+                                         ".down_proj.bias"};
+  if (model_config_.quant_config.method == QUANT_GPTQ) {
+    skip_lists.push_back(".qzeros");
+  }
+  for (const std::string& skip : skip_lists) {
+    if (tensor_name.find(skip) != std::string::npos) {
+      return true;
+    }
   }
   return false;
 }
@@ -80,6 +84,9 @@ bool QuantWeight<T>::CheckQuantModel() {
   // TODO(jinxcwu): make a struct to store different quant type: gptq, awq, ...
   if (model_config_.is_quant) {
     if (model_config_.quant_config.method == QUANT_GPTQ) {
+      return true;
+    }
+    if (model_config_.quant_config.method == QUANT_AWQ) {
       return true;
     }
     if (model_config_.quant_config.method == QUANT_FP8_E4M3) {
@@ -101,11 +108,11 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
   }
 
 #ifdef ENABLE_CUDA
-  if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos) {
+  if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos ||
+      tensor_name.find(".qzeros") != std::string::npos) {
     if (tensor_name.find("W_pack") != std::string::npos) {
       size_t q_proj_size = model_config_.size_per_head * model_config_.head_num;
       size_t kv_proj_size = model_config_.size_per_head * model_config_.num_key_value_heads;
-
       if (q_proj_size % tensor_para_size_ != 0 || kv_proj_size % tensor_para_size_ != 0) {
         KLLM_THROW(
             fmt::format("Model can't run with tensor_para_size == {}. "
@@ -113,28 +120,18 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
                         "tensor_parallel_size_.",
                         tensor_para_size_, q_proj_size, kv_proj_size));
       }
+      auto options = torch::TensorOptions().device(torch::kCPU).dtype(GetTorchTypeFromDataType(weight_data_type));
+      torch::Tensor tensor =
+          torch::from_blob(weight_ptr, std::vector<int64_t>(weight_shape.begin(), weight_shape.end()), options);
 
-      const std::string prefix_name = tensor_name.substr(0, tensor_name.find("W_pack"));
-      const std::string suffix_name =
-          tensor_name.substr(tensor_name.find("W_pack") + sizeof("W_pack"), tensor_name.length() - 1);
-      std::string q_proj_name = prefix_name + "q_proj." + suffix_name;
-      std::string k_proj_name = prefix_name + "k_proj." + suffix_name;
-      std::string v_proj_name = prefix_name + "v_proj." + suffix_name;
+      std::string q_proj_name = std::regex_replace(tensor_name, std::regex("W_pack"), "q_proj");
+      std::string k_proj_name = std::regex_replace(tensor_name, std::regex("W_pack"), "k_proj");
+      std::string v_proj_name = std::regex_replace(tensor_name, std::regex("W_pack"), "v_proj");
 
-      std::vector<size_t> q_proj_shape = {weight_shape[0], q_proj_size / tensor_para_size_};
-      std::vector<size_t> kv_proj_shape = {weight_shape[0], kv_proj_size / tensor_para_size_};
-
-      tensor_manager_->AddWeightTensor(q_proj_name, q_proj_shape, weight_data_type);
-      tensor_manager_->AddWeightTensor(k_proj_name, kv_proj_shape, weight_data_type);
-      tensor_manager_->AddWeightTensor(v_proj_name, kv_proj_shape, weight_data_type);
-
-      auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
-      if (tensor_name.find(".scales") != std::string::npos) {
-        options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kHalf);
-      }
-      torch::Tensor tensor = torch::from_blob(
-          weight_ptr, {static_cast<int64_t>(weight_shape[0]), static_cast<int64_t>(weight_shape[1])}, options);
-      // TODO(jinxcwu): use Memcpy2DAsync to the usage of torch
+      tensor = AutoUnpack(tensor_name, tensor);
+      size_t s = (q_proj_size + kv_proj_size + kv_proj_size) / tensor.size(1);
+      q_proj_size /= s;
+      kv_proj_size /= s;
       auto tensors = torch::split(
           tensor,
           {static_cast<int64_t>(q_proj_size), static_cast<int64_t>(kv_proj_size), static_cast<int64_t>(kv_proj_size)},
@@ -142,20 +139,13 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
 
       q_proj_size /= tensor_para_size_;
       kv_proj_size /= tensor_para_size_;
-
       tensors[0] = tensors[0].slice(1, rank_ * q_proj_size, (rank_ + 1) * q_proj_size).contiguous();
       tensors[1] = tensors[1].slice(1, rank_ * kv_proj_size, (rank_ + 1) * kv_proj_size).contiguous();
       tensors[2] = tensors[2].slice(1, rank_ * kv_proj_size, (rank_ + 1) * kv_proj_size).contiguous();
 
-      MemcpyAsync(weights_map_[q_proj_name].GetPtr<void>(), tensors[0].data_ptr(),
-                  weights_map_[q_proj_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[rank_]);
-      MemcpyAsync(weights_map_[k_proj_name].GetPtr<void>(), tensors[1].data_ptr(),
-                  weights_map_[k_proj_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[rank_]);
-      MemcpyAsync(weights_map_[v_proj_name].GetPtr<void>(), tensors[2].data_ptr(),
-                  weights_map_[v_proj_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[rank_]);
+      AddWeightFromTorchTensor(q_proj_name, tensors[0]);
+      AddWeightFromTorchTensor(k_proj_name, tensors[1]);
+      AddWeightFromTorchTensor(v_proj_name, tensors[2]);
     } else if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
       if (weight_shape[0] % tensor_para_size_ != 0) {
         KLLM_THROW(
@@ -163,13 +153,15 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
                         "The size of weight_shape[0] {} cannot be evenly divided by the size of tensor_para_size_",
                         tensor_para_size_, weight_shape[0]));
       }
+      auto options = torch::TensorOptions().device(torch::kCPU).dtype(GetTorchTypeFromDataType(weight_data_type));
+      torch::Tensor tensor =
+          torch::from_blob(weight_ptr, std::vector<int64_t>(weight_shape.begin(), weight_shape.end()), options);
 
-      weight_shape[0] /= tensor_para_size_;
-      tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type);
+      tensor = AutoUnpack(tensor_name, tensor);
 
-      size_t single_proj_size = weights_map_[tensor_name].GetTotalBytes();
-      MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + rank_ * single_proj_size, single_proj_size,
-                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+      size_t single_size = tensor.size(0) / tensor_para_size_;
+      tensor = tensor.slice(0, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
+      AddWeightFromTorchTensor(tensor_name, tensor);
     } else {
       if (weight_shape[1] % tensor_para_size_ != 0) {
         KLLM_THROW(
@@ -177,13 +169,11 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
                         "The size of weight_shape[1] {} cannot be evenly divided by the size of tensor_para_size_",
                         tensor_para_size_, weight_shape[1]));
       }
+      auto options = torch::TensorOptions().device(torch::kCPU).dtype(GetTorchTypeFromDataType(weight_data_type));
+      torch::Tensor tensor =
+          torch::from_blob(weight_ptr, std::vector<int64_t>(weight_shape.begin(), weight_shape.end()), options);
 
-      auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
-      if (tensor_name.find(".scales") != std::string::npos) {
-        options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kHalf);
-      }
-      torch::Tensor tensor = torch::from_blob(
-          weight_ptr, {static_cast<int64_t>(weight_shape[0]), static_cast<int64_t>(weight_shape[1])}, options);
+      tensor = AutoUnpack(tensor_name, tensor);
 
       if (model_config_.type == "chatglm" && tensor_name.find("gate_proj") != std::string::npos) {
         const std::string gate_name = tensor_name;
@@ -191,29 +181,16 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
 
         auto tensors = torch::chunk(tensor, 2, -1);
 
-        weight_shape[1] = weight_shape[1] / 2 / tensor_para_size_;
-        tensor_manager_->AddWeightTensor(gate_name, weight_shape, weight_data_type);
-        tensor_manager_->AddWeightTensor(up_name, weight_shape, weight_data_type);
-
-        const size_t single_size = weight_shape[1];
+        const size_t single_size = tensors[0].size(1) / tensor_para_size_;
         torch::Tensor gate_tensor = tensors[0].slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
         torch::Tensor up_tensor = tensors[1].slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
 
-        MemcpyAsync(weights_map_[gate_name].GetPtr<void>(), gate_tensor.data_ptr(),
-                    weights_map_[gate_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[rank_]);
-        MemcpyAsync(weights_map_[up_name].GetPtr<void>(), up_tensor.data_ptr(), weights_map_[up_name].GetTotalBytes(),
-                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+        AddWeightFromTorchTensor(gate_name, gate_tensor);
+        AddWeightFromTorchTensor(up_name, up_tensor);
       } else {
-        size_t single_size = weight_shape[1] / tensor_para_size_;
+        size_t single_size = tensor.size(1) / tensor_para_size_;
         tensor = tensor.slice(1, rank_ * single_size, (rank_ + 1) * single_size).contiguous();
-
-        weight_shape[1] /= tensor_para_size_;
-        tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type);
-
-        MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), tensor.data_ptr(),
-                    weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[rank_]);
+        AddWeightFromTorchTensor(tensor_name, tensor);
       }
     }
     return true;
@@ -224,19 +201,69 @@ bool QuantWeight<T>::LoadQuantWeight(std::string& tensor_name, std::vector<size_
 
 #ifdef ENABLE_CUDA
 template <typename T>
-torch::Tensor QuantWeight<T>::UnpackInt32IntoInt8(const torch::Tensor& w_packed) {
-  auto w_packed_contiguous = w_packed.contiguous();
+torch::Tensor QuantWeight<T>::AutoUnpack(const std::string& tensor_name, torch::Tensor& tensor) {
+  if (tensor_name.find(".qweight") != std::string::npos) {
+    if (model_config_.quant_config.method == QUANT_GPTQ) {
+      tensor = UnpackGPTQ(tensor);
+    } else if (model_config_.quant_config.method == QUANT_AWQ) {
+      tensor = UnpackAWQ(tensor, model_config_.quant_config.bits, model_config_.quant_config.group_size);
+    }
+    int8_t zero = std::pow(2, model_config_.quant_config.bits - 1);
+    tensor = (tensor - zero).contiguous();
+    tensor = PackInt8ToPackedInt4(tensor);
+  }
+  if (tensor_name.find(".qzeros") != std::string::npos && model_config_.quant_config.method == QUANT_AWQ) {
+    tensor = UnpackAWQ(tensor, model_config_.quant_config.bits, model_config_.quant_config.group_size);
+    tensor = tensor.to(torch::kHalf);
+  }
+  return tensor;
+}
+
+// Follow the logic from https://github.com/casper-hansen/AutoAWQ/blob/v0.2.6/awq/utils/packing_utils.py
+template <typename T>
+torch::Tensor QuantWeight<T>::UnpackAWQ(const torch::Tensor& qweight, int bits, int group_size) {
+  torch::Tensor iweight = UnpackQWeight(qweight, bits);
+  torch::Tensor reverse_order_tensor = GetReverseOrder(iweight, bits);
+  iweight = iweight.index_select(1, reverse_order_tensor).contiguous();
+  auto mask = (1 << bits) - 1;
+  iweight = torch::bitwise_and(iweight, mask);
+  return iweight.contiguous();
+}
+
+template <typename T>
+torch::Tensor QuantWeight<T>::GetReverseOrder(const torch::Tensor& iweights, int bits) {
+  torch::Tensor reverse_order_tensor = torch::arange(iweights.size(-1), torch::kInt64);
+  reverse_order_tensor = reverse_order_tensor.view({-1, 32 / bits});
+  reverse_order_tensor =
+      reverse_order_tensor.index_select(1, torch::tensor({0, 4, 1, 5, 2, 6, 3, 7}, torch::kInt64)).contiguous();
+  reverse_order_tensor = reverse_order_tensor.view({-1});
+  return reverse_order_tensor;
+}
+
+template <typename T>
+torch::Tensor QuantWeight<T>::UnpackQWeight(const torch::Tensor& qtensor, int bits) {
+  torch::Tensor shifts = torch::arange(0, 32, bits).unsqueeze(0).unsqueeze(0);
+  torch::Tensor itensor = torch::bitwise_right_shift(qtensor.unsqueeze(-1), shifts).to(torch::kInt8);
+  itensor = itensor.view({itensor.size(0), -1});
+  return itensor;
+}
+
+// Unpack [k/groupsize,n]int32 to [k,n]int4
+template <typename T>
+torch::Tensor QuantWeight<T>::UnpackGPTQ(const torch::Tensor& w_packed) {
+  auto w_packed_contiguous = w_packed.t().contiguous();
   auto w_packed_int4x2 = w_packed_contiguous.view(torch::kUInt8);
   auto w_unpacked = torch::zeros({w_packed_int4x2.size(0), w_packed_int4x2.size(1) * 2}, torch::kInt8);
   w_unpacked.index_put_({torch::indexing::Slice(), torch::indexing::Slice(0, torch::indexing::None, 2)},
                         w_packed_int4x2 % 16);
   w_unpacked.index_put_({torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None, 2)},
                         w_packed_int4x2 / 16);
-  return w_unpacked.contiguous();
+  return w_unpacked.t().contiguous();
 }
 
+// Pack [k,n]int4 to [k,n/2]int8, each byte save 2 int4 weight
 template <typename T>
-torch::Tensor QuantWeight<T>::PackInt8TensorToPackedInt4(torch::Tensor weight) {
+torch::Tensor QuantWeight<T>::PackInt8ToPackedInt4(torch::Tensor weight) {
   std::vector<int64_t> packed_tensor_size(weight.dim());
   for (int i = 0; i < weight.dim(); ++i) {
     packed_tensor_size[i] = weight.size(i);
@@ -279,15 +306,6 @@ torch::Tensor QuantWeight<T>::PreprocessWeightsForMixedGemmWarpper(torch::Tensor
 
   return processed_tensor;
 }
-
-template <typename T>
-torch::Tensor QuantWeight<T>::ConvertGroupLayout(torch::Tensor qweight_int32) {
-  torch::Tensor qweight_unpacked_int8 = UnpackInt32IntoInt8(qweight_int32.clone().t()).t().contiguous() - 8;
-  torch::Tensor qweight_packed_int4 = PackInt8TensorToPackedInt4(qweight_unpacked_int8);
-  torch::Tensor processed_tensor = PreprocessWeightsForMixedGemmWarpper(
-      qweight_packed_int4, llm_kernels::nvidia::QuantType::PACKED_INT4_WEIGHT_ONLY);
-  return processed_tensor;
-}
 #endif
 
 template <typename T>
@@ -301,11 +319,10 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
 
   // pack q, k, v to qkv
   std::vector<std::string> needed_slove_weights_name = {"qweight", "scales"};
+  if (model_config_.quant_config.method == QUANT_AWQ) {
+    needed_slove_weights_name.push_back("qzeros");
+  }
   for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
-    auto options = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
-    if (needed_slove_weight_name == "scales") {
-      options = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kHalf);
-    }
     for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
       std::string q_name = fmt::format("model.layers.{}.self_attn.q_proj.{}", layer_idx, needed_slove_weight_name);
       std::string k_name = fmt::format("model.layers.{}.self_attn.k_proj.{}", layer_idx, needed_slove_weight_name);
@@ -313,26 +330,21 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
       std::string qkv_name =
           fmt::format("model.layers.{}.self_attn.query_key_value.{}", layer_idx, needed_slove_weight_name);
 
+      auto options =
+          torch::TensorOptions().device(torch::kCUDA).dtype(GetTorchTypeFromDataType(weights_map_[q_name].dtype));
       torch::Tensor q_tensor_gpu = torch::from_blob(
           weights_map_[q_name].GetPtr<void>(),
-          {static_cast<int64_t>(weights_map_[q_name].shape[0]), static_cast<int64_t>(weights_map_[q_name].shape[1])},
-          options);
+          std::vector<int64_t>(weights_map_[q_name].shape.begin(), weights_map_[q_name].shape.end()), options);
       torch::Tensor k_tensor_gpu = torch::from_blob(
           weights_map_[k_name].GetPtr<void>(),
-          {static_cast<int64_t>(weights_map_[k_name].shape[0]), static_cast<int64_t>(weights_map_[k_name].shape[1])},
-          options);
+          std::vector<int64_t>(weights_map_[k_name].shape.begin(), weights_map_[k_name].shape.end()), options);
       torch::Tensor v_tensor_gpu = torch::from_blob(
           weights_map_[v_name].GetPtr<void>(),
-          {static_cast<int64_t>(weights_map_[v_name].shape[0]), static_cast<int64_t>(weights_map_[v_name].shape[1])},
-          options);
+          std::vector<int64_t>(weights_map_[v_name].shape.begin(), weights_map_[v_name].shape.end()), options);
       torch::Tensor qkv_tensor_gpu = torch::cat({q_tensor_gpu, k_tensor_gpu, v_tensor_gpu}, -1);
+      torch::Tensor qkv_tensor = qkv_tensor_gpu.to(torch::kCPU);
 
-      tensor_manager_->AddWeightTensor(
-          qkv_name, {static_cast<size_t>(qkv_tensor_gpu.size(0)), static_cast<size_t>(qkv_tensor_gpu.size(1))},
-          weights_map_[q_name].dtype);
-      MemcpyAsync(weights_map_[qkv_name].GetPtr<void>(), qkv_tensor_gpu.data_ptr(),
-                  weights_map_[qkv_name].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[rank_]);
+      AddWeightFromTorchTensor(qkv_name, qkv_tensor);
 
       GetBlockManager()->FreeContiguous(weights_map_[q_name].GetBlockId());
       GetBlockManager()->FreeContiguous(weights_map_[k_name].GetBlockId());
@@ -340,6 +352,48 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
       weights_map_.erase(q_name);
       weights_map_.erase(k_name);
       weights_map_.erase(v_name);
+    }
+  }
+
+  // convert qzeros
+  if (model_config_.quant_config.method == QUANT_AWQ) {
+    needed_slove_weights_name = {"self_attn.query_key_value", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj",
+                                 "mlp.down_proj"};
+    for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
+      for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
+        std::string scales_name = fmt::format("model.layers.{}.{}.scales", layer_idx, needed_slove_weight_name);
+        std::string qzeros_name = fmt::format("model.layers.{}.{}.qzeros", layer_idx, needed_slove_weight_name);
+        std::string zeros_name = fmt::format("model.layers.{}.{}.zeros", layer_idx, needed_slove_weight_name);
+
+        auto scales_options = torch::TensorOptions()
+                                  .device(torch::kCUDA)
+                                  .dtype(GetTorchTypeFromDataType(weights_map_[scales_name].dtype));
+        torch::Tensor scales_gpu = torch::from_blob(
+            weights_map_[scales_name].GetPtr<void>(),
+            std::vector<int64_t>(weights_map_[scales_name].shape.begin(), weights_map_[scales_name].shape.end()),
+            scales_options);
+
+        auto qzeros_options = torch::TensorOptions()
+                                  .device(torch::kCUDA)
+                                  .dtype(GetTorchTypeFromDataType(weights_map_[qzeros_name].dtype));
+        torch::Tensor qzeros_gpu = torch::from_blob(
+            weights_map_[qzeros_name].GetPtr<void>(),
+            std::vector<int64_t>(weights_map_[qzeros_name].shape.begin(), weights_map_[qzeros_name].shape.end()),
+            qzeros_options);
+
+        int8_t zero = std::pow(2, model_config_.quant_config.bits - 1);
+        // In AWQ: weight@fp16 = scale@fp16 * (qweight@uint4 - zeros@uint4)
+        // In kernel: weight@fp16 = scale@fp16 * qweight@int4 + zeros@fp16
+        // So: weight = scale * (qweight - zeros)
+        //            = scale * (qweight - 8 + 8 - zeros)
+        //            = scale * (qweight - 8) + scale * (8 - zeros)
+        torch::Tensor zeros_cpu = (scales_gpu * (zero - qzeros_gpu)).to(torch::kCPU).contiguous();
+
+        AddWeightFromTorchTensor(zeros_name, zeros_cpu);
+
+        GetBlockManager()->FreeContiguous(weights_map_[qzeros_name].GetBlockId());
+        weights_map_.erase(qzeros_name);
+      }
     }
   }
 
@@ -352,25 +406,27 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
       std::string scales_name = fmt::format("model.layers.{}.{}.scales", layer_idx, needed_slove_weight_name);
       std::string weight_name = fmt::format("model.layers.{}.{}.weight", layer_idx, needed_slove_weight_name);
 
-      auto options = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
-      torch::Tensor qweight_int32_gpu = torch::from_blob(weights_map_[qweight_name].GetPtr<void>(),
-                                                         {static_cast<int64_t>(weights_map_[qweight_name].shape[0]),
-                                                          static_cast<int64_t>(weights_map_[qweight_name].shape[1])},
-                                                         options);
+      auto options =
+          torch::TensorOptions().device(torch::kCUDA).dtype(GetTorchTypeFromDataType(weights_map_[qweight_name].dtype));
+      torch::Tensor qweight_int32_gpu = torch::from_blob(
+          weights_map_[qweight_name].GetPtr<void>(),
+          std::vector<int64_t>(weights_map_[qweight_name].shape.begin(), weights_map_[qweight_name].shape.end()),
+          options);
       torch::Tensor qweight_int32 = qweight_int32_gpu.to(torch::kCPU);
-      torch::Tensor processed_tensor = ConvertGroupLayout(qweight_int32);
+      torch::Tensor processed_tensor =
+          PreprocessWeightsForMixedGemmWarpper(qweight_int32, llm_kernels::nvidia::QuantType::PACKED_INT4_WEIGHT_ONLY);
 
-      tensor_manager_->AddWeightTensor(
-          weight_name, {static_cast<size_t>(processed_tensor.size(0)), static_cast<size_t>(processed_tensor.size(1))},
-          TYPE_INT8);
-      MemcpyAsync(weights_map_[weight_name].GetPtr<void>(), processed_tensor.data_ptr(),
-                  weights_map_[weight_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[rank_]);
+      AddWeightFromTorchTensor(weight_name, processed_tensor);
 
       GetBlockManager()->FreeContiguous(weights_map_[qweight_name].GetBlockId());
       weights_map_.erase(qweight_name);
 
       weights_map_[weight_name].scales = &weights_map_[scales_name];
+
+      if (model_config_.quant_config.method == QUANT_AWQ) {
+        std::string zeros_name = fmt::format("model.layers.{}.{}.zeros", layer_idx, needed_slove_weight_name);
+        weights_map_[weight_name].zeros = &weights_map_[zeros_name];
+      }
     }
   }
 
@@ -624,6 +680,18 @@ Status QuantWeight<T>::GetMaxScaleOfQkv(float* q_scale, float* k_scale, float* v
   torch::max_out(qkv_scale_tensor, qkv_scale_tensor, v_scale_tensor);
   return Status();
 }
+#endif
+
+#ifdef ENABLE_CUDA
+template <typename T>
+Status QuantWeight<T>::AddWeightFromTorchTensor(const std::string& name, torch::Tensor& tensor) {
+  tensor_manager_->AddWeightTensor(name, std::vector<size_t>(tensor.sizes().begin(), tensor.sizes().end()),
+                                   GetDataTypeFromTorchType(tensor.scalar_type()));
+  MemcpyAsync(weights_map_[name].GetPtr<void>(), tensor.data_ptr(), weights_map_[name].GetTotalBytes(),
+              MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+  return Status();
+}
+
 #endif
 
 template class QuantWeight<float>;
