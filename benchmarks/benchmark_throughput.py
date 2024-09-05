@@ -9,7 +9,7 @@ import time
 import argparse
 import asyncio
 import json
-import time
+import random
 import csv
 from dataclasses import dataclass
 from typing import AsyncGenerator, List, Tuple, Union
@@ -143,6 +143,12 @@ def args_config():
     parser.add_argument("--random",
                         action="store_true",
                         help="Randomize request arrival time.")
+    parser.add_argument("--chat_template",
+                        action="store_true",
+                        help="tokenizer apply_chat_template")
+    parser.add_argument("--shuffle",
+                        action="store_true",
+                        help="shuffle input")
     parser.add_argument("--request_rate_step",
                         type=float,
                         default=1.0,
@@ -501,7 +507,13 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
                                                       args.concurrency,
                                                       args.random):
         # Format the prompt using the affix dictionary for the specified model type
-        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
+        if args.chat_template and tokenizer is not None:
+            prompt = tokenizer.apply_chat_template(
+                json.loads(prompt),
+                tokenize=False,
+                add_generation_prompt=True)
+        else:
+            prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
             send_request_async(args, prompt, api_url, req_id, result_list, pbar,
@@ -599,6 +611,7 @@ def main(args: argparse.Namespace):
     global REQUEST_LATENCY
 
     np.random.seed(args.seed)
+    random.seed(args.seed)
 
     tokenizer = None
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
@@ -623,6 +636,8 @@ def main(args: argparse.Namespace):
     # Read inputs from the input CSV file
     inputs = read_from_csv(args.input_csv, args.col_idx)
     # Adjust the length of the input list based on the provided arguments
+    if args.shuffle:
+        random.shuffle(inputs)
     inputs = adjust_list_length(inputs, args)
 
     perf_result_list: List[Tuple[BenchmarkMetrics, BenchmarkStreamMetrics]] = []
