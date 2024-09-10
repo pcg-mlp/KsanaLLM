@@ -64,7 +64,7 @@ class BatchSchedulerTest : public testing::Test {
     cache_manager_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
     cache_manager_config.tensor_para_size = tp_num;
     cache_manager_config.swap_threadpool_size = 8;
-    cache_manager_config.enable_preifx_caching = false;
+    cache_manager_config.enable_prefix_caching = false;
   }
 
  protected:

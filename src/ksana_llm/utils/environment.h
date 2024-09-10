@@ -192,7 +192,7 @@ struct CacheManagerConfig {
   size_t swap_threadpool_size = 2;
 
   // Whether enable prefix caching.
-  bool enable_preifx_caching = false;
+  bool enable_prefix_caching = false;
 };
 
 // The endpoint type.

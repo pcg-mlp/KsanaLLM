@@ -34,7 +34,7 @@ class PrefixCacheManagerTest : public testing::Test {
     cache_manager_config.block_token_num = 16;
     cache_manager_config.tensor_para_size = 2;
     cache_manager_config.swap_threadpool_size = 2;
-    cache_manager_config.enable_preifx_caching = true;
+    cache_manager_config.enable_prefix_caching = true;
 
     cache_manager = new PrefixCacheManager(cache_manager_config);
 
