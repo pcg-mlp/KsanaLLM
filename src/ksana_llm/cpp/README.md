@@ -56,7 +56,7 @@ C++用户可以仿照该文件的写法，提前定义好与接口对应的结�
 
 - [msgpack-c](https://github.com/msgpack/msgpack-c/tree/cpp_master)：将HTTP请求体打包为msgpack格式，并对msgpack格式的HTTP响应体解包
 
-- [base64](https://github.com/tobiaslocker/base64) 用base64解码返回的数值结果，低于C++17的可以使用[base64-decode-snippet-in-c](https://stackoverflow.com/questions/180947/base64-decode-snippet-in-c)
+- [base64](https://github.com/tobiaslocker/base64)：用base64解码返回的数值结果，低于C++17的可以使用[base64-decode-snippet-in-c](https://stackoverflow.com/questions/180947/base64-decode-snippet-in-c)
 
 ## 独立编译与使用
 

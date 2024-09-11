@@ -61,10 +61,15 @@ void InferRequest::Notify() {
   for (size_t i = 0; i < req_group.size(); i++) {
     req_group[i]->ClearReqGroup();
   }
+
+  // After a notification, the corresponding request may be destructed.
+  // So we return early to avoid accessing any variables referencing it.
+  if (aborted) {
+    abort_waiter->Notify();
+    return;
+  }
   if (waiter) {
     waiter->Notify();
-    // After the notification, the corresponding request may be destructed.
-    // So we return early to avoid accessing any variables referencing it.
     return;
   }
   if (step_waiter) {

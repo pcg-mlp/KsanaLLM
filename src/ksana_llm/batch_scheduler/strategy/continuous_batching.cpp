@@ -48,9 +48,6 @@ void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, 
   req->finish_status = req_status;
   req->finished = true;
   req->Notify();
-  if (req->aborted) {
-    req->abort_waiter->Notify();
-  }
 }
 
 void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_block_num) {
@@ -213,7 +210,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
                      << ", current_token_size:" << req->output_tokens.size();
 
       status = AllocateRequestBlocksWithRetry(req, total_needed_block_num, step_block_num, allocate_block_succ,
-                                                     skip_swapout_check);
+                                              skip_swapout_check);
       if (status.OK()) {
         continue;
       }
