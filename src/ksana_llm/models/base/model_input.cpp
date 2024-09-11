@@ -376,7 +376,7 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
-  EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
+  EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
 }
 
 void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs) {

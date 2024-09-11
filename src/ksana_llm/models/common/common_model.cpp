@@ -564,6 +564,9 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight) {
+  // Wait the computation of input_ids.
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
+
   STATUS_CHECK_RETURN(emb_lookup_layer_->Forward({model_input_->input_ids, model_input_->input_offset_uint64_tensor,
                                                   model_input_->input_prefix_uint64_tensor, embedding_weight},
                                                  residual_buffer_));
@@ -653,8 +656,6 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   // create forward shape tensor
   forward_shape_.shape = {model_input_->batch_size, model_input_->max_tokens,
                           static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
-
-  StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
 
   // GPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.

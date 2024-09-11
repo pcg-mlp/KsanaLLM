@@ -61,7 +61,6 @@ Status GPTModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_l
   if (layer_idx == 0) {
     // only need sync in the first layer
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
   }
 
   if (is_context_stage) {
@@ -147,6 +146,10 @@ Status GPTModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::Ba
 
 template <typename T>
 Status GPTModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight) {
+  // Wait the computation of input_ids and rotary_embedding_pos.
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->input_ids_event);
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
+
   STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
       {model_input_->input_ids, model_input_->input_offset_uint64_tensor, model_input_->input_prefix_uint64_tensor,
        embedding_weight, model_input_->rotary_embedding_pos},
