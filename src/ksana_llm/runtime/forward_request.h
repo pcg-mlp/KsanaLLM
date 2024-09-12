@@ -20,8 +20,8 @@ struct ForwardRequest {
   // The infer stage, context decode or decode.
   InferStage infer_stage;
 
-  // The decode step, 1 for context decode, and then 2, 3, 4...
-  int step;
+  // The decode step, 0 for context decode, and then 1, 2, 3...
+  int step = 0;
 
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;

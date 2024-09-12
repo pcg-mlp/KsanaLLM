@@ -33,7 +33,8 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   //   4: rotary_embedding_pos
   //   5: rotary_embedding_mask
   //   6: workspace 空间
-  //   7: forward_shape
+  //   7: forward_shape (context_num, context_max_tokens, context_total_block_num, decode_num, decode_max_tokens,
+  //      decode_total_block_num)
   //   8: 用于存储 qk 的临时空间(TODO:)
   // output_tensors:
   //   0: paged attention output
@@ -48,26 +49,42 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   // cache_offset是0,3,9
   const Tensor& kv_list = input_tensors[2];
   const Tensor& cache_offset = input_tensors[3];
+  size_t context_num = input_tensors[7].shape[0];
   const Tensor& rotary_embedding_pos = input_tensors[4];
   const Tensor& rotary_embedding_mask = input_tensors[5];
   const Tensor& workspace = input_tensors[6];
   const Tensor& qkv_workspace = input_tensors[8];
-  int layer_block_num = input_tensors[7].shape[2];
-  int max_tokens = input_tensors[7].shape[1];
-  int batch_size = input_tensors[7].shape[0];
-  int total_tokens = input_tensors[0].shape[0];
-  void** k_list = (kv_list.GetPtr<void*>()) + (size_t)this->layer_index_ * layer_block_num * 2;
+  int layer_block_num = input_tensors[7].shape[5];
+  int context_layer_block_num = input_tensors[7].shape[2];
+  int max_tokens = input_tensors[7].shape[4];
+  int batch_size = input_tensors[7].shape[3];
+  int total_tokens = batch_size;
+  size_t context_tokens = query.shape[0] - batch_size;
+  void** k_list_base = (kv_list.GetPtr<void*>() + this->layer_num_ * context_layer_block_num * 2);
+  void** k_list = k_list_base + static_cast<size_t>(this->layer_index_ * layer_block_num * 2);
   void** v_list = k_list + layer_block_num;
   Tensor& out = output_tensors[0];
   out.dtype = query.dtype;
   out.shape = {query.shape[0], this->num_heads_ * (size_t)this->head_size_};
+
+  auto skipped_context_out_ptr = out.GetPtr<void>() + context_tokens * (out.GetTotalBytes() / out.shape[0]);
+  auto skipped_context_query_ptr = query.GetPtr<void>() + context_tokens * (query.GetTotalBytes() / query.shape[0]);
+  auto skipped_context_cache_offset_ptr =
+      cache_offset.GetPtr<void>() + (context_num + 1) * GetTypeSize(cache_offset.dtype);
+  auto skipped_context_rotary_embedding_pos_ptr =
+      rotary_embedding_pos.GetPtr<void>() +
+      (rotary_embedding_pos.shape[0] - batch_size) * GetTypeSize(rotary_embedding_pos.dtype);
+  auto skipped_context_rotary_embedding_mask_ptr =
+      rotary_embedding_mask.GetPtr<void>() +
+      (rotary_embedding_mask.shape[0] - batch_size) * GetTypeSize(rotary_embedding_mask.dtype);
+
   InvokePagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-      out.GetPtr<void>(), query.GetPtr<void>(), k_list, v_list, context_lens.GetPtr<void>(), max_tokens,
-      this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), batch_size, this->num_heads_,
-      this->head_size_, this->num_kv_heads_, this->stride_size_, this->block_token_num_, this->k_scale_, this->v_scale_,
-      batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), total_tokens,
-      this->rotary_embedding_cuda_, workspace.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_,
-      this->alibi_slopes_, qkv_workspace.GetPtr<void>());
+      skipped_context_out_ptr, skipped_context_query_ptr, k_list, v_list, context_lens.GetPtr<void>(), max_tokens,
+      this->context_->GetComputeStreams()[this->rank_].Get(), skipped_context_cache_offset_ptr, batch_size,
+      this->num_heads_, this->head_size_, this->num_kv_heads_, this->stride_size_, this->block_token_num_,
+      this->k_scale_, this->v_scale_, batch_size, skipped_context_rotary_embedding_pos_ptr,
+      skipped_context_rotary_embedding_mask_ptr, total_tokens, this->rotary_embedding_cuda_, workspace.GetPtr<void>(),
+      workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_, qkv_workspace.GetPtr<void>());
   return Status();
 }
 

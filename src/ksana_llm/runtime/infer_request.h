@@ -119,8 +119,8 @@ class InferRequest {
   // context decode or decode stage.
   InferStage infer_stage;
 
-  // The decode step, 1 for context decode, and then 2, 3, 4...
-  int step;
+  // The decode step, 0 for context decode, and then 1, 2, 3...
+  int step = 0;
 
   // The kv cache blocks this request used, the index is used as device_id.
   // The key and value are stored in same blocks.

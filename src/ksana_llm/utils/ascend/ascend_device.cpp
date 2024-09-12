@@ -172,12 +172,16 @@ void FreeAsyncT<DEVICE_TYPE_ASCEND>(void* dev_ptr, StreamT<DEVICE_TYPE_ASCEND> s
 
 template <>
 void MemsetAsyncT<DEVICE_TYPE_ASCEND>(void* dev_ptr, int value, size_t count, StreamT<DEVICE_TYPE_ASCEND> stream) {
-  ACL_CHECK(aclrtMemsetAsync(dev_ptr, count, value, count, stream.Get()));
+  if (count > 0) {
+    ACL_CHECK(aclrtMemsetAsync(dev_ptr, count, value, count, stream.Get()));
+  }
 }
 
 template <>
 void MemsetT<DEVICE_TYPE_ASCEND>(void* dev_ptr, int value, size_t count) {
-  ACL_CHECK(aclrtMemset(dev_ptr, count, value, count));
+  if (count > 0) {
+    ACL_CHECK(aclrtMemset(dev_ptr, count, value, count));
+  }
 }
 
 aclrtMemcpyKind GetAclMemcpyKind(enum MemcpyKind kind) {
@@ -196,7 +200,9 @@ aclrtMemcpyKind GetAclMemcpyKind(enum MemcpyKind kind) {
 template <>
 void MemcpyAsyncT<DEVICE_TYPE_ASCEND>(void* dst, const void* src, size_t count, enum MemcpyKind kind,
                                       StreamT<DEVICE_TYPE_ASCEND> stream) {
-  ACL_CHECK(aclrtMemcpyAsync(dst, count, src, count, GetAclMemcpyKind(kind), stream.Get()));
+  if (count > 0) {
+    ACL_CHECK(aclrtMemcpyAsync(dst, count, src, count, GetAclMemcpyKind(kind), stream.Get()));
+  }
 }
 
 template <>
@@ -213,7 +219,9 @@ void Memcpy2DAsyncT<DEVICE_TYPE_ASCEND>(void* dst, size_t dpitch, const void* sr
 
 template <>
 void MemcpyT<DEVICE_TYPE_ASCEND>(void* dst, const void* src, size_t count, enum MemcpyKind kind) {
-  ACL_CHECK(aclrtMemcpy(dst, count, src, count, GetAclMemcpyKind(kind)));
+  if (count > 0) {
+    ACL_CHECK(aclrtMemcpy(dst, count, src, count, GetAclMemcpyKind(kind)));
+  }
 }
 
 template <class U>

@@ -31,7 +31,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   int max_tokens = input_tensors[7].shape[1];
   int batch_size = input_tensors[7].shape[0];
   int layer_block_num = input_tensors[7].shape[2];
-  int total_tokens = input_tensors[0].shape[0];
+  int total_tokens = input_tensors[0].shape[0] - input_tensors[7].shape[3];
 
   void** k_list = (input_tensors[2].GetPtr<void*>()) + this->layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
@@ -42,7 +42,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
       this->k_scale_, this->v_scale_, this->tensor_para_size_, this->is_causal_, this->rank_, this->block_token_num_,
       k_list, v_list, input_tensors[3].GetPtr<void>(), input_tensors[4].GetPtr<void>(), this->alibi_slopes_,
       this->context_->GetComputeStreams()[this->rank_].Get());
-  output_tensors[0].shape[0] = input_tensors[0].shape[0];
+  output_tensors[0].shape[0] = total_tokens;
   output_tensors[0].shape[1] = this->num_heads_ * this->head_size_;
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();

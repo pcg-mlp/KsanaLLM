@@ -106,12 +106,13 @@ TEST_F(LayerTest, AttentionLayerTest) {
   RoPEScalingFactor rope_scaling_factor;
   CreateHalfDataTypeTensor(cos_sin_cache_tensor, {(size_t)rotary_embedding, (size_t)max_position_embeddings},
                            GetDataType<half>());
-  EXPECT_TRUE(flash_attention_layer
-                  .Init({static_cast<int>(0), static_cast<int>(2048), head_num, kv_head_num, size_per_head, stride_size,
-                         static_cast<int>(1), TYPE_FP16, k_scale, v_scale, rotary_embedding, rope_theta, is_neox,
-                         PositionEncoding::ROPE, std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
-                        context, 0)
-                  .OK());
+  EXPECT_TRUE(
+      flash_attention_layer
+          .Init({static_cast<int>(0), static_cast<int>(1), static_cast<int>(2048), head_num, kv_head_num, size_per_head,
+                 stride_size, static_cast<int>(1), TYPE_FP16, k_scale, v_scale, rotary_embedding, rope_theta, is_neox,
+                 PositionEncoding::ROPE, std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
+                context, 0)
+          .OK());
 
   Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape;
   std::vector<size_t> input_shape = {2, 12288};
@@ -120,7 +121,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   CreateHalfDataTypeTensor(prefix_offsets, {2}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(pos, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
   CreateHalfDataTypeTensor(mask, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
-  forward_shape.shape = {1, 2, 1};
+  forward_shape.shape = {1, 2, 1, 0};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
   Memcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
@@ -157,9 +158,9 @@ TEST_F(LayerTest, AttentionLayerTest) {
 
   PagedAttentionLayer<half, half, llm_kernels::utils::KVCacheType::kAuto> attention_layer;
   EXPECT_TRUE(attention_layer
-                  .Init({static_cast<int>(1), static_cast<int>(2048), static_cast<int>(head_num), kv_head_num,
-                         static_cast<int>(size_per_head), stride_size, static_cast<int>(1), TYPE_FP16, k_scale, v_scale,
-                         rotary_embedding, rope_theta, is_neox, PositionEncoding::ROPE,
+                  .Init({static_cast<int>(1), static_cast<int>(2), static_cast<int>(2048), static_cast<int>(head_num),
+                         kv_head_num, static_cast<int>(size_per_head), stride_size, static_cast<int>(1), TYPE_FP16,
+                         k_scale, v_scale, rotary_embedding, rope_theta, is_neox, PositionEncoding::ROPE,
                          std::any(cos_sin_cache_tensor.GetPtr<void>()), rope_scaling_factor},
                         context, 0)
                   .OK());

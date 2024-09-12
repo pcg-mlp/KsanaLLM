@@ -43,7 +43,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
     max_block_num = (max_token_num_ * max_batch_size_) / GetBlockManager()->GetBlockTokenNum();
   }
 
-  STATUS_CHECK_FAILURE(CreateTensor(kv_cache_offset_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
+  // The "2" is necessary because both the context and decode operations require starting from index 0.
+  STATUS_CHECK_FAILURE(CreateTensor(kv_cache_offset_tensor, {max_batch_size_ + 2}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(CreateTensor(input_ids, {max_token_num_}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(kv_list, {static_cast<uint64_t>(num_layer_), max_block_num, 2}, TYPE_POINTER, rank_, MEMORY_DEVICE));
@@ -158,10 +159,9 @@ ModelInput::~ModelInput() {
   EventDestroy(input_ids_event);
 }
 
-void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage) {
+void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs) {
   // NOTE(karlluo): check batch size
   batch_size = forward_reqs.size();
-  KLLM_LOG_DEBUG << (is_context_stage ? "ContextDecode" : "Decode") << " With Batch Size " << batch_size;
   if (batch_size == 0) {
     KLLM_THROW(fmt::format("ModelInput empty forward requests, batch_size == 0"));
   } else if (batch_size > (size_t)model_config_.max_batch_size) {
@@ -169,46 +169,71 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
         fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size, model_config_.max_batch_size));
   }
 
-  max_tokens = 0;
-  total_seq_len = 0;
+  context_max_tokens = 0;
+  decode_max_tokens = 0;
+  context_total_seq_len = 0;
+  context_num = 0;
+  decode_num = 0;
   total_prefix_len = 0;
-  total_block_num = 0;
-  kv_cache_offset_list = {0};
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    total_seq_len += forward_reqs[idx].output_tokens->size();
+    if (forward_reqs[idx].step == 0) {
+      context_num++;
+      context_total_seq_len += forward_reqs[idx].output_tokens->size();
+    } else {
+      decode_num++;
+    }
     total_prefix_len += forward_reqs[idx].prefix_cache_len;
-    total_block_num += forward_reqs[idx].kv_cache_ptrs[rank_].size();
-    kv_cache_offset_list.push_back(total_block_num);
   }
 
+  KLLM_LOG_DEBUG << "ContextDecode reqs num: " << context_num << ", Decode reqs num: " << decode_num;
+  kv_cache_offset_list = {0};
+  for (size_t idx = 0; idx < context_num; ++idx) {
+    kv_cache_offset_list.push_back(forward_reqs[idx].kv_cache_ptrs[rank_].size() + kv_cache_offset_list.back());
+  }
+  context_total_block_num = kv_cache_offset_list.back();
+#ifdef ENABLE_CUDA
+  // Insert a zero at the beginning of the decode phase offsets when CUDA is enabled.
+  // This is necessary because, under CUDA, context and decode computations are performed concurrently.
+  // Therefore, a starting point of zero is required for the decode phase to correctly offset its computations.
+  kv_cache_offset_list.push_back(0);
+#endif
+  for (size_t idx = context_num; idx < batch_size; ++idx) {
+    kv_cache_offset_list.push_back(forward_reqs[idx].kv_cache_ptrs[rank_].size() + kv_cache_offset_list.back());
+  }
+  decode_total_block_num = kv_cache_offset_list.back();
   kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
   MemcpyAsync(kv_cache_offset_tensor.GetPtr<void>(), kv_cache_offset_list.data(),
               kv_cache_offset_list.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
-  KLLM_LOG_DEBUG << " Total Block Num " << total_block_num;
+  KLLM_LOG_DEBUG << " Total Block Num " << context_total_block_num + decode_total_block_num;
 
 #ifdef ENABLE_ACL_ATB
-  PrepareATBKVCache(forward_reqs, is_context_stage);
+  PrepareATBKVCache(forward_reqs, context_num > 0);
 #endif
 
-  if (is_context_stage) {
-    PrepareKVCacheBlocks(forward_reqs);
-    PreparePrefillPositionIds(forward_reqs);
-    PreparePrefillInputIds(forward_reqs);
-    PrepareInputRefit(forward_reqs);
-  } else {
-    PrepareKVCacheBlocks(forward_reqs);
-    PrepareDecodePositionIds(forward_reqs);
-    PrepareDecodeInputIds(forward_reqs);
-  }
+  input_offset_list_uint64 = {0};
+  input_prefix_list_uint64.resize(context_num + 1, 0ul);
+  input_ids_cpu.clear();
+  PrepareKVCacheBlocks(forward_reqs, 0, context_num, context_total_block_num);
+  PrepareKVCacheBlocks(forward_reqs, context_num, batch_size, decode_total_block_num);
+  PreparePrefillPositionIds(forward_reqs);
+  PreparePrefillInputIds(forward_reqs);
+  PrepareInputRefit(forward_reqs);
+  PrepareDecodePositionIds(forward_reqs);
+  PrepareDecodeInputIds(forward_reqs);
 }
 
-void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx, size_t end_idx,
+                                      size_t total_block_num) {
+  size_t copy_offset = 0;
+  if (begin_idx != 0) {
+    copy_offset = model_config_.num_layer * context_total_block_num * 2 * sizeof(void*);
+  }
   kv_list.shape = {model_config_.num_layer, total_block_num * 2};
   cpu_kv_list.resize(model_config_.num_layer * total_block_num * 2);
   for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
     int kv_list_index = 0;
     // 处理k
-    for (size_t idx = 0; idx < batch_size; ++idx) {
+    for (size_t idx = begin_idx; idx < end_idx; ++idx) {
       size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++) {
         void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
@@ -218,7 +243,7 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
       }
     }
     // 处理v
-    for (size_t idx = 0; idx < batch_size; ++idx) {
+    for (size_t idx = begin_idx; idx < end_idx; ++idx) {
       size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++) {
         void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
@@ -228,8 +253,8 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
       }
     }
   }
-  MemcpyAsync(kv_list.GetPtr<void>(), cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
+  MemcpyAsync(kv_list.GetPtr<void>() + copy_offset, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*),
+              MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
@@ -237,10 +262,10 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
 }
 
 void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& forward_reqs) {
-  std::vector<int64_t> cpu_rotary_pos(total_seq_len);
-  std::vector<int64_t> cpu_rotary_mask(total_seq_len, 1);
+  std::vector<int64_t> cpu_rotary_pos(context_total_seq_len);
+  std::vector<int64_t> cpu_rotary_mask(context_total_seq_len, 1);
   int cpu_rotary_pos_idx = 0;
-  for (size_t idx = 0; idx < batch_size; ++idx) {
+  for (size_t idx = 0; idx < context_num; ++idx) {
     if (forward_reqs[idx].prefix_cache_len > 0) {
       std::fill(cpu_rotary_mask.begin() + cpu_rotary_pos_idx,
                 cpu_rotary_mask.begin() + cpu_rotary_pos_idx + forward_reqs[idx].prefix_cache_len, 0);
@@ -249,12 +274,12 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
       cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
     }
   }
-  MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * total_seq_len,
+  MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * cpu_rotary_pos.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
-  MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * total_seq_len,
+  MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * cpu_rotary_mask.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
 }
@@ -267,7 +292,7 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
   void** cpu_input_refit_emb_fp32_ptr =
       reinterpret_cast<void**>(cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<void>());
 
-  for (size_t bs_idx = 0; bs_idx < batch_size; ++bs_idx) {
+  for (size_t bs_idx = 0; bs_idx < context_num; ++bs_idx) {
     const ForwardRequest& forward_req = forward_reqs[bs_idx];
     std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
     std::vector<std::vector<float>>& input_refit_embedding = (*forward_req.input_refit_embedding).embeddings;
@@ -364,15 +389,17 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
 #endif
 
 void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& forward_reqs) {
-  std::vector<int64_t> cpu_rotary_pos(batch_size);
-  std::vector<int64_t> cpu_rotary_mask(batch_size, 1);
-  for (size_t idx = 0; idx < batch_size; ++idx) {
-    cpu_rotary_pos[idx] = forward_reqs[idx].output_tokens->size() - 1;
+  std::vector<int64_t> cpu_rotary_pos(decode_num);
+  std::vector<int64_t> cpu_rotary_mask(decode_num, 1);
+  for (size_t idx = context_num; idx < batch_size; ++idx) {
+    cpu_rotary_pos[idx - context_num] = forward_reqs[idx].output_tokens->size() - 1;
   }
-  MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * batch_size,
-              MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
-  MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * batch_size,
-              MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+  MemcpyAsync(rotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * context_total_seq_len, cpu_rotary_pos.data(),
+              sizeof(int64_t) * cpu_rotary_pos.size(), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+  MemcpyAsync(rotary_embedding_mask.GetPtr<void>() + sizeof(int64_t) * context_total_seq_len, cpu_rotary_mask.data(),
+              sizeof(int64_t) * cpu_rotary_mask.size(), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+  rotary_embedding_pos.shape = {context_total_seq_len + decode_num};
+  rotary_embedding_mask.shape = {context_total_seq_len + decode_num};
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
@@ -380,18 +407,14 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
 }
 
 void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs) {
-  input_ids.shape = {total_seq_len - total_prefix_len};
   size_t input_offset = 0;
   use_logits_custom_length = false;
-  std::vector<int> input_offset_list_int32(batch_size + 1, 0);
-  std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
+  std::vector<int> input_offset_list_int32(context_num + 1, 0);
   std::vector<size_t> logits_custom_length_list_uint64(max_batch_size_ + 1, 0ul);
   std::vector<size_t> logits_length_prefix_list_uint64(max_batch_size_ + 1, 0ul);
   int logits_custom_length_list_uint64_index = 1;
-  std::vector<int> input_ids_cpu(0);
-  std::vector<int> input_prefix_list_int32(batch_size + 1, 0ul);
-  std::vector<size_t> input_prefix_list_uint64(batch_size + 1, 0ul);
-  for (size_t idx = 0; idx < batch_size; ++idx) {
+  std::vector<int> input_prefix_list_int32(context_num + 1, 0ul);
+  for (size_t idx = 0; idx < context_num; ++idx) {
     if (forward_reqs[idx].output_tokens->size() < (size_t)forward_reqs[idx].prefix_cache_len) {
       KLLM_THROW(fmt::format("Forward Request input tokens {} < prefix cache len {}",
                              forward_reqs[idx].output_tokens->size(), forward_reqs[idx].prefix_cache_len));
@@ -414,26 +437,19 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
     }
     input_offset += length;
     input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
-    input_offset_list_uint64[idx + 1] = input_offset;
+    input_offset_list_uint64.push_back(input_offset_list_uint64.back() + length);
     input_prefix_list_int32[idx + 1] = input_prefix_list_int32[idx] + forward_reqs[idx].prefix_cache_len;
     input_prefix_list_uint64[idx + 1] = input_prefix_list_uint64[idx] + prefix_offset;
-    max_tokens = std::max(max_tokens, length);
+    context_max_tokens = std::max(context_max_tokens, length);
   }
   input_offset_list = input_offset_list_int32;
   input_prefix_list = input_prefix_list_int32;
-  MemcpyAsync(input_ids.GetPtr<int>(), input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
-              context_->GetH2DStreams()[rank_]);
-  MemcpyAsync(input_prefix_uint64_tensor.GetPtr<void>(), input_prefix_list_uint64.data(),
-              input_prefix_list_uint64.size() * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
-              context_->GetH2DStreams()[rank_]);
   input_offset_uint64_tensor.shape = {batch_size + 1};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
   logits_custom_length_uint64_tensor.shape = {(size_t)logits_custom_length_list_uint64_index};
   logits_custom_length_uint64_tensor.dtype = TYPE_UINT64;
   logits_length_prefix_uint64_tensor.shape = logits_custom_length_uint64_tensor.shape;
   logits_length_prefix_uint64_tensor.dtype = logits_custom_length_uint64_tensor.dtype;
-  MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
-              (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   MemcpyAsync(logits_custom_length_uint64_tensor.GetPtr<void>(), logits_custom_length_list_uint64.data(),
               logits_custom_length_list_uint64_index * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
@@ -449,39 +465,34 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
 }
 
 void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forward_reqs) {
-  input_ids.shape = {batch_size};
-  std::vector<int> input_ids_cpu(batch_size);
-  size_t input_offset = 0;
-  std::vector<int> input_offset_list_int32(batch_size + 1, 0);
-  std::vector<int> input_tokens_list_int32(batch_size, 0);
-  std::vector<size_t> input_offset_list_uint64(batch_size + 1, 0ul);
-  std::vector<size_t> input_prefix_list_uint64(batch_size + 1, 0ul);
-  std::fill(input_prefix_list.begin(), input_prefix_list.end(), 0);
-  for (size_t idx = 0; idx < batch_size; ++idx) {
+  std::vector<int> input_tokens_list_int32(decode_num, 0);
+  for (size_t idx = context_num; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
-    input_ids_cpu[idx] = req_input->at(length - 1);
-    max_tokens = std::max(max_tokens, length);
-    input_offset++;
-    input_tokens_list_int32[idx] = length;
-    input_offset_list_int32[idx + 1] = static_cast<int>(input_offset);
-    input_offset_list_uint64[idx + 1] = input_offset;
+    input_ids_cpu.push_back(req_input->at(length - 1));
+    decode_max_tokens = std::max(decode_max_tokens, length);
+    input_tokens_list_int32[idx - context_num] = length;
+    input_offset_list_uint64.push_back(input_offset_list_uint64.back() + 1);
+    input_offset_list.push_back(input_offset_list.back() + 1);
+    input_prefix_list.push_back(input_prefix_list.back());
+    input_prefix_list_uint64.push_back(input_prefix_list_uint64.back());
   }
-
-  MemcpyAsync(input_ids.GetPtr<void>(), input_ids_cpu.data(), batch_size * sizeof(int), MEMCPY_HOST_TO_DEVICE,
+  input_ids.shape = {input_ids_cpu.size()};
+  MemcpyAsync(input_ids.GetPtr<void>(), input_ids_cpu.data(), input_ids_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
 
   // create input offset tensor int32 and uint64
-  input_tokens_int32_tensor.shape = {static_cast<uint64_t>(batch_size)};
+  input_tokens_int32_tensor.shape = {static_cast<uint64_t>(decode_num)};
   input_offset_uint64_tensor.shape = {static_cast<uint64_t>(batch_size) + 1};
-  use_logits_custom_length = false;
   void* input_tokens_int32_ptr = input_tokens_int32_tensor.GetPtr<void>();
-  MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), (batch_size) * sizeof(int), MEMCPY_HOST_TO_DEVICE,
-              context_->GetH2DStreams()[rank_]);
+  MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), input_tokens_list_int32.size() * sizeof(int),
+              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
-              (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+              input_offset_list_uint64.size() * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
   MemcpyAsync(input_prefix_uint64_tensor.GetPtr<void>(), input_prefix_list_uint64.data(),
-              (batch_size + 1) * sizeof(size_t), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+              input_prefix_list_uint64.size() * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_ACL

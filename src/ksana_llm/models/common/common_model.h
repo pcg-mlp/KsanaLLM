@@ -218,11 +218,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
-  Status CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
-                       const bool is_context_stage);
+  Status CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
-  Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                           const bool is_context_stage);
+  Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs);
 
   virtual Status EmbedTokensUseGpu(Tensor& embedding_weight);
 

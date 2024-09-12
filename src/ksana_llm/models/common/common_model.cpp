@@ -166,9 +166,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     // to ‘std::vector<std::any>’ so we use push back to make it work.
     std::vector<std::any> attention_param;
     attention_param.push_back(idx);
-#ifdef ENABLE_ACL
     attention_param.push_back(num_layer_);
-#endif
     attention_param.push_back(max_position_embeddings);
     attention_param.push_back(head_num_per_tp);
     attention_param.push_back(num_kv_heads_per_tp);
@@ -285,7 +283,13 @@ Status CommonModel<T>::AddAttentionPrefixCache() {
     size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
     size_t copy_size = (input_length - prefix_length) * size_per_token;
     size_t dst_offset = (model_input_->input_offset_list[idx] + prefix_length) * size_per_token;
-
+    if (idx >= model_input_->context_num && model_input_->decode_num > 0) {
+      MemcpyAsync(shared_buffer_[0].GetPtr<void>(), mmha_origin_input.GetPtr<void>() + src_offset,
+                  copy_size * model_input_->decode_num, MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+      shared_buffer_[0].shape = {copy_size / dtype_size, model_input_->decode_num};
+      total_token_num += model_input_->decode_num;
+      break;
+    }
     MemcpyAsync(mmha_prefix_input.GetPtr<void>() + dst_offset, mmha_origin_input.GetPtr<void>() + src_offset, copy_size,
                 MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
     total_token_num += input_length;
@@ -304,13 +308,13 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
   // excluding the Prefix Cache section, and continue with the subsequent inference.
   auto& mmha_prefix_output = hidden_buffer_0_[0];
   auto& mmha_output = hidden_buffer_1_[0];
-
+  auto attention_input_shape =  hidden_buffer_1_[0].shape;
   size_t total_token_num_without_prefix = 0;
   size_t dst_offset = 0;
   size_t src_offset = 0;
   size_t dtype_size = GetTypeSize(mmha_prefix_output.dtype);
   size_t size_per_token = mmha_prefix_output.shape[1] * dtype_size;
-  for (size_t idx = 0; idx < model_input_->batch_size; ++idx) {
+  for (size_t idx = 0; idx < model_input_->context_num; ++idx) {
     size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
     size_t input_length = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
     src_offset += prefix_length * size_per_token;
@@ -324,6 +328,13 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
   }
   mmha_output.shape = {total_token_num_without_prefix, mmha_prefix_output.shape[1]};
   mmha_output.dtype = mmha_prefix_output.dtype;
+  if (model_input_->decode_num > 0) {
+    MemcpyAsync(hidden_buffer_0_[0].GetPtr<void>() +
+                    shared_buffer_[0].GetTotalBytes() / model_input_->decode_num * total_token_num_without_prefix,
+                shared_buffer_[0].GetPtr<void>(), shared_buffer_[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                context_->GetComputeStreams()[rank_]);
+    hidden_buffer_0_[0].shape = {total_token_num_without_prefix + model_input_->decode_num, attention_input_shape[1]};
+  }
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
 
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
@@ -406,10 +417,13 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
   }
-
-  if (is_context_stage) {
+  if (model_input_->context_num) {
     FlashAttentionForward(layer_idx);
-  } else {
+    if (model_input_->decode_num) {
+      std::swap(hidden_buffer_1_, hidden_buffer_0_);
+    }
+  }
+  if (model_input_->decode_num) {
     PagedAttentionForward(layer_idx);
   }
 
@@ -540,14 +554,13 @@ Status CommonModel<T>::CommonDecoderPostNorm(const int layer_idx, std::shared_pt
 }
 
 template <typename T>
-Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                                         const bool is_context_stage) {
+Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs) {
   auto batch_size = forward_reqs.size();
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
   size_t index = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
-    if (is_context_stage) {
+    if (forward_reqs[idx].step == 0) {
       size_t copy_len = req_input->size() * sizeof(int);
       memcpy(input_tokens_ptr + index, req_input->data(), copy_len);
       index += copy_len;
@@ -641,21 +654,28 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
 
 template <typename T>
 Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                     std::vector<ForwardRequest>& forward_reqs, const bool is_context_stage) {
+                                     std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
 
   // CPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.
   Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
   if (embedding_weight.device == MemoryDevice::MEMORY_HOST) {
-    EmbedTokensUseCpu(embedding_weight, forward_reqs, is_context_stage);
+    EmbedTokensUseCpu(embedding_weight, forward_reqs);
   }
 
-  model_input_->ParseFromRequests(forward_reqs, is_context_stage);
+  model_input_->ParseFromRequests(forward_reqs);
 
   // create forward shape tensor
-  forward_shape_.shape = {model_input_->batch_size, model_input_->max_tokens,
+  forward_shape_.shape = {
+      model_input_->context_num, model_input_->context_max_tokens, model_input_->context_total_block_num,
+      model_input_->decode_num,  model_input_->decode_max_tokens,  model_input_->decode_total_block_num};
+#ifdef ENABLE_ACL
+  forward_shape_.shape = {std::max(model_input_->context_num, model_input_->decode_num),
+                          std::max(model_input_->context_max_tokens, model_input_->decode_max_tokens),
                           static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
+#endif
+  bool is_context_stage = model_input_->context_num > 0;
 
   // GPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.
@@ -745,7 +765,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
 template <typename T>
 Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs) {
   size_t batch_size = forward_reqs.size();
-  for (size_t idx = 0; idx < batch_size; idx++) {
+  for (size_t idx = 0; idx < batch_size && forward_reqs[idx].step == 0; idx++) {
     py::gil_scoped_acquire acquire;
 
     auto ksana_python_input = std::make_shared<KsanaPythonInput>();
@@ -790,13 +810,17 @@ Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& bas
   if (plugin_ && rank_ == 0) {
     PythonPluginPreproces(forward_reqs);
   }
-  return CommonForward(base_weight, forward_reqs, /*is_context_stage*/ true);
+  return CommonForward(base_weight, forward_reqs);
 }
 
 template <typename T>
 Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs) {
-  return CommonForward(base_weight, forward_reqs, /*is_context_stage*/ false);
+  // TODO(zakwang): Remove ContextDecode
+  if (plugin_ && rank_ == 0) {
+    PythonPluginPreproces(forward_reqs);
+  }
+  return CommonForward(base_weight, forward_reqs);
 }
 
 template class CommonModel<float>;

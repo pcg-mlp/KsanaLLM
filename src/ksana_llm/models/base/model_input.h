@@ -24,11 +24,12 @@ class ModelInput {
   ~ModelInput();
 
   // Parse forward request.
-  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage);
+  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs);
 
  private:
   // Prepare the kv cache blocks, in CSR format.
-  void PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx, size_t end_idx,
+                            size_t total_block_num);
 
   void PreparePrefillPositionIds(const std::vector<ForwardRequest>& forward_reqs);
 
@@ -48,20 +49,31 @@ class ModelInput {
   // The input batch size.
   size_t batch_size;
 
-  // The total sequence length.
-  size_t total_seq_len = 0;
+  // The context total sequence length.
+  size_t context_total_seq_len = 0;
+
+  // ContextDecode reqs num.
+  size_t context_num = 0;
+
+  // Decode reqs num.
+  size_t decode_num = 0;
 
   // The total prefix length.
   size_t total_prefix_len = 0;
 
   // The total block numbe.
-  size_t total_block_num = 0;
+  size_t context_total_block_num = 0;
+  size_t decode_total_block_num = 0;
 
   // The max tokens.
-  size_t max_tokens = 0;
+  size_t context_max_tokens = 0;
+  size_t decode_max_tokens = 0;
 
   // The cache offset list.
   std::vector<int> kv_cache_offset_list;
+  std::vector<size_t> input_offset_list_uint64;
+  std::vector<size_t> input_prefix_list_uint64;
+  std::vector<int> input_ids_cpu;
 
   // The infer stage, context decode or decode.
   InferStage infer_stage;

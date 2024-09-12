@@ -36,10 +36,17 @@ void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   int logits_offset = 0;
+  std::sort(reqs.begin(), reqs.end(),
+            [](const std::shared_ptr<InferRequest>& a, const std::shared_ptr<InferRequest>& b) {
+              return a->infer_stage < b->infer_stage;
+            });
   for (size_t i = 0; i < reqs.size(); ++i) {
     std::shared_ptr<InferRequest>& req_ptr = reqs[i];
 
-    req_ptr->step += 1;
+    if (reqs[i]->infer_stage == InferStage::STATE_DECODE) req_ptr->step += 1;
+#ifdef ENABLE_CUDA
+    reqs[i]->infer_stage = InferStage::STATE_DECODE;
+#endif
     req_ptr->logits_offset = logits_offset;
     // When the logits_custom_length is greater than 0, the size of logits to be calculated is logits_custom_length.
     if (req_ptr->logits_custom_length > 0) {

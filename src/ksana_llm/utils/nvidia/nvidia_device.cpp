@@ -136,12 +136,16 @@ void FreeAsyncT<DEVICE_TYPE_NVIDIA>(void* dev_ptr, StreamT<DEVICE_TYPE_NVIDIA> s
 
 template <>
 void MemsetAsyncT<DEVICE_TYPE_NVIDIA>(void* dev_ptr, int value, size_t count, StreamT<DEVICE_TYPE_NVIDIA> stream) {
-  CUDA_CHECK(cudaMemsetAsync(dev_ptr, value, count, stream.Get()));
+  if (count > 0) {
+    CUDA_CHECK(cudaMemsetAsync(dev_ptr, value, count, stream.Get()));
+  }
 }
 
 template <>
 void MemsetT<DEVICE_TYPE_NVIDIA>(void* dev_ptr, int value, size_t count) {
-  CUDA_CHECK(cudaMemset(dev_ptr, value, count));
+  if (count > 0) {
+    CUDA_CHECK(cudaMemset(dev_ptr, value, count));
+  }
 }
 
 cudaMemcpyKind GetCudaMemcpyKind(enum MemcpyKind kind) {
@@ -161,7 +165,9 @@ cudaMemcpyKind GetCudaMemcpyKind(enum MemcpyKind kind) {
 template <>
 void MemcpyAsyncT<DEVICE_TYPE_NVIDIA>(void* dst, const void* src, size_t count, enum MemcpyKind kind,
                                       StreamT<DEVICE_TYPE_NVIDIA> stream) {
-  CUDA_CHECK(cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind), stream.Get()));
+  if (count > 0) {
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind), stream.Get()));
+  }
 }
 
 template <>
@@ -178,7 +184,9 @@ void Memcpy2DAsyncT<DEVICE_TYPE_NVIDIA>(void* dst, size_t dpitch, const void* sr
 
 template <>
 void MemcpyT<DEVICE_TYPE_NVIDIA>(void* dst, const void* src, size_t count, enum MemcpyKind kind) {
-  CUDA_CHECK(cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind)));
+  if (count > 0) {
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind)));
+  }
 }
 
 template <class U>

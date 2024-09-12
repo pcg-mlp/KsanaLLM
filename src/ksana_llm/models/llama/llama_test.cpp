@@ -196,6 +196,9 @@ class LlamaTest : public testing::Test {
 #endif
 
     EventRecord(start, context_->GetComputeStreams()[device_id]);
+    for (auto &forward_req : multi_forward_reqs) {
+      forward_req.step = 1;
+    }
     for (int i = 0; i < rounds; ++i) {
       llama->Decode(llama_weight, multi_forward_reqs);
     }
@@ -218,7 +221,7 @@ class LlamaTest : public testing::Test {
     forward.request_target = &request_target;
     std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
     ModelInput model_input(model_config, 0, context_);
-    model_input.ParseFromRequests(prompt_probs_forward_reqs, true);
+    model_input.ParseFromRequests(prompt_probs_forward_reqs);
     EXPECT_TRUE(model_input.use_logits_custom_length);
     std::vector<uint64_t> result(model_input.logits_custom_length_uint64_tensor.GetElementNumber());
     std::vector<uint64_t> dst = {0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14};

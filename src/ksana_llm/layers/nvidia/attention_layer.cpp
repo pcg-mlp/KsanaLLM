@@ -11,6 +11,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   BaseLayer::Init(parameters, context, rank);
   int parameter_index = 0;
   layer_index_ = std::any_cast<const int>(parameters[parameter_index++]);
+  layer_num_ = std::any_cast<const int>(parameters[parameter_index++]);
   int max_position_embeddings = std::any_cast<const int>(parameters[parameter_index++]);
   num_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
   num_kv_heads_ = std::any_cast<const int>(parameters[parameter_index++]);
