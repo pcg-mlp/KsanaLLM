@@ -71,16 +71,16 @@ class BenchmarkMetrics:
 
     def __str__(self):
         return '\n'.join([
-            f"Request rate: {self.request_rate:.2f} requests/s",
+            f"Request rate: {self.request_rate:.3f} requests/s",
             f"Concurrency requests: {self.concurrency}",
-            f"Total latency: {self.total_latency:.2f} s",
-            f"Request throughput: {self.request_throughput:.2f} requests/s",
-            f"Average latency: {self.avg_latency:.2f} s",
-            f"Average input len: {self.avg_input_chars:.2f} chars",
-            f"Average output len: {self.avg_output_chars:.2f} chars",
-            f"Average input len: {self.avg_input_tokens:.2f} tokens",
-            f"Average output len: {self.avg_output_tokens:.2f} tokens",
-            f"Token throughput: {self.avg_tokens_per_sec:.2f} tokens/s",
+            f"Total latency: {self.total_latency:.3f} s",
+            f"Request throughput: {self.request_throughput:.3f} requests/s",
+            f"Average latency: {self.avg_latency:.3f} s",
+            f"Average input len: {self.avg_input_chars:.3f} chars",
+            f"Average output len: {self.avg_output_chars:.3f} chars",
+            f"Average input len: {self.avg_input_tokens:.3f} tokens",
+            f"Average output len: {self.avg_output_tokens:.3f} tokens",
+            f"Token throughput: {self.avg_tokens_per_sec:.3f} tokens/s",
         ])
 
 
@@ -288,10 +288,16 @@ async def generate_prompt_async(
     input_requests = enumerate(input_requests)
     # Number of requests already sent at the same time
     request_num = 0
+    # Start time
+    start_time = time.time()
+    # Total number of requests processed
+    total_requests = 0
+
     for req_id, request in input_requests:
         yield req_id, request
 
         request_num += 1
+        total_requests += 1
         if request_rate == float("inf"):
             # If the request rate is infinity, then we don't need to wait.
             continue
@@ -301,12 +307,22 @@ async def generate_prompt_async(
             continue
         request_num = 0
 
+        # Calculate the expected time to have sent total_requests at the current request_rate
+        expected_time = total_requests / request_rate
+        # Calculate the actual time elapsed
+        actual_time = time.time() - start_time
+        # Calculate the difference to adjust the sleep time
+        interval_adjustment = expected_time - actual_time
+
         if random:
-            # Sample the request interval from the exponential distribution.
-            interval = np.random.exponential(1.0 / (request_rate / concurrency))
+            # Sample the request interval from the exponential distribution and adjust
+            interval = np.random.exponential(1.0 / (request_rate / concurrency)) + interval_adjustment
         else:
-            # Request arrives uniformly.
-            interval = 1.0 / (request_rate / concurrency)
+            # Request arrives uniformly and adjust
+            interval = 1.0 / (request_rate / concurrency) + interval_adjustment
+
+        # Ensure interval is not negative
+        interval = max(interval, 0)
         # The next request will be sent after the interval.
         await asyncio.sleep(interval)
 
@@ -372,7 +388,7 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
             "logprobs": args.logprobs,
             "n": 1,
             "task_id": time.time(),
-            "delete_prompt_from_output": 0,
+            "delete_prompt_from_output": 1,
             "stream": args.stream,
             "stop_token_ids": args.stop_token_ids
         }
@@ -382,7 +398,8 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
 
     # Record the start time of the request
     request_start_time = time.perf_counter()
-
+    output = None
+    server_stream_output = ""
     # Create an asynchronous client session with the specified timeout
     async with aiohttp.ClientSession(timeout=timeout) as session:
         # Loop indefinitely until the request is successful
@@ -397,42 +414,35 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
                 most_recent_timestamp = request_start_time
                 # Iterate over the response chunks and append them to the list
                 async for chunk, _ in response.content.iter_chunks():
-                    chunk = chunk.strip(b'\x00')
-                    if not chunk:
+                    timestamp = time.perf_counter()
+                    last_chunk += chunk.strip(b'\x00')
+                    try:
+                        if "server" in args.backend and args.stream:
+                            output = json.loads(last_chunk.decode("utf-8")[6:][:-2])
+                            server_stream_output += output["choices"][0]["delta"]["content"]
+                        else:
+                            output = json.loads(last_chunk.decode("utf-8"))
+                        # First token
+                        if first_token_latency == 0.:
+                            first_token_latency = timestamp - request_start_time
+                        # Decoding phase
+                        else:
+                            inter_token_latencies.append(timestamp -
+                                                most_recent_timestamp)
+                        most_recent_timestamp = timestamp
+
+                        last_chunk = b''
+                    except json.JSONDecodeError:
                         continue
 
-                    timestamp = time.perf_counter()
-                    # First token
-                    if first_token_latency == 0.:
-                        first_token_latency = timestamp - request_start_time
-                    # Decoding phase
-                    else:
-                        inter_token_latencies.append(timestamp -
-                                            most_recent_timestamp)
-                    most_recent_timestamp = timestamp
-
-                    last_chunk = chunk
+            # Record the end time of the request
+            request_end_time = time.perf_counter()
             # Decode the last chunk to UTF-8
-            output = last_chunk.decode("utf-8")
-            # Parse the output as JSON
-            if "server" in args.backend and args.stream:
-                data_segments = output.strip().split("\n\n")
-                texts = ""
-                for segment in data_segments:
-                    json_string = segment.split(': ', 1)[1]
-                    data = json.loads(json_string)
-                    texts += data["choices"][0]["delta"]["content"]
-                output = json.loads(data_segments[-1].split(': ', 1)[1])
-                output["choices"][0]["delta"]["content"] = texts
-
-            output = json.loads(output)
 
             # If the response does not contain an "error" key, break out of the loop
             if "error" not in output:
                 break
 
-    # Record the end time of the request
-    request_end_time = time.perf_counter()
     # Calculate the latency of the request
     request_latency = request_end_time - request_start_time
 
@@ -464,14 +474,12 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
         prompt_len = len(prompt)
         output_text = output["text"][0].strip()
         output_token_num = len(output.get("output_token_ids")[0])
-    elif args.backend == "ksana-server":
+    elif "server" in args.backend:
+        if args.stream :
+            output["choices"][0]["delta"]["content"] = server_stream_output
         output_text = output['choices'][0][server_map_idx]['content']
         input_token_num = output['usage']['prompt_tokens']
         output_token_num = output['usage']['completion_tokens']
-    elif args.backend == "vllm-server":
-        prompt_len = len(prompt)
-        output_text = output['choices'][0][server_map_idx]['content'][
-            prompt_len:].strip()
     elif args.backend == "mindie-service":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
@@ -507,7 +515,7 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
                                                       args.concurrency,
                                                       args.random):
         # Format the prompt using the affix dictionary for the specified model type
-        if args.chat_template and tokenizer is not None:
+        if args.chat_template:
             prompt = tokenizer.apply_chat_template(
                 json.loads(prompt),
                 tokenize=False,
@@ -538,8 +546,14 @@ async def benchmark_sync(args: argparse.Namespace, api_url: str,
     async for req_id, prompt in generate_prompt_async(inputs, args.request_rate,
                                                       args.concurrency,
                                                       args.random):
-        # Format the prompt using the affix dictionary for the specified model type
-        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
+        if args.chat_template:
+            prompt = tokenizer.apply_chat_template(
+                json.loads(prompt),
+                tokenize=False,
+                add_generation_prompt=True)
+        else:
+            # Format the prompt using the affix dictionary for the specified model type
+            prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         # Await until last request finished
         await send_request_async(args, prompt, api_url, req_id, result_list, pbar,
                                   tokenizer)
@@ -621,17 +635,21 @@ def main(args: argparse.Namespace):
     elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
         args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
-    
+
+    if args.chat_template and args.tokenizer_path is None:
+        raise ValueError(
+            "When chat_template is enabled, tokenizer_path cannot be None.")
     # NOTE: mindie-service/TensorRT-LLM wont return tokens, we need encode tokens to get output tokens
-    if args.backend in ["mindie-service", "trt-llm", "vllm"]:
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.tokenizer_path,
-            revision=None,
-            padding_side="left",
-            truncation_side="left",
-            trust_remote_code=True,
-            use_fast=True
-        )
+    if args.backend in ["mindie-service", "trt-llm", "vllm"] or args.chat_template:
+        if args.tokenizer_path is not None:
+            tokenizer = AutoTokenizer.from_pretrained(
+                args.tokenizer_path,
+                revision=None,
+                padding_side="left",
+                truncation_side="left",
+                trust_remote_code=True,
+                use_fast=True
+            )
 
     # Read inputs from the input CSV file
     inputs = read_from_csv(args.input_csv, args.col_idx)
@@ -745,7 +763,7 @@ def main(args: argparse.Namespace):
                                "Avg TPOT", "Median TPOT", "P99 TPOT"])
             writer.writerow(header)
             for (metrics, stream_metrics) in perf_result_list:
-                row = [f"{value:.2f}" for value in metrics.__dict__.values()]
+                row = [f"{value:.3f}" for value in metrics.__dict__.values()]
                 if args.stream:
                     row.extend([f"{value:.3f}" for value in stream_metrics.__dict__.values()])
                 writer.writerow(row)
