@@ -44,6 +44,8 @@ struct ModelRunConfig {
   bool qkv_add_bias = false;
   // Use pre-norm or post-norm.
   LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
+  // Is run inference with graph
+  bool is_graph_mode = false;
 };
 
 // A common implement of transformer based model.

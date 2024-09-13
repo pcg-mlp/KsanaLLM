@@ -9,6 +9,12 @@
 namespace ksana_llm {
 
 template <typename T>
+Status AddLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, context, rank);
+  return Status();
+}
+
+template <typename T>
 Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   auto a = reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>());
   auto b = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());

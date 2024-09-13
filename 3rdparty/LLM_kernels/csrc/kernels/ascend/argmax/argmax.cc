@@ -7,6 +7,7 @@
 #include "aclnnop/aclnn_argmax.h"
 #include "aclrtlaunch_InvokeArgmaxFloatKernel.h"
 #include "aclrtlaunch_InvokeArgmaxHalfKernel.h"
+#include "atb/infer_op_params.h"
 #include "csrc/kernels/ascend/argmax/argmax_kernel.h"
 #include "csrc/utils/ascend/common.h"
 

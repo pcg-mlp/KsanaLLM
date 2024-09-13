@@ -301,8 +301,15 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
     CreateATBKVCache<aclFloat16>();
   }
 
+  void* rope_pos;
+  size_t pos_size = (total_token_num) * sizeof(int64_t);
+  ACL_CHECK_RET(aclrtMalloc(&rope_pos, pos_size, ACL_MEM_MALLOC_HUGE_FIRST));
+  std::vector<size_t> pos_shape;  // shape [163, ], content: [0, 1,..., 79, 0, 1,.., 81, 82]
+  llm_kernels::utils::LoadNpyToPtr<int64_t>("/tmp/tests/kernels/data/paged_attention/prefill_rope_pos.npy",
+                                            (int64_t*)rope_pos, pos_shape, false);
+
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
-  atb_paged_attention.Forward(output, qkv_tensor, slot_mapping, k_cache, v_cache, /*block_tables*/ nullptr,
+  atb_paged_attention.Forward(output, qkv_tensor, rope_pos, slot_mapping, k_cache, v_cache, /*block_tables*/ nullptr,
                               /*max_num_blocks_per_query*/ 0, static_cast<uint32_t>(batch_size),
                               static_cast<uint32_t>(total_token_num), static_cast<uint32_t>(total_block_num),
                               block_token_num, static_cast<uint32_t>(layer_idx), seq_len_host.data(), is_context_stage,
@@ -328,6 +335,7 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
     EXPECT_NEAR(aclFloat16ToFloat(result_host[i]), aclFloat16ToFloat(ref_host[i]), 1e-4);
   }
 
+  ACL_CHECK_RET(aclrtFree(rope_pos));
   ACL_CHECK_RET(aclrtFree(ref_result));
   ACL_CHECK_RET(aclrtFree(slot_mapping));
   ACL_CHECK_RET(aclrtFree(qkv_tensor));
@@ -375,6 +383,12 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
   if (k_cache == nullptr || v_cache == nullptr) {
     CreateATBKVCache<aclFloat16>();
   }
+  void* rope_pos;
+  size_t pos_size = batch_size * sizeof(int64_t);
+  ACL_CHECK_RET(aclrtMalloc(&rope_pos, pos_size, ACL_MEM_MALLOC_HUGE_FIRST));
+  std::vector<size_t> pos_shape;  // shape: [2], content: [80, 83]
+  llm_kernels::utils::LoadNpyToPtr<int64_t>("/tmp/tests/kernels/data/paged_attention/decode_rope_pos.npy",
+                                            (int64_t*)rope_pos, pos_shape, false);
 
   // NOTE(karlluo): block_tables is a tensor help paged attention to find the real block
   // batch size: 2
@@ -407,7 +421,7 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
                             ACL_MEMCPY_HOST_TO_DEVICE));
 
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
-  atb_paged_attention.Forward(output, qkv_tensor, slot_mapping, k_cache, v_cache, block_tables_device,
+  atb_paged_attention.Forward(output, qkv_tensor, rope_pos, slot_mapping, k_cache, v_cache, block_tables_device,
                               max_num_blocks_per_query, static_cast<uint32_t>(batch_size),
                               static_cast<uint32_t>(total_token_num), static_cast<uint32_t>(total_block_num),
                               block_token_num, static_cast<uint32_t>(layer_idx), seq_len_host.data(), is_context_stage,
@@ -433,6 +447,7 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
     EXPECT_NEAR(aclFloat16ToFloat(result_host[i]), aclFloat16ToFloat(ref_host[i]), 1e-4);
   }
 
+  ACL_CHECK_RET(aclrtFree(rope_pos));
   ACL_CHECK_RET(aclrtFree(ref_result));
   ACL_CHECK_RET(aclrtFree(block_tables_device));
   ACL_CHECK_RET(aclrtFree(slot_mapping));

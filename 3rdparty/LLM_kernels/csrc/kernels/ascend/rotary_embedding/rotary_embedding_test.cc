@@ -31,7 +31,7 @@ class LlamaAscendRotaryEmbeddingTestSuit : public AscendTestSuitBase {
 
   template <typename T>
   void TestRotaryEmbeddingAscendC() {
-    std::unique_ptr<RotaryEmbeddingAscendC<T>> rope_ptr = std::make_unique<RotaryEmbeddingAscendC<T>>();
+    std::unique_ptr<AscendCRotaryEmbedding<T>> rope_ptr = std::make_unique<AscendCRotaryEmbedding<T>>();
     // following config is loaded from llama2-13B
     int rotary_dim{128};
     int max_position_embeddings{2048};
@@ -168,7 +168,6 @@ class LlamaAscendRotaryEmbeddingTestSuit : public AscendTestSuitBase {
     ACL_CHECK_RET(aclrtFreeHost(cos_sin_cache_host));
   }
 
-#ifdef ENABLE_ACL_ATB
   template <typename DTYPE>
   void TestATBRotaryEmbedding() {
     // following config is loaded from llama2-13B
@@ -347,14 +346,11 @@ class LlamaAscendRotaryEmbeddingTestSuit : public AscendTestSuitBase {
     ACL_CHECK_RET(aclrtFree(rope_sin_workspace_ptr));
     ACL_CHECK_RET(aclrtFree(rope_cos_workspace_ptr));
   }
-#endif
 };
 
 TEST_F(LlamaAscendRotaryEmbeddingTestSuit, KernelTest) { TestRotaryEmbeddingAscendC<aclFloat16>(); }
 
-#ifdef ENABLE_ACL_ATB
 TEST_F(LlamaAscendRotaryEmbeddingTestSuit, ATBRopeTest) { TestATBRotaryEmbedding<half_float::half>(); }
-#endif
 
 }  // namespace test
 }  // namespace ascend

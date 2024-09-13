@@ -13,6 +13,7 @@ https://github.com/PaddlePaddle/PaddleCustomDevice/blob/develop/backends/npu/cus
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <type_traits>
 
 #include "aclrtlaunch_InvokePagedAttentionKernel.h"
@@ -489,12 +490,11 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
 template class PagedAttention<aclFloat16>;
 template class PagedAttention<float>;
 
-#ifdef ENABLE_ACL_ATB
 template <typename DTYPE>
 ATBPagedAttention<DTYPE>::~ATBPagedAttention() {}
 
 template <typename DTYPE>
-void ATBPagedAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* slot_mapping, void* k_cache, void* v_cache,
+void ATBPagedAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache, void* v_cache,
                                        void* block_tables, const uint32_t max_num_blocks_per_query,
                                        const uint32_t batch_size, const uint32_t total_token_num,
                                        const uint32_t total_block_num, const uint32_t block_token_num,
@@ -513,10 +513,12 @@ void ATBPagedAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* slo
   // qkv_input_tensor_id
   atb_op_executor_.SetInputTensor(qkv_tensor, {total_token_num, (head_size_ + 2 * kv_head_size_) * head_dim_},
                                   acl_dtype);
+  // pos_input_tensor_id
+  atb_op_executor_.SetInputTensor(pos_ids, {total_token_num}, aclDataType::ACL_INT64);
   // rope_cos_input_tensor_id
-  atb_op_executor_.SetInputTensor(rope_cos_workspace_ptr_, {total_token_num, head_dim_}, acl_dtype);
+  atb_op_executor_.SetInputTensor(rope_cos_workspace_ptr_, {max_position_embeddings_, head_dim_}, acl_dtype);
   // rope_sin_input_tensor_id
-  atb_op_executor_.SetInputTensor(rope_sin_workspace_ptr_, {total_token_num, head_dim_}, acl_dtype);
+  atb_op_executor_.SetInputTensor(rope_sin_workspace_ptr_, {max_position_embeddings_, head_dim_}, acl_dtype);
   if (is_context_stage) {
     // mask_input_tensor_id
     atb_op_executor_.SetInputTensor(attn_mask_ptr_, {MAX_SEQ_LEN, MAX_SEQ_LEN}, acl_dtype);
@@ -533,11 +535,6 @@ void ATBPagedAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* slo
   }
   // seqlen_input_tensor_id
   atb_op_executor_.SetInputTensor(seq_len, {batch_size}, aclDataType::ACL_INT32);
-  if (!is_context_stage) {
-    // batch_status_input_tensor_id
-    // TODO(karlluo): tag which query should be handle
-    atb_op_executor_.SetInputTensor(batch_status_.data(), {batch_size}, aclDataType::ACL_INT32);
-  }
   atb_op_executor_.SetOutputTensor(output, {total_token_num, head_size_ * head_dim_}, acl_dtype);
 
   atb_op_executor_.Run(atb_context, ws_func);
@@ -558,6 +555,7 @@ void ATBPagedAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head
   block_token_num_ = block_token_num;
   rank_ = rank;
   is_prefill_ = is_context_stage;
+  max_position_embeddings_ = max_position_embeddings;
 
   // TODO(karlluo): tag which query should be handle
   batch_status_.resize(max_batch_size_, 1);
@@ -573,6 +571,8 @@ void ATBPagedAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head
   // input
   // shape: (ntokens, (head_size + 2 * kv_head_size) * head_dim)
   uint32_t qkv_input_tensor_id = tensor_id++;
+  // shape: (ntokes,)
+  uint32_t pos_input_tensor_id = tensor_id++;
   // shape: (ntokens, head_dim)
   uint32_t rope_cos_input_tensor_id = tensor_id++;
   // shape: (ntokens, head_dim)
@@ -591,9 +591,6 @@ void ATBPagedAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head
   uint32_t block_tables_input_tensor_id = !is_context_stage ? tensor_id++ : 0;
   // shape: (batch)
   uint32_t seqlen_input_tensor_id = tensor_id++;
-  // is_context_stage == false:
-  //   shape: (batch, num_heads, 1, max_seqlen)
-  uint32_t batch_status_input_tensor_id = !is_context_stage ? tensor_id++ : seqlen_input_tensor_id;
   // output
   // shape: (ntokens, head_size * head_dim)
   uint32_t attn_output_tensor_id = tensor_id++;
@@ -604,13 +601,15 @@ void ATBPagedAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head
   uint32_t v_inner_tensor_id = tensor_id++;
   uint32_t emb_q_inner_tensor_id = tensor_id++;
   uint32_t emb_k_inner_tensor_id = tensor_id++;
+  uint32_t cos_inner_tensor_id = tensor_id++;
+  uint32_t sin_inner_tensor_id = tensor_id++;
 
   atb::GraphParam op_graph;
-  op_graph.name = "ATBPagedAttentionOp";
-  op_graph.inTensorNum = batch_status_input_tensor_id - qkv_input_tensor_id + 1;
+  op_graph.name = is_context_stage ? "ATBSelfAttentionOp" : "ATBPagedAttentionOp";
+  op_graph.inTensorNum = seqlen_input_tensor_id - qkv_input_tensor_id + 1;
   op_graph.outTensorNum = 1;
-  op_graph.internalTensorNum = emb_k_inner_tensor_id - q_inner_tensor_id + 1;
-  op_graph.nodes.resize(4);  // split qkv + rope + write kv + flash attn/page attn
+  op_graph.internalTensorNum = sin_inner_tensor_id - q_inner_tensor_id + 1;
+  op_graph.nodes.resize(4 + 2);  // gather rope's cos/sin + split qkv + rope + write kv + flash attn/page attn
   uint32_t node_idx = 0;
 
   // split q,k,v
@@ -621,13 +620,31 @@ void ATBPagedAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head
     op_node.outTensorIds = {q_inner_tensor_id, k_inner_tensor_id, v_inner_tensor_id};
   }
 
+  // gather cos
+  {
+    atb::Node& op_node = op_graph.nodes.at(node_idx++);
+    atb::infer::GatherParam gather_param;
+    atb::CreateOperation(gather_param, &op_node.operation);
+    op_node.inTensorIds = {rope_cos_input_tensor_id, pos_input_tensor_id};
+    op_node.outTensorIds = {cos_inner_tensor_id};
+  }
+
+  // gather sin
+  {
+    atb::Node& op_node = op_graph.nodes.at(node_idx++);
+    atb::infer::GatherParam gather_param;
+    atb::CreateOperation(gather_param, &op_node.operation);
+    op_node.inTensorIds = {rope_sin_input_tensor_id, pos_input_tensor_id};
+    op_node.outTensorIds = {sin_inner_tensor_id};
+  }
+
   // rope
   {
     atb::Node& op_node = op_graph.nodes.at(node_idx++);
     atb::infer::RopeParam op_param;
     op_param.rotaryCoeff = 2;
     atb::CreateOperation(op_param, &op_node.operation);
-    op_node.inTensorIds = {q_inner_tensor_id, k_inner_tensor_id, rope_cos_input_tensor_id, rope_sin_input_tensor_id,
+    op_node.inTensorIds = {q_inner_tensor_id, k_inner_tensor_id, cos_inner_tensor_id, sin_inner_tensor_id,
                            seqlen_input_tensor_id};
     op_node.outTensorIds = {emb_q_inner_tensor_id, emb_k_inner_tensor_id};
   }
@@ -676,13 +693,10 @@ void ATBPagedAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head
     op_param.headNum = head_size;
     op_param.qkScale = 1.0f / sqrt(head_dim);
     op_param.kvHeadNum = kv_head_size;
-    op_param.maskType = atb::infer::PagedAttentionParam::UNDEFINED;
-    op_param.batchRunStatusEnable = true;
-
     atb::CreateOperation(op_param, &op_node.operation);
 
     op_node.inTensorIds = {emb_q_inner_tensor_id,        k_cache_input_tensor_id, v_cache_input_tensor_id,
-                           block_tables_input_tensor_id, seqlen_input_tensor_id,  batch_status_input_tensor_id};
+                           block_tables_input_tensor_id, seqlen_input_tensor_id};
     op_node.outTensorIds = {attn_output_tensor_id};
     op_node.inTensorReshapeFuncs.resize(op_node.inTensorIds.size());
     op_node.inTensorReshapeFuncs[0] = [=](const atb::Dims& old_shape, atb::Dims& new_shape) {
@@ -877,7 +891,6 @@ void ATBPagedAttention<DTYPE>::CreateSplitQKVOperation(uint32_t head_size, uint3
 
 template class ATBPagedAttention<aclFloat16>;
 template class ATBPagedAttention<float>;
-#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

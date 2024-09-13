@@ -84,7 +84,7 @@ class PagedAttention {
   // The slice & permute & rope instantiation.
   Slice2<T> slice_;
   PermuteKernelWrapper<T> permute_;
-  RotaryEmbeddingAscendC<T> rope_;
+  AscendCRotaryEmbedding<T> rope_;
 
   // The tiling buffer on global memory
   void* tiling_buffer_gm_;
@@ -114,14 +114,13 @@ class PagedAttention {
   void* v_buffer_2_;
 };
 
-#ifdef ENABLE_ACL_ATB
 template <typename DTYPE>
 class ATBPagedAttention {
  public:
   ~ATBPagedAttention();
 
   // Invoke paged attention.
-  void Forward(void* output, void* qkv_tensor, void* slot_mapping, void* k_cache, void* v_cache, void* block_tables,
+  void Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache, void* v_cache, void* block_tables,
                const uint32_t max_num_blocks_per_query, const uint32_t batch_size, const uint32_t total_token_num,
                const uint32_t total_block_num, const uint32_t block_token_num, const uint32_t layer_index,
                void* seq_len, const bool is_context_stage, atb::Context* atb_context, void (*ws_func)(size_t, void**));
@@ -139,6 +138,7 @@ class ATBPagedAttention {
   bool is_prefill_{true};
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
 
+  size_t max_position_embeddings_;
   size_t head_size_;
   size_t kv_head_size_;
   size_t head_dim_;
@@ -162,7 +162,6 @@ class ATBPagedAttention {
   void CreateSplitQKVOperation(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,
                                atb::Operation** operation);
 };
-#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

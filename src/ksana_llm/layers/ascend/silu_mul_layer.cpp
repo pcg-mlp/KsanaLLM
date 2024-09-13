@@ -4,7 +4,6 @@
 
 #include "ksana_llm/layers/silu_mul_layer.h"
 
-#include "csrc/kernels/ascend/silu_mul/silu_mul.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
@@ -12,19 +11,71 @@
 namespace ksana_llm {
 
 template <typename T>
+Status SiluMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, context, rank);
+
+  // NOTE(karlluo): input and weight
+  constexpr int32_t INPUT_TENSOR_NUM = 2;
+  constexpr int32_t OUTPUT_TENSOR_NUM = 1;
+  // NOTE(karlluo): 1 buffer for silu output
+  constexpr int32_t INTERNAL_TENSOR_NUM = 1;
+  constexpr int32_t NODE_NUM = 2;
+
+  uint32_t node_idx = 0;
+  atb::GraphParam op_graph;
+  op_graph.name = "FusedSiluMul";
+  op_graph.inTensorNum = INPUT_TENSOR_NUM;
+  op_graph.outTensorNum = OUTPUT_TENSOR_NUM;
+  op_graph.internalTensorNum = INTERNAL_TENSOR_NUM;
+  op_graph.nodes.resize(NODE_NUM);
+  uint32_t tensor_idx = 0;
+  uint32_t input_tensor_idx = tensor_idx++;
+  uint32_t weight_tensor_idx = tensor_idx++;
+  uint32_t output_tensor_idx = tensor_idx++;
+  uint32_t interal_tensor_idx = tensor_idx++;
+  // for silu
+  {
+    atb::Node& op_node = op_graph.nodes.at(node_idx++);
+    atb::infer::ActivationParam activation_param;
+    activation_param.activationType = atb::infer::ACTIVATION_SWISH;
+    atb::CreateOperation(activation_param, &op_node.operation);
+    op_node.inTensorIds = {input_tensor_idx};
+    op_node.outTensorIds = {interal_tensor_idx};
+  }
+  // for mul
+  {
+    atb::Node& op_node = op_graph.nodes.at(node_idx++);
+    atb::infer::ElewiseParam elewise_param;
+    elewise_param.elewiseType = atb::infer::ElewiseParam::ElewiseType::ELEWISE_MUL;
+    atb::CreateOperation(elewise_param, &op_node.operation);
+    op_node.inTensorIds = {interal_tensor_idx, weight_tensor_idx};
+    op_node.outTensorIds = {output_tensor_idx};
+  }
+  atb_op_executor_.Init(rank, op_graph);
+  atb_op_executor_.ResetVariantPack();
+
+  return Status();
+}
+
+template <typename T>
 Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   int64_t total_seq_len = static_cast<int64_t>(input_tensors[0].shape[0]);
   int64_t ffn_size = static_cast<int64_t>(input_tensors[0].shape[1]);
-
+  output_tensors[0].shape = input_tensors[0].shape;
+  output_tensors[0].dtype = input_tensors[0].dtype;
   void* silu_input_buf_ptr = input_tensors[0].GetPtr<void>();
   void* silu_output_buf_ptr = output_tensors[0].GetPtr<void>();
   void* gated_weight_buf_ptr = input_tensors[1].GetPtr<void>();
-
-  llm_kernels::ascend::InvokeSiluMul<T>(
-      reinterpret_cast<T*>(silu_input_buf_ptr), reinterpret_cast<T*>(gated_weight_buf_ptr), total_seq_len, ffn_size,
-      reinterpret_cast<T*>(silu_output_buf_ptr), context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+      ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+  atb_op_executor_.ResetVariantPack();
+  atb_op_executor_.SetInputTensor(silu_input_buf_ptr, input_tensors[0].shape,
+                                  static_cast<aclDataType>(input_tensors[0].dtype));
+  atb_op_executor_.SetInputTensor(gated_weight_buf_ptr, input_tensors[1].shape,
+                                  static_cast<aclDataType>(input_tensors[1].dtype));
+  atb_op_executor_.SetOutputTensor(silu_output_buf_ptr, output_tensors[0].shape,
+                                   static_cast<aclDataType>(output_tensors[0].dtype));
+  atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
 template class SiluMulLayer<float>;

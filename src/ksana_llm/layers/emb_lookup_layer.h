@@ -4,6 +4,11 @@
 #pragma once
 
 #include "ksana_llm/layers/base_layer.h"
+#ifdef ENABLE_ACL
+#  include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
+#  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
+#endif
+
 namespace ksana_llm {
 
 template <typename T>
@@ -19,6 +24,10 @@ class EmbLookupLayer : public BaseLayer {
 
   // The position encoding weight.
   void* pos_weight_{nullptr};
+
+#ifdef ENABLE_ACL
+  llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
+#endif  // ENABLE_ACL
 };
 
 template <typename T>

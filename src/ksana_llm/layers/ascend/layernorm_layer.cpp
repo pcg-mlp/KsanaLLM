@@ -8,7 +8,6 @@
 
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
-#include "csrc/kernels/ascend/rmsnorm/rmsnorm.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
@@ -20,25 +19,33 @@ Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   context_ = context;
   rank_ = rank;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
+
+  atb::infer::RmsNormParam rms_norm_param;
+  rms_norm_param.layerType = atb::infer::RmsNormParam::RmsNormType::RMS_NORM_NORM;
+  rms_norm_param.normParam.epsilon = rms_norm_eps_;
+  rms_norm_param.normParam.layerNormEps = rms_norm_eps_;
+  atb_op_executor_.Init(rank, rms_norm_param);
+
   return Status();
 }
 
 template <typename T>
 Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int64_t total_seq_len = input_tensors[0].shape[0];
-  int64_t hidden_size = input_tensors[0].shape[1];
   void* lm_input_tensor_buf_ptr = input_tensors[0].GetPtr<void>();
   void* lm_weight_tensor_buf_ptr = input_tensors[1].GetPtr<void>();
   void* lm_output_tensor_buf_ptr = output_tensors[0].GetPtr<void>();
-  // TODO(karlluo): support beta
-  T* beta_ptr = nullptr;
-  llm_kernels::ascend::InvokeRmsLayerNorm<T>(
-      reinterpret_cast<T*>(lm_output_tensor_buf_ptr), reinterpret_cast<T*>(lm_input_tensor_buf_ptr),
-      reinterpret_cast<T*>(lm_weight_tensor_buf_ptr), beta_ptr, rms_norm_eps_, total_seq_len, hidden_size,
-      context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
-
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+      ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+  atb_op_executor_.ResetVariantPack();
+  atb_op_executor_.SetInputTensor(lm_input_tensor_buf_ptr, input_tensors[0].shape,
+                                  static_cast<aclDataType>(input_tensors[0].dtype));
+  atb_op_executor_.SetInputTensor(lm_weight_tensor_buf_ptr, input_tensors[1].shape,
+                                  static_cast<aclDataType>(input_tensors[1].dtype));
+  atb_op_executor_.SetOutputTensor(lm_output_tensor_buf_ptr, output_tensors[0].shape,
+                                   static_cast<aclDataType>(output_tensors[0].dtype));
+  atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
 template class LayernormLayer<float>;

@@ -82,6 +82,10 @@ template <typename T>
 void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<T>& tensor_shape, const size_t dtype_size,
                     void* data_ptr, const std::string& filename);
 
+void ParseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data);
+
+int32_t ParseNpyHeader(FILE*& f_ptr, uint32_t header_len, std::vector<size_t>& shape);
+
 template <typename T>
 void LoadNpyToPtr(const std::string& filename, T* data_ptr, std::vector<size_t>& tensor_shape, bool is_on_host = true);
 
@@ -122,7 +126,6 @@ void LoadDeviceAttribute(const std::string& platform_config_path, AscendNPUDevic
 // HFLOAT32 for calculation.
 enum ACLNNMatmulComputeType { KEEP_DTYPE = 0, ALLOW_FP32_DOWN_PRECISION = 1, USE_FP16 = 2, USE_HF32 = 3 };
 
-#ifdef ENABLE_ACL_ATB
 __attribute__((unused)) static const std::string GetATBErrorString(atb::ErrorType error) {
   static const std::unordered_map<atb::ErrorType, std::string> error_to_string_map{
       {atb::NO_ERROR, "NO_ERROR"},
@@ -158,9 +161,7 @@ void CheckATBError(T result, const char* func, const char* file, const int line)
   }
 }
 
-#  define ATB_CHECK_RET(val) \
-    llm_kernels::utils::CheckATBError<atb::ErrorType>(static_cast<atb::ErrorType>(val), #val, __FILE__, __LINE__)
-
-#endif  // ENABLE_ACL_ATB
+#define ATB_CHECK_RET(val) \
+  llm_kernels::utils::CheckATBError<atb::ErrorType>(static_cast<atb::ErrorType>(val), #val, __FILE__, __LINE__)
 }  // namespace utils
 }  // namespace llm_kernels

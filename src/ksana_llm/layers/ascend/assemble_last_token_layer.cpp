@@ -5,7 +5,6 @@
 #include "ksana_llm/layers/assemble_last_token_layer.h"
 #include <cstdlib>
 
-#include "3rdparty/LLM_kernels/csrc/kernels/ascend/assemble_last_token/assemble_last_token.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_utils.h"
@@ -13,17 +12,32 @@
 namespace ksana_llm {
 
 template <typename T>
+Status AssembleLastTokenLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
+                                       int rank) {
+  BaseLayer::Init(parameters, context, rank);
+  atb::infer::GatherParam gather_param;
+  atb_op_executor_.Init(rank, gather_param);
+  return Status();
+}
+
+template <typename T>
 Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
                                           std::vector<Tensor>& output_tensors) {
   size_t batch_size = input_tensors[1].shape[0] - 1;
   size_t hidden_size = input_tensors[0].shape[1];
-
-  llm_kernels::ascend::InvokeAssembleLastToken<T>(input_tensors[0].GetPtr<T>(), input_tensors[1].GetPtr<size_t>(),
-                                                  nullptr, batch_size, hidden_size, output_tensors[0].GetPtr<T>(),
-                                                  context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].shape[0] = batch_size;
+  output_tensors[0].shape[0] = input_tensors[1].shape[0];
   output_tensors[0].dtype = input_tensors[0].dtype;
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+      ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+  atb_op_executor_.ResetVariantPack();
+  atb_op_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
+                                  static_cast<aclDataType>(input_tensors[0].dtype));
+  atb_op_executor_.SetInputTensor(input_tensors[1].GetPtr<void>(), input_tensors[1].shape,
+                                  static_cast<aclDataType>(input_tensors[1].dtype));
+  atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
+                                   static_cast<aclDataType>(output_tensors[0].dtype));
+  atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
 template class AssembleLastTokenLayer<float>;

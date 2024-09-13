@@ -119,7 +119,7 @@ class ModelInput {
   Event rotary_embedding_event;
   Event input_ids_event;
 
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
   // record all reqs token number on host, shape: [batch_size]
   Tensor seq_len_host;
   // Tensor to save kv cache base. detail doc please refer:
@@ -141,6 +141,12 @@ class ModelInput {
   // attribute, so we need a tensor to be attribute.
   // shape: [2]; 0: layers_slot_mapping_dim_1; 1: max_num_blocks_per_query
   Tensor atb_attention_attr;
+
+  // assemble last token index for gather, dtype is int64_t
+  Tensor last_token_index_tensor;
+
+  std::vector<void*> kv_cache_ptrs;
+  Tensor kv_cache_ptrs_tensor;
 #endif
 
  private:

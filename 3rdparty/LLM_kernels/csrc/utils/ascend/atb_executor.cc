@@ -4,11 +4,7 @@
 
 #include "atb_executor.h"
 
-#ifdef ENABLE_ACL_ATB
-
-#  include "atb/utils.h"
-
-#  include "common.h"
+#include "atb/utils.h"
 
 namespace llm_kernels {
 namespace utils {
@@ -59,5 +55,3 @@ void ATBOperationExecutor::Run(atb::Context* context, void (*ws_func)(size_t, vo
 
 }  // namespace utils
 }  // namespace llm_kernels
-
-#endif

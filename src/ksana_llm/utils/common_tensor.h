@@ -61,7 +61,8 @@ class TensorT {
     if (refer_ptr != nullptr) {
       return reinterpret_cast<TP*>(refer_ptr);
     } else {
-      KLLM_CHECK_WITH_INFO(block_id >= 0, fmt::format("Tensor GetPtr() error, invalid block id {}.", block_id));
+      KLLM_CHECK_WITH_INFO(
+          block_id >= 0, fmt::format("Tensor GetPtr() error, invalid block id {} in Tensor {}.", block_id, ToString()));
       if (device == MEMORY_HOST) return GetHostContiguousPtr<TP>(block_id);
       return GetContiguousPtr<TP>(block_id);
     }
@@ -87,6 +88,9 @@ class TensorT {
 
   // Save to npy format file
   void SaveToFile(const std::string& file_path);
+
+  // Load npy format file to tensor
+  void LoadFromFile(const std::string& file_path);
 
   // Use block id instead of physical address, so that the blockmanager could do defragmentation easily.
   int block_id = -1;

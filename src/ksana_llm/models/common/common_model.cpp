@@ -308,7 +308,7 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
   // excluding the Prefix Cache section, and continue with the subsequent inference.
   auto& mmha_prefix_output = hidden_buffer_0_[0];
   auto& mmha_output = hidden_buffer_1_[0];
-  auto attention_input_shape =  hidden_buffer_1_[0].shape;
+  auto attention_input_shape = hidden_buffer_1_[0].shape;
   size_t total_token_num_without_prefix = 0;
   size_t dst_offset = 0;
   size_t src_offset = 0;
@@ -349,17 +349,20 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
     AddAttentionPrefixCache();
   }
 
+#ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
        model_input_->input_prefix_uint64_tensor, model_input_->kv_cache_offset_tensor,
-       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask, forward_shape_
-#ifdef ENABLE_ACL
-       ,
-       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
-#endif
-      },
+       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask, forward_shape_},
       hidden_buffer_1_));
+#elif defined(ENABLE_ACL)
+  // inference on NPU with ATB
+  STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
+      {hidden_buffer_0_[0], model_input_->rotary_embedding_pos, model_input_->layers_slot_mapping,
+       model_input_->k_cache_blocks_base, model_input_->v_cache_blocks_base, model_input_->seq_len_host, forward_shape_,
+       model_input_->atb_attention_attr},
+      hidden_buffer_1_));
+#endif
 
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
 
@@ -372,17 +375,20 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
 
 template <typename T>
 Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
+#ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
        model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
-       model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]
-#ifdef ENABLE_ACL
-       ,
-       ascend_buffer_0_, ascend_buffer_1_, ascend_buffer_2_, ascend_buffer_3_, ascend_buffer_4_,
-       ascend_key_caches_[layer_idx], ascend_val_caches_[layer_idx]
-#endif
-      },
+       model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]},
       hidden_buffer_1_));
+#elif defined(ENABLE_ACL)
+  // inference on NPU with ATB
+  STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
+      {hidden_buffer_0_[0], model_input_->rotary_embedding_pos, model_input_->layers_slot_mapping,
+       model_input_->layers_block_table, model_input_->k_cache_blocks_base, model_input_->v_cache_blocks_base,
+       model_input_->seq_len_host, forward_shape_, model_input_->atb_attention_attr},
+      hidden_buffer_1_));
+#endif
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
   return Status();
 }
@@ -732,9 +738,15 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
                                              model_input_->logits_length_prefix_uint64_tensor},
                                             hidden_buffer_0_));
   } else {
+#ifdef ENABLE_CUDA
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
         {residual_buffer_[0], model_input_->input_offset_uint64_tensor, model_input_->input_prefix_uint64_tensor},
         hidden_buffer_0_));
+#else
+    STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
+        {residual_buffer_[0], model_input_->last_token_index_tensor, model_input_->input_prefix_uint64_tensor},
+        hidden_buffer_0_));
+#endif
   }
 
   // lm_head
@@ -758,6 +770,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   std::vector<Tensor> logits_buffer{model_output_->logits_tensor};
   STATUS_CHECK_RETURN(cast_layer_->Forward({hidden_buffer_0_[0], forward_shape_}, logits_buffer));
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
+
   input_refit_layer_->Clear();
   return Status();
 }

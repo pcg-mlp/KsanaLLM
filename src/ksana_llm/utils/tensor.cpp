@@ -41,6 +41,7 @@ Status CreateTensor(Tensor& tensor, const std::vector<size_t> shape, const DataT
     }
     tensor = Tensor(memory_device, dtype, shape, block_id);
   } else {
+    tensor.block_id = -1;
     tensor = Tensor(memory_device, dtype, shape, refer_ptr);
   }
   return Status();

@@ -72,53 +72,13 @@ void PrintAclTensorMeta(const aclTensor* tensor, const std::string& name) {
 
 template <>
 std::vector<int64_t> TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorShape() const {
-  int64_t* storage_dims = nullptr;
-  uint64_t storage_dims_num;
   std::vector<int64_t> device_tensor_shape;
-  if (device_tensor_ != nullptr) {
-    ACL_CHECK(aclGetViewShape(device_tensor_, &storage_dims, &storage_dims_num));
-
-    for (size_t i = 0; i < storage_dims_num; ++i) {
-      device_tensor_shape.push_back(*(storage_dims + i));
-    }
-  }
   return device_tensor_shape;
 }
 
 template <>
 DataType TensorT<DEVICE_TYPE_ASCEND>::GetDeviceTensorDataType() const {
-  aclDataType data_type;
-  ACL_CHECK(aclGetDataType(device_tensor_, &data_type));
-  switch (data_type) {
-    case aclDataType::ACL_BF16:
-      return DataType::TYPE_BF16;
-    case aclDataType::ACL_BOOL:
-      return DataType::TYPE_BOOL;
-    case aclDataType::ACL_UINT8:
-      return DataType::TYPE_UINT8;
-    case aclDataType::ACL_UINT16:
-      return DataType::TYPE_UINT16;
-    case aclDataType::ACL_UINT32:
-      return DataType::TYPE_UINT32;
-    case aclDataType::ACL_UINT64:
-      return DataType::TYPE_UINT64;
-    case aclDataType::ACL_INT8:
-      return DataType::TYPE_INT8;
-    case aclDataType::ACL_INT16:
-      return DataType::TYPE_INT16;
-    case aclDataType::ACL_INT32:
-      return DataType::TYPE_INT32;
-    case aclDataType::ACL_INT64:
-      return DataType::TYPE_INT64;
-    case aclDataType::ACL_FLOAT16:
-      return DataType::TYPE_FP16;
-    case aclDataType::ACL_FLOAT:
-      return DataType::TYPE_FP32;
-    case aclDataType::ACL_DOUBLE:
-      return DataType::TYPE_FP64;
-    default:
-      return DataType::TYPE_INVALID;
-  }
+  return DataType::TYPE_INVALID;
 }
 
 template <>

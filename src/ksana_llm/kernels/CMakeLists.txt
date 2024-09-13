@@ -32,8 +32,6 @@ if(WITH_ACL)
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/ascend/*.cpp)
   list(FILTER ascend_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
   list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS}
-    llm_kernels_ascend_pointwise
-    llm_kernels_ascend_transpose
     llm_kernels_ascend_permute
     llm_kernels_ascend_embedding
     llm_kernels_ascend_argmax)

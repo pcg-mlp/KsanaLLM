@@ -62,10 +62,8 @@ class Slice2 {
   std::unordered_map<size_t, int> tiling_cores_;
 };
 
-#ifdef ENABLE_ACL_ATB
 void CreateSplitQKVATBOperation(const uint32_t total_token_num, const uint32_t head_size, const uint32_t kv_head_size,
                                 const uint32_t head_dim, atb::Operation** operation, const std::string& op_name = "");
-#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

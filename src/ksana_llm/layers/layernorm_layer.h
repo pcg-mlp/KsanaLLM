@@ -4,6 +4,10 @@
 #pragma once
 
 #include "ksana_llm/layers/base_layer.h"
+#ifdef ENABLE_ACL
+#  include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
+#  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
+#endif
 
 namespace ksana_llm {
 
@@ -22,6 +26,10 @@ class LayernormLayer : public BaseLayer {
   // NOTE(karlluo): only need by ascend
   int workspace_block_id_{-1};
   size_t workspace_size_{0ul};
+
+#ifdef ENABLE_ACL
+  llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
+#endif  // ENABLE_ACL
 };
 
 }  // namespace ksana_llm

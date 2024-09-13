@@ -21,9 +21,9 @@ void BaseAllocator::PreAllocateBlocks() {
 #ifdef ENABLE_ACL_ATB
   if (allocator_config_.device == MEMORY_DEVICE) {
     is_continuous_mode = true;
-    // NOTE(karlluo): allocator_config_.block_size shape: 2 x layer_num x block_size x head_dim x head_size x 2 x
+    // NOTE(karlluo): allocator_config_.block_size shape: 2 x layer_num x block_size x head_dim x head_size x
     // sizeof(DTYPE)
-    AllocateMemory(&base_mem_ptr, allocator_config_.blocks_num * allocator_config_.block_size);
+    AllocateMemory(&base_mem_ptr, (allocator_config_.blocks_num + 1) * allocator_config_.block_size);
     blocks_base_ptr = base_mem_ptr;
   }
 #endif
@@ -33,6 +33,7 @@ void BaseAllocator::PreAllocateBlocks() {
       memory_ptr = base_mem_ptr + i * allocator_config_.block_size;
       if (i == 0) {
         block_base_id = block_id;
+        KLLM_LOG_WARNING << "block_base_id: " << block_base_id;
       }
     } else {
       AllocateMemory(&memory_ptr, allocator_config_.block_size);
@@ -157,6 +158,6 @@ void* BaseAllocator::GetBlocksBasePtr() { return blocks_base_ptr; }
 
 const AllocatorConfig& BaseAllocator::GetAllocatorConfig() { return allocator_config_; }
 
-int BaseAllocator::GetBlocksBaseId() {return block_base_id;}
+int BaseAllocator::GetBlocksBaseId() { return block_base_id; }
 
 }  // namespace ksana_llm

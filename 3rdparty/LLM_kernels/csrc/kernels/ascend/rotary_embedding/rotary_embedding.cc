@@ -13,7 +13,7 @@ namespace llm_kernels {
 namespace ascend {
 
 template <typename T>
-void RotaryEmbeddingAscendC<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, const int max_position_embeddings,
+void AscendCRotaryEmbedding<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, const int max_position_embeddings,
                                           const float base, const int head_size, const int num_heads,
                                           const int num_kv_heads, const int stride_size, const bool is_neox,
                                           aclrtStream& stream, const RotaryEmbeddingType rotary_embedding_type,
@@ -81,19 +81,19 @@ void RotaryEmbeddingAscendC<T>::SetConfig(T* cos_sin_cache, const int rotary_dim
   params_.tiling_config.head_size = params_.head_size;
 }
 
-template void RotaryEmbeddingAscendC<float>::SetConfig(float* cos_sin_cache, const int rotary_dim,
+template void AscendCRotaryEmbedding<float>::SetConfig(float* cos_sin_cache, const int rotary_dim,
                                                        const int max_position_embeddings, const float base,
                                                        const int head_size, const int num_heads, const int num_kv_heads,
                                                        const int stride_size, const bool is_neox, aclrtStream& stream,
                                                        const RotaryEmbeddingType rotary_embedding_type,
                                                        const float scaling_factor);
-template void RotaryEmbeddingAscendC<aclFloat16>::SetConfig(
+template void AscendCRotaryEmbedding<aclFloat16>::SetConfig(
     aclFloat16* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
     aclrtStream& stream, const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor);
 
 template <typename T>
-void RotaryEmbeddingAscendC<T>::SetInput(int64_t* positions,  // [num_tokens]
+void AscendCRotaryEmbedding<T>::SetInput(int64_t* positions,  // [num_tokens]
                                          T* query,            // [num_tokens, num_heads * head_size]
                                          T* key,              // [num_tokens, num_kv_heads * head_size]
                                          int num_tokens, aclrtStream& stream) {
@@ -106,13 +106,13 @@ void RotaryEmbeddingAscendC<T>::SetInput(int64_t* positions,  // [num_tokens]
   params_.tiling_config.seq_len = num_tokens;
 }
 
-template void RotaryEmbeddingAscendC<float>::SetInput(int64_t* positions, float* query, float* key, int num_tokens,
+template void AscendCRotaryEmbedding<float>::SetInput(int64_t* positions, float* query, float* key, int num_tokens,
                                                       aclrtStream& stream);
-template void RotaryEmbeddingAscendC<aclFloat16>::SetInput(int64_t* positions, aclFloat16* query, aclFloat16* key,
+template void AscendCRotaryEmbedding<aclFloat16>::SetInput(int64_t* positions, aclFloat16* query, aclFloat16* key,
                                                            int num_tokens, aclrtStream& stream);
 
 template <typename T>
-void RotaryEmbeddingAscendC<T>::Forward() {
+void AscendCRotaryEmbedding<T>::Forward() {
   RotaryEmbeddingTilingConfig* buf = &(params_.tiling_config);
   ACL_CHECK_RET(aclrtMemcpyAsync(tiling_config_device_ptr, sizeof(RotaryEmbeddingTilingConfig), buf,
                                  sizeof(RotaryEmbeddingTilingConfig), ACL_MEMCPY_HOST_TO_DEVICE, params_.stream));
@@ -121,14 +121,13 @@ void RotaryEmbeddingAscendC<T>::Forward() {
     ACL_CHECK_RET(ACLRT_LAUNCH_KERNEL(InvokeRotaryEmbeddingHalfKernel)(
         params_.num_tokens_, params_.stream, params_.positions, params_.query_, params_.key_, params_.cos_sin_cache,
         tiling_config_device_ptr, params_.query_, params_.key_));
-  } else if (std::is_same<T, float>::value) {
   } else {
-    throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");
+    throw std::invalid_argument("Invalid rope compute type, only support float16.");
   }
 }
 
-template void RotaryEmbeddingAscendC<float>::Forward();
-template void RotaryEmbeddingAscendC<aclFloat16>::Forward();
+template void AscendCRotaryEmbedding<float>::Forward();
+template void AscendCRotaryEmbedding<aclFloat16>::Forward();
 
 }  // namespace ascend
 }  // namespace llm_kernels

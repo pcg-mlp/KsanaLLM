@@ -4,9 +4,9 @@
 
 #pragma once
 
-#ifdef ENABLE_ACL_ATB
+#include "atb/atb_infer.h"
 
-#  include "atb/atb_infer.h"
+#include "common.h"
 
 namespace llm_kernels {
 namespace utils {
@@ -51,5 +51,3 @@ class ATBOperationExecutor {
 
 }  // namespace utils
 }  // namespace llm_kernels
-
-#endif

@@ -32,10 +32,8 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   PositionEncoding position_encoding = std::any_cast<const PositionEncoding>(parameters[parameter_index++]);
   void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
   RoPEScalingFactor rope_scaling_factor_config = std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
-#ifdef ENABLE_ACL_ATB
   max_batch_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   is_context_stage_ = std::any_cast<const bool>(parameters[parameter_index++]);
-#endif
 
   // TODO(zhongzhicao): The cast should be removed after implementing ROPE.
   // Cast the unused variables to void to suppress the -Wunused-value warnings.
@@ -62,7 +60,6 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
     ascend_paged_attn_->Initialize(num_heads_, num_kv_heads_, head_size_, layer_num_, layer_index_, block_token_num_,
                                    context->GetComputeStreams()[rank].Get(), scaling_type, scaling_factor);
   }
-
   return Status();
 }
 

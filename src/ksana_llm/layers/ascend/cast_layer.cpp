@@ -4,8 +4,8 @@
 
 #include "ksana_llm/layers/cast_layer.h"
 
-#include "csrc/kernels/ascend/cast/cast.h"
-#include "csrc/kernels/ascend/pointwise/pointwise.h"
+#include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
+#include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
@@ -13,31 +13,21 @@ namespace ksana_llm {
 
 template <typename SRC_DTYPE>
 Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  GetBlockManager()->SetDeviceId(rank_);
-  std::vector<int64_t> input_shape(input_tensors[0].shape.size(), 0);
-  std::copy(input_tensors[0].shape.begin(), input_tensors[0].shape.end(), input_shape.begin());
-
-  aclTensor* output_device_tensor_ptr = nullptr;
-  void* output_buffer_space_ptr = output_tensors[0].GetPtr<void>();
-  void* input_buffer_space_ptr = input_tensors[0].GetPtr<void>();
-  if (input_tensors.size() > 1) {
-    // When the number of input_tensors is greater than 1, perform a cast operation with an offset.
-    // Set output_offset to the value of the first dimension of input_tensors[1].
-    size_t output_offset = input_tensors[1].shape[0];
-    output_buffer_space_ptr += output_offset;
-  }
-  llm_kernels::utils::CreateAclTensorWithData(input_shape, &(output_buffer_space_ptr), aclDataType::ACL_FLOAT,
-                                              aclFormat::ACL_FORMAT_ND, &output_device_tensor_ptr);
-
-  uint32_t seq_len = input_shape.front();
-  uint32_t hidden_units_num = input_shape.back();
-  // TODO(zakwang): Support Stride.
-  llm_kernels::ascend::InvokeCast<SRC_DTYPE, float>(
-      reinterpret_cast<SRC_DTYPE*>(input_buffer_space_ptr), reinterpret_cast<float*>(output_buffer_space_ptr), seq_len,
-      hidden_units_num, context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = DataType::TYPE_FP32;
-  output_tensors[0].ResetDeviceTensor(output_device_tensor_ptr);
+  atb::infer::ElewiseParam param;
+  param.elewiseType = atb::infer::ElewiseParam::ElewiseType::ELEWISE_CAST;
+  param.outTensorType = static_cast<aclDataType>(output_tensors[0].dtype);
+  llm_kernels::utils::ATBOperationExecutor atb_op_executor;
+  atb_op_executor.Init(rank_, param);
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+      ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+  atb_op_executor.ResetVariantPack();
+  atb_op_executor.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
+                                 static_cast<aclDataType>(input_tensors[0].dtype));
+  atb_op_executor.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
+                                  static_cast<aclDataType>(output_tensors[0].dtype));
+  atb_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
 template class CastLayer<float>;

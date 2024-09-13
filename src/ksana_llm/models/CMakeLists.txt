@@ -17,6 +17,7 @@ list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "models_SRCS: ${models_SRCS}")
 
 set(kernels_nvidia_LIBS, "")
+set(kernels_ascend_LIBS, "")
 
 if(WITH_CUDA)
   list(APPEND kernels_nvidia_LIBS llm_kernels_nvidia_kernel_asymmetric_gemm)

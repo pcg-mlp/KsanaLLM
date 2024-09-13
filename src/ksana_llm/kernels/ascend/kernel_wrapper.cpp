@@ -4,11 +4,14 @@
 
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
+#include "atb/infer_op_params.h"
+
+#include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
+#include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
 #include "csrc/kernels/ascend/argmax/argmax.h"
 #include "csrc/kernels/ascend/embedding/embedding.h"
 #include "csrc/kernels/ascend/permute/permute.h"
-#include "csrc/kernels/ascend/pointwise/pointwise.h"
-#include "csrc/kernels/ascend/transpose/transpose.h"
+#include "csrc/utils/ascend/common.h"
 
 #include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
@@ -50,49 +53,64 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
 Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<size_t>& permutation, Stream& stream,
                void* workspace_ptr) {
   std::vector<size_t> input_shape = input_tensor.shape;
-  aclTensor* input_acl_tensor = input_tensor.GetDeviceTensor();
-  void* output_buf_ptr = output_tensor.GetPtr<void>();
-  std::vector<int64_t> dims(permutation.size());
+  std::vector<size_t> output_shape = input_tensor.shape;
+  atb::infer::TransposeParam param;
   for (size_t i = 0; i < permutation.size(); ++i) {
-    dims[i] = static_cast<int64_t>(permutation[i]);
+    param.perm.push_back(static_cast<int32_t>(permutation[i]));
+    output_shape[i] = input_shape[permutation[i]];
   }
-  aclTensor* permute_output = nullptr;
-  void* input_acl_tensor_buf_ptr = input_tensor.GetPtr<void>();
-  llm_kernels::ascend::Permute(input_acl_tensor, &input_acl_tensor_buf_ptr, &permute_output, dims, stream.Get(),
-                               GetWorkSpaceFunc());
-  int64_t* output_t_shape_ptr = nullptr;
-  std::vector<int64_t> output_shape(input_shape.size(), 0);
-  uint64_t output_t_dims_num = 0;
-  ACL_CHECK_RET(aclGetViewShape(permute_output, &output_t_shape_ptr, &output_t_dims_num));
-  for (uint64_t i = 0; i < output_t_dims_num; ++i) {
-    output_shape[i] = output_t_shape_ptr[i];
-    output_tensor.shape[i] = static_cast<size_t>(output_shape[i]);
-  }
-  aclDataType output_dtype;
-  ACL_CHECK(aclGetDataType(input_acl_tensor, &output_dtype));
-  aclTensor* output_acl_tensor = nullptr;
-  llm_kernels::utils::CreateAclTensorWithData(output_shape, &output_buf_ptr, output_dtype, aclFormat::ACL_FORMAT_ND,
-                                              &output_acl_tensor);
-  llm_kernels::ascend::Copy(permute_output, &output_acl_tensor, stream.Get(), llm_kernels::utils::GetTestWorkSpaceFunc);
-  output_tensor.ResetDeviceTensor(output_acl_tensor);
-  ACL_CHECK(aclDestroyTensor(permute_output));
+  llm_kernels::utils::ATBOperationExecutor atb_op_executor;
+  int32_t rank = GetBlockManager()->GetDeviceId();
+  atb_op_executor.Init(rank, param);
+  output_tensor.dtype = input_tensor.dtype;
+  output_tensor.shape = output_shape;
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
+  atb_op_executor.ResetVariantPack();
+  atb_op_executor.SetInputTensor(input_tensor.GetPtr<void>(), input_tensor.shape,
+                                 static_cast<aclDataType>(input_tensor.dtype));
+  atb_op_executor.SetOutputTensor(output_tensor.GetPtr<void>(), output_tensor.shape,
+                                  static_cast<aclDataType>(output_tensor.dtype));
+  atb_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
+  StreamSynchronize(stream);
   return Status();
 }
 
 template <typename T>
 Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
-              uint32_t* result, Stream& stream, void* workspace_ptr) {
+              uint32_t* result, Stream& stream, void* buffer_ptr) {
   if (ids_offset != nullptr) {
     KLLM_THROW("Not supported ids offset.");
   }
-  llm_kernels::ascend::InvokeArgmax<T>(input, ids_offset, batch_size, vocab_size, result, stream.Get(),
-                                       llm_kernels::utils::GetTestWorkSpaceFunc);
+  // TODO(karlluo): support topk > 1 and toppp
+  const uint32_t TOPK_NUM = 1;
+  if (std::is_same<T, float>::value) {
+    llm_kernels::ascend::InvokeArgmax<T>(input, ids_offset, batch_size, vocab_size, result, stream.Get(),
+                                         llm_kernels::utils::GetTestWorkSpaceFunc);
+  } else if (std::is_same<T, float16>::value && buffer_ptr != nullptr) {
+    llm_kernels::utils::ATBOperationExecutor* atb_op_executor_ptr =
+        reinterpret_cast<llm_kernels::utils::ATBOperationExecutor*>(buffer_ptr);
+    void* output_buf_ptr;
+    GetWorkSpaceFunc()(batch_size * vocab_size * sizeof(T), &output_buf_ptr);
+    int32_t rank = GetBlockManager()->GetDeviceId();
+    reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
+    atb_op_executor_ptr->ResetVariantPack();
+    atb_op_executor_ptr->SetInputTensor(reinterpret_cast<void*>(const_cast<T*>(input)),
+                                        {static_cast<uint32_t>(batch_size), static_cast<uint32_t>(vocab_size)},
+                                        static_cast<aclDataType>(TYPE_FP32));
+    atb_op_executor_ptr->SetOutputTensor(output_buf_ptr, {static_cast<uint32_t>(batch_size), TOPK_NUM},
+                                         static_cast<aclDataType>(TYPE_FP32));
+    atb_op_executor_ptr->SetOutputTensor(result, {static_cast<uint32_t>(batch_size), TOPK_NUM},
+                                         static_cast<aclDataType>(TYPE_UINT32));
+    atb_op_executor_ptr->Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
+  } else {
+    KLLM_THROW("Not supported argmax data type.");
+  }
   return Status();
 }
 
 #define INSTANTIATE_ARG_MAX(T)                                                                 \
   template Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, \
-                         const int32_t vocab_size, uint32_t* result, Stream& stream, void* workspace_ptr);
+                         const int32_t vocab_size, uint32_t* result, Stream& stream, void* buffer_ptr);
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(float16);

@@ -43,7 +43,7 @@ struct RotaryEmbeddingParam {
 };
 
 template <typename T>
-class RotaryEmbeddingAscendC {
+class AscendCRotaryEmbedding {
  public:
   void SetConfig(T* cos_sin_cache,  // temp buffer, [max_position_embeddings, rotary_dim]
                  const int rotary_dim, const int max_position_embeddings, const float base, const int head_size,
@@ -58,7 +58,7 @@ class RotaryEmbeddingAscendC {
 
   void Forward();
 
-  ~RotaryEmbeddingAscendC() {
+  ~AscendCRotaryEmbedding() {
     if (tiling_config_device_ptr != nullptr) {
       ACL_CHECK_RET(aclrtFree(tiling_config_device_ptr));
       tiling_config_device_ptr = nullptr;

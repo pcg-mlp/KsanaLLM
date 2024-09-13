@@ -19,6 +19,8 @@ Status EmbLookupLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   if (parameter_index < parameters.size()) {
     pos_weight_ = std::any_cast<void*>(parameters[parameter_index++]);
   }
+  atb::infer::GatherParam gather_param;
+  atb_op_executor_.Init(rank, gather_param);
   return Status();
 }
 
@@ -33,37 +35,43 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   //   4: pos
   // output_tensors:
   //   0: emb_output
-  SetDevice(rank_);
-
   int total_seq_len = input_tensors[0].shape[0];
   int hidden_units = input_tensors[3].shape[1];
+  output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
+  output_tensors[0].dtype = input_tensors[3].dtype;
 
   Tensor input_ids = input_tensors[0];
   Tensor embedding_table = input_tensors[3];
 
-  aclTensor* input_tensor = input_ids.ResetDeviceTensor(DataType::TYPE_INT32, {static_cast<int64_t>(total_seq_len)});
-
-  aclTensor* embedding_tensor = embedding_table.ResetDeviceTensor(
-      DataType::TYPE_FP16,
-      {static_cast<int64_t>(embedding_table.shape[0]), static_cast<int64_t>(embedding_table.shape[1])});
-
-  aclTensor* output_tensor = output_tensors[0].ResetDeviceTensor(
-      DataType::TYPE_FP16, {static_cast<int64_t>(total_seq_len), static_cast<int64_t>(hidden_units)});
-
   if (input_tensors.size() > 4) {
     Tensor position_table = input_tensors[4];
+    aclTensor* input_tensor = input_ids.ResetDeviceTensor(DataType::TYPE_INT32, {static_cast<int64_t>(total_seq_len)});
+
+    aclTensor* embedding_tensor = embedding_table.ResetDeviceTensor(
+        DataType::TYPE_FP16,
+        {static_cast<int64_t>(embedding_table.shape[0]), static_cast<int64_t>(embedding_table.shape[1])});
+
+    aclTensor* output_tensor = output_tensors[0].ResetDeviceTensor(
+        DataType::TYPE_FP16, {static_cast<int64_t>(total_seq_len), static_cast<int64_t>(hidden_units)});
+
     aclTensor* position_tensor = position_table.ResetDeviceTensor(
         DataType::TYPE_FP16,
         {static_cast<int64_t>(position_table.shape[0]), static_cast<int64_t>(position_table.shape[1])});
     LookupEmbedding(input_tensor, position_tensor, position_tensor, output_tensor,
                     context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
   } else {
-    LookupEmbedding(input_tensor, embedding_tensor, nullptr, output_tensor, context_->GetComputeStreams()[rank_].Get(),
-                    GetWorkSpaceFunc());
+    reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+        ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+    atb_op_executor_.ResetVariantPack();
+    atb_op_executor_.SetInputTensor(embedding_table.GetPtr<void>(), embedding_table.shape,
+                                    static_cast<aclDataType>(embedding_table.dtype));
+    atb_op_executor_.SetInputTensor(input_ids.GetPtr<void>(), input_ids.shape,
+                                    static_cast<aclDataType>(input_ids.dtype));
+    atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
+                                     static_cast<aclDataType>(output_tensors[0].dtype));
+    atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   }
 
-  output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
-  output_tensors[0].dtype = input_tensors[3].dtype;
   return Status();
 }
 template class EmbLookupLayer<float>;
