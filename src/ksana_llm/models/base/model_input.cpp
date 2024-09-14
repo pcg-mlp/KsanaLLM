@@ -154,7 +154,14 @@ ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(kv_list, rank_));
 
 #ifdef ENABLE_ACL
-  // STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_ptrs_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(seq_len_host, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(k_cache_blocks_base, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(v_cache_blocks_base, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(layers_slot_mapping, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(layers_block_table, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(atb_attention_attr, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(last_token_index_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_ptrs_tensor, rank_));
 #endif
 
   EventDestroy(kvcache_offset_event);
@@ -209,10 +216,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
               kv_cache_offset_list.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   KLLM_LOG_DEBUG << " Total Block Num " << context_total_block_num + decode_total_block_num;
 
-#ifdef ENABLE_ACL_ATB
-  PrepareATBKVCache(forward_reqs, context_num > 0);
-#endif
-
   input_offset_list_uint64 = {0};
   input_prefix_list_uint64.resize(context_num + 1, 0ul);
   input_ids_cpu.clear();
@@ -223,6 +226,11 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareInputRefit(forward_reqs);
   PrepareDecodePositionIds(forward_reqs);
   PrepareDecodeInputIds(forward_reqs);
+
+#ifdef ENABLE_ACL
+  // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
+  PrepareATBKVCache(forward_reqs, context_num > 0);
+#endif
 }
 
 void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx, size_t end_idx,
