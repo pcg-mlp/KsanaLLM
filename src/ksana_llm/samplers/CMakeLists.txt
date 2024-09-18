@@ -12,10 +12,15 @@ list(FILTER samplers_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "samplers_SRCS: ${samplers_SRCS}")
 
 set(samplers_nvidia_LIBS "")
+set(samplers_ascend_LIBS "")
 
 if(WITH_CUDA)
   list(APPEND samplers_nvidia_LIBS cudart llm_kernels_nvidia_kernel_greedy)
 endif()
 
+if(WITH_ACL)
+  list(APPEND samplers_ascend_LIBS ${ACL_SHARED_LIBS} ${ACL_SHARED_LIBS})
+endif()
+
 add_library(samplers STATIC ${samplers_SRCS})
-target_link_libraries(samplers PUBLIC block_manager utils ${samplers_nvidia_LIBS})
+target_link_libraries(samplers PUBLIC block_manager utils ${samplers_nvidia_LIBS} ${samplers_ascend_LIBS})

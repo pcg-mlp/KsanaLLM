@@ -6,8 +6,7 @@
 #include "ksana_llm/samplers/base/base_sampling.h"
 
 #ifdef ENABLE_ACL
-#  include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
-#  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
+#  include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 #endif
 
 namespace ksana_llm {
@@ -28,7 +27,8 @@ class TopkSampling : public BaseSampling {
   size_t workspace_size_{0ul};
 
 #ifdef ENABLE_ACL
-  llm_kernels::utils::ATBOperationExecutor atb_topk_op_executor_;
+  ArgMaxATBExecutor<float> atb_executor_;
+  void* atb_executors_ptr_ = nullptr;
 #endif  // ENABLE_ACL
 };
 

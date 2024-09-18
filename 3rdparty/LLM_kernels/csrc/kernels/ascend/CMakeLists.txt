@@ -85,6 +85,7 @@ add_subdirectory(permute)
 add_subdirectory(paged_attention)
 add_subdirectory(slice)
 add_subdirectory(rotary_embedding)
+add_subdirectory(atb_plugin_operations)
 
 string(STRIP "${llm_kernels_ascend_libs}" llm_kernels_ascend_libs)
 string(REGEX REPLACE " " ";" llm_kernels_ascend_libs "${llm_kernels_ascend_libs}")

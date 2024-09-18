@@ -6,7 +6,6 @@
 
 #include "atb/infer_op_params.h"
 
-#include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
 #include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
 #include "csrc/kernels/ascend/argmax/argmax.h"
 #include "csrc/kernels/ascend/embedding/embedding.h"
@@ -76,32 +75,55 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
 }
 
 template <typename T>
+Status ArgMaxATBExecutor<T>::Init(const int rank, const size_t max_batch_size) {
+  llm_kernels::ascend::ArgmaxParam argmax_param;
+  argmax_param.dim = 1;
+  atb::Operation* argmax_op = new llm_kernels::ascend::ArgmaxOperation("argmax_exec_op_1", argmax_param);
+
+  llm_kernels::ascend::CastParam cast_param;
+  cast_param.dataType = aclDataType::ACL_UINT32;
+  atb::Operation* cast_op = new llm_kernels::ascend::CastOperation("argmax_exec_op_2", cast_param);
+
+  atb_argmax_op_executor_.SetOperation(argmax_op);
+  atb_cast_op_executor_.SetOperation(cast_op);
+  STATUS_CHECK_FAILURE(CreateTensor(internal_tensor_, {max_batch_size}, DataType::TYPE_INT32, rank, MEMORY_DEVICE));
+  return Status();
+}
+
+template <typename T>
+Status ArgMaxATBExecutor<T>::Run(const int rank, const T* input, const uint32_t* ids_offset, const int32_t batch_size,
+                                 const int32_t vocab_size, uint32_t* result, Stream& stream) {
+  // NOTE(karlluo): get argmax and output int32 type
+  atb_argmax_op_executor_.ResetVariantPack();
+  atb_argmax_op_executor_.SetInputTensor(reinterpret_cast<void*>(const_cast<T*>(input)),
+                                         {static_cast<uint32_t>(batch_size), static_cast<uint32_t>(vocab_size)},
+                                         static_cast<aclDataType>(TYPE_FP32));
+  atb_argmax_op_executor_.SetOutputTensor(internal_tensor_.GetPtr<void>(), {static_cast<uint32_t>(batch_size)},
+                                          static_cast<aclDataType>(TYPE_INT32));
+  atb_argmax_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
+  // NOTE(karlluo): cast int32 to uint32 type
+  atb_cast_op_executor_.ResetVariantPack();
+  atb_cast_op_executor_.SetInputTensor(internal_tensor_.GetPtr<void>(), {static_cast<uint32_t>(batch_size)},
+                                       static_cast<aclDataType>(TYPE_INT32));
+  atb_cast_op_executor_.SetOutputTensor(result, {static_cast<uint32_t>(batch_size)},
+                                        static_cast<aclDataType>(TYPE_UINT32));
+  atb_cast_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
+  return Status();
+}
+
+template class ArgMaxATBExecutor<float>;
+
+template <typename T>
 Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
               uint32_t* result, Stream& stream, void* buffer_ptr) {
   if (ids_offset != nullptr) {
     KLLM_THROW("Not supported ids offset.");
   }
-  // TODO(karlluo): support topk > 1 and toppp
-  const uint32_t TOPK_NUM = 1;
   if (std::is_same<T, float>::value) {
-    llm_kernels::ascend::InvokeArgmax<T>(input, ids_offset, batch_size, vocab_size, result, stream.Get(),
-                                         llm_kernels::utils::GetTestWorkSpaceFunc);
-  } else if (std::is_same<T, float16>::value && buffer_ptr != nullptr) {
-    llm_kernels::utils::ATBOperationExecutor* atb_op_executor_ptr =
-        reinterpret_cast<llm_kernels::utils::ATBOperationExecutor*>(buffer_ptr);
-    void* output_buf_ptr;
-    GetWorkSpaceFunc()(batch_size * vocab_size * sizeof(T), &output_buf_ptr);
     int32_t rank = GetBlockManager()->GetDeviceId();
     reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
-    atb_op_executor_ptr->ResetVariantPack();
-    atb_op_executor_ptr->SetInputTensor(reinterpret_cast<void*>(const_cast<T*>(input)),
-                                        {static_cast<uint32_t>(batch_size), static_cast<uint32_t>(vocab_size)},
-                                        static_cast<aclDataType>(TYPE_FP32));
-    atb_op_executor_ptr->SetOutputTensor(output_buf_ptr, {static_cast<uint32_t>(batch_size), TOPK_NUM},
-                                         static_cast<aclDataType>(TYPE_FP32));
-    atb_op_executor_ptr->SetOutputTensor(result, {static_cast<uint32_t>(batch_size), TOPK_NUM},
-                                         static_cast<aclDataType>(TYPE_UINT32));
-    atb_op_executor_ptr->Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
+    ArgMaxATBExecutor<T>* arg_max_atb_executor_ptr = reinterpret_cast<ArgMaxATBExecutor<T>*>(buffer_ptr);
+    arg_max_atb_executor_ptr->Run(rank, input, ids_offset, batch_size, vocab_size, result, stream);
   } else {
     KLLM_THROW("Not supported argmax data type.");
   }

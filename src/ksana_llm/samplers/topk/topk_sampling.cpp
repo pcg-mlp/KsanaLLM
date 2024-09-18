@@ -38,15 +38,11 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandSta
 
   CUDA_CHECK_LAST_ERROR(tensorrt_llm::kernels::invokeCurandBatchInitialize(
       device_curandstates, nullptr, max_batch_size, static_cast<uint64_t*>(workspace_ + workspace_size_), 0));
-#else
+#elif defined(ENABLE_ACL)
   // TODO(karlluo): support topk > 1 and toppp
-  const int32_t TOPK_NUM = 1;
   int32_t rank = GetBlockManager()->GetDeviceId();
-  // atb op for argmax(topk = 1)
-  atb::infer::SortParam sort_param;
-  sort_param.num.resize(1);
-  sort_param.num[0] = TOPK_NUM;
-  atb_topk_op_executor_.Init(rank, sort_param);
+  atb_executor_.Init(rank, max_batch_size);
+  atb_executors_ptr_ = &atb_executor_;
 #endif
 }
 
@@ -61,8 +57,13 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
                                  SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
                                  Stream& stream) {
   if (sampling_devide_parameter.device_topKs == nullptr) {
+#ifdef ENABLE_CUDA
     ArgMax(logits, offsets, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token,
            stream);
+#elif defined(ENABLE_ACL)
+    ArgMax(logits, offsets, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token,
+           stream, atb_executors_ptr_);
+#endif
   } else {
 #ifdef ENABLE_CUDA
     bool logitHasProbs = false;

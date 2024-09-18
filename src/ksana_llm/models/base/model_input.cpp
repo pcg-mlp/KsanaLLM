@@ -433,9 +433,11 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
         }
       }
       for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+        int32_t block_id =
+            forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
+                                                                     model_config_.block_token_num];
         layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + f_req_idx] =
-            (forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].back() + layer_idx) *
-                model_config_.block_token_num +
+            (block_id + layer_idx) * model_config_.block_token_num +
             ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % model_config_.block_token_num);
       }
     }

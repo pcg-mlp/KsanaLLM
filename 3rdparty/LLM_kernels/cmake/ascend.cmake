@@ -42,10 +42,6 @@ else()
   message(FATAL_ERROR "Can not find CANN version file in ${ASCEND_PATH}/version.cfg, please check CANN install and config")
 endif()
 
-if("${CANN_VER}" STREQUAL "7.3.0.1.231:8.0.RC2")
-  # target_include_directories(device_intf_pub INTERFACE /usr/include/c++/12 /usr/include/c++/12/x86_64-TencentOS-linux)
-endif()
-
 # get ATB version
 set(ATB_VER "")
 
