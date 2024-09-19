@@ -2,20 +2,18 @@
 #
 # ==============================================================================
 
-import asyncio
-import argparse
-import json
-import time
 import argparse
 import asyncio
-import json
-import random
 import csv
+import random
+import time
 from dataclasses import dataclass
 from typing import AsyncGenerator, List, Tuple, Union
 
 import aiohttp
 import numpy as np
+import orjson
+import uvloop
 from tqdm.asyncio import tqdm
 # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
 from transformers import AutoTokenizer 
@@ -279,12 +277,12 @@ def read_from_csv(csv_file, col_idx=0, remove_head=True):
     return [row[col_idx] for row in csv_reader]
 
 
-async def generate_prompt_async(
-    input_requests: List[str],
+async def generate_req_data_async(
+    input_requests: List[Tuple[str, bytes]],
     request_rate: float,
     concurrency: int,
     random: bool,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[int, Tuple[str, bytes]]:
     input_requests = enumerate(input_requests)
     # Number of requests already sent at the same time
     request_num = 0
@@ -327,12 +325,22 @@ async def generate_prompt_async(
         await asyncio.sleep(interval)
 
 
-async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str,
-                             req_id: int, result_list: List, pbar: tqdm,
-                             tokenizer: Union[None, AutoTokenizer]):
-    headers = {"User-Agent": "Benchmark Client"}
+def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
+                           args: argparse.Namespace) -> Tuple[str, bytes]:
+
     if not args.stop_token_ids:
         args.stop_token_ids = DEFAULT_STOP_TOKEN_IDS.get(args.model_type, [])
+    if args.chat_template:
+        # If chat template is enabled, apply the chat template to the prompt
+        prompt = tokenizer.apply_chat_template(
+            orjson.loads(prompt),
+            tokenize=False,
+            add_generation_prompt=True
+        )
+    else:
+        # If chat template is not enabled,
+        # replace the placeholder in the prompt affix dictionary
+        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
     if args.backend == "ksana":
         data = {
             "prompt": prompt,
@@ -392,6 +400,14 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
             "stream": args.stream,
             "stop_token_ids": args.stop_token_ids
         }
+    return prompt, orjson.dumps(data)
+
+
+async def send_request_async(args: argparse.Namespace, prompt: int,
+                             req_data: bytes, api_url: str,
+                             req_id: int, result_list: List, pbar: tqdm,
+                             tokenizer: Union[None, AutoTokenizer], max_retries=3):
+    headers = {"User-Agent": "Benchmark Client"}
 
     # Set a timeout of 3 hours for the aiohttp client
     timeout = aiohttp.ClientTimeout(total=args.client_timeout)
@@ -403,10 +419,11 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
     # Create an asynchronous client session with the specified timeout
     async with aiohttp.ClientSession(timeout=timeout) as session:
         # Loop indefinitely until the request is successful
+        retries = 0
         while True:
             # Send a POST request to the API URL with the specified headers and data
             async with session.post(api_url, headers=headers,
-                                    json=data) as response:
+                                    data=req_data) as response:
                 # Store the last response chunk
                 last_chunk = b""
                 first_token_latency = 0.
@@ -418,10 +435,10 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
                     last_chunk += chunk.strip(b'\x00')
                     try:
                         if "server" in args.backend and args.stream:
-                            output = json.loads(last_chunk.decode("utf-8")[6:][:-2])
+                            output = orjson.loads(last_chunk.decode("utf-8")[6:][:-2])
                             server_stream_output += output["choices"][0]["delta"]["content"]
                         else:
-                            output = json.loads(last_chunk.decode("utf-8"))
+                            output = orjson.loads(last_chunk.decode("utf-8"))
                         # First token
                         if first_token_latency == 0.:
                             first_token_latency = timestamp - request_start_time
@@ -432,7 +449,7 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
                         most_recent_timestamp = timestamp
 
                         last_chunk = b''
-                    except json.JSONDecodeError:
+                    except orjson.JSONDecodeError:
                         continue
 
             # Record the end time of the request
@@ -440,8 +457,11 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
             # Decode the last chunk to UTF-8
 
             # If the response does not contain an "error" key, break out of the loop
-            if "error" not in output:
+            if (output is not None) and ("error" not in output):
                 break
+            retries += 1
+            if retries > max_retries:
+                raise Exception(f"The request(req_id = {req_id}) failed.")
 
     # Calculate the latency of the request
     request_latency = request_end_time - request_start_time
@@ -492,7 +512,7 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
 
     output_len = len(output_text)
     result_list[req_id] = output_text
-    print("", output_text)
+    print(f"req_id : {req_id}\n{output_text}")
     REQUEST_LATENCY.append(
         (len(prompt), output_len if output_len > 0 else 1, input_token_num,
          output_token_num, request_latency,
@@ -502,30 +522,23 @@ async def send_request_async(args: argparse.Namespace, prompt: str, api_url: str
 
 # Define an asynchronous function to benchmark the API
 async def benchmark_async(args: argparse.Namespace, api_url: str,
-                          inputs: List[str], tokenizer: Union[None, AutoTokenizer]):
+                          inputs: List[Tuple[str, bytes]], tokenizer: Union[None, AutoTokenizer]):
     # Initialize a list to store the asynchronous tasks
     tasks: List[asyncio.Task] = []
     # Create a progress bar with a total count equal to the number of inputs
     pbar = tqdm(total=len(inputs))
     # Initialize a result list with empty strings, one for each input
     result_list = [""] * len(inputs)
-    # Asynchronously generate prompts with the specified request rate
-    async for req_id, prompt in generate_prompt_async(inputs,
-                                                      args.request_rate,
-                                                      args.concurrency,
-                                                      args.random):
-        # Format the prompt using the affix dictionary for the specified model type
-        if args.chat_template:
-            prompt = tokenizer.apply_chat_template(
-                json.loads(prompt),
-                tokenize=False,
-                add_generation_prompt=True)
-        else:
-            prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
+    # Asynchronously generate req_datas with the specified request rate
+    async for req_id, (prompt, req_data) in generate_req_data_async(inputs,
+                                                                    args.request_rate,
+                                                                    args.concurrency,
+                                                                    args.random):
+
         # Create an asynchronous task to send the request
         task = asyncio.create_task(
-            send_request_async(args, prompt, api_url, req_id, result_list, pbar,
-                                tokenizer))
+            send_request_async(args, prompt, req_data, api_url, req_id, result_list, pbar,
+                               tokenizer))
         # Add the task to the list of tasks
         tasks.append(task)
     # Wait for all tasks to complete
@@ -537,26 +550,18 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
 
 
 async def benchmark_sync(args: argparse.Namespace, api_url: str,
-                         inputs: List[str], tokenizer: Union[None, AutoTokenizer]):
+                         inputs: List[Tuple[str, bytes]], tokenizer: Union[None, AutoTokenizer]):
     # Create a progress bar with a total count equal to the number of inputs
     pbar = tqdm(total=len(inputs))
     # Initialize a result list with empty strings, one for each input
     result_list = [""] * len(inputs)
-    # Asynchronously generate prompts with the specified request rate
-    async for req_id, prompt in generate_prompt_async(inputs, args.request_rate,
-                                                      args.concurrency,
-                                                      args.random):
-        if args.chat_template:
-            prompt = tokenizer.apply_chat_template(
-                json.loads(prompt),
-                tokenize=False,
-                add_generation_prompt=True)
-        else:
-            # Format the prompt using the affix dictionary for the specified model type
-            prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
+    # Asynchronously generate req_datas with the specified request rate
+    async for req_id, (prompt, req_data) in generate_req_data_async(inputs, args.request_rate,
+                                                                    args.concurrency,
+                                                                    args.random):
         # Await until last request finished
-        await send_request_async(args, prompt, api_url, req_id, result_list, pbar,
-                                  tokenizer)
+        await send_request_async(args, prompt, req_data, api_url, req_id, result_list, pbar,
+                                 tokenizer)
     # Close the progress bar
     pbar.close()
     # Return the result list
@@ -581,7 +586,7 @@ def adjust_list_length(inputs: List[str], args: argparse.Namespace):
         return inputs[:args.prompt_num]
 
 
-def run_benchmark(args: argparse.Namespace, api_url: str, inputs: List[str],
+def run_benchmark(args: argparse.Namespace, api_url: str, inputs: List[Tuple[str, bytes]],
                   tokenizer: Union[None, AutoTokenizer]):
     if args.mode == "async":
         # Run the asynchronous benchmark
@@ -657,7 +662,7 @@ def main(args: argparse.Namespace):
     if args.shuffle:
         random.shuffle(inputs)
     inputs = adjust_list_length(inputs, args)
-
+    inputs = [construct_request_data(tokenizer, input, args) for input in inputs]
     perf_result_list: List[Tuple[BenchmarkMetrics, BenchmarkStreamMetrics]] = []
     # requst_rate_list: List[Tuple[request_rate, avg_latency, avg_TTFT]]
     request_rate_list: List[Tuple[float, float, float]] = []
@@ -770,5 +775,6 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
+    uvloop.install()
     args = args_config()
     main(args)

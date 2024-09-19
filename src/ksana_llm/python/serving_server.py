@@ -3,19 +3,21 @@
 # ==============================================================================
 
 import argparse
-import json
-import os
 import asyncio
-from typing import Dict, Any, Optional
-from functools import partial
+import os
 from concurrent import futures
+from functools import partial
+from typing import Any, Dict, Optional
 
-import ksana_llm
-import yaml
+import orjson
 import uvicorn
+import uvloop
+import yaml
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from transformers import GenerationConfig, AutoTokenizer, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast
+
+import ksana_llm
 
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
@@ -91,7 +93,7 @@ def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
                 "logprobs": ksana_python_output.logprobs,
                 "input_token_ids": input_tokens
             }
-            yield (json.dumps(ret) + "\0").encode("utf-8")
+            yield orjson.dumps(ret) + b"\0"
 
     # Return a StreamingResponse object with the streamed results
     return stream_results()
@@ -255,7 +257,7 @@ async def generate(request: Request) -> Response:
     - prompt: the prompt to use for the generation.
     - stream: whether to stream the results or not.
     """
-    request_dict = await request.json()
+    request_dict = orjson.loads(await request.body())
     enable_streaming = request_dict.get("stream", True)
     response_data = await process_request(request_dict)
     if enable_streaming:
@@ -279,6 +281,7 @@ async def forward(request: Request):
 
 
 if __name__ == "__main__":
+    uvloop.install()
     args = args_config()
     if not args.tokenizer_dir:
         with open(args.config_file, "r") as yaml_file:

@@ -2,10 +2,11 @@
 #
 # ==============================================================================
 
-import multiprocessing
 import argparse
-import json
+import multiprocessing
 import time
+
+import orjson
 import requests
 
 
@@ -21,11 +22,11 @@ def args_config():
 
 
 def post_request(serv, data, queue=None):
-    resp = requests.post(serv, json=data, timeout=600000)
+    resp = requests.post(serv, data=orjson.dumps(data), timeout=600000)
     if queue is None:
-        return json.loads(resp.content)
+        return orjson.loads(resp.content)
     else:
-        queue.put(json.loads(resp.content))
+        queue.put(orjson.loads(resp.content))
 
 
 def show_response(data, result):

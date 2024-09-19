@@ -6,3 +6,5 @@ protobuf==4.24.4
 rouge_score==0.1.2
 aiohttp==3.9.5
 msgpack>=1.0.8
+orjson>=3.10.7
+uvloop>=0.20.0
