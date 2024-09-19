@@ -202,7 +202,7 @@ if __name__ == "__main__":
 
     # Log a message indicating the start of inference
     logging.info("start async infer")
-    # total_infer_time = infer_test(warmup_prompts, ref_result, True)
+    total_infer_time = infer_test(warmup_prompts, ref_result, True)
     total_infer_time = 0
     # Log a message indicating the end of inference
     logging.info("finish infer")

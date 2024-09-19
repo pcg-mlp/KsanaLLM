@@ -25,7 +25,7 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
   atb_op_executor.ResetVariantPack();
   atb_op_executor.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
                                  static_cast<aclDataType>(input_tensors[0].dtype));
-  atb_op_executor.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
+  atb_op_executor.SetOutputTensor(output_tensors[0].GetPtr<void>() + input_tensors[1].shape[0], output_tensors[0].shape,
                                   static_cast<aclDataType>(output_tensors[0].dtype));
   atb_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
