@@ -256,9 +256,12 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
          * to load the data from "weight_ptr" twice and store it in the corresponding device spaces of the two weights.
          */
         KLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
-        std::vector<size_t> embed_tokens_shape = weights_map_["model.embed_tokens.weight"].shape;
-        std::vector<size_t> lm_head_shape = {(size_t)(DivRoundUp(embed_tokens_shape[0], tensor_para_size_)),
-                                             embed_tokens_shape[1] * tensor_para_size_};
+        if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+          tensor_para_offset = rank_;
+        } else {
+          weight_shape[1] *= tensor_para_size_;
+        }
+        std::vector<size_t> lm_head_shape = {DivRoundUp(weight_shape[0], tensor_para_size_), weight_shape[1]};
         LoadRegularTensor(weight_ptr, "lm_head.weight", lm_head_shape, weight_data_type, /*transpose_first*/ false,
                           tensor_para_offset, weight_size);
       }
