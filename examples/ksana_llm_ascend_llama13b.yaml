@@ -20,28 +20,28 @@ setting:
     max_waiting_queue_len: 1200
     # 一个调度step处理的最大token个数，一次context decode视为多个token。
     max_step_tokens: 4096
-    # 每一步推理时的最大batch_size
+    # 每一步推理时的最大batch_size。如果要获得在910B2C上获得最佳性能，建议将此值改成256。
     max_batch_size: 128
-    # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
-    max_token_len: 2048
+    # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens。如果要获得在910B2C上获得最佳性能，建议将此值改越小越好。
+    max_token_len: 840
     # 单个请求可用blck小于该值触发换出
     swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入
-    swapin_block_threshold: 2.0
+    swapin_block_threshold: 0.5
     # 单个请求可用block大于该值拉起新任务
-    launch_block_threshold: 2.0
+    launch_block_threshold: 0.5
     # 是否开启自动前缀匹配
     enable_auto_prefix_cache: false
     # 用于执行异步swap的线程池大小
-    swap_threadpool_size: 8
+    swap_threadpool_size: 64
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
     preempt_mode: 0
   # 显存块相关配置
   block_manager:
-    # 单个block可处理的最大token个数
+    # 单个block可处理的最大token个数。如果要获得在910B2C上获得最佳性能，建议将此值改成128。
     block_token_num: 16
     # 保留的显存占比，单位为百分比。
-    reserved_device_memory_ratio: 0.1
+    reserved_device_memory_ratio: 0.02
     # Lora权重的显存占比
     lora_deivce_memory_ratio: 0.0
     # Lora权重在host上的预分配大小，相比device上的倍数
