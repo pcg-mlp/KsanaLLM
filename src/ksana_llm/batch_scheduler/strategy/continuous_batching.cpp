@@ -39,7 +39,6 @@ void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> 
   // Add request to the begining of waiting queue.
   req->kv_cache_blocks.clear();
   req->kv_cache_blocks.resize(tp_num_);
-  req->output_tokens = req->input_tokens;
   req->infer_stage = InferStage::STAGE_CONTEXT;
   req->step = 0;
 }
@@ -257,7 +256,6 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       // Add recomputed request to the begining of waiting queue.
       req->kv_cache_blocks.clear();
       req->kv_cache_blocks.resize(tp_num_);
-      req->output_tokens = req->input_tokens;
       req->infer_stage = InferStage::STAGE_CONTEXT;
       req->step = 0;
 
