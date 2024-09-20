@@ -563,19 +563,8 @@ template <typename T>
 Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs) {
   auto batch_size = forward_reqs.size();
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
-  size_t index = 0;
-  for (size_t idx = 0; idx < batch_size; ++idx) {
-    std::vector<int>* req_input = forward_reqs[idx].output_tokens;
-    if (forward_reqs[idx].step == 0) {
-      size_t copy_len = req_input->size() * sizeof(int);
-      memcpy(input_tokens_ptr + index, req_input->data(), copy_len);
-      index += copy_len;
-    } else {
-      memcpy(input_tokens_ptr + index, &req_input->back(), sizeof(int));
-      index += sizeof(int);
-    }
-  }
-  cpu_input_tokens_tensor_.shape = {index / sizeof(int)};
+  memcpy(input_tokens_ptr, model_input_->input_ids_cpu.data(), model_input_->input_ids_cpu.size() * sizeof(int));
+  cpu_input_tokens_tensor_.shape = {model_input_->input_ids_cpu.size()};
   cpu_emb_lookup_layer_->Forward({cpu_input_tokens_tensor_, cpu_tokens_emb_tensor_, embedding_weight},
                                  residual_buffer_);
   return Status();
@@ -662,6 +651,7 @@ template <typename T>
 Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
+  model_input_->ParseFromRequests(forward_reqs);
 
   // CPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.
@@ -669,8 +659,6 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   if (embedding_weight.device == MemoryDevice::MEMORY_HOST) {
     EmbedTokensUseCpu(embedding_weight, forward_reqs);
   }
-
-  model_input_->ParseFromRequests(forward_reqs);
 
   // create forward shape tensor
   forward_shape_.shape = {
