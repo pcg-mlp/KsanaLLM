@@ -9,6 +9,7 @@
 #include "ksana_llm/models/llama/llama_model.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
+#include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
 #include "test.h"
@@ -160,6 +161,7 @@ class LlamaTest : public testing::Test {
 
     // Sampling
     SamplingRequest sample_req;
+    NgramDict ngram_dict;
     std::vector<std::vector<std::pair<int, float>>> logprobs;
     std::vector<float> prompt_probs;
     sample_req.logits_offset = forward_reqs[0].logits_offset;
@@ -175,7 +177,10 @@ class LlamaTest : public testing::Test {
     sample_config.topp = 0;
     sample_config.temperature = 0;
     sample_config.repetition_penalty = 1;
+    sample_config.no_repeat_ngram_size = 0;
+    sample_config.encoder_no_repeat_ngram_size = 0;
     sample_req.sampling_config = &sample_config;
+    sample_req.ngram_dict = &ngram_dict;
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
 
@@ -228,7 +233,7 @@ class LlamaTest : public testing::Test {
     Memcpy(result.data(), model_input.logits_custom_length_uint64_tensor.GetPtr<void>(),
            result.size() * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST);
     EXPECT_EQ(dst.size(), result.size());
-    for (int i = 0; i < result.size(); i++) {
+    for (size_t i = 0; i < result.size(); i++) {
       EXPECT_EQ(result[i], dst[i]);
     }
     EXPECT_TRUE(model_input.use_logits_custom_length);
