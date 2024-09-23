@@ -42,7 +42,6 @@ struct SamplingConfig {
 
   // The parameter for no_repeat_ngram_size.
   int no_repeat_ngram_size = 0;
-  int encoder_no_repeat_ngram_size = 0;
 };
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;

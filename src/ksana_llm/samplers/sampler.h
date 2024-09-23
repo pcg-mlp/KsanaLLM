@@ -38,20 +38,9 @@ class Sampler {
   void CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
                                  std::vector<std::vector<float>>& probs_output, Stream& stream);
 
-  void GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
-                 NgramDict* ngram_dict);
-
-  void BanRepeatTokens(float* logits, const int ngram_size, const int input_tokens_size, const int cur_output_size,
-                       const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
-                       Stream& stream);
-
   void NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
                               const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
                               Stream& stream);
-
-  void EncoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
-                                     const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
-                                     Stream& stream);
 
  private:
   BatchSchedulerConfig batch_schedule_config_;

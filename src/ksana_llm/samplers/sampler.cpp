@@ -102,25 +102,25 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
 #endif
 }
 
-void Sampler::GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
-                        NgramDict* ngram_dict) {
-  std::vector<std::vector<int>> ngrams;
-  for (int i = 0; i <= cur_output_size - ngram_size; ++i) {
-    std::vector<int> sub_ngram(output_tokens->begin() + i, output_tokens->begin() + i + ngram_size);
-    ngrams.push_back(sub_ngram);
+void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
+                                     const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
+                                     Stream& stream) {
+  std::vector<int> repeat_ids;
+  int cur_output_size = output_tokens->size();
+  if (ngram_size > cur_output_size) {
+    KLLM_THROW(
+        fmt::format("The no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
+                    ngram_size, cur_output_size));
   }
-
-  for (const auto& ngram : ngrams) {
-    std::vector<int> ngram_excluding_last(ngram.begin(), ngram.end() - 1);
-    int last_elem = ngram.back();
+  if (cur_output_size - input_tokens_size < ngram_size) {
+    return;
+  } else {
+    std::vector<int> sub_ngram(output_tokens->end() - ngram_size, output_tokens->end());
+    std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
+    int last_elem = sub_ngram.back();
     (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
   }
-}
 
-void Sampler::BanRepeatTokens(float* logits, const int ngram_size, const int input_tokens_size,
-                              const int cur_output_size, const std::vector<int>* output_tokens, NgramDict* ngram_dict,
-                              const int vocab_size, Stream& stream) {
-  std::vector<int> repeat_ids;
   int start_idx = cur_output_size - ngram_size + 1;
   std::vector<int> ngram_idx(output_tokens->begin() + start_idx, output_tokens->begin() + cur_output_size);
   if (ngram_dict->find(ngram_idx) != ngram_dict->end()) {
@@ -140,45 +140,6 @@ void Sampler::BanRepeatTokens(float* logits, const int ngram_size, const int inp
     InvokeAddBiasResidual<float>(logits, device_repetition_processor_, nullptr, 1, vocab_size, logits, stream.Get());
 #endif
   }
-}
-
-void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
-                                     const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
-                                     Stream& stream) {
-  int cur_output_size = output_tokens->size();
-  if (ngram_size > cur_output_size) {
-    KLLM_THROW(
-        fmt::format("The no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
-                    ngram_size, cur_output_size));
-  }
-  if (input_tokens_size == cur_output_size) {
-    KLLM_LOG_DEBUG << "for input and output tokens no repeat ngram sample";
-    GetNgrams(ngram_size, cur_output_size, output_tokens, ngram_dict);
-  } else if (input_tokens_size < cur_output_size) {
-    std::vector<int> sub_ngram(output_tokens->end() - ngram_size, output_tokens->end());
-    std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
-    int last_elem = sub_ngram.back();
-    (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
-  }
-  BanRepeatTokens(logits, ngram_size, input_tokens_size, cur_output_size, output_tokens, ngram_dict, vocab_size,
-                  stream);
-}
-
-void Sampler::EncoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
-                                            const std::vector<int>* output_tokens, NgramDict* ngram_dict,
-                                            const int vocab_size, Stream& stream) {
-  int cur_output_size = output_tokens->size();
-  if (ngram_size > cur_output_size) {
-    KLLM_THROW(fmt::format(
-        "The encoder_no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
-        ngram_size, cur_output_size));
-  }
-  if (input_tokens_size == cur_output_size) {
-    KLLM_LOG_DEBUG << "for input tokens no repeat ngram sample";
-    GetNgrams(ngram_size, cur_output_size, output_tokens, ngram_dict);
-  }
-  BanRepeatTokens(logits, ngram_size, input_tokens_size, cur_output_size, output_tokens, ngram_dict, vocab_size,
-                  stream);
 }
 
 void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
@@ -340,24 +301,12 @@ Status Sampler::PrepareDevideLogitsAndParameter(std::vector<SamplingRequest>& sa
                              vocab_size, sampling_config->repetition_penalty, stream);
     }
 
-    if (sampling_config->no_repeat_ngram_size > 0 && sampling_config->encoder_no_repeat_ngram_size > 0) {
-      return Status(RET_INVALID_ARGUMENT,
-                    "no_repeat_ngram_size and encoder_no_repeat_ngram_size can not be used at the same time");
-    } else {
+    if (sampling_config->no_repeat_ngram_size > 0) {
       int vocab_size = batch_schedule_config_.max_vocab_size;
       int input_tokens_size = sampling_req.input_tokens->size();
-      if (sampling_config->no_repeat_ngram_size > 0) {
-        NoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->no_repeat_ngram_size,
-                               input_tokens_size, sampling_req.output_tokens, sampling_req.ngram_dict, vocab_size,
-                               stream);
-      }
-      if (sampling_config->encoder_no_repeat_ngram_size > 0) {
-        EncoderNoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->encoder_no_repeat_ngram_size,
-                                      input_tokens_size, sampling_req.output_tokens, sampling_req.ngram_dict,
-                                      vocab_size, stream);
-      }
+      NoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
+                             sampling_req.output_tokens, sampling_req.ngram_dict, vocab_size, stream);
     }
-
     req_index++;
   }
   if (!use_arg_max || logits_softmax) {
