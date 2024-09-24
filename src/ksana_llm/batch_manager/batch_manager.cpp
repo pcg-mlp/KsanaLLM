@@ -102,7 +102,10 @@ Status BatchManager::Process() {
   while (!terminated_) {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
 
-    scheduled_reqs = batch_scheduler_->Schedule();
+    {
+      REPORT_TIME_US(batch_manager_schedule_us);
+      scheduled_reqs = batch_scheduler_->Schedule();
+    }
 
     if (scheduled_reqs.empty()) {
       if (batch_scheduler_->IsIdle()) {
@@ -113,6 +116,7 @@ Status BatchManager::Process() {
     }
 
     {
+      REPORT_TIME_US(batch_manager_step_us);
       Status status = llm_runtime_->Step(scheduled_reqs);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();

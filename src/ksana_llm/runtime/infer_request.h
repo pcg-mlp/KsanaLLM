@@ -9,7 +9,6 @@
 #include <string>
 #include <vector>
 
-#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
@@ -114,6 +113,9 @@ class InferRequest {
   // Padding token id of the model.
   int pad_id;
 
+  // The arrive time.
+  uint64_t timestamp_in_ms;
+
   // context decode or decode stage.
   InferStage infer_stage;
 
@@ -147,15 +149,6 @@ class InferRequest {
 
   // The no_repeate ngram sampling map
   NgramDict ngram_dict;
-
-  // Opentelemetry SpanContext
-  opentelemetry::trace::SpanContext span_context;
-
-  // The arrive time.
-  uint64_t timestamp_in_ms;
-
-  // request context
-  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 };
 
 }  // namespace ksana_llm

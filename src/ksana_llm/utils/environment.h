@@ -15,7 +15,6 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/status.h"
 
-#include "opentelemetry/sdk/common/attribute_utils.h"
 namespace ksana_llm {
 
 struct RoPEScalingFactor {
@@ -214,13 +213,13 @@ struct EndpointConfig {
 // The config of profiler.
 struct ProfilerConfig {
   // The stat interval, in second.
-  std::string trace_export_url;
-  std::string metrics_export_url;
-  uint64_t export_interval_millis;
-  uint64_t export_timeout_millis;
+  size_t stat_interval_second;
 
-  // Opentelemetry Resource attributes.
-  opentelemetry::sdk::common::AttributeMap resource_attributes;
+  // The stat buffer size.
+  size_t stat_buffer_size;
+
+  // The async report thread num.
+  size_t report_threadpool_size;
 };
 
 class Environment {

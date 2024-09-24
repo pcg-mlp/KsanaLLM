@@ -598,8 +598,8 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
   bool ret = true;
   int req_offset = 0;
   for (ForwardRequest& req : forward_reqs) {
-    int output_token_num = req.output_tokens->size();
-    req_offset += output_token_num;
+    int output_tokens_num = req.output_tokens->size();
+    req_offset += output_tokens_num;
     if (!req.request_target) {
       ret = false;
       continue;
@@ -617,7 +617,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
     // If specific token IDs are provided, add their positions to slice_pos.
     if (it->second.token_id.size() != 0) {
       std::set<int> token_id_set(it->second.token_id.begin(), it->second.token_id.end());
-      for (int i = 0; i < output_token_num; i++) {
+      for (int i = 0; i < output_tokens_num; i++) {
         if (token_id_set.count(req.output_tokens->at(i)) > 0) {
           slice_pos.push_back({i, i});
         }
@@ -638,7 +638,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
     // Copy data from the output tensor to the output_data buffer based on slice positions.
     for (auto [l, r] : slice_pos) {
       MemcpyAsync(ret_tensor.data.data() + output_len * chunk_size,
-                  output.GetPtr<void>() + (req_offset - output_token_num + l) * chunk_size, (r - l + 1) * chunk_size,
+                  output.GetPtr<void>() + (req_offset - output_tokens_num + l) * chunk_size, (r - l + 1) * chunk_size,
                   MEMCPY_DEVICE_TO_HOST, context_->GetComputeStreams()[rank_]);
       output_len += r - l + 1;
     }

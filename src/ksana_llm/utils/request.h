@@ -7,7 +7,6 @@
 #include <map>
 #include <vector>
 
-#include "ksana_llm/profiler/profiler.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
@@ -117,8 +116,7 @@ struct PythonTensor {
 class Request {
  public:
   // Build Request based on the given KsanaPythonInput.
-  explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
-                   const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx);
+  explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input);
 
   // The unique id of a request.
   int64_t req_id;
@@ -189,14 +187,6 @@ class Request {
 
   // Whether this request is the last one in a batch of requests.
   bool last_in_batch = true;
-
-  // Opentelemetry SpanContext
-  opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
-
-  // The arrive time.
-  uint64_t timestamp_in_ms;
-
-  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 
  private:
   // The id generator

@@ -7,7 +7,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/model_instance.h"
@@ -81,9 +80,6 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
     forward_req.prefix_cache_len = req_ptr->prefix_cache_len;
     forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;
-    forward_req.span_context = req_ptr->span_context;
-    forward_req.timestamp_in_ms = req_ptr->timestamp_in_ms;
-    forward_req.req_ctx = req_ptr->req_ctx;
 #ifdef ENABLE_ACL_ATB
     // NOTE(karlluo): for ATb, all device blocks locate on a flatten plane memory space.
     // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
@@ -203,7 +199,6 @@ void LlmRuntime::BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>>
     sampling_req.logits_buf = req_ptr->GetLogitsPtr();
     sampling_req.sampling_config = &(req_ptr->sampling_config);
     sampling_req.req_group = &(req_ptr->req_group);
-    sampling_req.req_ctx = req_ptr->req_ctx;
     if (sampling_req.sampling_config->num_beams > 1) {
       sampling_req.sampling_config->logprobs_num =
           std::max(sampling_req.sampling_config->logprobs_num, sampling_req.sampling_config->num_beams);

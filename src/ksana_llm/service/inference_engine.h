@@ -6,6 +6,7 @@
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
+#include "ksana_llm/profiler/collector.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/status.h"
@@ -50,6 +51,9 @@ class InferenceEngine {
 
   // The global block manager.
   BlockManager *block_manager_ = nullptr;
+
+  // The profiler.
+  ProfileCollector *profile_collector_ = nullptr;
 
   // The batch manager for the whole inference.
   std::shared_ptr<BatchManager> batch_manager_ = nullptr;

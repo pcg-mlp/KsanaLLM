@@ -22,14 +22,7 @@ def args_config():
 
 
 def post_request(serv, data, queue=None):
-
-    # If coller need to pass the remote ip and trace request, it can be set in the headers
-    # traceparent is opentracing standard(W3C), it can be used to trace the request
-    headers = {
-        'x-remote-ip': '8.8.8.8',
-        'traceparent': '00-4bf92f3577b34da6a3ce929d0e0e4737-00f067aa0ba902b8-01',
-    }
-    resp = requests.post(serv, data=orjson.dumps(data), headers=headers, timeout=600000)
+    resp = requests.post(serv, data=orjson.dumps(data), timeout=600000)
     if queue is None:
         return orjson.loads(resp.content)
     else:

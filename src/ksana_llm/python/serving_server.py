@@ -26,7 +26,7 @@ app = FastAPI()
 # pylint: disable=invalid-name
 model = None
 tokenizer = None
-fields_to_extract = ['x-remote-ip', 'traceparent']
+# pylint: enable=invalid-name
 
 
 def args_config():
@@ -55,7 +55,7 @@ def args_config():
     return args
 
 
-def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **kwargs):
+def streaming_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform streaming generation.
     """
     # Create a results iterator for the model's generation
@@ -64,7 +64,6 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
         streamer=True,  # enable streaming generation
-        req_ctx = req_ctx,  # request trace context
         **kwargs,
     )
 
@@ -100,7 +99,7 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
     return stream_results()
 
 
-def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwargs):
+def batch_generate(model_name, input_tokens, generation_config, **kwargs):
     """Perform batch generation.
     """
     # Generate output tokens using the model
@@ -109,7 +108,6 @@ def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwarg
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
         streamer=None,  # disable streaming generation
-        req_ctx = req_ctx,  # request trace context
         **kwargs,
     )
 
@@ -137,7 +135,7 @@ def get_sampling_value(sampling_config: dict, key: str, default_val=None):
     return sampling_config[key] if key in sampling_config else default_val
 
 
-async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str]) -> Response:
+async def process_request(request_dict: Dict[str, Any]) -> Response:
     """Generate completion for the request.
 
     The request should be a JSON object with the following fields:
@@ -214,7 +212,6 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
                 generation_config=generation_config,  # pass generation config as an argument
-                req_ctx = req_ctx,  # request trace context
                 **kwargs,
             )
         )
@@ -228,7 +225,6 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
                 generation_config=generation_config,  # pass generation config as an argument
-                req_ctx = req_ctx,  # request trace context
                 **kwargs,
             )
         )
@@ -237,7 +233,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     return results
 
 
-async def forward_request(request_bytes: bytes, req_ctx: Dict[str, str]) -> Optional[bytes]:
+async def forward_request(request_bytes: bytes) -> Optional[bytes]:
     """Forward the raw request bytes to the serving model.
     """
 
@@ -248,8 +244,7 @@ async def forward_request(request_bytes: bytes, req_ctx: Dict[str, str]) -> Opti
         model_executor,  # specify the executor to use
         partial(
             model.forward,  # partial function to call
-            request_bytes,  # pass request_bytes as an argument
-            req_ctx         # request trace context
+            request_bytes  # pass request_bytes as an argument
         )
     )
     return response_bytes
@@ -264,14 +259,9 @@ async def generate(request: Request) -> Response:
     - prompt: the prompt to use for the generation.
     - stream: whether to stream the results or not.
     """
-    req_ctx = {
-            field: request.headers.get(field) 
-            for field in fields_to_extract 
-            if request.headers.get(field) is not None
-    }
     request_dict = orjson.loads(await request.body())
     enable_streaming = request_dict.get("stream", True)
-    response_data = await process_request(request_dict, req_ctx)
+    response_data = await process_request(request_dict)
     if enable_streaming:
         return StreamingResponse(response_data)
     else:
@@ -284,14 +274,8 @@ async def forward(request: Request):
 
     The request should be a JSON object packed by msgpack.
     """
-    req_ctx = {
-            field: request.headers.get(field) 
-            for field in fields_to_extract 
-            if request.headers.get(field) is not None
-    }
     request_bytes = await request.body()
-
-    response_bytes = await forward_request(request_bytes, req_ctx)
+    response_bytes = await forward_request(request_bytes)
     if response_bytes is not None:
         return Response(content=response_bytes, media_type="application/x-msgpack")
     else:  # Bad request

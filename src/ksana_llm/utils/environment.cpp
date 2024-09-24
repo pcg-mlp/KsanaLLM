@@ -338,21 +338,13 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_auto_prefix_cache", false);
 
   // Read profiler config.
-  profiler_config_.trace_export_url =
-      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.profiler.trace_export_url", "");
-  profiler_config_.metrics_export_url =
-      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.profiler.metrics_export_url", "");
-  profiler_config_.export_interval_millis =
-      yaml_reader.GetScalar<uint64_t>(yaml_reader.GetRootNode(), "setting.profiler.export_interval_millis", 60000);
-  profiler_config_.export_timeout_millis =
-      yaml_reader.GetScalar<uint64_t>(yaml_reader.GetRootNode(), "setting.profiler.export_timeout_millis", 1000);
+  profiler_config_.stat_interval_second =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_interval_second", 60);
+  profiler_config_.stat_buffer_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.stat_buffer_size", 1024);
+  profiler_config_.report_threadpool_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.profiler.report_threadpool_size", 4);
 
-  auto attributes = yaml_reader.GetMap(yaml_reader.GetRootNode(), "setting.profiler.attributes");
-  for (auto it = attributes.begin(); it != attributes.end(); ++it) {
-    std::string key = it->first.as<std::string>();
-    std::string value = it->second.as<std::string>();
-    profiler_config_.resource_attributes[key] = value;
-  }
   // quantization_config in yaml takes effect when quantization_config in config.json is null.
   yaml_weight_quant_method_ = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.quantization_config.weight.quant_method", "auto");

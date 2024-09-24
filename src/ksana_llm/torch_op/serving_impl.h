@@ -26,17 +26,14 @@ class ServingImpl {
 
   // Handle serving request.
   Status Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
-                const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                 ksana_llm::KsanaPythonOutput &ksana_python_output);
 
   // Handle serving request, in streaming mode.
   Status HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
-                         const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                          std::shared_ptr<StreamingIterator> &streaming_iterator);
 
   // Handle serving batch request.
   Status HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>> &ksana_python_inputs,
-                     const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                      std::vector<KsanaPythonOutput> &ksana_python_outputs);
 
  private:
