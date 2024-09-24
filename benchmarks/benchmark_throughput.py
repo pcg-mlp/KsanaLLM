@@ -229,7 +229,12 @@ def args_config():
     parser.add_argument('--no_repeat_ngram_size',
                         type=int,
                         default=0,
-                        help=" If set to int > 0, all ngrams of that size can only occur once.")
+                        help="If set to int > 0, all ngrams of that size can only occur once.")
+    parser.add_argument('--encoder_no_repeat_ngram_size',
+                        type=int,
+                        default=0,
+                        help="If set to int > 0, all ngrams of that size that occur in the \
+                             `encoder_input_ids` cannot occur in the `decoder_input_ids`")
     parser.add_argument('--length_penalty',
                         type=float,
                         default=1.0,
@@ -353,6 +358,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
                 "length_penalty": args.length_penalty,
                 "repetition_penalty": args.repetition_penalty,
                 "no_repeat_ngram_size": args.no_repeat_ngram_size,
+                "encoder_no_repeat_ngram_size": args.encoder_no_repeat_ngram_size,
                 "logprobs": args.logprobs,
                 "max_new_tokens": args.max_new_tokens,
                 "stop_token_ids": args.stop_token_ids
