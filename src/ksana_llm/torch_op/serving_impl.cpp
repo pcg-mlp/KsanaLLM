@@ -5,6 +5,7 @@
 #include "ksana_llm/torch_op/serving_impl.h"
 
 #include "ksana_llm/endpoints/endpoint_factory.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
 
@@ -30,18 +31,31 @@ ServingImpl::ServingImpl() {
 }
 
 Status ServingImpl::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                           const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                            ksana_llm::KsanaPythonOutput &ksana_python_output) {
-  return endpoint_->Handle(ksana_python_input, ksana_python_output);
+  opentelemetry::trace::StartSpanOptions options;
+  auto span = REPORT_TRACE(serving_impl_handle, options);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(endpoint_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
 }
 
 Status ServingImpl::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                                    const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  return endpoint_->HandleStreaming(ksana_python_input, streaming_iterator);
+  opentelemetry::trace::StartSpanOptions options;
+  auto span = REPORT_TRACE(serving_impl_handle_streaming, options);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(endpoint_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
 }
 
 Status ServingImpl::HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>> &ksana_python_inputs,
+                                const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                 std::vector<KsanaPythonOutput> &ksana_python_outputs) {
-  return endpoint_->HandleBatch(ksana_python_inputs, ksana_python_outputs);
+  KLLM_LOG_DEBUG << "Processing Of ServingImpl::HandleBatch";
+  opentelemetry::trace::StartSpanOptions options;
+  auto span = REPORT_TRACE(serving_impl_handle_batch, options);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(endpoint_->HandleBatch(ksana_python_inputs, req_ctx, ksana_python_outputs), span);
 }
 
 Status ServingImpl::Start() {

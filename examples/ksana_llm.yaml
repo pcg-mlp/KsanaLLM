@@ -65,12 +65,8 @@ setting:
       quant_method: auto
   # 性能统计相关配置
   profiler:
-    # 统计周期，每隔多少秒输出一次统计数据
-    stat_interval_second: 5
-    # 缓存队列大小
-    stat_buffer_size: 1024
-    # 异步上报的线程池大小
-    report_threadpool_size: 4
+
+
 # 模型配置
 model_spec:
   # 基础模型配置，只能有一个

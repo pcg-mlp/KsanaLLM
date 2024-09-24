@@ -6,8 +6,10 @@
 
 #include <memory>
 
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -16,16 +18,35 @@ Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWei
                        std::vector<ForwardRequest>& forward_reqs) {
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
+  opentelemetry::trace::StartSpanOptions options;
 
   switch (stage) {
     case InferStage::STAGE_CONTEXT:
       KLLM_LOG_DEBUG << "ContextDecode infer on work_id: " << rank_;
-      model->ContextDecode(weight, forward_reqs);
+      {
+        auto span = REPORT_TRACE(worker_context_decode, options);
+        opentelemetry::trace::Scope scope(span);
+        model->ContextDecode(weight, forward_reqs);
+        span->End();
+        for (auto it = forward_reqs.begin(); it != forward_reqs.end(); ++it) {
+          auto& forward_req = *it;
+          options.parent = forward_req.span_context;
+          REPORT_METRIC(time_to_first_token_ms, ProfileTimer::GetCurrentTimeInMs() - forward_req.timestamp_in_ms,
+                        forward_req.req_ctx);
+        }
+      }
       break;
     case InferStage::STATE_DECODE:
       KLLM_LOG_DEBUG << "Decode infer on work_id: " << rank_;
-      model->Decode(weight, forward_reqs);
-      break;
+      {
+        auto start = ProfileTimer::GetCurrentTimeInMs();
+        model->Decode(weight, forward_reqs);
+        auto duration = ProfileTimer::GetCurrentTimeInMs() - start;
+
+        REPORT_METRIC(time_per_output_token_ms, duration / static_cast<double>(forward_reqs.size()));
+
+        break;
+      }
     default:
       KLLM_THROW(fmt::format("Invalid infer stage: {}. Valid stages include STAGE_CONTEXT and STATE_DECODE", stage));
   }

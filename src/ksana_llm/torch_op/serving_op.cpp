@@ -11,9 +11,12 @@
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
 #include "ksana_llm/periphery/version_reporter.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/singleton.h"
+#include "opentelemetry/trace/context.h"
+#include "opentelemetry/trace/semantic_conventions.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -54,32 +57,49 @@ void ServingOp::InitServing(const std::string &config_file) {
   serving_impl_->Start();
 
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
-        VersionReporter::GetInstance().Init();
+    VersionReporter::GetInstance().Init();
   }
 
   KLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
 }
 
 Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                           const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                            ksana_llm::KsanaPythonOutput &ksana_python_output) {
   KLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
-  return serving_impl_->Handle(ksana_python_input, ksana_python_output);
+  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
+  auto span = REPORT_TRACE(torch_op_generate_span, carrier);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(serving_impl_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
 }
 
 Status ServingOp::GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                                    const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
   KLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
-  return serving_impl_->HandleStreaming(ksana_python_input, streaming_iterator);
+  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
+  auto span = REPORT_TRACE(torch_op_generate_streaming_span, carrier);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(serving_impl_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
 }
 
-Status ServingOp::Forward(const std::string &request_bytes, std::string &response_bytes) {
+Status ServingOp::Forward(const std::string &request_bytes,
+                          const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
+                          std::string &response_bytes) {
   KLLM_LOG_DEBUG << "ServingOp::Forward invoked.";
-  std::vector<std::shared_ptr<KsanaPythonInput>> ksana_python_inputs;
-  STATUS_CHECK_RETURN(request_packer_.Unpack(request_bytes, ksana_python_inputs));
 
+  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
+  auto span = REPORT_TRACE(torch_op_generate_forward_span, carrier);
+  opentelemetry::trace::Scope scope(span);
+  std::vector<std::shared_ptr<KsanaPythonInput>> ksana_python_inputs;
+
+  STATUS_CHECK_RETURN_AND_REPORT(request_packer_.Unpack(request_bytes, ksana_python_inputs), span);
   std::vector<KsanaPythonOutput> ksana_python_outputs;
-  STATUS_CHECK_RETURN(serving_impl_->HandleBatch(ksana_python_inputs, ksana_python_outputs));
-  STATUS_CHECK_RETURN(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_bytes));
+  STATUS_CHECK_RETURN_AND_REPORT(serving_impl_->HandleBatch(ksana_python_inputs, req_ctx, ksana_python_outputs), span);
+  STATUS_CHECK_RETURN_AND_REPORT(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_bytes), span);
+
+  span->SetStatus(opentelemetry::trace::StatusCode::kOk);
+  span->End();
   return Status();
 }
 
@@ -186,26 +206,32 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("plugin_path", &ksana_llm::ServingOp::plugin_path_)
       .def("generate",
            [](std::shared_ptr<ksana_llm::ServingOp> &self,
-              const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input) {
+              const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input,
+              std::unordered_map<std::string, std::string> &req_ctx) {
              pybind11::gil_scoped_release release;
              ksana_llm::KsanaPythonOutput ksana_python_output;
-             ksana_llm::Status status = self->Generate(ksana_python_input, ksana_python_output);
+             auto req_ctx_ptr = std::make_shared<std::unordered_map<std::string, std::string>>(req_ctx);
+             ksana_llm::Status status = self->Generate(ksana_python_input, req_ctx_ptr, ksana_python_output);
              pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, std::move(ksana_python_output));
            })
       .def("generate_streaming",
            [](std::shared_ptr<ksana_llm::ServingOp> &self,
-              const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input) {
+              const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input,
+              std::unordered_map<std::string, std::string> &req_ctx) {
              pybind11::gil_scoped_release release;
              std::shared_ptr<ksana_llm::StreamingIterator> streaming_iterator;
-             ksana_llm::Status status = self->GenerateStreaming(ksana_python_input, streaming_iterator);
+             auto req_ctx_ptr = std::make_shared<std::unordered_map<std::string, std::string>>(req_ctx);
+             ksana_llm::Status status = self->GenerateStreaming(ksana_python_input, req_ctx_ptr, streaming_iterator);
              pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, streaming_iterator);
            })
-      .def("forward", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &request_bytes) {
+      .def("forward", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &request_bytes,
+                         std::unordered_map<std::string, std::string> &req_ctx) {
         pybind11::gil_scoped_release release;
         std::string response_bytes;
-        ksana_llm::Status status = self->Forward(request_bytes, response_bytes);
+        auto req_ctx_ptr = std::make_shared<std::unordered_map<std::string, std::string>>(req_ctx);
+        ksana_llm::Status status = self->Forward(request_bytes, req_ctx_ptr, response_bytes);
         pybind11::gil_scoped_acquire acquire;
         return std::make_tuple(status, py::bytes(response_bytes));
       });

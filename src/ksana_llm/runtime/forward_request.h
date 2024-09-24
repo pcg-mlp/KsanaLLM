@@ -58,6 +58,14 @@ struct ForwardRequest {
   // The prefix cache blocks number
   int prefix_cache_blocks_number = 0;
 
+  // Opentelemetry SpanContext
+  opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
+
+  // The arrive time.
+  uint64_t timestamp_in_ms;
+
+  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
+
 #ifdef ENABLE_ACL_ATB
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
   // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not

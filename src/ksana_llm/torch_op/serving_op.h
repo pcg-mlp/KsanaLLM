@@ -25,10 +25,12 @@ class ServingOp : public torch::jit::CustomClassHolder {
 
   // Generate a response.
   Status Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                  const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                   ksana_llm::KsanaPythonOutput &ksana_python_output);
 
   // Generate a response, in streaming mode.
   Status GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                           const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                            std::shared_ptr<StreamingIterator> &streaming_iterator);
 
   /**
@@ -39,7 +41,9 @@ class ServingOp : public torch::jit::CustomClassHolder {
    * final layer norm, logits, etc.
    * Refer to serving_forward_client for more details.
    */
-  Status Forward(const std::string &request_bytes, std::string &response_bytes);
+  Status Forward(const std::string &request_bytes,
+                 const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
+                 std::string &response_bytes);
 
  public:
   std::string plugin_path_;

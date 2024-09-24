@@ -109,14 +109,15 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
   schedule_strategy_->Schedule();
 
   size_t batch_size = batch_state_->running_queue.size();
-  REPORT_METRIC(batch_size, batch_size);
-  REPORT_METRIC(batch_scheduler_waiting, batch_state_->waiting_queue.size());
-  REPORT_METRIC(batch_scheduler_swapped, batch_state_->swapped_queue.size());
+  REPORT_METRIC(batch_scheduler_batch_size, batch_size);
+  REPORT_METRIC(batch_scheduler_waiting_size, batch_state_->waiting_queue.size());
+  REPORT_METRIC(batch_scheduler_swapped_size, batch_state_->swapped_queue.size());
 
   if (batch_size > 0) {
     size_t token_num = 0;
     for (auto& req : batch_state_->running_queue) {
       token_num += req->output_tokens.size();
+      REPORT_METRIC(batch_manager_schedule_ms, ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms, req->req_ctx);
     }
     REPORT_METRIC(token_num_in_batch, token_num);
 
@@ -126,8 +127,8 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
         token_fill_ratio,
         token_num * 1.0 / (GetBlockManager()->GetDeviceUsedBlockNumber() * GetBlockManager()->GetBlockTokenNum()));
   }
-  REPORT_METRIC(block_manager_free, GetBlockManager()->GetDeviceFreeBlockNumber());
-  REPORT_METRIC(block_manager_used, GetBlockManager()->GetDeviceUsedBlockNumber());
+  REPORT_METRIC(block_num_free, GetBlockManager()->GetDeviceFreeBlockNumber());
+  REPORT_METRIC(block_num_used, GetBlockManager()->GetDeviceUsedBlockNumber());
 
   KLLM_LOG_DEBUG << "batch scheduler result: " << batch_state_->running_queue.size();
   return batch_state_->running_queue;

@@ -14,6 +14,7 @@ include(external/yaml-cpp)
 include(external/nlohmann_json)
 include(external/base64)
 include(external/msgpack)
+include(external/opentelemetry)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/src
@@ -21,6 +22,7 @@ include_directories(
   ${THIRD_PARTY_PATH}/install/loguru
   ${THIRD_PARTY_PATH}/pybind11/include
   ${THIRD_PARTY_PATH}/download/fmt/include
+  ${OPENTELEMETRY_CPP_INCLUDE_DIRS}
 )
 
 add_subdirectory(batch_manager)
@@ -60,6 +62,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   gflags
   periphery
   ${NCCL_LIBRARIES}
+  ${OPENTELEMETRY_CPP_LIBRARIES}
 )
 
 add_subdirectory(torch_op)

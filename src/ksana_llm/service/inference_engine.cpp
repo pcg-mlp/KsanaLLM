@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/waiter.h"
@@ -23,11 +24,6 @@ InferenceEngine::~InferenceEngine() {
   if (block_manager_) {
     delete block_manager_;
     block_manager_ = nullptr;
-  }
-
-  if (profile_collector_) {
-    delete profile_collector_;
-    profile_collector_ = nullptr;
   }
 }
 
@@ -50,8 +46,9 @@ Status InferenceEngine::Initialize() {
 
   ProfilerConfig profiler_config;
   status = env->GetProfilerConfig(profiler_config);
-  profile_collector_ = new ProfileCollector(profiler_config);
-  SetProfileCollector(profile_collector_);
+  Singleton<Profiler>::GetInstance()->Init(profiler_config);
+  Singleton<Profiler>::GetInstance()->InitTracer();
+  Singleton<Profiler>::GetInstance()->InitMetrics();
 
   // Load model instances.
   std::unordered_map<std::string, ModelConfig> model_configs;
@@ -110,8 +107,12 @@ Status InferenceEngine::Initialize() {
 }
 
 Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
+  REPORT_COUNTER(request_total, static_cast<size_t>(1), req->req_ctx);
+  REPORT_METRIC(input_tokens_num, req->input_tokens.size(), req->req_ctx);
+
   Status handle_req_status = batch_manager_->Enqueue(req);
   if (!handle_req_status.OK()) {
+    REPORT_COUNTER(request_error, static_cast<size_t>(1), req->req_ctx);
     return handle_req_status;
   }
   return Status();
@@ -152,7 +153,10 @@ Status InferenceEngine::DoWarmupRun() {
   auto warmup_run_input = std::make_shared<KsanaPythonInput>();
   // Prepare the warm up input.
   warmup_run_input->input_tokens = std::vector<int>{1};
-  auto req = std::make_shared<Request>(warmup_run_input);
+
+  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
+      std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
   req->waiter = std::make_shared<Waiter>(1);
   HandleRequest(req);
 
@@ -169,9 +173,6 @@ Status InferenceEngine::DoWarmupRun() {
 }
 
 Status InferenceEngine::Start() {
-  // Start profiler, invoked before batch manager.
-  profile_collector_->Start();
-
   // Reset block num via device memory usage.
   block_manager_->ResetPreAllocatedBlocks();
 
@@ -217,9 +218,6 @@ Status InferenceEngine::Stop() {
   // Stop the batch manger.
   KLLM_LOG_DEBUG << "Stop batch manager.";
   batch_manager_->Stop();
-
-  // Stop profiler, after profiler.
-  profile_collector_->Stop();
 
   return Status();
 }

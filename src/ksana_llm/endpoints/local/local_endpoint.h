@@ -6,6 +6,7 @@
 #include "ksana_llm/endpoints/base/base_endpoint.h"
 
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"
@@ -21,14 +22,17 @@ class LocalEndpoint : public BaseEndpoint {
 
   // Handle a request.
   virtual Status Handle(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
+                        const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx,
                         ksana_llm::KsanaPythonOutput& ksana_python_output);
 
   // Handle a streaming request.
   virtual Status HandleStreaming(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
+                                 const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx,
                                  std::shared_ptr<StreamingIterator>& streaming_iterator);
 
   // Handle a batch request.
   virtual Status HandleBatch(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
+                             const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx,
                              std::vector<KsanaPythonOutput>& ksana_python_outputs);
 };
 
