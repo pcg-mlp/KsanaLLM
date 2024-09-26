@@ -293,7 +293,8 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   }
 
   // The matched prefix blocks could not be free for waiting request.
-  std::vector<PrefixCachedBlock*> reserved_blocks = (cached_request->req_state == RequestState::REQUEST_STATE_WAITING)
+  std::vector<PrefixCachedBlock*> reserved_blocks = (cached_request->req_state == RequestState::REQUEST_STATE_WAITING ||
+                                                     cached_request->req_state == RequestState::REQUEST_STATE_RUNNING)
                                                         ? cached_request->cached_blocks
                                                         : std::vector<PrefixCachedBlock*>();
 

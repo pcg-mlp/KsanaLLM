@@ -312,6 +312,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
   batch_scheduler_config_.preempt_mode = static_cast<PreemptMode>(
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
+  batch_scheduler_config_.split_fuse_token_num =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.split_fuse_token_num", 0);
 
   // Read block manager config.
   block_manager_config_.host_allocator_config.block_token_num =
@@ -336,6 +338,15 @@ Status Environment::ParseConfig(const std::string &config_file) {
   cache_manager_config_.tensor_para_size = tensor_parallel_size_;
   cache_manager_config_.enable_prefix_caching =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_auto_prefix_cache", false);
+  // TODO(zakwang): Implement support for enabling prefix caching when split_fuse_token_num is non-zero and ensure
+  // compatibility with block_host_memory_factor.
+  if (batch_scheduler_config_.split_fuse_token_num != 0) {
+    if (cache_manager_config_.enable_preifx_caching == false || block_manager_config_.block_host_memory_factor != 0) {
+      KLLM_LOG_WARNING << "split_fuse_token_num is non-zero while prefix caching is disabled or "
+                          "block_host_memory_factor is not zero. Setting split_fuse_token_num to 0.";
+      batch_scheduler_config_.split_fuse_token_num = 0;
+    }
+  }
 
   // Read profiler config.
   profiler_config_.trace_export_url =

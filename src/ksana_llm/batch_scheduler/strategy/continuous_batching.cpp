@@ -58,6 +58,16 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
     // Always update cache manager, even if request is finished.
     Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
+    if (req->output_tokens.size() <= req->origin_input_tokens.size()) {
+      req->step = 0;
+      req->infer_stage = InferStage::STAGE_CONTEXT;
+      req->input_tokens = req->origin_input_tokens;
+      req->output_tokens = req->origin_input_tokens;
+      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
+      it = batch_state_->running_queue.erase(it);
+      continue;
+    }
+
     if (!status.OK()) {
       KLLM_LOG_ERROR << "UpdateRequestTokens req " << req->req_id << " error, recompute it.";
 
@@ -374,6 +384,45 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
   }
 }
 
+/**
+ * Processes a request to determine the appropriate number of tokens to split or fuse based on the current
+ * batching strategy configuration. This function adjusts the number of output tokens in the request to match
+ * the calculated split or fuse token count, and updates the shared and unique block counts accordingly.
+ *
+ * The function aims to optimize the processing of requests by dynamically adjusting the number of tokens
+ * to be processed together, based on the configured thresholds and the current state of the request and
+ * batch scheduler.
+ */
+bool ContinuousBatchingStrategy::ProcessSplitFuseToken(std::shared_ptr<InferRequest> req, size_t &shared_block_num,
+                                                       size_t &unique_block_num, size_t &shared_token_num,
+                                                       size_t step_token_num, size_t decode_request_num) {
+  size_t split_fuse_token_num = batch_scheduler_config_.split_fuse_token_num;
+  size_t current_token_num = req->output_tokens.size();
+  size_t tokens_to_split = 0;
+  if (step_token_num < split_fuse_token_num) {
+    tokens_to_split = std::min((current_token_num - shared_token_num + req->block_token_num - 1),
+                               (split_fuse_token_num - step_token_num)) /
+                      req->block_token_num * req->block_token_num;
+  }
+
+  if (split_fuse_token_num > 0 && decode_request_num != 0 && tokens_to_split < current_token_num - shared_token_num) {
+    if (tokens_to_split == 0) {
+      // End the scheduling of context decode.
+      return true;
+    }
+    KLLM_LOG_DEBUG << "req " << req->req_id << " shared_block_num " << shared_block_num << " unique_block_num "
+                   << unique_block_num << " shared_token_num " << shared_token_num << " current_token_num "
+                   << current_token_num << " tokens_to_split " << tokens_to_split;
+    req->output_tokens.resize(shared_token_num + tokens_to_split);
+    cache_manager_->GetRequestPrefixBlockNumber(req->req_id, req->output_tokens, shared_block_num, unique_block_num,
+                                                shared_token_num);
+    // The `unique_block_num` is decremented here because, during split_fuse operations,
+    // there is no need to pre-allocate a block for decoding purposes.
+    unique_block_num--;
+  }
+  return false;
+}
+
 void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   KLLM_LOG_DEBUG << "ProcessWaitingQueue invoked, waiting queue size:" << batch_state_->waiting_queue.size()
                  << ", free block num:" << cache_manager_->GetUsableBlockNumber()
@@ -425,6 +474,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     size_t shared_token_num = 0;
     cache_manager_->GetRequestPrefixBlockNumber(req->req_id, req->output_tokens, shared_block_num, unique_block_num,
                                                 shared_token_num);
+    if (ProcessSplitFuseToken(req, shared_block_num, unique_block_num, shared_token_num, step_token_num,
+                              decode_request_num)) {
+      break;
+    }
+
     req->prefix_cache_len = shared_token_num;
     req->prefix_cache_blocks_number = shared_block_num;
     req->is_use_prefix_cache = shared_block_num > 0;
@@ -465,6 +519,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         }
 
         it = batch_state_->waiting_queue.erase(it);
+        if (batch_scheduler_config_.split_fuse_token_num > 0 &&
+            step_token_num >= batch_scheduler_config_.split_fuse_token_num) {
+          break;
+        }
         continue;
       }
       KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();

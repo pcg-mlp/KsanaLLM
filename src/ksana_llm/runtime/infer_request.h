@@ -58,6 +58,9 @@ class InferRequest {
   // The input tokens.
   std::vector<int> &input_tokens;
 
+  // The origin input tokens.
+  std::vector<int> origin_input_tokens;
+
   // Embedding slice used to refit input embedding
   EmbeddingSlice &input_refit_embedding;
 
@@ -124,8 +127,8 @@ class InferRequest {
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;
 
-  // The block size for every kv cache block.
-  size_t block_size;
+  // The max token number of one block.
+  size_t block_token_num;
 
   // The offset for model forward's logits output.
   size_t logits_offset = 0;

@@ -32,6 +32,11 @@ setting:
     launch_block_threshold: 2.0
     # 是否开启自动前缀匹配
     enable_auto_prefix_cache: true
+    # split_fuse_token_num用于控制在单轮推理过程中，模型处理的最大token数量。
+    # 设置为256意味着在执行推理时，每个处理步骤（或“分割”）将处理最多256个token。
+    # 如果设置为0，则表示不对处理的token数量进行限制，模型将尝试一次性处理整个输入。
+    # 控制此参数可以帮助平衡推理速度与资源消耗，特别是在处理长文本时。
+    split_fuse_token_num: 256
     # 用于执行异步swap的线程池大小
     swap_threadpool_size: 8
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE

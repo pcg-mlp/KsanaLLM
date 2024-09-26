@@ -70,7 +70,6 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.infer_stage = req_ptr->infer_stage;
     forward_req.step = req_ptr->step;
     forward_req.logits_custom_length = req_ptr->logits_custom_length;
-    forward_req.block_size = req_ptr->block_size;
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
     forward_req.logits_offset = req_ptr->logits_offset;

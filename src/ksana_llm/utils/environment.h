@@ -141,6 +141,13 @@ struct BatchSchedulerConfig {
 
   // The preempt mode in case of insufficient GPU blocks.
   PreemptMode preempt_mode = SWAP;
+
+  // This parameter controls the maximum number of tokens processed in a single inference round.
+  // Setting it to 256 means that during inference, each processing step (or "split") will handle up to 256 tokens.
+  // If set to 0, it indicates that there is no limit on the number of tokens processed, and the model will attempt to
+  // process the entire input at once. Adjusting this parameter can help balance inference speed and resource
+  // consumption, especially when dealing with long texts.
+  size_t split_fuse_token_num = 0;
 };
 
 struct AllocatorConfig {

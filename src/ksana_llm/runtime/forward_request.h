@@ -46,9 +46,6 @@ struct ForwardRequest {
   // The kv cache addresses, for every device.
   std::vector<std::vector<void*>> kv_cache_ptrs;
 
-  // The block size for every kv cache block.
-  size_t block_size;
-
   // The flag for tagging request prefix cache usage
   bool is_use_prefix_cache = false;
 

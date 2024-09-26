@@ -53,7 +53,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     infer_request_group.push_back(infer_req);
 
     infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
-    infer_req->block_size = GetBlockManager()->GetBlockSize();
+    infer_req->block_token_num = GetBlockManager()->GetBlockTokenNum();
     infer_req->model_instance = model_instances_[req->model_name];
     if (!req->sampling_config.ignore_eos) {
       std::vector<int> &stop_token_ids = infer_req->sampling_config.stop_token_ids;

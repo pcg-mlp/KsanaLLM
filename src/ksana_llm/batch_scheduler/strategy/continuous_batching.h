@@ -38,6 +38,18 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   Status AllocateRequestBlocksWithRetry(std::shared_ptr<InferRequest> req, size_t &total_needed_block_num,
                                         size_t &step_block_num, bool &allocate_block_succ, bool &skip_swapout_check);
 
+  /**
+   * Processes a request to determine the appropriate number of tokens to split or fuse based on the current
+   * batching strategy configuration. This function adjusts the number of output tokens in the request to match
+   * the calculated split or fuse token count, and updates the shared and unique block counts accordingly.
+   *
+   * The function aims to optimize the processing of requests by dynamically adjusting the number of tokens
+   * to be processed together, based on the configured thresholds and the current state of the request and
+   * batch scheduler.
+   */
+  bool ProcessSplitFuseToken(std::shared_ptr<InferRequest> req, size_t &shared_block_num, size_t &unique_block_num,
+                             size_t &shared_token_num, size_t step_token_num, size_t decode_request_num);
+
   // Schedule the running/swapped/waiting queue.
   void ProcessRunningQueue();
   void ProcessSwappedQueue();
