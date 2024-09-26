@@ -51,6 +51,8 @@ struct SamplingRequest {
 
   // The no_reapete_ngram sampling map
   NgramDict* ngram_dict = nullptr;
+
+  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 };
 
 }  // namespace ksana_llm

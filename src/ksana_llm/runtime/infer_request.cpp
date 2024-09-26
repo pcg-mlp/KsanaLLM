@@ -37,9 +37,10 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
       padded_size(request->padded_size),
-      beam_search_group(request->beam_search_group) {
-  timestamp_in_ms = GetCurrentTimeInMs();
-}
+      beam_search_group(request->beam_search_group),
+      span_context(request->span_context),
+      timestamp_in_ms(request->timestamp_in_ms),
+      req_ctx(request->req_ctx) {}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }
 

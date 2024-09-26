@@ -213,13 +213,13 @@ struct EndpointConfig {
 // The config of profiler.
 struct ProfilerConfig {
   // The stat interval, in second.
-  size_t stat_interval_second;
+  std::string trace_export_url;
+  std::string metrics_export_url;
+  uint64_t export_interval_millis;
+  uint64_t export_timeout_millis;
 
-  // The stat buffer size.
-  size_t stat_buffer_size;
-
-  // The async report thread num.
-  size_t report_threadpool_size;
+  // Opentelemetry Resource attributes.
+  std::unordered_map<std::string, std::string> resource_attributes;
 };
 
 class Environment {

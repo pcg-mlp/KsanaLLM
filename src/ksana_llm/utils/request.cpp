@@ -3,10 +3,12 @@
 ==============================================================================*/
 
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/profiler/reporter.h"
 
 namespace ksana_llm {
 
-Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input)
+Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
+                 const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx)
     : req_id(0),
       req_ids(),
       model_name(ksana_python_input->model_name),
@@ -28,7 +30,9 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input)
       finish_status(),
       output_mutex(),
       request_target(ksana_python_input->request_target),
-      response() {
+      response(),
+      timestamp_in_ms(ProfileTimer::GetCurrentTimeInMs()),
+      req_ctx(req_ctx) {
   for (auto& [output, req_logprobs, total_score] : output_group) {
     output = ksana_python_input->input_tokens;
     req_ids.push_back(id_generator_.Gen());

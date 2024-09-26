@@ -79,6 +79,12 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       StopRequest(req, Status(RET_SUCCESS));
       it = batch_state_->running_queue.erase(it);
+      uint64_t duration = ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms;
+      size_t output_token_num = req->output_tokens.size();
+
+      REPORT_METRIC(forward_cost_time_ms, duration, req->req_ctx);
+      REPORT_METRIC(output_token_num, output_token_num, req->req_ctx);
+
       continue;
     }
 
@@ -90,6 +96,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
       it = batch_state_->running_queue.erase(it);
+
+      REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), req->req_ctx);
       continue;
     }
 
@@ -101,6 +109,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       StopRequest(req, Status(RET_TERMINATED, "client aborted."));
       it = batch_state_->running_queue.erase(it);
+
+      REPORT_COUNTER(forward_req_aborted_num, static_cast<size_t>(1), req->req_ctx);
       continue;
     }
 
@@ -418,6 +428,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     req->prefix_cache_len = shared_token_num;
     req->prefix_cache_blocks_number = shared_block_num;
     req->is_use_prefix_cache = shared_block_num > 0;
+    if (req->is_use_prefix_cache) {
+      REPORT_COUNTER(cached_hit_num, static_cast<size_t>(1), req->req_ctx);
+      REPORT_COUNTER(cached_token_num, shared_token_num, req->req_ctx);
+      REPORT_COUNTER(cached_block_num, shared_block_num, req->req_ctx);
+    }
 
     size_t current_token_num = req->output_tokens.size();
     size_t launch_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.launch_block_threshold);
@@ -438,6 +453,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         // if full matched, skip decode and put it to the end of decode list.
         if (shared_token_num == req->output_tokens.size()) {
           KLLM_LOG_DEBUG << "Full matched, skip prefill, req " << req->req_id;
+          REPORT_COUNTER(full_prompt_matched_req_num, shared_block_num, req->req_ctx);
 
           req->infer_stage = InferStage::STATE_DECODE;
           req->prefix_cache_len = 0;
@@ -540,8 +556,8 @@ void ContinuousBatchingStrategy::Schedule() {
   ProcessSwappedQueue();
   ProcessWaitingQueue();
 
-  REPORT_METRIC(batch_scheduler_pending_swapin, batch_state_->swapin_pending_requests_.size());
-  REPORT_METRIC(batch_scheduler_pending_swapout, batch_state_->swapout_pending_requests_.size());
+  REPORT_METRIC(batch_scheduler_pending_swapin_size, batch_state_->swapin_pending_requests_.size());
+  REPORT_METRIC(batch_scheduler_pending_swapout_size, batch_state_->swapout_pending_requests_.size());
 }
 
 }  // namespace ksana_llm

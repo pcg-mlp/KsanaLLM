@@ -6,7 +6,6 @@
 #include <sstream>
 
 #include "ksana_llm/block_manager/block_manager_interface.h"
-#include "ksana_llm/profiler/collector.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "test.h"
 
@@ -443,17 +442,8 @@ class BatchSchedulerEnvironmentSimulator {
     blk_mgr_ = new BlockManagerSimulator(block_manager_config, tp_num);
     SetBlockManager(blk_mgr_);
     ProfilerConfig profiler_config;
-    profiler_config.report_threadpool_size = 1;
-    profiler_config.stat_interval_second = 1;
-    profile_collector_ = new ProfileCollector(profiler_config);
-    SetProfileCollector(profile_collector_);
-    profile_collector_->Start();
   }
-  ~BatchSchedulerEnvironmentSimulator() {
-    delete blk_mgr_;
-    profile_collector_->Stop();
-    delete profile_collector_;
-  }
+  ~BatchSchedulerEnvironmentSimulator() { delete blk_mgr_; }
 
   void RunAStep(std::vector<std::shared_ptr<InferRequest>>& scheduled_reqs) {
     for (auto req : scheduled_reqs) {
@@ -522,7 +512,9 @@ class BatchSchedulerEnvironmentSimulator {
     std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
     ksana_python_input->sampling_config.num_beams = 0;
     ksana_python_input->sampling_config.num_return_sequences = 1;
-    req = std::make_shared<Request>(ksana_python_input);
+    auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>(
+        std::unordered_map<std::string, std::string>{{"key1", "value1"}, {"key2", "value2"}});
+    req = std::make_shared<Request>(ksana_python_input, req_ctx);
     req->req_id = req_id;
     req->model_name = "llama";
     req->waiter = std::make_shared<Waiter>(1);
@@ -612,7 +604,6 @@ class BatchSchedulerEnvironmentSimulator {
 
  private:
   BlockManagerSimulator* blk_mgr_;
-  ProfileCollector* profile_collector_;
   std::unordered_map<int, int> req_output_num_map_;
 
   // map for seeds used to generate input and output

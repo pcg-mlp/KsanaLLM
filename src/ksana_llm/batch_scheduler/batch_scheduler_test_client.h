@@ -8,7 +8,7 @@
 
 #include "ksana_llm/batch_scheduler/batch_scheduler_interface.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
-#include "ksana_llm/profiler/timer.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/threadpool.h"
 
 namespace ksana_llm {

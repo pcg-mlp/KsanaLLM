@@ -65,12 +65,16 @@ setting:
       quant_method: auto
   # 性能统计相关配置
   profiler:
-    # 统计周期，每隔多少秒输出一次统计数据
-    stat_interval_second: 5
-    # 缓存队列大小
-    stat_buffer_size: 1024
-    # 异步上报的线程池大小
-    report_threadpool_size: 4
+    #trace_export_url: "http://example.com/v1/traces"
+    #metrics_export_url: "http://example.com/v1/metrics"
+    export_interval_millis: 30000
+    export_timeout_millis: 1000
+    attributes:
+        instance: "1.1.1.1"
+        container_name: "container_name_001"
+        version: "1.1"
+
+
 # 模型配置
 model_spec:
   # 基础模型配置，只能有一个

@@ -4,7 +4,7 @@
 
 import asyncio
 import importlib.util
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Dict
 import asyncio
 from concurrent import futures
 
@@ -158,6 +158,7 @@ class ServingModel(object):
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
         streamer: Optional["BaseStreamer"] = None,
+        req_ctx: Dict[str, str] = {},
         **kwargs,
     ) -> List[List[int]]:
         """The model generate interface, invoked by venus.
@@ -209,20 +210,19 @@ class ServingModel(object):
             ksana_python_input.input_refit_embedding.embeddings = kwargs['input_refit_embedding']['embeddings']
 
         if streamer is None:
-            _, ksana_python_output = self._serving.generate(ksana_python_input)
+            _, ksana_python_output = self._serving.generate(ksana_python_input, req_ctx)
             self._ksana_plugin.postprocess(ksana_python_input, ksana_python_output)
             return ksana_python_output
         else:
-            _, streaming_iterator = self._serving.generate_streaming(ksana_python_input)
+            _, streaming_iterator = self._serving.generate_streaming(ksana_python_input, req_ctx)
             return PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
 
     @torch.no_grad()
-    def forward(self, request_bytes: bytes) -> Optional[bytes]:
+    def forward(self, request_bytes: bytes, req_ctx: Dict[str, str]) -> Optional[bytes]:
         """The model forward interface.
         This function just forwards the raw request bytes to the serving in the C++ side.
         """
-
-        status, response_bytes = self._serving.forward(request_bytes)
+        status, response_bytes = self._serving.forward(request_bytes, req_ctx)
         if status.OK():
             return response_bytes
         else:  # Failed to get the response

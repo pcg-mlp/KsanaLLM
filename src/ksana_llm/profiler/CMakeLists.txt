@@ -3,12 +3,26 @@
 # ==============================================================================
 cmake_minimum_required(VERSION 3.8)
 
+include(external/opentelemetry)
 file(GLOB_RECURSE profiler_SRCS
-     ${PROJECT_SOURCE_DIR}/src/ksana_llm/profiler/*.cpp
      ${PROJECT_SOURCE_DIR}/src/ksana_llm/profiler/*.cpp)
 
 list(FILTER profiler_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "profiler_SRCS: ${profiler_SRCS}")
 
+
 add_library(profiler STATIC ${profiler_SRCS})
-target_link_libraries(profiler PUBLIC utils)
+# 添加 OpenTelemetry 的包含目录
+target_include_directories(profiler
+  PUBLIC
+    ${OPENTELEMETRY_CPP_INCLUDE_DIRS}  # 添加 OpenTelemetry 的包含目录
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+message(STATUS "OPENTELEMETRY_CPP_INCLUDE_DIRS: ${OPENTELEMETRY_CPP_INCLUDE_DIRS}")
+
+target_link_libraries(profiler 
+  PUBLIC 
+     utils 
+     ${OPENTELEMETRY_CPP_LIBRARIES}
+)

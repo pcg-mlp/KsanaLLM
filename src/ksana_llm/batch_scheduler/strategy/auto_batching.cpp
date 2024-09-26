@@ -6,7 +6,7 @@
 
 #include <iterator>
 #include <vector>
-
+#include "ksana_llm/profiler/reporter.h"
 #ifdef ENABLE_ACL
 #  include "ksana_llm/utils/ascend/acl_utils.h"
 #endif
@@ -35,6 +35,7 @@ bool AutoBatchingStrategy::CheckBatchFinished() {
          req->output_tokens.size() < batch_scheduler_config_.max_token_len)) {
       return false;
     }
+    REPORT_METRIC(forward_cost_time_ms, ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms, req->req_ctx);
   }
   return true;
 }
@@ -45,6 +46,7 @@ bool AutoBatchingStrategy::CheckBatchTimeout() {
     if (batch_state_->schedule_time_in_ms < req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms) {
       return false;
     }
+    REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), req->req_ctx);
   }
   return true;
 }
