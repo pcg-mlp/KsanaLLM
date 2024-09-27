@@ -5,6 +5,7 @@
 
 #include <future>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,13 +37,13 @@ class BaseCacheManager {
   // That is, the blocks used by swapout, but not merged yet.
   size_t GetFutureBlockNumber() {
     size_t future_block_num = 0;
-    for (auto pair : swapout_cached_block_buffer_) {
-      future_block_num += pair.second.size();
+    for (const auto& [req_id, swapout_blocks] : swapout_cached_block_buffer_) {
+      future_block_num += swapout_blocks.size();
     }
     return future_block_num;
   }
 
-  // Waiting until at lease on swap out/in task done, return the pending task number.
+  // Waiting until at least one swap out/in task done, return the pending task number.
   Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) {
     return WaitTaskDone(swapout_task_queue_, finish_swapout_request_, req_ids, left_req_num, blocking);
   }
@@ -77,13 +78,15 @@ class BaseCacheManager {
   // Create a new cached request instance.
   CachedRequestType* CreateCachedRequest(int64_t req_id) {
     // New created request is in waiting state, and have no cached blocks.PrefixCacheManager
-    CachedRequestType* cached_request = new CachedRequestType();
+    auto cached_request = std::make_unique<CachedRequestType>();
     cached_request->req_id = req_id;
 
+    // Get a raw pointer from the unique pointer of CachedRequestType without ownership.
+    CachedRequestType* cached_request_ptr = cached_request.get();
     // Append to request list.
-    cached_requests_[req_id] = cached_request;
+    cached_requests_.emplace(req_id, std::move(cached_request));
 
-    return cached_request;
+    return cached_request_ptr;
   }
 
   // Wait until at least one request is done.
@@ -188,7 +191,7 @@ class BaseCacheManager {
   std::queue<CachedBlockType*> free_cached_blocks_;
 
   // All requests, the key is request id.
-  std::unordered_map<int64_t, CachedRequestType*> cached_requests_;
+  std::unordered_map<int64_t, std::unique_ptr<CachedRequestType>> cached_requests_;
 
   // Threadpool used to swap in/out.
   std::shared_ptr<ThreadPool> threadpool_ = nullptr;

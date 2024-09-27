@@ -44,8 +44,8 @@ class PrefixCacheManagerTest : public testing::Test {
   }
 
   void TearDown() override {
-    delete cache_manager;
     delete faked_token_generator;
+    delete cache_manager;
     delete faked_block_manager;
   }
 

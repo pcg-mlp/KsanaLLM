@@ -4,8 +4,6 @@
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 
 #include <algorithm>
-#include <atomic>
-#include <cassert>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -62,10 +60,9 @@ size_t PrefixCacheManager::GetUsableBlockNumber() {
 size_t PrefixCacheManager::GetRequestUsableBlockNumber(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    assert(false);
-    return 0;
+    KLLM_THROW(FormatStr("Get usable block number for req %d error, req not exist.", req_id));
   }
-  PrefixCachedRequest* cached_request = it->second;
+  PrefixCachedRequest* cached_request = it->second.get();
 
   size_t reserved_block_num = 0;
   for (PrefixCachedBlock* cached_block : cached_request->cached_blocks) {
@@ -84,8 +81,7 @@ size_t PrefixCacheManager::GetHostFreeBlockNumber() {
 size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    assert(false);
-    return 0;
+    KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
   }
   return it->second->cached_blocks.back()->is_shareable ? 1 : 0;
 }
@@ -94,7 +90,7 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
                                                        size_t& shared_block_num, size_t& unique_block_num,
                                                        size_t& shared_token_num) {
   auto it = cached_requests_.find(req_id);
-  PrefixCachedRequest* request = (it == cached_requests_.end()) ? CreateCachedRequest(req_id) : it->second;
+  PrefixCachedRequest* request = (it == cached_requests_.end()) ? CreateCachedRequest(req_id) : it->second.get();
 
   // Check whether existed blocks is still valid.
   if (!request->cached_blocks.empty()) {
@@ -284,7 +280,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   if (it == cached_requests_.end()) {
     return Status(RET_RUNTIME, FormatStr("Allocate block for req %d error, req not exist.", req_id));
   }
-  PrefixCachedRequest* cached_request = it->second;
+  PrefixCachedRequest* cached_request = it->second.get();
 
   // Try to allocate from block manager first.
   size_t needed_blocks = 0;
@@ -351,7 +347,7 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
     return;
   }
 
-  PrefixCachedRequest* cached_request = it->second;
+  PrefixCachedRequest* cached_request = it->second.get();
 
   // If not waiting, remove request from associated cache blocks.
   if (cached_request->req_state != RequestState::REQUEST_STATE_WAITING) {
@@ -523,7 +519,7 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
     return Status(RET_RUNTIME, FormatStr("Update request token error, req %d is not found.", req_id));
   }
 
-  PrefixCachedRequest* cached_request = it->second;
+  PrefixCachedRequest* cached_request = it->second.get();
 
   // Return if block is not full.
   size_t filled_block_num = token_ids.size() / cache_manager_config_.block_token_num;
@@ -855,7 +851,7 @@ Status PrefixCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
 
     // Merge cb to existed node only if shareable.
     if (cb->is_shareable) {
-      AppendSwapinCachedBlock(it->second, i, cb, req_block_ids);
+      AppendSwapinCachedBlock(it->second.get(), i, cb, req_block_ids);
     } else {
       // Update internal memory block ids of unfilled block.
       for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
@@ -883,7 +879,7 @@ void PrefixCacheManager::DestroySwapedRequest(int64_t req_id) {
     return;
   }
 
-  PrefixCachedRequest* cached_request = it->second;
+  PrefixCachedRequest* cached_request = it->second.get();
   for (PrefixCachedBlock* cb : cached_request->cached_blocks) {
     // If on host.
     if (!cb->is_device_location) {

@@ -19,8 +19,8 @@ Status::Status(RetCode code, const std::string &message) {
 Status::Status(const Status &status) : Status(status.GetCode(), status.GetMessage()) {}
 
 const std::string &Status::GetEmptyString() {
-  static std::string *empty = new std::string();
-  return *empty;
+  static std::string empty;
+  return empty;
 }
 
 std::string Status::ToString() const {

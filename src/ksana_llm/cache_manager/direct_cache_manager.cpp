@@ -4,8 +4,6 @@
 #include "ksana_llm/cache_manager/direct_cache_manager.h"
 
 #include <algorithm>
-#include <atomic>
-#include <cassert>
 #include <cstring>
 #include <mutex>
 #include "ksana_llm/runtime/request_state.h"
@@ -58,8 +56,7 @@ size_t DirectCacheManager::GetHostFreeBlockNumber() {
 size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    assert(false);
-    return 0;
+    KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
   }
   return (it->second->output_token_num % cache_manager_config_.block_token_num == 0) ? 1 : 0;
 }
@@ -105,7 +102,7 @@ Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
     return Status(RET_RUNTIME, FormatStr("Allocate block for req %d error, req not exist.", req_id));
   }
 
-  DirectCachedRequest* cached_request = it->second;
+  DirectCachedRequest* cached_request = it->second.get();
 
   // Try to allocate from free list.
   for (size_t i = 0; i < block_num; ++i) {
@@ -131,7 +128,7 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
     return;
   }
 
-  DirectCachedRequest* cached_request = it->second;
+  DirectCachedRequest* cached_request = it->second.get();
 
   for (size_t i = 0; i < cached_request->cached_blocks.size(); ++i) {
     free_cached_blocks_.push(cached_request->cached_blocks[i]);
@@ -331,7 +328,7 @@ void DirectCacheManager::DestroySwapedRequest(int64_t req_id) {
     return;
   }
 
-  DirectCachedRequest* cached_request = it->second;
+  DirectCachedRequest* cached_request = it->second.get();
   for (DirectCachedBlock* cb : cached_request->cached_blocks) {
     GetBlockManager()->FreeHostBlocks(cb->memory_block_ids);
     delete cb;

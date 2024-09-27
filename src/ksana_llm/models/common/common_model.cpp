@@ -561,7 +561,6 @@ Status CommonModel<T>::CommonDecoderPostNorm(const int layer_idx, std::shared_pt
 
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs) {
-  auto batch_size = forward_reqs.size();
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
   memcpy(input_tokens_ptr, model_input_->input_ids_cpu.data(), model_input_->input_ids_cpu.size() * sizeof(int));
   cpu_input_tokens_tensor_.shape = {model_input_->input_ids_cpu.size()};
