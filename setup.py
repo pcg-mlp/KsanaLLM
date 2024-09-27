@@ -19,12 +19,8 @@ class CMakeExtension(Extension):
 
 
 def is_run_on_npu_device() -> bool:
-    try:
-        # pylint: disable-next=unused-import
-        import torch_npu
-        return True
-    except ModuleNotFoundError:
-        return False
+    import pkgutil
+    return "torch_npu" in [pkg.name for pkg in pkgutil.iter_modules()]
 
 
 class BuildExt(build_ext_orig):
@@ -61,8 +57,7 @@ class BuildExt(build_ext_orig):
             cmake_args = [
                 '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' +
                 str(extdir.parent.absolute()), '-DCMAKE_BUILD_TYPE=' + config,
-                '-DWITH_TESTING=OFF',
-                '-DSM=80,86,89'
+                '-DWITH_TESTING=OFF', '-DSM=80,86,89'
             ]
 
         # example of build args
@@ -87,16 +82,17 @@ class BuildExt(build_ext_orig):
             copy_file(str(build_temp_lib.joinpath(target_lib)),
                       str(extdir.parent.absolute()))
         # copy optional weight map to cwd for wheel package
-        need_dirs = [
-            'weight_map', 
-            'ksana_plugin'
-        ]
+        need_dirs = ['weight_map', 'ksana_plugin']
         for need_dir in need_dirs:
             src_dir = os.path.join('src/ksana_llm/python', need_dir)
-            dst_dir = os.path.join(extdir.parent.absolute(), os.path.join("ksana_llm", need_dir))
+            dst_dir = os.path.join(extdir.parent.absolute(),
+                                   os.path.join("ksana_llm", need_dir))
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
-        need_files = ["serving_server.py", "serving_generate_client.py", "serving_forward_client.py"]
+        need_files = [
+            "serving_server.py", "serving_generate_client.py",
+            "serving_forward_client.py"
+        ]
         for need_file in need_files:
             src_dir = os.path.join('src/ksana_llm/python', need_file)
             dst_dir = os.path.join(extdir.parent.absolute(), "ksana_llm")

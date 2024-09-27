@@ -118,7 +118,7 @@ if __name__ == "__main__":
     response = post_http_request(prompt, api_url, n, stream)
     # Initialize an empty result string
     # pylint: disable-next=invalid-name
-    result = ""
+    result = str()
     # Handle the response based on the stream flag
     if stream:
         # Iterate over the streaming response

@@ -5,7 +5,6 @@ import threading
 import queue
 import time
 import typing
-import pkgutil
 
 # Add paths for C++ lib python wrapper and python interface
 sys.path.insert(0, '../../build/lib')
@@ -28,7 +27,6 @@ stream_handler.setFormatter(formatter)
 logging.getLogger().addHandler(stream_handler)
 
 from transformers import GenerationConfig, AutoTokenizer
-from rouge_score import rouge_scorer
 
 
 # Define a function to parse command line arguments
