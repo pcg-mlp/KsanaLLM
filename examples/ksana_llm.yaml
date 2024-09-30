@@ -57,6 +57,8 @@ setting:
     block_host_memory_factor: 2.0
   # 量化相关配置
   quantization_config:
+    # GPTQ/AWQ中的量化后端，支持cutlass和marlin两种，默认为cutlass
+    gptq_backend: cutlass
     # block中kv cache的量化
     kv_cache:
       # 支持fp8_e5m2, fp8_e4m3和auto

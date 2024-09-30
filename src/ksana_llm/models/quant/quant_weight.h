@@ -56,22 +56,39 @@ class QuantWeight {
 
  private:
 #ifdef ENABLE_CUDA
-  torch::Tensor AutoUnpack(const std::string& tensor_name, torch::Tensor& tensor);
+  // Cutlass kernel
+  torch::Tensor CutlassAutoUnpack(const std::string& tensor_name, torch::Tensor& tensor);
 
-  torch::Tensor UnpackAWQ(const torch::Tensor& qweight, int bits, int group_size);
+  torch::Tensor CutlassUnpackAWQ(const torch::Tensor& qweight, int bits, int group_size);
 
-  torch::Tensor GetReverseOrder(const torch::Tensor& iweights, int bits);
+  torch::Tensor CutlassGetReverseOrder(const torch::Tensor& iweights, int bits);
 
-  torch::Tensor UnpackQWeight(const torch::Tensor& qtensor, int bits);
+  torch::Tensor CutlassUnpackQWeight(const torch::Tensor& qtensor, int bits);
 
-  torch::Tensor UnpackGPTQ(const torch::Tensor& qweight);
+  torch::Tensor CutlassUnpackGPTQ(const torch::Tensor& qweight);
 
-  torch::Tensor PackInt8ToPackedInt4(torch::Tensor weight);
+  torch::Tensor CutlassPackInt8ToPackedInt4(torch::Tensor weight);
 
-  torch::Tensor PreprocessWeightsForMixedGemmWarpper(torch::Tensor row_major_quantized_weight,
-                                                     llm_kernels::nvidia::QuantType quant_type);
+  torch::Tensor CutlassPreprocessWeightsForMixedGemmWarpper(torch::Tensor row_major_quantized_weight,
+                                                            llm_kernels::nvidia::QuantType quant_type);
 
+  // Marlin kernel
+  torch::Tensor MarlinPermuteScales(torch::Tensor s, int size_k, int size_n, int group_size);
+
+  torch::Tensor MarlinUnpackCols(const torch::Tensor& packed_q_w, int num_bits, int size_k, int size_n);
+
+  torch::Tensor MarlinPackCols(const torch::Tensor& q_w, int num_bits, int size_k, int size_n);
+
+  torch::Tensor MarlinZeroPoints(const torch::Tensor& zp_, int size_k, int size_n, int num_bits);
+
+  torch::Tensor MarlinAwqToMarlinZeroPoints(const torch::Tensor& q_zp_packed, int size_k, int size_n, int num_bits);
+
+  torch::Tensor MarlinSortGIdx(torch::Tensor& g_idx);
+
+  // tools
   Status AddWeightFromTorchTensor(const std::string& name, torch::Tensor& tensor);
+
+  torch::Tensor GetTorchTensorFromWeight(const std::string& name);
 #endif
 
   // Check if the model is a quantized model

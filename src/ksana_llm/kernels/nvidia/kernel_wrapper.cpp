@@ -32,7 +32,42 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
+#include "csrc/kernels/nvidia/gptq_marlin/awq_marlin_repack.h"
+#include "csrc/kernels/nvidia/gptq_marlin/gptq_marlin.h"
+#include "csrc/kernels/nvidia/gptq_marlin/gptq_marlin_repack.h"
+
 namespace ksana_llm {
+
+int GetMarlinReduceMaxM(int prob_m, int max_par) {
+  return llm_kernels::nvidia::marlin::determine_reduce_max_m(prob_m, max_par);
+}
+
+// Execute marlin's gptq/awq gemm
+// is_k_full indicates whether the weights are K-dimensionally splited
+// has_zp indicates zero data
+// has_act_order indicates whether it is a gptq-desc
+// is_awq indicates whether it is an AWQ model
+void InvokeMarlinGroupGemm(void* a, void* a_tmp, void* b_q_weight, void* b_scales, void* b_zeros, void* g_idx,
+                           void* perm, void* workspace, void* c, void* c_tmp, int64_t size_m, int64_t size_n,
+                           int64_t size_k, int64_t num_groups, bool is_k_full, bool has_zp, bool has_act_order,
+                           bool is_awq, int rank, cudaStream_t stream) {
+  llm_kernels::nvidia::gptq_marlin_gemm(a, a_tmp, b_q_weight, b_scales, b_zeros, g_idx, perm, workspace, c, c_tmp,
+                                        size_m, size_n, size_k, num_groups, is_k_full, has_zp, has_act_order, is_awq,
+                                        rank, stream);
+}
+
+// Weighted layout transformation for GPTQ in marlin backend
+void InvokeMarlinGptqRepack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr, uint32_t* out_ptr, int64_t size_k,
+                            int64_t size_n, int64_t num_bits, bool has_perm, int rank, cudaStream_t stream) {
+  llm_kernels::nvidia::gptq_marlin_repack(b_q_weight_ptr, perm_ptr, out_ptr, size_k, size_n, num_bits, has_perm, rank,
+                                          stream);
+}
+
+// Weighted layout transformation for AWQ in marlin backend
+void InvokeMarlinAwqRepack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, int64_t size_k, int64_t size_n,
+                           int64_t num_bits, int rank, cudaStream_t stream) {
+  llm_kernels::nvidia::awq_marlin_repack(b_q_weight_ptr, out_ptr, size_k, size_n, num_bits, rank, stream);
+}
 
 DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
   DataType data_type = TYPE_INVALID;

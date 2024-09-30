@@ -13,10 +13,23 @@
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 #include "csrc/utils/quant_type.h"
 
-#include "ksana_llm/utils/nvidia/nccl_utils.h"
 #include "ksana_llm/utils/common_device.h"
+#include "ksana_llm/utils/nvidia/nccl_utils.h"
 
 namespace ksana_llm {
+
+int GetMarlinReduceMaxM(int prob_m, int max_par);
+
+void InvokeMarlinGroupGemm(void* a, void* a_tmp, void* b_q_weight, void* b_scales, void* b_zeros, void* g_idx,
+                           void* perm, void* workspace, void* c, void* c_tmp, int64_t size_m, int64_t size_n,
+                           int64_t size_k, int64_t num_groups, bool is_k_full, bool has_zp, bool has_act_order,
+                           bool is_awq, int rank, cudaStream_t stream);
+
+void InvokeMarlinGptqRepack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr, uint32_t* out_ptr, int64_t size_k,
+                            int64_t size_n, int64_t num_bits, bool has_perm, int rank, cudaStream_t stream);
+
+void InvokeMarlinAwqRepack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, int64_t size_k, int64_t size_n,
+                           int64_t num_bits, int rank, cudaStream_t stream);
 
 DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type);
 

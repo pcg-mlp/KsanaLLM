@@ -33,6 +33,12 @@ class TensorT {
 
   TensorT<T>* scales = nullptr;
   TensorT<T>* zeros = nullptr;
+
+  // g_idx indicates the scales row number corresponding to each row of weight
+  TensorT<T>* g_idx = nullptr;
+  // perm is converted from g_idx, perm=torch.argsort(g_idx), perm is used in marlin backend to support gptq-desc
+  TensorT<T>* perm = nullptr;
+
   TensorT<T>* input_scales = nullptr;
   TensorT<T>* weight_scales = nullptr;
 

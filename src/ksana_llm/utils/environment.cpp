@@ -50,7 +50,7 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
 }
 
 void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config,
-                           std::string &yaml_weight_quant_method) {
+                           std::string &yaml_weight_quant_method, std::string &yaml_gptq_backend) {
   model_config.is_quant = config_json.contains("quantization_config");
   if (model_config.is_quant) {
     std::string quant_method = config_json["quantization_config"].at("quant_method");
@@ -58,8 +58,10 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
       model_config.quant_config.method = QUANT_GPTQ;
       model_config.quant_config.bits = config_json["quantization_config"].at("bits");
       model_config.quant_config.group_size = config_json["quantization_config"].at("group_size");
-      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}", quant_method,
-                                   model_config.quant_config.bits, model_config.quant_config.group_size);
+      model_config.quant_config.desc_act = config_json["quantization_config"].at("desc_act");
+      KLLM_LOG_INFO << fmt::format("using quant model, quant method: {}, bits: {}, group_size: {}, desc_act: {}",
+                                   quant_method, model_config.quant_config.bits, model_config.quant_config.group_size,
+                                   model_config.quant_config.desc_act);
     } else if (quant_method == "awq") {
       model_config.quant_config.method = QUANT_AWQ;
       model_config.quant_config.bits = config_json["quantization_config"].at("bits");
@@ -92,6 +94,21 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
           model_config.quant_config.is_activation_scheme_static);
     } else {
       KLLM_THROW(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
+    }
+  }
+
+  if (model_config.quant_config.method == QUANT_GPTQ && model_config.quant_config.desc_act == true) {
+    model_config.quant_config.backend = MARLIN_BACKEND;
+    KLLM_LOG_INFO << "Using MARLIN Quant Backend, only support MARLIN backend in desc_act mode";
+  } else {
+    if (yaml_gptq_backend == "cutlass") {
+      model_config.quant_config.backend = CUTLASS_BACKEND;
+      KLLM_LOG_INFO << "Using CUTLASS Quant Backend";
+    } else if (yaml_gptq_backend == "marlin") {
+      model_config.quant_config.backend = MARLIN_BACKEND;
+      KLLM_LOG_INFO << "Using MARLIN Quant Backend";
+    } else {
+      KLLM_THROW(fmt::format("Not support quant backend {}.", yaml_gptq_backend));
     }
   }
 }
@@ -368,6 +385,9 @@ Status Environment::ParseConfig(const std::string &config_file) {
   yaml_weight_quant_method_ = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.quantization_config.weight.quant_method", "auto");
 
+  yaml_gptq_backend_ = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.quantization_config.gptq_backend", "cutlass");
+
   // Read base model.
   std::string base_model_dir =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
@@ -455,7 +475,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
     PrepareCommonModelAttributes(config_json, model_config);
   }
   ParseModelMaxLength(config_json, model_config);
-  ParseModelQuantConfig(config_json, model_config, yaml_weight_quant_method_);
+  ParseModelQuantConfig(config_json, model_config, yaml_weight_quant_method_, yaml_gptq_backend_);
 
   UpdateEndIdFromGeneration(model_dir, model_config);
 

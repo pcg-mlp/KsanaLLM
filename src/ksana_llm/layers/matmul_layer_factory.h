@@ -54,14 +54,35 @@ class MatMulLayerFactory {
     // gptq layer
     if (model_config_.is_quant &&
         (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {
-      if (weight_name.find("lm_head") == std::string::npos) {
-        std::vector<std::any> group_matmul_param;
-        group_matmul_param.push_back(model_config_.max_scheduler_token_num);
-        group_matmul_param.push_back(base_weight->GetModelWeights(weight_name).shape[1] * 2);
-        group_matmul_param.push_back(base_weight->GetModelWeights(weight_name).shape[0]);
-        group_matmul_param.push_back(model_config_.quant_config.group_size);
-        group_matmul_param.push_back(true);
-        return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ);
+      size_t hidden_size = model_config_.hidden_units;
+      size_t inter_size = model_config_.inter_size;
+      // The inter size in config.json for the qwen1 model is twice the true inter size.
+      if (model_config_.type == "qwen") {
+        inter_size /= 2;
+      }
+      size_t tp = model_config_.tensor_para_size;
+      size_t qkv_size = model_config_.size_per_head * (model_config_.head_num + 2 * model_config_.num_key_value_heads);
+      // Because the layout convertion, we can't get n/k from weight shape, and have to calculate it.
+      std::map<std::string, std::tuple<size_t, size_t, bool>> kn_pairs;
+      kn_pairs["query_key_value"] = std::make_tuple(hidden_size, qkv_size / tp, true);
+      kn_pairs["o_proj"] = std::make_tuple(hidden_size / tp, hidden_size, false);
+      kn_pairs["gate_proj"] = std::make_tuple(hidden_size, inter_size / tp, true);
+      kn_pairs["up_proj"] = kn_pairs["gate_proj"];
+      kn_pairs["down_proj"] = std::make_tuple(inter_size / tp, hidden_size, false);
+      for (const auto& kn : kn_pairs) {
+        if (weight_name.find(kn.first) != std::string::npos) {
+          std::vector<std::any> group_matmul_param;
+          group_matmul_param.push_back(static_cast<bool>(model_config_.quant_config.method == QUANT_AWQ));
+          group_matmul_param.push_back(static_cast<bool>(model_config_.quant_config.desc_act));
+          group_matmul_param.push_back(static_cast<bool>(std::get<2>(kn.second)));
+          group_matmul_param.push_back(static_cast<GroupQuantBackend>(model_config_.quant_config.backend));
+          group_matmul_param.push_back(model_config_.max_scheduler_token_num);
+          group_matmul_param.push_back(std::get<1>(kn.second));
+          group_matmul_param.push_back(std::get<0>(kn.second));
+          group_matmul_param.push_back(model_config_.quant_config.group_size);
+          group_matmul_param.push_back(true);
+          return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ);
+        }
       }
     }
     // fp8 layer

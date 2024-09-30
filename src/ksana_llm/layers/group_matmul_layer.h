@@ -20,12 +20,26 @@ class GroupMatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+  bool is_awq_;
+  bool is_gptq_desc_;
+  // Whether the K-dimension of the weights is complete. If the weights split in the K dimension, is_k_full_ = false
+  bool is_k_full_;
+  GroupQuantBackend backend_;
+
   size_t max_m_, max_n_, max_k_;
   size_t groupsize_;
 
-  bool use_gemv_cuda_core_;
+  // Marlin parameter
+  size_t marlin_workspace_size_;
+  size_t marlin_input_tmp_size_;
+  size_t marlin_output_tmp_size_;
+  size_t marlin_workspace_offset_;
+  size_t marlin_input_tmp_offset_;
+  size_t marlin_output_tmp_offset_;
 
-  std::vector<size_t> config_map_;
+  // Cutlass parameter
+  bool cutlass_use_gemv_cuda_core_;
+  std::vector<size_t> cutlass_config_map_;
 };
 
 }  // namespace ksana_llm

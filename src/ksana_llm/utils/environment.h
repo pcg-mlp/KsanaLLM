@@ -27,16 +27,23 @@ struct RoPEScalingFactor {
 
 enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3 };
 
+enum GroupQuantBackend { CUTLASS_BACKEND, MARLIN_BACKEND };
+
 // The Quant informations.
 struct QuantConfig {
   // The quant method
   QuantMode method = QUANT_NONE;
 
   // (gptq/awq) The quant bits
-  size_t bits;
+  size_t bits = 4;
 
   // (gptq/awq) The quant group size
-  size_t group_size;
+  size_t group_size = 128;
+
+  // (gptq) The desc act mode
+  bool desc_act = false;
+
+  GroupQuantBackend backend = CUTLASS_BACKEND;
 
   // (fp8) Whether weight is quantized in checkpoint.
   bool is_checkpoint_fp8_serialized = false;
@@ -293,6 +300,9 @@ class Environment {
 
   // The config of block manager.
   BlockManagerConfig block_manager_config_;
+
+  // The backend of gptq/awq quantization.
+  std::string yaml_gptq_backend_;
 
   // The config of quantization.
   std::string yaml_weight_quant_method_;
