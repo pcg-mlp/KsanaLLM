@@ -25,8 +25,8 @@ set(layers_ascend_LIBS, "")
 if(WITH_ACL)
   file(GLOB_RECURSE layers_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/ascend/*.cpp)
   list(APPEND layers_ascend_LIBS ${ACL_SHARED_LIBS} llm_kernels_ascend_utils_common
-    llm_kernels_ascend_embedding
-    llm_kernels_ascend_paged_attention)
+    # llm_kernels_ascend_embedding
+    atb_attention)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})
@@ -42,7 +42,6 @@ endif()
 
 if(WITH_ACL)
   file(GLOB_RECURSE layers_test_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/ascend/*test.cpp)
-  add_library(extra_deps SHARED ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS})
 endif()
 
 file(GLOB_RECURSE layers_test_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/*test.cpp

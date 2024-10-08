@@ -31,7 +31,12 @@ aclDataType CastDataTypeToAclDataType(const DataType dtype) {
 
 void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_table, const aclTensor* position_table,
                      aclTensor* output, aclrtStream stream, WorkSpaceFunc ws_func) {
-  llm_kernels::ascend::LookupEmbedding(input_ids, embedding_table, position_table, output, stream, ws_func);
+  uint64_t ws_size = 0ull;
+  void* workspace = nullptr;
+  aclOpExecutor* executor = nullptr;
+  ACL_CHECK_RET(aclnnEmbeddingGetWorkspaceSize(embedding_table, input_ids, output, &ws_size, &executor));
+  ws_func(ws_size, &workspace);
+  ACL_CHECK_RET(aclnnEmbedding(workspace, ws_size, executor, stream));
 }
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {

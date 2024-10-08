@@ -2,12 +2,9 @@
 
 ==============================================================================*/
 #include "ksana_llm/utils/ascend/ascend_device.h"
+#include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 #include "ksana_llm/utils/device_utils.h"
-
-#ifdef ENABLE_ACL_ATB
-#  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
-#endif
 
 namespace ksana_llm {
 
@@ -22,26 +19,20 @@ AscendDeviceContextManager::AscendDeviceContextManager() {
     ACL_CHECK(aclrtSetDevice(dev_id));
     ACL_CHECK(aclrtCreateContext(&context, dev_id));
     acl_contexts_[dev_id] = context;
-#ifdef ENABLE_ACL_ATB
     atb::Context* atb_context_ptr = nullptr;
     ATB_CHECK_RET(atb::CreateContext(&atb_context_ptr));
     acl_atb_contexts_[dev_id] = atb_context_ptr;
-#endif
   }
 }
 
 aclrtContext& AscendDeviceContextManager::GetDeviceContext(int device_id) { return acl_contexts_[device_id]; }
 
-#ifdef ENABLE_ACL_ATB
 atb::Context* AscendDeviceContextManager::GetDeviceATBContext(int device_id) { return acl_atb_contexts_[device_id]; }
-#endif
 
 AscendDeviceContextManager::~AscendDeviceContextManager() {
   for (auto& [dev_id, context] : acl_contexts_) {
     ACL_CHECK(aclrtDestroyContext(context));
-#ifdef ENABLE_ACL_ATB
     ATB_CHECK_RET(DestroyContext(acl_atb_contexts_[dev_id]));
-#endif
   }
 }
 
@@ -49,9 +40,7 @@ StreamT<DEVICE_TYPE_ASCEND>::StreamT(int device_id) : device_id_(device_id) {
   ACL_CHECK(aclrtSetDevice(device_id_));
   ACL_CHECK(aclrtCreateStream(&acl_stream_));
 
-#ifdef ENABLE_ACL_ATB
   g_context_manager.GetDeviceATBContext(device_id)->SetExecuteStream(acl_stream_);
-#endif
 }
 
 void StreamT<DEVICE_TYPE_ASCEND>::Destroy() {
@@ -266,9 +255,7 @@ template DataType GetDataTypeT<DEVICE_TYPE_ASCEND>::impl<char>();
 template <>
 void* GetRuntimeContextT<DEVICE_TYPE_ASCEND>(int device_id) {
   void* runtime_context_ptr = nullptr;
-#ifdef ENABLE_ACL_ATB
   runtime_context_ptr = reinterpret_cast<void*>(g_context_manager.GetDeviceATBContext(device_id));
-#endif
   return runtime_context_ptr;
 }
 

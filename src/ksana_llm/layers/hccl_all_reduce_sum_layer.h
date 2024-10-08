@@ -3,21 +3,25 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/layers/attention_layer.h"
+#include "ksana_llm/layers/base_layer.h"
+#ifdef ENABLE_ACL
+#  include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
+#  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
+#endif
 
 namespace ksana_llm {
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-class FlashAttentionLayer : public AttentionLayer<SCALAR_T> {
+template <typename T>
+class HcclAllReduceSumLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
+
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
-#ifdef ENABLE_ACL_ATB
- private:
-  // ATB attention implement for ascend device, for ATB run with graph, each layer need's one kernel implement instance
-  std::shared_ptr<llm_kernels::ascend::ATBAttention<SCALAR_T>> atb_flash_attn_;
-#endif
+ protected:
+#ifdef ENABLE_ACL
+  llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
+#endif  // ENABLE_ACL
 };
 
 }  // namespace ksana_llm

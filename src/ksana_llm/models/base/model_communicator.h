@@ -4,9 +4,14 @@
 #pragma once
 
 #include <memory>
+#ifdef ENABLE_CUDA
 #include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/nccl_all_gather_layer.h"
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
+#elif defined(ENABLE_ACL)
+#include "ksana_llm/layers/hccl_all_gather_layer.h"
+#include "ksana_llm/layers/hccl_all_reduce_sum_layer.h"
+#endif
 
 namespace ksana_llm {
 
@@ -28,6 +33,7 @@ class ModelCommunicator {
   // Whether use the custom reduce layer.
   bool enable_custom_all_reduce_ = true;
 
+#ifdef ENABLE_CUDA
   // The default all reduce layer.
   std::shared_ptr<NcclAllReduceSumLayer<T>> nccl_all_reduce_sum_layer_;
 
@@ -36,6 +42,13 @@ class ModelCommunicator {
 
   // The custom all reduce layer.
   std::shared_ptr<CustomAllReduceSumLayer<T>> custom_all_reduce_sum_layer_0_;
+#elif defined(ENABLE_ACL)
+  // The default all reduce layer.
+  std::shared_ptr<HcclAllReduceSumLayer<T>> hccl_all_reduce_sum_layer_;
+
+  // The all gather layer
+  std::shared_ptr<HcclAllGatherLayer<T>> hccl_all_gather_layer_;
+#endif
 
  private:
   int rank_;

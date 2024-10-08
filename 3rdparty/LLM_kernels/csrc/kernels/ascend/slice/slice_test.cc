@@ -9,10 +9,7 @@
 #include "csrc/kernels/ascend/slice/slice.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
-
-#ifdef ENABLE_ACL_ATB
-#  include "csrc/utils/ascend/atb_executor.h"
-#endif
+#include "csrc/utils/ascend/atb_executor.h"
 
 using namespace llm_kernels::utils;
 
@@ -32,7 +29,6 @@ class LlamaAscendSliceTestSuit : public AscendTestSuitBase {
   using AscendTestSuitBase::is_inited;
   using AscendTestSuitBase::stream;
 
-#ifdef ENABLE_ACL_ATB
   template <typename DTYPE>
   void TestATBQKVSlice() {
     constexpr uint32_t ntokens{512};
@@ -195,7 +191,6 @@ class LlamaAscendSliceTestSuit : public AscendTestSuitBase {
     ACL_CHECK_RET(aclrtFree(q_tensor_ptr));
     ACL_CHECK_RET(aclrtFree(qkv_tensor_device_ptr));
   }
-#endif
 };
 
 TEST_F(LlamaAscendSliceTestSuit, SliceTest) {
@@ -281,9 +276,7 @@ TEST_F(LlamaAscendSliceTestSuit, SliceKernelTest) {
   }
 }
 
-#ifdef ENABLE_ACL_ATB
 TEST_F(LlamaAscendSliceTestSuit, ATBSliceTest) { TestATBQKVSlice<half_float::half>(); }
-#endif
 
 }  // namespace test
 }  // namespace ascend

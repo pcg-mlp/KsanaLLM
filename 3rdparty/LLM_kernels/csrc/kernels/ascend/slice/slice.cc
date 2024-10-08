@@ -122,7 +122,6 @@ void Slice2<T>::Forward(void* output, void* input, int start, int length, int st
 template class Slice2<aclFloat16>;
 template class Slice2<float>;
 
-#ifdef ENABLE_ACL_ATB
 void CreateSplitQKVATBOperation(const uint32_t total_token_num, const uint32_t head_size, const uint32_t kv_head_size,
                                 const uint32_t head_dim, atb::Operation** operation, const std::string& op_name) {
   uint32_t tensor_idx = 0;
@@ -222,7 +221,6 @@ void CreateSplitQKVATBOperation(const uint32_t total_token_num, const uint32_t h
   }
   atb::CreateOperation(op_graph, operation);
 }
-#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

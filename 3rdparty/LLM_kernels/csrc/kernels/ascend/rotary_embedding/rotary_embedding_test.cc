@@ -9,10 +9,7 @@
 #include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 #include "csrc/utils/ascend/common.h"
 #include "tests/kernels/ascend/utils/testsuit_base.h"
-
-#ifdef ENABLE_ACL_ATB
-#  include "csrc/utils/ascend/atb_executor.h"
-#endif
+#include "csrc/utils/ascend/atb_executor.h"
 
 using namespace llm_kernels::utils;
 

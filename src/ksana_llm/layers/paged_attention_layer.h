@@ -16,7 +16,7 @@ class PagedAttentionLayer : public AttentionLayer<SCALAR_T> {
 #ifdef ENABLE_ACL_ATB
  private:
   // ATB attention implement for ascend device, for ATB run with graph, each layer need's one kernel implement instance
-  std::shared_ptr<llm_kernels::ascend::ATBPagedAttention<SCALAR_T>> atb_paged_attn_;
+  std::shared_ptr<llm_kernels::ascend::ATBAttention<SCALAR_T>> atb_paged_attn_;
 #endif
 };
 

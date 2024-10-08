@@ -42,6 +42,12 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
                                          context_, rank_);
     EventDestroy(create_reduce_tensor_event);
   }
+#elif defined(ENABLE_ACL)
+  hccl_all_reduce_sum_layer_ = std::make_shared<HcclAllReduceSumLayer<T>>();
+  hccl_all_reduce_sum_layer_->Init({}, context, rank);
+
+  hccl_all_gather_layer_ = std::make_shared<HcclAllGatherLayer<T>>();
+  hccl_all_gather_layer_->Init({}, context, rank);
 #endif
 }
 template <typename T>

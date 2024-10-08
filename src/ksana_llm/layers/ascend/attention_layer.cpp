@@ -9,9 +9,6 @@
 namespace ksana_llm {
 
 template <typename T>
-std::shared_ptr<llm_kernels::ascend::PagedAttention<T>> AttentionLayer<T>::ascend_paged_attn_ = nullptr;
-
-template <typename T>
 Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, context, rank);
   int parameter_index = 0;
@@ -44,22 +41,6 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
 
   block_size_ = GetBlockManager()->GetBlockSize();
   block_token_num_ = GetBlockManager()->GetBlockTokenNum();
-
-  float scaling_factor = 1.0f;
-  llm_kernels::ascend::RotaryEmbeddingType scaling_type = llm_kernels::ascend::RotaryEmbeddingType::DEFAULT;
-  // setting scaling factor and mode
-  if (rope_scaling_factor_config.type == "dynamic") {
-    scaling_type = llm_kernels::ascend::RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
-    scaling_factor = rope_scaling_factor_config.factor;
-  } else if (rope_scaling_factor_config.type == "linear") {
-    scaling_type = llm_kernels::ascend::RotaryEmbeddingType::LINEAR_SCALING;
-    scaling_factor = rope_scaling_factor_config.factor;
-  }
-  if (ascend_paged_attn_ == nullptr) {
-    ascend_paged_attn_ = std::make_shared<llm_kernels::ascend::PagedAttention<T>>();
-    ascend_paged_attn_->Initialize(num_heads_, num_kv_heads_, head_size_, layer_num_, layer_index_, block_token_num_,
-                                   context->GetComputeStreams()[rank].Get(), scaling_type, scaling_factor);
-  }
   return Status();
 }
 

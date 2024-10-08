@@ -3,13 +3,11 @@
 ==============================================================================*/
 #pragma once
 
+#include <unordered_map>
+
 #include "ksana_llm/utils/common_device.h"
 
-#ifdef ENABLE_ACL_ATB
 #include "atb/context.h"
-#endif
-
-#include <unordered_map>
 
 namespace ksana_llm {
 
@@ -21,18 +19,14 @@ class AscendDeviceContextManager {
   // Get aclrtContext of device_id
   aclrtContext& GetDeviceContext(int device_id);
 
-#ifdef ENABLE_ACL_ATB
   // Get atb::Context of device_id
   atb::Context* GetDeviceATBContext(int device_id);
-#endif
 
  private:
   std::unordered_map<int, aclrtContext> acl_contexts_;
-#ifdef ENABLE_ACL_ATB
   // device_id => context
   // TODO(karlluo): maybe reuse aclrtContext and aclrtStream
   std::unordered_map<int, atb::Context*> acl_atb_contexts_;
-#endif
 };
 
 template <>

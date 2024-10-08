@@ -15,10 +15,7 @@
 #include "acl/acl.h"
 #include "acl/acl_op_compiler.h"
 #include "aclnn/acl_meta.h"
-
-#ifdef ENABLE_ACL_ATB
-#  include "atb/types.h"
-#endif
+#include "atb/types.h"
 
 namespace llm_kernels {
 namespace utils {

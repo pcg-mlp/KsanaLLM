@@ -32,7 +32,7 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   //   1: offset
   //   2: prefix (not be used)
   //   3: emb_weight
-  //   4: pos
+  //   4: pos (optional)
   // output_tensors:
   //   0: emb_output
   int total_seq_len = input_tensors[0].shape[0];
@@ -44,21 +44,7 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   Tensor embedding_table = input_tensors[3];
 
   if (input_tensors.size() > 4) {
-    Tensor position_table = input_tensors[4];
-    aclTensor* input_tensor = input_ids.ResetDeviceTensor(DataType::TYPE_INT32, {static_cast<int64_t>(total_seq_len)});
-
-    aclTensor* embedding_tensor = embedding_table.ResetDeviceTensor(
-        DataType::TYPE_FP16,
-        {static_cast<int64_t>(embedding_table.shape[0]), static_cast<int64_t>(embedding_table.shape[1])});
-
-    aclTensor* output_tensor = output_tensors[0].ResetDeviceTensor(
-        DataType::TYPE_FP16, {static_cast<int64_t>(total_seq_len), static_cast<int64_t>(hidden_units)});
-
-    aclTensor* position_tensor = position_table.ResetDeviceTensor(
-        DataType::TYPE_FP16,
-        {static_cast<int64_t>(position_table.shape[0]), static_cast<int64_t>(position_table.shape[1])});
-    LookupEmbedding(input_tensor, position_tensor, position_tensor, output_tensor,
-                    context_->GetComputeStreams()[rank_].Get(), GetWorkSpaceFunc());
+    KLLM_THROW("Not supported position embedding on NPU.");
   } else {
     reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
         ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());

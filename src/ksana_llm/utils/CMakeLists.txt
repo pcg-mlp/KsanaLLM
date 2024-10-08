@@ -23,7 +23,7 @@ set(utils_ascend_LIBS, "")
 
 if(WITH_ACL)
   file(GLOB_RECURSE utils_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/ascend/*.cpp)
-  list(APPEND utils_ascend_LIBS ${ACL_SHARED_LIBS})
+  list(APPEND utils_ascend_LIBS ${ACL_SHARED_LIBS} hccl)
 endif()
 
 add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS} ${utils_ascend_SRCS})

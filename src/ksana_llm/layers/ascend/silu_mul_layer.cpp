@@ -59,8 +59,6 @@ Status SiluMulLayer<T>::Init(const std::vector<std::any>& parameters, std::share
 
 template <typename T>
 Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int64_t total_seq_len = static_cast<int64_t>(input_tensors[0].shape[0]);
-  int64_t ffn_size = static_cast<int64_t>(input_tensors[0].shape[1]);
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
   void* silu_input_buf_ptr = input_tensors[0].GetPtr<void>();

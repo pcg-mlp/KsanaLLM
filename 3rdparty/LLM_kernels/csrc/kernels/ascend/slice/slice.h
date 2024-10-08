@@ -8,12 +8,10 @@
 #include "acl/acl.h"
 #include "acl/acl_op_compiler.h"
 #include "aclnn/acl_meta.h"
+#include "atb/atb_infer.h"
 
 #include "csrc/kernels/ascend/slice/slice_tiling.h"
 
-#ifdef ENABLE_ACL_ATB
-#  include "atb/atb_infer.h"
-#endif
 
 namespace llm_kernels {
 namespace ascend {

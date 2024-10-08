@@ -11,7 +11,7 @@
 #endif
 
 #ifdef ENABLE_ACL
-#  include "csrc/kernels/ascend/paged_attention/paged_attention.h"
+#  include "csrc/kernels/ascend/attention/attention.h"
 #endif
 
 #include "csrc/utils/quant_type.h"
@@ -43,13 +43,6 @@ class AttentionLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
-#ifdef ENABLE_ACL
-
- public:
-  // The attention implementation for ascend device.
-  static std::shared_ptr<llm_kernels::ascend::PagedAttention<T>> ascend_paged_attn_;
-#endif
-
  protected:
   int layer_num_;
   int layer_index_;
@@ -80,9 +73,7 @@ class AttentionLayer : public BaseLayer {
   size_t workspace_size_{0ul};
 
   void PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr);
-#endif
 
-#ifdef ENABLE_ACL_ATB
   size_t max_batch_size_;
   bool is_context_stage_;
 #endif

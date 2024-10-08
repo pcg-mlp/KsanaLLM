@@ -14,11 +14,9 @@
 
 #include <gtest/gtest.h>
 
-#include "csrc/utils/ascend/common.h"
+#include "atb/operation.h"
 
-#ifdef ENABLE_ACL_ATB
-#  include "atb/operation.h"
-#endif
+#include "csrc/utils/ascend/common.h"
 
 namespace llm_kernels {
 namespace ascend {
@@ -34,9 +32,7 @@ class AscendTestSuitBase : public testing::Test {
     if (is_inited) {
       ACL_CHECK_RET(aclrtSetDevice(device));
       ACL_CHECK_RET(aclrtSynchronizeStream(stream));
-#ifdef ENABLE_ACL_ATB
       ATB_CHECK_RET(atb::DestroyContext(atb_context));
-#endif
       ACL_CHECK_RET(aclrtDestroyStream(stream));
       ACL_CHECK_RET(aclrtDestroyContext(context));
     }
@@ -51,10 +47,8 @@ class AscendTestSuitBase : public testing::Test {
     aclrtRunMode runMode;
     ACL_CHECK_RET(aclrtGetRunMode(&runMode));
     is_inited = (runMode == ACL_DEVICE);
-#ifdef ENABLE_ACL_ATB
     ATB_CHECK_RET(atb::CreateContext(&atb_context));
     atb_context->SetExecuteStream(stream);
-#endif
   }
 
  protected:
@@ -63,9 +57,7 @@ class AscendTestSuitBase : public testing::Test {
   aclrtStream stream;
   aclrtContext context;
   bool is_inited = false;
-#ifdef ENABLE_ACL_ATB
   atb::Context* atb_context{nullptr};
-#endif
 };
 
 static const float HALF_FLT_MAX = 65504.F;

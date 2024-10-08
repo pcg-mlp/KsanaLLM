@@ -10,14 +10,11 @@
 #include "acl/acl_op_compiler.h"
 #include "acl/acl_rt.h"
 #include "aclnn/acl_meta.h"
+#include "atb/types.h"
 
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
-
-#ifdef ENABLE_ACL_ATB
-#  include "atb/types.h"
-#endif
 
 namespace ksana_llm {
 

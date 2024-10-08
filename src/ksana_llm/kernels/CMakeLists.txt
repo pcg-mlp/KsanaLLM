@@ -31,11 +31,7 @@ if(WITH_ACL)
   file(GLOB_RECURSE ascend_kernels_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/ascend/*.cpp)
   list(FILTER ascend_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
-  list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS}
-    atb_plugin_operations
-    llm_kernels_ascend_permute
-    llm_kernels_ascend_embedding
-    llm_kernels_ascend_argmax)
+  list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS} atb_plugin_operations)
 endif()
 
 message(STATUS "ascend_kernels_SRCS: ${ascend_kernels_SRCS}")

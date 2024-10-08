@@ -5,7 +5,7 @@
 
 #include <vector>
 
-#include "csrc/kernels/ascend/paged_attention/paged_attention.h"
+#include "csrc/kernels/ascend/attention/attention.h"
 #include "csrc/utils/ascend/common.h"
 
 #include "tests/kernels/ascend/utils/testsuit_base.h"
@@ -72,14 +72,12 @@ static void CreateKVCache() {
                             kv_list_host.size() * sizeof(void*), ACL_MEMCPY_HOST_TO_DEVICE));
 }
 
-#ifdef ENABLE_ACL_ATB
 template <typename DTYPE>
 static void CreateATBKVCache() {
   size_t cache_size = total_block_num * block_token_num * head_size * head_dim * sizeof(DTYPE);
   ACL_CHECK_RET(aclrtMalloc(&k_cache, cache_size, ACL_MEM_MALLOC_HUGE_FIRST));
   ACL_CHECK_RET(aclrtMalloc(&v_cache, cache_size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
-#endif
 
 class AscendPagedAttentionTestSuit : public AscendTestSuitBase {
  public:
@@ -239,7 +237,6 @@ TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionDecodeTest) {
   ACL_CHECK_RET(aclrtFree(output));
 }
 
-#ifdef ENABLE_ACL_ATB
 TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
   constexpr int total_token_num = 163;
   constexpr bool is_context_stage = true;
@@ -247,7 +244,7 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
   constexpr float rope_base = 10000.0f;
   uint32_t hidden_units = head_size * head_dim;
   uint32_t max_batch_size = 2;
-  ATBPagedAttention<aclFloat16> atb_paged_attention;
+  ATBAttention<aclFloat16> atb_paged_attention;
   atb_paged_attention.Initialize(max_batch_size, head_size, kv_head_size, head_dim, layer_num, layer_idx,
                                  block_token_num, stream, default_device, is_context_stage, max_position_embeddings,
                                  rope_base);
@@ -350,7 +347,7 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
   uint32_t hidden_units = head_size * head_dim;
   uint32_t max_batch_size = 2;
 
-  ATBPagedAttention<aclFloat16> atb_paged_attention;
+  ATBAttention<aclFloat16> atb_paged_attention;
   atb_paged_attention.Initialize(max_batch_size, head_size, kv_head_size, head_dim, layer_num, layer_idx,
                                  block_token_num, stream, default_device, is_context_stage, max_position_embeddings,
                                  rope_base);
@@ -454,7 +451,6 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
   ACL_CHECK_RET(aclrtFree(qkv_tensor));
   ACL_CHECK_RET(aclrtFree(output));
 }
-#endif
 
 }  // namespace test
 }  // namespace ascend

@@ -14,19 +14,15 @@ namespace ksana_llm {
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
                                                               std::shared_ptr<Context> context, int rank) {
-#ifdef ENABLE_ACL_ATB
   AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
   if (atb_flash_attn_ == nullptr) {
-    atb_flash_attn_ = std::make_shared<llm_kernels::ascend::ATBPagedAttention<SCALAR_T>>();
+    atb_flash_attn_ = std::make_shared<llm_kernels::ascend::ATBAttention<SCALAR_T>>();
     atb_flash_attn_->Initialize(static_cast<uint32_t>(this->max_batch_size_), this->num_heads_, this->num_kv_heads_,
                                 this->head_size_, this->layer_num_, this->layer_index_, this->block_token_num_,
                                 context->GetComputeStreams()[rank].Get(), rank, /*is_context_stage*/ true,
                                 this->max_position_embeddings_, this->base_);
   }
   return Status();
-#else
-  return AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
-#endif
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>

@@ -86,6 +86,7 @@ set(ACL_SHARED_LIBS
   ${ASCEND_PATH}/lib64/libtiling_api.a
   ${ASCEND_PATH}/x86_64-linux/lib64/libregister.so
   ${ASCEND_PATH}/x86_64-linux/lib64/libplatform.so
+  ${ASCEND_PATH}/lib64/libhccl.so
 )
 
 # for CANN8 POC530 ATB RC1
