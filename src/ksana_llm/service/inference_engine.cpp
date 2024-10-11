@@ -191,7 +191,7 @@ Status InferenceEngine::Start() {
   // Start service handler.
   StartHandler();
 
-#ifndef ENABLE_ACL_ATB
+#ifndef ENABLE_ACL
   // Start warmup run
   DoWarmupRun();
 #endif

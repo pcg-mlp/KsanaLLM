@@ -28,4 +28,7 @@ Status GroupMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors
 
 template class GroupMatMulLayer<float, TYPE_I4_GROUP>;
 template class GroupMatMulLayer<float16, TYPE_I4_GROUP>;
+#ifdef ENABLE_BFLOAT16
+template class GroupMatMulLayer<bfloat16, TYPE_I4_GROUP>;
+#endif
 }  // namespace ksana_llm

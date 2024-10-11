@@ -43,6 +43,9 @@ template class CpuEmbLookupLayer<__nv_bfloat16>;
 
 #ifdef ENABLE_ACL
 template class CpuEmbLookupLayer<float16>;
+#  ifdef ENABLE_BFLOAT16
+template class CpuEmbLookupLayer<bfloat16>;
+#  endif
 #endif
 
 }  // namespace ksana_llm

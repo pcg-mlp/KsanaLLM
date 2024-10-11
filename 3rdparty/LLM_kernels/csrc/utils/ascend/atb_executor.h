@@ -15,7 +15,12 @@ class ATBOperationExecutor {
  public:
   ATBOperationExecutor(){};
 
-  ~ATBOperationExecutor() { ResetVariantPack(); };
+  ~ATBOperationExecutor() {
+    ResetVariantPack();
+    if (operation_ != nullptr) {
+      ATB_CHECK_RET(atb::DestroyOperation(operation_));
+    }
+  };
 
   template <typename OPParamType>
   void Init(const int rank, const OPParamType& param) {

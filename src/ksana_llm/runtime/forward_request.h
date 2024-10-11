@@ -63,7 +63,7 @@ struct ForwardRequest {
 
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
   // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
   // guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,

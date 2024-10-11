@@ -46,6 +46,9 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
 
 template class AttentionLayer<float>;
 template class AttentionLayer<float16>;
+#ifdef ENABLE_BFLOAT16
+template class AttentionLayer<bfloat16>;
+#endif
 
 template <typename T>
 void AttentionLayer<T>::PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr) {

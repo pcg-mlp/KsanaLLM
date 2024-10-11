@@ -47,5 +47,8 @@ Status HcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
 
 template class HcclAllReduceSumLayer<float>;
 template class HcclAllReduceSumLayer<float16>;
+#ifdef ENABLE_BFLOAT16
+template class HcclAllReduceSumLayer<bfloat16>;
+#endif
 
 }  // namespace ksana_llm

@@ -40,5 +40,8 @@ Status AssembleLastTokenLayer<T>::Forward(const std::vector<Tensor>& input_tenso
 }
 template class AssembleLastTokenLayer<float>;
 template class AssembleLastTokenLayer<float16>;
+#ifdef ENABLE_BFLOAT16
+template class AssembleLastTokenLayer<bfloat16>;
+#endif
 
 }  // namespace ksana_llm

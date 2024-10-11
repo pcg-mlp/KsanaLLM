@@ -83,7 +83,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.span_context = req_ptr->span_context;
     forward_req.timestamp_in_ms = req_ptr->timestamp_in_ms;
     forward_req.req_ctx = req_ptr->req_ctx;
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
     // NOTE(karlluo): for ATb, all device blocks locate on a flatten plane memory space.
     // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
     // guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,

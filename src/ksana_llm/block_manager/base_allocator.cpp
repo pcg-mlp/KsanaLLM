@@ -18,7 +18,7 @@ void BaseAllocator::PreAllocateBlocks() {
   void* memory_ptr = nullptr;
   bool is_continuous_mode = false;
   void* base_mem_ptr = nullptr;
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
   if (allocator_config_.device == MEMORY_DEVICE) {
     is_continuous_mode = true;
     // NOTE(karlluo): allocator_config_.block_size shape: 2 x layer_num x block_size x head_dim x head_size x

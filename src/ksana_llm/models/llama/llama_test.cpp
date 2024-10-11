@@ -123,7 +123,7 @@ class LlamaTest : public testing::Test {
     GetBlockManager()->AllocateBlocks(1, block_ids);
     forward.kv_cache_ptrs.resize(1);
     GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
     // for rank_0
     forward.atb_kv_cache_base_blk_ids.clear();
     forward.atb_kv_cache_base_blk_ids.resize(1);
@@ -271,19 +271,21 @@ TEST_F(LlamaTest, ForwardTest) {
   TestLlamaForward<float16>();
 #endif
 
-#ifdef ENABLE_BFLOAT16
+#ifdef ENABLE_CUDA
+#  ifdef ENABLE_BFLOAT16
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_BF16;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
   TestLlamaForward<bfloat16>();
-#  ifdef ENABLE_FP8
+#    ifdef ENABLE_FP8
   // fp8 forward
   model_config.is_quant = true;
   model_config.quant_config.method = QUANT_FP8_E4M3;
   model_config.quant_config.is_checkpoint_fp8_serialized = false;
   std::cout << "Test TYPE_BF16 weight_data_type with QUANT_FP8_E4M3 forward" << std::endl;
   TestLlamaForward<bfloat16>();
+#    endif
 #  endif
 #endif
   Py_Finalize();

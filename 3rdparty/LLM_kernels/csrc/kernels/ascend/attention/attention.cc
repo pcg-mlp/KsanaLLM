@@ -31,17 +31,19 @@ template <typename DTYPE>
 ATBAttention<DTYPE>::~ATBAttention() {}
 
 template <typename DTYPE>
-void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache, void* v_cache,
-                                       void* block_tables, const uint32_t max_num_blocks_per_query,
-                                       const uint32_t batch_size, const uint32_t total_token_num,
-                                       const uint32_t total_block_num, const uint32_t block_token_num,
-                                       const uint32_t layer_index, void* seq_len, const bool is_context_stage,
-                                       atb::Context* atb_context, void (*ws_func)(size_t, void**)) {
+void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache,
+                                  void* v_cache, void* block_tables, const uint32_t max_num_blocks_per_query,
+                                  const uint32_t batch_size, const uint32_t total_token_num,
+                                  const uint32_t total_block_num, const uint32_t block_token_num,
+                                  const uint32_t layer_index, void* seq_len, const bool is_context_stage,
+                                  atb::Context* atb_context, void (*ws_func)(size_t, void**)) {
   aclDataType acl_dtype;
   if (std::is_same<DTYPE, aclFloat16>::value) {
     acl_dtype = aclDataType::ACL_FLOAT16;
   } else if (std::is_same<DTYPE, float>::value) {
     acl_dtype = aclDataType::ACL_FLOAT;
+  } else if (std::is_same<DTYPE, int16_t>::value) {
+    acl_dtype = aclDataType::ACL_BF16;
   } else {
     throw std::invalid_argument("Invalid matmul type type, only support float16 or float32.");
   }
@@ -79,11 +81,11 @@ void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids,
 
 template <typename DTYPE>
 void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size, uint32_t kv_head_size,
-                                          uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx,
-                                          uint32_t block_token_num, aclrtStream& stream, const int rank,
-                                          const bool is_context_stage, const size_t max_position_embeddings,
-                                          const float rope_base, const RotaryEmbeddingType scaling_type,
-                                          const float scaling_factor) {
+                                     uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx,
+                                     uint32_t block_token_num, aclrtStream& stream, const int rank,
+                                     const bool is_context_stage, const size_t max_position_embeddings,
+                                     const float rope_base, const RotaryEmbeddingType scaling_type,
+                                     const float scaling_factor) {
   max_batch_size_ = max_batch_size;
   head_size_ = head_size;
   kv_head_size_ = kv_head_size;
@@ -232,7 +234,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
     op_param.kvHeadNum = kv_head_size;
     atb::CreateOperation(op_param, &op_node.operation);
 
-    op_node.inTensorIds = {emb_q_inner_tensor_id,        k_cache_input_tensor_id, v_cache_input_tensor_id,
+    op_node.inTensorIds = {emb_q_inner_tensor_id, k_cache_input_tensor_id, v_cache_input_tensor_id,
                            block_tables_input_tensor_id, seqlen_input_tensor_id};
     op_node.outTensorIds = {attn_output_tensor_id};
     op_node.inTensorReshapeFuncs.resize(op_node.inTensorIds.size());
@@ -258,8 +260,8 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
 
 template <typename DTYPE>
 void ATBAttention<DTYPE>::InitRopeCosSinWorkspace(const size_t max_position_embeddings, const float rope_base,
-                                                       const uint32_t head_dim, const float scaling_factor,
-                                                       const RotaryEmbeddingType scaling_type, aclrtStream& stream) {
+                                                  const uint32_t head_dim, const float scaling_factor,
+                                                  const RotaryEmbeddingType scaling_type, aclrtStream& stream) {
   std::vector<DTYPE> cos_workspace_host(max_position_embeddings * head_dim, 0u);
   std::vector<DTYPE> sin_workspace_host(max_position_embeddings * head_dim, 0u);
   ACL_CHECK_RET(aclrtMalloc(&rope_cos_workspace_ptr_, max_position_embeddings * head_dim * sizeof(DTYPE),
@@ -295,8 +297,16 @@ void ATBAttention<DTYPE>::InitRopeCosSinWorkspace(const size_t max_position_embe
         cos_workspace_host[pos * head_dim + head_dim / 2 + rid] = cos_workspace_host[pos * head_dim + rid];
         sin_workspace_host[pos * head_dim + rid] = DTYPE(std::sin(freq));
         sin_workspace_host[pos * head_dim + head_dim / 2 + rid] = sin_workspace_host[pos * head_dim + rid];
+      } else if (std::is_same<DTYPE, int16_t>::value) {
+        float cos_val = std::cos(freq);
+        float sin_val = std::cos(freq);
+        // NOTE(karlluo): there is not bfloat16 type in cann, so we take int16_t as bfloat16 as dtype indicator
+        cos_workspace_host[pos * head_dim + rid] = (*reinterpret_cast<int *>(&(cos_val)))>>16;
+        cos_workspace_host[pos * head_dim + head_dim / 2 + rid] = cos_workspace_host[pos * head_dim + rid];
+        sin_workspace_host[pos * head_dim + rid] = (*reinterpret_cast<int *>(&(sin_val)))>>16;
+        sin_workspace_host[pos * head_dim + head_dim / 2 + rid] = sin_workspace_host[pos * head_dim + rid];
       } else {
-        throw std::invalid_argument("Invalid rope compute type, only support float16 or float32.");
+        throw std::invalid_argument("Invalid rope compute type, only support float16, bfloat16 or float32.");
       }
     }
   }
@@ -328,7 +338,7 @@ void ATBAttention<DTYPE>::InitAttnMask() {
 
 template <typename DTYPE>
 void ATBAttention<DTYPE>::CreateSplitQKVOperation(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,
-                                                       atb::Operation** operation) {
+                                                  atb::Operation** operation) {
   uint32_t tensor_idx = 0;
   uint32_t input_qkv_tensor = tensor_idx++;  // [ntokens, 3 * head_num * head_dim] or [ntokens,
                                              // (head_num + 2 * kv_head_num) * head_dim]
@@ -428,6 +438,10 @@ void ATBAttention<DTYPE>::CreateSplitQKVOperation(uint32_t head_size, uint32_t k
 
 template class ATBAttention<aclFloat16>;
 template class ATBAttention<float>;
+#ifdef ENABLE_BFLOAT16
+// NOTE(karlluo): there is not bfloat16 type in cann, so we take int16_t as bfloat16 as dtype indicator
+template class ATBAttention<int16_t>;
+#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

@@ -41,7 +41,7 @@ class ModelInput {
 
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
 
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
   void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage);
 #endif
 

@@ -13,7 +13,7 @@ class PagedAttentionLayer : public AttentionLayer<SCALAR_T> {
   virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
-#ifdef ENABLE_ACL_ATB
+#ifdef ENABLE_ACL
  private:
   // ATB attention implement for ascend device, for ATB run with graph, each layer need's one kernel implement instance
   std::shared_ptr<llm_kernels::ascend::ATBAttention<SCALAR_T>> atb_paged_attn_;

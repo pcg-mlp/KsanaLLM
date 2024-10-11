@@ -48,6 +48,9 @@ typedef __nv_bfloat16 bfloat16;
 #  endif
 #elif defined(ENABLE_ACL)
 typedef aclFloat16 float16;
+#  ifdef ENABLE_BFLOAT16
+typedef int16_t bfloat16;
+#  endif
 #endif
 
 // All the available data format, for ascend aclTensor.

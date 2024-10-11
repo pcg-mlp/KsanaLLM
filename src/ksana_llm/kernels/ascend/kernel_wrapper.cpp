@@ -22,6 +22,8 @@ aclDataType CastDataTypeToAclDataType(const DataType dtype) {
   switch (dtype) {
     case DataType::TYPE_FP16:
       return aclDataType::ACL_FLOAT16;
+    case DataType::TYPE_BF16:
+      return aclDataType::ACL_BF16;
     case DataType::TYPE_FP32:
       return aclDataType::ACL_FLOAT;
     default:
@@ -40,17 +42,33 @@ void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_tabl
 }
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
-  if (tensor.dtype == DataType::TYPE_BF16 || target_dtype == DataType::TYPE_BF16) {
-    KLLM_THROW(
-        fmt::format("Invalid cast compute type bfloat16, only support float16 to float32 or float32 to float16. "
-                    "Tensor type is {}, target type is {}.",
-                    tensor.dtype, target_dtype));
-  } else if (tensor.dtype == target_dtype) {
-    // No need to convert
+  if (tensor.dtype != target_dtype) {
+    llm_kernels::utils::ATBOperationExecutor atb_cast_op_executor;
+    llm_kernels::ascend::CastParam cast_param;
+    // NOTE(karlluo): there is no inplace in ATB, we have prepare a buffer simulate inplace operation
+    cast_param.dataType = static_cast<aclDataType>(target_dtype);
+    atb::Operation* cast_op = new llm_kernels::ascend::CastOperation(
+        fmt::format("Cast{}To{}Inplace", GetTypeString(tensor.dtype), GetTypeString(target_dtype)), cast_param);
+    atb_cast_op_executor.SetOperation(cast_op);
+    int32_t rank = GetBlockManager()->GetDeviceId();
+    reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
+    int block_id = -1;
+    GetBlockManager()->AllocateContiguous(tensor.GetTotalBytes(), block_id);
+    Tensor tmp_tensor(MemoryDevice::MEMORY_DEVICE, target_dtype, tensor.shape, block_id);
+    atb_cast_op_executor.ResetVariantPack();
+    atb_cast_op_executor.SetInputTensor(tensor.GetPtr<void>(), tensor.shape, static_cast<aclDataType>(tensor.dtype));
+    atb_cast_op_executor.SetOutputTensor(tmp_tensor.GetPtr<void>(), tensor.shape,
+                                         static_cast<aclDataType>(target_dtype));
+    atb_cast_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
+    StreamSynchronize(stream);
+    Memcpy(tensor.GetPtr<void>(), tmp_tensor.GetPtr<void>(), tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE);
+    GetBlockManager()->FreeContiguous(block_id);
+    tensor.dtype = target_dtype;
   } else {
-    KLLM_THROW(fmt::format("CastInplace from type {} to {} is not yet implement", tensor.dtype, target_dtype));
+    // NOTE(karlluo): dtype same will skip cast
+    KLLM_LOG_DEBUG << fmt::format("Cast{}To{}Inplace is ignore", GetTypeString(tensor.dtype),
+                                  GetTypeString(target_dtype));
   }
-  tensor.dtype = target_dtype;
   return Status();
 }
 
@@ -141,6 +159,9 @@ Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_si
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(float16);
+#ifdef ENABLE_BFLOAT16
+INSTANTIATE_ARG_MAX(bfloat16);
+#endif
 
 #undef INSTANTIATE_ARG_MAX
 
