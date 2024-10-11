@@ -3,6 +3,8 @@
 ==============================================================================*/
 
 #include "ksana_llm/runtime/llm_runtime.h"
+#include <algorithm>
+#include <execution>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -31,6 +33,8 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     samplers_.push_back(std::make_shared<Sampler>(batch_schedule_config_, worker_id, context_));
   }
+  threadpool_ = std::make_shared<ThreadPool>(2);
+  threadpool_->Start();
 }
 
 void LlmRuntime::BuildForwardRequests(
@@ -43,7 +47,6 @@ void LlmRuntime::BuildForwardRequests(
             });
   for (size_t i = 0; i < reqs.size(); ++i) {
     std::shared_ptr<InferRequest>& req_ptr = reqs[i];
-
     if (reqs[i]->infer_stage == InferStage::STATE_DECODE) req_ptr->step += 1;
 #ifdef ENABLE_CUDA
     reqs[i]->infer_stage = InferStage::STATE_DECODE;
@@ -232,6 +235,16 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
       result_status = status;
     }
   }
+
+  threadpool_->Submit([reqs]() mutable {
+    const auto current_time = ProfileTimer::GetCurrentTimeInMs();
+    std::for_each(std::execution::par_unseq, reqs.begin(), reqs.end(), [current_time](const auto& req) {
+      if (req->step == 0) {
+        REPORT_METRIC(time_to_first_token_ms, current_time - req->timestamp_in_ms);
+      }
+    });
+  });
+
   return result_status;
 }
 

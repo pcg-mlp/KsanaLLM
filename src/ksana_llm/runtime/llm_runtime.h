@@ -8,6 +8,7 @@
 
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/context.h"
@@ -18,6 +19,11 @@ namespace ksana_llm {
 class LlmRuntime {
  public:
   LlmRuntime(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context);
+  ~LlmRuntime() {
+    if (threadpool_) {
+      threadpool_->Stop();
+    }
+  }
 
   // Execute one req in parallel.
   Status Step(std::vector<std::shared_ptr<InferRequest>> &reqs);
@@ -53,6 +59,9 @@ class LlmRuntime {
 
   // The sampler instance on every device.
   std::vector<std::shared_ptr<Sampler>> samplers_;
+
+  // Threadpool used to metrics report.
+  std::shared_ptr<ThreadPool> threadpool_ = nullptr;
 };
 
 }  // namespace ksana_llm

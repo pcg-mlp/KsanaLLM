@@ -55,6 +55,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
     // All req here should be decode now.
     req->infer_stage = InferStage::STATE_DECODE;
+    opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(*req->req_ctx);
 
     // Always update cache manager, even if request is finished.
     Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
@@ -92,8 +93,9 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
       uint64_t duration = ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms;
       size_t output_token_num = req->output_tokens.size();
 
-      REPORT_METRIC(forward_cost_time_ms, duration, req->req_ctx);
-      REPORT_METRIC(output_token_num, output_token_num, req->req_ctx);
+      REPORT_METRIC(forward_cost_time_ms, duration, attributes);
+      REPORT_METRIC(metric_output_token_num, output_token_num, attributes);
+      REPORT_METRIC(time_to_per_output_token_ms, output_token_num / duration, attributes);
 
       continue;
     }
@@ -106,8 +108,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
       it = batch_state_->running_queue.erase(it);
+      REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), attributes);
 
-      REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), req->req_ctx);
       continue;
     }
 
@@ -119,8 +121,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       StopRequest(req, Status(RET_TERMINATED, "client aborted."));
       it = batch_state_->running_queue.erase(it);
+      REPORT_COUNTER(forward_req_aborted_num, static_cast<size_t>(1), attributes);
 
-      REPORT_COUNTER(forward_req_aborted_num, static_cast<size_t>(1), req->req_ctx);
       continue;
     }
 
@@ -483,9 +485,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     req->prefix_cache_blocks_number = shared_block_num;
     req->is_use_prefix_cache = shared_block_num > 0;
     if (req->is_use_prefix_cache) {
-      REPORT_COUNTER(cached_hit_num, static_cast<size_t>(1), req->req_ctx);
-      REPORT_COUNTER(cached_token_num, shared_token_num, req->req_ctx);
-      REPORT_COUNTER(cached_block_num, shared_block_num, req->req_ctx);
+      REPORT_COUNTER(prefix_cache_hit_req_num, static_cast<size_t>(1));
+      REPORT_COUNTER(prefix_cache_hit_token_num, shared_token_num);
+      REPORT_COUNTER(prefix_cache_hit_block_num, shared_block_num);
     }
 
     size_t current_token_num = req->output_tokens.size();
@@ -507,7 +509,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         // if full matched, skip decode and put it to the end of decode list.
         if (shared_token_num == req->output_tokens.size()) {
           KLLM_LOG_DEBUG << "Full matched, skip prefill, req " << req->req_id;
-          REPORT_COUNTER(full_prompt_matched_req_num, shared_block_num, req->req_ctx);
+          REPORT_COUNTER(full_prompt_matched_req_num, static_cast<size_t>(1));
+          REPORT_COUNTER(full_prompt_matched_block_num, shared_block_num);
+          REPORT_METRIC(time_to_first_token_ms, ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms);
 
           req->infer_stage = InferStage::STATE_DECODE;
           req->prefix_cache_len = 0;
@@ -614,8 +618,8 @@ void ContinuousBatchingStrategy::Schedule() {
   ProcessSwappedQueue();
   ProcessWaitingQueue();
 
-  REPORT_METRIC(batch_scheduler_pending_swapin_size, batch_state_->swapin_pending_requests_.size());
-  REPORT_METRIC(batch_scheduler_pending_swapout_size, batch_state_->swapout_pending_requests_.size());
+  REPORT_COUNTER(batch_scheduler_pending_swapin_size, batch_state_->swapin_pending_requests_.size());
+  REPORT_COUNTER(batch_scheduler_pending_swapout_size, batch_state_->swapout_pending_requests_.size());
 }
 
 }  // namespace ksana_llm

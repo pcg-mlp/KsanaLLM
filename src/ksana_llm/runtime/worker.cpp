@@ -23,30 +23,12 @@ Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWei
   switch (stage) {
     case InferStage::STAGE_CONTEXT:
       KLLM_LOG_DEBUG << "ContextDecode infer on work_id: " << rank_;
-      {
-        auto span = REPORT_TRACE(worker_context_decode, options);
-        opentelemetry::trace::Scope scope(span);
-        model->ContextDecode(weight, forward_reqs);
-        span->End();
-        for (auto it = forward_reqs.begin(); it != forward_reqs.end(); ++it) {
-          auto& forward_req = *it;
-          options.parent = forward_req.span_context;
-          REPORT_METRIC(time_to_first_token_ms, ProfileTimer::GetCurrentTimeInMs() - forward_req.timestamp_in_ms,
-                        forward_req.req_ctx);
-        }
-      }
+      model->ContextDecode(weight, forward_reqs);
       break;
     case InferStage::STATE_DECODE:
       KLLM_LOG_DEBUG << "Decode infer on work_id: " << rank_;
-      {
-        auto start = ProfileTimer::GetCurrentTimeInMs();
-        model->Decode(weight, forward_reqs);
-        auto duration = ProfileTimer::GetCurrentTimeInMs() - start;
-
-        REPORT_METRIC(time_per_output_token_ms, duration / static_cast<double>(forward_reqs.size()));
-
-        break;
-      }
+      model->Decode(weight, forward_reqs);
+      break;
     default:
       KLLM_THROW(fmt::format("Invalid infer stage: {}. Valid stages include STAGE_CONTEXT and STATE_DECODE", stage));
   }

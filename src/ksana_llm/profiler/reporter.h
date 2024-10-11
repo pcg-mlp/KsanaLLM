@@ -32,22 +32,7 @@ struct TimeReporter {
   time_t start_;
 };
 
-// Report metric.
-void ReporterMetric(const std::string &name, const size_t value,
-                    const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx = nullptr);
-void ReporterMetric(const std::string &name, const float value,
-                    const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx = nullptr);
-void ReporterMetric(const std::string &name, const double value,
-                    const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx = nullptr);
-
-// Report counter
-void ReportCounter(const std::string &name, const size_t value,
-                   const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx = nullptr);
-void ReportCounter(const std::string &name, const double value,
-                   const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx = nullptr);
-void ReportCounter(const std::string &name, const float value,
-                   const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx = nullptr);
-
+// Report trace.
 opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span> ReportTrace(
     const std::string &span_name, const opentelemetry::trace::StartSpanOptions &carrier);
 
@@ -60,10 +45,13 @@ opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span> ReportTrace(
 
 #define REPORT_TIME_NS(name) TimeReporter time_reporter_##name(#name, TimeReporter::TimeUnit::TIME_NS)
 
-#define REPORT_COUNTER(name, value, ...) ReportCounter(std::string(#name), value, ##__VA_ARGS__)
+#define REPORT_METRIC(metric_name, value, ...)                                                  \
+  Singleton<Profiler>::GetInstance()->monitor_.call.metric_name->Record((value), ##__VA_ARGS__, \
+                                                                        opentelemetry::context::Context{})
 
-#define REPORT_METRIC(name, value, ...) ReporterMetric(std::string(#name), value, ##__VA_ARGS__)
-
+#define REPORT_COUNTER(counter_name, value, ...)                                              \
+  Singleton<Profiler>::GetInstance()->monitor_.call.counter_name->Add((value), ##__VA_ARGS__, \
+                                                                      opentelemetry::context::Context{})
 #define REPORT_TRACE(span_name, carrier) ReportTrace(std::string(#span_name), carrier)
 
 }  // namespace ksana_llm

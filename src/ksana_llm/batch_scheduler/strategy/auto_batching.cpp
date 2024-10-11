@@ -18,6 +18,7 @@ AutoBatchingStrategy::AutoBatchingStrategy(const BatchSchedulerConfig &batch_sch
     : BaseScheduleStrategy(batch_scheduler_config, tp_num, batch_state) {}
 
 bool AutoBatchingStrategy::CheckBatchFinished() {
+  const auto current_time = ProfileTimer::GetCurrentTimeInMs();
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end(); ++it) {
     auto &req = *it;
     if (req->infer_stage != InferStage::STATE_DECODE) {
@@ -35,7 +36,8 @@ bool AutoBatchingStrategy::CheckBatchFinished() {
          req->output_tokens.size() < batch_scheduler_config_.max_token_len)) {
       return false;
     }
-    REPORT_METRIC(forward_cost_time_ms, ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms, req->req_ctx);
+    opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(*req->req_ctx);
+    REPORT_METRIC(forward_cost_time_ms, current_time - req->timestamp_in_ms, attributes);
   }
   return true;
 }
@@ -46,7 +48,8 @@ bool AutoBatchingStrategy::CheckBatchTimeout() {
     if (batch_state_->schedule_time_in_ms < req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms) {
       return false;
     }
-    REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), req->req_ctx);
+    opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(*req->req_ctx);
+    REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), attributes);
   }
   return true;
 }

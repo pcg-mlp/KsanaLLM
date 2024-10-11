@@ -47,8 +47,6 @@ Status InferenceEngine::Initialize() {
   ProfilerConfig profiler_config;
   status = env->GetProfilerConfig(profiler_config);
   Singleton<Profiler>::GetInstance()->Init(profiler_config);
-  Singleton<Profiler>::GetInstance()->InitTracer();
-  Singleton<Profiler>::GetInstance()->InitMetrics();
 
   // Load model instances.
   std::unordered_map<std::string, ModelConfig> model_configs;
@@ -107,12 +105,13 @@ Status InferenceEngine::Initialize() {
 }
 
 Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
-  REPORT_COUNTER(request_total, static_cast<size_t>(1), req->req_ctx);
-  REPORT_METRIC(input_tokens_num, req->input_tokens.size(), req->req_ctx);
+  opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(*req->req_ctx);
+  REPORT_COUNTER(forward_req_total_num, static_cast<size_t>(1), attributes);
+  REPORT_METRIC(metric_input_tokens_num, req->input_tokens.size(), attributes);
 
   Status handle_req_status = batch_manager_->Enqueue(req);
   if (!handle_req_status.OK()) {
-    REPORT_COUNTER(request_error, static_cast<size_t>(1), req->req_ctx);
+    REPORT_COUNTER(forward_req_error_num, static_cast<size_t>(1), attributes);
     return handle_req_status;
   }
   return Status();

@@ -10,6 +10,7 @@
 #include <numeric>
 #include <streambuf>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -74,7 +75,40 @@ class HttpTextMapCarrier : public opentelemetry::context::propagation::TextMapCa
 // Use to collect profile data from different modules, must be thread-safe.
 class Profiler {
  public:
-  Profiler() {}
+  struct Monitor {
+    struct Call {
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> forward_req_total_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> forward_req_error_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> forward_req_timeout_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> forward_req_aborted_num;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> forward_cost_time_ms;
+
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> prefix_cache_hit_req_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> prefix_cache_hit_token_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> prefix_cache_hit_block_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> full_prompt_matched_req_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> full_prompt_matched_block_num;
+
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_batch_size;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_waiting_size;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_swapped_size;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_manager_schedule_ms;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> token_num_in_batch;
+      std::unique_ptr<opentelemetry::metrics::Histogram<double>> token_fill_ratio;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> block_num_free;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> block_num_used;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> batch_scheduler_pending_swapin_size;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> batch_scheduler_pending_swapout_size;
+
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> time_to_first_token_ms;
+      std::unique_ptr<opentelemetry::metrics::Histogram<double>> time_to_per_output_token_ms;
+
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> metric_input_tokens_num;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> metric_output_token_num;
+    } call;
+  };
+
+  Profiler();
   void Init(const ProfilerConfig& profiler_config);
   ~Profiler();
 
@@ -90,11 +124,67 @@ class Profiler {
 
   void CleanupMetrics();
 
+  Monitor monitor_;
+
  private:
   std::string trace_export_url_;
   std::string metrics_export_url_;
   uint64_t export_interval_millis_;
   uint64_t export_timeout_millis_;
   opentelemetry::sdk::common::AttributeMap attr_;
+
+  static constexpr std::string_view kForwardReqTotalNum = "forward_req_total_num";
+  static constexpr std::string_view kForwardReqErrorNum = "forward_req_error_num";
+  static constexpr std::string_view kForwardReqTimeoutNum = "forward_req_timeout_num";
+  static constexpr std::string_view kForwardReqAbortedNum = "forward_req_aborted_num";
+  static constexpr std::string_view kForwardCostTimeMs = "forward_cost_time_ms";
+
+  static constexpr std::string_view kPrefixCacheHitReqNum = "prefix_cache_hit_req_num";
+  static constexpr std::string_view kPrefixCacheHitTokenNum = "prefix_cache_hit_token_num";
+  static constexpr std::string_view kPrefixCacheHitBlockNum = "prefix_cache_hit_block_num";
+  static constexpr std::string_view kFullPromptMatchedReqNum = "full_prompt_matched_req_num";
+  static constexpr std::string_view kFullPromptMatchedBlockNum = "full_prompt_matched_block_num";
+
+  static constexpr std::string_view kBatchSchedulerBatchSize = "batch_scheduler_batch_size";
+  static constexpr std::string_view kBatchSchedulerWaitingSize = "batch_scheduler_waiting_size";
+  static constexpr std::string_view kBatchSchedulerSwappedSize = "batch_scheduler_swapped_size";
+  static constexpr std::string_view kBatchManagerScheduleMs = "batch_manager_schedule_ms";
+  static constexpr std::string_view kTokenNumInBatch = "token_num_in_batch";
+  static constexpr std::string_view kTokenFillRatio = "token_fill_ratio";
+  static constexpr std::string_view kBlockNumFree = "block_num_free";
+  static constexpr std::string_view kBlockNumUsed = "block_num_used";
+  static constexpr std::string_view kBatchSchedulerPendingSwapInSize = "batch_scheduler_pending_swapin_size";
+  static constexpr std::string_view kBatchSchedulerPendingSwapOutSize = "batch_scheduler_pending_swapout_size";
+
+  static constexpr std::string_view kTimeToFirstTokenMs = "time_to_first_token_ms";
+  static constexpr std::string_view kTimeToPerOutputTokenMs = "time_to_per_output_token_ms";
+
+  static constexpr std::string_view kInputTokensNum = "metric_input_tokens_num";
+  static constexpr std::string_view kOutputTokenNum = "metric_output_token_num";
+
+  std::unordered_set<std::string_view> metrics_ = {kForwardReqTotalNum,
+                                                   kForwardReqErrorNum,
+                                                   kForwardReqTimeoutNum,
+                                                   kForwardReqAbortedNum,
+                                                   kForwardCostTimeMs,
+                                                   kPrefixCacheHitReqNum,
+                                                   kPrefixCacheHitTokenNum,
+                                                   kPrefixCacheHitBlockNum,
+                                                   kFullPromptMatchedReqNum,
+                                                   kFullPromptMatchedBlockNum,
+                                                   kBatchSchedulerBatchSize,
+                                                   kBatchSchedulerWaitingSize,
+                                                   kBatchSchedulerSwappedSize,
+                                                   kBatchManagerScheduleMs,
+                                                   kTokenNumInBatch,
+                                                   kTokenFillRatio,
+                                                   kBlockNumFree,
+                                                   kBlockNumUsed,
+                                                   kBatchSchedulerPendingSwapInSize,
+                                                   kBatchSchedulerPendingSwapOutSize,
+                                                   kTimeToFirstTokenMs,
+                                                   kTimeToPerOutputTokenMs,
+                                                   kInputTokensNum,
+                                                   kOutputTokenNum};
 };
 }  // namespace ksana_llm
