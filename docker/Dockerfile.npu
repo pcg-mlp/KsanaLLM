@@ -1,0 +1,26 @@
+FROM hub.oepkgs.net/openeuler/openeuler:22.03-lts
+
+LABEL MAINTAINER="ksana-llm-developer"
+
+RUN yum update -y
+RUN yum groupinstall -y "Development Tools"
+RUN yum install -y bzip2-devel expat-devel gdbm-devel libffi-devel \
+                   ncurses-devel openssl-devel readline-devel \
+                   sqlite-devel tk-devel xz-devel git-lfs \
+                   zlib-devel wget vim gcc cmake libcurl-devel
+
+RUN wget https://www.python.org/ftp/python/3.10.13/Python-3.10.13.tgz && \
+    tar zxvf Python-3.10.13.tgz && \
+    cd Python-3.10.13 && \
+    ./configure --prefix=/usr/local/python-3.10.13 --enable-loadable-sqlite-extensions --enable-shared && \
+    make && make install && \
+    cd /usr/local/python-3.10.13/bin/ && \
+    ln -s pip3 pip && ln -s python3 python
+
+RUN echo "" >> /root/.bashrc
+RUN echo "export LD_LIBRARY_PATH=/usr/local/python-3.10.13/lib:\$LD_LIBRARY_PATH" >> /root/.bashrc
+RUN echo "export PATH=/usr/local/python-3.10.13/bin:\$PATH" >> /root/.bashrc
+
+RUN yum clean all
+RUN yum clean expire-cache
+RUN du -sh /var/cache/dnf

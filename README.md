@@ -39,8 +39,8 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 **Supported Hardware**
 
- - Nvidia GPUs: A10, A100, L40
- - Huawei Ascend NPUs: 910B
+ - Nvidia GPUs: A10, A100, L40, L20
+ - Huawei Ascend NPUs: 910B2C
 
 ## Usage
 
@@ -59,8 +59,42 @@ apt update && apt install git-lfs -y
 
 #### 1.2 For Huawei Ascend NPU
 
-[https://ascendhub.huawei.com/#/detail/mindie](https://ascendhub.huawei.com/#/detail/mindie)
-version: 1.0.RC1-800I-A2-aarch64
+**Please install Huawei Ascend NPU driver and CANN: [driver download link](https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/softwareinst/instg/instg_0000.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit)**
+
+**Recommend version: CANN 8.0RC2**
+
+**Only Support Ascend NPU + X86 CPU**
+
+```bash
+cd docker
+docker build -f Dockerfile.npu -t ksana-npu .
+docker run \
+    -u root \
+    -itd --privileged \
+    --shm-size=50g \
+    --network host \
+    --cap-add=SYS_ADMIN \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp:unconfined $(find /dev/ -regex ".*/davinci$" | awk '{print " --device "$0}') \
+    --device=/dev/devmm_svm \
+    --device=/dev/hisi_hdc \
+    -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi \
+    -v /usr/local/sbin/:/usr/local/sbin/ \
+    -v /var/log/npu/conf/slog/slog.conf:/var/log/npu/conf/slog/slog.conf \
+    -v /var/log/npu/slog/:/var/log/npu/slog \
+    -v /var/log/npu/profiling/:/var/log/npu/profiling \
+    -v /var/log/npu/dump/:/var/log/npu/dump \
+    -v /var/log/npu/:/usr/slog \
+    -v /usr/local/Ascend/driver:/usr/local/Ascend/driver \
+    -v /etc/ascend_install.info:/etc/ascend_install.info \
+    ksana-npu bash
+
+# install Ascend-cann-toolkit, Ascend-cann-nnal from https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/softwareinst/instg/instg_0000.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit
+# download torch_npu-2.1.0.post6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl from https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/softwareinst/instg/instg_0000.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit
+pip3 install torch==2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch_npu-2.1.0.post6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install -r requirements.txt
+```
 
 ### 2. Clone source code
 
