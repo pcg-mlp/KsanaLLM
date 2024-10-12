@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
+#include "ksana_llm/periphery/version_reporter.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
@@ -101,6 +102,9 @@ Status InferenceEngine::Initialize() {
   batch_manager_->SetBatchScheduler(batch_scheduler_);
   batch_manager_->SetLlmRuntime(llm_runtime_);
 
+  if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
+    VersionReporter::GetInstance().Init();
+  }
   return Status();
 }
 
