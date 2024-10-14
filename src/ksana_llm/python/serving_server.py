@@ -15,7 +15,7 @@ import uvloop
 import yaml
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast, logging
 
 import ksana_llm
 
@@ -44,13 +44,15 @@ def args_config():
                         default="0.0.0.0",
                         help='server host address')
     parser.add_argument('--port', type=int, default=8888, help='server port')
+    parser.add_argument("--access-log",
+                        action="store_true",
+                        help="enable the endpoint access log")
     parser.add_argument("--ssl-keyfile", type=str, default=None)
     parser.add_argument("--ssl-certfile", type=str, default=None)
-    parser.add_argument(
-        "--root-path",
-        type=str,
-        default=None,
-        help="FastAPI root_path when app is behind a path based routing proxy")
+    parser.add_argument("--root-path",
+                        type=str,
+                        default=None,
+                        help="FastAPI root_path when app is behind a path based routing proxy")
     args = parser.parse_args()
     return args
 
@@ -305,6 +307,8 @@ if __name__ == "__main__":
         with open(args.config_file, "r") as yaml_file:
             yaml_data = yaml.safe_load(yaml_file)
             args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
+    # Set the verbosity of transformers to ERROR.
+    logging.set_verbosity_error()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
                                               trust_remote_code=True)
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
@@ -314,9 +318,9 @@ if __name__ == "__main__":
         )
     model = ksana_llm.AutoModel.from_config(args.config_file)
 
-    # Use multithread to support parallelism.
+    # Set the log level of uvicorn based on KLLM_LOG_LEVEL.
     LOG_LEVEL = os.getenv("KLLM_LOG_LEVEL", "INFO").upper()
-    if LOG_LEVEL in ["DEBUG", "INFO", "ERROR"]:
+    if LOG_LEVEL in ["DEBUG", "INFO", "WARNING", "ERROR"]:
         LOG_LEVEL = LOG_LEVEL.lower()
     else:
         LOG_LEVEL = "info"
@@ -328,6 +332,7 @@ if __name__ == "__main__":
                 host=args.host,
                 port=args.port,
                 log_level=LOG_LEVEL,
+                access_log=args.access_log,
                 timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
                 ssl_keyfile=args.ssl_keyfile,
                 ssl_certfile=args.ssl_certfile)

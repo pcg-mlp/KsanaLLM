@@ -255,11 +255,14 @@ def args_config():
                         help="Whether to return log probabilities of the output tokens"
                              " or not. ")
     parser.add_argument('--stop_token_ids',
-                        nargs='+',
+                        nargs='*',
                         type=int,
-                        default=[],
+                        default=None,
                         help="A list of token id that should terminate generation if the"
                              " model outputs them.")
+    parser.add_argument('--ignore_eos',
+                        action="store_true",
+                        help="Whether to ignore any EOS tokens.")
     parser.add_argument('--client_timeout',
                         type=int,
                         default=30*3600,
@@ -361,7 +364,8 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
                 "encoder_no_repeat_ngram_size": args.encoder_no_repeat_ngram_size,
                 "logprobs": args.logprobs,
                 "max_new_tokens": args.max_new_tokens,
-                "stop_token_ids": args.stop_token_ids
+                "stop_token_ids": args.stop_token_ids,
+                "ignore_eos": args.ignore_eos,
             },
             "stream": args.stream,
         }
@@ -384,6 +388,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "logprobs": args.logprobs,
             "repetition_penalty": args.repetition_penalty,
             "stop_token_ids": args.stop_token_ids,
+            "ignore_eos": args.ignore_eos,
             "skip_special_tokens": False,
             "spaces_between_special_tokens": False,
             "top_p": args.topp,
@@ -404,7 +409,8 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "task_id": time.time(),
             "delete_prompt_from_output": 1,
             "stream": args.stream,
-            "stop_token_ids": args.stop_token_ids
+            "stop_token_ids": args.stop_token_ids,
+            "ignore_eos": args.ignore_eos,
         }
     return prompt, orjson.dumps(data)
 

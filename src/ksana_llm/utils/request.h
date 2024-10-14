@@ -32,8 +32,8 @@ struct SamplingConfig {
   // The returned tokens will contain the stop tokens.
   std::vector<int> stop_token_ids;
 
-  // Whether to ignore the EOS token and continue generating
-  // tokens after the EOS token is generated.
+  // Whether to ignore any EOS tokens and continue generating
+  // tokens after an EOS token is generated.
   bool ignore_eos = false;
 
   // The maximum numbers of tokens to generate, ignoring the number of tokens in the prompt.

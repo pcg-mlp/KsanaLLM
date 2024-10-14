@@ -46,6 +46,19 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     req->waiter->Notify();
     return req->finish_status;
   }
+  const std::shared_ptr<ModelInstance> &model_instance = model_instances_[req->model_name];
+
+  // Update `stop_token_ids` based on the config of the requested model.
+  std::vector<int> &stop_token_ids = req->sampling_config.stop_token_ids;
+  if (req->sampling_config.ignore_eos) {  // Ignore any end ids.
+    stop_token_ids.clear();
+  } else {  // Supplement the end ids in model config or generation config.
+    for (int end_id : model_instance->GetModelConfig().end_ids) {
+      if (std::find(stop_token_ids.begin(), stop_token_ids.end(), end_id) == stop_token_ids.end()) {
+        stop_token_ids.push_back(end_id);
+      }
+    }
+  }
 
   std::vector<std::shared_ptr<InferRequest>> infer_request_group;
   for (size_t i = 0; i < req->output_group.size(); i++) {
@@ -54,16 +67,8 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
     infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
     infer_req->block_token_num = GetBlockManager()->GetBlockTokenNum();
-    infer_req->model_instance = model_instances_[req->model_name];
-    if (!req->sampling_config.ignore_eos) {
-      std::vector<int> &stop_token_ids = infer_req->sampling_config.stop_token_ids;
-      for (int end_id : infer_req->model_instance->GetModelConfig().end_ids) {
-        if (std::find(stop_token_ids.begin(), stop_token_ids.end(), end_id) == stop_token_ids.end()) {
-          stop_token_ids.push_back(end_id);
-        }
-      }
-    }
-    infer_req->pad_id = infer_req->model_instance->GetModelConfig().pad_id;
+    infer_req->model_instance = model_instance;
+    infer_req->pad_id = model_instance->GetModelConfig().pad_id;
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
     infer_req->step = 0;
   }

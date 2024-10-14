@@ -74,7 +74,8 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
       model_config.quant_config.is_activation_scheme_static =
           (config_json["quantization_config"].at("activation_scheme") == "static");
       KLLM_LOG_INFO << fmt::format(
-          "using quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, is_activation_scheme_static: {}",
+          "using quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, "
+          "is_activation_scheme_static: {}",
           quant_method, model_config.quant_config.is_checkpoint_fp8_serialized,
           model_config.quant_config.is_activation_scheme_static);
     } else {
@@ -89,7 +90,8 @@ void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model
       model_config.quant_config.is_checkpoint_fp8_serialized = false;
       model_config.quant_config.is_activation_scheme_static = false;
       KLLM_LOG_INFO << fmt::format(
-          "using quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, is_activation_scheme_static: {}",
+          "using quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, "
+          "is_activation_scheme_static: {}",
           yaml_weight_quant_method, model_config.quant_config.is_checkpoint_fp8_serialized,
           model_config.quant_config.is_activation_scheme_static);
     } else {
@@ -194,18 +196,17 @@ void PrepareCommonModelAttributes(const nlohmann::json &config_json, ModelConfig
 }
 
 void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_config) {
-  // Priority: `generation_config` argument > `model.generation_config`
+  // Priority: `generation_config` argument > `config.json` argument
   // It is recommended to set all generation parameters in `generation_config`
   // Refer to
-  // https://github.com/huggingface/transformers/blob/main/src/transformers/generation/utils.py#L1300
-  std::filesystem::path raw_model_dir_path = model_dir;
-  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(raw_model_dir_path);
+  // https://github.com/huggingface/transformers/blob/main/src/transformers/generation/utils.py#L1736
+  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(model_dir);
   std::string config_file = abs_model_dir_path.u8string() + "/generation_config.json";
 
   nlohmann::json config_json;
   std::ifstream file(config_file);
   if (!file.is_open()) {
-    KLLM_LOG_WARNING << fmt::format("Load generation config file: {} error.", config_file);
+    KLLM_LOG_DEBUG << fmt::format("Gneration config file: {} does not exist.", config_file);
     return;
   } else {
     file >> config_json;
@@ -218,18 +219,14 @@ void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_
 
   std::vector<int> end_ids;
   if (config_json.at("eos_token_id").is_array()) {
-    for (int end_id : config_json.at("eos_token_id")) {
-      if (std::find(end_ids.begin(), end_ids.end(), end_id) == end_ids.end()) {
-        end_ids.push_back(end_id);
-      }
-    }
+    end_ids = config_json["eos_token_id"].get<std::vector<int>>();
   } else {
-    end_ids.push_back(config_json.at("eos_token_id"));
+    end_ids = std::vector<int>{config_json.at("eos_token_id")};
   }
   if (end_ids != model_config.end_ids) {
-    KLLM_LOG_WARNING << fmt::format("eos_token_id: {} in model config is ignored by {} in generation config",
-                                    model_config.end_ids.front(), fmt::join(end_ids, ", "));
-    model_config.end_ids = end_ids;
+    KLLM_LOG_WARNING << fmt::format("eos_token_id: [{}] in model config is overwritten by [{}] in generation config",
+                                    fmt::join(model_config.end_ids, ", "), fmt::join(end_ids, ", "));
+    model_config.end_ids = std::move(end_ids);
   }
 }
 
@@ -438,8 +435,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
 }
 
 Status Environment::ParseModelConfig(const std::string &model_dir) {
-  std::filesystem::path raw_model_dir_path = model_dir;
-  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(raw_model_dir_path);
+  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(model_dir);
   std::string config_file = abs_model_dir_path.u8string() + "/config.json";
 
   nlohmann::json config_json;

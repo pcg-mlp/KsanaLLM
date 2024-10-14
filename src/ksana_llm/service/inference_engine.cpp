@@ -156,6 +156,9 @@ Status InferenceEngine::DoWarmupRun() {
   auto warmup_run_input = std::make_shared<KsanaPythonInput>();
   // Prepare the warm up input.
   warmup_run_input->input_tokens = std::vector<int>{1};
+  // Warm up with one context and one decoding.
+  warmup_run_input->sampling_config.max_new_tokens = 2;
+  warmup_run_input->sampling_config.ignore_eos = true;
 
   auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
   auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
