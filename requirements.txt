@@ -1,4 +1,4 @@
-transformers==4.39.2
+transformers==4.45.0
 sentencepiece==0.2.0
 uvicorn[standard]==0.29.0
 fastapi==0.110.0
