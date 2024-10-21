@@ -100,7 +100,7 @@ class BuildExt(build_ext_orig):
 
 
 setup(name='ksana_llm',
-      version='v0.2.1',
+      version='v0.2.2',
       author='ksana_llm',
       author_email='ksana_llm@tencent.com',
       description='Ksana LLM inference server',
