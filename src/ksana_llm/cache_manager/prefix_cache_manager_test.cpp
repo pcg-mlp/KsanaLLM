@@ -188,8 +188,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - (unique_block_num * tensor_para_size));
 
   // Merge swapped blocks.
-  for (int64_t id : req_ids) {
-    status = cache_manager->MergeSwapoutRequest(id);
+  for (int64_t req_id : req_ids) {
+    status = cache_manager->MergeSwapoutRequest(req_id);
     EXPECT_TRUE(status.OK());
   }
 
@@ -248,8 +248,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num);
 
   // Merge swapin request.
-  for (int64_t id : swapin_req_ids) {
-    status = cache_manager->MergeSwapinRequest(id, req_block_ids);
+  for (int64_t req_id : swapin_req_ids) {
+    status = cache_manager->MergeSwapinRequest(req_id, req_block_ids);
     EXPECT_TRUE(status.OK());
   }
 
@@ -441,8 +441,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
     EXPECT_TRUE(status.OK());
 
     // Merge swapped blocks.
-    for (int64_t id : req_ids_2) {
-      status = cache_manager->MergeSwapoutRequest(id);
+    for (int64_t req_id : req_ids_2) {
+      status = cache_manager->MergeSwapoutRequest(req_id);
       EXPECT_TRUE(status.OK());
     }
   } while (left_req_num_2 > 0);
@@ -492,8 +492,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - (1 * 2));
 
   // Merge swapin req 2.
-  for (int64_t id : swapin_req_ids_2) {
-    status = cache_manager->MergeSwapinRequest(id, req_block_ids_2);
+  for (int64_t req_id : swapin_req_ids_2) {
+    status = cache_manager->MergeSwapinRequest(req_id, req_block_ids_2);
     EXPECT_TRUE(status.OK());
   }
 

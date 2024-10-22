@@ -4,29 +4,19 @@
 #pragma once
 
 #include <atomic>
-#include <cstdint>
-#include <limits>
-#include <memory>
 
 namespace ksana_llm {
 
 class IdGenerator {
  public:
   int64_t Gen() {
-    ++id_;
-    if (id_ == max_) {
-      id_ = 0;
-    }
-
-    return id_;
+    // Keep the highest sign bit to 0.
+    return static_cast<int64_t>(id_.fetch_add(1, std::memory_order_relaxed) & ((1ul << 63) - 1));
   }
 
  private:
   // default to zero.
-  std::atomic_int64_t id_ = 0;
-
-  // max id value.
-  int64_t max_ = std::numeric_limits<int64_t>::max();
+  std::atomic_size_t id_ = 0;
 };
 
 }  // namespace ksana_llm
