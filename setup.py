@@ -112,6 +112,7 @@ setup(name='ksana_llm',
       },
       ext_modules=[CMakeExtension('ksana_llm')],
       python_requires='>=3',
+      install_requires=open('requirements.txt').readlines(),
       cmdclass={
           'build_ext': BuildExt,
       })
