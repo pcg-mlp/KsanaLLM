@@ -198,5 +198,5 @@ For more detailed information, please refer to the following link: [Optional KV 
 
 #### 7. Contact Us
 ##### WeChat Group
-<img src=doc/img/webchat-github.jpg width="200px">
+<img src=docs/img/webchat-github.jpg width="200px">
 
