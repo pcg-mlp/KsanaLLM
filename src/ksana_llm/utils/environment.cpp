@@ -382,8 +382,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
   yaml_weight_quant_method_ = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.quantization_config.weight.quant_method", "auto");
 
-  yaml_gptq_backend_ = yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(),
-                                                          "setting.quantization_config.gptq_backend", "cutlass");
+  yaml_gptq_backend_ = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.quantization_config.gptq_backend", "cutlass");
 
   // Read base model.
   std::string base_model_dir =

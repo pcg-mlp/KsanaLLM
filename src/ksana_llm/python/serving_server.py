@@ -61,7 +61,7 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
     """Perform streaming generation.
     """
     # Create a results iterator for the model's generation
-    kllm_status, results_iterator = model.generate(
+    results_iterator = model.generate(
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
@@ -69,9 +69,6 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
         req_ctx = req_ctx,  # request trace context
         **kwargs,
     )
-
-    if not kllm_status.OK():
-        return kllm_status, None
 
     # Define an asynchronous function to stream the results
     async def stream_results():
@@ -102,14 +99,14 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
             yield orjson.dumps(ret) + b"\0"
 
     # Return a StreamingResponse object with the streamed results
-    return kllm_status, stream_results()
+    return stream_results()
 
 
 def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwargs):
     """Perform batch generation.
     """
     # Generate output tokens using the model
-    kllm_status, ksana_python_output = model.generate(
+    ksana_python_output = model.generate(
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
@@ -117,8 +114,6 @@ def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwarg
         req_ctx = req_ctx,  # request trace context
         **kwargs,
     )
-    if not kllm_status.OK():
-        return kllm_status, None
 
     # Decode the output tokens into a human-readable text using the tokenizer
     output_text = []
@@ -130,7 +125,7 @@ def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwarg
             raise ValueError("Invalid token ids!")
 
     # Create a JSON response with the generated text and token IDs
-    return kllm_status, {
+    return {
         "texts": output_text,  # the generated text
         "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
         "logprobs": ksana_python_output.logprobs,
@@ -222,7 +217,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     if enable_streaming:
         # Use streaming generation
         # Run the streaming_generate function in an executor to avoid blocking the event loop
-        kllm_status, results = await loop.run_in_executor(
+        results = await loop.run_in_executor(
             model_executor,  # specify the executor to use
             partial(
                 streaming_generate,  # partial function to call
@@ -236,7 +231,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     else:
         # Use batch generation
         # Run the batch_generate function in an executor to avoid blocking the event loop
-        kllm_status, results = await loop.run_in_executor(
+        results = await loop.run_in_executor(
             model_executor,  # specify the executor to use
             partial(
                 batch_generate,  # partial function to call
@@ -249,7 +244,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
         )
 
     # Return the results of the generation
-    return kllm_status, results
+    return results
 
 
 async def forward_request(request_bytes: bytes, req_ctx: Dict[str, str]) -> Optional[bytes]:
@@ -259,7 +254,7 @@ async def forward_request(request_bytes: bytes, req_ctx: Dict[str, str]) -> Opti
     # Get the current event loop
     loop = asyncio.get_event_loop()
 
-    kllm_status, response_bytes = await loop.run_in_executor(
+    response_bytes = await loop.run_in_executor(
         model_executor,  # specify the executor to use
         partial(
             model.forward,  # partial function to call
@@ -267,8 +262,7 @@ async def forward_request(request_bytes: bytes, req_ctx: Dict[str, str]) -> Opti
             req_ctx         # request trace context
         )
     )
-
-    return kllm_status, response_bytes
+    return response_bytes
 
 
 @app.post("/generate")
@@ -283,12 +277,8 @@ async def generate(request: Request) -> Response:
     req_ctx = get_trace_context(request)
     request_dict = orjson.loads(await request.body())
     enable_streaming = request_dict.get("stream", True)
-    kllm_status, response_data = await process_request(request_dict)
-    if not kllm_status.OK():
-        error_response = {"Message": kllm_status.GetMessage(), "code": kllm_status.GetCode().value}
-        return Response(content = json.dumps(error_response),
-             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    if enable_streaming :
+    response_data = await process_request(request_dict, req_ctx)
+    if enable_streaming:
         return StreamingResponse(response_data)
     else:
         return JSONResponse(response_data)
@@ -302,14 +292,12 @@ async def forward(request: Request):
     """
     req_ctx = get_trace_context(request)
     request_bytes = await request.body()
-    kllm_status, response_bytes = await forward_request(request_bytes)
 
-    if kllm_status.OK() and response_bytes is not None:
+    response_bytes = await forward_request(request_bytes, req_ctx)
+    if response_bytes is not None:
         return Response(content=response_bytes, media_type="application/x-msgpack")
     else:  # Bad request
-        error_response = {"Message": kllm_status.GetMessage(), "code": kllm_status.GetCode().value}
-        return Response(content = json.dumps(error_response),
-             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(status_code=status.HTTP_400_BAD_REQUEST, media_type="application/x-msgpack")
 
 
 if __name__ == "__main__":
