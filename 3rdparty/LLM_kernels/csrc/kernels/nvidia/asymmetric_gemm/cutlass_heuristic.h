@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 

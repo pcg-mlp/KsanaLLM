@@ -67,11 +67,16 @@ static const float HALF_FLT_MAX = 65504.F;
 #define FINAL_MASK 0xffffffff
 
 template <typename T>
+inline __device__ T add(T a, T b) {
+  return a + b;
+}
+
+template <typename T>
 __inline__ __device__ T WarpReduceSum(T val) {
 #pragma unroll
   for (int32_t mask = 16; mask > 0; mask >>= 1)
     //__shfl_sync bf16 return float when sm < 80
-    val = add(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));
+    val = add<T>(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));
   return val;
 }
 

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <queue>
 #include <vector>
@@ -21,7 +22,8 @@ __attribute__((unused)) static int64_t DivRoundDown(int64_t dividend, int64_t di
 /**
  * The AlignedMemoryQueue class is designed to facilitate the allocation and alignment of memory blocks
  * in a queued manner, ensuring that each block is aligned to a specified boundary. This is particularly
- * useful for optimizing memory access patterns in systems where alignment matters, such as on GPUs or for SIMD operations.
+ * useful for optimizing memory access patterns in systems where alignment matters, such as on GPUs or for SIMD
+ * operations.
  *
  * Usage Example:
  * --------------
@@ -47,8 +49,8 @@ __attribute__((unused)) static int64_t DivRoundDown(int64_t dividend, int64_t di
  * queue.Add(ptr2, 5);
  * queue.Add(ptr3, 7);
  *
- * // Once all requests are added, call AllocateAndAlign to process the queue, allocate, and align all requested memory blocks.
- * aligned_memory_queue.AllocateAndAlign();
+ * // Once all requests are added, call AllocateAndAlign to process the queue, allocate, and align all requested memory
+ * blocks. aligned_memory_queue.AllocateAndAlign();
  *
  * Notes:
  * ------
