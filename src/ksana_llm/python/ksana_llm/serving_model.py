@@ -210,12 +210,17 @@ class ServingModel(object):
             ksana_python_input.input_refit_embedding.embeddings = kwargs['input_refit_embedding']['embeddings']
 
         if streamer is None:
-            _, ksana_python_output = self._serving.generate(ksana_python_input, req_ctx)
+            status, ksana_python_output = self._serving.generate(ksana_python_input, req_ctx)
+            if not status.OK():
+                return status, None
             self._ksana_plugin.postprocess(ksana_python_input, ksana_python_output)
-            return ksana_python_output
+
+            return status, ksana_python_output
         else:
-            _, streaming_iterator = self._serving.generate_streaming(ksana_python_input, req_ctx)
-            return PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
+            status, streaming_iterator = self._serving.generate_streaming(ksana_python_input, req_ctx)
+            if not status.OK():
+                return status, None
+            return status, PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
 
     @torch.no_grad()
     def forward(self, request_bytes: bytes, req_ctx: Dict[str, str]) -> Optional[bytes]:
@@ -224,9 +229,9 @@ class ServingModel(object):
         """
         status, response_bytes = self._serving.forward(request_bytes, req_ctx)
         if status.OK():
-            return response_bytes
+            return status, response_bytes
         else:  # Failed to get the response
-            return None
+            return status, None
 
     def _check_do_sample_params(self, generation_config, sampling_config, get_generation_value):
         do_sample = True

@@ -56,6 +56,7 @@ Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &k
 
   Status status = Status();
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
+
   STATUS_CHECK_AND_REPORT(status, span);
 }
 
@@ -87,10 +88,17 @@ Status LocalEndpoint::HandleBatch(const std::vector<std::shared_ptr<KsanaPythonI
   KLLM_LOG_DEBUG << "LocalEndpoint::HandleBatch Wait finished.";
 
   ksana_python_outputs.reserve(batch_size);
-  for (const auto &[_, req] : reqs) {
+  for (const auto &[status, req] : reqs) {
+    if (!status.OK()) {
+      ksana_python_outputs.emplace_back(req);
+      KLLM_LOG_ERROR << "LocalEndpoint::HandleBatch Error: " << status.ToString();
+      return status;
+    }
+
     ksana_python_outputs.emplace_back(req);
   }
   KLLM_LOG_DEBUG << "LocalEndpoint::HandleBatch Fetch result.";
+
   return Status();
 }
 
