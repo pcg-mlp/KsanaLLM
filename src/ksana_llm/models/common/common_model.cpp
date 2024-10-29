@@ -72,8 +72,10 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   STATUS_CHECK_FAILURE(CreateBufferTensor(residual_buffer_[0], {residual_buffer_size}, weight_type));
   STATUS_CHECK_FAILURE(CreateBufferTensor(shared_buffer_[0], {shared_buffer_size}, weight_type));
 
+  float scale_factor = model_config_.rope_scaling_factor_config.factor;
   STATUS_CHECK_FAILURE(CreateBufferTensor(
-      cos_sin_cache_tensor_, {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings)},
+      cos_sin_cache_tensor_,
+      {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings * scale_factor)},
       weight_type));
 #ifdef ENABLE_ACL
   STATUS_CHECK_FAILURE(
