@@ -192,4 +192,4 @@ python -c "import ksana_llm"
 
 #### 7. 联系我们
 ##### 微信群
-<img src=doc/img/webchat-github.jpg width="200px">
+<img src=docs/img/webchat-github.jpg width="200px">
