@@ -447,10 +447,10 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                     last_chunk += chunk.strip(b'\x00')
                     try:
                         if "server" in args.backend and args.stream:
-                            output = orjson.loads(last_chunk.decode("utf-8")[6:][:-2], errors="ignore")
+                            output = orjson.loads(last_chunk.decode("utf-8")[6:][:-2])
                             server_stream_output += output["choices"][0]["delta"]["content"]
                         else:
-                            output = orjson.loads(last_chunk.decode("utf-8"), errors="ignore")
+                            output = orjson.loads(last_chunk.decode("utf-8"))
                         # First token
                         if first_token_latency == 0.:
                             first_token_latency = timestamp - request_start_time
