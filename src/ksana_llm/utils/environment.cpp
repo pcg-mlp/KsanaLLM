@@ -355,7 +355,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   // TODO(zakwang): Implement support for enabling prefix caching when split_fuse_token_num is non-zero and ensure
   // compatibility with block_host_memory_factor.
   if (batch_scheduler_config_.split_fuse_token_num != 0) {
-    if (cache_manager_config_.enable_preifx_caching == false || block_manager_config_.block_host_memory_factor != 0) {
+    if (cache_manager_config_.enable_prefix_caching == false || block_manager_config_.block_host_memory_factor != 0) {
       KLLM_LOG_WARNING << "split_fuse_token_num is non-zero while prefix caching is disabled or "
                           "block_host_memory_factor is not zero. Setting split_fuse_token_num to 0.";
       batch_scheduler_config_.split_fuse_token_num = 0;
