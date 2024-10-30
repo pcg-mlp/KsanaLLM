@@ -62,10 +62,13 @@ Status GPTModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_l
     // only need sync in the first layer
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
   }
-
-  if (is_context_stage) {
+  if (model_input_->context_num) {
     CommonModel<T>::FlashAttentionForward(layer_idx);
-  } else {
+    if (model_input_->decode_num) {
+      std::swap(hidden_buffer_1_, hidden_buffer_0_);
+    }
+  }
+  if (model_input_->decode_num) {
     CommonModel<T>::PagedAttentionForward(layer_idx);
   }
 
