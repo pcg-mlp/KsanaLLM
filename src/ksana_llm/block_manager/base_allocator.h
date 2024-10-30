@@ -19,6 +19,8 @@ class BaseAllocator {
   BaseAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context);
   virtual ~BaseAllocator() {}
 
+  virtual void Clear();
+
   // Allocate blocked memory.
   virtual Status AllocateBlocks(size_t block_num, std::vector<int>& blocks);
 

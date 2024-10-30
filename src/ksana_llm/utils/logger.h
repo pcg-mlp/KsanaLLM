@@ -75,7 +75,11 @@ inline void InitLoguru() {
   }
 
   loguru::g_stderr_verbosity = loguru::Verbosity_OFF;
-  loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
+  static bool kIsLoggerInitialized = false;
+  if (!kIsLoggerInitialized) {
+    loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
+    kIsLoggerInitialized = true;
+  }
 }
 
 #define NO_CC_IF if  // For CodeCC compatibility.

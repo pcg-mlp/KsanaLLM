@@ -134,7 +134,7 @@ Status BatchManager::Start() {
 }
 
 Status BatchManager::Stop() {
-  KLLM_LOG_DEBUG << "Stop batch manager.";
+  KLLM_LOG_INFO << "Stop batch manager.";
 
   terminated_ = true;
 
@@ -145,7 +145,7 @@ Status BatchManager::Stop() {
     batch_manager_thread_->join();
   }
 
-  KLLM_LOG_DEBUG << "batch manager stopped.";
+  KLLM_LOG_INFO << "batch manager stopped.";
   return Status();
 }
 

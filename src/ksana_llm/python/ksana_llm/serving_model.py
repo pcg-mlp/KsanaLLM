@@ -158,12 +158,14 @@ class ServingModel(object):
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
         streamer: Optional["BaseStreamer"] = None,
-        req_ctx: Dict[str, str] = {},
+        req_ctx: Dict[str, str] = None,
         **kwargs,
     ) -> List[List[int]]:
         """The model generate interface, invoked by venus.
         """
 
+        if req_ctx is None:
+            req_ctx = {}
         ksana_python_input = libtorch_serving.KsanaPythonInput()
         ksana_python_input.model_name = model_name
         ksana_python_input.input_tokens = inputs
@@ -218,10 +220,13 @@ class ServingModel(object):
             return PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
 
     @torch.no_grad()
-    def forward(self, request_bytes: bytes, req_ctx: Dict[str, str]) -> Optional[bytes]:
+    def forward(self, request_bytes: bytes,
+                req_ctx: Dict[str, str] = None) -> Optional[bytes]:
         """The model forward interface.
         This function just forwards the raw request bytes to the serving in the C++ side.
         """
+        if req_ctx is None:
+            req_ctx = {}
         status, response_bytes = self._serving.forward(request_bytes, req_ctx)
         if status.OK():
             return response_bytes

@@ -22,6 +22,7 @@ InferenceEngine::InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Reque
 }
 
 InferenceEngine::~InferenceEngine() {
+  model_instances_.clear();
   if (block_manager_) {
     delete block_manager_;
     block_manager_ = nullptr;
@@ -214,16 +215,24 @@ Status InferenceEngine::Stop() {
   handle_thread_.join();
 
   // Wait all request done.
-  KLLM_LOG_DEBUG << "Waiting all running request.";
+  KLLM_LOG_INFO << "Waiting all running request.";
   Status status = batch_manager_->WaitAllDone();
   if (!status.OK()) {
     KLLM_LOG_ERROR << "Wait all requests done error:" << status.ToString();
   }
 
   // Stop the batch manger.
-  KLLM_LOG_DEBUG << "Stop batch manager.";
+  KLLM_LOG_INFO << "Stop batch manager.";
   batch_manager_->Stop();
+  batch_manager_ = nullptr;
+  llm_runtime_ = nullptr;
 
+  if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
+    VersionReporter::GetInstance().StopReporting();
+    VersionReporter::GetInstance().Destroy();
+  }
+
+  KLLM_LOG_INFO << "The Inference Engine has stopped.";
   return Status();
 }
 

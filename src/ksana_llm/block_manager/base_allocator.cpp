@@ -14,6 +14,39 @@ IdGenerator BaseAllocator::id_generator_;
 BaseAllocator::BaseAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context)
     : allocator_config_(allocator_config), context_(context) {}
 
+void BaseAllocator::Clear() {
+#ifdef ENABLE_ACL_ATB
+  if (allocator_config_.device == MEMORY_DEVICE) {
+    if (blocks_base_ptr != nullptr) {
+      FreeMemory(blocks_base_ptr);
+    }
+    used_contiguous_.clear();
+    free_blocks_.clear();
+    used_blocks_.clear();
+    return;
+  }
+#endif
+  {
+    std::unique_lock<std::mutex> lock(contiguous_mutex_);
+    for (auto it = used_contiguous_.begin(); it != used_contiguous_.end();) {
+      FreeMemory(it->second.address);
+      it = used_contiguous_.erase(it);
+    }
+  }
+  {
+    std::unique_lock<std::mutex> lock(block_mutex_);
+    for (auto it = free_blocks_.begin(); it != free_blocks_.end();) {
+      FreeMemory(it->second.address);
+      it = free_blocks_.erase(it);
+    }
+
+    for (auto it = used_blocks_.begin(); it != used_blocks_.end();) {
+      FreeMemory(it->second.address);
+      it = used_blocks_.erase(it);
+    }
+  }
+}
+
 void BaseAllocator::PreAllocateBlocks() {
   void* memory_ptr = nullptr;
   bool is_continuous_mode = false;

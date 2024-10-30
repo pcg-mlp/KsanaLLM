@@ -14,7 +14,7 @@ namespace ksana_llm {
 class HostAllocator : public BaseAllocator {
  public:
   HostAllocator(const AllocatorConfig& allocator_config, std::shared_ptr<Context> context);
-  virtual ~HostAllocator() {}
+  virtual ~HostAllocator() { Clear(); }
 
  private:
   // allocate memory

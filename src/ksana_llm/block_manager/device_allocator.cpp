@@ -15,7 +15,7 @@ DeviceAllocator::DeviceAllocator(const AllocatorConfig& allocator_config, std::s
   SetDevice(device_id_);
 }
 
-DeviceAllocator::~DeviceAllocator() {}
+DeviceAllocator::~DeviceAllocator() { Clear(); }
 
 int DeviceAllocator::GetDeviceId() { return device_id_; }
 

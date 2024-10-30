@@ -29,7 +29,11 @@ class ModelInstance {
     loader_weight_threadpool_ = std::make_shared<ThreadPool>(context->GetTensorParallelSize());
     loader_weight_threadpool_->Start();
   }
-  ~ModelInstance() { loader_weight_threadpool_->Stop(); }
+  ~ModelInstance() {
+    loader_weight_threadpool_->Stop();
+    models_.clear();
+    weights_.clear();
+  }
   // Load model with specified model config.
   void Load();
 

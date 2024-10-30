@@ -64,15 +64,16 @@ Status ServingImpl::Start() {
 }
 
 Status ServingImpl::Stop() {
-  KLLM_LOG_DEBUG << "Recive stop signal, ready to quit.";
+  KLLM_LOG_INFO << "Recive stop signal, ready to quit.";
 
   request_queue_.Close();
   inference_engine_->Stop();
 
   // Force exit here.
-  KLLM_LOG_DEBUG << "Exit now.";
+  KLLM_LOG_INFO << "Exit now.";
+#ifdef ENABLE_ACL
   _exit(0);
-
+#endif
   return Status();
 }
 

@@ -95,7 +95,7 @@ Status HttpEndpoint::Start() {
 }
 
 Status HttpEndpoint::Stop() {
-  KLLM_LOG_DEBUG << "Close http endpoint.";
+  KLLM_LOG_INFO << "Close http endpoint.";
   http_server_.stop();
   terminated_ = true;
   return Status();
