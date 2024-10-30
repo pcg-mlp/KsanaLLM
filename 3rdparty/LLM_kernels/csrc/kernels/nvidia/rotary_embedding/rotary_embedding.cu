@@ -130,10 +130,10 @@ __global__ void InvokeComputeCosSinWithCacheKernel(T* __restrict__ cos_sin_cache
 
 template <typename T>
 __global__ void InvokeComputeMultiFreqCosSinWithCacheKernel(T* __restrict__ cos_sin_cache, const int rotary_dim,
-                                                         const int max_position_embeddings, const float base,
-                                                         const float scaling, const float low_freq_factor,
-                                                         const float high_freq_factor,
-                                                         const int original_max_position_embeddings) {
+                                                            const int max_position_embeddings, const float base,
+                                                            const float scaling, const float low_freq_factor,
+                                                            const float high_freq_factor,
+                                                            const int original_max_position_embeddings) {
   int pos = blockIdx.x;
   float low_freq_wavelen = (float)original_max_position_embeddings / low_freq_factor;
   float high_freq_wavelen = (float)original_max_position_embeddings / high_freq_factor;
@@ -155,6 +155,55 @@ __global__ void InvokeComputeMultiFreqCosSinWithCacheKernel(T* __restrict__ cos_
     freq = pos * freq;
     cos_sin_cache[pos * rotary_dim + rid] = (T)cos(freq);
     cos_sin_cache[pos * rotary_dim + rotary_dim / 2 + rid] = (T)sin(freq);
+  }
+}
+
+template <typename T>
+__global__ void InvokeYarnComputeCosSinWithCacheKernel(T* __restrict__ cos_sin_cache, const int rotary_dim,
+                                                       const int max_position_embeddings, const float base,
+                                                       const float scaling) {
+  // Same logic as :
+  // https://github.com/vllm-project/vllm/blob/9f669a9a7c2b2d0a7963a6e29253280e57680adb/vllm/model_executor/layers/rotary_embedding.py#L215
+  int pos = blockIdx.x;
+  float extrapolation_factor = 1.0f;
+  float attn_factor = 1.0f;
+  float beta_fast = 32.0f;
+  float beta_slow = 1.0f;
+  float mscale = 1.0f;
+  if (scaling > 1.0f) {
+    mscale = (0.1f * std::log(scaling) + 1.0f) * attn_factor;
+  }
+
+  float low_dim = ((float)rotary_dim * std::log((float)max_position_embeddings / (beta_fast * 2.0f * M_PI))) /
+                  (2.0f * std::log(base));
+  float low = std::floor(low_dim);
+  low = std::max(low, 0.0f);
+  float high_dim = ((float)rotary_dim * std::log((float)max_position_embeddings / (beta_slow * 2.0f * M_PI))) /
+                   (2.0f * std::log(base));
+  float high = std::ceil(high_dim);
+  high = std::min(high, (float)rotary_dim - 1.0f);
+  for (int rid = threadIdx.x; rid < rotary_dim / 2; rid += blockDim.x) {
+    float pos_freqs = pow(base, rid * 2 / (float)rotary_dim);
+    float inv_freq_extrapolation = 1.0f / pos_freqs;
+    float inv_freq_interpolation = 1.0f / (scaling * pos_freqs);
+    float ramp_mask;
+    if (low == high) {
+      ramp_mask = ((float)rid - low) / (high + 0.001f - low);
+    } else {
+      ramp_mask = ((float)rid - low) / (high - low);
+    }
+    if (ramp_mask <= 0.0f) {
+      ramp_mask = 0.0f;
+    }
+    if (ramp_mask >= 1.0f) {
+      ramp_mask = 1.0f;
+    }
+    float inv_freq_mask = (1.0f - ramp_mask) * extrapolation_factor;
+    float inv_freq = inv_freq_interpolation * (1.0f - inv_freq_mask) + inv_freq_extrapolation * inv_freq_mask;
+
+    float freq = pos * inv_freq;
+    cos_sin_cache[pos * rotary_dim + rid] = (T)(cos(freq) * mscale);
+    cos_sin_cache[pos * rotary_dim + rotary_dim / 2 + rid] = (T)(sin(freq) * mscale);
   }
 }
 
@@ -187,6 +236,13 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam<T>& params) {
     InvokeComputeMultiFreqCosSinWithCacheKernel<T>
         <<<grid, block, 0, params.stream>>>(params.cos_sin_cache, params.rotary_dim, extend_max_len, base, scaling,
                                             low_freq_factor, high_freq_factor, original_max_position_embeddings);
+  } else if (params.rotary_embedding_type == RotaryEmbeddingType::YARN_SCALING) {
+    scaling = params.scaling_factor;
+    extend_max_len = params.max_position_embeddings * scaling;
+    int original_max_position_embeddings = params.original_max_position_embeddings;
+    dim3 grid(extend_max_len);
+    InvokeYarnComputeCosSinWithCacheKernel<T><<<grid, block, 0, params.stream>>>(
+        params.cos_sin_cache, params.rotary_dim, original_max_position_embeddings, base, scaling);
   } else {
     dim3 grid(extend_max_len);
     InvokeComputeCosSinWithCacheKernel<T>
@@ -256,20 +312,16 @@ void RotaryEmbeddingCuda<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, c
   ComputeCosSinWithCache(params_);
 }
 
-template void RotaryEmbeddingCuda<float>::SetConfig(float* cos_sin_cache, const int rotary_dim,
-                                                    const int max_position_embeddings, const float base,
-                                                    const int head_size, const int num_heads, const int num_kv_heads,
-                                                    const int stride_size, const bool is_neox, cudaStream_t& stream,
-                                                    const RotaryEmbeddingType rotary_embedding_type,
-                                                    const float scaling_factor, const float low_freq_factor,
-                                                    const float high_freq_factor, const int original_max_position_embeddings);
-template void RotaryEmbeddingCuda<half>::SetConfig(half* cos_sin_cache, const int rotary_dim,
-                                                   const int max_position_embeddings, const float base,
-                                                   const int head_size, const int num_heads, const int num_kv_heads,
-                                                   const int stride_size, const bool is_neox, cudaStream_t& stream,
-                                                   const RotaryEmbeddingType rotary_embedding_type,
-                                                   const float scaling_factor, const float low_freq_factor,
-                                                   const float high_freq_factor, const int original_max_position_embeddings);
+template void RotaryEmbeddingCuda<float>::SetConfig(
+    float* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
+    const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
+    cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor,
+    const float low_freq_factor, const float high_freq_factor, const int original_max_position_embeddings);
+template void RotaryEmbeddingCuda<half>::SetConfig(
+    half* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base, const int head_size,
+    const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox, cudaStream_t& stream,
+    const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor, const float low_freq_factor,
+    const float high_freq_factor, const int original_max_position_embeddings);
 template void RotaryEmbeddingCuda<__nv_bfloat16>::SetConfig(
     __nv_bfloat16* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,

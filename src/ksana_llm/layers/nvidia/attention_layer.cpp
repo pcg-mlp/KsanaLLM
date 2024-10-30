@@ -51,6 +51,10 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
       low_freq_factor = rope_scaling_factor_config.low_freq_factor;
       high_freq_factor = rope_scaling_factor_config.high_freq_factor;
       original_max_position_embeddings = rope_scaling_factor_config.original_max_position_embeddings;
+    } else if (rope_scaling_factor_config.type == "yarn") {
+      rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::YARN_SCALING;
+      scaling_factor = rope_scaling_factor_config.factor;
+      original_max_position_embeddings = rope_scaling_factor_config.original_max_position_embeddings;
     } else if (rope_scaling_factor_config.type != "default") {
       KLLM_THROW(fmt::format("Unsupport rope scaling type: {}.", rope_scaling_factor_config.type));
     }

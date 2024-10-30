@@ -26,7 +26,7 @@
 namespace llm_kernels {
 namespace nvidia {
 
-enum RotaryEmbeddingType { DEFAULT, LINEAR_SCALING, DYNAMIC_NTK_SCALING, MULTIFREQ_SCALING };
+enum RotaryEmbeddingType { DEFAULT, LINEAR_SCALING, DYNAMIC_NTK_SCALING, MULTIFREQ_SCALING, YARN_SCALING };
 
 template <typename T>
 struct RotaryEmbeddingParam {

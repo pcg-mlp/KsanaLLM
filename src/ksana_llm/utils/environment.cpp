@@ -152,6 +152,8 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
     if (model_config.rope_scaling_factor_config.type != "su") {
       if (model_config.rope_scaling_factor_config.type == "yarn") {
         derived_max_model_len = rope_scaling_setting.value("original_max_position_embeddings", derived_max_model_len);
+        model_config.rope_scaling_factor_config.original_max_position_embeddings =
+            rope_scaling_setting.value("original_max_position_embeddings", 32768);
       }
       derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
     }
@@ -385,8 +387,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
   yaml_weight_quant_method_ = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.quantization_config.weight.quant_method", "auto");
 
-  yaml_gptq_backend_ = yaml_reader.GetScalar<std::string>(
-      yaml_reader.GetRootNode(), "setting.quantization_config.gptq_backend", "cutlass");
+  yaml_gptq_backend_ = yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(),
+                                                          "setting.quantization_config.gptq_backend", "cutlass");
 
   // Read base model.
   std::string base_model_dir =
