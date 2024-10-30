@@ -48,6 +48,11 @@ void GPTWeight<T>::ProcessWeights() {
   }
 }
 
+template <typename T>
+void GPTWeight<T>::SetEmbeddingsConfig() {
+  CommonWeight<T>::SetEmbeddingsConfig();
+}
+
 template class GPTWeight<float>;
 template class GPTWeight<float16>;
 #ifdef ENABLE_BFLOAT16

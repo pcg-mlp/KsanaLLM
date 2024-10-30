@@ -30,6 +30,11 @@ void LlamaWeight<T>::ProcessWeights() {
   common_weight_->ProcessWeights();
 }
 
+template <typename T>
+void LlamaWeight<T>::SetEmbeddingsConfig() {
+  common_weight_->SetEmbeddingsConfig();
+}
+
 template class LlamaWeight<float>;
 template class LlamaWeight<float16>;
 #ifdef ENABLE_BFLOAT16

@@ -25,6 +25,8 @@ class BaseWeight {
                                      std::vector<std::string>& custom_name_list) = 0;
 
   virtual void ProcessWeights() = 0;
+
+  virtual void SetEmbeddingsConfig() = 0;
 };
 
 }  // namespace ksana_llm

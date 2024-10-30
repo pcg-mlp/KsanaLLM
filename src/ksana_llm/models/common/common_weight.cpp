@@ -77,6 +77,11 @@ int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_
 }
 
 template <typename T>
+void CommonWeight<T>::SetEmbeddingsConfig() {
+  model_config_.tie_word_embeddings = true;
+}
+
+template <typename T>
 Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape,
                                           bool& transpose_first, const std::string& tensor_name) {
   // scale does not require slice

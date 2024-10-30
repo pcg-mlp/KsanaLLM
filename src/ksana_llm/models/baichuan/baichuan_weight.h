@@ -23,6 +23,8 @@ class BaichuanWeight : public BaseWeight {
 
   std::shared_ptr<CommonWeight<T>> Getcommonweight() { return common_weight_; }
 
+  void SetEmbeddingsConfig();
+
  private:
   // the common weight instance.
   std::shared_ptr<CommonWeight<T>> common_weight_ = nullptr;

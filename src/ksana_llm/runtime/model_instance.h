@@ -60,7 +60,7 @@ class ModelInstance {
 
   size_t GetMaxTokenNum() { return model_config_.max_token_num; }
 
-  uint32_t GetLayerNum() {return model_config_.num_layer; }
+  uint32_t GetLayerNum() { return model_config_.num_layer; }
 
  private:
   // Create the object and return a shared pointer.
@@ -94,6 +94,12 @@ class ModelInstance {
   std::shared_ptr<BaseWeight> CreateModelWeight(int rank) {
     return CreatetModelObject<ClassT, BaseWeight>(rank);
   }
+
+  void SetEmbeddingsConfig();
+
+  void CheckTieEmbeddings(int weight_file_size);
+
+  void CheckTieEmbeddings(std::vector<std::string>& custom_name_list);
 
   void LoadWeightsAndModelsMap();
 

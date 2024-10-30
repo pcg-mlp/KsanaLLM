@@ -30,6 +30,11 @@ void QwenWeight<T>::ProcessWeights() {
   common_weight_->ProcessWeights();
 }
 
+template <typename T>
+void QwenWeight<T>::SetEmbeddingsConfig() {
+  common_weight_->SetEmbeddingsConfig();
+}
+
 template class QwenWeight<float>;
 template class QwenWeight<float16>;
 #ifdef ENABLE_BFLOAT16

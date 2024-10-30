@@ -26,6 +26,8 @@ class CommonWeight : public BaseWeight {
                              std::vector<std::string>& weight_name_list,
                              std::vector<std::string>& custom_name_list) override;
 
+  void SetEmbeddingsConfig() override;
+
  protected:
   Status ConvertCommonTensor(int hidden_units, int inter_size, int num_layer, int vocab_size);
 

@@ -30,6 +30,11 @@ void BaichuanWeight<T>::ProcessWeights() {
   common_weight_->ProcessWeights();
 }
 
+template <typename T>
+void BaichuanWeight<T>::SetEmbeddingsConfig() {
+  common_weight_->SetEmbeddingsConfig();
+}
+
 template class BaichuanWeight<float>;
 template class BaichuanWeight<float16>;
 #ifdef ENABLE_BFLOAT16

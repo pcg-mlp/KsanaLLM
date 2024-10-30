@@ -13,6 +13,7 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/optional_file.h"
 #include "ksana_llm/utils/status.h"
+#include "nlohmann/json.hpp"
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
 #include "ksana_llm/models/chatglm/chatglm_weight.h"
@@ -96,9 +97,79 @@ std::vector<std::future<Status>> ModelInstance::ForwardAsync(std::shared_ptr<Wor
   return results;
 }
 
+void ModelInstance::SetEmbeddingsConfig() {
+  for (auto& weight : weights_) {
+    if (weight) {
+      weight->SetEmbeddingsConfig();
+    }
+  }
+}
+/*
+ * embed_token.weight 和 lm_head.weight 的检查和替换逻辑如下表所示：
+ * （第一列为模型config.json中是否存在参数tie_word_embeddings）
+ * （第二列为参数tie_word_embeddings实际默认值）
+ *  (第三列为是否存在lm_head.weight)
+ *  (第四列为embed_token.weight是否替换lm_head.weight)
+ *   +-----------+--------+---------------+-------------+
+ *   | exist tie | value  | exist lm_head | is replace  |
+ *   +-----------+--------+---------------+-------------+
+ *   |           |        |     true      |     NO      |
+ *   |           |  true  +---------------+-------------|
+ *   |           |        |     false     |     YES     |
+ *   | false     +--------+---------------+-------------+
+ *   |           |        |     true      |     NO      |
+ *   |           |  false +---------------+-------------|
+ *   |           |        |     false     |     YES     |
+ *   +-----------+--------+---------------+-------------+
+ *   |           |        |     true      |     YES     |
+ *   |           |  true  +---------------+-------------|
+ *   |           |        |     false     |     YES     |
+ *   |  true     +--------+---------------+-------------+
+ *   |           |  false |     true      |     NO      |
+ *   +-----------+--------+---------------+-------------+
+ */
+void ModelInstance::CheckTieEmbeddings(int weight_file_size) {
+  if (weight_file_size <= 1 || model_config_.exist_tie_embeddings_param) {
+    return;
+  }
+  // When the quantity of weight files exceeds 1, retrieve the "index.json" file mapping the names of the weights
+  // under the model path.
+  for (const auto& entry : std::filesystem::directory_iterator(model_config_.path)) {
+    std::string index_filename = entry.path().filename().string();
+    if (index_filename.size() > 11 && index_filename.substr(index_filename.size() - 11) == ".index.json") {
+      std::ifstream file(entry.path());
+      nlohmann::json weights_index_json;
+      file >> weights_index_json;
+      if (!weights_index_json["weight_map"].contains("lm_head.weight") &&
+          !weights_index_json["weight_map"].contains("transformer.output_layer.weight")) {
+        SetEmbeddingsConfig();
+        KLLM_LOG_INFO
+            << "tie_word_embeddings param and lm_head.weight are not exist, replace it with embedd_tokens.weight";
+        break;
+      }
+    }
+  }
+}
+
+void ModelInstance::CheckTieEmbeddings(std::vector<std::string>& custom_name_list) {
+  if (!model_config_.exist_tie_embeddings_param) {
+    // When the quantity of weight files is equal to 1, the weight file should be loaded directly before the name search
+    // is performed.
+    std::string lm_head_weight = "lm_head.weight";
+    auto exist_lm_head = std::find(custom_name_list.begin(), custom_name_list.end(), lm_head_weight);
+    if (exist_lm_head == custom_name_list.end()) {
+      SetEmbeddingsConfig();
+      KLLM_LOG_INFO
+          << "tie_word_embeddings param and lm_head.weight are not exist, replace it with the embedd_tokens.weight";
+    }
+  }
+}
+
 void ModelInstance::LoadWeightsAndModelsMap() {
   bool is_safetensors = false;
   std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, is_safetensors);
+  int weight_file_size = weights_file_list.size();
+  CheckTieEmbeddings(weight_file_size);
 
   for (std::string& file_name : weights_file_list) {
     std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
@@ -110,6 +181,10 @@ void ModelInstance::LoadWeightsAndModelsMap() {
     std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
     std::vector<std::string> custom_name_list;
     GetCustomNameList(weight_name_list, custom_name_list, model_config_.path, model_config_.type);
+
+    if (weight_file_size == 1) {
+      CheckTieEmbeddings(custom_name_list);
+    }
 
     std::vector<std::future<void>> get_weight_tasks;
     for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {

@@ -95,6 +95,7 @@ struct ModelConfig {
   RoPEScalingFactor rope_scaling_factor_config;
 
   bool tie_word_embeddings;
+  bool exist_tie_embeddings_param = true;
 
   // The activation function used.
   std::string activation_function{"swiglu"};
