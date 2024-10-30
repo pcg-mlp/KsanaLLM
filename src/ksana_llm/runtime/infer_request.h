@@ -31,6 +31,7 @@ class InferRequest {
     req_group = beam_search_infer_group;
   }
 
+  // Clear the group of requests.
   void ClearReqGroup() { req_group.clear(); }
 
   // Notify after request finished.

@@ -38,13 +38,14 @@ class BatchScheduler : public BatchSchedulerInterface {
   bool IsIdle();
 
  private:
-  // True if waiting queue is already full.
-  inline bool CheckWaitingQueueFull(int num);
+  // Add infer requests to waiting buffer queue, and reject requests if the queue is full.
+  Status EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
 
   // True if request length exceed the max input length.
   inline bool CheckRequestExceedLength(const std::shared_ptr<InferRequest> req);
 
  private:
+  // The config of batch scheduler.
   BatchSchedulerConfig batch_scheduler_config_;
 
   // The batch state informations, include some queues and mutexes.

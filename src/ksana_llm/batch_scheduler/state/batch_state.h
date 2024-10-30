@@ -14,15 +14,27 @@
 namespace ksana_llm {
 
 struct BatchState {
-  explicit BatchState(const BatchSchedulerConfig &batch_scheduler_config) {
-    running_queue.reserve(batch_scheduler_config.max_batch_size);
-    waiting_buffer_queue.reserve(batch_scheduler_config.max_waiting_queue_len);
+  explicit BatchState(const BatchSchedulerConfig& batch_scheduler_config)
+      : batch_scheduler_config_(batch_scheduler_config) {
+    running_queue.reserve(batch_scheduler_config_.max_batch_size);
+    waiting_buffer_queue.reserve(batch_scheduler_config_.max_waiting_queue_len);
   }
 
   void MergeWaitingBufferQueue() {
     std::lock_guard<std::mutex> guard(queue_buffer_mutex);
 
-    waiting_queue.insert(waiting_queue.end(), waiting_buffer_queue.begin(), waiting_buffer_queue.end());
+    for (auto& infer_request : waiting_buffer_queue) {
+      if (waiting_queue.size() < batch_scheduler_config_.max_waiting_queue_len) {
+        waiting_queue.push_back(infer_request);
+      } else {
+        KLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
+
+        // Reject this request.
+        infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
+        infer_request->finished = true;
+        infer_request->Notify();
+      }
+    }
     waiting_buffer_queue.clear();
   }
 
@@ -37,6 +49,9 @@ struct BatchState {
     schedule_time_in_ms = GetCurrentTimeInMs();
     step_sched_finish = false;
   }
+
+  // The config of batch scheduler.
+  BatchSchedulerConfig batch_scheduler_config_;
 
   // The waiting queue, double end queue.
   std::deque<std::shared_ptr<InferRequest>> waiting_queue;

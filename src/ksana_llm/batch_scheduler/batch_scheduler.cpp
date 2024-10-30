@@ -46,35 +46,20 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
   KLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
                  << infer_request->sampling_config.max_new_tokens;
-  if (CheckWaitingQueueFull(infer_request_group.size())) {
-    KLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
-
-    infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
-    for (auto& infer_request : infer_request_group) {
-      infer_request->finished = true;
-    }
-    infer_request->Notify();
-
-    return infer_request->finish_status;
-  }
 
   if (CheckRequestExceedLength(infer_request)) {
     KLLM_LOG_DEBUG << "input len or logits_custom_length is too long, req " << infer_request->req_id << " failed.";
 
-    infer_request->finish_status = Status(RET_EXCEED_LENGTH, "input length or logits_custom_length exceeds the limit.");
+    auto finish_status = Status(RET_EXCEED_LENGTH, "input length or logits_custom_length exceeds the limit.");
+    infer_request->finish_status = finish_status;
     for (auto& infer_request : infer_request_group) {
       infer_request->finished = true;
     }
     infer_request->Notify();
-
-    return infer_request->finish_status;
+    return finish_status;
   }
 
-  std::lock_guard<std::mutex> guard(batch_state_->queue_buffer_mutex);
-  for (auto& infer_request : infer_request_group) {
-    batch_state_->waiting_buffer_queue.push_back(infer_request);
-  }
-  return Status();
+  return EnqueueWaitingBufferQueue(infer_request_group);
 }
 
 bool BatchScheduler::IsIdle() {
@@ -93,8 +78,27 @@ bool BatchScheduler::IsIdle() {
   return (waiting_buffer_emtpy && swapped_queue_empty);
 }
 
-bool BatchScheduler::CheckWaitingQueueFull(int num) {
-  return batch_state_->waiting_queue.size() + num >= batch_scheduler_config_.max_waiting_queue_len;
+Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
+  std::lock_guard<std::mutex> guard(batch_state_->queue_buffer_mutex);
+
+  if (batch_state_->waiting_buffer_queue.size() + infer_request_group.size() >
+      batch_scheduler_config_.max_waiting_queue_len) {
+    std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
+    KLLM_LOG_DEBUG << "waiting queue is full, req " << infer_request->req_id << " failed.";
+
+    auto finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
+    infer_request->finish_status = finish_status;
+    for (auto& infer_request : infer_request_group) {
+      infer_request->finished = true;
+    }
+    infer_request->Notify();
+    return finish_status;
+  }
+
+  for (const auto& infer_request : infer_request_group) {
+    batch_state_->waiting_buffer_queue.push_back(infer_request);
+  }
+  return Status();
 }
 
 inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
