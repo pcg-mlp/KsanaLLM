@@ -32,6 +32,9 @@ namespace ksana_llm {
 // The layernorm position type.
 enum class LayerNormPosition { PRE_NORM = 0, POST_NORM = 1 };
 
+// TODO(ttsybyweng): del g_plugin
+extern std::shared_ptr<pybind11::object> g_plugin;
+
 // Describe the model architecture.
 struct ModelRunConfig {
   // The model position embedding.
@@ -71,9 +74,6 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
 
- public:
-  // plugin name
-  std::string plugin_name = "";
 
  protected:
   using BaseModel::context_;

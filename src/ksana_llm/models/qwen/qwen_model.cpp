@@ -11,10 +11,6 @@ QwenModel<T>::QwenModel(const ModelConfig& model_config, const int rank, std::sh
                         std::shared_ptr<BaseWeight> base_weight) {
   common_model_ = std::make_shared<CommonModel<T>>(model_config, rank, context);
 
-  if (model_config.type == "qwen" && model_config.is_visual && model_config.hidden_units == 4096) {
-    common_model_->plugin_name = "qwenvl";
-  }
-
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
   model_run_config.qkv_add_bias = true;

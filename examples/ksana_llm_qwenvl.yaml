@@ -64,3 +64,5 @@ model_spec:
   base_model:
     # 模型路径
     model_dir: /model/qwen-hf/Qwen-VL-Chat/
+  # 多模态类模型是否使用TRT推理（eg.VIT）
+  enable_trt: true

@@ -113,6 +113,9 @@ class BlockManager : public BlockManagerInterface {
   // Get the first allocated block id from continuous blocks memory space
   int GetBlocksBaseId();
 
+  // Update block magager config
+  Status UpdateConfig(const BlockManagerConfig& update_block_manager_config);
+
  private:
   // Calculate the block number.
   Status CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num);

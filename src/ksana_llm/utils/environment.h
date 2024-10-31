@@ -107,6 +107,9 @@ struct ModelConfig {
   bool is_quant;
   QuantConfig quant_config;
 
+  // Determines whether the model is preprocessed with trt.
+  bool enable_trt;
+
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;
 };
@@ -245,7 +248,7 @@ class Environment {
   Status ParseConfig(const std::string &config_file);
 
   // Parse model config from model dir.
-  Status ParseModelConfig(const std::string &model_dir);
+  Status ParseModelConfig(const std::string &model_dir, bool enable_trt);
 
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
@@ -281,6 +284,9 @@ class Environment {
   bool EmbedTokensUseCpu() { return embed_tokens_use_cpu_; }
 
   bool IsReportVersion() { return is_version_report_; }
+
+  // Modify reserved_device_memory_ratio
+  void SetReservedDeviceRatio(float reserved_device_memory_ratio);
 
  private:
   // Calculate block size via model configs.

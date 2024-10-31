@@ -257,4 +257,9 @@ int BlockManager::GetBlocksBaseId() {
   return device_allocators_[device_id]->GetBlocksBaseId();
 }
 
+Status BlockManager::UpdateConfig(const BlockManagerConfig& update_block_manager_config) {
+  block_manager_config_ = update_block_manager_config;
+  return Status();
+}
+
 }  // namespace ksana_llm

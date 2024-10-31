@@ -3,76 +3,100 @@
 # ==============================================================================
 
 import os
-import json
-from glob import glob
-import importlib.util
+import sys
 
 import torch
-from transformers import AutoConfig
-from safetensors.torch import load
+
+# parent_dir: ./KsanaLLM/src/ksana_llm/python/ksana_plugin
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
+sys.path.append(parent_dir)
+
+from qwenvl.ksana_plugin_model import VITModel
 
 
-def load_safetensors(file_path):
-    with open(file_path, "rb") as f:
-        data = f.read()
-    loaded = load(data)
-    return loaded
+def free_cache():
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 class KsanaPlugin:
     """
     Define a class named KsanaPlugin
     """
+    def __init__(self):
+        pass
 
     # Plugin initialization is automatically invoked upon service startup.
     def init_plugin(self, **kwargs):
         if "preprocess" in kwargs:
-            modelpath = kwargs["model_path"]
+            model_path = kwargs["model_path"]
+            enable_trt = kwargs.get('enable_trt', True)
 
-            # read config
-            self.config = AutoConfig.from_pretrained(modelpath, trust_remote_code=True)
-            precision = self.config.torch_dtype
+            # Initializing a model instance
+            self.model = VITModel(model_path)
+            self.visual = None
 
-            # get visual model
-            spec = importlib.util.spec_from_file_location(modelpath, f'{modelpath}/visual.py')
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            vision_transformer = getattr(module, "VisionTransformer")
-            visual = vision_transformer(**self.config.visual)
+            self.trt = False
+            if enable_trt:
+                try:
+                    self.visual = self._init_trt(model_path)
+                    self.trt = True
+                    print(f"[I] Initializing the TensorRT model successfully!")
+                except Exception as e:  # pylint: disable=broad-except
+                    print(f"[E] Failed to initialize TensorRT model : {e}")
 
-            # read weight map
-            weight_map_json = glob(os.path.join(modelpath, "*index.json"))
-            assert len(weight_map_json) == 1
-            with open(weight_map_json[0]) as file:
-                weight_map_files = json.load(file)
-            weight_map_files = weight_map_files["weight_map"]
-            # get visual weight files
-            filtered_values = {value for key, value in weight_map_files.items() if "transformer.visual" in key}
-            weight_map_files = list(filtered_values)
-            # read weight
-            visual_weights = {}
-            for weight_map_file in weight_map_files:
-                weight_file = os.path.join(modelpath, weight_map_file)
-                if os.path.splitext(weight_file)[1] == ".safetensors":
-                    weights = load_safetensors(weight_file)
-                else:
-                    weights = torch.load(weight_file, map_location=torch.device('cpu'))
-                for name, tensor in weights.items():
-                    if "transformer.visual." in name:
-                        visual_weights[name.replace("transformer.visual.", "")] = tensor
+            if not self.trt:
+                self.visual = self._init_torch(model_path)
+                print(f"[I] Initializing the Torch model successfully!")
 
-            # assign gpu and precision
-            visual = visual.to(dtype=precision)
-            visual.load_state_dict(visual_weights)
-            visual = visual.to(device="cuda")
+            free_cache()
 
-            self.visual = visual
-
-            # free cache
-            torch.cuda.empty_cache()
+            # Return to the block manager config 
+            reserved_device_memory_ratio = 0.04
+            if self.trt:
+                reserved_device_memory_ratio = 0.01
+            # Ensure the result is a dictionary
+            return {
+                       'reserved_device_memory_ratio' : reserved_device_memory_ratio,
+                       'plugin_trt' : self.trt,
+                   }
 
         if "postprocess" in kwargs:
             return
+
+    # Method for pre-processing
+    def preprocess(self, **kwargs):
+        config = self.model.config
+        if self.check_intput(**kwargs):
+            raise RuntimeError(f"Check input failed.")
+        ksana_python_input = kwargs['ksana_python_input']
+
+        input_tokens = ksana_python_input.input_tokens
+        url_srt = [int(pos+1) for pos, ids in enumerate(input_tokens) if ids == config.visual["image_start_id"]]
+        url_end = [int(pos-1) for pos, ids in enumerate(input_tokens) if ids == config.visual["image_start_id"]+1]
+        image_url = []
+        for i in range(len(url_srt)):
+            url = input_tokens[url_srt[i]:url_end[i]]
+            url = url[:url.index(config.visual['image_start_id']+2)]
+            image_url.append(bytes(url).decode('utf-8'))
+
+        if (len(image_url) == 0):
+            return
+
+        if not self.trt:
+            image_embedding  = self._infer_torch(image_url)
+        else:
+            image_embedding  = self._infer_trt(image_url)
+
+        ksana_python_input.input_refit_embedding.pos = url_srt
+        ksana_python_input.input_refit_embedding.embedding_tensors = torch.unbind(image_embedding.cpu().float())
+
+
+    # Method for post-processing
+    def postprocess(self, **kwargs):
+        return
 
     def check_intput(self, **kwargs):
         input_list = [
@@ -83,29 +107,77 @@ class KsanaPlugin:
                 print(f"input {input_name} not found.")
                 return False
 
-    # Method for pre-processing
-    def preprocess(self, **kwargs):
-        if self.check_intput(**kwargs):
-            raise RuntimeError(f"Check input failed.")
-        ksana_python_input = kwargs['ksana_python_input']
+    def _init_torch(self, model_path):
+        model = self.model.get_model(model_path)
+        return model
 
-        input_tokens = ksana_python_input.input_tokens
-        url_srt = [int(pos+1) for pos, ids in enumerate(input_tokens) if ids == self.config.visual["image_start_id"]]
-        url_end = [int(pos-1) for pos, ids in enumerate(input_tokens) if ids == self.config.visual["image_start_id"]+1]
-        image_url = []
-        for i in range(len(url_srt)):
-            url = input_tokens[url_srt[i]:url_end[i]]
-            url = url[:url.index(self.config.visual['image_start_id']+2)]
-            image_url.append(bytes(url).decode('utf-8'))
+    def _init_trt(self, model_path):
+        os.environ['CUDA_MODULE_LOADING'] = 'LAZY'
 
-        if (len(image_url) == 0):
-            return
+        from trt_engine import Engine
+
+        trt_path = self.model.get_trt_path(model_path)
+        trt_engine = Engine(trt_path)
+
+        # If there is no TRT engine, Start model convert
+        if not os.path.exists(trt_path):
+            print(f"[I] Start converting Model!")
+
+            # If there are multiple devices, only one process is needed to convert
+            from filelock import FileLock, Timeout
+            import subprocess
+            lock_file = "build_model.lock"
+            try:
+                with FileLock(lock_file, timeout=1):
+                    print("[W] Lock acquired, running ksana_plugin_model.py")
+                    script = os.path.join(current_dir, "ksana_plugin_model.py")
+                    py_command = f"python {script} {model_path}"
+
+                    # Out of memory: can be converted locally, serving load
+                    result = subprocess.run(py_command, shell=True, stdout=subprocess.PIPE)
+                    log = result.stdout.decode('utf-8')
+                    print(log)
+
+                    if result.returncode != 0:
+                        raise Exception(f"[E] ksana_plugin_model.py failed with error: {result.stderr}")
+
+                    print("[E] ksana_plugin_model.py finished successfully")
+            except Timeout:
+                print("Another instance of ksana_plugin_model.py is running, waiting...")
+                with FileLock(lock_file):
+                    print("Lock acquired after waiting, continuing execution")
+
+        # Load trt
+        trt_engine.load()
+        self.stream = torch.cuda.current_stream().cuda_stream
+        self.model.get_preprocess()
+
+        return trt_engine
+
+    def _infer_torch(self, image_url):
         with torch.no_grad():
             image_embedding = self.visual.encode(image_url)
+        return image_embedding
 
-        ksana_python_input.input_refit_embedding.pos = url_srt
-        ksana_python_input.input_refit_embedding.embedding_tensors = torch.unbind(image_embedding.cpu().float())
+    def _infer_trt(self, image_url):
+        images = self.model.image_pre_obj.encode(image_url).to('cuda').contiguous()
 
-    # Method for post-processing
-    def postprocess(self, **kwargs):
-        return
+        # TRT engine can split the input according to the engine's maximum batch size
+        split_size = self.model.max_batch
+        images_list = [images]
+        if images.size(0) > split_size:
+            images_list = torch.split(images, split_size)
+
+        outs_list = []
+        for image in images_list:
+            batch_size = image.size(0)
+            infer_shape = self.model.get_infer_shape(batch_size)
+            self.visual.allocate_buffers(infer_shape)
+
+            infer_data = self.model.get_infer_data(image)
+            target = self.model.get_output_names()[0]
+            out = self.visual.infer(infer_data, self.stream)[target]
+
+            outs_list.append(out)
+        image_embedding = torch.cat(outs_list, dim=0)
+        return image_embedding

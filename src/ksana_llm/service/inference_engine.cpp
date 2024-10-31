@@ -88,6 +88,11 @@ Status InferenceEngine::Initialize() {
     batch_manager_->RegisterModelInstance(model_instance);
   }
 
+  // Update block manager after model loading successfully
+  BlockManagerConfig update_block_manager_config;
+  env->GetBlockManagerConfig(update_block_manager_config);
+  block_manager_->UpdateConfig(update_block_manager_config);
+
   // Create cache manager.
   CacheManagerConfig cache_manager_config;
   status = env->GetCacheManagerConfig(cache_manager_config);

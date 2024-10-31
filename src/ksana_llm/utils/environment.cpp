@@ -393,7 +393,9 @@ Status Environment::ParseConfig(const std::string &config_file) {
   // Read base model.
   std::string base_model_dir =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
-  status = ParseModelConfig(base_model_dir);
+  bool enable_trt =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "model_spec.enable_trt", true);
+  status = ParseModelConfig(base_model_dir, enable_trt);
   if (!status.OK()) {
     return status;
   }
@@ -439,7 +441,11 @@ Status Environment::ParseConfig(const std::string &config_file) {
   return CheckEnvironment();
 }
 
-Status Environment::ParseModelConfig(const std::string &model_dir) {
+void Environment::SetReservedDeviceRatio(float reserved_device_memory_ratio) {
+  block_manager_config_.reserved_device_memory_ratio = reserved_device_memory_ratio;
+}
+
+Status Environment::ParseModelConfig(const std::string &model_dir, bool enable_trt) {
   std::filesystem::path abs_model_dir_path = std::filesystem::absolute(model_dir);
   std::string config_file = abs_model_dir_path.u8string() + "/config.json";
 
@@ -457,6 +463,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir) {
   model_config.path = abs_model_dir_path.u8string();
   model_config.weight_data_type = GetModelDataType(config_json, model_config);
   model_config.tensor_para_size = tensor_parallel_size_;
+  model_config.enable_trt = enable_trt;
 
   model_config.type = config_json.at("model_type");
   if (model_config.type == "chatglm") {
