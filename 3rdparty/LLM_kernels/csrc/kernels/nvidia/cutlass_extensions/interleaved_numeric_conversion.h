@@ -47,7 +47,7 @@ namespace cutlass {
 // bits and the odd elemeents are in the high bits of the register. In addition, it assumes elements were originally
 // signed and had a bias of 2**(b-1) added (where b is the number of bits in the type) to make all numbers unsigned.
 // This converter will uninterleave the data and subtract the bias while converting to the result type.
-template <typename T, typename S, int32_t N>
+template <typename T, typename S, int N>
 struct FastInterleavedAndBiasedNumericArrayConverter {};
 
 template <>
@@ -80,9 +80,9 @@ struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint8_t, 4> {
   result_type operator()(source_type const& s) { return convert(s); }
 };
 
-template <int32_t N>
+template <int N>
 struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint8_t, N> {
-  static constexpr int32_t VEC_WIDTH = 4;
+  static constexpr int VEC_WIDTH = 4;
   static_assert(!(N % VEC_WIDTH), "N must be multiple of 4.");
 
   using result_type = Array<half_t, N>;
@@ -102,7 +102,7 @@ struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint8_t, N> {
     vec_source const* source_ptr = reinterpret_cast<vec_source const*>(&source);
 
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t i = 0; i < N / VEC_WIDTH; ++i) {
+    for (int i = 0; i < N / VEC_WIDTH; ++i) {
       result_ptr[i] = convert_vector_(source_ptr[i]);
     }
 
@@ -138,13 +138,13 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint8_t, 4> {
 
     // Subtract out fp32_base + 128 to make the unsigned integer signed.
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t ii = 0; ii < 4; ++ii) {
+    for (int ii = 0; ii < 4; ++ii) {
       fp32_intermediates[ii] -= 8388736.f;
     }
 
     // Truncate the fp32 representation and pack up as bfloat16s.
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t ii = 0; ii < 2; ++ii) {
+    for (int ii = 0; ii < 2; ++ii) {
       bf16_result_ptr[ii] =
           __byte_perm(fp32_intermediates_casted[2 * ii + 0], fp32_intermediates_casted[2 * ii + 1], 0x7632);
     }
@@ -161,9 +161,9 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint8_t, 4> {
   result_type operator()(source_type const& s) { return convert(s); }
 };
 
-template <int32_t N>
+template <int N>
 struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint8_t, N> {
-  static constexpr int32_t VEC_WIDTH = 4;
+  static constexpr int VEC_WIDTH = 4;
   static_assert(!(N % VEC_WIDTH), "N must be multiple of 4.");
 
   using result_type = Array<bfloat16_t, N>;
@@ -183,7 +183,7 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint8_t, N> {
     vec_source const* source_ptr = reinterpret_cast<vec_source const*>(&source);
 
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t i = 0; i < N / VEC_WIDTH; ++i) {
+    for (int i = 0; i < N / VEC_WIDTH; ++i) {
       result_ptr[i] = convert_vector_(source_ptr[i]);
     }
 
@@ -264,9 +264,9 @@ struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint4b_t, 8> {
   result_type operator()(source_type const& s) { return convert(s); }
 };
 
-template <int32_t N>
+template <int N>
 struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint4b_t, N> {
-  static constexpr int32_t VEC_WIDTH = 8;
+  static constexpr int VEC_WIDTH = 8;
   static_assert(!(N % VEC_WIDTH), "N must be multiple of 8.");
 
   using result_type = Array<half_t, N>;
@@ -286,7 +286,7 @@ struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint4b_t, N> {
     vec_source const* source_ptr = reinterpret_cast<vec_source const*>(&source);
 
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t i = 0; i < N / VEC_WIDTH; ++i) {
+    for (int i = 0; i < N / VEC_WIDTH; ++i) {
       result_ptr[i] = convert_vector_(source_ptr[i]);
     }
 
@@ -322,7 +322,7 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint4b_t, 8> {
                  : "=r"(h[0])
                  : "r"(i4s), "n"(MASK), "n"(I4s_TO_BF16s_MAGIC_NUM), "n"(immLut));
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t ii = 1; ii < result_type::kElements / 2; ++ii) {
+    for (int ii = 1; ii < result_type::kElements / 2; ++ii) {
       i4s >>= sizeof_bits<typename source_type::Element>::value;
       // (i4s & 0x000f000f) | 0x43004300
       asm volatile("lop3.b32 %0, %1, %2, %3, %4;\n"
@@ -336,7 +336,7 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint4b_t, 8> {
 
     // Finally, we construct the output numbers.
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t ii = 0; ii < result_type::kElements / 2; ++ii) {
+    for (int ii = 0; ii < result_type::kElements / 2; ++ii) {
       // Since this section is for Ampere+, we use bf16 fma to do the bias subtraction
       asm("fma.rn.bf16x2 %0, %1, %2, %3;\n" : "=r"(h[ii]) : "r"(h[ii]), "r"(BF16_ONE), "r"(BF16_BIAS));
     }
@@ -353,9 +353,9 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint4b_t, 8> {
   result_type operator()(source_type const& s) { return convert(s); }
 };
 
-template <int32_t N>
+template <int N>
 struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint4b_t, N> {
-  static constexpr int32_t VEC_WIDTH = 8;
+  static constexpr int VEC_WIDTH = 8;
   static_assert(!(N % VEC_WIDTH), "N must be multiple of 8.");
 
   using result_type = Array<bfloat16_t, N>;
@@ -375,7 +375,7 @@ struct FastInterleavedAndBiasedNumericArrayConverter<bfloat16_t, uint4b_t, N> {
     vec_source const* source_ptr = reinterpret_cast<vec_source const*>(&source);
 
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t i = 0; i < N / VEC_WIDTH; ++i) {
+    for (int i = 0; i < N / VEC_WIDTH; ++i) {
       result_ptr[i] = convert_vector_(source_ptr[i]);
     }
 

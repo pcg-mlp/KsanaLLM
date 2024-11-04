@@ -10,17 +10,17 @@
 #include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_preprocessors.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/fpA_intB_gemm/fpA_intB_gemm_template.h"
 
-#include "csrc/kernels/nvidia/asymmetric_gemm/weightOnlyBatchedGemv/kernelLauncher.h"
+#include "csrc/kernels/nvidia/weight_only_batched_gemv/kernelLauncher.h"
 
 namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-bool IsConfigValid(tkc::CutlassGemmConfig& config, size_t k) {
+bool IsConfigValid(llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig& config, size_t k) {
   if (config.stages >= 5) {
     return false;
   }
-  if (config.split_k_style != tkc::SplitKStyle::NO_SPLIT_K) {
+  if (config.split_k_style != llm_kernels::nvidia::cutlass_extensions::SplitKStyle::NO_SPLIT_K) {
     int k_size = (k + config.split_k_factor - 1) / config.split_k_factor;
     if (k_size % 64) {
       return false;
@@ -64,37 +64,37 @@ class NvidiaAsymmetricGemmTestSuit : public NvidiaTestSuitBase {
     auto cutlass_gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
         half, cutlass::uint4b_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
 
-    const size_t ws_bytes = cutlass_gemm->GetWorkspaceSize(m, n, k);
+    const size_t ws_bytes = cutlass_gemm->getWorkspaceSize(m, n, k);
     BufferMeta buffer_ws = CreateBuffer<char>(MemoryType::MEMORY_GPU, {ws_bytes}, false);
 
     int best_config_index = 0;
     {
       float fast_time = std::numeric_limits<float>::max();
-      auto configs = cutlass_gemm->GetConfigs();
+      auto configs = cutlass_gemm->getConfigs();
       for (size_t config_index = 0; config_index < configs.size(); config_index++) {
         auto& config = configs[config_index];
         if (!IsConfigValid(config, k)) {
           continue;
         }
         for (size_t i = 0; i < 10; ++i) {
-          cutlass_gemm->Gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
+          cutlass_gemm->gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
                              reinterpret_cast<const cutlass::uint4b_t*>(buffer_qweight.data_ptr),
                              reinterpret_cast<const half*>(buffer_weight_scales.data_ptr),
                              nullptr,  // no zeros
                              nullptr,  // no bias
                              reinterpret_cast<half*>(buffer_cutlass_output.data_ptr), m, n, k, groupsize,
-                             cutlass_gemm->GetConfigs()[config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
+                             cutlass_gemm->getConfigs()[config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
                              ws_bytes, stream);
         }
         cudaEventRecord(begin, stream);
         for (size_t i = 0; i < 100; ++i) {
-          cutlass_gemm->Gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
+          cutlass_gemm->gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
                              reinterpret_cast<const cutlass::uint4b_t*>(buffer_qweight.data_ptr),
                              reinterpret_cast<const half*>(buffer_weight_scales.data_ptr),
                              nullptr,  // no zeros
                              nullptr,  // no bias
                              reinterpret_cast<half*>(buffer_cutlass_output.data_ptr), m, n, k, groupsize,
-                             cutlass_gemm->GetConfigs()[config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
+                             cutlass_gemm->getConfigs()[config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
                              ws_bytes, stream);
         }
         cudaEventRecord(end, stream);
@@ -109,24 +109,24 @@ class NvidiaAsymmetricGemmTestSuit : public NvidiaTestSuitBase {
     }
 
     for (size_t i = 0; i < 10; ++i) {
-      cutlass_gemm->Gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
+      cutlass_gemm->gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
                          reinterpret_cast<const cutlass::uint4b_t*>(buffer_qweight.data_ptr),
                          reinterpret_cast<const half*>(buffer_weight_scales.data_ptr),
                          nullptr,  // no zeros
                          nullptr,  // no bias
                          reinterpret_cast<half*>(buffer_cutlass_output.data_ptr), m, n, k, groupsize,
-                         cutlass_gemm->GetConfigs()[best_config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
+                         cutlass_gemm->getConfigs()[best_config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
                          ws_bytes, stream);
     }
     cudaEventRecord(begin, stream);
     for (size_t i = 0; i < 1000; ++i) {
-      cutlass_gemm->Gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
+      cutlass_gemm->gemm(reinterpret_cast<const half*>(buffer_input.data_ptr),
                          reinterpret_cast<const cutlass::uint4b_t*>(buffer_qweight.data_ptr),
                          reinterpret_cast<const half*>(buffer_weight_scales.data_ptr),
                          nullptr,  // no zeros
                          nullptr,  // no bias
                          reinterpret_cast<half*>(buffer_cutlass_output.data_ptr), m, n, k, groupsize,
-                         cutlass_gemm->GetConfigs()[best_config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
+                         cutlass_gemm->getConfigs()[best_config_index], reinterpret_cast<char*>(buffer_ws.data_ptr),
                          ws_bytes, stream);
     }
     cudaEventRecord(end, stream);

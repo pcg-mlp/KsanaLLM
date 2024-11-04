@@ -1,5 +1,4 @@
 /***************************************************************************************************
- * Copyright 2024 Tencent Inc.  All rights reserved.
  * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -57,23 +56,23 @@ namespace threadblock {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Shape, typename Element, typename Layout, int32_t AdvanceRank, int32_t Alignment>
+template <typename Shape, typename Element, typename Layout, int AdvanceRank, int Alignment>
 class FineGrainedScaleZeroIterator;
 
-template <typename Shape_, typename Element_, int32_t Alignment_>
+template <typename Shape_, typename Element_, int Alignment_>
 class FineGrainedScaleZeroIterator<Shape_, Element_, layout::RowMajor, 0, Alignment_> {
  public:
   using Shape = Shape_;
   using Element = Element_;
   using Layout = layout::RowMajor;
-  static int32_t const kAdvanceRank = 0;
-  static int32_t const kAlignment = Alignment_;
+  static int const kAdvanceRank = 0;
+  static int const kAlignment = Alignment_;
 
-  static int32_t const kAccessesPerVector = 1;
+  static int const kAccessesPerVector = 1;
 
   /// Row index of scales corresponding to the groupsize of 64
-  int32_t row_groupsize64_;
-  int32_t group_size_;
+  int row_groupsize64_;
+  int group_size_;
 
   using Index = typename Layout::Index;
   using LongIndex = typename Layout::LongIndex;
@@ -85,6 +84,8 @@ class FineGrainedScaleZeroIterator<Shape_, Element_, layout::RowMajor, 0, Alignm
   using NonConstPointer = typename platform::remove_const<Element>::type*;
 
   using AccessType = AlignedArray<Element, kAlignment>;
+
+  using Fragment = cutlass::Array<Element, kAlignment>;
 
   // For compatibility with existing iterator interface
   struct Params {
@@ -137,11 +138,11 @@ class FineGrainedScaleZeroIterator<Shape_, Element_, layout::RowMajor, 0, Alignm
       ///< Extent of the scale and bias
       TensorCoord extent,
       ///< ID of each participating thread
-      int32_t thread_id,
+      int thread_id,
       ///< Initial offset of threadblock
       TensorCoord const& threadblock_offset,
       ///< Group size
-      int32_t group_size)
+      int group_size)
       : params_(params),
         pointer_scale_(reinterpret_cast<BytePointer>(const_cast<NonConstPointer>(pointer_scale))),
         pointer_zero_(reinterpret_cast<BytePointer>(const_cast<NonConstPointer>(pointer_zero))) {
@@ -157,10 +158,10 @@ class FineGrainedScaleZeroIterator<Shape_, Element_, layout::RowMajor, 0, Alignm
       pointer_zero_ += (tb_row_byte_offset + tb_col_byte_offset);
     }
 
-    static constexpr int32_t THREADS_PER_ROW = Shape::kColumn / kAlignment;
+    static constexpr int THREADS_PER_ROW = Shape::kColumn / kAlignment;
 
-    const int32_t thread_row = thread_id / THREADS_PER_ROW;
-    const int32_t thread_col = thread_id % THREADS_PER_ROW;
+    int const thread_row = thread_id / THREADS_PER_ROW;
+    int const thread_col = thread_id % THREADS_PER_ROW;
 
     const LongIndex thread_row_byte_offset = thread_row * params_.stride_ * sizeof_bits<Element>::value / 8;
     const LongIndex thread_col_byte_offset = thread_col * kAlignment * sizeof_bits<Element>::value / 8;
@@ -173,11 +174,11 @@ class FineGrainedScaleZeroIterator<Shape_, Element_, layout::RowMajor, 0, Alignm
     // a given iteration. The same threads will be responsible for issues reads since the number of scales
     // read in a given iteration is a constant. Therefore, we should never have to update is_valid_
     // outside of the constructor.
-    const int32_t global_row = threadblock_offset.row() + thread_row;
-    const int32_t global_col = threadblock_offset.column() + thread_col * kAlignment;
+    int const global_row = threadblock_offset.row() + thread_row;
+    int const global_col = threadblock_offset.column() + thread_col * kAlignment;
 
-    const bool row_in_bounds = global_row < extent.row() && thread_row < Shape::kRow;
-    const bool col_in_bounds = global_col < extent.column();
+    bool const row_in_bounds = global_row < extent.row() && thread_row < Shape::kRow;
+    bool const col_in_bounds = global_col < extent.column();
 
     is_valid_ = row_in_bounds && col_in_bounds;
   }
@@ -187,8 +188,8 @@ class FineGrainedScaleZeroIterator<Shape_, Element_, layout::RowMajor, 0, Alignm
                                                    Pointer pointer_scale,  ///< Pointer to start of scale tensor
                                                    Pointer pointer_zero,   ///< Pointer to start of zero tensor
                                                    TensorCoord extent,     ///< Extent of tensor
-                                                   int32_t thread_id,      ///< ID of each participating thread
-                                                   int32_t group_size)
+                                                   int thread_id,          ///< ID of each participating thread
+                                                   int group_size)
       : FineGrainedScaleZeroIterator(params, pointer_scale, pointer_zero, extent, thread_id, make_Coord(0, 0),
                                      group_size) {}
 

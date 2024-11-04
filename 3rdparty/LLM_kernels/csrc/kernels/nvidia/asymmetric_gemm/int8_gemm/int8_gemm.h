@@ -18,9 +18,11 @@
 #pragma once
 
 #include <cuda_runtime_api.h>
-
+#include <vector>
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
 #include "csrc/utils/nvidia/quantization.h"
+
+using namespace llm_kernels::utils;
 
 namespace llm_kernels {
 namespace nvidia {
@@ -41,20 +43,20 @@ class CutlassInt8GemmRunnerInterface {
 
   virtual ~CutlassInt8GemmRunnerInterface() {}
 
-  virtual void Gemm(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                    const float* alpha_col, const float* alpha_row, void* C, int32_t m, int32_t n, int32_t k,
-                    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace_ptr,
-                    const size_t workspace_bytes, cudaStream_t stream) = 0;
+  virtual void gemm(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption, float const* alphaCol,
+                    float const* alphaRow, void* C, int m, int n, int k,
+                    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspacePtr,
+                    const size_t workspaceBytes, cudaStream_t stream) = 0;
 
   // Returns desired workspace size in bytes.
-  virtual size_t GetWorkspaceSize(const int32_t m, const int32_t n, const int32_t k) = 0;
+  virtual size_t getWorkspaceSize(int const m, int const n, int const k) = 0;
 
-  virtual std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> GetConfigs() const = 0;
+  virtual std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> getConfigs() const = 0;
 
  protected:
-  static constexpr int32_t SPLIT_K_LIMIT = 7;
-  static constexpr int32_t MIN_M_TILE = 32;
-  static constexpr int32_t MIN_N_TILE = 64;
+  static constexpr int SPLIT_K_LIMIT = 7;
+  static constexpr int MIN_M_TILE = 32;
+  static constexpr int MIN_N_TILE = 64;
 };
 
 template <typename T>
@@ -63,24 +65,24 @@ class CutlassInt8GemmRunner : public virtual CutlassInt8GemmRunnerInterface {
   CutlassInt8GemmRunner();
   ~CutlassInt8GemmRunner();
 
-  void Gemm(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option, const float* alpha_col,
-            const float* alpha_row, void* C, int32_t m, int32_t n, int32_t k,
-            llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace_ptr,
-            const size_t workspace_bytes, cudaStream_t stream) override;
+  void gemm(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption, float const* alphaCol,
+            float const* alphaRow, void* C, int m, int n, int k,
+            llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspacePtr,
+            const size_t workspaceBytes, cudaStream_t stream) override;
 
   // Returns desired workspace size in bytes.
-  size_t GetWorkspaceSize(const int32_t m, const int32_t n, const int32_t k) override;
+  size_t getWorkspaceSize(int const m, int const n, int const k) override;
 
-  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> GetConfigs() const override;
+  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> getConfigs() const override;
 
  private:
-  void DispatchToArch(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                      const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                      llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace_ptr,
-                      const size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr);
+  void dispatchToArch(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                      float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k,
+                      llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspacePtr,
+                      const size_t workspaceBytes, cudaStream_t stream, int* occupancy = nullptr);
 
-  int32_t sm_;
-  int32_t multiprocessor_count_;
+  int mSm;
+  int mMultiProcessorCount;
 };
 
 }  // namespace nvidia

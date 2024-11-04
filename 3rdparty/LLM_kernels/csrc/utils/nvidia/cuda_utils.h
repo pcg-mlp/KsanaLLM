@@ -11,6 +11,7 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include "csrc/utils/nvidia/assert.h"
 
 #ifdef ENABLE_FP8
 #  include "cuda_fp8_utils.h"
@@ -38,7 +39,7 @@ constexpr int32_t DEFAULT_CUDA_ONE_THIRTY_TWO_WARP_SIZE = 1;
 
 static const char* GetErrorCode(cudaError_t error) { return cudaGetErrorString(error); }
 
-static const char* GetErrorCode(cublasStatus_t error) {
+static inline const char* GetErrorCode(cublasStatus_t error) {
   switch (error) {
     case CUBLAS_STATUS_SUCCESS:
       return "CUBLAS_STATUS_SUCCESS";
@@ -242,5 +243,15 @@ inline int32_t GetSMVersion() {
   return sm_major * 10 + sm_minor;
 }
 
+inline int getMaxSharedMemoryPerBlockOptin()
+{
+    int device_id;
+    int max_shared_memory_per_block;
+    CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device_id));
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaDeviceGetAttribute(&max_shared_memory_per_block, cudaDevAttrMaxSharedMemoryPerBlockOptin, device_id));
+    return max_shared_memory_per_block;
+}
+  
 }  // namespace utils
 }  // namespace llm_kernels

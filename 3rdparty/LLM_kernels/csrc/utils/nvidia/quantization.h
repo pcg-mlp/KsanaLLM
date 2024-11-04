@@ -17,8 +17,9 @@
 
 #pragma once
 
-#include <stdlib.h>
 #include <cstdint>
+#include <optional>
+#include <string>
 
 namespace llm_kernels {
 namespace utils {
@@ -28,112 +29,172 @@ class QuantMode {
  public:
   using BaseType = std::uint32_t;
 
-  explicit constexpr QuantMode(BaseType value) noexcept : value_{value} {}
+  explicit constexpr QuantMode(BaseType value) noexcept : mValue{value} {}
 
   QuantMode() noexcept = default;
 
   constexpr QuantMode(QuantMode const&) noexcept = default;
 
-  constexpr QuantMode& operator=(const QuantMode& other) noexcept = default;
+  constexpr QuantMode& operator=(QuantMode const& other) noexcept = default;
 
-  static constexpr QuantMode None() noexcept { return QuantMode(BaseType(0)); }
+  static constexpr QuantMode none() noexcept { return QuantMode(BaseType(0)); }
 
-  static constexpr QuantMode Int4Weights() noexcept { return QuantMode(BaseType(1u) << 0); }
+  static constexpr QuantMode int4Weights() noexcept { return QuantMode(BaseType(1u) << 0); }
 
-  static constexpr QuantMode Int8Weights() noexcept { return QuantMode(BaseType(1u) << 1); }
+  static constexpr QuantMode int8Weights() noexcept { return QuantMode(BaseType(1u) << 1); }
 
-  static constexpr QuantMode Activations() noexcept { return QuantMode(BaseType(1u) << 2); }
+  static constexpr QuantMode activations() noexcept { return QuantMode(BaseType(1u) << 2); }
 
-  static constexpr QuantMode PerChannelScaling() noexcept { return QuantMode(BaseType(1u) << 3); }
+  static constexpr QuantMode perChannelScaling() noexcept { return QuantMode(BaseType(1u) << 3); }
 
-  static constexpr QuantMode PerTokenScaling() noexcept { return QuantMode(BaseType(1u) << 4); }
+  static constexpr QuantMode perTokenScaling() noexcept { return QuantMode(BaseType(1u) << 4); }
 
-  static constexpr QuantMode PerGroupScaling() noexcept { return QuantMode(BaseType(1u) << 5); }
+  static constexpr QuantMode perGroupScaling() noexcept { return QuantMode(BaseType(1u) << 5); }
 
-  static constexpr QuantMode Int8KvCache() noexcept { return QuantMode(BaseType(1u) << 6); }
+  static constexpr QuantMode int8KvCache() noexcept { return QuantMode(BaseType(1u) << 6); }
 
-  static constexpr QuantMode Fp8KvCache() noexcept { return QuantMode(BaseType(1u) << 7); }
+  static constexpr QuantMode fp8KvCache() noexcept { return QuantMode(BaseType(1u) << 7); }
 
-  static constexpr QuantMode Fp8Qdq() noexcept { return QuantMode(BaseType(1u) << 8); }
+  static constexpr QuantMode fp8Qdq() noexcept { return QuantMode(BaseType(1u) << 8); }
 
-  constexpr BaseType Value() const noexcept { return value_; }
-
-  constexpr bool IsSet(QuantMode const& mode) const noexcept { return (value_ & mode.Value()) == mode.Value(); }
-
-  constexpr bool HasInt4Weights() const noexcept { return IsSet(Int4Weights()); }
-
-  constexpr bool HasInt8Weights() const noexcept { return IsSet(Int8Weights()); }
-
-  constexpr bool HasActivations() const noexcept { return IsSet(Activations()); }
-
-  constexpr bool HasPerChannelScaling() const noexcept { return IsSet(PerChannelScaling()); }
-
-  constexpr bool HasPerTokenScaling() const noexcept { return IsSet(PerTokenScaling()); }
-
-  constexpr bool HasPerGroupScaling() const noexcept { return IsSet(PerGroupScaling()); }
-
-  constexpr bool HasStaticActivationScaling() const noexcept { return !HasPerTokenScaling(); }
-
-  constexpr bool HasInt8KvCache() const noexcept { return IsSet(Int8KvCache()); }
-
-  constexpr bool HasFp8KvCache() const noexcept { return IsSet(Fp8KvCache()); }
-
-  constexpr bool HasFp8Qdq() const noexcept { return IsSet(Fp8Qdq()); }
-
-  constexpr bool HasKvCacheQuant() const noexcept { return HasInt8KvCache() || HasFp8KvCache(); }
-
-  static constexpr QuantMode FromDescription(bool quantize_weights = false, bool quantize_activations = false,
-                                             bool per_token = false, bool per_channel = false,
-                                             bool use_int4_weights = false, bool use_int8_kvcache = false,
-                                             bool use_fp8_kvcache = false, bool use_fp8_qdq = false) {
-    QuantMode quant_mode{};
-    if (quantize_weights) {
-      if (use_int4_weights)
-        quant_mode += Int4Weights();
-      else
-        quant_mode += Int8Weights();
-    }
-
-    if (quantize_activations) {
-      quant_mode += Activations();
-    }
-
-    if (per_channel) {
-      quant_mode += QuantMode::PerChannelScaling();
-    }
-    if (per_token) {
-      quant_mode += QuantMode::PerTokenScaling();
-    }
-
-    if (use_int8_kvcache) {
-      quant_mode += Int8KvCache();
-    }
-
-    if (use_fp8_kvcache) {
-      quant_mode += Fp8KvCache();
-    }
-
-    if (use_fp8_qdq) {
-      quant_mode += Fp8Qdq();
-    }
-
-    return quant_mode;
+  static constexpr QuantMode fp8RowWise() noexcept {
+    return QuantMode(BaseType(1u) << 3 | BaseType(1u) << 4 | BaseType(1u) << 9);
   }
 
-  constexpr QuantMode operator+(const QuantMode& other) const noexcept { return QuantMode(value_ | other.value_); }
+  constexpr BaseType value() const noexcept { return mValue; }
 
-  constexpr QuantMode& operator+=(const QuantMode& other) noexcept { return *this = *this + other; }
+  constexpr bool isSet(QuantMode const& mode) const noexcept { return (mValue & mode.value()) == mode.value(); }
 
-  constexpr QuantMode operator-(const QuantMode& other) const noexcept { return QuantMode(value_ & ~other.value_); }
+  constexpr bool hasInt4Weights() const noexcept { return isSet(int4Weights()); }
 
-  constexpr QuantMode& operator-=(const QuantMode& other) noexcept { return *this = *this - other; }
+  constexpr bool hasInt8Weights() const noexcept { return isSet(int8Weights()); }
 
-  constexpr bool operator==(const QuantMode& other) const noexcept { return value_ == other.value_; }
+  constexpr bool hasActivations() const noexcept { return isSet(activations()); }
 
-  constexpr bool operator!=(const QuantMode& other) const noexcept { return !(*this == other); }
+  constexpr bool hasPerChannelScaling() const noexcept { return isSet(perChannelScaling()); }
+
+  constexpr bool hasPerTokenScaling() const noexcept { return isSet(perTokenScaling()); }
+
+  constexpr bool hasPerGroupScaling() const noexcept { return isSet(perGroupScaling()); }
+
+  constexpr bool hasStaticActivationScaling() const noexcept { return !hasPerTokenScaling(); }
+
+  constexpr bool hasInt8KvCache() const noexcept { return isSet(int8KvCache()); }
+
+  constexpr bool hasFp8KvCache() const noexcept { return isSet(fp8KvCache()); }
+
+  constexpr bool hasFp8Qdq() const noexcept { return isSet(fp8Qdq()); }
+
+  constexpr bool hasFp8RowWise() const noexcept { return isSet(fp8RowWise()); }
+
+  constexpr bool hasKvCacheQuant() const noexcept { return hasInt8KvCache() || hasFp8KvCache(); }
+
+  static constexpr QuantMode fromDescription(bool quantizeWeights = false, bool quantizeActivations = false,
+                                             bool perToken = false, bool perChannel = false, bool perGroup = false,
+                                             bool useInt4Weights = false, bool useInt8KvCache = false,
+                                             bool useFp8KvCache = false, bool useFp8Qdq = false,
+                                             bool useFp8RowWise = false) {
+    QuantMode quantMode{};
+    if (quantizeWeights) {
+      if (useInt4Weights)
+        quantMode += int4Weights();
+      else
+        quantMode += int8Weights();
+    }
+
+    if (quantizeActivations) {
+      quantMode += activations();
+    }
+
+    if (perChannel) {
+      quantMode += QuantMode::perChannelScaling();
+    }
+    if (perToken) {
+      quantMode += QuantMode::perTokenScaling();
+    }
+    if (perGroup) {
+      quantMode += QuantMode::perGroupScaling();
+    }
+
+    if (useInt8KvCache) {
+      quantMode += int8KvCache();
+    }
+
+    if (useFp8KvCache) {
+      quantMode += fp8KvCache();
+    }
+
+    if (useFp8Qdq) {
+      quantMode += fp8Qdq();
+    }
+
+    if (useFp8RowWise) {
+      quantMode += fp8RowWise();
+    }
+
+    return quantMode;
+  }
+
+  static constexpr QuantMode useSmoothQuant(bool perToken = false, bool perChannel = false) {
+    return fromDescription(true, true, perToken, perChannel);
+  }
+
+  static constexpr QuantMode useWeightOnly(bool useInt4Weights = false, bool perGroup = false) {
+    return fromDescription(true, false, false, false, perGroup, useInt4Weights);
+  }
+
+  static const QuantMode fromQuantAlgo(std::optional<std::string> quantAlgo = std::nullopt,
+                                       std::optional<std::string> kvCacheQuantAlgo = std::nullopt) {
+    QuantMode quantMode{};
+    if (quantAlgo == "W8A16") {
+      quantMode = useWeightOnly(false, false);
+    } else if (quantAlgo == "W4A16") {
+      quantMode = useWeightOnly(true, false);
+    } else if (quantAlgo == "W4A16_AWQ") {
+      quantMode = useWeightOnly(true, true);
+    } else if (quantAlgo == "W4A8_AWQ") {
+      quantMode = useWeightOnly(true, true);
+    } else if (quantAlgo == "W4A16_GPTQ") {
+      quantMode = useWeightOnly(true, true);
+    } else if (quantAlgo == "W8A8_SQ_PER_CHANNEL") {
+      quantMode = useSmoothQuant(false, true);
+    } else if (quantAlgo == "W8A8_SQ_PER_TENSOR_PLUGIN") {
+      quantMode = useSmoothQuant(false, false);
+    } else if (quantAlgo == "W8A8_SQ_PER_CHANNEL_PER_TOKEN_PLUGIN") {
+      quantMode = useSmoothQuant(true, true);
+    } else if (quantAlgo == "W8A8_SQ_PER_CHANNEL_PER_TENSOR_PLUGIN") {
+      quantMode = useSmoothQuant(false, true);
+    } else if (quantAlgo == "W8A8_SQ_PER_TENSOR_PER_TOKEN_PLUGIN") {
+      quantMode = useSmoothQuant(true, false);
+    } else if (quantAlgo == "FP8") {
+      quantMode = fromDescription(false, false, false, false, false, false, false, false, true);
+    } else if (quantAlgo == "FP8_ROWWISE") {
+      quantMode = fromDescription(false, false, true, true, false, false, false, false, false, true);
+    }
+
+    if (kvCacheQuantAlgo == "INT8") {
+      quantMode += int8KvCache();
+    } else if (kvCacheQuantAlgo == "FP8") {
+      quantMode += fp8KvCache();
+    }
+
+    return quantMode;
+  }
+
+  constexpr QuantMode operator+(QuantMode const& other) const noexcept { return QuantMode(mValue | other.mValue); }
+
+  constexpr QuantMode& operator+=(QuantMode const& other) noexcept { return *this = *this + other; }
+
+  constexpr QuantMode operator-(QuantMode const& other) const noexcept { return QuantMode(mValue & ~other.mValue); }
+
+  constexpr QuantMode& operator-=(QuantMode const& other) noexcept { return *this = *this - other; }
+
+  constexpr bool operator==(QuantMode const& other) const noexcept { return mValue == other.mValue; }
+
+  constexpr bool operator!=(QuantMode const& other) const noexcept { return !(*this == other); }
 
  private:
-  BaseType value_{0};
+  BaseType mValue{0};
 };
 
 }  // namespace utils

@@ -1,7 +1,7 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 
 # set Nvidia utils target
-file(GLOB_RECURSE NVIDIA_UTILS_SRCS *.cu)
+file(GLOB_RECURSE NVIDIA_UTILS_SRCS *.cpp *.cu)
 list(FILTER NVIDIA_UTILS_SRCS EXCLUDE REGEX ".*test.cu")
 add_library(llm_kernels_nvidia_utils STATIC ${NVIDIA_UTILS_SRCS})
 target_link_libraries(llm_kernels_nvidia_utils PUBLIC -lcublas -lcudart -lcurand)

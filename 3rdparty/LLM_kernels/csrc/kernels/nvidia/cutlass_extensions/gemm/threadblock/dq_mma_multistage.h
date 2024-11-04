@@ -88,7 +88,7 @@ template <
     /// Policy describing tuning details (concept: MmaPolicy)
     typename Policy_,
     /// Number of stages,
-    int32_t Stages,
+    int Stages,
     /// Converter for B matrix applited immediately after the LDS
     typename TransformBAfterLDS_,
     /// The quantization operator being used

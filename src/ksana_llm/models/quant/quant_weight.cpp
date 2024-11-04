@@ -329,8 +329,8 @@ torch::Tensor QuantWeight<T>::CutlassPackInt8ToPackedInt4(torch::Tensor weight) 
 
 template <typename T>
 torch::Tensor QuantWeight<T>::CutlassPreprocessWeightsForMixedGemmWarpper(torch::Tensor row_major_quantized_weight,
-                                                                          llm_kernels::nvidia::QuantType quant_type) {
-  const size_t bits_in_quant_type = GetBitsInQuantType(quant_type);
+                                                                   llm_kernels::nvidia::QuantType quant_type) {
+  const size_t bits_in_quant_type = get_weight_quant_bits(quant_type);
 
   const size_t num_experts = row_major_quantized_weight.dim() == 2 ? 1 : row_major_quantized_weight.size(0);
   const size_t num_rows = row_major_quantized_weight.size(-2);
@@ -340,7 +340,7 @@ torch::Tensor QuantWeight<T>::CutlassPreprocessWeightsForMixedGemmWarpper(torch:
   int8_t* input_byte_ptr = reinterpret_cast<int8_t*>(row_major_quantized_weight.data_ptr());
   int8_t* output_byte_ptr = reinterpret_cast<int8_t*>(processed_tensor.data_ptr());
 
-  PreprocessWeightsForMixedGemm(output_byte_ptr, input_byte_ptr, {num_experts, num_rows, num_cols}, quant_type);
+  preprocess_weights_for_mixed_gemm(output_byte_ptr, input_byte_ptr, {num_experts, num_rows, num_cols}, quant_type);
 
   return processed_tensor;
 }
@@ -576,7 +576,7 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
       if (model_config_.quant_config.backend == CUTLASS_BACKEND) {
         torch::Tensor qweight_cpu = qweight_gpu.to(torch::kCPU);
         processed_tensor_cpu = CutlassPreprocessWeightsForMixedGemmWarpper(
-            qweight_cpu, llm_kernels::nvidia::QuantType::PACKED_INT4_WEIGHT_ONLY);
+            qweight_cpu, llm_kernels::nvidia::QuantType::W4_A16);
       } else if (model_config_.quant_config.backend == MARLIN_BACKEND) {
         int pack_factor = 32 / model_config_.quant_config.bits;
         int tile_size = llm_kernels::nvidia::marlin::tile_size;

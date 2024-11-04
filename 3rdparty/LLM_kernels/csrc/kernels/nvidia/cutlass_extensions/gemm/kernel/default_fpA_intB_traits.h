@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -22,6 +21,7 @@
 #include "cutlass/bfloat16.h"
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/gemm.h"
+#include "cutlass/half.h"
 #include "cutlass/layout/matrix.h"
 
 #include "csrc/kernels/nvidia/cutlass_extensions/arch/mma.h"
@@ -32,19 +32,21 @@ namespace gemm {
 namespace kernel {
 
 template <typename TypeA, typename TypeB, typename arch, typename Enable = void>
-struct MixedGemmArchTraits {};
+struct MixedGemmArchTraits {
+  static_assert(dependent_false<arch>, "Unrecognised parameterization");
+};
 
-template <typename arch>
-struct MixedGemmArchTraits<float, float, arch> {
-  static constexpr int32_t Stages = 2;
+template <typename Arch>
+struct MixedGemmArchTraits<float, float, Arch> {
+  static constexpr int Stages = 2;
   using OperatorClass = cutlass::arch::OpClassSimt;
   using AccType = float;
   using LayoutB = cutlass::layout::ColumnMajor;
 
-  static constexpr int32_t ElementsPerAccessA = 1;
-  static constexpr int32_t ElementsPerAccessB = 1;
-  static constexpr int32_t ElementsPerAccessC = 1;
-  static constexpr int32_t ThreadblockK = 8;
+  static constexpr int ElementsPerAccessA = 1;
+  static constexpr int ElementsPerAccessB = 1;
+  static constexpr int ElementsPerAccessC = 1;
+  static constexpr int ThreadblockK = 8;
   using InstructionShape = cutlass::gemm::GemmShape<1, 1, 1>;
 
   using Operator = cutlass::arch::OpMultiplyAdd;
@@ -61,18 +63,18 @@ struct MixedGemmArchTraits<
     typename cutlass::platform::enable_if<cutlass::platform::is_same<TypeA, cutlass::half_t>::value ||
                                           cutlass::platform::is_same<TypeA, cutlass::bfloat16_t>::value>::type> {
  private:
-  using LayoutDetails = LayoutDetailsB<TypeB, cutlass::arch::Sm70>;
+  using LayoutDetails = LayoutDetailsB<TypeA, TypeB, cutlass::arch::Sm70>;
 
  public:
-  static constexpr int32_t ThreadblockK = LayoutDetails::ThreadblockK;
+  static constexpr int ThreadblockK = LayoutDetails::ThreadblockK;
 
   using OperatorClass = cutlass::arch::OpClassTensorOp;
   using AccType = float;
   using LayoutB = typename LayoutDetails::Layout;
 
-  static constexpr int32_t ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
-  static constexpr int32_t ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
-  static constexpr int32_t ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
+  static constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
   using InstructionShape = cutlass::gemm::GemmShape<8, 8, 4>;
 
   using Operator = typename LayoutDetails::Operator;
@@ -87,18 +89,18 @@ struct MixedGemmArchTraits<
     typename cutlass::platform::enable_if<cutlass::platform::is_same<TypeA, cutlass::half_t>::value ||
                                           cutlass::platform::is_same<TypeA, cutlass::bfloat16_t>::value>::type> {
  private:
-  using LayoutDetails = LayoutDetailsB<TypeB, cutlass::arch::Sm75>;
+  using LayoutDetails = LayoutDetailsB<TypeA, TypeB, cutlass::arch::Sm75>;
 
  public:
-  static constexpr int32_t ThreadblockK = LayoutDetails::ThreadblockK;
+  static constexpr int ThreadblockK = LayoutDetails::ThreadblockK;
 
   using OperatorClass = cutlass::arch::OpClassTensorOp;
   using AccType = float;
   using LayoutB = typename LayoutDetails::Layout;
 
-  static constexpr int32_t ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
-  static constexpr int32_t ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
-  static constexpr int32_t ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
+  static constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
   using InstructionShape = cutlass::gemm::GemmShape<16, 8, 8>;
 
   using Operator = typename LayoutDetails::Operator;
@@ -111,19 +113,69 @@ struct MixedGemmArchTraits<
     typename cutlass::platform::enable_if<cutlass::platform::is_same<TypeA, cutlass::half_t>::value ||
                                           cutlass::platform::is_same<TypeA, cutlass::bfloat16_t>::value>::type> {
  private:
-  using LayoutDetails = LayoutDetailsB<TypeB, cutlass::arch::Sm80>;
+  using LayoutDetails = LayoutDetailsB<TypeA, TypeB, cutlass::arch::Sm80>;
 
  public:
-  static constexpr int32_t ThreadblockK = LayoutDetails::ThreadblockK;
+  static constexpr int ThreadblockK = LayoutDetails::ThreadblockK;
 
   using OperatorClass = cutlass::arch::OpClassTensorOp;
   using AccType = float;
   using LayoutB = typename LayoutDetails::Layout;
 
-  static constexpr int32_t ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
-  static constexpr int32_t ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
-  static constexpr int32_t ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
+  static constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
   using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
+
+  using Operator = typename LayoutDetails::Operator;
+};
+
+// ======================= Ada Traits ==============================
+template <typename TypeA, typename TypeB>
+struct MixedGemmArchTraits<
+    TypeA, TypeB, cutlass::arch::Sm89,
+    typename cutlass::platform::enable_if<cutlass::platform::is_same<TypeA, cutlass::half_t>::value ||
+                                          cutlass::platform::is_same<TypeA, cutlass::bfloat16_t>::value>::type> {
+ private:
+  using LayoutDetails = LayoutDetailsB<TypeA, TypeB, cutlass::arch::Sm89>;
+
+ public:
+  static constexpr int ThreadblockK = LayoutDetails::ThreadblockK;
+
+  using OperatorClass = cutlass::arch::OpClassTensorOp;
+  using AccType = float;
+  using LayoutB = typename LayoutDetails::Layout;
+
+  static constexpr int ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
+  static constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeA>::value;
+  using InstructionShape = cutlass::gemm::GemmShape<16, 8, 256 / cutlass::sizeof_bits<TypeA>::value>;
+
+  using Operator = typename LayoutDetails::Operator;
+};
+
+// FP8 A/B = fp8, C/D = fp32
+template <typename TypeA, typename TypeB>
+struct MixedGemmArchTraits<
+    TypeA, TypeB, cutlass::arch::Sm89,
+    typename cutlass::platform::enable_if<cutlass::platform::is_same<TypeA, cutlass::float_e4m3_t>::value ||
+                                          cutlass::platform::is_same<TypeA, cutlass::float_e5m2_t>::value>::type> {
+ private:
+  using LayoutDetails = LayoutDetailsB<TypeA, TypeB, cutlass::arch::Sm89>;
+
+ public:
+  static constexpr int ThreadblockK = LayoutDetails::ThreadblockK;
+
+  using OperatorClass = cutlass::arch::OpClassTensorOp;
+  using AccType = float;
+  // be careful, TypeC should align with HopperGroupedGemmInput::OutputTypeAdaptor_t<TypeA>
+  using TypeC = __nv_bfloat16;
+  using LayoutB = typename LayoutDetails::Layout;
+
+  static constexpr int ElementsPerAccessA = 128 / cutlass::sizeof_bits<TypeA>::value;
+  static constexpr int ElementsPerAccessB = LayoutDetails::ElementsPerAccess;
+  static constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<TypeC>::value;
+  using InstructionShape = cutlass::gemm::GemmShape<16, 8, 256 / cutlass::sizeof_bits<TypeA>::value>;
 
   using Operator = typename LayoutDetails::Operator;
 };

@@ -42,10 +42,10 @@
 namespace cutlass {
 namespace layout {
 
-template <int32_t RowsPerTile, int32_t ColumnsInterleaved>
+template <int RowsPerTile, int ColumnsInterleaved>
 struct ColumnMajorTileInterleave {
-  static constexpr int32_t kRowsPerTile = RowsPerTile;
-  static constexpr int32_t kColumnsInterleaved = ColumnsInterleaved;
+  static constexpr int kRowsPerTile = RowsPerTile;
+  static constexpr int kColumnsInterleaved = ColumnsInterleaved;
 };
 
 template <class T>
@@ -53,7 +53,7 @@ struct IsColumnMajorTileInterleave {
   static constexpr bool value = false;
 };
 
-template <int32_t U, int32_t V>
+template <int U, int V>
 struct IsColumnMajorTileInterleave<ColumnMajorTileInterleave<U, V>> {
   static constexpr bool value = true;
 };

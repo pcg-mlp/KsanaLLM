@@ -40,6 +40,7 @@
 
 #include "cutlass/arch/arch.h"
 #include "cutlass/cutlass.h"
+#include "cutlass/detail/helper_macros.hpp"
 #include "cutlass/device_kernel.h"
 #include "cutlass/numeric_types.h"
 
@@ -105,7 +106,7 @@ class GemmUniversalBaseCompat {
 
  protected:
   /// Private helper to obtain the grid dimensions with fix-up for split-K
-  static void get_grid_shape_(gemm::GemmCoord& grid_tiled_shape, int32_t& gemm_k_size, Arguments const& args) {
+  static void get_grid_shape_(gemm::GemmCoord& grid_tiled_shape, int& gemm_k_size, Arguments const& args) {
     // Determine grid shape
     ThreadblockSwizzle threadblock_swizzle;
 
@@ -115,7 +116,7 @@ class GemmUniversalBaseCompat {
     gemm_k_size = args.problem_size.k();
 
     if (args.mode == GemmUniversalMode::kGemm || args.mode == GemmUniversalMode::kGemmSplitKParallel) {
-      int32_t const kAlignK =
+      int const kAlignK =
           const_max(const_max(128 / sizeof_bits<ElementA>::value, 128 / sizeof_bits<ElementB>::value), 1);
 
       gemm_k_size = round_up(ceil_div(args.problem_size.k(), args.batch_count), kAlignK);
@@ -134,7 +135,7 @@ class GemmUniversalBaseCompat {
   static Status can_implement(Arguments const& args) {
     // Determine grid shape
     cutlass::gemm::GemmCoord grid_tiled_shape;
-    int32_t gemm_k_size = 0;
+    int gemm_k_size = 0;
 
     get_grid_shape_(grid_tiled_shape, gemm_k_size, args);
 
@@ -158,7 +159,7 @@ class GemmUniversalBaseCompat {
 
     // Determine grid shape
     cutlass::gemm::GemmCoord grid_tiled_shape;
-    int32_t gemm_k_size = 0;
+    int gemm_k_size = 0;
 
     get_grid_shape_(grid_tiled_shape, gemm_k_size, args);
 
@@ -168,7 +169,7 @@ class GemmUniversalBaseCompat {
     } else if (args.mode == GemmUniversalMode::kGemm && grid_tiled_shape.k() > 1) {
       // Serial split-K only requires a temporary workspace if the number of partitions along the
       // GEMM K dimension is greater than one.
-      workspace_bytes = sizeof(int32_t) * size_t(grid_tiled_shape.m()) * size_t(grid_tiled_shape.n());
+      workspace_bytes = sizeof(int) * size_t(grid_tiled_shape.m()) * size_t(grid_tiled_shape.n());
     }
 
     CUTLASS_TRACE_HOST("  workspace_bytes: " << workspace_bytes);
@@ -185,7 +186,7 @@ class GemmUniversalBaseCompat {
     ThreadblockSwizzle threadblock_swizzle;
 
     cutlass::gemm::GemmCoord grid_tiled_shape;
-    int32_t gemm_k_size = 0;
+    int gemm_k_size = 0;
 
     get_grid_shape_(grid_tiled_shape, gemm_k_size, args);
     dim3 result = threadblock_swizzle.get_grid_shape(grid_tiled_shape);
@@ -197,11 +198,11 @@ class GemmUniversalBaseCompat {
   }
 
   /// Computes the maximum number of active blocks per multiprocessor
-  static int32_t maximum_active_blocks(int32_t smem_capacity = -1) {
+  static int maximum_active_blocks(int smem_capacity = -1) {
     CUTLASS_TRACE_HOST("GemmUniversalBaseCompat::maximum_active_blocks()");
 
-    int32_t max_active_blocks = -1;
-    int32_t smem_size = int32_t(sizeof(typename GemmKernel::SharedStorage));
+    int max_active_blocks = -1;
+    int smem_size = int(sizeof(typename GemmKernel::SharedStorage));
 
     CUTLASS_TRACE_HOST("  smem_size: " << smem_size << " bytes");
 
@@ -226,7 +227,7 @@ class GemmUniversalBaseCompat {
       }
 
       if (smem_capacity < 0) {
-        int32_t device_idx = 0;
+        int device_idx = 0;
         result = cudaGetDevice(&device_idx);
 
         if (result != cudaSuccess) {
@@ -240,10 +241,10 @@ class GemmUniversalBaseCompat {
           return -1;
         }
 
-        smem_capacity = static_cast<int32_t>(properties.sharedMemPerMultiprocessor);
+        smem_capacity = static_cast<int>(properties.sharedMemPerMultiprocessor);
       }
 
-      int32_t occupancy = std::min(max_active_blocks, smem_capacity / smem_size);
+      int occupancy = std::min(max_active_blocks, smem_capacity / smem_size);
 
       CUTLASS_TRACE_HOST("  occupancy: " << occupancy);
 
@@ -285,15 +286,15 @@ class GemmUniversalBaseCompat {
 
     // Get CUDA grid shape
     cutlass::gemm::GemmCoord grid_tiled_shape;
-    int32_t gemm_k_size = 0;
+    int gemm_k_size = 0;
 
     get_grid_shape_(grid_tiled_shape, gemm_k_size, args);
 
     // Initialize the Params structure
-    params_ = typename GemmKernel::Params(args, grid_tiled_shape, gemm_k_size, static_cast<int32_t*>(workspace));
+    params_ = typename GemmKernel::Params(args, grid_tiled_shape, gemm_k_size, static_cast<int*>(workspace));
 
     // Specify shared memory capacity for kernel.
-    int32_t smem_size = int32_t(sizeof(typename GemmKernel::SharedStorage));
+    int smem_size = int(sizeof(typename GemmKernel::SharedStorage));
 
     if (smem_size >= (48 << 10)) {
       cudaError_t result =
@@ -335,7 +336,7 @@ class GemmUniversalBaseCompat {
     dim3 grid = threadblock_swizzle.get_grid_shape(params_.grid_tiled_shape);
     dim3 block(GemmKernel::kThreadCount, 1, 1);
 
-    int32_t smem_size = int32_t(sizeof(typename GemmKernel::SharedStorage));
+    int smem_size = int(sizeof(typename GemmKernel::SharedStorage));
 
     //
     // Launch kernel

@@ -46,26 +46,24 @@
 #include "cutlass/fast_math.h"
 #include "cutlass/numeric_conversion.h"
 
-namespace tk = llm_kernels::nvidia;
-
 namespace cutlass {
 namespace epilogue {
 namespace threadblock {
 
-template <typename ThreadblockShape_, int32_t ThreadCount, typename ScaleTileIterator_, typename OutputTileIterator_,
+template <typename ThreadblockShape_, int ThreadCount, typename ScaleTileIterator_, typename OutputTileIterator_,
           typename ElementAccumulator_, typename ElementCompute_, typename ElementwiseFunctor_,
           bool UseMasking_ = false>
 class EpilogueVisitorPerRowPerCol {
  public:
   using ThreadblockShape = ThreadblockShape_;
-  static int32_t const kThreadCount = ThreadCount;
+  static int const kThreadCount = ThreadCount;
 
   using ScaleTileIterator = ScaleTileIterator_;
   using OutputTileIterator = OutputTileIterator_;
   using ElementwiseFunctor = ElementwiseFunctor_;
 
-  static int32_t const kIterations = OutputTileIterator::kIterations;
-  static int32_t const kElementsPerAccess = OutputTileIterator::kElementsPerAccess;
+  static int const kIterations = OutputTileIterator::kIterations;
+  static int const kElementsPerAccess = OutputTileIterator::kElementsPerAccess;
 
   using ElementOutput = typename OutputTileIterator::Element;
   using LayoutOutput = cutlass::layout::RowMajor;
@@ -78,7 +76,7 @@ class EpilogueVisitorPerRowPerCol {
   using ComputeFragment = Array<ElementCompute_, kElementsPerAccess>;
   using OutputVector = Array<ElementOutput, kElementsPerAccess>;
 
-  static int32_t const kThreadsPerRow = OutputTileIterator::ThreadMap::Detail::kAccessWidth;
+  static int const kThreadsPerRow = OutputTileIterator::ThreadMap::Detail::kAccessWidth;
   static bool const kHasMultiStepsInRow = (OutputTileIterator::ThreadMap::Iterations::kColumn > 1);
 
   /// Argument structure
@@ -134,8 +132,8 @@ class EpilogueVisitorPerRowPerCol {
   MatrixCoord extent_real_;
   ElementwiseFunctor elementwise_;
 
-  const bool per_token_quant_;
-  const bool per_channel_quant_;
+  bool const per_token_quant_;
+  bool const per_channel_quant_;
 
   AlphaScaleElementType* ptr_alpha_row_;
   AlphaScaleElementType* ptr_alpha_col_;
@@ -151,28 +149,28 @@ class EpilogueVisitorPerRowPerCol {
 
   ElementAccumulator beta_;
 
-  int32_t column_offset_;
+  int column_offset_;
 
   MatrixCoord thread_offset_;
 
  public:
   CUTLASS_DEVICE
   EpilogueVisitorPerRowPerCol(Params const& params, SharedStorage& shared_storage,
-                              cutlass::MatrixCoord const& problem_size, int32_t thread_idx, int32_t warp_idx,
-                              int32_t lane_idx, typename ScaleTileIterator::Params params_alpha_col,
+                              cutlass::MatrixCoord const& problem_size, int thread_idx, int warp_idx, int lane_idx,
+                              typename ScaleTileIterator::Params params_alpha_col,
                               typename OutputTileIterator::Params params_C,
                               typename OutputTileIterator::Params params_D, llm_kernels::utils::QuantMode quant_option,
                               AlphaScaleElementType* ptr_alpha_row, AlphaScaleElementType* ptr_alpha_col,
                               typename OutputTileIterator::Element* ptr_C, typename OutputTileIterator::Element* ptr_D,
                               cutlass::MatrixCoord const& threadblock_offset = cutlass::MatrixCoord(0, 0),
-                              int32_t column_offset = 0,
+                              int column_offset = 0,
                               cutlass::MatrixCoord const& problem_size_real = cutlass::MatrixCoord(0, 0))
       : params_(params),
         shared_storage_(shared_storage),
         extent_(problem_size),
         elementwise_(params.elementwise),
-        per_token_quant_(quant_option.HasPerTokenScaling()),
-        per_channel_quant_(quant_option.HasPerChannelScaling()),
+        per_token_quant_(quant_option.hasPerTokenScaling()),
+        per_channel_quant_(quant_option.hasPerChannelScaling()),
         ptr_alpha_row_(ptr_alpha_row),
         ptr_alpha_col_(ptr_alpha_col),
         iterator_alpha_col_(params_alpha_col, ptr_alpha_col, problem_size, thread_idx, threadblock_offset),
@@ -196,13 +194,13 @@ class EpilogueVisitorPerRowPerCol {
 
   /// Helper to indicate split-K behavior
   CUTLASS_DEVICE
-  void set_k_partition(int32_t split_k_index,     ///< Index of this threadblock within split-K partitioned scheme
-                       int32_t split_k_slices) {  ///< Total number of split-K slices
+  void set_k_partition(int split_k_index,     ///< Index of this threadblock within split-K partitioned scheme
+                       int split_k_slices) {  ///< Total number of split-K slices
   }
 
   /// Called to set the batch index
   CUTLASS_DEVICE
-  void set_batch_index(int32_t batch_idx) {
+  void set_batch_index(int batch_idx) {
     iterator_alpha_col_.add_pointer_offset(batch_idx * params_.batch_stride_alpha);
     iterator_C_.add_pointer_offset(batch_idx * params_.batch_stride_C);
     iterator_D_.add_pointer_offset(batch_idx * params_.batch_stride_D);
@@ -218,7 +216,7 @@ class EpilogueVisitorPerRowPerCol {
 
   /// Called at the start of one step before starting accumulator exchange
   CUTLASS_DEVICE
-  void begin_step(int32_t step_idx) {
+  void begin_step(int step_idx) {
     fragment_D_.clear();
     fragment_C_.clear();
 
@@ -230,10 +228,10 @@ class EpilogueVisitorPerRowPerCol {
 
   /// Called at the start of a row
   CUTLASS_DEVICE
-  void begin_row(int32_t row_idx) {
+  void begin_row(int row_idx) {
     // load alpha_row in begin_step only when per token(row) scaling is used
     if (per_token_quant_) {
-      int32_t thread_offset_row =
+      int thread_offset_row =
           iterator_D_.thread_start_row() + OutputTileIterator::ThreadMap::iteration_offset(row_idx).row();
 
       arch::global_load<AlphaScaleElementType, sizeof(AlphaScaleElementType)>(
@@ -243,8 +241,7 @@ class EpilogueVisitorPerRowPerCol {
 
   /// Called after accumulators have been exchanged for each accumulator vector
   CUTLASS_DEVICE
-  void visit(int32_t iter_idx, int32_t row_idx, int32_t column_idx, int32_t frag_idx,
-             AccumulatorFragment const& accum) {
+  void visit(int iter_idx, int row_idx, int column_idx, int frag_idx, AccumulatorFragment const& accum) {
     NumericArrayConverter<ElementCompute, ElementAccumulator, kElementsPerAccess> source_converter;
 
     ComputeFragment result = source_converter(accum);
@@ -263,11 +260,11 @@ class EpilogueVisitorPerRowPerCol {
 
   /// Called at the end of a row
   CUTLASS_DEVICE
-  void end_row(int32_t row_idx) {}
+  void end_row(int row_idx) {}
 
   /// Called after all accumulator elements have been visited
   CUTLASS_DEVICE
-  void end_step(int32_t step_idx) {
+  void end_step(int step_idx) {
     iterator_D_.store(fragment_D_);
     ++iterator_D_;
   }
@@ -282,7 +279,7 @@ class EpilogueVisitorPerRowPerCol {
                                                        AlphaScaleElementType const& scale_row) {
     ComputeFragment result;
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t i = 0; i < ComputeFragment::kElements; ++i) {
+    for (int i = 0; i < ComputeFragment::kElements; ++i) {
       result[i] = accum[i] * (scale_col[i] * scale_row);
     }
 
@@ -294,7 +291,7 @@ class EpilogueVisitorPerRowPerCol {
                                                AlphaScaleElementType const& scale_row) {
     ComputeFragment result;
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t i = 0; i < ComputeFragment::kElements; ++i) {
+    for (int i = 0; i < ComputeFragment::kElements; ++i) {
       result[i] = accum[i] * (scale_col * scale_row);
     }
 

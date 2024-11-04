@@ -19,8 +19,6 @@
 
 namespace llm_kernels {
 namespace nvidia {
-
-template class MoeGemmRunner<half, uint8_t>;
-
-}  //     namespace nvidia
+template class MoeGemmRunner<half, uint8_t, half>;
+}  // namespace nvidia
 }  // namespace llm_kernels

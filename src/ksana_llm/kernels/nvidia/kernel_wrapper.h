@@ -11,6 +11,7 @@
 
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+#include "csrc/kernels/nvidia/weight_only_batched_gemv/weight_only_gemv_wrapper.h"
 #include "csrc/utils/quant_type.h"
 
 #include "ksana_llm/utils/common_device.h"

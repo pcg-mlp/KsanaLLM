@@ -93,6 +93,7 @@ endif()
 
 # setting cutlass
 set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
+set(CUTLASS_TOOLS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/tools/util/include)
 set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/fastertransformer/cutlass_extensions/include)
 subproject_version(${PROJECT_SOURCE_DIR}/3rdparty/cutlass CUTLASS_VERSION)
 set(CUTLASS_VERSION_SUB_LIST ${CUTLASS_VERSION})
@@ -108,6 +109,7 @@ add_definitions("-DCUTLASS_PATCH_VERSION=${CUTLASS_PATCH_VERSION}")
 set(CUDA_INC_DIRS
   ${CUDA_PATH}/include
   ${CUTLASS_HEADER_DIR}
+  ${CUTLASS_TOOLS_HEADER_DIR}
 )
 
 set(CUDA_LIB_DIRS

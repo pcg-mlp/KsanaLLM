@@ -14,6 +14,7 @@ add_subdirectory(cast)
 # add_subdirectory(bgmv)
 # TODO(karlluo): will be support in quantization
 add_subdirectory(asymmetric_gemm)
+add_subdirectory(weight_only_batched_gemv)
 add_subdirectory(all_reduce)
 add_subdirectory(permute)
 add_subdirectory(alibi)

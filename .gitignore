@@ -85,7 +85,7 @@ cmake-build-debug
 .tags
 *.csv
 *.log
-*.txt
+# *.txt
 *.zip
 *.run
 *.gz

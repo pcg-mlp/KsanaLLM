@@ -19,8 +19,6 @@
 
 namespace llm_kernels {
 namespace nvidia {
-
-template class MoeGemmRunner<half, cutlass::uint4b_t>;
-
+template class MoeGemmRunner<half, cutlass::uint4b_t, half>;
 }  // namespace nvidia
 }  // namespace llm_kernels

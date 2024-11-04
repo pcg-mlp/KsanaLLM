@@ -54,18 +54,18 @@ namespace threadblock {
 ////////////////////////////////////////////////////////////////////////////////
 // SFINAE trick so I can keep the same loop code for Volta and dispatch to the
 // correct warp level mma. On volta, all data is stored to shared memory as FP16.
-template <typename WarpMma, int32_t kExpansionFactor = 1>
+template <typename WarpMma, int kExpansionFactor = 1>
 CUTLASS_DEVICE void run_warp_mma(WarpMma& warp_mma, typename WarpMma::FragmentC& D,
                                  typename WarpMma::FragmentA const& A, typename WarpMma::FragmentB const& B,
-                                 typename WarpMma::FragmentC const& C, const int32_t warp_tileB_k_offset) {
+                                 typename WarpMma::FragmentC const& C, int const warp_tileB_k_offset) {
   warp_mma(D, A, B, C);
 }
 
-template <typename WarpMma, int32_t kExpansionFactor = WarpMma::kExpansionFactor>
+template <typename WarpMma, int kExpansionFactor = WarpMma::kExpansionFactor>
 CUTLASS_DEVICE void run_warp_mma(WarpMma& warp_mma, typename WarpMma::FragmentC& D,
                                  typename WarpMma::TransformedFragmentA const& A,
                                  typename WarpMma::TransformedFragmentB const& B, typename WarpMma::FragmentC const& C,
-                                 const int32_t warp_tileB_k_offset) {
+                                 int const warp_tileB_k_offset) {
   warp_mma(D, A, B, C, warp_tileB_k_offset);
 }
 
@@ -81,7 +81,7 @@ template <
     /// The type of the scales
     typename ElementScale_,
     /// Number of stages,
-    int32_t Stages,
+    int Stages,
     /// The dequantizing op to be performed.
     WeightOnlyQuantOp DequantOp,
     /// Used for partial specialization,
@@ -100,11 +100,11 @@ class DqMmaBase {
   static_assert(DequantOp != WeightOnlyQuantOp::UNDEFINED, "");
 
   // Finegrained scales get streamed in via cp.async
-  static constexpr int32_t ScalebiasStages = IsFinegrained(DequantOp) ? Stages : 1;
+  static constexpr int ScalebiasStages = isFinegrained(DequantOp) ? Stages : 1;
   // We always have scales.
-  static constexpr int32_t ScaleElementsPerStage = Shape::kN;
+  static constexpr int ScaleElementsPerStage = Shape::kN;
   // We sometimes have a bias
-  static constexpr int32_t BiasElementsPerStage = HasZero(DequantOp) ? Shape::kN : 0;
+  static constexpr int BiasElementsPerStage = hasZero(DequantOp) ? Shape::kN : 0;
 
   //
   // Dependent types
@@ -121,16 +121,16 @@ class DqMmaBase {
   using WarpCount = GemmShape<Shape::kM / WarpGemm::kM, Shape::kN / WarpGemm::kN, Shape::kK / WarpGemm::kK>;
 
   /// Number of warp-level GEMM operations
-  static int32_t const kWarpGemmIterations = (WarpGemm::kK / Operator::Policy::MmaShape::kK);
+  static int const kWarpGemmIterations = (WarpGemm::kK / Operator::Policy::MmaShape::kK);
 
-  static constexpr int32_t kNumKIterationsPerWarpBLoad =
+  static constexpr int kNumKIterationsPerWarpBLoad =
       Operator::IteratorB::InstructionShape::kRow / Operator::InstructionShape::kK;
 
   static_assert(!(kWarpGemmIterations % kNumKIterationsPerWarpBLoad), "");
-  static constexpr int32_t kWarpGemmIterationsForB = kWarpGemmIterations / kNumKIterationsPerWarpBLoad;
+  static constexpr int kWarpGemmIterationsForB = kWarpGemmIterations / kNumKIterationsPerWarpBLoad;
 
   /// Number of stages
-  static int32_t const kStages = Stages;
+  static int const kStages = Stages;
 
   /// Tensor reference to the A operand
   using TensorRefA = TensorRef<typename Operator::ElementA, typename Operator::LayoutA>;
@@ -219,11 +219,11 @@ class DqMmaBase {
       ///< Shared storage needed for internal use by threadblock-scoped GEMM
       SharedStorage& shared_storage,
       ///< ID within the threadblock
-      int32_t thread_idx,
+      int thread_idx,
       ///< ID of warp
-      int32_t warp_idx,
+      int warp_idx,
       ///< ID of each thread within a warp
-      int32_t lane_idx)
+      int lane_idx)
       : warp_tile_iterator_A_(shared_storage.operand_A_ref(), lane_idx),
         warp_tile_iterator_B_(shared_storage.operand_B_ref(), lane_idx) {}
 };

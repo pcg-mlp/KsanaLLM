@@ -52,16 +52,16 @@ namespace thread {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-__forceinline__ __device__ float CopySignFPos(float a, float b) {
+__forceinline__ __device__ float copysignf_pos(float a, float b) {
   float r;
   r = __int_as_float(__float_as_int(a) | (__float_as_int(b) & 0x80000000));
   return r;
 }
 
-__forceinline__ __device__ float TanhOpt(float x) {
+__forceinline__ __device__ float tanh_opt(float x) {
 #if (__CUDACC_VER_MAJOR__ < 11) || (__CUDA_ARCH__ < 750)
-  const float exp_val = -1.f * fabs(2 * x);
-  return CopySignFPos((1.0f - __expf(exp_val)) / (__expf(exp_val) + 1.0f), x);
+  float const exp_val = -1.f * fabs(2 * x);
+  return copysignf_pos((1.0f - __expf(exp_val)) / (__expf(exp_val) + 1.0f), x);
 #else
   return fast_tanh(x);
 #endif
@@ -70,7 +70,7 @@ __forceinline__ __device__ float TanhOpt(float x) {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 template <>
 struct GELU_taylor<float> {
-  static const bool kIsHeavy = true;
+  static bool const kIsHeavy = true;
 
   CUTLASS_DEVICE
   float operator()(float const& z) const {
@@ -79,7 +79,7 @@ struct GELU_taylor<float> {
 
     return float(
         cutlass::constants::half<float>() * z *
-        (cutlass::constants::one<float>() + TanhOpt(k0 * z * (cutlass::constants::one<float>() + k1 * z * z))));
+        (cutlass::constants::one<float>() + tanh_opt(k0 * z * (cutlass::constants::one<float>() + k1 * z * z))));
   }
 
   using Params = LinearCombinationGenericParams<float>;

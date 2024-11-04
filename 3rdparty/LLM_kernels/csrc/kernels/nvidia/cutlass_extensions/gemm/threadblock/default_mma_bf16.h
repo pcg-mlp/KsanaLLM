@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -32,11 +31,11 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Layout type for B matrix operand
     typename LayoutB,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Tag indicating architecture to tune for
@@ -93,11 +92,11 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Layout type for B matrix operand
     typename LayoutB,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Threadblock-level tile size (concept: GemmShape)
@@ -153,11 +152,11 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Layout type for B matrix operand
     typename LayoutB,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Tag indicating architecture to tune for
@@ -174,7 +173,7 @@ struct DefaultMma<cutlass::bfloat16_t, LayoutA, kAlignmentA, uint8_t, LayoutB, k
                   layout::RowMajor, arch::OpClassTensorOp, ArchTag, ThreadblockShape, WarpShape, InstructionShape, 2,
                   Operator> {
  private:
-  static constexpr int32_t kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
+  static constexpr int kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
 
   using Mma = DqMma<bfloat16_t, LayoutA, kAlignmentA, uint8_t, LayoutB, kAlignmentB, bfloat16_t, layout::RowMajor,
                     kAlignmentScale, ElementAccumulator, layout::RowMajor, arch::OpClassTensorOp, ArchTag,
@@ -200,11 +199,11 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Layout type for B matrix operand
     typename LayoutB,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Tag indicating architecture to tune for
@@ -221,7 +220,7 @@ struct DefaultMma<cutlass::bfloat16_t, LayoutA, kAlignmentA, uint4b_t, LayoutB, 
                   layout::RowMajor, arch::OpClassTensorOp, ArchTag, ThreadblockShape, WarpShape, InstructionShape, 2,
                   Operator> {
  private:
-  static constexpr int32_t kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
+  static constexpr int kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
 
   using Mma = DqMma<bfloat16_t, LayoutA, kAlignmentA, uint4b_t, LayoutB, kAlignmentB, bfloat16_t, layout::RowMajor,
                     kAlignmentScale, ElementAccumulator, layout::RowMajor, arch::OpClassTensorOp, ArchTag,
@@ -245,11 +244,11 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Layout type for B matrix operand
     typename LayoutB,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Tag indicating architecture to tune for
@@ -263,14 +262,14 @@ template <
     /// Operation performed by GEMM
     typename Operator,
     ///
-    int32_t kStages,
+    int kStages,
     /// Shared memory clear option
     SharedMemoryClearOption SharedMemoryClear>
 struct DefaultMma<cutlass::bfloat16_t, LayoutA, kAlignmentA, uint8_t, LayoutB, kAlignmentB, ElementAccumulator,
                   layout::RowMajor, arch::OpClassTensorOp, ArchTag, ThreadblockShape, WarpShape, InstructionShape,
                   kStages, Operator, false, SharedMemoryClear> {
  private:
-  static constexpr int32_t kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
+  static constexpr int kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
 
   using Mma = DqMma<bfloat16_t, LayoutA, kAlignmentA, uint8_t, LayoutB, kAlignmentB, bfloat16_t, layout::RowMajor,
                     kAlignmentScale, ElementAccumulator, layout::RowMajor, arch::OpClassTensorOp, ArchTag,
@@ -296,11 +295,11 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Layout type for B matrix operand
     typename LayoutB,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Tag indicating architecture to tune for
@@ -314,14 +313,14 @@ template <
     /// Operation performed by GEMM
     typename Operator,
     ///
-    int32_t kStages,
+    int kStages,
     /// Shared memory clear option
     SharedMemoryClearOption SharedMemoryClear>
 struct DefaultMma<cutlass::bfloat16_t, LayoutA, kAlignmentA, uint4b_t, LayoutB, kAlignmentB, ElementAccumulator,
                   layout::RowMajor, arch::OpClassTensorOp, ArchTag, ThreadblockShape, WarpShape, InstructionShape,
                   kStages, Operator, false, SharedMemoryClear> {
  private:
-  static constexpr int32_t kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
+  static constexpr int kAlignmentScale = 128 / sizeof_bits<bfloat16_t>::value;
 
   using Mma = DqMma<bfloat16_t, LayoutA, kAlignmentA, uint4b_t, LayoutB, kAlignmentB, bfloat16_t, layout::RowMajor,
                     kAlignmentScale, ElementAccumulator, layout::RowMajor, arch::OpClassTensorOp, ArchTag,

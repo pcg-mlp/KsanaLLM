@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -79,19 +78,19 @@ template <
     /// Layout type for A matrix operand
     typename LayoutA_,
     /// Access granularity of A matrix in units of elements
-    int32_t kAlignmentA,
+    int kAlignmentA,
     /// Element type for B matrix operand
     typename ElementB_,
     /// Layout type for B matrix operand
     typename LayoutB_,
     /// Access granularity of B matrix in units of elements
-    int32_t kAlignmentB,
+    int kAlignmentB,
     /// Element type for the input scale
     typename ElementScale_,
     /// Layout for the scale operand
     typename LayoutScale_,
     /// Access granularity of Scales in unit of elements
-    int32_t kAlignmentScale,
+    int kAlignmentScale,
     /// Element type for internal accumulation
     typename ElementAccumulator_,
     /// Layout type for C and D matrix operands
@@ -107,7 +106,7 @@ template <
     /// Instruction-level tile size (concept: GemmShape)
     typename InstructionShape_,
     /// Number of stages used in the pipelined mainloop
-    int32_t Stages,
+    int Stages,
     /// Operation performed by GEMM
     typename Operator_,
     /// Use zfill or predicate for out-of-bound cp.async

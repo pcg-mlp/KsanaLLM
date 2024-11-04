@@ -21,19 +21,36 @@
 
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
+#include "cute/tensor.hpp"
 
 namespace llm_kernels {
 namespace nvidia {
 
-std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> GetCandidateConfigs(
-    int32_t sm, const bool is_weight_only, const bool simt_configs_only, const bool int8_configs_only = false,
-    const int32_t max_split_k = 1);
+template <class TileShape, class ClusterShape, class ActivationType>
+struct should_filter_sm90_gemm_problem_shape {
+#ifdef FAST_BUILD
+  constexpr static int TILE_K = 128 * 8 / cutlass::sizeof_bits<ActivationType>::value;
+  using SupportedCtaShape = cute::Shape<cute::_128, cute::_128, cute::Int<TILE_K>>;
+  using SupportedCgaShape = cute::Shape<cute::_1, cute::_1, cute::_1>;
 
-llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig EstimateBestConfigFromOccupancies(
-    const std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>& candidate_configs,
-    const std::vector<int32_t>& occupancies, const int64_t m, const int64_t n, const int64_t k,
-    const int64_t num_experts, const int32_t split_k_limit, const size_t workspace_bytes,
-    const int32_t multi_processor_count, const int32_t is_weight_only);
+  constexpr static bool value =
+      !cute::is_same_v<SupportedCtaShape, TileShape> || !cute::is_same_v<SupportedCgaShape, ClusterShape>;
+#else
+  constexpr static bool value = false;
+#endif
+};
+template <class TileShape, class ClusterShape, class ActivationType>
+constexpr static bool should_filter_sm90_gemm_problem_shape_v =
+    should_filter_sm90_gemm_problem_shape<TileShape, ClusterShape, ActivationType>::value;
+
+std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> get_candidate_configs(
+    int sm, int const max_split_k,
+    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam const);
+
+llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig estimate_best_config_from_occupancies(
+    std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> const& candidate_configs,
+    std::vector<int> const& occupancies, int64_t const m, int64_t const n, int64_t const k, int64_t const num_experts,
+    int const split_k_limit, size_t const workspace_bytes, int const multi_processor_count, int const is_weight_only);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

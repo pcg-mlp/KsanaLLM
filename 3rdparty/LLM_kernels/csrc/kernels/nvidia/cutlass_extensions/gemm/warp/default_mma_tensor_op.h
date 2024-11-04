@@ -66,7 +66,7 @@ template <
     /// Layout of C matrix (concept: MatrixLayout)
     typename LayoutC,
     /// Number of partitions along K dimension
-    int32_t PartitionsK,
+    int PartitionsK,
     /// Store the accumulators in row major or column major.  Row major is used
     /// when output layout is interleaved.
     bool AccumulatorsInRowMajor>
@@ -77,7 +77,7 @@ struct DefaultMmaTensorOp<WarpShape_, InstructionShape_, ElementA, LayoutA, Elem
   using ComputeInstructionShape = InstructionShape_;
 
   // Chosen so we get K=16 for int8 and K=32 for int4.
-  static constexpr int32_t LoadInstructionK = 8 * sizeof_bits<ElementA>::value / sizeof_bits<ElementB>::value;
+  static constexpr int LoadInstructionK = 128 / sizeof_bits<ElementB>::value;
 
   // Shape for loading the narrow data type from shared memory
   using LoadInstructionShape = GemmShape<InstructionShape_::kM, InstructionShape_::kN, LoadInstructionK>;

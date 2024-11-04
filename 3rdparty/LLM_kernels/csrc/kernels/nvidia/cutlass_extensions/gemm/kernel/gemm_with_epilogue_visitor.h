@@ -100,18 +100,17 @@ struct GemmWithEpilogueVisitor {
   using EpilogueOutputOp =
       typename Epilogue::Visitor::ElementwiseFunctor;  // Define type so GemmUniversalBase doesn't complain
 
-  static int32_t const kStages = Mma::kStages;
-  static int32_t const kAlignmentA = Mma::IteratorA::AccessType::kElements;
-  static int32_t const kAlignmentB = Mma::IteratorB::AccessType::kElements;
-  static int32_t const kAlignmentC = EpilogueVisitor::kElementsPerAccess;
+  static int const kStages = Mma::kStages;
+  static int const kAlignmentA = Mma::IteratorA::AccessType::kElements;
+  static int const kAlignmentB = Mma::IteratorB::AccessType::kElements;
+  static int const kAlignmentC = EpilogueVisitor::kElementsPerAccess;
 
   /// Warp count (concept: GemmShape)
   using WarpCount = typename Mma::WarpCount;
-  static int32_t const kThreadCount = 32 * WarpCount::kCount;
+  static int const kThreadCount = 32 * WarpCount::kCount;
 
   /// Split-K preserves splits that are 128b aligned
-  static int32_t const kSplitKAlignment =
-      const_max(128 / sizeof_bits<ElementA>::value, 128 / sizeof_bits<ElementB>::value);
+  static int const kSplitKAlignment = const_max(128 / sizeof_bits<ElementA>::value, 128 / sizeof_bits<ElementB>::value);
 
   //
   // Structures
@@ -125,7 +124,7 @@ struct GemmWithEpilogueVisitor {
 
     GemmUniversalMode mode;
     GemmCoord problem_size;
-    int32_t batch_count;
+    int batch_count;
 
     TensorRefA ref_A;
     TensorRefB ref_B;
@@ -148,10 +147,10 @@ struct GemmWithEpilogueVisitor {
     Arguments() : mode(GemmUniversalMode::kGemm), batch_count(1) {}
 
     /// constructs an arguments structure
-    Arguments(GemmUniversalMode mode_, GemmCoord problem_size_, int32_t batch_count_, TensorRefA ref_A_,
-              TensorRefB ref_B_, llm_kernels::utils::QuantMode quant_option_, TensorRefAlphaCol ref_alpha_col_,
-              TensorRefAlphaRow ref_alpha_row_, TensorRefC ref_C_, TensorRefC ref_D_, int64_t batch_stride_A_,
-              int64_t batch_stride_B_, typename EpilogueVisitor::Arguments epilogue_visitor_)
+    Arguments(GemmUniversalMode mode_, GemmCoord problem_size_, int batch_count_, TensorRefA ref_A_, TensorRefB ref_B_,
+              llm_kernels::utils::QuantMode quant_option_, TensorRefAlphaCol ref_alpha_col_, TensorRefAlphaRow ref_alpha_row_,
+              TensorRefC ref_C_, TensorRefC ref_D_, int64_t batch_stride_A_, int64_t batch_stride_B_,
+              typename EpilogueVisitor::Arguments epilogue_visitor_)
         : mode(mode_),
           problem_size(problem_size_),
           batch_count(batch_count_),
@@ -176,7 +175,7 @@ struct GemmWithEpilogueVisitor {
   struct Params {
     cutlass::gemm::GemmCoord problem_size;
     cutlass::gemm::GemmCoord grid_tiled_shape;
-    int32_t swizzle_log_tile;
+    int swizzle_log_tile;
 
     typename Mma::IteratorA::Params params_A;
     typename Mma::IteratorB::Params params_B;
@@ -186,8 +185,8 @@ struct GemmWithEpilogueVisitor {
     typename EpilogueVisitor::OutputTileIterator::Params params_D;
 
     GemmUniversalMode mode;
-    int32_t batch_count;
-    int32_t gemm_k_size;
+    int batch_count;
+    int gemm_k_size;
 
     void* ptr_A;
     void* ptr_B;
@@ -226,8 +225,7 @@ struct GemmWithEpilogueVisitor {
           batch_stride_A(0),
           batch_stride_B(0) {}
 
-    Params(Arguments const& args, cutlass::gemm::GemmCoord const& grid_tiled_shape_, int32_t gemm_k_size_,
-           int32_t* workspace_)
+    Params(Arguments const& args, cutlass::gemm::GemmCoord const& grid_tiled_shape_, int gemm_k_size_, int* workspace_)
         : problem_size(args.problem_size),
           swizzle_log_tile(0),
           params_A(args.ref_A.layout()),
@@ -255,7 +253,7 @@ struct GemmWithEpilogueVisitor {
           args.problem_size, {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK}, args.batch_count);
 
       if (args.mode == GemmUniversalMode::kGemm || args.mode == GemmUniversalMode::kGemmSplitKParallel) {
-        int32_t const kAlignK =
+        int const kAlignK =
             const_max(const_max(128 / sizeof_bits<ElementA>::value, 128 / sizeof_bits<ElementB>::value), 1);
 
         gemm_k_size = round_up(ceil_div(args.problem_size.k(), args.batch_count), kAlignK);
@@ -291,9 +289,9 @@ struct GemmWithEpilogueVisitor {
   static Status can_implement(cutlass::gemm::GemmCoord const& problem_size) {
     CUTLASS_TRACE_HOST("GemmWithEpilogueVisitor::can_implement()");
 
-    static int32_t const kAlignmentA = Mma::IteratorA::AccessType::kElements;
-    static int32_t const kAlignmentB = Mma::IteratorB::AccessType::kElements;
-    static int32_t const kAlignmentC = EpilogueVisitor::OutputTileIterator::kElementsPerAccess;
+    static int const kAlignmentA = Mma::IteratorA::AccessType::kElements;
+    static int const kAlignmentB = Mma::IteratorB::AccessType::kElements;
+    static int const kAlignmentC = EpilogueVisitor::OutputTileIterator::kElementsPerAccess;
 
     bool isAMisaligned = false;
     bool isBMisaligned = false;
@@ -356,7 +354,7 @@ struct GemmWithEpilogueVisitor {
 
   /// Executes one GEMM
   CUTLASS_DEVICE
-  void operator()(Params const& params, SharedStorage& shared_storage) {
+  void run_kernel_(Params const& params, SharedStorage& shared_storage) {
     // Compute threadblock location
     ThreadblockSwizzle threadblock_swizzle;
 
@@ -368,8 +366,8 @@ struct GemmWithEpilogueVisitor {
       return;
     }
 
-    int32_t offset_k = 0;
-    int32_t problem_size_k = params.problem_size.k();
+    int offset_k = 0;
+    int problem_size_k = params.problem_size.k();
 
     ElementA* ptr_A = static_cast<ElementA*>(params.ptr_A);
     ElementB* ptr_B = static_cast<ElementB*>(params.ptr_B);
@@ -402,7 +400,7 @@ struct GemmWithEpilogueVisitor {
     cutlass::MatrixCoord tb_offset_B{offset_k, threadblock_tile_offset.n() * Mma::Shape::kN};
 
     // Compute position within threadblock
-    int32_t thread_idx = threadIdx.x;
+    int thread_idx = threadIdx.x;
 
     // Construct iterators to A and B operands
     typename Mma::IteratorA iterator_A(params.params_A, ptr_A, {params.problem_size.m(), problem_size_k}, thread_idx,
@@ -413,9 +411,9 @@ struct GemmWithEpilogueVisitor {
 
     // Broadcast the warp_id computed by lane 0 to ensure dependent code
     // is compiled as warp-uniform.
-    int32_t warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
+    int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
 
-    int32_t lane_idx = threadIdx.x % 32;
+    int lane_idx = threadIdx.x % 32;
 
     //
     // Main loop
@@ -429,7 +427,7 @@ struct GemmWithEpilogueVisitor {
     accumulators.clear();
 
     // Compute threadblock-scoped matrix multiply-add
-    int32_t gemm_k_iterations = (problem_size_k - offset_k + Mma::Shape::kK - 1) / Mma::Shape::kK;
+    int gemm_k_iterations = (problem_size_k - offset_k + Mma::Shape::kK - 1) / Mma::Shape::kK;
 
     // Compute threadblock-scoped matrix multiply-add
     mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators);
@@ -444,7 +442,7 @@ struct GemmWithEpilogueVisitor {
     MatrixCoord threadblock_offset(threadblock_tile_offset.m() * Mma::Shape::kM,
                                    threadblock_tile_offset.n() * Mma::Shape::kN);
 
-    int32_t block_idx = threadblock_tile_offset.m() + threadblock_tile_offset.n() * params.grid_tiled_shape.m();
+    int block_idx = threadblock_tile_offset.m() + threadblock_tile_offset.n() * params.grid_tiled_shape.m();
 
     //
     // Construct the epilogue visitor
@@ -467,6 +465,43 @@ struct GemmWithEpilogueVisitor {
 
     // Execute the epilogue operator to update the destination tensor.
     epilogue(epilogue_visitor, accumulators);
+  }
+
+  template <typename CompilationArch>
+  CUTLASS_DEVICE void run_kernel(Params const& params, SharedStorage& shared_storage) {
+    if constexpr (platform::is_same<ArchTag, CompilationArch>::value) {
+      run_kernel_(params, shared_storage);
+    } else {
+      CUTLASS_NOT_IMPLEMENTED();
+    }
+  }
+
+  /*
+      To improve compilation speed, we do not compile the device operator if the CUDA_ARCH does not correspond
+      to the ArchTag of the cutlass kernel operator.
+    */
+  /// Executes one GEMM
+  CUTLASS_DEVICE
+  void operator()(Params const& params, SharedStorage& shared_storage) {
+#if defined(__CUDA_ARCH__)
+#  if (__CUDA_ARCH__ >= 700) && (__CUDA_ARCH__ < 720)
+    run_kernel<arch::Sm70>(params, shared_storage);
+#  elif (__CUDA_ARCH__ >= 720) && (__CUDA_ARCH__ < 750)
+    run_kernel<arch::Sm72>(params, shared_storage);
+#  elif (__CUDA_ARCH__ >= 750) && (__CUDA_ARCH__ < 800)
+    run_kernel<arch::Sm75>(params, shared_storage);
+#  elif (__CUDA_ARCH__ >= 800) && (__CUDA_ARCH__ < 900)
+    run_kernel<arch::Sm80>(params, shared_storage);
+#  elif (__CUDA_ARCH__ >= 900)
+    // TODO - replace with CUTLASS_NOT_IMPLEMENTED() and upgrade to 3.x kernels.
+    run_kernel<arch::Sm80>(params, shared_storage);
+#  else
+    static_assert(false,
+                  "Invalid architecture being compiled. Only Volta+ supported in weight-only quantization kernels.");
+#  endif
+#else
+    CUTLASS_NOT_IMPLEMENTED();
+#endif
   }
 };
 

@@ -3,7 +3,6 @@
 ==============================================================================*/
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/fpA_intB_gemm/fpA_intB_gemm_template.h"
-#include "csrc/kernels/nvidia/asymmetric_gemm/weightOnlyBatchedGemv/kernelLauncher.h"
 
 namespace llm_kernels {
 namespace nvidia {
@@ -27,11 +26,11 @@ struct WeightTypeSelector<INT8> {
 // SplitKStyle: only supports SPLIT_K_SERIAL
 // split_k_factor: minimum is 2, maximum is 7
 // stages: in Group and AMPERE GPU, minimum value is 2, maximum value is 4
-bool IsConfigValid(tkc::CutlassGemmConfig& config, size_t k) {
+bool IsConfigValid(llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig& config, size_t k) {
   if (config.stages >= 5) {
     return false;
   }
-  if (config.split_k_style != tkc::SplitKStyle::NO_SPLIT_K) {
+  if (config.split_k_style != llm_kernels::nvidia::cutlass_extensions::SplitKStyle::NO_SPLIT_K) {
     int k_size = (k + config.split_k_factor - 1) / config.split_k_factor;
     if (k_size % 64) {
       return false;
@@ -46,7 +45,7 @@ void FpAIntBGroupCutlassGemmWrapper<T, WT>::GetWorkspaceSize(size_t m, size_t n,
     using weight_type = typename WeightTypeSelector<WT>::type;
     auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
         T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
-    ws_bytes = gemm->GetWorkspaceSize(m, n, k);
+    ws_bytes = gemm->getWorkspaceSize(m, n, k);
   }
 }
 
@@ -59,20 +58,20 @@ void FpAIntBGroupCutlassGemmWrapper<T, WT>::Gemm(void* output, const void* input
     if (zeros == nullptr) {
       auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
           T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
-      gemm->Gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
+      gemm->gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
                 reinterpret_cast<const T*>(scales),
                 nullptr,  // no zeros
                 nullptr,  // no bias
-                reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->GetConfigs()[config_index],
-                reinterpret_cast<char*>(ws), gemm->GetWorkspaceSize(m, n, k), stream);
+                reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->getConfigs()[config_index],
+                reinterpret_cast<char*>(ws), gemm->getWorkspaceSize(m, n, k), stream);
     } else {
       auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
           T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
-      gemm->Gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
+      gemm->gemm(reinterpret_cast<const T*>(input), reinterpret_cast<const weight_type*>(weight),
                 reinterpret_cast<const T*>(scales), reinterpret_cast<const T*>(zeros),
                 nullptr,  // no bias
-                reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->GetConfigs()[config_index],
-                reinterpret_cast<char*>(ws), gemm->GetWorkspaceSize(m, n, k), stream);
+                reinterpret_cast<T*>(output), m, n, k, groupsize, gemm->getConfigs()[config_index],
+                reinterpret_cast<char*>(ws), gemm->getWorkspaceSize(m, n, k), stream);
     }
   }
 }
@@ -90,11 +89,11 @@ size_t FpAIntBGroupCutlassGemmWrapper<T, WT>::GetBestConfigIndex(size_t warmup, 
     if (zeros == nullptr) {
       auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
           T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
-      configs = gemm->GetConfigs();
+      configs = gemm->getConfigs();
     } else {
       auto gemm = std::make_shared<llm_kernels::nvidia::CutlassFpAIntBGemmRunner<
           T, weight_type, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
-      configs = gemm->GetConfigs();
+      configs = gemm->getConfigs();
     }
 
     cudaEvent_t begin, end;
@@ -150,54 +149,6 @@ template class FpAIntBGroupCutlassGemmWrapper<half, INT8>;
 #ifdef ENABLE_BF16
 template class FpAIntBGroupCutlassGemmWrapper<__nv_bfloat16, INT4>;
 template class FpAIntBGroupCutlassGemmWrapper<__nv_bfloat16, INT8>;
-#endif
-
-template <typename T, WeightType WT>
-FpAIntBGroupCudaGemmWrapper<T, WT>::FpAIntBGroupCudaGemmWrapper() {
-  arch = llm_kernels::utils::GetSMVersion();
-}
-
-template <typename T, WeightType WT>
-bool FpAIntBGroupCudaGemmWrapper<T, WT>::IsSupport() {
-  if constexpr (WT == WeightType::INT4 && std::is_same_v<T, half>) {
-    return llm_kernels::nvidia::weight_only::is_supported(
-        arch, llm_kernels::nvidia::weight_only::KernelType::FP16Int4Groupwise);
-  } else {
-    return false;
-  }
-}
-
-template <typename T, WeightType WT>
-void FpAIntBGroupCudaGemmWrapper<T, WT>::Gemm(void* output, const void* input, const void* weight, const void* scales,
-                                              const void* zeros, size_t m, size_t n, size_t k, size_t groupsize,
-                                              cudaStream_t stream) {
-  if constexpr (WT == WeightType::INT4 && std::is_same_v<T, half>) {
-    llm_kernels::nvidia::weight_only::Params params{reinterpret_cast<const void*>(input),
-                                                    nullptr,
-                                                    reinterpret_cast<const void*>(weight),
-                                                    reinterpret_cast<const void*>(scales),
-                                                    reinterpret_cast<const void*>(zeros),
-                                                    nullptr,  // no bias
-                                                    reinterpret_cast<void*>(output),
-                                                    1.0f,
-                                                    static_cast<int>(m),
-                                                    static_cast<int>(n),
-                                                    static_cast<int>(k),
-                                                    static_cast<int>(groupsize),
-                                                    weight_only::KernelType::FP16Int4Groupwise};
-    llm_kernels::nvidia::weight_only::kernel_launcher(arch, params, stream);
-  }
-}
-
-template class FpAIntBGroupCudaGemmWrapper<float, INT4>;
-template class FpAIntBGroupCudaGemmWrapper<float, INT8>;
-
-template class FpAIntBGroupCudaGemmWrapper<half, INT4>;
-template class FpAIntBGroupCudaGemmWrapper<half, INT8>;
-
-#ifdef ENABLE_BF16
-template class FpAIntBGroupCudaGemmWrapper<__nv_bfloat16, INT4>;
-template class FpAIntBGroupCudaGemmWrapper<__nv_bfloat16, INT8>;
 #endif
 
 }  // namespace nvidia

@@ -15,19 +15,14 @@
  * limitations under the License.
  */
 
-#pragma once
-
 #ifndef _WIN32
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wstrict-aliasing"
 #endif  // #ifndef _WIN32
 
-#include "cutlass/gemm/kernel/default_gemm.h"
-
-#include "csrc/utils/nvidia/cuda_utils.h"
-
 #include "csrc/kernels/nvidia/cutlass_extensions/compute_occupancy.h"
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm/device/gemm_universal_base_compat.h"
+#include "cutlass/gemm/kernel/default_gemm.h"
 
 #include "csrc/kernels/nvidia/cutlass_extensions/epilogue_helpers.h"
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm/kernel/default_fpA_intB_traits.h"
@@ -39,74 +34,69 @@
 #  pragma GCC diagnostic pop
 #endif  // #ifndef _WIN32
 
-#include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_heuristic.h"
-#include "csrc/kernels/nvidia/asymmetric_gemm/fpA_intB_gemm/fpA_intB_gemm.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
+
+#include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_heuristic.h"
+#include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_type_conversion.h"
+#include "csrc/kernels/nvidia/asymmetric_gemm/fpA_intB_gemm/fpA_intB_gemm.h"
+#include "csrc/kernels/nvidia/asymmetric_gemm/fpA_intB_gemm/fpA_intB_gemm_template_sm90.h"
 
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
 namespace nvidia {
 
-template <typename T, typename WeightType, typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag,
-          typename ThreadblockShape, typename WarpShape, int32_t Stages>
-void generic_mixed_gemm_kernelLauncher(const T* A, const WeightType* B, const T* weight_scales,
-                                       const T* weight_zero_points, const T* biases, T* C, int32_t m, int32_t n,
-                                       int32_t k, const int32_t group_size,
-                                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
-                                       char* workspace, size_t workspace_bytes, cudaStream_t stream,
-                                       int32_t* occupancy = nullptr) {
+template <typename ActivationType, typename WeightType, typename ScaleZeroType, typename BiasType, typename OutputType,
+          typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag, typename ThreadblockShape,
+          typename WarpShape, int Stages>
+void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const* B, ScaleZeroType const* weight_scales,
+                                       ScaleZeroType const* weight_zero_points, BiasType const* biases,
+                                       float const alpha, OutputType* C, int m, int n, int k, int const group_size,
+                                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace, size_t workspace_bytes,
+                                       cudaStream_t stream, int* occupancy = nullptr) {
+
 #ifdef ENABLE_BF16
-  static_assert(cutlass::platform::is_same<T, __nv_bfloat16>::value || cutlass::platform::is_same<T, half>::value ||
-                    cutlass::platform::is_same<T, float>::value,
-                "Specialized for bfloat16, half, float");
+  static_assert(
+#  ifdef ENABLE_FP8
+      cutlass::platform::is_same<ActivationType, __nv_fp8_e4m3>::value ||
+#  endif
+          cutlass::platform::is_same<ActivationType, __nv_bfloat16>::value ||
+          cutlass::platform::is_same<ActivationType, half>::value ||
+          cutlass::platform::is_same<ActivationType, float>::value,
+      "Specialized for bfloat16, half, float");
 #else
-  static_assert(cutlass::platform::is_same<T, half>::value || cutlass::platform::is_same<T, float>::value,
+  static_assert(cutlass::platform::is_same<ActivationType, half>::value ||
+                    cutlass::platform::is_same<ActivationType, float>::value,
                 "Specialized for half, float");
 #endif
 
-  static_assert(cutlass::platform::is_same<T, WeightType>::value ||
+  static_assert(cutlass::platform::is_same<ActivationType, WeightType>::value ||
                     cutlass::platform::is_same<WeightType, uint8_t>::value ||
                     cutlass::platform::is_same<WeightType, cutlass::uint4b_t>::value,
                 "");
 
   // The cutlass type for the input elements. This is needed to convert to cutlass::half_t if necessary.
-  using ElementType_ =
-      typename cutlass::platform::conditional<cutlass::platform::is_same<T, half>::value, cutlass::half_t, T>::type;
-#ifdef ENABLE_BF16
-  using ElementType =
-      typename cutlass::platform::conditional<cutlass::platform::is_same<ElementType_, __nv_bfloat16>::value,
-                                              cutlass::bfloat16_t, ElementType_>::type;
-#else
-  using ElementType = ElementType_;
-#endif
-
-  using CutlassWeightType_ =
-      typename cutlass::platform::conditional<cutlass::platform::is_same<WeightType, half>::value, cutlass::half_t,
-                                              WeightType>::type;
-#ifdef ENABLE_BF16
-  using CutlassWeightType =
-      typename cutlass::platform::conditional<cutlass::platform::is_same<CutlassWeightType_, __nv_bfloat16>::value,
-                                              cutlass::bfloat16_t, CutlassWeightType_>::type;
-#else
-  using CutlassWeightType = CutlassWeightType_;
-#endif
+  using CutlassActivationType = typename TllmToCutlassTypeAdapter<ActivationType>::type;
+  using CutlassWeightType = typename TllmToCutlassTypeAdapter<WeightType>::type;
+  using CutlassScaleZeroType = typename TllmToCutlassTypeAdapter<ScaleZeroType>::type;
+  using CutlassBiasType = typename TllmToCutlassTypeAdapter<BiasType>::type;
+  using CutlassOutputType = typename TllmToCutlassTypeAdapter<OutputType>::type;
 
   // We need separate config for each architecture since we will target different tensorcore instructions. For float,
   // we do not target TCs.
-  using MixedGemmArchTraits = cutlass::gemm::kernel::MixedGemmArchTraits<ElementType, CutlassWeightType, arch>;
+  using MixedGemmArchTraits =
+      cutlass::gemm::kernel::MixedGemmArchTraits<CutlassActivationType, CutlassWeightType, arch>;
   using ElementAccumulator = typename MixedGemmArchTraits::AccType;
 
-  using EpilogueOp =
-      typename llm_kernels::nvidia::cutlass_extensions::Epilogue<ElementType, MixedGemmArchTraits::ElementsPerAccessC,
-                                                                 ElementAccumulator, EpilogueTag>::Op;
+  constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<CutlassOutputType>::value;
+  using EpilogueOp = typename llm_kernels::nvidia::cutlass_extensions::Epilogue<CutlassOutputType, ElementsPerAccessC, ElementAccumulator, EpilogueTag>::Op;
 
   using Operator = typename MixedGemmArchTraits::Operator;
   using TaggedOperator = typename cutlass::arch::TagOperator<Operator, QuantOp>::TaggedOperator;
 
   using GemmKernel_ = typename cutlass::gemm::kernel::DefaultGemm<
-      ElementType, cutlass::layout::RowMajor, MixedGemmArchTraits::ElementsPerAccessA, CutlassWeightType,
-      typename MixedGemmArchTraits::LayoutB, MixedGemmArchTraits::ElementsPerAccessB, ElementType,
+      CutlassActivationType, cutlass::layout::RowMajor, MixedGemmArchTraits::ElementsPerAccessA, CutlassWeightType,
+      typename MixedGemmArchTraits::LayoutB, MixedGemmArchTraits::ElementsPerAccessB, CutlassOutputType,
       cutlass::layout::RowMajor, ElementAccumulator, cutlass::arch::OpClassTensorOp, arch, ThreadblockShape, WarpShape,
       typename MixedGemmArchTraits::InstructionShape, EpilogueOp,
       typename cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>, Stages, true, TaggedOperator>::GemmKernel;
@@ -117,22 +107,26 @@ void generic_mixed_gemm_kernelLauncher(const T* A, const WeightType* B, const T*
                                                         GemmKernel_::kSplitKSerial>;
 
   if (occupancy != nullptr) {
-    *occupancy = llm_kernels::nvidia::cutlass_extensions::ComputeOccupancyForKernel<GemmKernel>();
+    *occupancy = llm_kernels::nvidia::cutlass_extensions::compute_occupancy_for_kernel<GemmKernel>();
     return;
   }
 
   using Gemm = cutlass::gemm::device::GemmUniversalBaseCompat<GemmKernel>;
 
-  const int32_t ldb =
-      cutlass::platform::is_same<cutlass::layout::RowMajor, typename MixedGemmArchTraits::LayoutB>::value
-          ? n
-          : k * GemmKernel::kInterleave;
+  int const ldb = cutlass::platform::is_same<cutlass::layout::RowMajor, typename MixedGemmArchTraits::LayoutB>::value
+                      ? n
+                      : k * GemmKernel::kInterleave;
 
   if (weight_scales == nullptr) {
     throw std::runtime_error("Weight scales must always be set to a non-null value.");
   }
 
-  if constexpr (cutlass::IsFinegrained(QuantOp)) {
+  if constexpr (cutlass::isFinegrained(QuantOp)) {
+    if constexpr (cutlass::platform::is_same<CutlassActivationType, float_e4m3_t>::value) {
+      if (group_size != 128) {
+        throw std::runtime_error("Only group size 128 supported for fine grained W4A(fp)8 kernels.");
+      }
+    }
     if (group_size != 64 && group_size != 128) {
       throw std::runtime_error("Only group size 64 and 128 supported for fine grained kernels.");
     }
@@ -156,15 +150,16 @@ void generic_mixed_gemm_kernelLauncher(const T* A, const WeightType* B, const T*
     }
   }
 
-  const int32_t ld_scale_zero = cutlass::IsFinegrained(QuantOp) ? n : 0;
+  int const ld_scale_zero = cutlass::isFinegrained(QuantOp) ? n : 0;
   ElementAccumulator output_op_beta = (biases == nullptr) ? ElementAccumulator(0.f) : ElementAccumulator(1.f);
-  typename Gemm::Arguments args({m, n, k}, group_size, {reinterpret_cast<ElementType*>(const_cast<T*>(A)), k},
-                                {reinterpret_cast<CutlassWeightType*>(const_cast<WeightType*>(B)), ldb},
-                                {reinterpret_cast<ElementType*>(const_cast<T*>(weight_scales)), ld_scale_zero},
-                                {reinterpret_cast<ElementType*>(const_cast<T*>(weight_zero_points)), ld_scale_zero},
-                                {reinterpret_cast<ElementType*>(const_cast<T*>(biases)), 0},
-                                {reinterpret_cast<ElementType*>(C), n}, gemm_config.split_k_factor,
-                                {ElementAccumulator(1.f), output_op_beta});
+  typename Gemm::Arguments args(
+      {m, n, k}, group_size, {reinterpret_cast<CutlassActivationType*>(const_cast<ActivationType*>(A)), k},
+      {reinterpret_cast<CutlassWeightType*>(const_cast<WeightType*>(B)), ldb},
+      {reinterpret_cast<CutlassScaleZeroType*>(const_cast<ScaleZeroType*>(weight_scales)), ld_scale_zero},
+      {reinterpret_cast<CutlassScaleZeroType*>(const_cast<ScaleZeroType*>(weight_zero_points)), ld_scale_zero},
+      {reinterpret_cast<CutlassBiasType*>(const_cast<BiasType*>(biases)), 0},
+      {reinterpret_cast<CutlassOutputType*>(C), n}, gemm_config.split_k_factor,
+      {ElementAccumulator(alpha), output_op_beta});
 
   // This assertion is enabled because because for the column interleaved layout, K MUST be a multiple of
   // threadblockK. The reason for this is that the default pitchlinear iterators are used to handle walking over the
@@ -177,78 +172,92 @@ void generic_mixed_gemm_kernelLauncher(const T* A, const WeightType* B, const T*
 
   Gemm gemm;
   if (gemm.get_workspace_size(args) > workspace_bytes) {
+    std::runtime_error("Requested split-k but workspace size insufficient. Falling back to non-split-k implementation.");
     // If requested split-k factor will require more workspace bytes, revert to standard gemm.
     args.batch_count = 1;
   }
 
   auto can_implement = gemm.can_implement(args);
   if (can_implement != cutlass::Status::kSuccess) {
-    std::string err_msg = "fpA_intB cutlass kernel will fail for params. Error: " +
-                          std::string(cutlass::cutlassGetStatusString(can_implement));
+    std::string err_msg =
+        "fpA_intB cutlass kernel will fail for params. Error: " + std::string(cutlassGetStatusString(can_implement));
     throw std::runtime_error("[fpA_intB Runner] " + err_msg);
   }
 
   auto init_status = gemm.initialize(args, workspace, stream);
   if (init_status != cutlass::Status::kSuccess) {
-    std::string err_msg = "Failed to initialize cutlass fpA_intB gemm. Error: " +
-                          std::string(cutlass::cutlassGetStatusString(init_status));
+    std::string err_msg =
+        "Failed to initialize cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(init_status));
     throw std::runtime_error("[fpA_intB Runner] " + err_msg);
   }
 
   auto run_status = gemm.run(stream);
   if (run_status != cutlass::Status::kSuccess) {
     std::string err_msg =
-        "Failed to run cutlass fpA_intB gemm. Error: " + std::string(cutlass::cutlassGetStatusString(run_status));
+        "Failed to run cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(run_status));
     throw std::runtime_error("[fpA_intB Runner] " + err_msg);
   }
 }
 
 // This filters out invalid template combinations that we DON'T want instantiated in CUTLASS. For example,
 // instantiating SM=75, Stages=3 is invalid so we would need to filter that out. Fine grained
-// quanitzation is only supported on Ampere+ GPUs.
-template <typename T, typename WeightType, typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag,
-          typename ThreadblockShape, typename WarpShape, int32_t Stages>
-void filter_and_run_mixed_gemm(const T* A, const WeightType* B, const T* weight_scales, const T* weight_zero_points,
-                               const T* biases, T* C, int32_t m, int32_t n, int32_t k, const int32_t group_size,
-                               llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace,
-                               size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr) {
-  if constexpr (cutlass::IsFinegrained(QuantOp) && arch::kMinComputeCapability < 80) {
-    // Finegrained only supported on Ampere
-    std::string err_msg = "Cutlass fpA_intB gemm not implemented for arch " +
-                          std::to_string(arch::kMinComputeCapability) + " with finegraind weight-only quantization.";
-    throw std::runtime_error("[filter_and_run_mixed_gemm] " + err_msg);
-  } else if constexpr (Stages > 2 && arch::kMinComputeCapability < 80) {
+// quanitzation is only supported on Ampere+ GPUs. FP8 GEMM is only supported on Ada+ GPUs.
+template <typename ActivationType, typename WeightType, typename ScaleZeroType, typename BiasType, typename OutputType,
+          typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag, typename ThreadblockShape,
+          typename WarpShape, int Stages>
+void filter_and_run_mixed_gemm(ActivationType const* A, WeightType const* B, ScaleZeroType const* weight_scales,
+                               ScaleZeroType const* weight_zero_points, BiasType const* biases, float const alpha,
+                               OutputType* C, int m, int n, int k, int const group_size,
+                               llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace, size_t workspace_bytes,
+                               cudaStream_t stream, int* occupancy = nullptr) {
+  if constexpr (Stages > 2 && arch::kMinComputeCapability < 80) {
     // Multistage only supported on Ampere
     std::string err_msg = "Cutlass fpA_intB gemm not supported for arch " +
                           std::to_string(arch::kMinComputeCapability) + " with stages set to " + std::to_string(Stages);
     throw std::runtime_error("[filter_and_run_mixed_gemm] " + err_msg);
+  } else if constexpr (Stages == 2 && arch::kMinComputeCapability >= 89) {
+    // Multistage only supported on Ampere
+    std::string err_msg = "Cutlass fpA_intB gemm not supported for arch " +
+                          std::to_string(arch::kMinComputeCapability) + " with stages set to " + std::to_string(Stages);
+    throw std::runtime_error("[filter_and_run_mixed_gemm] " + err_msg);
+  } else if constexpr (cutlass::platform::is_same<ActivationType, __nv_fp8_e4m3>::value &&
+                       arch::kMinComputeCapability < 89) {
+    // FP8 activation type only supported on Ada+ GPUs
+    std::string err_msg = "Cutlass fpA_intB gemm not supported for arch " +
+                          std::to_string(arch::kMinComputeCapability) + " with activation type set to FP8";
+    throw std::runtime_error("[filter_and_run_mixed_gemm] " + err_msg);
   } else {
-    generic_mixed_gemm_kernelLauncher<T, WeightType, arch, QuantOp, EpilogueTag, ThreadblockShape, WarpShape, Stages>(
-        A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, gemm_config, workspace,
+    generic_mixed_gemm_kernelLauncher<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                                      EpilogueTag, ThreadblockShape, WarpShape, Stages>(
+        A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
         workspace_bytes, stream, occupancy);
   }
 }
 
-template <typename T, typename WeightType, typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag,
-          typename ThreadblockShape, typename WarpShape>
-void dispatch_gemm_config(const T* A, const WeightType* B, const T* weight_scales, const T* weight_zero_points,
-                          const T* biases, T* C, int32_t m, int32_t n, int32_t k, const int32_t group_size,
-                          llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace,
-                          size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr) {
+template <typename ActivationType, typename WeightType, typename ScaleZeroType, typename BiasType, typename OutputType,
+          typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag, typename ThreadblockShape,
+          typename WarpShape>
+void dispatch_gemm_config(ActivationType const* A, WeightType const* B, ScaleZeroType const* weight_scales,
+                          ScaleZeroType const* weight_zero_points, BiasType const* biases, float const alpha,
+                          OutputType* C, int m, int n, int k, int const group_size, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
+                          char* workspace, size_t workspace_bytes, cudaStream_t stream, int* occupancy = nullptr) {
   switch (gemm_config.stages) {
     case 2:
-      filter_and_run_mixed_gemm<T, WeightType, arch, QuantOp, EpilogueTag, ThreadblockShape, WarpShape, 2>(
-          A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, gemm_config, workspace,
+      filter_and_run_mixed_gemm<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                                EpilogueTag, ThreadblockShape, WarpShape, 2>(
+          A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
           workspace_bytes, stream, occupancy);
       break;
     case 3:
-      filter_and_run_mixed_gemm<T, WeightType, arch, QuantOp, EpilogueTag, ThreadblockShape, WarpShape, 3>(
-          A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, gemm_config, workspace,
+      filter_and_run_mixed_gemm<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                                EpilogueTag, ThreadblockShape, WarpShape, 3>(
+          A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
           workspace_bytes, stream, occupancy);
       break;
     case 4:
-      filter_and_run_mixed_gemm<T, WeightType, arch, QuantOp, EpilogueTag, ThreadblockShape, WarpShape, 4>(
-          A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, gemm_config, workspace,
+      filter_and_run_mixed_gemm<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                                EpilogueTag, ThreadblockShape, WarpShape, 4>(
+          A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
           workspace_bytes, stream, occupancy);
       break;
     default:
@@ -258,137 +267,240 @@ void dispatch_gemm_config(const T* A, const WeightType* B, const T* weight_scale
   }
 }
 
-template <typename T, typename WeightType, typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag>
-void dispatch_gemm_to_cutlass(const T* A, const WeightType* B, const T* weight_scales, const T* weight_zero_points,
-                              const T* biases, T* C, int32_t m, int32_t n, int32_t k, const int32_t group_size,
-                              char* workspace, size_t workspace_bytes,
-                              llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
-                              cudaStream_t stream, int32_t* occupancy = nullptr) {
-  // Note that SIMT configs are omitted here since they are not supported for fpA_intB.
-  // We also only instantiate configs here where threadblockShapeM == warpShapeM since those usually perform the best
-  // for mixed type gemms.
-  switch (gemm_config.tile_config) {
-    case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape32x128x64_WarpShape32x32x64:
-      dispatch_gemm_config<T, WeightType, arch, QuantOp, EpilogueTag, cutlass::gemm::GemmShape<32, 128, 64>,
-                           cutlass::gemm::GemmShape<32, 32, 64>>(A, B, weight_scales, weight_zero_points, biases, C, m,
-                                                                 n, k, group_size, gemm_config, workspace,
-                                                                 workspace_bytes, stream, occupancy);
-      break;
-    case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape64x128x64_WarpShape64x32x64:
-      dispatch_gemm_config<T, WeightType, arch, QuantOp, EpilogueTag, cutlass::gemm::GemmShape<64, 128, 64>,
-                           cutlass::gemm::GemmShape<64, 32, 64>>(A, B, weight_scales, weight_zero_points, biases, C, m,
-                                                                 n, k, group_size, gemm_config, workspace,
-                                                                 workspace_bytes, stream, occupancy);
-      break;
-    case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape128x128x64_WarpShape128x32x64:
-      if (arch::kMinComputeCapability < NVIDIA_TURING_GPU_COMPUTE_CAPABILITY) {
-        throw std::invalid_argument("Invalid config on Volta");
-      } else {
-        dispatch_gemm_config<T, WeightType, arch, QuantOp, EpilogueTag, cutlass::gemm::GemmShape<128, 128, 64>,
-                             cutlass::gemm::GemmShape<128, 32, 64>>(A, B, weight_scales, weight_zero_points, biases, C,
-                                                                    m, n, k, group_size, gemm_config, workspace,
-                                                                    workspace_bytes, stream, occupancy);
-      }
-      break;
-    case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::Undefined:
-      throw std::runtime_error("[fpA_intB][dispatch_gemm_to_cutlass] gemm config undefined.");
-      break;
-    case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::ChooseWithHeuristic:
-      throw std::runtime_error(
-          "[fpA_intB][dispatch_gemm_to_cutlass] gemm config should have already been set by "
-          "heuristic.");
-      break;
-    default:
-      throw std::runtime_error("[fpA_intB][dispatch_gemm_to_cutlass] Config is invalid for mixed type GEMM.");
-      break;
+template <typename T>
+constexpr bool is_fp8() {
+  return std::is_same_v<T, __nv_fp8_e4m3> || std::is_same_v<T, __nv_fp8_e5m2>;
+}
+
+template <typename ActivationType, typename WeightType, typename ScaleZeroType, typename BiasType, typename OutputType,
+          typename arch, cutlass::WeightOnlyQuantOp QuantOp, typename EpilogueTag>
+void dispatch_gemm_to_cutlass(ActivationType const* A, WeightType const* B, ScaleZeroType const* weight_scales,
+                              ScaleZeroType const* weight_zero_points, BiasType const* biases, float const alpha,
+                              OutputType* C, int m, int n, int k, int const group_size, char* workspace,
+                              size_t workspace_bytes, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, cudaStream_t stream,
+                              int* occupancy = nullptr) {
+
+  // Don't instantiate configs that are not supported pre-hopper. Produce a sensible error instead.
+  constexpr bool any_is_fp8 = is_fp8<ActivationType>() || is_fp8<WeightType>() || is_fp8<ScaleZeroType>() ||
+                              is_fp8<BiasType>() || is_fp8<OutputType>();
+
+  constexpr bool all_types_are_the_same = std::is_same_v<ActivationType, ScaleZeroType> &&
+                                          std::is_same_v<ActivationType, BiasType> &&
+                                          std::is_same_v<ActivationType, OutputType>;
+
+  constexpr bool is_valid_pre_hopper = (all_types_are_the_same && !any_is_fp8) || (arch::kMinComputeCapability >= 89);
+
+  if constexpr (is_valid_pre_hopper) {
+    // Note that SIMT configs are omitted here since they are not supported for fpA_intB.
+    // We also only instantiate configs here where threadblockShapeM == warpShapeM since those usually perform the
+    // best for mixed type gemms.
+    constexpr int tile_shape_k = 128 * 8 / cutlass::sizeof_bits<ActivationType>::value;
+    switch (gemm_config.tile_config) {
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape16x128x64_WarpShape16x32x64:
+        KLLM_KERNEL_CHECK_WITH_INFO(arch::kMinComputeCapability >= 75, "Invalid config on Volta");
+        if constexpr (arch::kMinComputeCapability >= 75) {
+          dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                               EpilogueTag, cutlass::gemm::GemmShape<16, 128, tile_shape_k>,
+                               cutlass::gemm::GemmShape<16, 32, tile_shape_k>>(
+              A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
+              workspace_bytes, stream, occupancy);
+        }
+        break;
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape16x256x64_WarpShape16x64x64:
+        KLLM_KERNEL_CHECK_WITH_INFO(arch::kMinComputeCapability >= 75, "Invalid config on Volta");
+        if constexpr (arch::kMinComputeCapability >= 75) {
+          dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                               EpilogueTag, cutlass::gemm::GemmShape<16, 256, tile_shape_k>,
+                               cutlass::gemm::GemmShape<16, 64, tile_shape_k>>(
+              A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
+              workspace_bytes, stream, occupancy);
+        }
+        break;
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape32x128x64_WarpShape32x32x64:
+        dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                             EpilogueTag, cutlass::gemm::GemmShape<32, 128, tile_shape_k>,
+                             cutlass::gemm::GemmShape<32, 32, tile_shape_k>>(
+            A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
+            workspace_bytes, stream, occupancy);
+        break;
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape64x128x64_WarpShape64x32x64:
+        dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                             EpilogueTag, cutlass::gemm::GemmShape<64, 128, tile_shape_k>,
+                             cutlass::gemm::GemmShape<64, 32, tile_shape_k>>(
+            A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
+            workspace_bytes, stream, occupancy);
+        break;
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape128x128x64_WarpShape128x32x64:
+        KLLM_KERNEL_CHECK_WITH_INFO(arch::kMinComputeCapability >= 75, "Invalid config on Volta");
+        if constexpr (arch::kMinComputeCapability >= 75) {
+          dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
+                               EpilogueTag, cutlass::gemm::GemmShape<128, 128, tile_shape_k>,
+                               cutlass::gemm::GemmShape<128, 32, tile_shape_k>>(
+              A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, gemm_config, workspace,
+              workspace_bytes, stream, occupancy);
+        }
+        break;
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::Undefined:
+        throw std::runtime_error("[fpA_intB][dispatch_gemm_to_cutlass] gemm config undefined.");
+        break;
+      case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::ChooseWithHeuristic:
+        throw std::runtime_error(
+            "[fpA_intB][dispatch_gemm_to_cutlass] gemm config should have already been set by "
+            "heuristic.");
+        break;
+      default:
+        throw std::runtime_error(
+            "[fpA_intB][dispatch_gemm_to_cutlass] Config is invalid for mixed type GEMM.");
+        break;
+    }
+  } else {
+    // This is not a limitation in CUTLASS. We just do not need to support this case.
+    std::string err_msg = "The activation type must equal the scale, bias and output types on Ampere and earlier.";
+    throw std::runtime_error("[dispatch_gemm_to_cutlass] " + err_msg);
   }
 }
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
-CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::CutlassFpAIntBGemmRunner() {
-  int32_t device{-1};
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType,
+                         OutputType>::CutlassFpAIntBGemmRunner() {
+  int device{-1};
   CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device));
   sm_ = llm_kernels::utils::GetSMVersion();
   CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&multi_processor_count_, cudaDevAttrMultiProcessorCount, device));
 }
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
-CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::~CutlassFpAIntBGemmRunner() {}
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType,
+                         OutputType>::~CutlassFpAIntBGemmRunner() {
+}
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
 template <typename EpilogueTag>
-void CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::dispatch_to_arch<EpilogueTag>(
-    const T* A, const WeightType* B, const T* weight_scales, const T* weight_zero_points, const T* biases, T* C,
-    int32_t m, int32_t n, int32_t k, const int32_t group_size,
-    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace_ptr,
-    const size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy) {
-  if (sm_ >= NVIDIA_VOLTA_GPU_COMPUTE_CAPABILITY && sm_ < NVIDIA_TURING_GPU_COMPUTE_CAPABILITY) {
-    dispatch_gemm_to_cutlass<T, WeightType, cutlass::arch::Sm70, QuantOp, EpilogueTag>(
-        A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, workspace_ptr, workspace_bytes,
-        gemm_config, stream, occupancy);
-  } else if (sm_ >= NVIDIA_TURING_GPU_COMPUTE_CAPABILITY && sm_ < NVIDIA_AMPERE_GPU_COMPUTE_CAPABILITY) {
-    dispatch_gemm_to_cutlass<T, WeightType, cutlass::arch::Sm75, QuantOp, EpilogueTag>(
-        A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, workspace_ptr, workspace_bytes,
-        gemm_config, stream, occupancy);
-  } else if (sm_ >= NVIDIA_AMPERE_GPU_COMPUTE_CAPABILITY && sm_ <= NVIDIA_HOPPER_GPU_COMPUTE_CAPABILITY) {
-    dispatch_gemm_to_cutlass<T, WeightType, cutlass::arch::Sm80, QuantOp, EpilogueTag>(
-        A, B, weight_scales, weight_zero_points, biases, C, m, n, k, group_size, workspace_ptr, workspace_bytes,
-        gemm_config, stream, occupancy);
+void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType,
+                              OutputType>::dispatch_to_arch<EpilogueTag>(ActivationType const* A, WeightType const* B,
+                                                                         ScaleZeroType const* weight_scales,
+                                                                         ScaleZeroType const* weight_zero_points,
+                                                                         BiasType const* biases, float const alpha,
+                                                                         OutputType* C, int m, int n, int k,
+                                                                         int const group_size,
+                                                                         llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
+                                                                         char* workspace_ptr,
+                                                                         const size_t workspace_bytes,
+                                                                         cudaStream_t stream, int* occupancy) {
+  if (sm_ >= 70 && sm_ < 75) {
+    dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm70,
+                             QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k,
+                                                   group_size, workspace_ptr, workspace_bytes, gemm_config, stream,
+                                                   occupancy);
+  } else if (sm_ >= 75 && sm_ < 80) {
+    dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm75,
+                             QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k,
+                                                   group_size, workspace_ptr, workspace_bytes, gemm_config, stream,
+                                                   occupancy);
+  } else if (sm_ >= 80 && sm_ < 89) {
+    dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm80,
+                             QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k,
+                                                   group_size, workspace_ptr, workspace_bytes, gemm_config, stream,
+                                                   occupancy);
+  } else if (sm_ == 89) {
+#if ENABLE_FP8 && ((__CUDACC_VER_MAJOR__ < 12) || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ < 4))
+    if constexpr (cutlass::platform::is_same<ActivationType, __nv_fp8_e4m3>::value) {
+      throw std::runtime_error(
+          "[CutlassFpAIntBGemmRunner][dispatch_to_arch] INT4xFP8 GEMM for Ada needs CUDA>=12.4");
+    }
+#endif
+    dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm89,
+                             QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k,
+                                                   group_size, workspace_ptr, workspace_bytes, gemm_config, stream,
+                                                   occupancy);
+  } else if (sm_ == 90) {
+    sm90_dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, QuantOp,
+                                  EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k,
+                                               group_size, workspace_ptr, workspace_bytes, gemm_config, stream,
+                                               occupancy);
   } else {
     throw std::runtime_error(
-        "[CutlassFpAIntBGemmRunner][GEMM Dispatch] Arch unsupported for CUTLASS mixed type "
-        "GEMM");
+        "[CutlassFpAIntBGemmRunner][dispatch_to_arch] Arch unsupported for CUTLASS mixed type GEMM");
   }
 }
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
-void CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::Gemm(
-    const void* A, const void* B, const void* weight_scales, const void* weight_zero_points, const void* biases,
-    void* C, int32_t m, int32_t n, int32_t k, const int32_t group_size,
-    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace_ptr,
-    const size_t workspace_bytes, cudaStream_t stream) {
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::gemm(
+    void const* A, void const* B, void const* weight_scales, void const* weight_zero_points, void const* biases,
+    float const alpha, void* C, int m, int n, int k, int const group_size, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig,
+    char* workspace_ptr, const size_t workspace_bytes, cudaStream_t stream) {
   if constexpr ((QuantOp == cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS) ||
                 (QuantOp == cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY)) {
-    dispatch_to_arch<llm_kernels::nvidia::cutlass_extensions::EpilogueOpBias>(
-        (const T*)A, (const WeightType*)B, (const T*)weight_scales, (const T*)weight_zero_points, (const T*)biases,
-        (T*)C, m, n, k, group_size, gemm_config, workspace_ptr, workspace_bytes, stream, nullptr);
+    dispatch_to_arch<llm_kernels::nvidia::cutlass_extensions::EpilogueOpBias>((ActivationType const*)A, (WeightType const*)B,
+                                          (ScaleZeroType const*)weight_scales, (ScaleZeroType const*)weight_zero_points,
+                                          (BiasType const*)biases, alpha, (OutputType*)C, m, n, k, group_size,
+                                          gemmConfig, workspace_ptr, workspace_bytes, stream, nullptr);
   } else {
     throw std::runtime_error("Overload with scale, zero and group size only supported for fine grained bias template.");
   }
 }
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
-void CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::Gemm(
-    const void* A, const void* B, const void* weight_scales, void* C, int32_t m, int32_t n, int32_t k,
-    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace_ptr,
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::gemm(
+    void const* A, void const* B, void const* weight_scales, void const* weight_zero_points, void const* biases,
+    void* C, int m, int n, int k, int const group_size, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace_ptr,
     const size_t workspace_bytes, cudaStream_t stream) {
+  gemm(A, B, weight_scales, weight_zero_points, biases, 1.f, C, m, n, k, group_size, gemmConfig, workspace_ptr,
+       workspace_bytes, stream);
+}
+
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::gemm(
+    void const* A, void const* B, void const* weight_scales, float const alpha, void* C, int m, int n, int k,
+    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace_ptr, const size_t workspace_bytes, cudaStream_t stream) {
+
   if constexpr (QuantOp == cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY) {
-    dispatch_to_arch<llm_kernels::nvidia::cutlass_extensions::EpilogueOpDefault>(
-        (const T*)A, (const WeightType*)B, (const T*)weight_scales, nullptr, nullptr, (T*)C, m, n, k, k, gemm_config,
-        workspace_ptr, workspace_bytes, stream, nullptr);
+    dispatch_to_arch<llm_kernels::nvidia::cutlass_extensions::EpilogueOpBias>((ActivationType const*)A, (WeightType const*)B,
+                                          (ScaleZeroType const*)weight_scales, nullptr, nullptr, alpha, (OutputType*)C,
+                                          m, n, k, k, gemmConfig, workspace_ptr, workspace_bytes, stream, nullptr);
   } else {
     throw std::runtime_error("Overload with scale only (and no group size) only supported for per column scaling.");
   }
 }
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
-std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>
-CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::GetConfigs() const {
-  static constexpr bool is_weight_only = !std::is_same<T, WeightType>::value;
-  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> candidate_configs =
-      GetCandidateConfigs(sm_, is_weight_only, false, false, SPLIT_K_LIMIT);
-  return candidate_configs;
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::gemm(
+    void const* A, void const* B, void const* weight_scales, void* C, int m, int n, int k,
+    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace_ptr, const size_t workspace_bytes, cudaStream_t stream) {
+  gemm(A, B, weight_scales, 1.f, C, m, n, k, gemmConfig, workspace_ptr, workspace_bytes, stream);
 }
 
-template <typename T, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp>
-size_t CutlassFpAIntBGemmRunner<T, WeightType, QuantOp>::GetWorkspaceSize(const int32_t m, const int32_t n,
-                                                                          const int32_t k) {
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>
+CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::getConfigs() const {
+  static constexpr bool is_weight_only = !std::is_same<ActivationType, WeightType>::value;
+  llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam config_type_param =
+      llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam::HOPPER;
+  if (is_weight_only) {
+    config_type_param = static_cast<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam>(
+        config_type_param | llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam::WEIGHT_ONLY);
+  }
+  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> candidateConfigs = get_candidate_configs(sm_, SPLIT_K_LIMIT, config_type_param);
+  return candidateConfigs;
+}
+
+template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuantOp QuantOp, typename ScaleZeroType,
+          typename BiasType, typename OutputType>
+size_t CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType,
+                                OutputType>::getWorkspaceSize(int const m, int const n, int const k) {
   // These are the min tile sizes for each config, which would launch the maximum number of blocks
-  const int32_t max_grid_m = cutlass::ceil_div(m, MIN_M_TILE);
-  const int32_t max_grid_n = cutlass::ceil_div(n, MIN_N_TILE);
+  int const max_grid_m = cutlass::ceil_div(m, MIN_M_TILE);
+  int const max_grid_n = cutlass::ceil_div(n, MIN_N_TILE);
   // We need 4 bytes per block in the worst case. We launch split_k_limit in z dim.
-  constexpr int32_t FPA_INTB_BLOCK_BYTE_NUM = 4;
-  return static_cast<size_t>(max_grid_m * max_grid_n * SPLIT_K_LIMIT * FPA_INTB_BLOCK_BYTE_NUM);
+  return static_cast<size_t>(max_grid_m * max_grid_n * SPLIT_K_LIMIT * 4);
 }
 
 }  // namespace nvidia

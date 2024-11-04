@@ -28,19 +28,5 @@ class FpAIntBGroupCutlassGemmWrapper {
                             size_t groupsize, cudaStream_t stream);
 };
 
-template <typename T, WeightType WT>
-class FpAIntBGroupCudaGemmWrapper {
- public:
-  FpAIntBGroupCudaGemmWrapper();
-
-  bool IsSupport();
-
-  void Gemm(void* output, const void* input, const void* weight, const void* scales, const void* zeros, size_t m,
-            size_t n, size_t k, size_t groupsize, cudaStream_t stream);
-
- private:
-  int arch;
-};
-
 }  // namespace nvidia
 }  // namespace llm_kernels

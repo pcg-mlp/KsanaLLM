@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-#pragma once
-
 #ifndef _WIN32
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wstrict-aliasing"
@@ -25,7 +23,6 @@
 // clang-format off
 #include <cutlass/gemm/device/default_gemm_configuration.h>
 #include <cutlass/gemm/device/gemm.h>
-
 #include <csrc/kernels/nvidia/cutlass_extensions/gemm/device/gemm_universal_base_compat.h>
 #include <cutlass/gemm/kernel/default_gemm.h>
 #include <cutlass/epilogue/threadblock/epilogue_with_visitor.h>
@@ -47,8 +44,9 @@
 #include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_heuristic.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/int8_gemm/int8_gemm.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
+// TODO(winminkong): add decoderMaskedMultiheadAttention Utils
+// #include "csrc/kernels/nvidia/decoderMaskedMultiheadAttentionUtils.h"
 
-// NOTE(karlluo): prevent conflict with cutlass we import cutlass and its extension first
 #include <chrono>
 #include <sstream>
 
@@ -57,12 +55,12 @@ using namespace llm_kernels::utils;
 namespace llm_kernels {
 namespace nvidia {
 
-template <typename T, typename arch, typename ThreadblockShape, typename WarpShape, int32_t Stages>
-void GenericInt8GemmKernelLauncher(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                                   const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n,
-                                   int32_t k, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
-                                   char* workspace, size_t workspace_bytes, cudaStream_t stream,
-                                   int32_t* occupancy = nullptr) {
+template <typename T, typename arch, typename ThreadblockShape, typename WarpShape, int Stages>
+void genericInt8GemmKernelLauncher(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                                   float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k,
+                                   llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig,
+                                   char* workspace, size_t workspaceBytes, cudaStream_t stream,
+                                   int* occupancy = nullptr) {
   using ElementInput = int8_t;
 
   using ElementOutput_ =
@@ -117,245 +115,244 @@ void GenericInt8GemmKernelLauncher(const int8_t* A, const int8_t* B, llm_kernels
       cutlass::gemm::kernel::GemmWithEpilogueVisitor<typename GemmKernel_::Mma, Epilogue, ThreadblockSwizzle>;
 
   if (occupancy != nullptr) {
-    *occupancy = llm_kernels::nvidia::cutlass_extensions::ComputeOccupancyForKernel<GemmKernel>();
+    *occupancy =
+        llm_kernels::nvidia::cutlass_extensions::compute_occupancy_for_kernel<GemmKernel>();
     return;
   }
 
   using Gemm = cutlass::gemm::device::GemmUniversalBaseCompat<GemmKernel>;
 
-  typename EpilogueOp::Params linear_scaling_params;  // TODO: right now it's unused (scaling is done in
-                                                      // visitor, no activation needed)
+  typename EpilogueOp::Params linearScalingParams;  // TODO: right now it's unused (scaling is done in
+                                                    // visitor, no activation needed)
   typename Gemm::Arguments args{cutlass::gemm::GemmUniversalMode::kBatched,
                                 {m, n, k},
                                 1,
                                 {reinterpret_cast<ElementInput*>(const_cast<ElementInput*>(A)), k},
                                 {reinterpret_cast<ElementInput*>(const_cast<ElementInput*>(B)), k},
-                                quant_option,
-                                {reinterpret_cast<ElementCompute*>(const_cast<float*>(alpha_col)), 0},
-                                {reinterpret_cast<ElementCompute*>(const_cast<float*>(alpha_row)), 0},
+                                quantOption,
+                                {reinterpret_cast<ElementCompute*>(const_cast<float*>(alphaCol)), 0},
+                                {reinterpret_cast<ElementCompute*>(const_cast<float*>(alphaRow)), 0},
                                 {nullptr, 0},
                                 {reinterpret_cast<ElementOutput*>(C), n},
                                 0,
                                 0,
-                                typename EpilogueVisitor::Arguments(linear_scaling_params, 0, 0, 0)};
+                                typename EpilogueVisitor::Arguments(linearScalingParams, 0, 0, 0)};
 
   Gemm gemm;
   // TODO: handle that
-  if (gemm.get_workspace_size(args) > workspace_bytes) {
+  if (gemm.get_workspace_size(args) > workspaceBytes) {
+    throw std::runtime_error(
+        "Requested split-k but workspace size insufficient. Falling back to non-split-k implementation.");
     // If requested split-k factor will require more workspace bytes, revert to standard gemm.
     args.batch_count = 1;
   }
 
   auto can_implement = gemm.can_implement(args);
   if (can_implement != cutlass::Status::kSuccess) {
-    std::string err_msg = "int8gemm cutlass kernel will fail for params. Error: " +
-                          std::string(cutlass::cutlassGetStatusString(can_implement));
-    throw std::runtime_error("[int8gemm Runner] " + err_msg);
+    std::string errMsg =
+        "int8gemm cutlass kernel will fail for params. Error: " + std::string(cutlassGetStatusString(can_implement));
+    throw std::runtime_error("[TensorRT-LLM Error][int8gemm Runner] " + errMsg);
   }
 
-  auto init_status = gemm.initialize(args, workspace, stream);
-  if (init_status != cutlass::Status::kSuccess) {
-    std::string err_msg =
-        "Failed to initialize cutlass int8 gemm. Error: " + std::string(cutlass::cutlassGetStatusString(init_status));
-    throw std::runtime_error("[int8gemm Runner] " + err_msg);
+  auto initStatus = gemm.initialize(args, workspace, stream);
+  if (initStatus != cutlass::Status::kSuccess) {
+    std::string errMsg =
+        "Failed to initialize cutlass int8 gemm. Error: " + std::string(cutlassGetStatusString(initStatus));
+    throw std::runtime_error("[TensorRT-LLM Error][int8gemm Runner] " + errMsg);
   }
 
-  auto run_status = gemm.run(stream);
-  if (run_status != cutlass::Status::kSuccess) {
-    std::string err_msg =
-        "Failed to run cutlass int8 gemm. Error: " + std::string(cutlass::cutlassGetStatusString(run_status));
-    throw std::runtime_error("[int8gemm Runner] " + err_msg);
+  auto runStatus = gemm.run(stream);
+  if (runStatus != cutlass::Status::kSuccess) {
+    std::string errMsg = "Failed to run cutlass int8 gemm. Error: " + std::string(cutlassGetStatusString(runStatus));
+    throw std::runtime_error("[TensorRT-LLM Error][int8gemm Runner] " + errMsg);
   }
 }
 
-template <typename T, typename arch, typename ThreadblockShape, typename WarpShape, int32_t Stages,
-          typename Enable = void>
+template <typename T, typename arch, typename ThreadblockShape, typename WarpShape, int Stages, typename Enable = void>
 struct dispatchStages {
-  static void Dispatch(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                       const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace,
-                       size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr) {
-    std::string err_msg = "Cutlass int8 gemm. Not instantiates for arch " +
-                          std::to_string(arch::kMinComputeCapability) + " with stages set to " + std::to_string(Stages);
-    throw std::runtime_error("[dispatchStages::dispatch] " + err_msg);
+  static void dispatch(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                       float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k,
+                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace,
+                       size_t workspaceBytes, cudaStream_t stream, int* occupancy = nullptr) {
+    std::string errMsg = "Cutlass int8 gemm. Not instantiates for arch " + std::to_string(arch::kMinComputeCapability) +
+                         " with stages set to " + std::to_string(Stages);
+    throw std::runtime_error("[TensorRT-LLM Error][dispatchStages::dispatch] " + errMsg);
   }
 };
 
 template <typename T, typename arch, typename ThreadblockShape, typename WarpShape>
 struct dispatchStages<T, arch, ThreadblockShape, WarpShape, 2> {
-  static void Dispatch(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                       const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace,
-                       size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr) {
-    GenericInt8GemmKernelLauncher<T, arch, ThreadblockShape, WarpShape, 2>(A, B, quant_option, alpha_col, alpha_row, C,
-                                                                           m, n, k, gemm_config, workspace,
-                                                                           workspace_bytes, stream, occupancy);
+  static void dispatch(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                       float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k,
+                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace,
+                       size_t workspaceBytes, cudaStream_t stream, int* occupancy = nullptr) {
+    genericInt8GemmKernelLauncher<T, arch, ThreadblockShape, WarpShape, 2>(
+        A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
   }
 };
 
-template <typename T, typename ThreadblockShape, typename WarpShape, int32_t Stages>
+template <typename T, typename ThreadblockShape, typename WarpShape, int Stages>
 struct dispatchStages<T, cutlass::arch::Sm80, ThreadblockShape, WarpShape, Stages,
                       typename std::enable_if<(Stages > 2)>::type> {
-  static void Dispatch(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                       const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace,
-                       size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr) {
-    GenericInt8GemmKernelLauncher<T, cutlass::arch::Sm80, ThreadblockShape, WarpShape, Stages>(
-        A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-        occupancy);
+  static void dispatch(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                       float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k,
+                       llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace,
+                       size_t workspaceBytes, cudaStream_t stream, int* occupancy = nullptr) {
+    genericInt8GemmKernelLauncher<T, cutlass::arch::Sm80, ThreadblockShape, WarpShape, Stages>(
+        A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
   }
 };
 
 template <typename T, typename arch, typename ThreadblockShape, typename WarpShape>
-void DispatchGemmConfig(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                        const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                        llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, char* workspace,
-                        size_t workspace_bytes, cudaStream_t stream, int32_t* occupancy = nullptr) {
-  switch (gemm_config.stages) {
+void dispatchGemmConfig(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                        float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k,
+                        llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig, char* workspace,
+                        size_t workspaceBytes, cudaStream_t stream, int* occupancy = nullptr) {
+  switch (gemmConfig.stages) {
     case 2:
       using DispatcherStages2 = dispatchStages<T, arch, ThreadblockShape, WarpShape, 2>;
-      DispatcherStages2::Dispatch(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace,
-                                  workspace_bytes, stream, occupancy);
+      DispatcherStages2::dispatch(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace,
+                                  workspaceBytes, stream, occupancy);
       break;
     case 3:
       using DispatcherStages3 = dispatchStages<T, arch, ThreadblockShape, WarpShape, 3>;
-      DispatcherStages3::Dispatch(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace,
-                                  workspace_bytes, stream, occupancy);
+      DispatcherStages3::dispatch(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace,
+                                  workspaceBytes, stream, occupancy);
       break;
     case 4:
       using DispatcherStages4 = dispatchStages<T, arch, ThreadblockShape, WarpShape, 4>;
-      DispatcherStages4::Dispatch(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace,
-                                  workspace_bytes, stream, occupancy);
+      DispatcherStages4::dispatch(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace,
+                                  workspaceBytes, stream, occupancy);
       break;
     case 5:
       using DispatcherStages5 = dispatchStages<T, arch, ThreadblockShape, WarpShape, 5>;
-      DispatcherStages5::Dispatch(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace,
-                                  workspace_bytes, stream, occupancy);
+      DispatcherStages5::dispatch(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace,
+                                  workspaceBytes, stream, occupancy);
       break;
     case 6:
       using DispatcherStages6 = dispatchStages<T, arch, ThreadblockShape, WarpShape, 6>;
-      DispatcherStages6::Dispatch(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace,
-                                  workspace_bytes, stream, occupancy);
+      DispatcherStages6::dispatch(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace,
+                                  workspaceBytes, stream, occupancy);
       break;
     default:
-      std::string err_msg = "DispatchGemmConfig does not support stages " + std::to_string(gemm_config.stages);
-      throw std::runtime_error("[dispatch_gemm_config] " + err_msg);
+      std::string errMsg = "dispatchGemmConfig does not support stages " + std::to_string(gemmConfig.stages);
+      throw std::runtime_error("[TensorRT-LLM Error][dispatch_gemm_config] " + errMsg);
       break;
   }
 }
 
 template <typename T, typename arch>
-void DispatchGemmToCutlass(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                           const float* alpha_col, const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                           char* workspace, size_t workspace_bytes,
-                           llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config, cudaStream_t stream,
-                           int32_t* occupancy = nullptr) {
-  switch (gemm_config.tile_config) {
+void dispatchGemmToCutlass(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                           float const* alphaCol, float const* alphaRow, T* C, int m, int n, int k, char* workspace,
+                           size_t workspaceBytes, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig,
+                           cudaStream_t stream, int* occupancy = nullptr) {
+  switch (gemmConfig.tile_config) {
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape128x64x64_WarpShape64x32x64:
-      DispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<128, 128, 64>, cutlass::gemm::GemmShape<64, 32, 64>>(
-          A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-          occupancy);
+      dispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<128, 64, 64>, cutlass::gemm::GemmShape<64, 32, 64>>(
+          A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape256x128x64_WarpShape64x64x64:
-      DispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<256, 128, 64>, cutlass::gemm::GemmShape<64, 64, 64>>(
-          A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-          occupancy);
+      dispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<256, 128, 64>, cutlass::gemm::GemmShape<64, 64, 64>>(
+          A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape32x128x64_WarpShape32x32x64:
-      DispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<32, 128, 64>, cutlass::gemm::GemmShape<32, 32, 64>>(
-          A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-          occupancy);
+      dispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<32, 128, 64>, cutlass::gemm::GemmShape<32, 32, 64>>(
+          A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape64x128x64_WarpShape64x32x64:
-      DispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<64, 128, 64>, cutlass::gemm::GemmShape<64, 32, 64>>(
-          A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-          occupancy);
+      dispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<64, 128, 64>, cutlass::gemm::GemmShape<64, 32, 64>>(
+          A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape64x64x128_WarpShape32x64x64:
-      DispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<64, 64, 128>, cutlass::gemm::GemmShape<32, 64, 64>>(
-          A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-          occupancy);
+      dispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<64, 64, 128>, cutlass::gemm::GemmShape<32, 64, 64>>(
+          A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::CtaShape128x256x64_WarpShape64x64x64:
-      DispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<128, 256, 64>, cutlass::gemm::GemmShape<64, 64, 64>>(
-          A, B, quant_option, alpha_col, alpha_row, C, m, n, k, gemm_config, workspace, workspace_bytes, stream,
-          occupancy);
+      dispatchGemmConfig<T, arch, cutlass::gemm::GemmShape<128, 256, 64>, cutlass::gemm::GemmShape<64, 64, 64>>(
+          A, B, quantOption, alphaCol, alphaRow, C, m, n, k, gemmConfig, workspace, workspaceBytes, stream, occupancy);
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::Undefined:
-      throw std::runtime_error("[int8][dispatch_gemm_to_cutlass] gemm config undefined.");
+      throw std::runtime_error("[TensorRT-LLM Error][int8][dispatch_gemm_to_cutlass] gemm config undefined.");
       break;
     case llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig::ChooseWithHeuristic:
       throw std::runtime_error(
-          "[int8][dispatch_gemm_to_cutlass] gemm config should have already been set by "
+          "[TensorRT-LLM Error][int8][dispatch_gemm_to_cutlass] gemm config should have already been set by "
           "heuristic.");
       break;
     default:
-      throw std::runtime_error("[int8][dispatch_gemm_to_cutlass] Config is invalid for int8 GEMM.");
+      throw std::runtime_error("[TensorRT-LLM Error][int8][dispatch_gemm_to_cutlass] Config is invalid for int8 GEMM.");
       break;
   }
 }
 
 template <typename T>
 CutlassInt8GemmRunner<T>::CutlassInt8GemmRunner() {
-  int32_t device{-1};
+  int device{-1};
   CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device));
-  sm_ = llm_kernels::utils::GetSMVersion();
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&multiprocessor_count_, cudaDevAttrMultiProcessorCount, device));
+  mSm = llm_kernels::utils::GetSMVersion();
+  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&mMultiProcessorCount, cudaDevAttrMultiProcessorCount, device));
 }
 
 template <typename T>
 CutlassInt8GemmRunner<T>::~CutlassInt8GemmRunner() {}
 
 template <typename T>
-void CutlassInt8GemmRunner<T>::DispatchToArch(const int8_t* A, const int8_t* B,
-                                              llm_kernels::utils::QuantMode quant_option, const float* alpha_col,
-                                              const float* alpha_row, T* C, int32_t m, int32_t n, int32_t k,
-                                              llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
-                                              char* workspace_ptr, const size_t workspace_bytes, cudaStream_t stream,
-                                              int32_t* occupancy) {
-  if (sm_ >= NVIDIA_VOLTA_GPU_COMPUTE_CAPABILITY && sm_ < NVIDIA_AGX_XAVIER_GPU_COMPUTE_CAPABILITY) {
-    DispatchGemmToCutlass<T, cutlass::arch::Sm70>(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, workspace_ptr,
-                                                  workspace_bytes, gemm_config, stream, occupancy);
-  } else if (sm_ >= NVIDIA_AGX_XAVIER_GPU_COMPUTE_CAPABILITY && sm_ < NVIDIA_TURING_GPU_COMPUTE_CAPABILITY) {
-    DispatchGemmToCutlass<T, cutlass::arch::Sm72>(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, workspace_ptr,
-                                                  workspace_bytes, gemm_config, stream, occupancy);
-  } else if (sm_ >= NVIDIA_TURING_GPU_COMPUTE_CAPABILITY && sm_ < NVIDIA_AMPERE_GPU_COMPUTE_CAPABILITY) {
-    DispatchGemmToCutlass<T, cutlass::arch::Sm75>(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, workspace_ptr,
-                                                  workspace_bytes, gemm_config, stream, occupancy);
-  } else if (sm_ >= NVIDIA_AMPERE_GPU_COMPUTE_CAPABILITY && sm_ <= NVIDIA_HOPPER_GPU_COMPUTE_CAPABILITY) {
-    DispatchGemmToCutlass<T, cutlass::arch::Sm80>(A, B, quant_option, alpha_col, alpha_row, C, m, n, k, workspace_ptr,
-                                                  workspace_bytes, gemm_config, stream, occupancy);
+void CutlassInt8GemmRunner<T>::dispatchToArch(int8_t const* A, int8_t const* B,
+                                              llm_kernels::utils::QuantMode quantOption, float const* alphaCol,
+                                              float const* alphaRow, T* C, int m, int n, int k,
+                                              llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig,
+                                              char* workspacePtr, size_t const workspaceBytes, cudaStream_t stream,
+                                              int* occupancy) {
+  if (mSm >= 70 && mSm < 72) {
+    dispatchGemmToCutlass<T, cutlass::arch::Sm70>(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, workspacePtr,
+                                                  workspaceBytes, gemmConfig, stream, occupancy);
+  } else if (mSm >= 72 && mSm < 75) {
+    dispatchGemmToCutlass<T, cutlass::arch::Sm72>(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, workspacePtr,
+                                                  workspaceBytes, gemmConfig, stream, occupancy);
+  } else if (mSm >= 75 && mSm < 80) {
+    dispatchGemmToCutlass<T, cutlass::arch::Sm75>(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, workspacePtr,
+                                                  workspaceBytes, gemmConfig, stream, occupancy);
+  } else if (mSm >= 80 && mSm <= 90) {
+    dispatchGemmToCutlass<T, cutlass::arch::Sm80>(A, B, quantOption, alphaCol, alphaRow, C, m, n, k, workspacePtr,
+                                                  workspaceBytes, gemmConfig, stream, occupancy);
   } else {
-    throw std::runtime_error("[CutlassInt8GemmRunner][GEMM Dispatch] Arch unsupported for CUTLASS int8 GEMM");
+    throw std::runtime_error(
+        "[TensorRT-LLM Error][CutlassInt8GemmRunner][GEMM Dispatch] Arch unsupported for CUTLASS int8 GEMM");
   }
 }
 
 template <typename T>
-void CutlassInt8GemmRunner<T>::Gemm(const int8_t* A, const int8_t* B, llm_kernels::utils::QuantMode quant_option,
-                                    const float* alpha_col, const float* alpha_row, void* C, int32_t m, int32_t n,
-                                    int32_t k, llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemm_config,
-                                    char* workspace_ptr, const size_t workspace_bytes, cudaStream_t stream) {
-  DispatchToArch(A, B, quant_option, alpha_col, alpha_row, reinterpret_cast<T*>(C), m, n, k, gemm_config, workspace_ptr,
-                 workspace_bytes, stream);
+void CutlassInt8GemmRunner<T>::gemm(int8_t const* A, int8_t const* B, llm_kernels::utils::QuantMode quantOption,
+                                    float const* alphaCol, float const* alphaRow, void* C, int m, int n, int k,
+                                    llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig gemmConfig,
+                                    char* workspacePtr, size_t const workspaceBytes, cudaStream_t stream) {
+  dispatchToArch(A, B, quantOption, alphaCol, alphaRow, reinterpret_cast<T*>(C), m, n, k, gemmConfig, workspacePtr,
+                 workspaceBytes, stream);
 }
 
 template <typename T>
-std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> CutlassInt8GemmRunner<T>::GetConfigs() const {
-  static constexpr bool is_weight_only = false;
-  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> candidate_configs =
-      GetCandidateConfigs(sm_, is_weight_only, sm_ <= NVIDIA_VOLTA_GPU_COMPUTE_CAPABILITY, /* SIMT configs */
-                          true, SPLIT_K_LIMIT);                                            /* INT8 configs */
-  return candidate_configs;
+std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> CutlassInt8GemmRunner<T>::getConfigs() const {
+  auto config_type_param =
+      llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam::INT8_ONLY;
+  if (mSm <= 70) {
+    config_type_param =
+        static_cast<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam>(
+            config_type_param |
+            llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig::CandidateConfigTypeParam::SIMT_ONLY);
+  }
+
+  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> candidateConfigs =
+      get_candidate_configs(mSm, SPLIT_K_LIMIT, config_type_param);
+  return candidateConfigs;
 }
 
 template <typename T>
-size_t CutlassInt8GemmRunner<T>::GetWorkspaceSize(const int32_t m, const int32_t n, const int32_t k) {
+size_t CutlassInt8GemmRunner<T>::getWorkspaceSize(int const m, int const n, int const k) {
   // These are the min tile sizes for each config, which would launch the maximum number of blocks
-  const int32_t max_grid_m = cutlass::ceil_div(m, MIN_M_TILE);
-  const int32_t max_grid_n = cutlass::ceil_div(m, MIN_N_TILE);
+  int const maxGridM = cutlass::ceil_div(m, MIN_M_TILE);
+  int const maxGridN = cutlass::ceil_div(m, MIN_N_TILE);
   // We need 4 bytes per block in the worst case. We launch SPLIT_K_LIMIT in z dim.
-  constexpr int32_t FPA_INTB_BLOCK_BYTE_NUM = 4;
-  return static_cast<size_t>(max_grid_m * max_grid_n * SPLIT_K_LIMIT * FPA_INTB_BLOCK_BYTE_NUM);
+  return static_cast<size_t>(maxGridM * maxGridN * SPLIT_K_LIMIT * 4);
 }
 
 }  // namespace nvidia

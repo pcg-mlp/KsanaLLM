@@ -36,8 +36,8 @@ namespace gemm {
 namespace kernel {
 
 /// Visitor class to abstract away the algorithm for iterating over tiles
-template <typename ThreadblockShape, GroupScheduleMode GroupScheduleMode_, int32_t PrefetchTileCount,
-          int32_t ThreadCount, bool Transposed = false>
+template <typename ThreadblockShape, GroupScheduleMode GroupScheduleMode_, int PrefetchTileCount, int ThreadCount,
+          bool Transposed = false>
 struct GemmMoeProblemVisitor
     : public MoeProblemVisitor<detail::GemmGroupedProblemSizeHelper<ThreadblockShape, Transposed>, ThreadblockShape,
                                GroupScheduleMode_, PrefetchTileCount, ThreadCount> {

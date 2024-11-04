@@ -46,6 +46,7 @@
 #include "cutlass/arch/memory_sm75.h"
 #include "cutlass/arch/mma_sm75.h"
 #include "cutlass/arch/mma_sm80.h"
+#include "cutlass/arch/mma_sm89.h"
 
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/warp/mma.h"
@@ -83,7 +84,7 @@ template <
     /// Instruction shape to override shared memory iterators with
     typename SharedMemoryInstructionShape_,
     /// Number of partitions along K dimension
-    int32_t PartitionsK_ = 1,
+    int PartitionsK_ = 1,
     /// Store the accumulators in row major or column major.  Row major is used
     /// when output layout is interleaved.
     bool AccumulatorsInRowMajor = false,
@@ -127,12 +128,16 @@ class MmaTensorOpComputeBWithF16 {
                  platform::is_same<typename ArchMmaOperator::ElementB, half_t>::value) ||
                     (platform::is_same<typename ArchMmaOperator::ElementA, bfloat16_t>::value &&
                      platform::is_same<typename ArchMmaOperator::ElementB, bfloat16_t>::value &&
-                     ArchTag::kMinComputeCapability >= 80),
-                "MmaTensorOpCvtBToA only supports underlying HMMA");
+                     ArchTag::kMinComputeCapability >= 80) ||
+                    (platform::is_same<typename ArchMmaOperator::ElementA, float_e4m3_t>::value &&
+                     platform::is_same<typename ArchMmaOperator::ElementB, float_e4m3_t>::value &&
+                     ArchTag::kMinComputeCapability >= 89),
+                "MmaTensorOpCvtBToA only supports underlying HMMA/QMMA");
 
   static_assert(platform::is_same<ElementA, half_t>::value ||
-                    (platform::is_same<ElementA, bfloat16_t>::value && ArchTag::kMinComputeCapability >= 80),
-                "MmaTensorOpCvtBToA only supports Fp16 A or Bf16 A on Ampere+");
+                    (platform::is_same<ElementA, bfloat16_t>::value && ArchTag::kMinComputeCapability >= 80) ||
+                    (platform::is_same<ElementA, float_e4m3_t>::value && ArchTag::kMinComputeCapability >= 89),
+                "MmaTensorOpCvtBToA only supports Fp16 A or Bf16 A on Ampere+, or FP8 on Ada");
 
   /// Indicates class of matrix operator
   using OperatorClass = arch::OpClassTensorOp;
@@ -148,7 +153,7 @@ class MmaTensorOpComputeBWithF16 {
   static_assert(SharedMemoryInstructionShape::kN == InstructionShape::kN,
                 "N dimension of compute instruction must match load");
 
-  static constexpr int32_t kExpansionFactor = SharedMemoryInstructionShape::kK / InstructionShape::kK;
+  static constexpr int kExpansionFactor = SharedMemoryInstructionShape::kK / InstructionShape::kK;
 
   static_assert(!(Shape::kK % SharedMemoryInstructionShape::kK), "");
 
@@ -159,10 +164,10 @@ class MmaTensorOpComputeBWithF16 {
   static ComplexTransform const kTransformB = ComplexTransform::kNone;
 
   /// Number of threads participating in warp-level matrix product
-  static int32_t const kThreadCount = 32;
+  static int const kThreadCount = 32;
 
   /// Number of partitions along K dimension
-  static int32_t const kPartitionsK = PartitionsK_;
+  static int const kPartitionsK = PartitionsK_;
 
  public:
   /// Iterates over the A operand in memory
@@ -216,7 +221,7 @@ class MmaTensorOpComputeBWithF16 {
   /// Performs a warp-level matrix multiply-accumulate operation
   CUTLASS_DEVICE
   void operator()(FragmentC& D, TransformedFragmentA const& A, TransformedFragmentB const& B, FragmentC const& C,
-                  const int32_t warp_tileB_k_offset) const {
+                  int const warp_tileB_k_offset) const {
     using MmaOperandA = typename ArchMmaOperator::FragmentA;
     using MmaOperandB = typename ArchMmaOperator::FragmentB;
     using MmaOperandC = typename ArchMmaOperator::FragmentC;
@@ -235,12 +240,12 @@ class MmaTensorOpComputeBWithF16 {
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 800)
     // Serpentine visitation order maximizing reuse of Rb
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t n = 0; n < MmaIterations::kColumn; ++n) {
+    for (int n = 0; n < MmaIterations::kColumn; ++n) {
       CUTLASS_PRAGMA_UNROLL
-      for (int32_t m = 0; m < MmaIterations::kRow; ++m) {
-        int32_t m_serpentine = ((n % 2) ? (MmaIterations::kRow - 1 - m) : m);
+      for (int m = 0; m < MmaIterations::kRow; ++m) {
+        int m_serpentine = ((n % 2) ? (MmaIterations::kRow - 1 - m) : m);
 
-        int32_t n_offsetB = warp_tileB_k_offset + kExpansionFactor * n;
+        int n_offsetB = warp_tileB_k_offset + kExpansionFactor * n;
         if (AccumulatorsInRowMajor) {  // matrix B is reordered
           mma(ptr_D[n + m_serpentine * MmaIterations::kColumn], ptr_A[m_serpentine], ptr_B[n_offsetB],
               ptr_D[n + m_serpentine * MmaIterations::kColumn]);
@@ -253,12 +258,12 @@ class MmaTensorOpComputeBWithF16 {
 #elif defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
     // Serpentine visitation order maximizing reuse of Ra
     CUTLASS_PRAGMA_UNROLL
-    for (int32_t m = 0; m < MmaIterations::kRow; ++m) {
+    for (int m = 0; m < MmaIterations::kRow; ++m) {
       CUTLASS_PRAGMA_UNROLL
-      for (int32_t n = 0; n < MmaIterations::kColumn; ++n) {
-        int32_t n_serpentine = ((m % 2) ? (MmaIterations::kColumn - 1 - n) : n);
+      for (int n = 0; n < MmaIterations::kColumn; ++n) {
+        int n_serpentine = ((m % 2) ? (MmaIterations::kColumn - 1 - n) : n);
 
-        int32_t n_serpentine_offsetB = warp_tileB_k_offset + kExpansionFactor * n_serpentine;
+        int n_serpentine_offsetB = warp_tileB_k_offset + kExpansionFactor * n_serpentine;
         if (AccumulatorsInRowMajor) {  // matrix B is reordered
           mma(ptr_D[n_serpentine + m * MmaIterations::kColumn], ptr_A[m], ptr_B[n_serpentine_offsetB],
               ptr_D[n_serpentine + m * MmaIterations::kColumn]);
