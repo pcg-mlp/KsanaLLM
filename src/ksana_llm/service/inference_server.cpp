@@ -4,67 +4,89 @@
 
 #include "ksana_llm/service/inference_server.h"
 
-#include <iostream>
-#include <memory>
-#include <stdexcept>
-
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
-#include "ksana_llm/utils/status.h"
-#include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
 
-InferenceServer::InferenceServer() {
-  inference_engine_ = std::make_shared<InferenceEngine>(request_queue_);
+InferenceServer::InferenceServer(const std::string &config_file, const EndpointConfig &endpoint_config) {
+  InitLoguru();
+  KLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
 
-  std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
+  KLLM_LOG_INFO << "Init inference server with config file: " << config_file;
+  auto env = Singleton<Environment>::GetInstance();
   if (!env) {
     KLLM_THROW("The Environment is nullptr.");
   }
+  STATUS_CHECK_FAILURE(env->ParseConfig(config_file));
 
-  EndpointConfig endpoint_config;
-  Status status = env->GetEndpointConfig(endpoint_config);
-  if (!status.OK()) {
-    KLLM_THROW("Get endpoint config error:" + status.ToString());
+  // Init inference engine.
+  inference_engine_ = std::make_shared<InferenceEngine>(request_queue_);
+
+  // Init local endpoint.
+  local_endpoint_ = EndpointFactory::CreateLocalEndpoint(endpoint_config, request_queue_);
+  // Init rpc endpoint if specified.
+  if (endpoint_config.type == EndpointType::RPC) {
+    rpc_endpoint_ = EndpointFactory::CreateRpcEndpoint(endpoint_config, local_endpoint_);
   }
 
-  // Create rpc endpoint.
-  endpoint_config.type = EndpointType::ENDPOINT_HTTP;
-  endpoint_ = EndpointFactory::CreateRpcEndpoint(endpoint_config, request_queue_);
-
-  waiter_ = std::make_shared<Waiter>(1);
+  KLLM_LOG_INFO << "Inference server is initialized.";
 }
 
-Status InferenceServer::WaitUntilStop() {
-  waiter_->Wait();
-  return Status();
+Status InferenceServer::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                               const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
+                               ksana_llm::KsanaPythonOutput &ksana_python_output) {
+  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
+  auto span = REPORT_TRACE(inference_server_handle_span, carrier);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(local_endpoint_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
+}
+
+Status InferenceServer::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
+                                        const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
+                                        std::shared_ptr<StreamingIterator> &streaming_iterator) {
+  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
+  auto span = REPORT_TRACE(inference_server_handle_streaming_span, carrier);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(local_endpoint_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
+}
+
+Status InferenceServer::HandleForward(const std::string &request_bytes,
+                                      const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
+                                      std::string &response_bytes) {
+  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
+  auto span = REPORT_TRACE(inference_server_handle_forward_span, carrier);
+  opentelemetry::trace::Scope scope(span);
+  STATUS_CHECK_AND_REPORT(local_endpoint_->HandleForward(request_bytes, req_ctx, response_bytes), span);
 }
 
 Status InferenceServer::Start() {
-  inference_engine_->Start();
-  endpoint_->Start();
+  KLLM_LOG_INFO << "Inference server start.";
 
-  WaitUntilStop();
+  inference_engine_->Start();
+  if (rpc_endpoint_) {
+    rpc_endpoint_->Start();
+  }
+
   return Status();
 }
 
 Status InferenceServer::Stop() {
-  KLLM_LOG_DEBUG << "Recive stop signal, ready to quit.";
+  KLLM_LOG_INFO << "Inference server stop.";
 
   request_queue_.Close();
-
-  endpoint_->Stop();
   inference_engine_->Stop();
-
-  waiter_->Notify();
+  if (rpc_endpoint_) {
+    rpc_endpoint_->Stop();
+  }
 
   // Force exit here.
-  KLLM_LOG_DEBUG << "Exit now.";
+  KLLM_LOG_INFO << "Inference server exit.";
+#ifdef ENABLE_ACL
   _exit(0);
-
+#endif
   return Status();
 }
 
-}  // namespace ksana_llm.
+}  // namespace ksana_llm

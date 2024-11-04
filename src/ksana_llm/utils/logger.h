@@ -7,8 +7,6 @@
 #include <string>
 #include <unordered_map>
 
-#define LOGURU_USE_FMTLIB 1
-#define LOGURU_WITH_STREAMS 1
 #include "loguru.hpp"
 
 namespace ksana_llm {

@@ -4,13 +4,12 @@
 #pragma once
 
 #include <torch/script.h>
+#include <memory>
+#include <string>
 
-#include "ksana_llm/endpoints/local/local_endpoint.h"
-#include "ksana_llm/endpoints/streaming/streaming_iterator.h"
-#include "ksana_llm/service/inference_engine.h"
-#include "ksana_llm/torch_op/serving_impl.h"
-#include "ksana_llm/utils/channel.h"
-#include "ksana_llm/utils/request_packer.h"
+#include "ksana_llm/service/inference_server.h"
+#include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
@@ -20,8 +19,8 @@ class ServingOp : public torch::jit::CustomClassHolder {
   ServingOp();
   ~ServingOp();
 
-  // Initialize the service implement.
-  void InitServing(const std::string &mode_dir);
+  // Initialize the serving server.
+  void InitServing(const std::string &config_file);
 
   // Generate a response.
   Status Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
@@ -46,14 +45,15 @@ class ServingOp : public torch::jit::CustomClassHolder {
                  std::string &response_bytes);
 
  public:
+  // The config of endpoint.
+  EndpointConfig endpoint_config_;
+
+  // The path of plugin.
   std::string plugin_path_;
 
  private:
-  // The inference implement.
-  std::shared_ptr<ServingImpl> serving_impl_ = nullptr;
-
-  // Used in the forward interface to unpack requests and pack responses.
-  RequestPacker request_packer_;
+  // The inference server.
+  std::shared_ptr<InferenceServer> inference_server_;
 };
 
 }  // namespace ksana_llm

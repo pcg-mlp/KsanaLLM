@@ -4,15 +4,16 @@
 #pragma once
 
 #include "httplib.h"
-#include "ksana_llm/endpoints/base/base_endpoint.h"
+#include "ksana_llm/endpoints/rpc/rpc_endpoint.h"
 
 namespace ksana_llm {
+
+class Request;
 
 // The HTTP endpoint, used to receive request from http client.
 class HttpEndpoint : public RpcEndpoint {
  public:
-  HttpEndpoint(const EndpointConfig &endpoint_config,
-               Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
+  HttpEndpoint(const EndpointConfig &endpoint_config, const std::shared_ptr<LocalEndpoint> &local_endpoint);
 
   virtual ~HttpEndpoint() override {}
 

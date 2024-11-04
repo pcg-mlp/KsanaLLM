@@ -214,18 +214,25 @@ struct CacheManagerConfig {
 };
 
 // The endpoint type.
-enum EndpointType { ENDPOINT_LOCAL, ENDPOINT_HTTP, ENDPOINT_TRPC };
+enum class EndpointType { LOCAL, RPC };
 
 // The config of endpoint.
 struct EndpointConfig {
-  // The endpoint type.
-  EndpointType type = EndpointType::ENDPOINT_LOCAL;
+  // The endpoint service type.
+  EndpointType type = EndpointType::LOCAL;
 
-  // HTTP service hostname, default is localhost
-  std::string host;
+  // If the endpoint type is RPC, load the corresponding
+  // shared library based on the rpc plugin name.
+  std::string rpc_plugin_name;
 
-  // HTTP service port, default is 8080
-  uint32_t port;
+  // The endpoint service host address.
+  std::string host = "0.0.0.0";
+
+  // The endpoint service port.
+  uint32_t port = 8080;
+
+  // Whether to enable the endpoint access log.
+  bool access_log = false;
 };
 
 // The config of profiler.

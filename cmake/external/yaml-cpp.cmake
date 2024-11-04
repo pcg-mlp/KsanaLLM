@@ -3,25 +3,36 @@
 # ==============================================================================
 
 include(FetchContent)
-include(ExternalProject)
 
-set(YAML_INSTALL_DIR ${THIRD_PARTY_PATH}/download/yaml-cpp)
+set(YAML_INSTALL_DIR ${THIRD_PARTY_PATH}/install/yaml-cpp)
 
 option(BUILD_SHARED_LIBS "Build Shared Libraries" OFF)
-option(YAML_CPP_BUILD_TESTS "Enable yaml testing" OFF)
 
-# Keep the same yaml version with trpc
-set(YAML_VER 0.6.2)
-set(YAML_URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-${YAML_VER}.tar.gz)
+if(NOT DEFINED YAML_VER)
+    set(YAML_VER 0.7.0)
+endif()
+set(YAML_GIT_URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-${YAML_VER}.tar.gz)
+
 FetchContent_Declare(
     yaml_cpp
-    URL ${YAML_URL}
-    URL_MD5 5b943e9af0060d0811148b037449ef82
+    URL        ${YAML_GIT_URL}
     SOURCE_DIR ${YAML_INSTALL_DIR}
 )
 
-FetchContent_MakeAvailable(yaml_cpp)
-include_directories(${YAML_INSTALL_DIR}/include)
+FetchContent_GetProperties(yaml_cpp)
+if(NOT yaml_cpp_POPULATED)
+    FetchContent_Populate(yaml_cpp)
+
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    set(YAML_CPP_BUILD_TESTS OFF)
+    set(YAML_CPP_BUILD_TOOLS OFF)
+    add_subdirectory(${yaml_cpp_SOURCE_DIR} ${yaml_cpp_BINARY_DIR})
+endif()
+
+message(STATUS "Yaml-cpp source directory: ${yaml_cpp_SOURCE_DIR}")
+message(STATUS "Yaml-cpp binary directory: ${yaml_cpp_BINARY_DIR}")
+
+include_directories(${yaml_cpp_SOURCE_DIR}/include)
 
 # the declare yaml-cpp will generate libyaml-cpp.a,
 # the involked library name is yaml-cpp, we alias it as ksana_llm_yaml

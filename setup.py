@@ -38,10 +38,15 @@ class BuildExt(build_ext_orig):
         build_temp = pathlib.Path(self.build_temp)
         build_temp.mkdir(parents=True, exist_ok=True)
         extdir = pathlib.Path(self.get_ext_fullpath(ext.name))
-        if not extdir.exists():
-            extdir.mkdir(parents=True, exist_ok=True)
+        extdir.mkdir(parents=True, exist_ok=True)
 
-        # example of cmake args
+        # collect all the implemented endpoints
+        implemented_endpoints = []
+        for endpoint in os.scandir(cwd.joinpath("src/endpoints_impl")):
+            if endpoint.is_dir():
+                implemented_endpoints.append(endpoint.name)
+
+        # specify cmake args
         config = 'Debug' if self.debug else 'Release'
         cmake_args = []
         if is_run_on_npu_device():
@@ -56,11 +61,15 @@ class BuildExt(build_ext_orig):
         else:
             cmake_args = [
                 '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' +
-                str(extdir.parent.absolute()), '-DCMAKE_BUILD_TYPE=' + config,
-                '-DWITH_TESTING=OFF', '-DSM=80,86,89'
+                str(extdir.parent.absolute()),
+                '-DCMAKE_BUILD_TYPE=' + config,
+                '-DWITH_TESTING=OFF',
+                '-DSM=80,86,89'
             ]
+        for endpoint in implemented_endpoints:
+            cmake_args.append(f"-DWITH_{endpoint.upper()}_ENDPOINT=ON")
 
-        # example of build args
+        # specify build args
         build_args = ['--config', config, '--', '-j']
 
         os.chdir(str(build_temp))
@@ -75,6 +84,8 @@ class BuildExt(build_ext_orig):
         build_temp_lib = build_temp.joinpath('lib')
         deps_lib.mkdir(parents=True, exist_ok=True)
         target_libs = ["libtorch_serving.so", "libloguru.so"]
+        for endpoint in implemented_endpoints:
+            target_libs.append(f"lib{endpoint}_endpoint.so")
         for target_lib in target_libs:
             # for local develop
             copy_file(str(build_temp_lib.joinpath(target_lib)), str(deps_lib))
@@ -89,14 +100,19 @@ class BuildExt(build_ext_orig):
                                    os.path.join("ksana_llm", need_dir))
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
-        need_files = [
-            "serving_server.py", "serving_generate_client.py",
-            "serving_forward_client.py"
-        ]
+        # copy endpoint config if it exists
+        for endpoint in implemented_endpoints:
+            src_dir = f"src/endpoints_impl/{endpoint}/rpc_config"
+            dst_dir = os.path.join(extdir.parent.absolute(), os.path.join("ksana_llm", "rpc_config"))
+            pathlib.Path(dst_dir).mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
+        # copy required python files
+        need_files = ["serving_server.py", "serving_generate_client.py", "serving_forward_client.py"]
         for need_file in need_files:
-            src_dir = os.path.join('src/ksana_llm/python', need_file)
+            src_file = os.path.join('src/ksana_llm/python', need_file)
             dst_dir = os.path.join(extdir.parent.absolute(), "ksana_llm")
-            copy_file(src_dir, dst_dir)
+            copy_file(src_file, dst_dir)
 
 
 setup(name='ksana_llm',

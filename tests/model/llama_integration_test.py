@@ -139,6 +139,7 @@ if __name__ == "__main__":
     logging.info("start load model")
     start_time = time.perf_counter()
     model = ksana_llm.AutoModel.from_config(args.config_file)
+    model.init_serving(ksana_llm.EndpointConfig())
     end_time = time.perf_counter()
     model_load_time = end_time - start_time
     # Finish loading the model

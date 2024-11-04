@@ -29,7 +29,7 @@ endif()
 add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS} ${utils_ascend_SRCS})
 add_dependencies(utils fmt gflags)
 target_link_libraries(utils PUBLIC
-  -lpthread -ldl gflags loguru block_manager ksana_llm_yaml ${utils_nvidia_LIBS} ${utils_ascend_LIBS}
+  -lpthread -ldl gflags loguru ksana_llm_yaml ${utils_nvidia_LIBS} ${utils_ascend_LIBS}
 )
 
 # for test

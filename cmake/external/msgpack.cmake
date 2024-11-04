@@ -10,8 +10,6 @@ FetchContent_Populate(download_msgpack
     GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
     GIT_TAG cpp-6.1.1
     SOURCE_DIR ${MSGPACK_INCLUDE_DIR}
-    SUBBUILD_DIR ${THIRD_PARTY_PATH}/tmp
-    BINARY_DIR ${THIRD_PARTY_PATH}/tmp
 )
 
 add_definitions(-DMSGPACK_NO_BOOST)

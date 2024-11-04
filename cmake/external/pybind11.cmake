@@ -4,14 +4,12 @@
 
 include(FetchContent)
 
-set(PYBIND11_INSTALL_DIR ${THIRD_PARTY_PATH}/pybind11)
+set(PYBIND11_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/pybind11)
 
 FetchContent_Populate(download_pybind11
     GIT_REPOSITORY https://github.com/pybind/pybind11.git
-    GIT_TAG ffa346860b306c9bbfb341aed9c14c067751feb8
-    SOURCE_DIR ${PYBIND11_INSTALL_DIR}
-    SUBBUILD_DIR ${THIRD_PARTY_PATH}/tmp
-    BINARY_DIR ${THIRD_PARTY_PATH}/tmp
+    GIT_TAG v2.13.5
+    SOURCE_DIR ${PYBIND11_INCLUDE_DIR}
 )
 
-include_directories(${PYBIND11_INSTALL_DIR}/include)
+include_directories(${PYBIND11_INCLUDE_DIR}/include)

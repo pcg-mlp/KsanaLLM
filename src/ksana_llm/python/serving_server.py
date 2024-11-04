@@ -5,6 +5,8 @@
 import argparse
 import asyncio
 import os
+import signal
+import sys
 from concurrent import futures
 from functools import partial
 from typing import Any, Dict, Optional
@@ -43,7 +45,12 @@ def args_config():
                         type=str,
                         default="0.0.0.0",
                         help='server host address')
-    parser.add_argument('--port', type=int, default=8888, help='server port')
+    parser.add_argument('--port', type=int, default=8080, help='server port')
+    parser.add_argument("--endpoint",
+                        type=str,
+                        default=None,
+                        help="server endpoint type (e.g., python/trpc). If not specified, "
+                        "it will be inferred based on the config file.")
     parser.add_argument("--access-log",
                         action="store_true",
                         help="enable the endpoint access log")
@@ -54,6 +61,21 @@ def args_config():
                         default=None,
                         help="FastAPI root_path when app is behind a path based routing proxy")
     args = parser.parse_args()
+
+    if not args.tokenizer_dir:
+        with open(args.config_file, "r") as yaml_file:
+            yaml_data = yaml.safe_load(yaml_file)
+            args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
+    if args.endpoint is None:
+        with open(args.config_file, "r") as yaml_file:
+            yaml_data = yaml.safe_load(yaml_file)
+            if "endpoint_type" in yaml_data["setting"]:
+                args.endpoint = yaml_data["setting"]["endpoint_type"]
+            else:  # Use Python endpoint by default
+                args.endpoint = "python"
+    # normalize the endpoint type
+    args.endpoint = args.endpoint.lower()
+
     return args
 
 
@@ -303,10 +325,16 @@ async def forward(request: Request):
 if __name__ == "__main__":
     uvloop.install()
     args = args_config()
-    if not args.tokenizer_dir:
-        with open(args.config_file, "r") as yaml_file:
-            yaml_data = yaml.safe_load(yaml_file)
-            args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
+
+    # Initialize model serving based on configs.
+    model = ksana_llm.AutoModel.from_config(args.config_file)
+    endpoint_config = ksana_llm.EndpointConfig(args.endpoint, args.host,
+                                               args.port, args.access_log)
+    model.init_serving(endpoint_config)
+    if args.endpoint != "python":
+        signal.pause()
+        sys.exit(0)
+
     # Set the verbosity of transformers to ERROR.
     logging.set_verbosity_error()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
@@ -316,7 +344,6 @@ if __name__ == "__main__":
             "Using a slow tokenizer. This might cause a significant "
             "slowdown. Consider using a fast tokenizer instead."
         )
-    model = ksana_llm.AutoModel.from_config(args.config_file)
 
     # Set the log level of uvicorn based on KLLM_LOG_LEVEL.
     LOG_LEVEL = os.getenv("KLLM_LOG_LEVEL", "INFO").upper()

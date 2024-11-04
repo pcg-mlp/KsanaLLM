@@ -80,7 +80,6 @@ __pycache__
 .DS_Store
 [Tt]humbs.db
 *.iml
-#CMakeLists.txt
 cmake-build-debug
 .idea
 .tags
@@ -91,6 +90,7 @@ cmake-build-debug
 *.run
 *.gz
 d.*
+!CMakeLists.txt
 src/ksana_llm/python/*
 !src/ksana_llm/python/ksana_llm
 !src/ksana_llm/python/ksana_plugin

@@ -23,6 +23,5 @@ message(STATUS "OPENTELEMETRY_CPP_INCLUDE_DIRS: ${OPENTELEMETRY_CPP_INCLUDE_DIRS
 
 target_link_libraries(profiler 
   PUBLIC 
-     utils 
      ${OPENTELEMETRY_CPP_LIBRARIES}
 )

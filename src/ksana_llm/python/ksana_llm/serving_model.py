@@ -5,12 +5,11 @@
 import asyncio
 import importlib.util
 from typing import Callable, List, Optional, Dict
-import asyncio
 from concurrent import futures
+from dataclasses import dataclass
 
 import torch
 from transformers.generation.configuration_utils import GenerationConfig
-
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 
@@ -18,6 +17,13 @@ import libtorch_serving
 
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
+
+@dataclass
+class EndpointConfig:
+    endpoint: str = "python"  # endpoint type
+    host: str = "0.0.0.0"  # endpoint host address
+    port: int = 8080  # endpoint port
+    access_log: bool = False  # whether to enable the endpoint access log
 
 
 class KsanaPlugin(object):
@@ -138,11 +144,26 @@ class ServingModel(object):
         Args:
             config_file: The serving config file.
         """
+        self._config_file = config_file
         self._serving_cls = libtorch_serving.Serving
 
         # The serving instance.
         self._serving = self._serving_cls()
-        self._serving.init_serving(config_file)
+
+    def init_serving(self, endpoint_config: EndpointConfig):
+        """Initialize the serving endpoint.
+
+        Args:
+            endpoint_config: The endpoint config.
+        """
+        if endpoint_config.endpoint != "python":
+            self._serving.endpoint_config.type = libtorch_serving.EndpointType.RPC
+            self._serving.endpoint_config.rpc_plugin_name = endpoint_config.endpoint
+        self._serving.endpoint_config.host = endpoint_config.host
+        self._serving.endpoint_config.port = endpoint_config.port
+        self._serving.endpoint_config.access_log = endpoint_config.access_log
+
+        self._serving.init_serving(self._config_file)
         self._ksana_plugin = KsanaPlugin(self._serving.plugin_path)
 
     @torch.no_grad()

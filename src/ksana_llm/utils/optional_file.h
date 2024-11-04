@@ -3,28 +3,26 @@
 ==============================================================================*/
 #pragma once
 
-#include <filesystem>
-#include "ksana_llm/utils/singleton.h"
-
 #include <Python.h>
-#include "logger.h"
+#include <filesystem>
+
+#include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
 class OptionalFile {
  public:
-  static std::shared_ptr<OptionalFile> GetInstance() { return Singleton<OptionalFile>::GetInstance(); }
-
-  std::string& GetOptionalFile(const std::string& model_path, const std::string& path_name,
+  std::string& GetOptionalFile(const std::string& path_prefix, const std::string& path_name,
                                const std::string& file_name) {
-    SearchOptionalFile(model_path, path_name, file_name);
+    SearchOptionalFile(path_prefix, path_name, file_name);
     return target_file;
   }
 
  private:
-  void SearchOptionalFile(const std::string& model_path, const std::string& path_name, const std::string& file_name) {
+  void SearchOptionalFile(const std::string& path_prefix, const std::string& path_name, const std::string& file_name) {
     // Search within the model path
-    target_file = model_path + "/" + file_name;
+    target_file = path_prefix + "/" + file_name;
     if (FileExists()) {
       return;
     }

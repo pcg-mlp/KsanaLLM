@@ -524,7 +524,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir, bool enable_t
 }
 
 Status Environment::ParseOptions(int argc, char **argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  google::ParseCommandLineFlags(&argc, &argv, true);
 
   endpoint_config_.host = FLAGS_host;
   endpoint_config_.port = static_cast<uint32_t>(FLAGS_port);

@@ -47,7 +47,7 @@ execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD OUTPUT_VARIABLE COMMI
 
 link_directories(/usr/lib64)
 
-set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake ${CMAKE_SOURCE_DIR}/cmake)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
 
 # set compiler flags

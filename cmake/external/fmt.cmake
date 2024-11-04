@@ -3,48 +3,28 @@
 # ==============================================================================
 
 include(FetchContent)
-include(ExternalProject)
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 
-set(FMT_DOWNLOAD_DIR ${THIRD_PARTY_PATH}/download/fmt)
 set(FMT_INSTALL_DIR ${THIRD_PARTY_PATH}/install/fmt)
 
-if(NOT TARGET fmt)
-  FetchContent_Populate(download_fmt
-    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-    GIT_TAG 4ab01fb1988b70916d52dc1d30f176aebbd543f0
-    SOURCE_DIR ${FMT_DOWNLOAD_DIR}
-    SUBBUILD_DIR ${THIRD_PARTY_PATH}/tmp
-    BINARY_DIR ${THIRD_PARTY_PATH}/tmp
-  )
-  ExternalProject_Add(extern_fmt
-    PREFIX ${THIRD_PARTY_PATH}/fmt
-    SOURCE_DIR ${FMT_DOWNLOAD_DIR}
-    CMAKE_ARGS
-    -DCMAKE_BUILD_TYPE=Release
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-    -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=${CXX11_ABI_FLAG}"
-    -DCMAKE_INSTALL_PREFIX=${FMT_INSTALL_DIR}
-    -DFMT_TEST=OFF
-  )
-  add_library(fmt STATIC IMPORTED GLOBAL)
+if(NOT DEFINED FMT_GIT_TAG)
+    set(FMT_GIT_TAG 9.1.0)
+endif()
+set(FMT_GIT_URL  https://github.com/fmtlib/fmt/archive/${FMT_GIT_TAG}.tar.gz)
 
-  # Compatible with ubuntu.
-  execute_process(
-    COMMAND bash -c "awk -F= '/^ID=/{print $2}' /etc/os-release |tr -d '\n' | tr -d '\"'"
-    OUTPUT_VARIABLE output_os_name)
+FetchContent_Declare(
+    fmt
+    URL        ${FMT_GIT_URL}
+    SOURCE_DIR ${FMT_INSTALL_DIR}
+)
 
-  if(${output_os_name} MATCHES "ubuntu")
-    MESSAGE(STATUS "OS name: ubuntu")
-    set_property(TARGET fmt PROPERTY
-      IMPORTED_LOCATION ${FMT_INSTALL_DIR}/lib/libfmt.a)
-  else()
-    MESSAGE(STATUS "OS name: centos")
-    set_property(TARGET fmt PROPERTY
-      IMPORTED_LOCATION ${FMT_INSTALL_DIR}/lib64/libfmt.a)
-  endif()
+FetchContent_GetProperties(fmt)
+if(NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
 
-  add_dependencies(fmt extern_fmt)
+    add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR})
 endif()
 
-include_directories(${FMT_INSTALL_DIR}/include)
+message(STATUS "Fmt source directory: ${fmt_SOURCE_DIR}")
+message(STATUS "Fmt binary directory: ${fmt_BINARY_DIR}")
+
+include_directories(${fmt_SOURCE_DIR}/include)

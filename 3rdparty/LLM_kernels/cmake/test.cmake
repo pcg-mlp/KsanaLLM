@@ -1,18 +1,11 @@
+# Copyright 2024 Tencent Inc.  All rights reserved.
 
 if(NOT WITH_TESTING)
   return()
 endif()
 
 enable_testing()
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG release-1.12.1
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+include(external/gtest)
 
 set(PYTHON_PATH "python" CACHE STRING "Python path")
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch; print(torch.__version__,end='');"

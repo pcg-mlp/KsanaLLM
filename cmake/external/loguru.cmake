@@ -4,19 +4,24 @@
 
 include(FetchContent)
 
-set(LOGURU_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/loguru)
+set(LOGURU_INSTALL_DIR ${THIRD_PARTY_PATH}/install/loguru)
 
-FetchContent_Populate(download_loguru
+FetchContent_Declare(
+    loguru
     GIT_REPOSITORY https://github.com/whitelok/loguru.git
     GIT_TAG f63653183f69c5b8987a4415773ca64d9f3fc2f4
-    SOURCE_DIR ${LOGURU_INCLUDE_DIR}
-    SUBBUILD_DIR ${THIRD_PARTY_PATH}/tmp
-    BINARY_DIR ${THIRD_PARTY_PATH}/tmp
+    SOURCE_DIR ${LOGURU_INSTALL_DIR}
 )
 
-include_directories(${LOGURU_INCLUDE_DIR})
 add_definitions(-DLOGURU_USE_FMTLIB=1)
 add_definitions(-DLOGURU_WITH_STREAMS=1)
+FetchContent_GetProperties(loguru)
+if(NOT loguru_POPULATED)
+    FetchContent_Populate(loguru)
 
-add_library(loguru SHARED ${THIRD_PARTY_PATH}/install/loguru/loguru.cpp)
-target_link_libraries(loguru fmt)
+    add_library(loguru SHARED ${LOGURU_INSTALL_DIR}/loguru.cpp)
+
+    target_link_libraries(loguru fmt)
+endif()
+
+include_directories(${LOGURU_INSTALL_DIR})

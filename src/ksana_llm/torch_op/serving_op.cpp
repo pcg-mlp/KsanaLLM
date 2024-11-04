@@ -4,16 +4,6 @@
 
 #include "ksana_llm/torch_op/serving_op.h"
 
-#include <iostream>
-#include <memory>
-#include <string>
-
-#include "ksana_llm/endpoints/endpoint_factory.h"
-#include "ksana_llm/endpoints/streaming/streaming_iterator.h"
-#include "ksana_llm/profiler/profiler.h"
-#include "ksana_llm/profiler/reporter.h"
-#include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/singleton.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -21,40 +11,21 @@
 
 PYBIND11_MAKE_OPAQUE(std::map<std::string, ksana_llm::TargetDescribe>);
 PYBIND11_MAKE_OPAQUE(std::map<std::string, ksana_llm::PythonTensor>);
-PYBIND11_MAKE_OPAQUE(std::vector<std::pair<size_t, size_t>>);
+PYBIND11_MAKE_OPAQUE(std::vector<std::pair<int, int>>);
 
 namespace ksana_llm {
 
 ServingOp::ServingOp() {}
 
-ServingOp::~ServingOp() { serving_impl_->Stop(); }
+ServingOp::~ServingOp() { inference_server_->Stop(); }
 
 void ServingOp::InitServing(const std::string &config_file) {
-  InitLoguru();
-  KLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
-
-  KLLM_LOG_DEBUG << "ServingOp::InitServing invoked.";
-
-  KLLM_LOG_INFO << "InitServing with config file: " << config_file;
-  Status status = Singleton<Environment>::GetInstance()->ParseConfig(config_file);
-  if (!status.OK()) {
-    std::cerr << status.ToString() << std::endl;
-    KLLM_LOG_FATAL << "InitServing error, " << status.ToString();
-  }
+  inference_server_ = std::make_shared<InferenceServer>(config_file, endpoint_config_);
+  STATUS_CHECK_FAILURE(inference_server_->Start());
 
   ModelConfig model_config;
-  Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
+  STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetModelConfig("", model_config));
   plugin_path_ = model_config.path;
-  try {
-    request_packer_.InitTokenizer(model_config.path);
-  } catch (const py::error_already_set &e) {
-    PyErr_Clear();
-    KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
-  }
-  serving_impl_ = std::make_shared<ServingImpl>();
-  serving_impl_->Start();
-
-  KLLM_LOG_DEBUG << "ServingOp::InitServing finished.";
 }
 
 Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
@@ -62,9 +33,9 @@ Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python
                            ksana_llm::KsanaPythonOutput &ksana_python_output) {
   KLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
   const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(torch_op_generate_span, carrier);
+  auto span = REPORT_TRACE(serving_op_generate_span, carrier);
   opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(serving_impl_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
+  STATUS_CHECK_AND_REPORT(inference_server_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
 }
 
 Status ServingOp::GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
@@ -72,29 +43,19 @@ Status ServingOp::GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksa
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
   KLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
   const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(torch_op_generate_streaming_span, carrier);
+  auto span = REPORT_TRACE(serving_op_generate_streaming_span, carrier);
   opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(serving_impl_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
+  STATUS_CHECK_AND_REPORT(inference_server_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
 }
 
 Status ServingOp::Forward(const std::string &request_bytes,
                           const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                           std::string &response_bytes) {
   KLLM_LOG_DEBUG << "ServingOp::Forward invoked.";
-
   const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(torch_op_generate_forward_span, carrier);
+  auto span = REPORT_TRACE(serving_op_forward_span, carrier);
   opentelemetry::trace::Scope scope(span);
-  std::vector<std::shared_ptr<KsanaPythonInput>> ksana_python_inputs;
-
-  STATUS_CHECK_RETURN_AND_REPORT(request_packer_.Unpack(request_bytes, ksana_python_inputs), span);
-  std::vector<KsanaPythonOutput> ksana_python_outputs;
-  STATUS_CHECK_RETURN_AND_REPORT(serving_impl_->HandleBatch(ksana_python_inputs, req_ctx, ksana_python_outputs), span);
-  STATUS_CHECK_RETURN_AND_REPORT(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_bytes), span);
-
-  span->SetStatus(opentelemetry::trace::StatusCode::kOk);
-  span->End();
-  return Status();
+  STATUS_CHECK_AND_REPORT(inference_server_->HandleForward(request_bytes, req_ctx, response_bytes), span);
 }
 
 }  // namespace ksana_llm
@@ -193,10 +154,25 @@ PYBIND11_MODULE(libtorch_serving, m) {
         return std::make_tuple(status, std::move(ksana_python_output));
       });
 
+  // Export `EndpointType` to python, only export the values used in python.
+  pybind11::enum_<ksana_llm::EndpointType>(m, "EndpointType", pybind11::arithmetic())
+      .value("RPC", ksana_llm::EndpointType::RPC)
+      .export_values();
+
+  // Export `EndpointConfig` to python.
+  pybind11::class_<ksana_llm::EndpointConfig, std::shared_ptr<ksana_llm::EndpointConfig>>(m, "EndpointConfig")
+      .def(pybind11::init<>())
+      .def_readwrite("type", &ksana_llm::EndpointConfig::type)
+      .def_readwrite("rpc_plugin_name", &ksana_llm::EndpointConfig::rpc_plugin_name)
+      .def_readwrite("host", &ksana_llm::EndpointConfig::host)
+      .def_readwrite("port", &ksana_llm::EndpointConfig::port)
+      .def_readwrite("access_log", &ksana_llm::EndpointConfig::access_log);
+
   // Export `ServingOp` to python.
   pybind11::class_<ksana_llm::ServingOp, std::shared_ptr<ksana_llm::ServingOp>>(m, "Serving")
       .def(pybind11::init<>())
       .def("init_serving", &ksana_llm::ServingOp::InitServing)
+      .def_readwrite("endpoint_config", &ksana_llm::ServingOp::endpoint_config_)
       .def_readwrite("plugin_path", &ksana_llm::ServingOp::plugin_path_)
       .def("generate",
            [](std::shared_ptr<ksana_llm::ServingOp> &self,

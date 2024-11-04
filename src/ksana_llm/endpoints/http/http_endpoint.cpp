@@ -5,15 +5,15 @@
 #include "ksana_llm/endpoints/http/http_endpoint.h"
 #include <memory>
 
+#include "ksana_llm/endpoints/local/local_endpoint.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 #include "nlohmann/json.hpp"
 
 namespace ksana_llm {
 
-HttpEndpoint::HttpEndpoint(const EndpointConfig &endpoint_config,
-                           Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
-    : RpcEndpoint(endpoint_config, request_queue) {}
+HttpEndpoint::HttpEndpoint(const EndpointConfig &endpoint_config, const std::shared_ptr<LocalEndpoint> &local_endpoint)
+    : RpcEndpoint(endpoint_config, local_endpoint) {}
 
 Status HttpEndpoint::Accept(std::shared_ptr<Request> &req) {
   if (terminated_) {
@@ -64,7 +64,7 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
 
     Status req_prepare_status = Accept(req);
     std::shared_ptr<Waiter> waiter = req->waiter;
-    request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(req_prepare_status, req));
+    // request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(req_prepare_status, req));
 
     // Get inference result
     waiter->Wait();

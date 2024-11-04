@@ -30,6 +30,13 @@ class RequestPackerTest : public testing::Test {
   TargetRequestSerial target;
 };
 
+// Test for empty unpacking.
+TEST_F(RequestPackerTest, EmptyUnpack) {
+  std::string request_bytes;
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs).GetMessage().find("Request content is empty."),
+            std::string::npos);
+}
+
 // Test for simple unpacking.
 TEST_F(RequestPackerTest, SimpleUnpack) {
   request.prompt = "hello world";

@@ -16,6 +16,11 @@ void RequestPacker::InitTokenizer(const std::string& tokenizer_path) {
 
 Status RequestPacker::Unpack(const std::string& request_bytes,
                              std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
+  // Return early if `request_bytes` is empty.
+  if (request_bytes.empty()) {
+    return Status(RET_INVALID_ARGUMENT, "Request content is empty.");
+  }
+
   // Construct a KsanaPythonInput object from a RequestSerial object.
   auto GetKsanaPythonInput = [this](const RequestSerial& req) -> KsanaPythonInput {
     KsanaPythonInput ksana_python_input;

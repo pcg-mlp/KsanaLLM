@@ -81,7 +81,7 @@ class Status {
 
 #define STATUS_CHECK_AND_REPORT(status, span)                                                                  \
   do {                                                                                                         \
-    auto _status = (status);                                                                                   \
+    auto &&_status = (status);                                                                                 \
     bool is_ok = _status.OK();                                                                                 \
     if (!is_ok) {                                                                                              \
       KLLM_LOG_ERROR << _status.GetMessage();                                                                  \
