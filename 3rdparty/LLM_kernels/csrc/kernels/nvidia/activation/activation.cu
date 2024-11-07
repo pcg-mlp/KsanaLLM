@@ -475,15 +475,15 @@ __global__ void InvokeSigmoidKernel(T* data, const int32_t size, const float sca
   }
 }
 
-template <>
-__global__ void InvokeSigmoidKernel(half2* data, const int32_t size, const float scale) {
+template <typename T>
+__global__ void InvokeOptiSigmoidKernel(T* data, const int32_t size, const float scale) {
   const int32_t index = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
   if (index < size / 2) {
-    half2 val = data[index];
+    T val = data[index];
     float2 val_float2 = CastCudaDataType<float2>(val);
     val_float2.x = 1.0f / (1.0f + exp(-val_float2.x)) * scale;
     val_float2.y = 1.0f / (1.0f + exp(-val_float2.y)) * scale;
-    data[index] = CastCudaDataType<half2>(val_float2);
+    data[index] = CastCudaDataType<T>(val_float2);
   }
 }
 
@@ -499,12 +499,19 @@ void InvokeSigmoid(T* data, const int32_t size, const float scale, cudaStream_t&
     // NOTE(karlluo): each instrinct can handle two elements, so we just need half blocks num
     dim3 block(block_threads_num);
     dim3 grid((size + grid_blocks_num - 1) / grid_blocks_num);
-    InvokeSigmoidKernel<<<grid, block, 0, stream>>>((half2*)data, size, scale);
+    if (std::is_same<T, __nv_bfloat16>::value) {
+      InvokeOptiSigmoidKernel<<<grid, block, 0, stream>>>((__nv_bfloat162*)data, size, scale);
+    } else {
+      InvokeOptiSigmoidKernel<<<grid, block, 0, stream>>>((half2*)data, size, scale);
+    }
   }
 }
 
 template void InvokeSigmoid(float* data, const int32_t size, const float scale, cudaStream_t& stream);
 template void InvokeSigmoid(half* data, const int32_t size, const float scale, cudaStream_t& stream);
+#ifdef ENABLE_BF16
+template void InvokeSigmoid(__nv_bfloat16* data, const int32_t size, const float scale, cudaStream_t& stream);
+#endif  // ENABLE_BF16
 
 }  // namespace nvidia
 }  // namespace llm_kernels
