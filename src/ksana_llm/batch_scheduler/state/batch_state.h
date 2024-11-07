@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
 
 namespace ksana_llm {
@@ -32,6 +33,9 @@ struct BatchState {
         // Reject this request.
         infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
         infer_request->finished = true;
+
+        RECORD_TRACE_EVENT_TAG("WaitingQFull", TraceEventType::DropReq, std::to_string(infer_request->req_id),
+                               TRACE_THREAD_NAME_PREFILL_DECODE);
         infer_request->Notify();
       }
     }

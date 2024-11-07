@@ -7,6 +7,7 @@ option(WITH_CUDA "Enable CUDA" ON)
 option(WITH_ACL "Enable Ascend" OFF)
 option(WITH_TESTING "Enable testing" OFF)
 option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
+option(WITH_EVENT_RECORD "Enable event record" OFF)
 
 if(WITH_CUDA)
   project(ksana_llm LANGUAGES CXX CUDA)
@@ -125,6 +126,10 @@ link_directories(
 if(WITH_TESTING)
   enable_testing()
   include(external/gtest)
+endif()
+
+if(WITH_EVENT_RECORD)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_RECORD_EVENT")
 endif()
 
 # include torch

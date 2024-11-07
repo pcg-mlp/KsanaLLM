@@ -34,6 +34,8 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Set the cache manager instance of batch scheduler.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
 
+  std::shared_ptr<CacheManagerInterface> &GetCacheManager();
+
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
   bool IsIdle();
 

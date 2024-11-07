@@ -201,6 +201,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
     PreparePrefixCacheBlocks();
   }
+  std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return dummy_cache_mgr_; }
 
   std::vector<std::shared_ptr<InferRequest>>& Schedule() override {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -380,6 +381,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
   std::vector<int> prefix_cache_tokens_;
 
   std::mutex mux_;
+  std::shared_ptr<CacheManagerInterface> dummy_cache_mgr_ = nullptr;
 };
 
 TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {

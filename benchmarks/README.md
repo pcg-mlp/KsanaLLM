@@ -8,7 +8,7 @@ git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
 
 ```
 
-# Ksna
+# Ksana
 ## Start server
 ```
 cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python

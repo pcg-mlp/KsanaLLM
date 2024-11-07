@@ -9,13 +9,13 @@
 
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
-
 namespace ksana_llm {
 
 BatchManager::BatchManager(std::shared_ptr<Context> context) {
@@ -75,6 +75,9 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
   for (auto &infer_req : infer_request_group) {
     infer_req->SetReqGroup(infer_request_group);
+
+    RECORD_TRACE_EVENT_TAG("SchedBegin", TraceEventType::SchedBegin, std::to_string(infer_req->req_id),
+                           TRACE_THREAD_NAME_PREFILL_DECODE);
   }
 
   enqueue_status = batch_scheduler_->AddInferRequest(infer_request_group);
@@ -117,12 +120,78 @@ Status BatchManager::Process() {
       continue;
     }
 
+#ifdef ENABLE_RECORD_EVENT
+    // Cache some request info because they may be changed in Step()
+    std::unordered_map<uint64_t, std::pair<std::string, TraceEventType>> req_infos;
+    time_t start_time_ns = ProfileTimer::GetCurrentTimeInNs();
+    uint64_t forward_token_num = 0;  // number of tokens computed in this step
+    uint64_t input_token_num = 0;    // number of tokens may consume kv-cache
+    for (auto &req : scheduled_reqs) {
+      input_token_num += req->output_tokens.size();
+      // number of tokens computed in this step for current request
+      int token_num =
+          (req->infer_stage == InferStage::STAGE_CONTEXT) ? (req->output_tokens.size() - req->prefix_cache_len) : 1;
+      forward_token_num += token_num;
+      std::string name = ((req->infer_stage == InferStage::STAGE_CONTEXT) ? "P" : "D") + std::to_string(token_num);
+      TraceEventType type =
+          req->infer_stage == InferStage::STAGE_CONTEXT ? TraceEventType::Prefill : TraceEventType::Decode;
+      req_infos[req->req_id] = std::make_pair(name, type);
+    }
+
+    RECORD_TRACE_EVENT(std::to_string(input_token_num), TraceEventType::InputTokenNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_INPUT_TOKEN_NUM, TraceEventPhase::Begin, start_time_ns);
+    RECORD_TRACE_EVENT(std::to_string(forward_token_num), TraceEventType::ForwardTokenNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_FORWARD_TOKEN_NUM, TraceEventPhase::Begin, start_time_ns);
+
+    for (auto &req : scheduled_reqs) {
+      RECORD_TRACE_EVENT(req_infos[req->req_id].first, req_infos[req->req_id].second, std::to_string(req->req_id),
+                         TRACE_THREAD_NAME_PREFILL_DECODE, TraceEventPhase::Begin, start_time_ns);
+    }
+#endif
+
     {
       Status status = llm_runtime_->Step(scheduled_reqs);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();
       }
     }
+
+#ifdef ENABLE_RECORD_EVENT
+    // Record metrics
+    time_t end_time_ns = ProfileTimer::GetCurrentTimeInNs();
+
+    // Record input_token_num,forward_token_num and forward_token_per_sec
+    RECORD_TRACE_EVENT(std::to_string(input_token_num), TraceEventType::InputTokenNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_INPUT_TOKEN_NUM, TraceEventPhase::End, end_time_ns);
+    RECORD_TRACE_EVENT(std::to_string(forward_token_num), TraceEventType::ForwardTokenNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_FORWARD_TOKEN_NUM, TraceEventPhase::End, end_time_ns);
+
+    std::string token_per_sec_str =
+        std::to_string(forward_token_num * 1000 * 1000 * 1000 / (end_time_ns - start_time_ns));
+    RECORD_TRACE_EVENT(token_per_sec_str, TraceEventType::TokenNumPerSec, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_FORWARD_TOKEN_PER_SEC, TraceEventPhase::Begin, start_time_ns);
+    RECORD_TRACE_EVENT(token_per_sec_str, TraceEventType::TokenNumPerSec, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_FORWARD_TOKEN_PER_SEC, TraceEventPhase::End, end_time_ns);
+
+    // Record usable block num, future block num
+    std::string usable_block_num_str = std::to_string(batch_scheduler_->GetCacheManager()->GetUsableBlockNumber());
+    RECORD_TRACE_EVENT(usable_block_num_str, TraceEventType::UsableBlockNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_USABLE_BLK_NUM, TraceEventPhase::Begin, start_time_ns);
+    RECORD_TRACE_EVENT(usable_block_num_str, TraceEventType::UsableBlockNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_USABLE_BLK_NUM, TraceEventPhase::End, end_time_ns);
+    std::string future_block_num_str = std::to_string(batch_scheduler_->GetCacheManager()->GetFutureBlockNumber());
+    RECORD_TRACE_EVENT(future_block_num_str, TraceEventType::FutureBlockNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_FUTURE_BLK_NUM, TraceEventPhase::Begin, start_time_ns);
+    RECORD_TRACE_EVENT(future_block_num_str, TraceEventType::FutureBlockNum, TRACE_PROCESS_NAME_METRICS,
+                       TRACE_THREAD_NAME_FUTURE_BLK_NUM, TraceEventPhase::End, end_time_ns);
+
+    // Record end of trace events
+    for (auto &req : scheduled_reqs) {
+      RECORD_TRACE_EVENT(req_infos[req->req_id].first, req_infos[req->req_id].second, std::to_string(req->req_id),
+                         TRACE_THREAD_NAME_PREFILL_DECODE, TraceEventPhase::End, end_time_ns);
+    }
+
+#endif
   }
 
   return Status();

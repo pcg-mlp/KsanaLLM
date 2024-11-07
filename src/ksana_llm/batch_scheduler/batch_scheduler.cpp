@@ -15,6 +15,7 @@
 #include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/block_manager/memory_block.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/context.h"
@@ -42,6 +43,10 @@ void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cach
   schedule_strategy_->SetCacheManager(cache_manager);
 }
 
+std::shared_ptr<CacheManagerInterface>& BatchScheduler::GetCacheManager() {
+  return schedule_strategy_->GetCacheManager();
+}
+
 Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
   std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
   KLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
@@ -54,6 +59,9 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
     infer_request->finish_status = finish_status;
     for (auto& infer_request : infer_request_group) {
       infer_request->finished = true;
+
+      RECORD_TRACE_EVENT_TAG("Input2Long", TraceEventType::DropReq, std::to_string(infer_request->req_id),
+                             TRACE_THREAD_NAME_PREFILL_DECODE);
     }
     infer_request->Notify();
     return finish_status;
@@ -90,6 +98,8 @@ Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<Inf
     infer_request->finish_status = finish_status;
     for (auto& infer_request : infer_request_group) {
       infer_request->finished = true;
+      RECORD_TRACE_EVENT_TAG("WaitingQFull", TraceEventType::DropReq, std::to_string(infer_request->req_id),
+                             TRACE_THREAD_NAME_PREFILL_DECODE);
     }
     infer_request->Notify();
     return finish_status;

@@ -24,6 +24,8 @@ class BaseScheduleStrategy {
   // Set the cache manager instance of scheduler strategy.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
 
+  std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return cache_manager_; }
+
  protected:
   // The batch state informations, include some queues and mutexes.
   std::shared_ptr<BatchState> batch_state_ = nullptr;

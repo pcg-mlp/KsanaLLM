@@ -8,6 +8,7 @@
 
 #include "base_strategy.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
@@ -46,6 +47,17 @@ void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> 
 void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status req_status) {
   req->finish_status = req_status;
   req->finished = true;
+
+#ifdef ENABLE_RECORD_EVENT
+  if (req_status.GetCode() == RET_SUCCESS) {
+    RECORD_TRACE_EVENT_TAG("FinishReq", TraceEventType::FinishReq, std::to_string(req->req_id),
+                           TRACE_THREAD_NAME_PREFILL_DECODE);
+  } else {
+    RECORD_TRACE_EVENT_TAG(req_status.GetMessage(), TraceEventType::DropReq, std::to_string(req->req_id),
+                           TRACE_THREAD_NAME_PREFILL_DECODE);
+  }
+#endif
+
   req->Notify();
 }
 
@@ -252,7 +264,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
           KLLM_LOG_DEBUG << "Pending swapin requests exists, merge it first.";
           MergePendingSwapinRequests(true, false);
         }
-
+        RECORD_TRACE_EVENT_BEGIN("SO", TraceEventType::SwapOut, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
         size_t free_block_num = 0;
         size_t swapped_block_num = 0;
         status = cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num);
@@ -364,7 +376,7 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
         KLLM_LOG_DEBUG << "Pending swapout requests exists, merge it first.";
         MergePendingSwapoutRequests(true, false);
       }
-
+      RECORD_TRACE_EVENT_BEGIN("SI", TraceEventType::SwapIn, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
       status = cache_manager_->SwapinRequestAsync(req->req_id, swapin_needed_block_num, req->kv_cache_blocks);
       if (status.OK()) {
         step_batch_size += 1;
@@ -562,6 +574,7 @@ Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, boo
         return status;
       }
 
+      RECORD_TRACE_EVENT_END("SI", TraceEventType::SwapIn, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
       KLLM_LOG_DEBUG << "MergePendingSwapinRequests swap in req " << req->req_id
                      << ", current_block_num:" << req->kv_cache_blocks[0].size()
                      << ", current_token_size:" << req->output_tokens.size();
@@ -598,6 +611,7 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
         return status;
       }
 
+      RECORD_TRACE_EVENT_END("SO", TraceEventType::SwapOut, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
       KLLM_LOG_DEBUG << "MergePendingSwapinRequests swapout req " << req->req_id
                      << ", current_block_num:" << req->kv_cache_blocks[0].size()
                      << ", current_token_size:" << req->output_tokens.size();
