@@ -37,6 +37,16 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::
   threadpool_->Start();
 }
 
+#ifdef ENABLE_CUDA
+// In a CUDA environment, it's necessary to compute perfill and decode together.
+// Therefore, kGroupStageMap is required to map to a single stage for synchronized processing.
+static std::unordered_map<InferStage, InferStage> kGroupStageMap = {
+    {InferStage::STAGE_CONTEXT, InferStage::STATE_DECODE}, {InferStage::STATE_DECODE, InferStage::STATE_DECODE}};
+#else
+static std::unordered_map<InferStage, InferStage> kGroupStageMap = {
+    {InferStage::STAGE_CONTEXT, InferStage::STAGE_CONTEXT}, {InferStage::STATE_DECODE, InferStage::STATE_DECODE}};
+#endif
+
 void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
@@ -47,10 +57,7 @@ void LlmRuntime::BuildForwardRequests(
             });
   for (size_t i = 0; i < reqs.size(); ++i) {
     std::shared_ptr<InferRequest>& req_ptr = reqs[i];
-    if (reqs[i]->infer_stage == InferStage::STATE_DECODE) req_ptr->step += 1;
-#ifdef ENABLE_CUDA
-    reqs[i]->infer_stage = InferStage::STATE_DECODE;
-#endif
+    req_ptr->step += 1;
     req_ptr->logits_offset = logits_offset;
     // When the logits_custom_length is greater than 0, the size of logits to be calculated is logits_custom_length.
     if (req_ptr->logits_custom_length > 0) {
@@ -59,13 +66,14 @@ void LlmRuntime::BuildForwardRequests(
       logits_offset++;
     }
     ModelInstance* key = req_ptr->model_instance.get();
-    InferStage stage = req_ptr->infer_stage;
+    InferStage grouped_stage = kGroupStageMap[req_ptr->infer_stage];
+
     if (grouped_reqs.find(key) == grouped_reqs.end()) {
       grouped_reqs[key] = {};
     }
 
-    if (grouped_reqs[key].find(stage) == grouped_reqs[key].end()) {
-      grouped_reqs[key][stage] = {};
+    if (grouped_reqs[key].find(grouped_stage) == grouped_reqs[key].end()) {
+      grouped_reqs[key][grouped_stage] = {};
     }
 
     ForwardRequest forward_req;
@@ -138,7 +146,7 @@ void LlmRuntime::BuildForwardRequests(
                                                          device_kv_cache_block_ids.end());
     }
 #endif
-    grouped_reqs[key][stage].push_back(forward_req);
+    grouped_reqs[key][grouped_stage].push_back(forward_req);
   }
 }
 
@@ -239,7 +247,7 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   threadpool_->Submit([reqs]() mutable {
     const auto current_time = ProfileTimer::GetCurrentTimeInMs();
     std::for_each(std::execution::par_unseq, reqs.begin(), reqs.end(), [current_time](const auto& req) {
-      if (req->step == 0) {
+      if (req->infer_stage == STAGE_CONTEXT) {
         REPORT_METRIC(time_to_first_token_ms, current_time - req->timestamp_in_ms);
       }
     });

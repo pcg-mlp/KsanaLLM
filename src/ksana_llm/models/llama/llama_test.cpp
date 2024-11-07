@@ -190,6 +190,9 @@ class LlamaTest : public testing::Test {
     sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29871, (*forward_reqs[0].output_tokens)[2]);
 
+    for (auto &forward_req : forward_reqs) {
+      forward_req.infer_stage = InferStage::STATE_DECODE;
+    }
     // Decode
     EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
     sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
@@ -203,7 +206,7 @@ class LlamaTest : public testing::Test {
 
     EventRecord(start, context_->GetComputeStreams()[device_id]);
     for (auto &forward_req : multi_forward_reqs) {
-      forward_req.step = 1;
+      forward_req.infer_stage = InferStage::STATE_DECODE;
     }
     for (int i = 0; i < rounds; ++i) {
       llama->Decode(llama_weight, multi_forward_reqs);

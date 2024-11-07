@@ -18,7 +18,7 @@ struct ForwardRequest {
   size_t req_id;
 
   // The infer stage, context decode or decode.
-  InferStage infer_stage;
+  InferStage infer_stage = InferStage::STAGE_CONTEXT;
 
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;

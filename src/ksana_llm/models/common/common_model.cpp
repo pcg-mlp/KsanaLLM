@@ -743,7 +743,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
 template <typename T>
 Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs) {
   size_t batch_size = forward_reqs.size();
-  for (size_t idx = 0; idx < batch_size && forward_reqs[idx].step == 0; idx++) {
+  for (size_t idx = 0; idx < batch_size && forward_reqs[idx].infer_stage == STAGE_CONTEXT; idx++) {
     py::gil_scoped_acquire acquire;
 
     auto ksana_python_input = std::make_shared<KsanaPythonInput>();

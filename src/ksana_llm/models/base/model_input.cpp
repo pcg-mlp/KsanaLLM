@@ -186,7 +186,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   decode_num = 0;
   total_prefix_len = 0;
   for (size_t idx = 0; idx < batch_size; ++idx) {
-    if (forward_reqs[idx].step == 0) {
+    if (forward_reqs[idx].infer_stage == STAGE_CONTEXT) {
       context_num++;
       context_total_seq_len += forward_reqs[idx].output_tokens->size();
     } else {

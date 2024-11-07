@@ -60,7 +60,6 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
     // Always update cache manager, even if request is finished.
     Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
     if (req->output_tokens.size() <= req->origin_input_tokens.size()) {
-      req->step = 0;
       req->infer_stage = InferStage::STAGE_CONTEXT;
       req->input_tokens = req->origin_input_tokens;
       req->output_tokens = req->origin_input_tokens;
