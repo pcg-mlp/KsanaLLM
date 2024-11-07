@@ -522,7 +522,7 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
   PrefixCachedRequest* cached_request = it->second.get();
 
   // Return if block is not full.
-  size_t filled_block_num = token_ids.size() / cache_manager_config_.block_token_num;
+  size_t filled_block_num = (token_ids.size() - 1) / cache_manager_config_.block_token_num;
   if (filled_block_num <= cached_request->shared_block_num) {
     return Status();
   }
