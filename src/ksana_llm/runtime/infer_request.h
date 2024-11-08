@@ -59,14 +59,20 @@ class InferRequest {
   // The input tokens.
   std::vector<int> &input_tokens;
 
-  // The origin input tokens.
-  std::vector<int> origin_input_tokens;
-
   // Embedding slice used to refit input embedding
   EmbeddingSlice &input_refit_embedding;
 
-  // The output tokens, always contain input tokens on the left.
+  // output_tokens is used during computation. When split fuse is enabled, output_tokens contains only the split
+  // part. This variable is dynamically updated based on the current computation phase and may not always represent the
+  // complete output.
   std::vector<int> &output_tokens;
+
+  // complete_output_tokens holds the entire set of output tokens. It is used to preserve the full output state,
+  // especially when working with split fuse operations. Before each scheduling when split fuse is not fully completed,
+  // output_tokens is restored from complete_output_tokens to ensure consistency. Additionally, upon re-computation,
+  // complete_output_tokens is updated to reflect the latest state of output_tokens, ensuring that it always
+  // represents the most current complete output.
+  std::vector<int> complete_output_tokens;
 
   // Store token and their corresponding float probability values.
   std::vector<std::vector<std::pair<int, float>>> &logprobs;

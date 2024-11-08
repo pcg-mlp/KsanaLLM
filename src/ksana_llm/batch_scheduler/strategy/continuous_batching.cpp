@@ -42,6 +42,7 @@ void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> 
   req->kv_cache_blocks.resize(tp_num_);
   req->infer_stage = InferStage::STAGE_CONTEXT;
   req->step = 0;
+  req->complete_output_tokens = req->output_tokens;
 }
 
 void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status req_status) {
@@ -71,10 +72,9 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
     // Always update cache manager, even if request is finished.
     Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
-    if (req->output_tokens.size() <= req->origin_input_tokens.size()) {
+    if (req->output_tokens.size() <= req->complete_output_tokens.size()) {
       req->infer_stage = InferStage::STAGE_CONTEXT;
-      req->input_tokens = req->origin_input_tokens;
-      req->output_tokens = req->origin_input_tokens;
+      req->output_tokens = req->complete_output_tokens;
       batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
       it = batch_state_->running_queue.erase(it);
       continue;
@@ -248,6 +248,22 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       }
     }
 
+    // If allocation failed, disable split fuse.
+    if (batch_state_->waiting_queue.size() > 0 && batch_scheduler_config_.split_fuse_token_num > 0) {
+      for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end(); it++) {
+        auto req = *it;
+        if (req->kv_cache_blocks[0].size() > 0) {
+          cache_manager_->DestroyFinishedRequest(req->req_id);
+          req->kv_cache_blocks.clear();
+          req->kv_cache_blocks.resize(tp_num_);
+          KLLM_LOG_WARNING << fmt::format("Split fuse disabled due to allocation failure for request ID {}",
+                                          req->req_id);
+        }
+      }
+      batch_scheduler_config_.split_fuse_token_num = 0;
+      KLLM_LOG_WARNING << "Split fuse has been disabled.";
+    }
+
     // If allocation failed, skip swapout, recompute request directly.
     if (allocate_block_succ) {
       // No more blocks, skip swap in and waiting launch.
@@ -291,7 +307,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       req->kv_cache_blocks.resize(tp_num_);
       req->infer_stage = InferStage::STAGE_CONTEXT;
       req->step = 0;
-
+      req->complete_output_tokens = req->output_tokens;
       batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
       batch_state_->running_queue.erase(it);
 
@@ -457,6 +473,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   size_t step_token_num = batch_state_->running_queue.size();
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
+    req->output_tokens = req->complete_output_tokens;
 
     // When the logits_custom_length is greater than 0, the size of logits to be calculated is logits_custom_length.
     auto logits_extra_length = (req->logits_custom_length - 1);

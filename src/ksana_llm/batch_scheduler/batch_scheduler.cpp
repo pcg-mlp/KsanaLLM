@@ -77,13 +77,13 @@ bool BatchScheduler::IsIdle() {
     waiting_buffer_emtpy = batch_state_->waiting_buffer_queue.empty();
   }
 
-  bool swapped_queue_empty = false;
+  bool batch_state_queue_empty = false;
   {
     std::lock_guard<std::mutex> guard(batch_state_->queue_mutex);
-    swapped_queue_empty = batch_state_->swapped_queue.empty();
+    batch_state_queue_empty = batch_state_->swapped_queue.empty() && batch_state_->waiting_queue.empty();
   }
 
-  return (waiting_buffer_emtpy && swapped_queue_empty);
+  return (waiting_buffer_emtpy && batch_state_queue_empty);
 }
 
 Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {

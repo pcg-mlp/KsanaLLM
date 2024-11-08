@@ -22,7 +22,7 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       model_name(request->model_name),
       logits_custom_length(request->logits_custom_length),
       input_tokens(request->input_tokens),
-      origin_input_tokens(request->input_tokens),
+      complete_output_tokens(request->input_tokens),
       input_refit_embedding(request->input_refit_embedding),
       output_tokens(std::get<0>(request->output_group[index])),
       logprobs(std::get<1>(request->output_group[index])),
