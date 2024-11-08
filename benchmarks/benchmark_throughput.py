@@ -7,7 +7,7 @@ import asyncio
 import csv
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncGenerator, List, Tuple, Union
 
 import aiohttp
@@ -16,7 +16,7 @@ import orjson
 import uvloop
 from tqdm.asyncio import tqdm
 # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
-from transformers import AutoTokenizer 
+from transformers import AutoTokenizer
 
 # (prompt len, output len, input token num, output token num,
 #  request latency, first token latency, inter token latencies)
@@ -84,28 +84,37 @@ class BenchmarkMetrics:
 
 @dataclass
 class BenchmarkStreamMetrics:
-    avg_first_token_latency: float = 0.  # TTFT
-    median_first_token_latency: float = 0.
-    p99_first_token_latency: float = 0.
-    avg_inter_token_latency: float = 0.  # ITL
-    median_inter_token_latency: float = 0.
-    p99_inter_token_latency: float = 0.
-    avg_latency_per_out_token: float = 0.  # TPOT
-    median_latency_per_out_token: float = 0.
-    p99_latency_per_out_token: float = 0.
+    avg_first_token_latency: float = 0.0  # TTFT
+    median_first_token_latency: float = 0.0
+    percentiles_first_token_latency: List[Tuple[int, float]] = field(
+        default_factory=list
+    )
+    avg_inter_token_latency: float = 0.0  # ITL
+    median_inter_token_latency: float = 0.0
+    percentiles_inter_token_latency: List[Tuple[int, float]] = field(
+        default_factory=list
+    )
+    avg_latency_per_out_token: float = 0.0  # TPOT
+    median_latency_per_out_token: float = 0.0
+    percentiles_latency_per_out_token: List[Tuple[int, float]] = field(
+        default_factory=list
+    )
 
     def __str__(self):
-        return '\n'.join([
-            f"Average TTFT: {self.avg_first_token_latency:.3f} s",
-            f"Median TTFT: {self.median_first_token_latency:.3f} s",
-            f"P99 TTFT: {self.p99_first_token_latency:.3f} s",
-            f"Average ITL: {self.avg_inter_token_latency:.3f} s",
-            f"Median ITL: {self.median_inter_token_latency:.3f} s",
-            f"P99 ITL: {self.p99_inter_token_latency:.3f} s",
-            f"Average TPOT: {self.avg_latency_per_out_token:.3f} s",
-            f"Median TPOT: {self.median_latency_per_out_token:.3f} s",
-            f"P99 TPOT: {self.p99_latency_per_out_token:.3f} s",
-        ])
+        return '\n'.join(
+            [f"Average TTFT: {self.avg_first_token_latency:.3f} s",
+             f"Median TTFT: {self.median_first_token_latency:.3f} s"] +
+            [f"P{percentile} TTFT: {percentile_ttft:.3f} s"
+             for [percentile, percentile_ttft] in self.percentiles_first_token_latency] +
+            [f"Average ITL: {self.avg_inter_token_latency:.3f} s",
+             f"Median ITL: {self.median_inter_token_latency:.3f} s"] +
+            [f"P{percentile} ITL: {percentile_itl:.3f} s"
+             for [percentile, percentile_itl] in self.percentiles_inter_token_latency] +
+            [f"Average TPOT: {self.avg_latency_per_out_token:.3f} s",
+             f"Median TPOT: {self.median_latency_per_out_token:.3f} s"] +
+            [f"P{percentile} TPOT: {percentile_tpot:.3f} s"
+             for [percentile, percentile_tpot] in self.percentiles_latency_per_out_token]
+        )
 
 
 def args_config():
@@ -147,6 +156,13 @@ def args_config():
     parser.add_argument("--shuffle",
                         action="store_true",
                         help="shuffle input")
+    parser.add_argument("--percentiles",
+                        nargs='+',
+                        type=int,
+                        default=[99],
+                        help="A list of percentiles for TTFT, ITL and TPOT. "
+                        "To report 25-th, 50-th, and 75-th percentiles, use \"25 50 75\". "
+                        "Default value is \"99\".")
     parser.add_argument("--request_rate_step",
                         type=float,
                         default=1.0,
@@ -183,25 +199,27 @@ def args_config():
     parser.add_argument('--stream',
                         action='store_true',
                         help='Whether to use stream mode for the request')
-    parser.add_argument(
-        '--backend',
-        type=str,
-        default="ksana",
-        choices=[
-            'ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm', 'evart', 'mindie-service'
-        ],
-        help='serving backend, ksana or vllm or evart or online server')
+    parser.add_argument('--backend',
+                        type=str,
+                        default="ksana",
+                        choices=[
+                            'ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm',
+                            'evart', 'mindie-service', 'sglang'
+                        ],
+                        help='serving backend')
     parser.add_argument('--prompt_num',
                         type=int,
                         default=0,
                         help='number of input prompts')
-    parser.add_argument(
-        '--model_type',
-        type=str,
-        default="llama",
-        choices=['llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'chatglm', 'empty'],
-        help=
-        'serving model type, used to add prefixes and suffixes to the prompt.')
+    parser.add_argument('--model_type',
+                        type=str,
+                        default="llama",
+                        choices=[
+                            'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi',
+                            'chatglm', 'empty'
+                        ],
+                        help="serving model type, used to add prefixes and suffixes"
+                             " to the prompt.")
     parser.add_argument('--max_new_tokens',
                         type=int,
                         default=1024,
@@ -266,8 +284,8 @@ def args_config():
     parser.add_argument('--client_timeout',
                         type=int,
                         default=30*3600,
-                        help="The timeout limit for the aiohttp client,"
-                             "(default is 3 hour).")
+                        help="The timeout limit for the aiohttp client"
+                             " (default is 3 hours).")
     parser.add_argument('--tokenizer_path',
                         type=str,
                         default=None,
@@ -294,10 +312,11 @@ async def generate_req_data_async(
     input_requests = enumerate(input_requests)
     # Number of requests already sent at the same time
     request_num = 0
-    # Start time
-    start_time = time.time()
     # Total number of requests processed
     total_requests = 0
+
+    # Start time
+    start_time = time.time()
 
     for req_id, request in input_requests:
         yield req_id, request
@@ -371,17 +390,20 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
         }
     elif args.backend == "trt-llm":
         data = {
+            "accumulate_tokens": True,
             "text_input": prompt,
             "max_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "min_tokens": args.max_new_tokens if args.ignore_eos else 0,
             "bad_words": "",
             "stop_words": "",
+            "top_p": args.topp,
             "top_k": args.topk,
+            "stream": args.stream,
         }
     elif args.backend in ["vllm", "evart", "mindie-service"]:
-        # max outputlen is 1024.
         data = {
             "prompt": prompt,
-            "use_beam_search": False,
             "n": 1,
             "temperature": args.temperature,
             "max_tokens": args.max_new_tokens,
@@ -389,10 +411,28 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "repetition_penalty": args.repetition_penalty,
             "stop_token_ids": args.stop_token_ids,
             "ignore_eos": args.ignore_eos,
+            "min_tokens": args.max_new_tokens if args.ignore_eos else 0,
             "skip_special_tokens": False,
             "spaces_between_special_tokens": False,
             "top_p": args.topp,
             "top_k": args.topk,
+            "stream": args.stream
+        }
+    elif args.backend == "sglang":
+        data = {
+            "text": prompt,
+            "sampling_params": {
+                "n": 1,
+                "temperature": args.temperature,
+                "max_new_tokens": args.max_new_tokens,
+                "stop_token_ids": args.stop_token_ids,
+                "ignore_eos": args.ignore_eos,
+                "top_p": args.topp,
+                "top_k": args.topk,
+                "skip_special_tokens": False,
+                "spaces_between_special_tokens": False,
+                "repetition_penalty": args.repetition_penalty,
+            },
             "stream": args.stream
         }
     elif args.backend in ["ksana-server", "vllm-server"]:
@@ -402,7 +442,6 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "top_p": args.topp,
             "temperature": args.temperature,
             "top_k": args.topk,
-            "num_beams": args.num_beams,
             "repetition_penalty": args.repetition_penalty,
             "logprobs": args.logprobs,
             "n": 1,
@@ -410,6 +449,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "delete_prompt_from_output": 1,
             "stream": args.stream,
             "stop_token_ids": args.stop_token_ids,
+            "max_new_tokens": args.max_new_tokens,
             "ignore_eos": args.ignore_eos,
         }
     return prompt, orjson.dumps(data)
@@ -419,38 +459,60 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                              req_data: bytes, api_url: str,
                              req_id: int, result_list: List, pbar: tqdm,
                              tokenizer: Union[None, AutoTokenizer], max_retries=3):
-    headers = {"User-Agent": "Benchmark Client"}
+    headers = {
+        "User-Agent": "Benchmark Client",
+        "Content-Type": "application/json",
+    }
 
     # Set a timeout of 3 hours for the aiohttp client
     timeout = aiohttp.ClientTimeout(total=args.client_timeout)
-
-    # Record the start time of the request
-    request_start_time = time.perf_counter()
-    output = None
+    
+    # Store the output of sever in stream mode
     server_stream_output = ""
+
     # Create an asynchronous client session with the specified timeout
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Loop indefinitely until the request is successful
+        # Loop until the request is succeeds or the max_reties is reached
         retries = 0
         while True:
+            # Record the start time of the request
+            request_start_time = time.perf_counter()
+
             # Send a POST request to the API URL with the specified headers and data
             async with session.post(api_url, headers=headers,
                                     data=req_data) as response:
-                # Store the last response chunk
-                last_chunk = b""
-                first_token_latency = 0.
-                inter_token_latencies = []
-                most_recent_timestamp = request_start_time
-                # Iterate over the response chunks and append them to the list
-                async for chunk, _ in response.content.iter_chunks():
-                    timestamp = time.perf_counter()
-                    last_chunk += chunk.strip(b'\x00')
-                    try:
-                        if "server" in args.backend and args.stream:
-                            output = orjson.loads(last_chunk.decode("utf-8")[6:][:-2])
-                            server_stream_output += output["choices"][0]["delta"]["content"]
-                        else:
-                            output = orjson.loads(last_chunk.decode("utf-8"))
+                if response.status == 200:
+                    first_token_latency = 0.
+                    inter_token_latencies = []
+                    most_recent_timestamp = request_start_time
+                    # Store a temporarily incomplete response chunk
+                    chunk_acc = ""
+                    # Iterate over the response chunks and append them to the list
+                    async for chunk_bytes, _ in response.content.iter_chunks():
+                        # Record the current timestamp
+                        timestamp = time.perf_counter()
+                        chunk_bytes = chunk_bytes.strip(b'\x00')
+                        if not chunk_bytes:
+                            continue
+                        chunk = chunk_bytes.decode("utf-8")
+                        # Remove the optional prefix "data: " for the first chunk
+                        if chunk_acc == "" and chunk.startswith("data: "):
+                            chunk = chunk[len("data: "):]
+                        # Response done
+                        if chunk == "[DONE]":
+                            break
+                        # Accumulate this chunk
+                        chunk_acc += chunk
+                        # Response is error-prone
+                        try:
+                            output = orjson.loads(chunk_acc)
+                            # Reset the chunk_acc
+                            chunk_acc = ""
+                            if "server" in args.backend and args.stream:
+                                server_stream_output += output["choices"][0]["delta"]["content"]
+                        except orjson.JSONDecodeError:
+                            continue
+
                         # First token
                         if first_token_latency == 0.:
                             first_token_latency = timestamp - request_start_time
@@ -460,17 +522,12 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                                                 most_recent_timestamp)
                         most_recent_timestamp = timestamp
 
-                        last_chunk = b''
-                    except orjson.JSONDecodeError:
-                        continue
-
-            # Record the end time of the request
-            request_end_time = time.perf_counter()
-            # Decode the last chunk to UTF-8
-
             # If the response does not contain an "error" key, break out of the loop
             if (output is not None) and ("error" not in output):
+                # Record the end time of the request as the most recent timestamp
+                request_end_time = most_recent_timestamp
                 break
+            # Request failed, try again
             retries += 1
             if retries > max_retries:
                 raise Exception(f"The request(req_id = {req_id}) failed.")
@@ -502,12 +559,17 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         else:
             input_token_num = len(tokenizer.encode(prompt))
             output_token_num = len(tokenizer.encode(output_text))
+    elif args.backend == "sglang":
+        prompt_len = len(prompt)
+        output_text = output["text"].strip()
+        input_token_num = output["meta_info"]["prompt_tokens"]
+        output_token_num = output["meta_info"]["completion_tokens"]
     elif args.backend == "evart":
         prompt_len = len(prompt)
         output_text = output["text"][0].strip()
         output_token_num = len(output.get("output_token_ids")[0])
     elif "server" in args.backend:
-        if args.stream :
+        if args.stream:
             output["choices"][0]["delta"]["content"] = server_stream_output
         output_text = output['choices'][0][server_map_idx]['content']
         input_token_num = output['usage']['prompt_tokens']
@@ -649,6 +711,8 @@ def main(args: argparse.Namespace):
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(
             args.port) + "/v2/models/ensemble/generate"
+        if args.stream:
+            api_url += "_stream"  # generate_stream
     elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
         args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
@@ -723,7 +787,7 @@ def main(args: argparse.Namespace):
 
         # Calculate the token throughput
         metrics.avg_tokens_per_sec = (metrics.avg_input_tokens + metrics.avg_output_tokens
-            ) * len(inputs) / metrics.total_latency
+            ) * len(REQUEST_LATENCY) / metrics.total_latency / args.repeat_num_iters
 
         print(metrics)
 
@@ -733,17 +797,25 @@ def main(args: argparse.Namespace):
                 first_token_latency
                 for _, _, _, _, _, first_token_latency, _ in REQUEST_LATENCY
             ]
-            stream_metrics.avg_first_token_latency = np.mean(first_token_latencies)
-            stream_metrics.median_first_token_latency = np.median(first_token_latencies)
-            stream_metrics.p99_first_token_latency = np.percentile(first_token_latencies, 99)
+            if len(first_token_latencies) > 0:
+                stream_metrics.avg_first_token_latency = np.mean(first_token_latencies)
+                stream_metrics.median_first_token_latency = np.median(first_token_latencies)
+                stream_metrics.percentiles_first_token_latency = [
+                    (percentile, np.percentile(first_token_latencies, percentile))
+                    for percentile in args.percentiles
+                ]
 
             inter_token_latencies = [
                 inter_token_latency for _, _, _, _, _, _, inter_token_latencies in REQUEST_LATENCY
                 for inter_token_latency in inter_token_latencies
             ]
-            stream_metrics.avg_inter_token_latency = np.mean(inter_token_latencies)
-            stream_metrics.median_inter_token_latency = np.median(inter_token_latencies)
-            stream_metrics.p99_inter_token_latency = np.percentile(inter_token_latencies, 99)
+            if len(inter_token_latencies) > 0:
+                stream_metrics.avg_inter_token_latency = np.mean(inter_token_latencies)
+                stream_metrics.median_inter_token_latency = np.median(inter_token_latencies)
+                stream_metrics.percentiles_inter_token_latency = [
+                    (percentile, np.percentile(inter_token_latencies, percentile))
+                    for percentile in args.percentiles
+                ]
 
             latencies_per_out_token = [
                 (latency - first_token_latency) / (output_tokens_num - 1)
@@ -753,7 +825,10 @@ def main(args: argparse.Namespace):
             if len(latencies_per_out_token) > 0:
                 stream_metrics.avg_latency_per_out_token = np.mean(latencies_per_out_token)
                 stream_metrics.median_latency_per_out_token = np.median(latencies_per_out_token)
-                stream_metrics.p99_latency_per_out_token = np.percentile(latencies_per_out_token, 99)
+                stream_metrics.percentiles_latency_per_out_token = [
+                    (percentile, np.percentile(latencies_per_out_token, percentile))
+                    for percentile in args.percentiles
+                ]
 
             print(stream_metrics)
 
@@ -775,9 +850,12 @@ def main(args: argparse.Namespace):
                       "Avg input chars", "Avg output chars", "Avg input tokens", "Avg output tokens",
                       "Token throughput"]
             if args.stream:
-                header.extend(["Avg TTFT", "Median TTFT", "P99 TTFT",
-                               "Avg ITL", "Median ITL", "P99 ITL",
-                               "Avg TPOT", "Median TPOT", "P99 TPOT"])
+                header.extend(["Avg TTFT", "Median TTFT"] +
+                              [f"P{percentile} TTFT" for percentile in args.percentiles] +
+                              ["Avg ITL", "Median ITL"] +
+                              [f"P{percentile} ITL" for percentile in args.percentiles] +
+                              ["Avg TPOT", "Median TPOT"] +
+                              [f"P{percentile} TPOT" for percentile in args.percentiles])
             writer.writerow(header)
             for (metrics, stream_metrics) in perf_result_list:
                 row = [f"{value:.3f}" for value in metrics.__dict__.values()]
