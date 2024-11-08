@@ -30,9 +30,11 @@ class ATBOperationExecutor {
 
   void ResetVariantPack();
 
-  void SetInputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype);
+  void SetInputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype,
+                      const aclFormat format = aclFormat::ACL_FORMAT_ND);
 
-  void SetOutputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype);
+  void SetOutputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype,
+                       const aclFormat format = aclFormat::ACL_FORMAT_ND);
 
   void Run(atb::Context* context, void (*ws_func)(size_t, void**));
 

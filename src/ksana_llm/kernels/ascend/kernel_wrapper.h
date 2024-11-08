@@ -8,6 +8,7 @@
 #include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
 #include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/tensor.h"
 
@@ -35,5 +36,9 @@ class ArgMaxATBExecutor {
 // Invoke the lookup embedding.
 void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_table, const aclTensor* position_table,
                      aclTensor* output, aclrtStream stream, WorkSpaceFunc ws_func);
+
+// NOTE(karlluo): for some case: matmul, layout NZ/ND has much better performance. TransLayout is such operation to
+// trans layout
+Status TransLayout(Tensor& tensor, Stream& stream);
 
 }  // namespace ksana_llm

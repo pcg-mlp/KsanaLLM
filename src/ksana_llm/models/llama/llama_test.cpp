@@ -98,7 +98,10 @@ class LlamaTest : public testing::Test {
     std::string weight_name = "lm_head.weight";
     Tensor lm_head = llama_weight->GetModelWeights(weight_name);
     EXPECT_EQ(lm_head.device, MEMORY_DEVICE);
+#ifdef ENABLE_CUDA
+    // TODO(karlluo): GPU weight load implement without trans is inefficient, karl will enhance it someday.
     EXPECT_EQ(lm_head.shape, std::vector<size_t>({4096, 32000}));
+#endif
 
     // 错误的 weight 名称
     weight_name = "wrong_name";

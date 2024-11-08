@@ -18,10 +18,11 @@ void ATBOperationExecutor::ResetVariantPack() {
   out_tensor_num_ = 0;
 }
 
-void ATBOperationExecutor::SetInputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype) {
+void ATBOperationExecutor::SetInputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype,
+                                          const aclFormat format) {
   variant_pack_.inTensors.resize(in_tensor_num_ + 1);
   atb::Tensor& atb_tensor = variant_pack_.inTensors[in_tensor_num_++];
-  atb_tensor.desc.format = ACL_FORMAT_ND;
+  atb_tensor.desc.format = format;
   atb_tensor.desc.shape.dimNum = shape.size();
   for (auto i = 0; i < shape.size(); ++i) {
     atb_tensor.desc.shape.dims[i] = shape[i];
@@ -32,10 +33,11 @@ void ATBOperationExecutor::SetInputTensor(void* addr_ptr, const std::vector<size
   atb_tensor.deviceData = const_cast<void*>(addr_ptr);
 }
 
-void ATBOperationExecutor::SetOutputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype) {
+void ATBOperationExecutor::SetOutputTensor(void* addr_ptr, const std::vector<size_t> shape, const aclDataType dtype,
+                                           const aclFormat format) {
   variant_pack_.outTensors.resize(out_tensor_num_ + 1);
   atb::Tensor& atb_tensor = variant_pack_.outTensors[out_tensor_num_++];
-  atb_tensor.desc.format = ACL_FORMAT_ND;
+  atb_tensor.desc.format = format;
   atb_tensor.desc.shape.dimNum = shape.size();
   for (auto i = 0; i < shape.size(); ++i) {
     atb_tensor.desc.shape.dims[i] = shape[i];

@@ -58,9 +58,35 @@ enum DataFormat {
 #if defined(ENABLE_CUDA)
   FORMAT_DEFAULT
 #elif defined(ENABLE_ACL)
-  FORMAT_DEFAULT = aclFormat::ACL_FORMAT_ND
+  FORMAT_DEFAULT = aclFormat::ACL_FORMAT_ND,
+  FORMAT_ND = aclFormat::ACL_FORMAT_ND,
+  FORMAT_NZ = aclFormat::ACL_FORMAT_FRACTAL_NZ
 #endif
 };
+
+#ifdef ENABLE_ACL
+inline aclFormat GetACLFormat(DataFormat data_format) {
+  switch (data_format) {
+    case FORMAT_ND:
+      return aclFormat::ACL_FORMAT_ND;
+    case FORMAT_NZ:
+      return aclFormat::ACL_FORMAT_FRACTAL_NZ;
+    default:
+      return aclFormat::ACL_FORMAT_ND;
+  }
+}
+
+inline DataFormat GetTensorFormat(aclFormat data_format) {
+  switch (data_format) {
+    case aclFormat::ACL_FORMAT_ND:
+      return FORMAT_DEFAULT;
+    case aclFormat::ACL_FORMAT_FRACTAL_NZ:
+      return FORMAT_NZ;
+    default:
+      return FORMAT_DEFAULT;
+  }
+}
+#endif
 
 // All the available data types.
 enum DataType {

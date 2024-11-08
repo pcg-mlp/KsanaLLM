@@ -226,6 +226,7 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
   } else {
     mlp_up_proj_layer_ = nullptr;
   }
+
   mlp_down_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight",
                                                                 weight_type, input_type, output_type, {});
   lm_head_proj_layer_ =
