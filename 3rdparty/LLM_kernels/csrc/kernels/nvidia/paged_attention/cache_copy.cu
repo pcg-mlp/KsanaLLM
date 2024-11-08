@@ -8,6 +8,7 @@ namespace llm_kernels {
 namespace nvidia {
 
 #define MAX_THREADS_PER_BLOCK 1024
+#define MAX_BLOCKS_PER_GRID_Y 65535
 
 __device__ int k_chunk_size = 16;
 /*
@@ -27,7 +28,7 @@ __global__ void CacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list,
     j:           Represents the offset of the head_size to be processed within a single chunk.
   */
   int x = k_chunk_size / sizeof(SCALAR_T);
-  int idx = blockIdx.y;
+  int idx = blockIdx.y + blockIdx.z * gridDim.y;
   if (idx < total_len) {
     int batch_idx = 0;
     for (batch_idx = 0; batch_idx < bs; batch_idx++) {
@@ -86,7 +87,7 @@ __global__ void ReverseCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** 
     j:           Represents the offset of the head_size to be processed within a single chunk.
   */
   int x = k_chunk_size / sizeof(SCALAR_T);
-  int idx = blockIdx.y;
+  int idx = blockIdx.y + blockIdx.z * gridDim.y;
   if (idx < total_len) {
     int batch_idx = 0;
     for (batch_idx = 0; batch_idx < bs; batch_idx++) {
@@ -180,7 +181,10 @@ template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType K
 void CacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,
                int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
-  dim3 grid_shape(num_heads, total_len);
+  int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
+  int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  dim3 grid_shape(num_heads, grid_y, grid_z);
+
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
   CacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
@@ -191,7 +195,10 @@ template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType K
 void ReverseCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                       size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,
                       int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
-  dim3 grid_shape(num_heads, total_len);
+  int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
+  int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  dim3 grid_shape(num_heads, grid_y, grid_z);
+
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
   ReverseCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
