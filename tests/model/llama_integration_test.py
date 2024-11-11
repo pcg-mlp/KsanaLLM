@@ -59,7 +59,7 @@ def infer(prompt, tokenizer, generation_config, model, queue=None, idx=0):
                                          stop_token_ids=[])
 
     # Generate text using the model
-    ksana_python_output = model.generate(model_name="",
+    _, ksana_python_output = model.generate(model_name="",
                                          inputs=input_tokens,
                                          generation_config=generation_config,
                                          streamer=None)
