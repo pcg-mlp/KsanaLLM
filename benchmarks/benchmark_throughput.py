@@ -860,7 +860,11 @@ def main(args: argparse.Namespace):
             for (metrics, stream_metrics) in perf_result_list:
                 row = [f"{value:.3f}" for value in metrics.__dict__.values()]
                 if args.stream:
-                    row.extend([f"{value:.3f}" for value in stream_metrics.__dict__.values()])
+                    for value in stream_metrics.__dict__.values():
+                        if isinstance(value, list):
+                            row.extend([f"{percentile_value[1]:.3f}" for percentile_value in value])
+                        else:
+                            row.append(f"{value:.3f}")
                 writer.writerow(row)
 
 
