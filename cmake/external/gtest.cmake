@@ -36,4 +36,7 @@ endif()
 message(STATUS "Google test source directory: ${googletest_SOURCE_DIR}")
 message(STATUS "Google test binary directory: ${googletest_BINARY_DIR}")
 
-include_directories(${googletest_BINARY_DIR}/include)
+include_directories(
+    ${googletest_SOURCE_DIR}/googlemock
+    ${googletest_SOURCE_DIR}/googletest
+)

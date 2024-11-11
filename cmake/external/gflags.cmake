@@ -6,8 +6,6 @@ include(FetchContent)
 
 set(GFLAGS_INSTALL_DIR ${THIRD_PARTY_PATH}/install/gflags)
 
-option(BUILD_SHARED_LIBS "Build Shared Libraries" OFF)
-
 if(NOT DEFINED GFLAGS_VER)
     set(GFLAGS_VER 2.2.2)
 endif()
@@ -21,9 +19,10 @@ FetchContent_Declare(
 
 FetchContent_GetProperties(gflags)
 if(NOT gflags_POPULATED)
+    FetchContent_Populate(gflags)
+
     # Make the namespace of gflags be "google" instead of "gflags"
     set(GFLAGS_NAMESPACE "google")
-    FetchContent_Populate(gflags)
 
     add_subdirectory(${gflags_SOURCE_DIR} ${gflags_BINARY_DIR})
 endif()

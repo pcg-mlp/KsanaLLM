@@ -2,10 +2,8 @@
 #
 # ==============================================================================
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
-set(THIRD_PARTY_PATH "${CMAKE_BINARY_DIR}/third_party")
-
 # import external dependencies
+include(external/abseil-cpp)
 include(external/protobuf)
 include(external/fmt)
 include(external/loguru)
@@ -17,6 +15,8 @@ include(external/nlohmann_json)
 include(external/base64)
 include(external/msgpack)
 include(external/opentelemetry)
+include(external/re2)
 
+# import subprojects
 add_subdirectory(ksana_llm)
 add_subdirectory(endpoints_impl)

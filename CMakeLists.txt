@@ -9,6 +9,9 @@ option(WITH_TESTING "Enable testing" OFF)
 option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
 option(WITH_EVENT_RECORD "Enable event record" OFF)
 
+# Build external libraries statically by default
+set(BUILD_SHARED_LIBS OFF)
+
 if(WITH_CUDA)
   project(ksana_llm LANGUAGES CXX CUDA)
 else()
@@ -29,32 +32,29 @@ if(NOT WITH_CUDA AND NOT WITH_ACL)
 endif()
 
 set(USE_CXX11_ABI, "False")
-
 # according prepare ABI version
 execute_process(COMMAND python "-c" "import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   RESULT_VARIABLE _PYTHON_SUCCESS
   OUTPUT_VARIABLE USE_CXX11_ABI)
-
 if(NOT _PYTHON_SUCCESS EQUAL 0)
   message(FATAL_ERROR "run python -c \"import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');\" failed.")
 endif()
 
-set(CXX11_ABI_FLAG 0)
-
 # set compiler flags
 if("${USE_CXX11_ABI}" STREQUAL "True")
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
-  set(CXX11_ABI_FLAG 1)
+  message(STATUS "Compile with CXX11 ABI")
 else()
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
-  set(CXX11_ABI_FLAG 0)
+  message(STATUS "Compile without CXX11 ABI")
 endif()
+
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
 
-find_package(Git QUIET)
+find_package(Git REQUIRED)
 
 if(WITH_CUDA)
   # dedicate for Nvidia GPU
@@ -75,21 +75,25 @@ include(LLM_kernels)
 include(base)
 
 # set compiler flags
-set(CXX_STD "17" CACHE STRING "C++ standard")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wall -O0 -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -D_GLIBCXX_USE_CXX11_ABI=${CXX11_ABI_FLAG} -Wno-unknown-pragmas -Wno-pointer-arith -Wno-attributes")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -Wno-unknown-pragmas -Wno-pointer-arith -Wno-attributes -Wabi-tag")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0 -gdwarf-4 -gstrict-dwarf")
-set(CMAKE_CXX_STANDARD "${CXX_STD}")
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
+
+set(CXX_STD "17" CACHE STRING "C++ standard")
+set(CMAKE_CXX_STANDARD ${CXX_STD})
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_INSTALL_RPATH $ORIGIN)
 
-link_directories(${CMAKE_BINARY_DIR}/lib)
+message(STATUS "Build mode: ${CMAKE_BUILD_TYPE}")
+message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
+message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
+message(STATUS "CMAKE_CXX_FLAGS_RELEASE: ${CMAKE_CXX_FLAGS_RELEASE}")
 
 if(WITH_CUDA)
   include(nvidia)

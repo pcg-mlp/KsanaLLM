@@ -9,6 +9,11 @@ set(WITH_EXAMPLES OFF CACHE BOOL "Do not build examples" FORCE)
 set(WITH_DEPRECATED_SDK_FACTORY OFF CACHE BOOL "Disable deprecated SDK factory" FORCE)
 set(WITH_OTLP_HTTP ON CACHE BOOL "Build OTLP HTTP exporter" FORCE)
 
+set(absl_FOUND TRUE)
+add_compile_definitions(HAVE_ABSEIL)
+set(OPENTELEMETRY_ABI_VERSION_NO 1)
+set(WITH_ABSEIL ON CACHE BOOL "Enable absl" FORCE)
+
 FetchContent_Declare(
   opentelemetry-cpp
   GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
