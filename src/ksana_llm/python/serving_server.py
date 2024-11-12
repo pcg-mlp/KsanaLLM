@@ -15,7 +15,8 @@ import orjson
 import uvicorn
 import uvloop
 import yaml
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
+from fastapi import status as http_status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast, logging
 
@@ -307,7 +308,7 @@ async def generate(request: Request) -> Response:
     if not status.OK():
         error_response = {"Message": status.GetMessage(), "code": status.GetCode().value}
         return Response(content = orjson.dumps(error_response),
-             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
     if enable_streaming:
         return StreamingResponse(response_data)
     else:
@@ -329,7 +330,7 @@ async def forward(request: Request):
     else:  # Bad request
         error_response = {"Message": status.GetMessage(), "code": status.GetCode().value}
         return Response(content = orjson.dumps(error_response),
-             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 if __name__ == "__main__":

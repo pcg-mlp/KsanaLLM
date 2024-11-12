@@ -242,7 +242,7 @@ class ServingModel(object):
             status, streaming_iterator = self._serving.generate_streaming(ksana_python_input, req_ctx)
             if not status.OK():
                 return status, None
-            return PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
+            return status, PyAsyncStreamingIterator(streaming_iterator, self._ksana_plugin, ksana_python_input)
 
     @torch.no_grad()
     def forward(self, request_bytes: bytes,
