@@ -1,6 +1,7 @@
 # tests/conftest.py
 
 import os
+import atexit
 import pytest
 from utils import read_from_csv
 
@@ -30,3 +31,10 @@ def pytest_configure(config):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
     os.chdir(parent_dir)
+
+
+def on_exit():
+    os._exit(0)
+
+
+atexit.register(on_exit)

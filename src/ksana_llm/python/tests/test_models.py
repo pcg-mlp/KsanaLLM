@@ -111,6 +111,7 @@ def run_test(
 
         # Initialize the model
         model = ksana_llm.AutoModel.from_config(ksana_yaml_path)
+        model.init_serving(ksana_llm.EndpointConfig())
         logger.debug("Initialized ksana_llm model.")
 
         generate_results = []
@@ -122,7 +123,7 @@ def run_test(
             input_tokens = tokenizer.encode(formatted_prompt)
             generation_config = GenerationConfig()
 
-            output = model.generate(
+            _, output = model.generate(
                 model_name="",  # Specify the model name if needed
                 inputs=input_tokens,
                 generation_config=generation_config,
@@ -161,6 +162,7 @@ def run_test(
         # Re-initialize the model with updated YAML
         del model
         model = ksana_llm.AutoModel.from_config(ksana_yaml_path)
+        model.init_serving(ksana_llm.EndpointConfig())
         logger.debug(
             "Re-initialized ksana_llm model with updated configuration."
         )
@@ -192,7 +194,7 @@ def run_test(
             }
 
             packed_data = msgpack.packb(data)
-            unpacked_result = msgpack.unpackb(model.forward(packed_data))
+            unpacked_result = msgpack.unpackb(model.forward(packed_data)[1])
             python_tensor = unpacked_result["responses"][0]["response"][0][
                 "tensor"
             ]
