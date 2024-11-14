@@ -17,6 +17,7 @@
 #include "ksana_llm/models/chatglm/chatglm_config.h"
 #include "ksana_llm/models/gpt/gpt_config.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/optional_file.h"
 #include "ksana_llm/utils/ret_code.h"
@@ -183,9 +184,9 @@ void PrepareCommonModelAttributes(const nlohmann::json &config_json, ModelConfig
   model_config.start_id = config_json.value("bos_token_id", 1);
   // for llama3.1 config
   if (config_json.contains("eos_token_id") && config_json["eos_token_id"].is_array()) {
-    model_config.end_ids = config_json["eos_token_id"].get<std::vector<int>>();
+    model_config.end_ids = config_json["eos_token_id"].get<std::vector<uint32_t>>();
   } else {
-    model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 2)};
+    model_config.end_ids = std::vector<uint32_t>{config_json.value("eos_token_id", 2)};
   }
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
@@ -222,11 +223,11 @@ void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_
     return;
   }
 
-  std::vector<int> end_ids;
+  std::vector<uint32_t> end_ids;
   if (config_json.at("eos_token_id").is_array()) {
-    end_ids = config_json["eos_token_id"].get<std::vector<int>>();
+    end_ids = config_json["eos_token_id"].get<std::vector<uint32_t>>();
   } else {
-    end_ids = std::vector<int>{config_json.at("eos_token_id")};
+    end_ids = std::vector<uint32_t>{config_json.at("eos_token_id")};
   }
   if (end_ids != model_config.end_ids) {
     KLLM_LOG_WARNING << fmt::format("eos_token_id: [{}] in model config is overwritten by [{}] in generation config",
@@ -390,9 +391,14 @@ Status Environment::ParseConfig(const std::string &config_file) {
   // Read base model.
   std::string base_model_dir =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
-  bool enable_trt =
-      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "model_spec.enable_trt", true);
-  status = ParseModelConfig(base_model_dir, enable_trt);
+  std::string tokenizer_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.tokenizer_dir", "");
+
+  if (tokenizer_dir.empty()) {
+    tokenizer_dir = base_model_dir;
+  }
+  bool enable_trt = yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "model_spec.enable_trt", true);
+  status = ParseModelConfig(base_model_dir, tokenizer_dir, enable_trt);
   if (!status.OK()) {
     return status;
   }
@@ -442,47 +448,143 @@ void Environment::SetReservedDeviceRatio(float reserved_device_memory_ratio) {
   block_manager_config_.reserved_device_memory_ratio = reserved_device_memory_ratio;
 }
 
-Status Environment::ParseModelConfig(const std::string &model_dir, bool enable_trt) {
-  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(model_dir);
-  std::string config_file = abs_model_dir_path.u8string() + "/config.json";
+// read GGUF CONFIG
+Status Environment::ParseModelConfigFromGGUF(const std::string &meta_file_path, ModelConfig &model_config) {
+  // load meta data from GGUF file
+  GGUFFileTensorLoader gguf_loader(meta_file_path);
+  auto context = gguf_loader.GetMetadata();
+  auto &metadata_map = context->metadata_map;
 
-  nlohmann::json config_json;
-  std::ifstream file(config_file);
-  if (!file.is_open()) {
-    KLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file);
-    return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load model config file: {} error.", config_file));
-  } else {
-    file >> config_json;
-    file.close();
+  // Helper functions to retrieve metadata values
+  auto get_required_value = [&](const std::string &key, const std::string &error_msg) -> std::any {
+    auto it = metadata_map.find(key);
+    if (it != metadata_map.end()) {
+      return it->second.value;
+    } else {
+      throw std::runtime_error(error_msg);
+    }
+  };
+
+  auto get_optional_value = [&](const std::string &key, const std::any &default_value) -> std::any {
+    auto it = metadata_map.find(key);
+    if (it != metadata_map.end()) {
+      return it->second.value;
+    } else {
+      return default_value;
+    }
+  };
+
+  try {
+    model_config.type = std::any_cast<std::string>(
+        get_required_value("general.architecture", "Model type is not supported in GGUF format."));
+    if (model_config.type != "llama") {
+      throw std::runtime_error("Model type is not supported in GGUF format.");
+    }
+
+    std::string model_type = model_config.type;
+    uint32_t ftype =
+        std::any_cast<uint32_t>(get_optional_value("general.file_type", GGUFModelFileType::LLAMA_FTYPE_MOSTLY_F16));
+    model_config.weight_data_type = GGUFFileTensorLoader::ConverGGUFModelFileTypeToDataType(ftype);
+    model_config.head_num = std::any_cast<uint32_t>(
+        get_required_value(model_type + ".attention.head_count", "Model head_num is not supported in GGUF format."));
+    model_config.num_key_value_heads = std::any_cast<uint32_t>(get_required_value(
+        model_type + ".attention.head_count_kv", "Model num_key_value_heads is not supported in GGUF format."));
+    model_config.inter_size = std::any_cast<uint32_t>(
+        get_required_value(model_type + ".feed_forward_length", "Model inter_size is not supported in GGUF format."));
+    model_config.vocab_size = std::any_cast<uint32_t>(
+        get_required_value(model_type + ".vocab_size", "Model vocab_size is not supported in GGUF format."));
+    model_config.num_layer = std::any_cast<uint32_t>(
+        get_required_value(model_type + ".block_count", "Model num_layer is not supported in GGUF format."));
+    model_config.hidden_units = std::any_cast<uint32_t>(
+        get_required_value(model_type + ".embedding_length", "Model hidden_units is not supported in GGUF format."));
+    model_config.rope_theta = std::any_cast<float>(get_optional_value(model_type + ".rope.freq_base", 10000.0f));
+    model_config.layernorm_eps =
+        std::any_cast<float>(get_optional_value(model_type + ".attention.layer_norm_rms_epsilon", 1e-6));
+    model_config.start_id = std::any_cast<uint32_t>(get_optional_value("tokenizer.ggml.bos_token_id", 1));
+    model_config.pad_id = std::any_cast<uint32_t>(get_optional_value("tokenizer.ggml.padding_token_id", (uint32_t)0));
+    model_config.max_position_embeddings =
+        std::any_cast<uint32_t>(get_optional_value(model_type + ".context_length", 2048));
+    model_config.tie_word_embeddings =
+        std::any_cast<bool>(get_optional_value(model_type + ".tie_word_embeddings", false));
+    model_config.is_visual = metadata_map.count("visual");
+
+    // Handle 'end_ids' which might be a single value or an array
+    if (metadata_map.count("tokenizer.ggml.eos_token_id")) {
+      auto eos_token_meta = metadata_map["tokenizer.ggml.eos_token_id"];
+      if (eos_token_meta.type == GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_ARRAY) {
+        model_config.end_ids = std::any_cast<std::vector<uint32_t>>(eos_token_meta.value);
+      } else {
+        model_config.end_ids = {std::any_cast<uint32_t>(eos_token_meta.value)};
+      }
+    } else {
+      model_config.end_ids = {2};
+    }
+    model_config.max_token_num = model_config.max_position_embeddings;
+
+    size_t size_per_head = model_config.hidden_units / model_config.head_num;
+    model_config.size_per_head = size_per_head;
+    model_config.rotary_embedding = size_per_head;
+  } catch (const std::exception &e) {
+    return Status(RET_INVALID_ARGUMENT, e.what());
   }
 
+  return Status();
+}
+
+Status Environment::ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir, bool enable_trt) {
+  std::filesystem::path abs_model_dir_path = std::filesystem::absolute(model_dir);
+  std::filesystem::path abs_tokenizer_dir_path = std::filesystem::absolute(tokenizer_dir);
+  std::string config_file = abs_model_dir_path.u8string() + "/config.json";
+  ModelFileFormat model_file_format;
   ModelConfig model_config;
+  Status status;
+
   model_config.path = abs_model_dir_path.u8string();
-  model_config.weight_data_type = GetModelDataType(config_json, model_config);
+  model_config.tokenizer_path = abs_tokenizer_dir_path.u8string();
   model_config.tensor_para_size = tensor_parallel_size_;
   model_config.enable_trt = enable_trt;
+  std::vector<std::string> weights_file_list = SearchLocalPath(model_dir, model_file_format);
+  model_config.model_file_format = model_file_format;
 
-  model_config.type = config_json.at("model_type");
-  if (model_config.type == "chatglm") {
-    PrepareChatglmAttributes(config_json, model_config);
-  } else if (model_config.type == "openai-gpt") {  // GPT-1
-    // For fairseq transformer, we use the same config as huggingface openai-gpt,
-    // and distinguish them by the vocab size.
-    if (config_json.at("vocab_size") == 7000) {
-      model_config.type = "fairseq-transformer";
-      PrepareFairseqTransformerAttributes(config_json, model_config);
-    } else {
-      PrepareGPT1Attributes(config_json, model_config);
+  if (model_file_format == GGUF) {
+    status = ParseModelConfigFromGGUF(weights_file_list[0], model_config);
+    if (!status.OK()) {
+      return status;
     }
-  } else if (model_config.type == "gpt2") {
-    PrepareGPT2Attributes(config_json, model_config);
   } else {
-    PrepareCommonModelAttributes(config_json, model_config);
-  }
-  ParseModelMaxLength(config_json, model_config);
-  ParseModelQuantConfig(config_json, model_config, yaml_weight_quant_method_, yaml_gptq_backend_);
+    nlohmann::json config_json;
+    std::ifstream file(config_file);
+    if (!file.is_open()) {
+      KLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file);
+      return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load model config file: {} error.", config_file));
+    } else {
+      file >> config_json;
+      file.close();
+    }
 
-  UpdateEndIdFromGeneration(model_dir, model_config);
+    model_config.weight_data_type = GetModelDataType(config_json, model_config);
+    model_config.type = config_json.at("model_type");
+    if (model_config.type == "chatglm") {
+      PrepareChatglmAttributes(config_json, model_config);
+    } else if (model_config.type == "openai-gpt") {  // GPT-1
+      // For fairseq transformer, we use the same config as huggingface openai-gpt,
+      // and distinguish them by the vocab size.
+      if (config_json.at("vocab_size") == 7000) {
+        model_config.type = "fairseq-transformer";
+        PrepareFairseqTransformerAttributes(config_json, model_config);
+      } else {
+        PrepareGPT1Attributes(config_json, model_config);
+      }
+    } else if (model_config.type == "gpt2") {
+      PrepareGPT2Attributes(config_json, model_config);
+    } else {
+      PrepareCommonModelAttributes(config_json, model_config);
+    }
+    ParseModelMaxLength(config_json, model_config);
+    ParseModelQuantConfig(config_json, model_config, yaml_weight_quant_method_, yaml_gptq_backend_);
+
+    UpdateEndIdFromGeneration(model_dir, model_config);
+  }
 
   if (tensor_parallel_size_ > model_config.num_key_value_heads ||
       model_config.num_key_value_heads % tensor_parallel_size_ != 0) {

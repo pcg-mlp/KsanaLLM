@@ -18,6 +18,8 @@ class LlamaWeight : public BaseWeight {
 
   Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
                              std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list);
+  void PermuteQKWeight(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
+                       std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list);
 
   void ProcessWeights();
 
@@ -28,6 +30,7 @@ class LlamaWeight : public BaseWeight {
  private:
   // the common weight instance.
   std::shared_ptr<CommonWeight<T>> common_weight_ = nullptr;
+  ModelConfig model_config_;
 };
 
 }  // namespace ksana_llm

@@ -70,8 +70,8 @@ void ModelInstance::InitPlugin() {
           py::dict result_dict = result.cast<py::dict>();
           if (result_dict.contains("reserved_device_memory_ratio")) {
             float reserved_device_memory_ratio = result_dict["reserved_device_memory_ratio"].cast<float>();
-             KLLM_LOG_DEBUG << "Plugin fixed reserved_device_memory_ratio : " << reserved_device_memory_ratio;
-             Singleton<Environment>::GetInstance()->SetReservedDeviceRatio(reserved_device_memory_ratio);
+            KLLM_LOG_DEBUG << "Plugin fixed reserved_device_memory_ratio : " << reserved_device_memory_ratio;
+            Singleton<Environment>::GetInstance()->SetReservedDeviceRatio(reserved_device_memory_ratio);
           }
         }
       }
@@ -219,27 +219,29 @@ void ModelInstance::CheckTieEmbeddings(std::vector<std::string>& custom_name_lis
 }
 
 void ModelInstance::LoadWeightsAndModelsMap() {
-  bool is_safetensors = false;
-  std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, is_safetensors);
+  ModelFileFormat model_file_format;
+  std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, model_file_format);
   int weight_file_size = weights_file_list.size();
   CheckTieEmbeddings(weight_file_size);
 
   for (std::string& file_name : weights_file_list) {
     std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-    if (is_safetensors) {
+    if (model_file_format == SAFETENSORS) {
       weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
+    } else if (model_file_format == GGUF) {
+      weights_loader = std::make_shared<GGUFFileTensorLoader>(file_name);
     } else {
       weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
     }
     std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
     std::vector<std::string> custom_name_list;
-    GetCustomNameList(weight_name_list, custom_name_list, model_config_.path, model_config_.type);
-
+    GetCustomNameList(weight_name_list, custom_name_list, model_config_.path, model_config_.type, model_file_format);
     if (weight_file_size == 1) {
       CheckTieEmbeddings(custom_name_list);
     }
 
     std::vector<std::future<void>> get_weight_tasks;
+
     for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
       get_weight_tasks.push_back(
           loader_weight_threadpool_->Submit([worker_id, this, &weights_loader, &weight_name_list, &custom_name_list]() {

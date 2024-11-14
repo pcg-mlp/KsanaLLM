@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include <fstream>
+#include <iostream>
 #include <regex>
 
 #include "ksana_llm/utils/get_custom_weight_name.h"
@@ -13,14 +14,17 @@
 namespace ksana_llm {
 
 Status GetCustomNameList(std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list,
-                         std::string& model_path, std::string& model_type) {
+                         std::string& model_path, std::string& model_type, ModelFileFormat model_file_format) {
   // In the default case, the tensor name is consistent with the weight name.
   custom_name_list.assign(weight_name_list.begin(), weight_name_list.end());
 
   // Search for the optional_weight_map.json file
   auto optional_file = Singleton<OptionalFile>::GetInstance();
-  std::string& weight_path =
-      optional_file->GetOptionalFile(model_path, "weight_map", model_type + "_weight_map.json");
+  std::string& weight_path = optional_file->GetOptionalFile(model_path, "weight_map", model_type + "_weight_map.json");
+  if (model_file_format == GGUF) {
+    weight_path = optional_file->GetOptionalFile(model_path, "weight_map", model_type + "_gguf_weight_map.json");
+  }
+
   if (weight_path == "") {
     return Status();
   }

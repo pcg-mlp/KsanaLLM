@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/pytorch_file_tensor_loader.h"
 #include "ksana_llm/utils/safetensors_file_tensor_loader.h"
 #include "ksana_llm/utils/status.h"

@@ -73,18 +73,21 @@ class LlamaTest : public testing::Test {
     std::shared_ptr<BaseWeight> llama_weight =
         std::make_shared<LlamaWeight<weight_data_type>>(model_config, 0, context_);
     // Start Loader Weight
-    bool is_safetensors = false;
-    std::vector<std::string> weights_file_list = SearchLocalPath(model_path, is_safetensors);
+    ModelFileFormat model_file_format;
+    std::vector<std::string> weights_file_list = SearchLocalPath(model_path, model_file_format);
     for (std::string &file_name : weights_file_list) {
       std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-      if (is_safetensors) {
+      if (model_file_format == SAFETENSORS) {
         weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
+      } else if (model_file_format == GGUF) {
+        weights_loader = std::make_shared<GGUFFileTensorLoader>(file_name);
       } else {
         weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
       }
       std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
       std::vector<std::string> custom_name_list;
-      GetCustomNameList(weight_name_list, custom_name_list, model_config.path, model_config.type);
+
+      GetCustomNameList(weight_name_list, custom_name_list, model_config.path, model_config.type, model_file_format);
 
       llama_weight->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
       StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);

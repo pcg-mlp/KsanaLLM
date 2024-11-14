@@ -9,6 +9,7 @@
 
 namespace ksana_llm {
 
-std::vector<std::string> SearchLocalPath(const std::string& model_path, bool& is_safetensors);
+enum ModelFileFormat { BIN, SAFETENSORS, GGUF };
+std::vector<std::string> SearchLocalPath(const std::string& model_path, ModelFileFormat& is_safetensors);
 
 }  // namespace ksana_llm

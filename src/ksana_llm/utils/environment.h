@@ -5,6 +5,7 @@
 #pragma once
 
 #include <unistd.h>
+#include <any>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -55,13 +57,15 @@ struct QuantConfig {
 // The model informations.
 struct ModelConfig {
   // The model name.
-  std::string name;
+  std::string name = "";
 
   // The model type, such as llama.
   std::string type;
 
   // The dir path.
   std::string path;
+
+  std::string tokenizer_path;
 
   // Type of weight
   DataType weight_data_type;
@@ -82,9 +86,9 @@ struct ModelConfig {
   float rope_theta;
   float layernorm_eps;
   uint32_t vocab_size;
-  int start_id;
-  std::vector<int> end_ids;
-  int pad_id;
+  uint32_t start_id;
+  std::vector<uint32_t> end_ids;
+  uint32_t pad_id;
   size_t num_key_value_heads;
   int max_batch_size;
   int max_position_embeddings;
@@ -112,6 +116,8 @@ struct ModelConfig {
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;
+
+  ModelFileFormat model_file_format;
 };
 
 enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
@@ -255,7 +261,7 @@ class Environment {
   Status ParseConfig(const std::string &config_file);
 
   // Parse model config from model dir.
-  Status ParseModelConfig(const std::string &model_dir, bool enable_trt);
+  Status ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir, bool enable_trt);
 
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);
@@ -301,6 +307,9 @@ class Environment {
 
   // Check Whether the environment config is valid.
   Status CheckEnvironment();
+
+  // Parse model config from GGUF file.
+  Status ParseModelConfigFromGGUF(const std::string &meta_file_path, ModelConfig &model_config);
 
  private:
   // The model list that should be loaded.

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "base_file_tensor_loader.h"
+#include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
 // Define a class named PytorchFileTensorLoader that inherits from BaseFileTensorLoader
@@ -18,6 +19,10 @@ class SafeTensorsLoader : public BaseFileTensorLoader {
 
   // Get a tensor by its name
   std::tuple<void*, size_t> GetTensor(const std::string& tensor_name);
+
+  void SetTensor(const std::string& tensor_name, torch::Tensor tensor) {
+    KLLM_THROW(fmt::format("SetTensor not implement {}.", tensor_name));
+  }
 
   DataType GetTensorDataType(const std::string& tensor_name);
 

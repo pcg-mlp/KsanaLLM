@@ -6,6 +6,7 @@
 
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
@@ -16,9 +17,13 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
   ModelConfig model_config;
   STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetModelConfig("", model_config));
   try {
-    request_packer_.InitTokenizer(model_config.path);
+    request_packer_.InitTokenizer(model_config.tokenizer_path);
   } catch (const py::error_already_set &e) {
     PyErr_Clear();
+    if (model_config.model_file_format == GGUF) {
+      // TODO(shawnding): Load tokenizer from GGUF model file.
+      KLLM_LOG_ERROR << "GGUF model, should set tokenizer path in python.";
+    }
     KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
   }
 }

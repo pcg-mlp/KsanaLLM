@@ -4,6 +4,17 @@
 
 #include "ksana_llm/torch_op/serving_op.h"
 
+#include <iostream>
+#include <memory>
+#include <string>
+
+#include "ksana_llm/endpoints/endpoint_factory.h"
+#include "ksana_llm/endpoints/streaming/streaming_iterator.h"
+#include "ksana_llm/profiler/profiler.h"
+#include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"

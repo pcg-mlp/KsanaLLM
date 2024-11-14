@@ -19,7 +19,7 @@ inline void PrepareFairseqTransformerAttributes(const nlohmann::json &config_jso
   model_config.inter_size = config_json.value("n_inner", 4 * model_config.hidden_units);
   model_config.layernorm_eps = config_json.value("layer_norm_epsilon", 1e-5);  // torch.nn uses 1e-5 by default
   model_config.start_id = config_json.value("bos_token_id", 0);
-  model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 2)};
+  model_config.end_ids = std::vector<uint32_t>{config_json.value("eos_token_id", 2)};
   model_config.pad_id = config_json.value("pad_token_id", 1);
   model_config.max_position_embeddings = config_json.value("n_positions", 512);
   model_config.activation_function = config_json.value("afn", "relu");
@@ -44,7 +44,7 @@ inline void PrepareGPT1Attributes(const nlohmann::json &config_json, ModelConfig
   // Note: GPT-1 does not have bos, eos and pad tokens by default.
   model_config.start_id = config_json.value("bos_token_id", 0);
   if (config_json.contains("eos_token_id")) {
-    model_config.end_ids = std::vector<int>{config_json.at("eos_token_id")};
+    model_config.end_ids = std::vector<uint32_t>{config_json.at("eos_token_id")};
   }
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("n_positions", 512);
@@ -68,7 +68,7 @@ inline void PrepareGPT2Attributes(const nlohmann::json &config_json, ModelConfig
   model_config.inter_size = config_json.value("n_inner", 4 * model_config.hidden_units);
   model_config.layernorm_eps = config_json.value("layer_norm_epsilon", 1e-5);
   model_config.start_id = config_json.value("bos_token_id", 50256);
-  model_config.end_ids = std::vector<int>{config_json.value("eos_token_id", 50256)};
+  model_config.end_ids = std::vector<uint32_t>{config_json.value("eos_token_id", 50256)};
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("n_positions", 1024);
   model_config.activation_function = config_json.value("activation_function", "gelu_new");

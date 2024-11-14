@@ -18,7 +18,6 @@
 #include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
-
 class Worker;
 class WorkerGroup;
 

@@ -22,7 +22,7 @@ class BaseFileTensorLoader {
 
   // Pure virtual function to get a tensor by its name
   virtual std::tuple<void*, size_t> GetTensor(const std::string& tensor_name) = 0;
-
+  virtual void SetTensor(const std::string& tensor_name, torch::Tensor tensor) = 0;
   virtual DataType GetTensorDataType(const std::string& tensor_name) = 0;
 
   virtual std::string GetTensorFileName() = 0;

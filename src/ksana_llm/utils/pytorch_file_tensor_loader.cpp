@@ -73,9 +73,7 @@ DataType PytorchFileTensorLoader::GetTensorDataType(const std::string& tensor_na
   return data_type;
 }
 
-std::string PytorchFileTensorLoader::GetTensorFileName() {
-  return file_name_;
-}
+std::string PytorchFileTensorLoader::GetTensorFileName() { return file_name_; }
 
 std::tuple<void*, size_t> PytorchFileTensorLoader::GetTensor(const std::string& tensor_name) {
   if (!pytorch_tensor_map_.count(tensor_name)) {
@@ -84,7 +82,6 @@ std::tuple<void*, size_t> PytorchFileTensorLoader::GetTensor(const std::string& 
   auto& tensor = pytorch_tensor_map_[tensor_name];
   return std::make_tuple(tensor.data_ptr(), tensor.numel() * tensor.element_size());
 }
-
 std::vector<std::size_t> PytorchFileTensorLoader::GetTensorShape(const std::string& tensor_name) {
   if (!pytorch_tensor_map_.count(tensor_name)) {
     return {};

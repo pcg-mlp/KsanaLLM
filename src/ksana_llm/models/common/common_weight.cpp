@@ -9,8 +9,10 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <torch/nn/functional/normalization.h>
-#include <regex>
+#include <torch/torch.h>
+#include <cstdlib>
 
+#include <regex>
 #include "ksana_llm/utils/common_device.h"
 #include "nlohmann/json.hpp"
 
@@ -172,7 +174,6 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
 #endif
 
     torch::Tensor weight_cpu_tensor;
-
     if (tensor_name.find(".weight_scale") == std::string::npos &&
         tensor_name.find(".input_scale") == std::string::npos && weight_data_type == TYPE_FP32) {
       // cast TYPE_FP32 to weight_data_type_.
