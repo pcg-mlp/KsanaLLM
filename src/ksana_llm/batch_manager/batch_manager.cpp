@@ -64,7 +64,6 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   for (size_t i = 0; i < req->output_group.size(); i++) {
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
     infer_request_group.push_back(infer_req);
-
     infer_req->kv_cache_blocks.resize(context_->GetTensorParallelSize());
     infer_req->block_token_num = GetBlockManager()->GetBlockTokenNum();
     infer_req->model_instance = model_instance;

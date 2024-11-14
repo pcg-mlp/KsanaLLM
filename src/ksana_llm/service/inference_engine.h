@@ -71,6 +71,9 @@ class InferenceEngine {
 
   // The async thread used to hanle main loop.
   std::thread handle_thread_;
+
+  // The tokenizer used to do encode and decode
+  std::shared_ptr<Tokenizer> tokenizer_ = nullptr;
 };
 
 }  // namespace ksana_llm

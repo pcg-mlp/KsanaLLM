@@ -223,9 +223,10 @@ class ServingModel(object):
             get_generation_value(generation_config, 'stop_token_ids', [])
         sampling_config.ignore_eos = \
             get_generation_value(generation_config, 'ignore_eos', False)
+        sampling_config.stop_strings = \
+            get_generation_value(generation_config, 'stop_strings', [])
         
         self._check_do_sample_params(generation_config, sampling_config, get_generation_value)
-
         if 'input_refit_embedding' in kwargs and 'pos' in kwargs['input_refit_embedding']:
             ksana_python_input.input_refit_embedding.pos = kwargs['input_refit_embedding']['pos']
 

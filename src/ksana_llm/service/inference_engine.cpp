@@ -13,6 +13,7 @@
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/waiter.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
@@ -98,9 +99,14 @@ Status InferenceEngine::Initialize() {
   status = env->GetCacheManagerConfig(cache_manager_config);
   cache_manager_ = CacheManagerFactory::CreateCacheManager(cache_manager_config);
 
+  // Initialize tokenzier
+  tokenizer_ = std::make_shared<Tokenizer>();
+  tokenizer_->InitTokenizer(model_instances_[0]->GetModelConfig().path);
+
   // Create batch scheduler.
   batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, context_->GetTensorParallelSize());
   batch_scheduler_->SetCacheManager(cache_manager_);
+  batch_scheduler_->SetTokenizer(tokenizer_);
 
   // Create llm runtime
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, context_);

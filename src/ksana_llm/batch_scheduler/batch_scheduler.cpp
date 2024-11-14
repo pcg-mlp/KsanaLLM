@@ -25,6 +25,8 @@
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
+#include "ksana_llm/utils/tokenizer.h"
+
 
 namespace ksana_llm {
 
@@ -41,6 +43,10 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) {
   schedule_strategy_->SetCacheManager(cache_manager);
+}
+
+void BatchScheduler::SetTokenizer(std::shared_ptr<Tokenizer> tokenizer) {
+  schedule_strategy_->SetTokenizer(tokenizer);
 }
 
 std::shared_ptr<CacheManagerInterface>& BatchScheduler::GetCacheManager() {

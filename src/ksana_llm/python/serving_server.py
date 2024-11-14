@@ -187,15 +187,13 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     prompt_text = request_dict.pop("prompt", None)
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
-
     input_refit_embedding = request_dict.pop("input_refit_embedding", None)
-
     input_tokens = request_dict.pop("input_tokens", None)
     if input_tokens is None:
         input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
     kwargs = {
-        "input_refit_embedding": {}
+        "input_refit_embedding": {},
     }
 
     if input_refit_embedding is not None and "pos" in input_refit_embedding:
@@ -203,7 +201,6 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
 
     if input_refit_embedding is not None and "embeddings" in input_refit_embedding:
         kwargs['input_refit_embedding']["embeddings"] = input_refit_embedding["embeddings"]
-
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)
     if (
@@ -233,6 +230,8 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
                                               "num_return_sequences", 1),
         length_penalty=get_sampling_value(sampling_config,
                                               "length_penalty", 1.0),
+        stop_strings=get_sampling_value(sampling_config,
+                                              "stop_strings", []),
         stop_token_ids=stop_token_ids,
         ignore_eos=ignore_eos
     )

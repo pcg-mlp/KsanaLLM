@@ -14,6 +14,7 @@
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/stop_checker.h"
 
 namespace ksana_llm {
 
@@ -31,9 +32,12 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
       (req->sampling_config.max_new_tokens > 0 &&
        req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
       req->output_tokens.size() >= batch_scheduler_config_.max_token_len) {
+      stop_checker_->CheckCompleteStopStrings(req, tokenizer_);
     return true;
   }
-  return false;
+
+  // When stop strings are checked and matched, stop early
+  return stop_checker_->CheckIncrementalStopStrings(req, tokenizer_);
 }
 
 void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> req) {
@@ -65,7 +69,6 @@ void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, 
 void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_block_num) {
   for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end();) {
     auto req = *it;
-
     // All req here should be decode now.
     req->infer_stage = InferStage::STATE_DECODE;
     opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(*req->req_ctx);
@@ -95,8 +98,6 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
     // Check if finished.
     if (CheckRequestFinish(req)) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " finished.";
-
       cache_manager_->DestroyFinishedRequest(req->req_id);
 
       StopRequest(req, Status(RET_SUCCESS));
@@ -643,7 +644,6 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
 void ContinuousBatchingStrategy::Schedule() {
   batch_state_->ResetInfoBeforeSchedule();
   batch_state_->MergeWaitingBufferQueue();
-
   ProcessRunningQueue();
   ProcessSwappedQueue();
   ProcessWaitingQueue();

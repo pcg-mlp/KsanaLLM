@@ -10,4 +10,8 @@ void BaseScheduleStrategy::SetCacheManager(std::shared_ptr<CacheManagerInterface
   cache_manager_ = cache_manager;
 }
 
+void BaseScheduleStrategy::SetTokenizer(std::shared_ptr<Tokenizer> tokenizer) {
+  tokenizer_ = tokenizer;
+}
+
 }  // namespace ksana_llm

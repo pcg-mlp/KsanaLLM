@@ -38,7 +38,9 @@ Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_pyth
   auto req = std::make_shared<Request>(ksana_python_input, req_ctx);
   req->waiter = std::make_shared<Waiter>(1);
   req->span_context = span->GetContext();
-
+  if (!ksana_python_input->sampling_config.stop_strings.empty()) {
+    req->has_stop_strings = true;
+  }
   Status status = Status();
   std::shared_ptr<Waiter> waiter = req->waiter;
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
@@ -63,7 +65,9 @@ Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &k
   req->step_waiter = std::make_shared<Waiter>(1);
   req->abort_waiter = std::make_shared<Waiter>(1);
   req->span_context = span->GetContext();
-
+  if (!ksana_python_input->sampling_config.stop_strings.empty()) {
+    req->has_stop_strings = true;
+  }
   streaming_iterator = std::make_shared<StreamingIterator>(req, ksana_python_input);
 
   Status status = Status();

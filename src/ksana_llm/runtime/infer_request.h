@@ -166,6 +166,9 @@ class InferRequest {
 
   // request context
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
+
+  // Incremental decoded str used in stop strings
+  std::string incremental_decoded_str;
 };
 
 }  // namespace ksana_llm

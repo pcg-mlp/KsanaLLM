@@ -9,6 +9,9 @@
 #include "ksana_llm/batch_scheduler/state/batch_state.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/utils/tokenizer.h"
+#include "ksana_llm/utils/stop_checker.h"
+
 
 namespace ksana_llm {
 
@@ -24,6 +27,8 @@ class BaseScheduleStrategy {
   // Set the cache manager instance of scheduler strategy.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
 
+  void SetTokenizer(std::shared_ptr<Tokenizer> tokenizer);
+
   std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return cache_manager_; }
 
  protected:
@@ -36,6 +41,11 @@ class BaseScheduleStrategy {
   // the config and context.
   BatchSchedulerConfig batch_scheduler_config_;
   int tp_num_;
+
+  // The tokenizer used for encode and decode
+  std::shared_ptr<Tokenizer> tokenizer_ = nullptr;
+
+  std::shared_ptr<StopChecker> stop_checker_;
 };
 
 }  // namespace ksana_llm

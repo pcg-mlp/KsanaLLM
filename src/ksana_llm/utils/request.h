@@ -44,6 +44,9 @@ struct SamplingConfig {
   // The parameter for no_repeat_ngram_size.
   int no_repeat_ngram_size = 0;
   int encoder_no_repeat_ngram_size = 0;
+
+  // In generation phasse, when stop strings are meet, the request will be stopped and truncated
+  std::vector<std::string> stop_strings;
 };
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;
@@ -197,6 +200,9 @@ class Request {
   uint64_t timestamp_in_ms;
 
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
+
+  // Whether the request contains stop strings
+  bool has_stop_strings = false;
 
  private:
   // The id generator

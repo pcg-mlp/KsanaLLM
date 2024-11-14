@@ -291,6 +291,11 @@ def args_config():
                         default=None,
                         help="mindie-service/TensorRT-LLM wont return tokens, we need"
                              " encode tokens to get output tokens")
+    parser.add_argument('--stop_strings',
+                        nargs='*',
+                        type=str,
+                        default=None,
+                        help="A list of strings which will be used as stop string in token generation phase")
     args = parser.parse_args()
     return args
 
@@ -384,6 +389,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
                 "logprobs": args.logprobs,
                 "max_new_tokens": args.max_new_tokens,
                 "stop_token_ids": args.stop_token_ids,
+                "stop_strings": args.stop_strings,
                 "ignore_eos": args.ignore_eos,
             },
             "stream": args.stream,

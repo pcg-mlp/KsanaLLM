@@ -17,6 +17,7 @@
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
@@ -38,6 +39,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
   bool IsIdle();
+
+  // Set the tokenizer of batch scheduler.
+  void SetTokenizer(std::shared_ptr<Tokenizer> tokenizer);
 
  private:
   // Add infer requests to waiting buffer queue, and reject requests if the queue is full.
