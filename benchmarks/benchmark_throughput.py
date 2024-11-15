@@ -5,6 +5,7 @@
 import argparse
 import asyncio
 import csv
+import http
 import random
 import time
 from dataclasses import dataclass, field
@@ -749,6 +750,18 @@ def main(args: argparse.Namespace):
     # requst_rate_list: List[Tuple[request_rate, avg_latency, avg_TTFT]]
     request_rate_list: List[Tuple[float, float, float]] = []
     while True:
+        # cmake -DWITH_CLEAR_CACHE=ON
+        clear_cache_data = {
+            "input_tokens": [0, 0],
+            "sampling_config": {
+                "max_new_tokens": 1
+            }
+        }
+        conn = http.client.HTTPConnection(args.host + ":" + str(args.port))
+        conn.request("POST", '/generate',
+                     body=orjson.dumps(clear_cache_data),
+                     headers={'Content-Type': 'application/json'})
+        conn.getresponse()
         metrics = BenchmarkMetrics()
         metrics.request_rate = search_request_rate(args, request_rate_list)
         args.request_rate = metrics.request_rate

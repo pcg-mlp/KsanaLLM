@@ -146,6 +146,10 @@ class PrefixCacheManager : public CacheManagerInterface,
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id);
 
+  // Free at least block_num cached blocks that could resued, reserve some blocks if needed.
+  bool FreeCachedBlocks(size_t block_num, size_t& free_block_num,
+                        const std::vector<PrefixCachedBlock*>& reserved_blocks = {});
+
  private:
   // Whether the block token is equal to specific ones.
   bool CheckSameTokens(const PrefixCachedBlock* block, const int* start, size_t len);
@@ -161,10 +165,6 @@ class PrefixCacheManager : public CacheManagerInterface,
 
   // The cached block must be reset before reused, keep memory block id unchanged.
   void ResetCachedBlock(PrefixCachedBlock* cached_block);
-
-  // Free at least block_num cached blocks that could resued, reserve some blocks if needed.
-  bool FreeCachedBlocks(size_t block_num, size_t& free_block_num,
-                        const std::vector<PrefixCachedBlock*>& reserved_blocks = {});
 
   // Recursive free block and its all children.
   void FreeCachedBlockRecursively(PrefixCachedBlock* cached_block, std::vector<PrefixCachedBlock*>& free_blocks,

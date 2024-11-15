@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base_strategy.h"
+#include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
@@ -28,6 +29,16 @@ bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<Infer
 
 bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
   std::vector<int> &stop_token_ids = req->sampling_config.stop_token_ids;
+#ifdef CLEAR_CACHE
+  if (req->input_tokens.size() == 2 && req->input_tokens[0] == 0 && req->input_tokens[1] == 0) {
+    size_t free_block_num;
+    auto prefix_cache_manager_ptr = dynamic_cast<PrefixCacheManager *>(cache_manager_.get());
+    if (prefix_cache_manager_ptr != nullptr) {
+      prefix_cache_manager_ptr->FreeCachedBlocks(1e8, free_block_num);
+      KLLM_LOG_WARNING << "cache_manager free " << free_block_num << " blocks.";
+    }
+  }
+#endif
   if (std::find(stop_token_ids.begin(), stop_token_ids.end(), req->output_tokens.back()) != stop_token_ids.end() ||
       (req->sampling_config.max_new_tokens > 0 &&
        req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
