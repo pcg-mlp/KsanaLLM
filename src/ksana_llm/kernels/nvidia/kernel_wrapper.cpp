@@ -477,7 +477,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 #    endif
 #  endif
 
-#  ifdef ENABLE_FLASH_ATTN_MINOR_5
+#  if defined(ENABLE_FLASH_ATTN_MINOR_4) || defined(ENABLE_FLASH_ATTN_MINOR_5)
   std::vector<at::Tensor> mha_output =
       mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
                      torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
