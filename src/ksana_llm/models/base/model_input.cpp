@@ -227,11 +227,29 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareDecodePositionIds(forward_reqs);
   PrepareDecodeInputIds(forward_reqs);
 
+#ifdef ENABLE_CUDA
+  PrepareCudagraphParams(forward_reqs);
+#endif
+
 #ifdef ENABLE_ACL
   // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
   PrepareATBKVCache(forward_reqs, context_num > 0);
 #endif
 }
+
+#ifdef ENABLE_CUDA
+void ModelInput::PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs) {
+  is_cudagraph_batchsize_matched = false;
+  is_cudagraph_capture_request = false;
+  if (forward_reqs[0].is_cudagraph_capture_request) {
+    is_cudagraph_capture_request = true;
+  }
+  if (context_num == 0 && (decode_num == 1 || decode_num == 2 || decode_num == 3)) {
+    is_cudagraph_batchsize_matched = true;
+  }
+  cudagraph_batch_size = 0;
+}
+#endif
 
 void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx, size_t end_idx,
                                       size_t total_block_num) {

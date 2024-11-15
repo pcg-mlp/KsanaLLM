@@ -4,6 +4,7 @@
 #pragma once
 
 #include <vector>
+#include <set>
 #include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
@@ -39,6 +40,8 @@ class ContextT {
 
   std::vector<Stream>& GetNCCLStreams() { return nccl_streams_; }
 
+  const std::set<int>& GetSupportedCudaGraphCaptureSizes() { return cudagraph_captured_batchsizes; }
+
   inline bool IsGemmFp8Supported() { return is_gemm_fp8_supported_; }
 
  public:
@@ -59,6 +62,7 @@ class ContextT {
   // TODO(karlluo): load from environment
   bool is_contextdecode_and_decode_run_serially_{true};
   bool is_gemm_fp8_supported_{false};
+  const std::set<int> cudagraph_captured_batchsizes = {1, 2, 3};
 
   // streams
   std::vector<Stream> memory_manage_streams_;

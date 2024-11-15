@@ -41,6 +41,9 @@ class InferenceEngine {
   // Do warmup run
   Status DoWarmupRun();
 
+  // Cudagraph capture during warmup
+  Status CudaGraphCapture();
+
  private:
   // The channel used to pass request from endpoint.
   Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue_;

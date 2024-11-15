@@ -41,6 +41,10 @@ class ModelInput {
 
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
 
+#ifdef ENABLE_CUDA
+  void PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs);
+#endif
+
 #ifdef ENABLE_ACL
   void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage);
 #endif
@@ -68,6 +72,14 @@ class ModelInput {
   // The max tokens.
   size_t context_max_tokens = 0;
   size_t decode_max_tokens = 0;
+
+  size_t cudagraph_batch_size = 0;
+
+  // current request batchsize matches cudagraph catpure range
+  bool is_cudagraph_batchsize_matched = false;
+
+  // if current req is cudagraph capture request
+  bool is_cudagraph_capture_request = false;
 
   // The cache offset list.
   std::vector<int> kv_cache_offset_list;

@@ -193,6 +193,9 @@ class Request {
   // Whether this request is the last one in a batch of requests.
   bool last_in_batch = true;
 
+  // is cudagraph capture call
+  bool is_cudagraph_capture_request = false;
+
   // Opentelemetry SpanContext
   opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
 

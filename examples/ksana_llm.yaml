@@ -10,6 +10,9 @@ setting:
     enable_lora_adapter: false
     # 是否使用cpu保存embed_tokens
     embed_tokens_use_cpu: false
+    # 是否启用cudagraph用于decode阶段加速, 当前启用默认只开启decode阶段batchsize=1,2,3
+    # 不开启更多batchsize是因为每个batchsize的cudagraph实例会占用15~25mb左右显存
+    enable_cuda_graph: false
   # 调度相关配置
   batch_scheduler:
     # 调度策略，0表示continuous_batching，1表示auto_batching，默认为0

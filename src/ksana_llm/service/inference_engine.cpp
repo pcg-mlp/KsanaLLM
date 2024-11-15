@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <thread>
+#include <chrono>
 
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
 #include "ksana_llm/periphery/version_reporter.h"
@@ -14,6 +15,10 @@
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/waiter.h"
 #include "ksana_llm/utils/tokenizer.h"
+#ifdef ENABLE_CUDA
+#include "ksana_llm/runtime/cuda_graph_runner.h"
+#endif
+
 
 namespace ksana_llm {
 
@@ -163,6 +168,10 @@ Status InferenceEngine::StartHandler() {
 }
 
 Status InferenceEngine::DoWarmupRun() {
+  if (std::getenv("DISABLE_WARMUP") != nullptr) {
+    KLLM_LOG_DEBUG << "warmup is disabled";
+    return Status();
+  }
   pybind11::gil_scoped_release release;
   KLLM_LOG_INFO << "Start to do warmup run";
   auto warmup_run_input = std::make_shared<KsanaPythonInput>();
@@ -189,6 +198,55 @@ Status InferenceEngine::DoWarmupRun() {
   return Status();
 }
 
+#ifdef ENABLE_CUDA
+Status InferenceEngine::CudaGraphCapture() {
+  if (!Singleton<Environment>::GetInstance()->IsCudagraphEnabled()) {
+    KLLM_LOG_INFO << "cuda graph capture is disabled";
+    return Status();
+  }
+  pybind11::gil_scoped_release release;
+  auto cuda_graph_builder = std::make_shared<CudaGraphBuilder>();
+  // currently support cudagraph bs=1,2,3
+  // for VRAM usage consideration (each cudagraph for specific bs takes 15~25mb VRAM)
+  const int capture_batch_sizes = 3;
+  size_t max_batch_size =
+    cuda_graph_builder->GetMaxGraphBatchSize(model_instances_[0]->GetModelConfig().max_batch_size);
+  std::vector<int> batch_size_capture_list;
+  batch_size_capture_list.reserve(cuda_graph_builder->GetBatchSizeCaptureList().size());
+  std::copy_if(
+      cuda_graph_builder->GetBatchSizeCaptureList().begin(),
+      cuda_graph_builder->GetBatchSizeCaptureList().end(),
+      std::back_inserter(batch_size_capture_list),
+      [&](size_t bs) { return bs <= max_batch_size; });
+  std::vector<int> input_tokens(batch_size_capture_list.back(), 0);
+  for (int batchsize = 1; batchsize <= capture_batch_sizes; ++batchsize) {
+    KLLM_LOG_INFO << "start to capture graph: batchsize: " << batchsize;
+    auto warmup_run_input = std::make_shared<KsanaPythonInput>();
+    warmup_run_input->input_tokens =
+      std::vector<int>(input_tokens.begin(), input_tokens.begin() + capture_batch_sizes);
+    auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+    auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
+    for (int i = 0; i <= batchsize; ++i) {
+      std::vector<int> output_tuple_;
+      output_tuple_.emplace_back(std::get<0>(req->output_group[0])[0]);
+      std::vector<std::vector<std::pair<int, float>>> req_logprobs;
+      auto req_tuple = std::make_tuple(output_tuple_, req_logprobs, std::get<2>(req->output_group[0]));
+      req->output_group.emplace_back(req_tuple);
+    }
+    req->is_cudagraph_capture_request = true;
+    // we only need one context decode + one decode process
+    req->sampling_config.max_new_tokens = 2;
+    req->waiter = std::make_shared<Waiter>(1);
+    HandleRequest(req);
+    req->waiter->Wait();
+    KLLM_LOG_INFO << "end to capture graph batchsize: " << batchsize;
+  }
+  pybind11::gil_scoped_acquire acquire;
+  return Status();
+}
+#endif
+
+
 Status InferenceEngine::Start() {
   // Reset block num via device memory usage.
   block_manager_->ResetPreAllocatedBlocks();
@@ -212,6 +270,10 @@ Status InferenceEngine::Start() {
 #ifndef ENABLE_ACL
   // Start warmup run
   DoWarmupRun();
+#endif
+
+#ifdef ENABLE_CUDA
+  CudaGraphCapture();
 #endif
 
   return Status();

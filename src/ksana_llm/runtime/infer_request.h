@@ -158,6 +158,9 @@ class InferRequest {
   // The no_repeate ngram sampling map
   NgramDict ngram_dict;
 
+  // is cudagraph capture call
+  bool &is_cudagraph_capture_request;
+
   // Opentelemetry SpanContext
   opentelemetry::trace::SpanContext span_context;
 

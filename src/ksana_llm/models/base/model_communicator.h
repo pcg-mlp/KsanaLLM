@@ -64,6 +64,14 @@ class ModelCommunicator {
 
   // Whether the communication is finished.
   Event nccl_finish_event_;
+
+ private:
+  bool CheckIfUseCustomReduceSum(size_t batch_size, bool use_custom) {
+    return enable_custom_all_reduce_
+          && use_custom
+          && context_->GetSupportedCudaGraphCaptureSizes().find(batch_size)
+              == context_->GetSupportedCudaGraphCaptureSizes().end();
+  }
 };
 
 }  // namespace ksana_llm

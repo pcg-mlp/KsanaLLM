@@ -298,6 +298,8 @@ class Environment {
 
   bool IsReportVersion() { return is_version_report_; }
 
+  bool IsCudagraphEnabled() { return cuda_graph_; }
+
   // Modify reserved_device_memory_ratio
   void SetReservedDeviceRatio(float reserved_device_memory_ratio);
 
@@ -345,6 +347,7 @@ class Environment {
   // Embed_tokens gather operation is processed on the CPU.
   bool embed_tokens_use_cpu_ = false;
   bool is_version_report_ = true;
+  bool cuda_graph_ = false;
 };
 
 }  // namespace ksana_llm

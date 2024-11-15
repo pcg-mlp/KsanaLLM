@@ -4,13 +4,13 @@
 #pragma once
 
 #include "ksana_llm/models/base/base_weight.h"
-#ifdef ENABLE_CUDA
-#  include "ksana_llm/runtime/cuda_graph_runner.h"
-#endif
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/runtime/cuda_graph_runner.h"
+#endif
 
 namespace ksana_llm {
 

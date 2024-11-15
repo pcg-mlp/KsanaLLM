@@ -84,7 +84,7 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
   if (is_context_stage) {
     STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
   } else {
-    if (enable_custom_all_reduce_ && use_custom) {
+    if (CheckIfUseCustomReduceSum(input_tensors[0].shape[0], use_custom)) {
       STATUS_CHECK_RETURN(custom_all_reduce_sum_layer_0_->Forward(input_tensors, output_tensors));
     } else {
       STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));

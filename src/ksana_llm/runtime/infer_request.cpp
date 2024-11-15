@@ -41,6 +41,7 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       beam_search_group(request->beam_search_group),
       span_context(request->span_context),
       timestamp_in_ms(request->timestamp_in_ms),
+      is_cudagraph_capture_request(request->is_cudagraph_capture_request),
       req_ctx(request->req_ctx) {}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }

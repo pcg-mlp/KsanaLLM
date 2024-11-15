@@ -6,52 +6,77 @@
 #include <cuda_runtime.h>
 #include <unordered_map>
 #include <vector>
+#include <string>
+#include <unordered_set>
 
 namespace ksana_llm {
 
 // The class used to build a cuda graph.
 class CudaGraphBuilder {
  public:
-  // Begin and end the graph capture.
-  void BeginCapture(cudaStream_t stream);
-  void EndCapture(cudaStream_t stream);
+  size_t GetMaxGraphBatchSize(size_t batch_size_step_);
 
-  // Get the captured graph.
-  cudaGraphExec_t GetGraphExec();
+  std::vector<size_t>& GetBatchSizeCaptureList() { return batch_sizes_to_catpure_list; }
 
  private:
-  // Whether has been instantiated.
-  bool initialized_ = false;
+  // The batch size config for cuda graph.
+  size_t max_batch_size_ = 2;
 
-  // The graph object.
-  cudaGraph_t graph_;
+  // Reserved for extension to align with vllm cudagraph
+  // where batchsizes within batch_size_step_ will fall into a padded batchsize
+  size_t batch_size_step_ = 8;
 
-  // The executable graph instance.
-  cudaGraphExec_t exec_graph_;
+  const size_t default_batch_generation_limit = 1024;
+
+  // batch size to catpure in warmup
+  std::vector<size_t> batch_sizes_to_catpure_list;
+
+  // Capture graphs for batch size 1, 2, 4, 8, 16, 24, 32, 40, ..., 256.....
+  void GenerateBatchSizesConfig(std::vector<size_t>& batch_sizes_to_catpure);
+
+  // Get the paded batch size.
+  size_t GetPaddedBatchSize(size_t batch_size);
 };
 
 // Used to run inference forward with cuda graph.
 class CudaGraphRunner {
  public:
   // Launch cuda graph with specified batch_size.
-  void LaunchGraph(size_t batch_size, cudaStream_t stream);
+  void LaunchGraph(std::string batch_size, cudaStream_t stream);
 
-  // Capture graphs for batch size 1, 2, 4, 8, 16, 24, 32, 40, ..., 256.
-  void GetGraphBatchSizes(std::vector<size_t>& batch_sizes);
+  // Begin and end the graph capture.
+  void BeginCapture(cudaStream_t stream, int rank_);
 
-  // Whether the cuda graph is available.
-  bool CheckGraphAvailable(size_t batch_size);
+  // End to catpure cuda stream
+  cudaGraphExec_t EndCapture(cudaStream_t stream, int rank_);
 
-  // Get the paded batch size.
-  size_t GetPaddedBatchSize(size_t batch_size);
+  // Check if the captured graph exists in cache.
+  bool CheckIfGraphExec(std::string batch_size);
+
+  void SetGraphInstance(const std::string& batch_size, cudaGraphExec_t& graph_exec);
+
+ public:
+  // Already captured batch sizes
+  std::unordered_set<std::string> captured_batch_sizes;
+
+  // Whether graph capturing is running
+  bool is_capturing_graph = false;
 
  private:
-  // batch_size => graph instance.
-  std::unordered_map<size_t, cudaGraphExec_t> graph_instances_;
+  // Whether has been instantiated.
+  bool initialized_ = false;
 
-  // The batch size config for cuda graph.
-  size_t max_batch_size_ = 256;
-  size_t batch_size_step_ = 8;
+  // Batch_size => graph instances
+  std::unordered_map<std::string, cudaGraphExec_t> graph_instances_;
+
+  // The graph object.
+  cudaGraph_t graph_;
+
+  // The executable graph instance.
+  cudaGraphExec_t exec_graph_;
+
+  // Stream used for capture graph
+  cudaStream_t capture_stream;
 };
 
 }  // namespace ksana_llm

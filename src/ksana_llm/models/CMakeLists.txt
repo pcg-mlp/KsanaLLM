@@ -24,7 +24,7 @@ if(WITH_CUDA)
 endif()
 
 add_library(models STATIC ${models_SRCS})
-target_link_libraries(models PUBLIC block_manager layers samplers "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
+target_link_libraries(models PUBLIC block_manager layers samplers runtime "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
 
 # for test
 file(GLOB_RECURSE models_test_SRCS

@@ -26,7 +26,9 @@
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/utils.h"
-
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/runtime/cuda_graph_runner.h"
+#endif
 namespace ksana_llm {
 
 // The layernorm position type.
@@ -118,6 +120,10 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   std::shared_ptr<py::object> plugin_;
 
+  #ifdef ENABLE_CUDA
+    std::shared_ptr<CudaGraphRunner> cudagraph_runner;
+  #endif
+
   // The layer number of the model
   int num_layer_;
 
@@ -126,6 +132,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   // Vocab size aligned and padded with tensor_para_size
   size_t vocab_size_pad_;
+
+  // Whether cudagraph is enabled
+  bool is_cudagraph_enabled = false;
 
   /**
    * The following 4 buffers are used as temporary buffers during the whole model inference:
@@ -162,6 +171,8 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::vector<Tensor>& gated_buffer_{shared_buffer_};
   std::vector<Tensor>& reduce_buffer_{shared_buffer_};
   std::vector<Tensor>& paged_buffer_{shared_buffer_};
+  std::vector<Tensor> cuda_graph_input_{1};
+  std::vector<Tensor> cuda_graph_output_{1};
 
   Tensor forward_shape_;
   Tensor cos_sin_cache_tensor_;

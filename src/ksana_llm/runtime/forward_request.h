@@ -55,6 +55,9 @@ struct ForwardRequest {
   // The prefix cache blocks number
   int prefix_cache_blocks_number = 0;
 
+  // is cudagraph capture call
+  bool is_cudagraph_capture_request;
+
   // Opentelemetry SpanContext
   opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
 

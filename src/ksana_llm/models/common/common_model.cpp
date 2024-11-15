@@ -75,6 +75,19 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   STATUS_CHECK_FAILURE(CreateBufferTensor(shared_buffer_[0], {shared_buffer_size}, weight_type));
 
   float scale_factor = model_config_.rope_scaling_factor_config.factor;
+
+  #ifdef ENABLE_CUDA
+  if (Singleton<Environment>::GetInstance()->IsCudagraphEnabled()) {
+    KLLM_LOG_INFO <<  "rank: " << rank_ << " start to create cudagraph runner";
+    cudagraph_runner = std::make_shared<CudaGraphRunner>();
+    is_cudagraph_enabled = true;
+    // current only support max_batch_size = 1
+    size_t cudagraph_buffer_size = std::max(2 * vocab_size_pad_, max_token_num * max_dim);
+    STATUS_CHECK_FAILURE(CreateBufferTensor(cuda_graph_input_[0], {cudagraph_buffer_size}, weight_type));
+    STATUS_CHECK_FAILURE(CreateBufferTensor(cuda_graph_output_[0], {cudagraph_buffer_size}, weight_type));
+  }
+  #endif
+
   STATUS_CHECK_FAILURE(CreateBufferTensor(
       cos_sin_cache_tensor_,
       {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings * scale_factor)},
@@ -355,11 +368,20 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
 template <typename T>
 Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
 #ifdef ENABLE_CUDA
-  STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
+  if (is_cudagraph_enabled && model_input_->is_cudagraph_batchsize_matched) {
+    STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
+      {hidden_buffer_0_[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
+       model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
+       model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]},
+      cuda_graph_input_));
+  } else {
+     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
        model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
        model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]},
       hidden_buffer_1_));
+     std::swap(hidden_buffer_1_, hidden_buffer_0_);
+  }
 #elif defined(ENABLE_ACL)
   // inference on NPU with ATB
   STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
@@ -367,8 +389,8 @@ Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
        model_input_->layers_block_table, model_input_->k_cache_blocks_base, model_input_->v_cache_blocks_base,
        model_input_->seq_len_host, forward_shape_, model_input_->atb_attention_attr},
       hidden_buffer_1_));
-#endif
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
+#endif
   return Status();
 }
 
@@ -397,7 +419,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
 
   // MMHA Flash/Paged Attention
-  if (layer_idx == 0) {
+  if (!model_input_->is_cudagraph_capture_request && layer_idx == 0) {
     // only need sync in the first layer
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
@@ -412,15 +434,41 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
     PagedAttentionForward(layer_idx);
   }
 
+  #ifdef ENABLE_CUDA
+    if (is_cudagraph_enabled) {
+      std::string cudagraph_batch_size = fmt::format("{}_{}", model_input_->input_ids.shape[0], layer_idx);
+      if (model_input_->is_cudagraph_capture_request && !is_context_stage
+          && cudagraph_runner->captured_batch_sizes.find(cudagraph_batch_size)
+            == cudagraph_runner->captured_batch_sizes.end()) {
+        KLLM_LOG_DEBUG <<  "rank: " << rank_ << "cudagraph start to capture batch size " << cudagraph_batch_size;
+        cudagraph_runner->BeginCapture(context_->GetComputeStreams()[rank_].Get(), rank_);
+        cudagraph_runner->captured_batch_sizes.insert(cudagraph_batch_size);
+        cudagraph_runner->is_capturing_graph = true;
+      }
+      if (!is_context_stage && cudagraph_runner->CheckIfGraphExec(cudagraph_batch_size)) {
+        cudagraph_runner->LaunchGraph(cudagraph_batch_size, context_->GetComputeStreams()[rank_].Get());
+        return Status();
+      }
+    }
+  #endif
+
   // Attn o_proj MatMul
   Tensor attn_o_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
   if (model_communicator_) {
     // Put output to `reduce_buffer_` to ensure that the input for custom reduce sum is always in `reduce_buffer_`.
-    STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({hidden_buffer_0_[0], attn_o_proj_weight}, reduce_buffer_));
+    if (is_cudagraph_enabled && model_input_->is_cudagraph_batchsize_matched) {
+      STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({cuda_graph_input_[0], attn_o_proj_weight}, reduce_buffer_));
+    } else {
+      STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({hidden_buffer_0_[0], attn_o_proj_weight}, reduce_buffer_));
+    }
   } else {
-    STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({hidden_buffer_0_[0], attn_o_proj_weight}, hidden_buffer_1_));
-    std::swap(hidden_buffer_1_, hidden_buffer_0_);
+    if (is_cudagraph_enabled && model_input_->is_cudagraph_batchsize_matched) {
+      STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({cuda_graph_input_[0], attn_o_proj_weight}, cuda_graph_output_));
+    } else {
+      STATUS_CHECK_RETURN(attn_o_proj_layer_->Forward({hidden_buffer_0_[0], attn_o_proj_weight}, hidden_buffer_1_));
+      std::swap(hidden_buffer_1_, hidden_buffer_0_);
+    }
   }
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
@@ -469,7 +517,6 @@ Status CommonModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm:
     EventRecord(model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
     StreamWaitEvent(context_->GetNCCLStreams()[rank_], model_output_->compute_ready_event);
   }
-
   // Mlp AllReduceSum
   if (model_communicator_) {
     model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
@@ -491,8 +538,20 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
   // Common attention
   STATUS_CHECK_RETURN(CommonAttention(layer_idx, base_weight, hidden_buffer_0_, is_context_stage));
 
+  // If this is cudagraph request, then graph is replayed, no need to do following steps
+  if (is_cudagraph_enabled && !is_context_stage && model_input_->is_cudagraph_batchsize_matched
+        && !model_input_->is_cudagraph_capture_request) {
+    return Status();
+  }
+
   // Attn residual add
-  STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, residual_buffer_));
+  // Cudagraph capture request requires fixed address I/O tensor
+  if (!model_communicator_ && is_cudagraph_enabled
+        && model_input_->is_cudagraph_batchsize_matched) {
+    STATUS_CHECK_RETURN(add_layer_->Forward({cuda_graph_output_[0], residual_buffer_[0]}, residual_buffer_));
+  } else {
+    STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, residual_buffer_));
+  }
 
   // Pre mlp layernorm
   // Pre layernorm uses layernorm input for residual connection.
@@ -504,6 +563,16 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
 
   // Mlp residual add
   STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, residual_buffer_));
+
+  #ifdef ENABLE_CUDA
+  if (is_cudagraph_enabled && cudagraph_runner->is_capturing_graph) {
+      cudaGraphExec_t graph_exec = cudagraph_runner->EndCapture(context_->GetComputeStreams()[rank_].Get(), rank_);
+      std::string cudagraph_batch_size = fmt::format("{}_{}", model_input_->input_ids.shape[0], layer_idx);
+      KLLM_LOG_DEBUG <<  "rank: " << rank_ << "cudagraph end to capture batch size " << cudagraph_batch_size;
+      cudagraph_runner->SetGraphInstance(cudagraph_batch_size, graph_exec);
+      cudagraph_runner->is_capturing_graph = false;
+  }
+  #endif
 
   return Status();
 }
@@ -630,6 +699,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
                                      std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
   model_input_->ParseFromRequests(forward_reqs);
+  bool is_context_stage = model_input_->context_num > 0;
 
   // CPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.
@@ -647,7 +717,11 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
                           std::max(model_input_->context_max_tokens, model_input_->decode_max_tokens),
                           static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
 #endif
-  bool is_context_stage = model_input_->context_num > 0;
+
+  if (model_input_->is_cudagraph_capture_request) {
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
+  }
 
   // GPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.

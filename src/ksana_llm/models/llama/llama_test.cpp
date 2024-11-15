@@ -2,6 +2,7 @@
 
 ==============================================================================*/
 
+#include <stdlib.h>
 #include <Python.h>
 #include <filesystem>
 
@@ -21,7 +22,6 @@ class LlamaTest : public testing::Test {
  protected:
   void SetUp() override {
     context_ = std::make_shared<Context>(1, 1);
-
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();

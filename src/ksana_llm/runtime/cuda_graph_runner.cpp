@@ -4,43 +4,42 @@
 
 #include "ksana_llm/runtime/cuda_graph_runner.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
-
+#include <algorithm>
+#include <thread>
 namespace ksana_llm {
 
-void CudaGraphBuilder::BeginCapture(cudaStream_t stream) {
-  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+void CudaGraphRunner::BeginCapture(cudaStream_t stream, int rank_) {
+  cudaGraph_t capture_graph_;
+  graph_ = capture_graph_;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
 }
 
-void CudaGraphBuilder::EndCapture(cudaStream_t stream) {
-  if (initialized_) {
-    CUDA_CHECK(cudaGraphDestroy(graph_));
-  }
-
+cudaGraphExec_t CudaGraphRunner::EndCapture(cudaStream_t stream, int rank_) {
+  cudaGraphExec_t graph_exec;
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph_));
-  CUDA_CHECK(cudaGraphInstantiate(&exec_graph_, graph_, nullptr, nullptr, 0));
-  initialized_ = true;
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CUDA_CHECK(cudaGraphInstantiate(&graph_exec, graph_, nullptr, nullptr, 0));
+  CUDA_CHECK(cudaGraphDestroy(graph_));
+  return graph_exec;
 }
 
-cudaGraphExec_t CudaGraphBuilder::GetGraphExec() { return exec_graph_; }
-
-bool CudaGraphRunner::CheckGraphAvailable(size_t batch_size) {
-  return graph_instances_.find(batch_size) != graph_instances_.end();
+void CudaGraphRunner::SetGraphInstance(const std::string& batch_size, cudaGraphExec_t& graph_exec) {
+  graph_instances_[batch_size] = graph_exec;
 }
 
-void CudaGraphRunner::GetGraphBatchSizes(std::vector<size_t>& batch_sizes) {
-  batch_sizes.clear();
-  for (size_t i = max_batch_size_ / batch_size_step_; i > 0; --i) {
-    batch_sizes.push_back(batch_size_step_ * i);
+void CudaGraphRunner::LaunchGraph(std::string batch_size, cudaStream_t stream) {
+  cudaGraphExec_t graph_exec = graph_instances_[batch_size];
+  CUDA_CHECK(cudaGraphLaunch(graph_exec, stream));
+}
+
+bool CudaGraphRunner::CheckIfGraphExec(std::string batch_size) {
+  if (graph_instances_.find(batch_size) != graph_instances_.end()) {
+    return true;
   }
-
-  size_t batch_size = batch_size_step_ / 2;
-  while (batch_size > 0) {
-    batch_sizes.push_back(batch_size);
-    batch_size = batch_size / 2;
-  }
+  return false;
 }
 
-size_t CudaGraphRunner::GetPaddedBatchSize(size_t batch_size) {
+size_t CudaGraphBuilder::GetPaddedBatchSize(size_t batch_size) {
   if (batch_size <= 2) {
     return batch_size;
   } else if (batch_size <= 4) {
@@ -50,9 +49,24 @@ size_t CudaGraphRunner::GetPaddedBatchSize(size_t batch_size) {
   }
 }
 
-void CudaGraphRunner::LaunchGraph(size_t batch_size, cudaStream_t stream) {
-  cudaGraphExec_t graph_exec = graph_instances_[batch_size];
-  CUDA_CHECK(cudaGraphLaunch(graph_exec, stream));
+size_t CudaGraphBuilder::GetMaxGraphBatchSize(size_t max_num_seqs) {
+  size_t padded_size = GetPaddedBatchSize(max_num_seqs);
+  if (batch_sizes_to_catpure_list.empty()) {
+    GenerateBatchSizesConfig(batch_sizes_to_catpure_list);
+  }
+  if (std::find(batch_sizes_to_catpure_list.begin(), batch_sizes_to_catpure_list.end(), padded_size)
+    != batch_sizes_to_catpure_list.end()) {
+    return padded_size;
+  }
+  return batch_sizes_to_catpure_list.back();
+}
+
+void CudaGraphBuilder::GenerateBatchSizesConfig(std::vector<size_t>& batch_sizes_to_catpure) {
+  batch_sizes_to_catpure = {1, 2, 4};
+  batch_sizes_to_catpure.reserve(1027);
+  for (int i = 1; i <= default_batch_generation_limit; ++i) {
+    batch_sizes_to_catpure.push_back(batch_size_step_ * i);
+  }
 }
 
 }  // namespace ksana_llm
