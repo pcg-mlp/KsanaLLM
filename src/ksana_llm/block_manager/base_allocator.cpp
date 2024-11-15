@@ -15,7 +15,7 @@ BaseAllocator::BaseAllocator(const AllocatorConfig& allocator_config, std::share
     : allocator_config_(allocator_config), context_(context) {}
 
 void BaseAllocator::Clear() {
-#ifdef ENABLE_ACL_ATB
+#if defined(ENABLE_ACL_ATB) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
   if (allocator_config_.device == MEMORY_DEVICE) {
     if (blocks_base_ptr != nullptr) {
       FreeMemory(blocks_base_ptr);
@@ -51,7 +51,7 @@ void BaseAllocator::PreAllocateBlocks() {
   void* memory_ptr = nullptr;
   bool is_continuous_mode = false;
   void* base_mem_ptr = nullptr;
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
   if (allocator_config_.device == MEMORY_DEVICE) {
     is_continuous_mode = true;
     // NOTE(karlluo): allocator_config_.block_size shape: 2 x layer_num x block_size x head_dim x head_size x

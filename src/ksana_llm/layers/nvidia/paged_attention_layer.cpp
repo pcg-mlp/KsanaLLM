@@ -36,6 +36,10 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   //   7: forward_shape (context_num, context_max_tokens, context_total_block_num, decode_num, decode_max_tokens,
   //      decode_total_block_num)
   //   8: 用于存储 qk 的临时空间(TODO:)
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  //   9: kv_cache_base_ptr_tensor: [layer_num, 2]
+  //   10: block_table: [batch_size, max_tokens]
+#endif
   // output_tensors:
   //   0: paged attention output
   // KLLM_LOG_WARNING <<"";
@@ -67,6 +71,15 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   out.dtype = query.dtype;
   out.shape = {query.shape[0], this->num_heads_ * (size_t)this->head_size_};
 
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  int64_t kv_cache_block_num = *(input_tensors[9].GetPtr<int64_t>());
+  void** layer_kv_cache_ptr = input_tensors[9].GetPtr<void*>() + 1;
+  void* k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];
+  void* v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
+  int32_t* block_table_ptr = input_tensors[10].GetPtr<int32_t>();
+  int max_blocks_per_seq = input_tensors[10].shape[1];
+#endif
+
   auto skipped_context_out_ptr = out.GetPtr<void>() + context_tokens * (out.GetTotalBytes() / out.shape[0]);
   auto skipped_context_query_ptr = query.GetPtr<void>() + context_tokens * (query.GetTotalBytes() / query.shape[0]);
   auto skipped_context_cache_offset_ptr =
@@ -84,7 +97,13 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
       this->num_heads_, this->head_size_, this->num_kv_heads_, this->stride_size_, this->block_token_num_,
       this->k_scale_, this->v_scale_, batch_size, skipped_context_rotary_embedding_pos_ptr,
       skipped_context_rotary_embedding_mask_ptr, total_tokens, this->rotary_embedding_cuda_, workspace.GetPtr<void>(),
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+      workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_, qkv_workspace.GetPtr<void>(), k_cache_ptr,
+      v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq);
+#else
       workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_, qkv_workspace.GetPtr<void>());
+#endif
+
   return Status();
 }
 

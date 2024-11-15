@@ -151,11 +151,41 @@ TEST_F(LayerTest, AttentionLayerTest) {
   }
   Memcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE);
 
-  EXPECT_TRUE(
-      flash_attention_layer
-          .Forward({qkv, input_len, kv_list, prefix_offsets, block_offsets, pos, mask, forward_shape}, output_tensors)
-          .OK());
+#  if defined(ENABLE_FLASH_ATTN_WITH_CACHE)
+  Tensor layer_kv_cache_ptr_tensor;
+  CreateTensor(layer_kv_cache_ptr_tensor, {static_cast<uint64_t>(1 + 2)}, TYPE_INT64, 0, MEMORY_HOST);
+  int64_t* kv_cache_block_num = layer_kv_cache_ptr_tensor.GetPtr<int64_t>();
+  *kv_cache_block_num = static_cast<uint64_t>(1);
+  void** layer_kv_cache_ptr = layer_kv_cache_ptr_tensor.GetPtr<void*>() + 1;
+  layer_kv_cache_ptr[0] = h_kv_list_ptrs[0];
+  layer_kv_cache_ptr[1] = h_kv_list_ptrs[1];
 
+  std::vector<int32_t> prefill_block_table_host = {0};
+  Tensor prefill_block_table;
+  CreateTensor(prefill_block_table, {static_cast<uint64_t>(1), static_cast<uint64_t>(1)}, TYPE_INT32, 0, MEMORY_DEVICE);
+  Memcpy(prefill_block_table.GetPtr<void>(), prefill_block_table_host.data(),
+         prefill_block_table_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE);
+#  endif
+  EXPECT_TRUE(flash_attention_layer
+                  .Forward(
+                      {
+                          qkv,
+                          input_len,
+                          kv_list,
+                          prefix_offsets,
+                          block_offsets,
+                          pos,
+                          mask,
+                          forward_shape
+#  if defined(ENABLE_FLASH_ATTN_WITH_CACHE)
+                          ,
+                          layer_kv_cache_ptr_tensor,
+                          prefill_block_table,
+                          input_len,
+#  endif
+                      },
+                      output_tensors)
+                  .OK());
   PagedAttentionLayer<half, half, llm_kernels::utils::KVCacheType::kAuto> attention_layer;
   EXPECT_TRUE(attention_layer
                   .Init({static_cast<int>(1), static_cast<int>(2), static_cast<int>(2048), static_cast<int>(head_num),

@@ -423,12 +423,18 @@ Status Environment::ParseConfig(const std::string &config_file) {
                                                                "setting.quantization_config.kv_cache.dtype", "auto");
   DataType kv_cache_dtype = model_configs_[""].weight_data_type;
 
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  if (kv_cache_dtype_str == "fp8_e5m2" || kv_cache_dtype_str == "fp8_e4m3") {
+    KLLM_THROW("FlashAttention not support fp8 kv cache");
+  }
+#else
   if (kv_cache_dtype_str == "fp8_e5m2") {
     kv_cache_dtype = TYPE_FP8_E5M2;
   } else if (kv_cache_dtype_str == "fp8_e4m3") {
     kv_cache_dtype = TYPE_FP8_E4M3;
     PrepareKVScales(base_model_dir, model_configs_[""]);
   }
+#endif
   block_manager_config_.host_allocator_config.kv_cache_dtype = kv_cache_dtype;
   block_manager_config_.device_allocator_config.kv_cache_dtype = kv_cache_dtype;
 

@@ -8,6 +8,7 @@ option(WITH_ACL "Enable Ascend" OFF)
 option(WITH_TESTING "Enable testing" OFF)
 option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
 option(WITH_EVENT_RECORD "Enable event record" OFF)
+option(WITH_VLLM_FLASH_ATTN "Enable vllm-flash-attn" OFF)
 option(WITH_CLEAR_CACHE "Enable clear prefix cache" OFF)
 
 if(WITH_CLEAR_CACHE)

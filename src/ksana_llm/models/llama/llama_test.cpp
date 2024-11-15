@@ -129,7 +129,7 @@ class LlamaTest : public testing::Test {
     GetBlockManager()->AllocateBlocks(1, block_ids);
     forward.kv_cache_ptrs.resize(1);
     GetBlockManager()->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
     // for rank_0
     forward.atb_kv_cache_base_blk_ids.clear();
     forward.atb_kv_cache_base_blk_ids.resize(1);
@@ -138,7 +138,7 @@ class LlamaTest : public testing::Test {
         (uintptr_t(forward.kv_cache_ptrs[0][0]) - uintptr_t(GetBlockManager()->GetBlockBasePtr())) /
         (2 * model_config.num_layer * model_config.block_token_num * model_config.head_num *
          model_config.size_per_head) /
-        sizeof(float16);
+         GetTypeSize(block_manager->GetBlockManagerConfig().device_allocator_config.kv_cache_dtype);
     forward.atb_kv_cache_base_blk_ids[0].push_back(
         {static_cast<int32_t>(origin_block_id * 2 * model_config.num_layer)});
 #endif

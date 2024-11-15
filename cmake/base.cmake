@@ -8,12 +8,12 @@ endif()
 function(cpp_test TARGET_NAME)
   if(WITH_TESTING)
     set(oneValueArgs "")
-    set(multiValueArgs SRCS DEPS ARGS)
+    set(multiValueArgs SRCS DEPS LIBS ARGS)
     add_compile_options(-fno-access-control -g -O0)
     cmake_parse_arguments(cpp_test "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     add_executable(${TARGET_NAME} ${cpp_test_SRCS})
     target_link_libraries(${TARGET_NAME} ${cpp_test_DEPS}
-      ksana_llm_libs gtest_main gtest gmock_main gmock -pthread)
+      ksana_llm_libs gtest_main gtest gmock_main gmock -pthread ${cpp_test_LIBS})
     add_dependencies(${TARGET_NAME} ${cpp_test_DEPS} gtest_main gtest gmock_main gmock)
     add_test(NAME ${TARGET_NAME}
       COMMAND ${TARGET_NAME} ${cpp_test_ARGS}

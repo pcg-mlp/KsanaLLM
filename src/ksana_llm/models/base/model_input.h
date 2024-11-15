@@ -31,6 +31,12 @@ class ModelInput {
   void PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx, size_t end_idx,
                             size_t total_block_num);
 
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  // Prepare the kv cache block_table.
+  void PrepareKVCacheBlockTable(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx, size_t end_idx,
+                                size_t total_block_num, Tensor& block_table);
+#endif
+
   void PreparePrefillPositionIds(const std::vector<ForwardRequest>& forward_reqs);
 
   void PrepareDecodePositionIds(const std::vector<ForwardRequest>& forward_reqs);
@@ -159,6 +165,15 @@ class ModelInput {
 
   std::vector<void*> kv_cache_ptrs;
   Tensor kv_cache_ptrs_tensor;
+#endif
+
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  std::vector<int32_t> block_table_host;
+  Tensor prefill_block_table, decode_block_table;
+  Tensor layer_kv_cache_ptr_tensor;
+  std::vector<size_t> input_without_prefix_list_uint64;
+  Tensor input_without_prefix_uint64_tensor;
+  size_t context_without_prefix_max_tokens = 0;
 #endif
 
  private:

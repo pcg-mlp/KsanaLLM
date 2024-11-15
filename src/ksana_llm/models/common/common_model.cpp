@@ -154,6 +154,11 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   input_refit_layer_ = std::make_shared<InputRefitLayer<T>>();
   input_refit_layer_->Init({}, context_, rank_);
 
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer<T>>();
+  set_torch_stream_layer_->Init({}, context_, rank_);
+#endif
+
   model_input_ = std::make_shared<ModelInput>(model_config_, rank_, context_);
 
   if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
@@ -337,15 +342,23 @@ template <typename T>
 Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
   bool reuse_prefix_caching = prefix_caching_enabled_;
 
+#ifndef ENABLE_FLASH_ATTN_WITH_CACHE
   if (reuse_prefix_caching) {
     AddAttentionPrefixCache();
   }
+#endif
 
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
        model_input_->input_prefix_uint64_tensor, model_input_->kv_cache_offset_tensor,
-       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask, forward_shape_},
+       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask, forward_shape_
+#  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+       ,
+       model_input_->layer_kv_cache_ptr_tensor, model_input_->prefill_block_table,
+       model_input_->input_without_prefix_uint64_tensor
+#  endif
+      },
       hidden_buffer_1_));
 #elif defined(ENABLE_ACL)
   // inference on NPU with ATB
@@ -358,9 +371,11 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
 
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
 
+#ifndef ENABLE_FLASH_ATTN_WITH_CACHE
   if (reuse_prefix_caching) {
     RemoveAttentionPrefixCache();
   }
+#endif
 
   return Status();
 }
@@ -378,7 +393,12 @@ Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
      STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
        model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
-       model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]},
+       model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]
+#  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+       ,
+       model_input_->layer_kv_cache_ptr_tensor, model_input_->decode_block_table
+#  endif
+      },
       hidden_buffer_1_));
      std::swap(hidden_buffer_1_, hidden_buffer_0_);
   }
@@ -407,6 +427,10 @@ Status CommonModel<T>::LayerNormForward(const std::string& layer_name,
 template <typename T>
 Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                        const std::vector<Tensor>& attention_input, const bool is_context_stage) {
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  std::vector<Tensor> empty_tensors;
+  set_torch_stream_layer_->Forward(empty_tensors, empty_tensors);
+#endif
   // Attn proj MatMul
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
@@ -482,6 +506,9 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
   if (model_communicator_) {
     model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
   }
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  set_torch_stream_layer_->Clear();
+#endif
   return Status();
 }
 
@@ -709,9 +736,17 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   }
 
   // create forward shape tensor
-  forward_shape_.shape = {
-      model_input_->context_num, model_input_->context_max_tokens, model_input_->context_total_block_num,
-      model_input_->decode_num,  model_input_->decode_max_tokens,  model_input_->decode_total_block_num};
+  forward_shape_.shape = {model_input_->context_num,
+                          model_input_->context_max_tokens,
+                          model_input_->context_total_block_num,
+                          model_input_->decode_num,
+                          model_input_->decode_max_tokens,
+                          model_input_->decode_total_block_num
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+                          ,
+                          model_input_->context_without_prefix_max_tokens
+#endif
+  };
 #ifdef ENABLE_ACL
   forward_shape_.shape = {std::max(model_input_->context_num, model_input_->decode_num),
                           std::max(model_input_->context_max_tokens, model_input_->decode_max_tokens),

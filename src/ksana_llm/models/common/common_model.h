@@ -15,6 +15,9 @@
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#  include "ksana_llm/layers/set_torch_stream_layer.h"
+#endif
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/models/base/model_communicator.h"
 #include "ksana_llm/models/base/model_input.h"
@@ -76,7 +79,6 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
 
-
  protected:
   using BaseModel::context_;
   using BaseModel::rank_;
@@ -109,6 +111,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> assemble_last_token_layer_;
   std::shared_ptr<BaseLayer> cast_layer_;
   std::shared_ptr<BaseLayer> input_refit_layer_;
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  std::shared_ptr<BaseLayer> set_torch_stream_layer_;
+#endif
 
   std::shared_ptr<MatMulLayerFactory<T>> matmul_layer_factory_;
   std::shared_ptr<BaseLayer> attn_qkv_proj_layer_;

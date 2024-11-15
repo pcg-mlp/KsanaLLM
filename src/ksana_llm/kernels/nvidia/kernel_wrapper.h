@@ -90,7 +90,10 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,
                  int stride_size, float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank,
                  int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
-                 const std::optional<void*>& alibi_slopes, cudaStream_t stream);
+                 const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr = nullptr,
+                 void* v_cache_ptr = nullptr, int32_t* block_table_ptr = nullptr, int64_t kv_cache_block_num = 0,
+                 int max_blocks_per_seq = 0, size_t* without_prefix_offsets = nullptr,
+                 int without_prefix_max_tokens = 0);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]
@@ -105,7 +108,9 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           void* rotary_embedding_mask, int total_tokens,
                           std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
                           void* workspace, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
-                          void* qkv_workspace);
+                          void* qkv_workspace, void* k_cache_ptr = nullptr, void* v_cache_ptr = nullptr,
+                          int32_t* block_table_ptr = nullptr, int64_t kv_cache_block_num = 0,
+                          int max_blocks_per_seq = 0);
 
 template <typename T>
 void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data, void** data_handles,
@@ -147,4 +152,8 @@ void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scal
 #endif
 
 size_t InvokeGetCublasWorkspaceSize();
+
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank);
+#endif
 }  // namespace ksana_llm

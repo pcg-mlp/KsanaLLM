@@ -136,6 +136,16 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(CreateTensor(kv_cache_ptrs_tensor, {static_cast<uint64_t>(max_batch_size_ * max_block_num)},
                                     TYPE_POINTER, rank_, MEMORY_HOST));
 #endif
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  STATUS_CHECK_FAILURE(CreateTensor(prefill_block_table, {static_cast<uint64_t>(max_batch_size_ * max_block_num)},
+                                    TYPE_INT32, rank, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(decode_block_table, {static_cast<uint64_t>(max_batch_size_ * max_block_num)},
+                                    TYPE_INT32, rank, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(layer_kv_cache_ptr_tensor, {1 + static_cast<uint64_t>(model_config.num_layer * 2)},
+                                    TYPE_INT64, rank, MEMORY_HOST));
+  STATUS_CHECK_FAILURE(
+      CreateTensor(input_without_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
+#endif
 }
 
 ModelInput::~ModelInput() {
@@ -163,7 +173,12 @@ ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(last_token_index_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_ptrs_tensor, rank_));
 #endif
-
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  STATUS_CHECK_FAILURE(DestroyTensor(prefill_block_table, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(decode_block_table, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(layer_kv_cache_ptr_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(input_without_prefix_uint64_tensor, rank_));
+#endif
   EventDestroy(kvcache_offset_event);
   EventDestroy(rotary_embedding_event);
   EventDestroy(input_ids_event);
@@ -180,6 +195,9 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   }
 
   context_max_tokens = 0;
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  context_without_prefix_max_tokens = 0;
+#endif
   decode_max_tokens = 0;
   context_total_seq_len = 0;
   context_num = 0;
@@ -221,6 +239,10 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   input_ids_cpu.clear();
   PrepareKVCacheBlocks(forward_reqs, 0, context_num, context_total_block_num);
   PrepareKVCacheBlocks(forward_reqs, context_num, batch_size, decode_total_block_num);
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  PrepareKVCacheBlockTable(forward_reqs, 0, context_num, context_total_block_num, prefill_block_table);
+  PrepareKVCacheBlockTable(forward_reqs, context_num, batch_size, decode_total_block_num, decode_block_table);
+#endif
   PreparePrefillPositionIds(forward_reqs);
   PreparePrefillInputIds(forward_reqs);
   PrepareInputRefit(forward_reqs);
@@ -284,16 +306,70 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
   }
   MemcpyAsync(kv_list.GetPtr<void>() + copy_offset, cpu_kv_list.data(), cpu_kv_list.size() * sizeof(void*),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
   EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
 }
 
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+void ModelInput::PrepareKVCacheBlockTable(const std::vector<ForwardRequest>& forward_reqs, size_t begin_idx,
+                                          size_t end_idx, size_t total_block_num, Tensor& block_table) {
+  if (end_idx - begin_idx > 0) {
+    // Get each layer's raw pointer of k_cache and v_cache tensor from
+    // kv_cache[num_blocks, num_layers, 2, block_size, num_kv_heads, head_size]
+    // block_size is [num_layers, 2, block_size, num_kv_heads, head_size]
+    void* k_cache_base_ptr = GetBlockManager()->GetBlockBasePtr();
+    void* v_cache_base_ptr = k_cache_base_ptr + block_size_ / model_config_.num_layer / 2;
+
+    int64_t* kv_cache_block_num = layer_kv_cache_ptr_tensor.GetPtr<int64_t>();
+    *kv_cache_block_num = GetBlockManager()->GetAllocatorConfig().blocks_num * model_config_.num_layer * 2;
+    void** layer_kv_cache_ptr = layer_kv_cache_ptr_tensor.GetPtr<void*>() + 1;
+    for (uint32_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+      layer_kv_cache_ptr[layer_idx * 2 + 0] = k_cache_base_ptr + layer_idx * block_size_ / model_config_.num_layer;
+      layer_kv_cache_ptr[layer_idx * 2 + 1] = v_cache_base_ptr + layer_idx * block_size_ / model_config_.num_layer;
+    }
+
+    size_t max_num_blocks_per_query = 0;
+    for (size_t f_req_idx = begin_idx; f_req_idx < end_idx; ++f_req_idx) {
+      max_num_blocks_per_query =
+          std::max(max_num_blocks_per_query, forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].size());
+    }
+    block_table_host.clear();
+    block_table_host.resize((end_idx - begin_idx) * max_num_blocks_per_query, -1);
+    // The pointer has already been offset by layer_idx, so all layers can use the same block_table.
+    for (size_t f_req_idx = begin_idx; f_req_idx < end_idx; ++f_req_idx) {
+      size_t cur_query_blocks_num = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].size();
+      for (uint32_t base_block_idx = 0; base_block_idx < cur_query_blocks_num; ++base_block_idx) {
+        block_table_host[(f_req_idx - begin_idx) * max_num_blocks_per_query + base_block_idx] =
+            forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_][base_block_idx];
+      }
+    }
+    MemcpyAsync(block_table.GetPtr<void>(), block_table_host.data(), block_table_host.size() * sizeof(int32_t),
+                MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+    block_table.shape = {end_idx - begin_idx, max_num_blocks_per_query};
+    layer_kv_cache_ptr_tensor.shape = {1 + model_config_.num_layer * 2};
+  }
+
+#  ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+#  endif
+  EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
+}
+#endif
+
 void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& forward_reqs) {
   std::vector<int64_t> cpu_rotary_pos(context_total_seq_len);
   std::vector<int64_t> cpu_rotary_mask(context_total_seq_len, 1);
   int cpu_rotary_pos_idx = 0;
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  for (size_t idx = 0; idx < context_num; ++idx) {
+    for (size_t pos = forward_reqs[idx].prefix_cache_len; pos < forward_reqs[idx].output_tokens->size(); ++pos) {
+      cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
+    }
+  }
+#else
   for (size_t idx = 0; idx < context_num; ++idx) {
     if (forward_reqs[idx].prefix_cache_len > 0) {
       std::fill(cpu_rotary_mask.begin() + cpu_rotary_pos_idx,
@@ -303,6 +379,7 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
       cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
     }
   }
+#endif
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * cpu_rotary_pos.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
 #ifdef ENABLE_ACL
@@ -572,6 +649,7 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
   input_tokens_int32_tensor.shape = {static_cast<uint64_t>(decode_num)};
   input_offset_uint64_tensor.shape = {static_cast<uint64_t>(batch_size) + 1};
   void* input_tokens_int32_ptr = input_tokens_int32_tensor.GetPtr<void>();
+
   MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), input_tokens_list_int32.size() * sizeof(int),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
@@ -580,6 +658,18 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
   MemcpyAsync(input_prefix_uint64_tensor.GetPtr<void>(), input_prefix_list_uint64.data(),
               input_prefix_list_uint64.size() * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  input_without_prefix_list_uint64.clear();
+  input_without_prefix_list_uint64.resize(input_prefix_list_uint64.size());
+  for (size_t i = 0; i < input_prefix_list_uint64.size(); ++i) {
+    input_without_prefix_list_uint64[i] = input_offset_list_uint64[i] - input_prefix_list_uint64[i];
+    context_without_prefix_max_tokens =
+        std::max(context_without_prefix_max_tokens, input_without_prefix_list_uint64[i]);
+  }
+  MemcpyAsync(input_without_prefix_uint64_tensor.GetPtr<void>(), input_without_prefix_list_uint64.data(),
+              input_without_prefix_list_uint64.size() * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
+#endif
   EventRecord(input_ids_event, context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_ACL

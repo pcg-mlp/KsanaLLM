@@ -7,7 +7,7 @@
 #include <fstream>
 #include <iostream>
 
-#ifdef ENABLE_FLASH_ATTN_2
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
 #  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #else
 #  include "flash_api.h"
@@ -22,6 +22,7 @@
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
+#include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
@@ -129,7 +130,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
@@ -347,6 +348,7 @@ torch::ScalarType GetTorchDataType();
   torch::ScalarType GetTorchDataType<T>() { \
     return TORCH_TYPE;                      \
   }
+GET_TORCH_DATA_TYPE(int32_t, torch::kInt32);
 GET_TORCH_DATA_TYPE(float, torch::kFloat32);
 GET_TORCH_DATA_TYPE(half, torch::kFloat16);
 #ifdef ENABLE_BFLOAT16
@@ -370,7 +372,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,
                  int stride_size, float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank,
                  int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
-                 const std::optional<void*>& alibi_slopes, cudaStream_t stream) {
+                 const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr,
+                 int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
+                 size_t* without_prefix_offsets, int without_prefix_max_tokens) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
       torch::from_blob(qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
@@ -383,11 +387,13 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   torch::Tensor k_tensor = tt[1];
   torch::Tensor v_tensor = tt[2];
 
+#ifndef ENABLE_FLASH_ATTN_WITH_CACHE
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
       v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
       reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
       k_scale, v_scale, stream));
+#endif
 
   if (rotary_embedding_cuda.has_value()) {
     rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
@@ -397,14 +403,22 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
   }
 
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
+      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
+      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets), without_prefix_offsets,
+      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+      k_scale, v_scale, stream));
+#else
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
       v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
       reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
       k_scale, v_scale, stream));
+#endif
 
 // flash attention 2 or flash attention 1
-#ifdef ENABLE_FLASH_ATTN_2
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
   // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
   // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
   // leads to a core dump.
@@ -433,11 +447,43 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
           stream));
     }
   }
+#  ifdef ENABLE_VLLM_FLASH_ATTN_MINOR_6
+#    ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  torch::Tensor seqlen_q_tensor = torch::from_blob(without_prefix_offsets, {batch + 1}, int_options);
+  auto cache_options = options;
+  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 || KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    // cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt8);
+    KLLM_THROW("FlashAttention not support fp8 kv cache");
+  }
+  // kv_cache[num_blocks, block_size, num_kv_heads, head_size]
+  torch::Tensor k_cache_tensor =
+      torch::from_blob(k_cache_ptr, {kv_cache_block_num, block_size, num_kv_heads, head_size}, cache_options);
+  torch::Tensor v_cache_tensor =
+      torch::from_blob(v_cache_ptr, {kv_cache_block_num, block_size, num_kv_heads, head_size}, cache_options);
+  auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>());
+  c10::optional<at::Tensor> block_table = torch::from_blob(block_table_ptr, {batch, max_blocks_per_seq}, int32_options);
+  std::vector<at::Tensor> mha_output = mha_varlen_fwd(
+      q_tmp_tensor, k_cache_tensor, v_cache_tensor, out_tensor, seqlen_q_tensor.to(torch::kInt32),
+      seqlen_tensor.to(torch::kInt32), seqused_k, block_table, alibi_slopes_tensor, without_prefix_max_tokens,
+      max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+
+#    else
+  c10::optional<at::Tensor> block_table = c10::nullopt;  // batch_size x max_num_blocks_per_seq
+  std::vector<at::Tensor> mha_output = mha_varlen_fwd(
+      q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
+      torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor, seqlen_tensor.to(torch::kInt32),
+      seqlen_tensor.to(torch::kInt32), seqused_k, block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f,
+      1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+#    endif
+#  endif
+
+#  ifdef ENABLE_FLASH_ATTN_MINOR_5
   std::vector<at::Tensor> mha_output =
       mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
                      torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
                      seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
                      max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
+#  endif
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, set the output tensor to nullptr.";
     at::Tensor& out_data = mha_output[0];
@@ -460,7 +506,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens,  \
       int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, float k_scale,   \
       float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list, \
-      void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream)
+      void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream,    \
+      void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                  \
+      int max_blocks_per_seq, size_t* without_prefix_offsets, int without_prefix_max_tokens)
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -511,18 +559,17 @@ PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, uint8_t, uint8_t, llm_kernels::uti
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs,
                           void* context_lens_ptr, int max_context_len, cudaStream_t stream, void* cache_offsets_ptr,
-                          int seqs_num, int heads_num, int head_size, int kv_heads_num, int stride_size, int block_size,
+                          int seqs_num, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
                           float k_scale, float v_scale, int batch, void* rotary_embedding_pos,
                           void* rotary_embedding_mask, int total_tokens,
                           std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
                           void* workspace_ptr, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
-                          void* qkv_workspace) {
-  const float* alibi_slopes_ptr =
-      reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
+                          void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
+                          int64_t kv_cache_block_num, int max_blocks_per_seq) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
-      torch::from_blob(query_ptr, {total_tokens, (heads_num + kv_heads_num * 2) * head_size}, options);
-  auto tt = qkv_tensor.split({heads_num * head_size, kv_heads_num * head_size, kv_heads_num * head_size}, -1);
+      torch::from_blob(query_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
+  auto tt = qkv_tensor.split({num_heads * head_size, num_kv_heads * head_size, num_kv_heads * head_size}, -1);
 
   torch::Tensor q_tensor = tt[0];
   torch::Tensor k_tensor = tt[1];
@@ -539,26 +586,77 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
   }
 
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
+      reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
+      value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
+      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+      k_scale, v_scale, stream));
+#else
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
       value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
-      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, kv_heads_num, head_size, stride_size,
+      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
       k_scale, v_scale, stream));
-
-  PagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(heads_num, head_size, kv_heads_num, stride_size, block_size, k_scale,
+#endif
+#ifdef ENABLE_FLASH_ATTN_WITH_CACHE
+  auto cache_options = options;
+  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 || KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    // cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt8);
+    KLLM_THROW("FlashAttention not support fp8 kv cache");
+  }
+  // kv_cache[num_blocks, 2, block_size, num_kv_heads, head_size]
+  torch::Tensor k_cache_tensor =
+      torch::from_blob(k_cache_ptr, {kv_cache_block_num, block_size, num_kv_heads, head_size}, cache_options);
+  torch::Tensor v_cache_tensor =
+      torch::from_blob(v_cache_ptr, {kv_cache_block_num, block_size, num_kv_heads, head_size}, cache_options);
+  auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>());
+  c10::optional<at::Tensor> block_table_tensor =
+      torch::from_blob(block_table_ptr, {batch, max_blocks_per_seq}, int32_options);
+  c10::optional<const at::Tensor> seqlens_k_tensor =
+      c10::optional<const at::Tensor>(torch::from_blob(context_lens_ptr, {batch}, int32_options));
+  q_tensor = q_tensor.reshape({batch, 1, num_heads, head_size});
+  c10::optional<at::Tensor> out_tensor = torch::from_blob(output_ptr, {batch, 1, num_heads, head_size}, options);
+  float softmax_scale = 1.0 / sqrt(head_size);
+  c10::optional<at::Tensor> null_tensor = c10::nullopt;
+  c10::optional<const at::Tensor> const_null_tensor = c10::nullopt;
+  c10::optional<at::Tensor> alibi_slopes_tensor = c10::nullopt;
+  if (alibi_slopes.has_value()) {
+    auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
+    alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
+  }
+  mha_fwd_kvcache(q_tensor,             // batch_size x seqlen_q x num_heads x head_size
+                  k_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
+                  v_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
+                  const_null_tensor,    // k_
+                  const_null_tensor,    // v_
+                  seqlens_k_tensor,     // batch_size
+                  const_null_tensor,    // rotary_cos_: seqlen_ro x (rotary_dim / 2)
+                  const_null_tensor,    // rotary_sin_: seqlen_ro x (rotary_dim / 2)
+                  const_null_tensor,    // cache_batch_idx_: indices to index into the KV cache
+                  block_table_tensor,   // batch_size x max_num_blocks_per_seq
+                  alibi_slopes_tensor,  // num_heads or batch_size x num_heads
+                  out_tensor,           // batch_size x seqlen_q x num_heads x head_size
+                  softmax_scale, true, -1, -1, 0.0, true, 0);
+#else
+  const float* alibi_slopes_ptr =
+      reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
+  PagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(num_heads, head_size, num_kv_heads, stride_size, block_size, k_scale,
                                               v_scale, output_ptr, q_tensor_ptr, key_cache_ptrs, value_cache_ptrs,
                                               cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num, stream,
                                               workspace_ptr, work_size, alibi_slopes_ptr);
+#endif
 }
 
 #define RUN_PAGED_ATTENTION(SCALAR_T, CACHE_T, KV_DTYPE)                                                             \
   template void InvokePagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(                                                   \
       void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,     \
-      int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int heads_num, int head_size, \
-      int kv_heads_num, int stride_size, int block_size, float k_scale, float v_scale, int batch,                    \
+      int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int num_heads, int head_size, \
+      int num_kv_heads, int stride_size, int block_size, float k_scale, float v_scale, int batch,                    \
       void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,                                     \
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr, \
-      size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace)
+      size_t work_size, int rank, const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr,  \
+      void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq)
 RUN_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -839,4 +937,15 @@ void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scal
 #endif
 
 size_t InvokeGetCublasWorkspaceSize() { return llm_kernels::nvidia::GetCublasWorkspaceSize(); }
+
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank) {
+  cudaStream_t old_stream = torch::cuda::getCurrentCUDAStream(rank).stream();
+  // set compute stream as torch stream
+  torch::cuda::CUDAStream new_stream = torch::cuda::getStreamFromExternal(stream, rank);
+  torch::cuda::setCurrentCUDAStream(new_stream);
+  return old_stream;
+}
+#endif
+
 }  // namespace ksana_llm
