@@ -1,0 +1,6 @@
+{
+    "model.layers.(\\d+).block_sparse_moe.gate.weight": "model.layers.$1.mlp.gate.weight",
+    "model.layers.(\\d+).block_sparse_moe.experts.(\\d+).w1.weight": "model.layers.$1.mlp.experts.$2.gate_proj.weight",
+    "model.layers.(\\d+).block_sparse_moe.experts.(\\d+).w2.weight": "model.layers.$1.mlp.experts.$2.down_proj.weight",
+    "model.layers.(\\d+).block_sparse_moe.experts.(\\d+).w3.weight": "model.layers.$1.mlp.experts.$2.up_proj.weight"
+}

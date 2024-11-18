@@ -22,6 +22,7 @@
 #include "ksana_llm/models/base/model_communicator.h"
 #include "ksana_llm/models/base/model_input.h"
 #include "ksana_llm/models/base/model_output.h"
+#include "ksana_llm/models/common_moe/moe_config.h"
 #include "ksana_llm/models/llama/llama_weight.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
@@ -54,6 +55,8 @@ struct ModelRunConfig {
   LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
   // Is run inference with graph
   bool is_graph_mode = false;
+  // Use no_norm or re_norm.
+  MoeScaleNormMode moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;
 };
 
 // A common implement of transformer based model.

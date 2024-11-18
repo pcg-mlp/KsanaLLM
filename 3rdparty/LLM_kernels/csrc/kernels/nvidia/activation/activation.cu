@@ -499,11 +499,15 @@ void InvokeSigmoid(T* data, const int32_t size, const float scale, cudaStream_t&
     // NOTE(karlluo): each instrinct can handle two elements, so we just need half blocks num
     dim3 block(block_threads_num);
     dim3 grid((size + grid_blocks_num - 1) / grid_blocks_num);
+#ifdef ENABLE_BF16
     if (std::is_same<T, __nv_bfloat16>::value) {
       InvokeOptiSigmoidKernel<<<grid, block, 0, stream>>>((__nv_bfloat162*)data, size, scale);
     } else {
+#endif
       InvokeOptiSigmoidKernel<<<grid, block, 0, stream>>>((half2*)data, size, scale);
+#ifdef ENABLE_BF16
     }
+#endif
   }
 }
 

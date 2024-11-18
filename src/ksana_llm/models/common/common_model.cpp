@@ -22,6 +22,10 @@ CommonModel<T>::CommonModel(const ModelConfig& model_config, const int rank, std
   context_ = context;
   rank_ = rank;
   plugin_ = g_plugin;
+
+  // auto create matmul layers
+  matmul_layer_factory_ =
+      std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_, rank_, context_);
 }
 
 template <typename T>
@@ -60,9 +64,13 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
                                 model_config_.max_batch_size, model_config_.max_token_num, max_token_num);
 
   int inter_size_per_tp = model_config_.inter_size / tensor_para_size;
+  if (model_config_.has_shared_experts) {
+    inter_size_per_tp = model_config_.moe_config.shared_expert_inter_size / tensor_para_size;
+  }
   int max_dim =
       std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units), inter_size_per_tp);
   size_t hidden_buffer_size = std::max(max_batch_size * vocab_size_pad_, max_token_num * max_dim);
+
   size_t residual_buffer_size = max_token_num * hidden_units;
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
   size_t shared_buffer_size = max_token_num * std::max(inter_size_per_tp, hidden_units * 2);
@@ -227,26 +235,24 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
   DataType input_type = weight_type;
   DataType output_type = weight_type;
 
-  // auto create matmul layers
-  matmul_layer_factory_ =
-      std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_, rank_, context_);
-
   attn_qkv_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(
       base_weight, "model.layers.0.self_attn.query_key_value.weight", weight_type, input_type, output_type, {});
   attn_o_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.self_attn.o_proj.weight",
                                                               weight_type, input_type, output_type, {});
-  mlp_gate_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.gate_proj.weight",
-                                                                weight_type, input_type, output_type, {});
-  // Only gated activation has up_proj.
-  if (base_weight->GetModelWeights("model.layers.0.mlp.up_proj.weight").GetBlockId() >= 0) {
-    mlp_up_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.up_proj.weight",
-                                                                weight_type, input_type, output_type, {});
-  } else {
-    mlp_up_proj_layer_ = nullptr;
-  }
 
-  mlp_down_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight",
-                                                                weight_type, input_type, output_type, {});
+  if (!model_config_.is_moe) {
+    mlp_gate_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.gate_proj.weight",
+                                                                  weight_type, input_type, output_type, {});
+    // Only gated activation has up_proj.
+    if (base_weight->GetModelWeights("model.layers.0.mlp.up_proj.weight").GetBlockId() >= 0) {
+      mlp_up_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.up_proj.weight",
+                                                                  weight_type, input_type, output_type, {});
+    } else {
+      mlp_up_proj_layer_ = nullptr;
+    }
+    mlp_down_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight",
+                                                                  weight_type, input_type, output_type, {});
+  }
   lm_head_proj_layer_ =
       matmul_layer_factory_->AutoCreateLayer(base_weight, "lm_head.weight", weight_type, input_type, output_type, {});
 
@@ -368,7 +374,6 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
        model_input_->atb_attention_attr},
       hidden_buffer_1_));
 #endif
-
   std::swap(hidden_buffer_1_, hidden_buffer_0_);
 
 #ifndef ENABLE_FLASH_ATTN_WITH_CACHE

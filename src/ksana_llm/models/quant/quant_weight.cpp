@@ -32,10 +32,10 @@
 #include "ksana_llm/utils/common_device.h"
 
 #ifdef ENABLE_CUDA
-#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #  include "csrc/kernels/nvidia/gptq_marlin/awq_marlin_repack.h"
 #  include "csrc/kernels/nvidia/gptq_marlin/gptq_marlin_repack.h"
 #  include "csrc/kernels/nvidia/gptq_marlin/marlin_params.h"
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
 #include "ksana_llm/kernels/cast.h"
@@ -329,7 +329,7 @@ torch::Tensor QuantWeight<T>::CutlassPackInt8ToPackedInt4(torch::Tensor weight) 
 
 template <typename T>
 torch::Tensor QuantWeight<T>::CutlassPreprocessWeightsForMixedGemmWarpper(torch::Tensor row_major_quantized_weight,
-                                                                   llm_kernels::nvidia::QuantType quant_type) {
+                                                                          llm_kernels::nvidia::QuantType quant_type) {
   const size_t bits_in_quant_type = get_weight_quant_bits(quant_type);
 
   const size_t num_experts = row_major_quantized_weight.dim() == 2 ? 1 : row_major_quantized_weight.size(0);
@@ -575,8 +575,8 @@ Status QuantWeight<T>::ConvertGroupTensor(int hidden_units, int inter_size, int 
       torch::Tensor processed_tensor_cpu;
       if (model_config_.quant_config.backend == CUTLASS_BACKEND) {
         torch::Tensor qweight_cpu = qweight_gpu.to(torch::kCPU);
-        processed_tensor_cpu = CutlassPreprocessWeightsForMixedGemmWarpper(
-            qweight_cpu, llm_kernels::nvidia::QuantType::W4_A16);
+        processed_tensor_cpu =
+            CutlassPreprocessWeightsForMixedGemmWarpper(qweight_cpu, llm_kernels::nvidia::QuantType::W4_A16);
       } else if (model_config_.quant_config.backend == MARLIN_BACKEND) {
         int pack_factor = 32 / model_config_.quant_config.bits;
         int tile_size = llm_kernels::nvidia::marlin::tile_size;

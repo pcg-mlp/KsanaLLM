@@ -19,8 +19,8 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_rotary_embedding llm_kernels_nvidia_kernel_all_reduce
     llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi
     llm_kernels_nvidia_kernel_greedy llm_kernels_nvidia_kernel_asymmetric_gemm
-    llm_kernels_nvidia_kernel_gptq_marlin llm_kernels_nvidia_kernel_weight_only_batched_gemv 
-    llm_kernels_nvidia_utils)
+    llm_kernels_nvidia_kernel_gptq_marlin llm_kernels_nvidia_kernel_weight_only_batched_gemv
+    llm_kernels_nvidia_kernel_mixture_of_experts llm_kernels_nvidia_utils)
 endif()
 
 message(STATUS "nvidia_kernels_SRCS: ${nvidia_kernels_SRCS}")

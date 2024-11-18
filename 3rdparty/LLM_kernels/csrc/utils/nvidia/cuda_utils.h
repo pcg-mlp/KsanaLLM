@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <stdexcept>
-#include <string>
-
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <optional>
+#include <stdexcept>
+#include <string>
 #include "csrc/utils/nvidia/assert.h"
 
 #ifdef ENABLE_FP8
@@ -83,6 +83,39 @@ void CheckNvidiaCUDAError(T result, const char* func, const char* file, const in
 }
 
 #define CHECK_NVIDIA_CUDA_ERROR(val) CheckNvidiaCUDAError((val), #val, __FILE__, __LINE__)
+// refer to
+// https://github.com/NVIDIA/TensorRT-LLM/blame/ab49b93718b906030bcec0c817b10ebb373d4179/cpp/include/tensorrt_llm/common/cudaUtils.h
+inline std::optional<bool> IsCudaLaunchBlocking() {
+  static bool first_call = true;
+  static std::optional<bool> result = std::nullopt;
+
+  if (first_call) {
+    char const* env = std::getenv("CUDA_LAUNCH_BLOCKING");
+    if (env != nullptr && std::string(env) == "1") {
+      result = true;
+    } else if (env != nullptr && std::string(env) == "0") {
+      result = false;
+    }
+    first_call = false;
+  }
+  return result;
+}
+
+inline void SyncAndCheck(char const* const file, int const line) {
+  auto const cuda_launch_blocking = IsCudaLaunchBlocking();
+#ifndef NDEBUG
+  bool const check_error = cuda_launch_blocking.value_or(true);
+#else
+  bool const check_error = cuda_launch_blocking.value_or(false);
+#endif
+
+  if (check_error) {
+    cudaError_t result = cudaDeviceSynchronize();
+    CheckNvidiaCUDAError(result, "cudaDeviceSynchronize", file, line);
+  }
+}
+
+#define sync_check_cuda_error() llm_kernels::utils::SyncAndCheck(__FILE__, __LINE__)
 
 #define RETURN_NVIDIA_CUBLAS_ERROR(val) \
   if ((val)) {                          \
@@ -95,8 +128,9 @@ void RandomGPUBuffer(T* data_ptr, size_t n_elems, const float max_val = 1.0f, co
 template <typename T_INPUT, typename T_STEP>
 void InvokeRange(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step, cudaStream_t stream);
 
-typedef struct __align__(4) { half x, y, z, w; }
-half4;
+typedef struct __align__(4) {
+  half x, y, z, w;
+} half4;
 
 inline int32_t div_up(int32_t a, int32_t n) { return (a + n - 1) / n; }
 
@@ -243,15 +277,28 @@ inline int32_t GetSMVersion() {
   return sm_major * 10 + sm_minor;
 }
 
-inline int getMaxSharedMemoryPerBlockOptin()
-{
-    int device_id;
-    int max_shared_memory_per_block;
-    CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device_id));
-    CHECK_NVIDIA_CUDA_ERROR(
-        cudaDeviceGetAttribute(&max_shared_memory_per_block, cudaDevAttrMaxSharedMemoryPerBlockOptin, device_id));
-    return max_shared_memory_per_block;
+inline int getMaxSharedMemoryPerBlockOptin() {
+  int device_id;
+  int max_shared_memory_per_block;
+  CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device_id));
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaDeviceGetAttribute(&max_shared_memory_per_block, cudaDevAttrMaxSharedMemoryPerBlockOptin, device_id));
+  return max_shared_memory_per_block;
 }
-  
+
+/// Get the memory info
+/// \return The free and total amount of memory in bytes
+inline std::tuple<size_t, size_t> getDeviceMemoryInfo(bool const useUvm) {
+  size_t free, total;
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemGetInfo(&free, &total));
+  return {free, total};
+}
+
+inline int getDeviceCount() {
+  int count = 0;
+  CHECK_NVIDIA_CUDA_ERROR(cudaGetDeviceCount(&count));
+  return count;
+}
+
 }  // namespace utils
 }  // namespace llm_kernels

@@ -110,6 +110,11 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
     return Status();
   }
 
+  // Moe Gating weight does not require slicing include share_gating
+  if (tensor_name.find("gate.") != std::string::npos) {
+    return Status();
+  }
+
   tensor_para_offset = rank_;
   if (tensor_name.find(".bias") != std::string::npos || tensor_name.find("o_proj") != std::string::npos ||
       tensor_name.find("down_proj") != std::string::npos || tensor_name.find("embed_") != std::string::npos) {
@@ -198,6 +203,12 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       KLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
     }
 
+    // filter out moe model experts weight
+    if (tensor_name.find(".experts.") != std::string::npos) {
+      moe_weight_data_type_ = weight_data_type;
+      continue;
+    }
+
     // GPT-1 and GPT-2 use Conv1D instead of Linear, we need to do an extra transpose.
     if ((model_config_.type == "openai-gpt" || model_config_.type == "gpt2") &&
         (tensor_name.find("self_attn.W_pack.weight") != std::string::npos ||
@@ -253,7 +264,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       MemcpyAsync(qkv_weight_tensor.GetPtr<void>() + saved_offset, weight_ptr + tensor_para_offset, single_proj_size,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else if (tensor_name.find("_proj.") != std::string::npos || tensor_name.find("norm.") != std::string::npos ||
-               tensor_name == "model.embed_positions.weight" ||
+               tensor_name == "model.embed_positions.weight" || tensor_name.find("gate.") != std::string::npos ||
                (tensor_name == "lm_head.weight" && !model_config_.tie_word_embeddings)) {
       LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
                         weight_size);
@@ -324,7 +335,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     } else {
       KLLM_LOG_DEBUG << "state_dict[" << tensor_name << "] will not be used";
     }
-    KLLM_LOG_DEBUG << "Success load weight:" << tensor_name;
+    KLLM_LOG_DEBUG << "Success load weight:" << tensor_name << " on rank " << rank_;
   }
   return Status();
 }
@@ -526,13 +537,18 @@ Status CommonWeight<T>::ConvertCommonTensor(int hidden_units, int inter_size, in
   GetBlockManager()->FreeContiguous(q_out_tensor.GetBlockId());
 
   // permute gate_proj, up_proj, down_proj: permute(1, 0)
-  tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_down_up_tensor");
-  tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.gate_proj.weight", "empty_gate_tensor");
-  Tensor& last_down_up_tensor = weights_map_["empty_down_up_tensor"];
-  Tensor& last_gate_tensor = weights_map_["empty_gate_tensor"];
-  STATUS_CHECK_RETURN(PermuteMLPWeight(last_down_up_tensor, last_gate_tensor, num_layer));
-  GetBlockManager()->FreeContiguous(last_down_up_tensor.GetBlockId());
-  GetBlockManager()->FreeContiguous(last_gate_tensor.GetBlockId());
+  if (!model_config_.is_moe) {
+    tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.down_proj.weight", "empty_down_up_tensor");
+    tensor_manager_->CreateTensorWithSameShape("model.layers.0.mlp.gate_proj.weight", "empty_gate_tensor");
+    Tensor& last_down_up_tensor = weights_map_["empty_down_up_tensor"];
+    Tensor& last_gate_tensor = weights_map_["empty_gate_tensor"];
+    STATUS_CHECK_RETURN(PermuteMLPWeight(last_down_up_tensor, last_gate_tensor, num_layer));
+    GetBlockManager()->FreeContiguous(last_down_up_tensor.GetBlockId());
+    GetBlockManager()->FreeContiguous(last_gate_tensor.GetBlockId());
+
+    weights_map_.erase("empty_down_up_tensor");
+    weights_map_.erase("empty_gate_tensor");
+  }
 
   // permute o_proj: permute(1, 0)
   tensor_manager_->CreateTensorWithSameShape("model.layers.0.self_attn.o_proj.weight", "empty_o_proj_tensor");
@@ -543,8 +559,6 @@ Status CommonWeight<T>::ConvertCommonTensor(int hidden_units, int inter_size, in
   weights_map_.erase("empty_qkv_tensor");
   weights_map_.erase("empty_q_in_tensor");
   weights_map_.erase("empty_q_out_tensor");
-  weights_map_.erase("empty_down_up_tensor");
-  weights_map_.erase("empty_gate_tensor");
   weights_map_.erase("empty_o_proj_tensor");
 
   ConvertLmheadTensor();

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
+#include "csrc/kernels/nvidia/mixture_of_experts/moe_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 #include "csrc/kernels/nvidia/weight_only_batched_gemv/weight_only_gemv_wrapper.h"
 #include "csrc/utils/quant_type.h"
@@ -35,6 +36,21 @@ void InvokeMarlinAwqRepack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, in
 DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type);
 
 c10::ScalarType GetTorchTypeFromDataType(const DataType& data_type);
+
+template <typename T>
+void GetMoeGemmWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size,
+                             size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes);
+
+template <typename T>
+size_t InvokeMoeGemmConfigProfile();
+
+template <typename T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode NT>
+void InvokeMoeCutlassGemm(void const* input_activations_void, void* gating_output, void const* fc1_expert_weights_void,
+                          void const* fc2_expert_weights_void, int64_t const num_rows, int64_t const hidden_size,
+                          int64_t const inter_size, int const num_experts, int const topk, char* workspace_ptr,
+                          void* final_output_void, void* token_topk_final_scales_void,
+                          int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, int tp_size,
+                          int rank, bool use_lora, size_t best_config_index, cudaStream_t stream);
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
@@ -118,6 +134,9 @@ void CustomAllReduceInit(void** ptr, void* input, void** metas, void* rank_data,
                          cudaStream_t& stream);
 
 template <typename T>
+void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream);
+
+template <typename T>
 void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream);
 
 template <typename T>
@@ -131,6 +150,8 @@ template <typename T>
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
                    cudaStream_t& stream);
 
+template <typename T>
+void Mul(void* a, void* b, void* c, int m1, int n1, int m2, int n2, int device_rank);
 // c = Mul(a, b)
 void Mul(float* a, float* b, float* c, int n, int device_rank);
 

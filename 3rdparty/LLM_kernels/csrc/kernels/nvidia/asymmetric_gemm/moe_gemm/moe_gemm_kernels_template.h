@@ -500,7 +500,7 @@ MoeGemmRunner<T, WeightType, OutputType, ScaleBiasType>::getAmpereConfigs(int sm
     }
 
     std::vector<cutlass_extensions::CutlassGemmConfig> ampere_configs
-        = get_candidate_configs(sm, max_split_k, config_type_param);//TODO(可能会有一些调整)
+        = get_candidate_configs(sm, max_split_k, config_type_param);
     return ampere_configs;
 }
 

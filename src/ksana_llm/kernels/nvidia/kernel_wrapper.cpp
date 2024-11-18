@@ -70,6 +70,21 @@ void InvokeMarlinAwqRepack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, in
   llm_kernels::nvidia::awq_marlin_repack(b_q_weight_ptr, out_ptr, size_k, size_n, num_bits, rank, stream);
 }
 
+template <typename T>
+torch::ScalarType GetTorchDataType();
+#define GET_TORCH_DATA_TYPE(T, TORCH_TYPE)  \
+  template <>                               \
+  torch::ScalarType GetTorchDataType<T>() { \
+    return TORCH_TYPE;                      \
+  }
+GET_TORCH_DATA_TYPE(int32_t, torch::kInt32);
+GET_TORCH_DATA_TYPE(float, torch::kFloat32);
+GET_TORCH_DATA_TYPE(half, torch::kFloat16);
+#ifdef ENABLE_BFLOAT16
+GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
+#endif
+#undef GET_TORCH_DATA_TYPE
+
 DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
   DataType data_type = TYPE_INVALID;
   switch (torch_type) {
@@ -123,6 +138,73 @@ c10::ScalarType GetTorchTypeFromDataType(const DataType& data_type) {
   }
   return torch_type;
 }
+
+template <typename T>
+void GetMoeGemmWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size,
+                             size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes) {
+  auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T>();
+  moe_gemm.GetWorkspaceSize(token_num, expert_num, expert_hidden_size, expert_inter_size, expert_topk, tp_size, rank,
+                            use_lora, ws_bytes);
+}
+#define GET_MOE_GEMM_WORKSPACE_SIZE(T)                                                                          \
+  template void GetMoeGemmWorkspaceSize<T>(size_t token_num, size_t expert_num, size_t expert_hidden_size,      \
+                                           size_t expert_inter_size, size_t expert_topk, int tp_size, int rank, \
+                                           bool use_lora, size_t& ws_bytes)
+GET_MOE_GEMM_WORKSPACE_SIZE(float);
+GET_MOE_GEMM_WORKSPACE_SIZE(half);
+#ifdef ENABLE_BFLOAT16
+GET_MOE_GEMM_WORKSPACE_SIZE(__nv_bfloat16);
+#endif
+#undef GET_MOE_GEMM_WORKSPACE_SIZE
+
+template <typename T>
+size_t InvokeMoeGemmConfigProfile() {
+  auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T>();
+  return moe_gemm.GetBestConfigIndex();
+}
+#define INVOKE_MOE_GEMM_CONFIG_PROFILE(T) template size_t InvokeMoeGemmConfigProfile<T>()
+INVOKE_MOE_GEMM_CONFIG_PROFILE(float);
+INVOKE_MOE_GEMM_CONFIG_PROFILE(half);
+#ifdef ENABLE_BFLOAT16
+INVOKE_MOE_GEMM_CONFIG_PROFILE(__nv_bfloat16);
+#endif
+#undef INVOKE_MOE_GEMM_CONFIG_PROFILE
+
+template <typename T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode NT>
+void InvokeMoeCutlassGemm(void const* input_activations_void, void* gating_output, void const* fc1_expert_weights_void,
+                          void const* fc2_expert_weights_void, int64_t const num_rows, int64_t const hidden_size,
+                          int64_t const inter_size, int const num_experts, int const topk, char* workspace_ptr,
+                          void* final_output_void, void* token_topk_final_scales_void,
+                          int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, int tp_size,
+                          int rank, bool use_lora, size_t best_config_index, cudaStream_t stream) {
+  auto origin_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
+  torch::Tensor gating_tensor = torch::from_blob(
+      gating_output, {static_cast<int64_t>(num_rows), static_cast<int64_t>(num_experts)}, origin_options);
+  gating_tensor = gating_tensor.to(torch::kFloat32);
+
+  auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T>();
+  moe_gemm.Gemm(input_activations_void, gating_tensor.data_ptr(), fc1_expert_weights_void, fc2_expert_weights_void,
+                num_rows, hidden_size, inter_size, num_experts, topk, workspace_ptr, final_output_void,
+                token_topk_final_scales_void, expanded_source_row_to_expanded_dest_row, expert_for_source_row, tp_size,
+                rank, use_lora, best_config_index, NT, stream);
+}
+#define INVOKE_MOE_CUTLASS_GEMM(T, NT)                                                                               \
+  template void InvokeMoeCutlassGemm<T, NT>(                                                                         \
+      void const* input_activations_void, void* gating_output, void const* fc1_expert_weights_void,                  \
+      void const* fc2_expert_weights_void, int64_t const num_rows, int64_t const hidden_size,                        \
+      int64_t const inter_size, int const num_experts, int const topk, char* workspace_ptr, void* final_output_void, \
+      void* token_topk_final_scales_void, int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, \
+      int tp_size, int rank, bool use_lora, size_t best_config_index, cudaStream_t stream)
+
+INVOKE_MOE_CUTLASS_GEMM(float, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
+INVOKE_MOE_CUTLASS_GEMM(float, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
+INVOKE_MOE_CUTLASS_GEMM(half, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
+INVOKE_MOE_CUTLASS_GEMM(half, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
+#ifdef ENABLE_BFLOAT16
+INVOKE_MOE_CUTLASS_GEMM(__nv_bfloat16, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
+INVOKE_MOE_CUTLASS_GEMM(__nv_bfloat16, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
+#endif
+#undef INVOKE_MOE_CUTLASS_GEMM
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes) {
@@ -340,21 +422,6 @@ INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, half);
 #ifdef ENABLE_BFLOAT16
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, __nv_bfloat16);
 #endif
-
-template <typename T>
-torch::ScalarType GetTorchDataType();
-#define GET_TORCH_DATA_TYPE(T, TORCH_TYPE)  \
-  template <>                               \
-  torch::ScalarType GetTorchDataType<T>() { \
-    return TORCH_TYPE;                      \
-  }
-GET_TORCH_DATA_TYPE(int32_t, torch::kInt32);
-GET_TORCH_DATA_TYPE(float, torch::kFloat32);
-GET_TORCH_DATA_TYPE(half, torch::kFloat16);
-#ifdef ENABLE_BFLOAT16
-GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
-#endif
-#undef GET_TORCH_DATA_TYPE
 
 // Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
 // intended for use in testing accuracy outcomes only.
@@ -723,6 +790,19 @@ CUSTOM_ALL_REDUCE_INIT(__nv_bfloat16);
 #undef CUSTOM_ALL_REDUCE_INIT
 
 template <typename T>
+void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream) {
+  CUDA_CHECK_LAST_ERROR(
+      llm_kernels::nvidia::InvokeSigmoid<T>(reinterpret_cast<T*>(input), static_cast<int32_t>(size), scale, stream));
+}
+
+template void InvokeSigmoidActivation<float>(void* input, const size_t size, const float scale, cudaStream_t& stream);
+template void InvokeSigmoidActivation<half>(void* input, const size_t size, const float scale, cudaStream_t& stream);
+#ifdef ENABLE_BFLOAT16
+template void InvokeSigmoidActivation<__nv_bfloat16>(void* input, const size_t size, const float scale,
+                                                     cudaStream_t& stream);
+#endif
+
+template <typename T>
 void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream) {
   llm_kernels::nvidia::CustomAllreduce* reduce_op = static_cast<llm_kernels::nvidia::CustomAllreduce*>(ptr);
   reduce_op->AllReduce<T>(stream, static_cast<T*>(input), static_cast<T*>(result), data_size);
@@ -845,6 +925,23 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
   }
   return Status();
 }
+
+template <typename T>
+void Mul(void* a, void* b, void* c, int m1, int n1, int m2, int n2, int device_rank) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, device_rank).dtype(GetTorchDataType<T>());
+  auto a_tensor = torch::from_blob(a, {m1, n1}, options);
+  auto b_tensor = torch::from_blob(b, {m2, n2}, options);
+  auto c_tensor = torch::from_blob(c, {m1 >= m2 ? m1 : m2, n1 >= n2 ? n1 : n2}, options);
+  mul_out(c_tensor, a_tensor, b_tensor);
+  c = c_tensor.data_ptr();
+}
+#define MUL(T) template void Mul<T>(void* a, void* b, void* c, int m1, int n1, int m2, int n2, int device_rank);
+MUL(float);
+MUL(half);
+#ifdef ENABLE_BFLOAT16
+MUL(__nv_bfloat16);
+#endif
+#undef MUL
 
 // c = Mul(a, b)
 void Mul(float* a, float* b, float* c, int n, int device_rank) {

@@ -74,4 +74,23 @@ template class ActivationLayer<ActivationType::Swiglu, float16>;
 template class ActivationLayer<ActivationType::Swiglu, __nv_bfloat16>;
 #endif
 
+template <typename T>
+Status SigmoidLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (input_tensors[0].GetPtr<void>() == output_tensors[0].GetPtr<void>()) {
+    size_t size = output_tensors[0].shape[0] * output_tensors[0].shape[1];
+    float scale = 1.0f;
+    InvokeSigmoidActivation<T>(output_tensors[0].GetPtr<void>(), size, scale,
+                               context_->GetComputeStreams()[rank_].Get());
+  } else {
+    KLLM_LOG_WARNING << "The sigmoid layer can directly process the tensor without needing to return another tensor.";
+  }
+  return Status();
+}
+
+template class SigmoidLayer<float>;
+template class SigmoidLayer<float16>;
+#ifdef ENABLE_BFLOAT16
+template class SigmoidLayer<__nv_bfloat16>;
+#endif
+
 }  // namespace ksana_llm

@@ -27,7 +27,7 @@ struct RoPEScalingFactor {
   int original_max_position_embeddings{8192};
 };
 
-enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3 };
+enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3, MOE_QUANT_NONE };
 
 enum GroupQuantBackend { CUTLASS_BACKEND, MARLIN_BACKEND };
 
@@ -52,6 +52,17 @@ struct QuantConfig {
 
   // (fp8) Whether input_scale is in checkpoint.
   bool is_activation_scheme_static = false;
+};
+
+// The Moe informations.
+struct MoeConfig {
+  size_t num_experts{1};
+
+  size_t experts_topk;
+
+  uint32_t moe_inter_size;
+
+  uint32_t shared_expert_inter_size;
 };
 
 // The model informations.
@@ -113,6 +124,11 @@ struct ModelConfig {
 
   // Determines whether the model is preprocessed with trt.
   bool enable_trt;
+
+  // Determines if the model is a moe model.
+  bool is_moe = false;
+  bool has_shared_experts = false;
+  MoeConfig moe_config;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

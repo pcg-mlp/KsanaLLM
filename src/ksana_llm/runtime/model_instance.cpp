@@ -19,13 +19,17 @@
 #include "ksana_llm/models/chatglm/chatglm_weight.h"
 #include "ksana_llm/models/gpt/gpt_weight.h"
 #include "ksana_llm/models/llama/llama_weight.h"
+#include "ksana_llm/models/mixtral/mixtral_weight.h"
 #include "ksana_llm/models/qwen/qwen_weight.h"
+#include "ksana_llm/models/qwen2_moe/qwen2_moe_weight.h"
 
 #include "ksana_llm/models/baichuan/baichuan_model.h"
 #include "ksana_llm/models/chatglm/chatglm_model.h"
 #include "ksana_llm/models/gpt/gpt_model.h"
 #include "ksana_llm/models/llama/llama_model.h"
+#include "ksana_llm/models/mixtral/mixtral_model.h"
 #include "ksana_llm/models/qwen/qwen_model.h"
+#include "ksana_llm/models/qwen2_moe/qwen2_moe_model.h"
 
 namespace ksana_llm {
 
@@ -94,6 +98,9 @@ void ModelInstance::Load() {
   if (unified_model_type.find("llama") != std::string::npos) {
     type = "llama";
     CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);
+  } else if (unified_model_type.find("qwen2_moe") != std::string::npos) {
+    type = "qwen2_moe";
+    CreateModelInstance<Qwen2MoeModel, Qwen2MoeWeight>(unified_model_type);
   } else if (unified_model_type.find("qwen") != std::string::npos) {
     type = "qwen";
     CreateModelInstance<QwenModel, QwenWeight>(unified_model_type);
@@ -107,6 +114,9 @@ void ModelInstance::Load() {
              unified_model_type.find("fairseq-transformer") != std::string::npos) {
     type = "gpt";
     CreateModelInstance<GPTModel, GPTWeight>(unified_model_type);
+  } else if (unified_model_type.find("mixtral") != std::string::npos) {
+    type = "mixtral";
+    CreateModelInstance<MixtralModel, MixtralWeight>(unified_model_type);
   } else {
     // Optional weights map
     auto optional_file = Singleton<OptionalFile>::GetInstance();

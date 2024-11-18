@@ -68,6 +68,7 @@ class CommonWeight : public BaseWeight {
   int tensor_para_size_ = 1;
   std::string model_name_ = "";
   DataType weight_data_type_ = TYPE_FP16;
+  DataType moe_weight_data_type_ = TYPE_FP16;
 
   std::shared_ptr<Context> context_{nullptr};
 

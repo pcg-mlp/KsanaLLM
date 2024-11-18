@@ -11,7 +11,10 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/baichuan/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/chatglm/*.cpp
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/gpt/*.cpp)
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/gpt/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common_moe/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/mixtral/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen2_moe/*.cpp)
 
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 
