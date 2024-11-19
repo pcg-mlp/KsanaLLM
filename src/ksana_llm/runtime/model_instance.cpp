@@ -58,7 +58,7 @@ void ModelInstance::InitPlugin() {
 
     KLLM_LOG_INFO << "Using Plugin";
   } catch (const py::error_already_set& e) {
-    KLLM_LOG_ERROR << "Error loading plugin: " << e.what();
+    KLLM_LOG_WARNING << "Error loading plugin: " << e.what();
     PyErr_Clear();
   }
   // if load plugin success, try to init plugin
@@ -80,7 +80,7 @@ void ModelInstance::InitPlugin() {
         }
       }
     } catch (const py::error_already_set& e) {
-      KLLM_LOG_ERROR << "Error initializing plugin: " << e.what();
+      KLLM_LOG_WARNING << "Error initializing plugin: " << e.what();
       PyErr_Clear();
     }
   }
