@@ -19,8 +19,8 @@ from fastapi import FastAPI, Request
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import (
-   AutoProcessor, AutoTokenizer, LlamaTokenizer, VideoLlavaProcessor,
-   GenerationConfig, PreTrainedTokenizerFast, logging
+   AutoConfig, AutoProcessor, AutoTokenizer, LlamaTokenizer,
+   VideoLlavaProcessor, GenerationConfig, PreTrainedTokenizerFast, logging
 )
 from transformers.models.auto.tokenization_auto import get_tokenizer_config
 
