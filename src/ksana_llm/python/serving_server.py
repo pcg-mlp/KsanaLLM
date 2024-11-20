@@ -18,7 +18,11 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast, logging
+from transformers import (
+   AutoProcessor, AutoTokenizer, LlamaTokenizer, VideoLlavaProcessor,
+   GenerationConfig, PreTrainedTokenizerFast, logging
+)
+from transformers.models.auto.tokenization_auto import get_tokenizer_config
 
 import ksana_llm
 
@@ -332,6 +336,17 @@ async def forward(request: Request):
              status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def load_tokenizer(model_path):
+    tokenizer_config = get_tokenizer_config(model_path)
+    if tokenizer_config.get("processor_class", "") == "VideoLlavaProcessor":
+        return VideoLlavaProcessor.from_pretrained(model_path)
+    if tokenizer_config.get("tokenizer_class", "") == "LlamaTokenizer":
+        return LlamaTokenizer.from_pretrained(model_path)
+
+    if os.path.exists(model_path + "/preprocessor_config.json"):
+        return AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+    return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
 if __name__ == "__main__":
     uvloop.install()
     args = args_config()
@@ -347,8 +362,7 @@ if __name__ == "__main__":
 
     # Set the verbosity of transformers to ERROR.
     logging.set_verbosity_error()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir,
-                                              trust_remote_code=True)
+    tokenizer = load_tokenizer(args.tokenizer_dir)
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         print(
             "Using a slow tokenizer. This might cause a significant "
