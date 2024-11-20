@@ -92,7 +92,7 @@ class BuildExt(build_ext_orig):
             # for wheel pacakge
             copy_file(str(build_temp_lib.joinpath(target_lib)),
                       str(extdir.parent.absolute()))
-        # copy optional weight map to cwd for wheel package
+        # copy weight map and ksana plugin to cwd for wheel package
         need_dirs = ['weight_map', 'ksana_plugin']
         for need_dir in need_dirs:
             src_dir = os.path.join('src/ksana_llm/python', need_dir)

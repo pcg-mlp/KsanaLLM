@@ -94,3 +94,8 @@ model_spec:
     # 模型路径
     # model_dir: /model/llama-hf/13B
     model_dir: /model/qwen1.5-hf/0.5B-Chat
+  plugin_model:
+    # 插件中的模型是否使用TensorRT加速推理（e.g., 多模态中的ViT）,
+    # 设置为false则回退为Torch推理。注：TensorRT推理可能出现异常
+    # （NaN），该配置允许手动调整为Torch推理
+    enable_tensorrt: true

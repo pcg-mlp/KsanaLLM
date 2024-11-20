@@ -183,8 +183,16 @@ python -c "import ksana_llm"
 
 #### 6.2 自定义插件
 
-自定义插件可以做特殊预处理和后处理。使用时，你需要把ksana_plugin.py放在模型目录下。
-[样例](examples/qwenvl/ksana_plugin.py)
+自定义插件可以做特殊预处理和后处理。使用时，你需要把`ksana_plugin.py`放在模型目录下。
+
+你需要实现类`KsanaPlugin`，包含3个可选的方法：
+`init_plugin(self, **kwargs)`, `preprocess(self, **kwargs)` and `postprocess(self, **kwargs)`。
+
+- `init_plugin`会在插件初始化时被调用一次
+- `preprocess`会在每条请求开始时被调用一次（如推理ViT）
+- `postprocess`会在每条请求结束前被调用一次（如计算困惑度PPL）
+
+更多细节见[示例](src/ksana_llm/python/ksana_plugin/qwen_vl/ksana_plugin.py)。
 
 #### 6.3 KV Cache缩放因子
 

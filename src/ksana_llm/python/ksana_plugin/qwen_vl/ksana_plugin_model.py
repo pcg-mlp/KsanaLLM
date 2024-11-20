@@ -5,11 +5,9 @@
 import os
 import json
 from glob import glob
-import importlib.util
 from typing import List
 
 import torch
-from safetensors.torch import load
 from transformers import AutoConfig
 
 import requests
@@ -17,31 +15,7 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
-
-def free_cache():
-    import gc
-    gc.collect()
-    torch.cuda.empty_cache()
-
-
-def load_safetensors(file_path):
-    with open(file_path, "rb") as f:
-        data = f.read()
-    loaded = load(data)
-    return loaded
-
-
-def check_file_dir(file_path):
-    file_dir = os.path.dirname(file_path)
-    if not file_dir == '' and not os.path.exists(file_dir):
-        os.makedirs(file_dir)
-
-
-def get_module(module_name, py_path, class_name):
-    spec = importlib.util.spec_from_file_location(module_name, py_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return getattr(module, class_name)
+from utils import free_cache, load_safetensors, check_file_dir, get_module
 
 
 class VITModel:
@@ -175,7 +149,7 @@ class Preprocss:
                     image = Image.open(image_path)
                 image = image.convert("RGB")
                 images.append(self.image_transform(image))
-            except Exception as e:  # pylint: disable=broad-except
+            except Exception:  # pylint: disable=broad-except
                 image = torch.zeros((3, 448, 448))
                 images.append(image)
 

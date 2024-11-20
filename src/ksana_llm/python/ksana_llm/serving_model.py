@@ -3,7 +3,6 @@
 # ==============================================================================
 
 import asyncio
-import importlib.util
 from typing import Callable, List, Optional, Dict
 from concurrent import futures
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 
 import libtorch_serving
+from .ksana_plugin import KsanaPlugin, PluginConfig
 
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
@@ -24,71 +24,6 @@ class EndpointConfig:
     host: str = "0.0.0.0"  # endpoint host address
     port: int = 8080  # endpoint port
     access_log: bool = False  # whether to enable the endpoint access log
-
-
-class KsanaPlugin(object):
-    """
-    This class is designed to dynamically load and manage plugins for the Ksana framework.
-    It allows for the initialization and post-processing of plugins specified by a file path.
-    """
-
-    def __init__(self, plugin_path: str):
-        """
-        Initializes the KsanaPlugin instance by loading a plugin from the given path.
-
-        :param plugin_path: The file system path to the plugin module to be loaded.
-        """
-
-        self._ksana_plugin = self.load_plugin(plugin_path)
-        if hasattr(self._ksana_plugin, 'init_plugin'):
-            kwargs = {
-                "postprocess" : True,
-                "model_path" : plugin_path,
-            }
-            self._ksana_plugin.init_plugin(**kwargs)
-
-    def load_plugin(self, plugin_path : str):
-        """
-        Dynamically loads the plugin module located at the specified path.
-
-        :param plugin_path: The file system path to the plugin module to be loaded.
-        :return: An instance of the loaded plugin class if successful, None otherwise.
-        """
-
-        try:
-            plugin_path = plugin_path + "/ksana_plugin.py"
-            spec = importlib.util.spec_from_file_location("ksana_plugin", plugin_path)
-            if spec is None:
-                print("spec is None")
-                return None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            class_name = "KsanaPlugin"
-            if hasattr(module, class_name):
-                ksana_plugin = getattr(module, class_name)
-                return ksana_plugin()
-            else:
-                return None
-        # pylint: disable-next=broad-except
-        except Exception:
-            # TODO: need a better log
-            return None
-
-
-    def postprocess(self,
-                    ksana_python_input : libtorch_serving.KsanaPythonInput,
-                    ksana_python_output : libtorch_serving.KsanaPythonOutput):
-        """
-        Invokes the postprocess method of the loaded plugin, if available.
-        """
-
-        kwargs = {
-            "ksana_python_input" : ksana_python_input,
-            "ksana_python_output" : ksana_python_output,
-            }
-        if self._ksana_plugin is None:
-            return ksana_python_output
-        return self._ksana_plugin.postprocess(**kwargs)
 
 
 class PyAsyncStreamingIterator(object):
@@ -150,12 +85,20 @@ class ServingModel(object):
         # The serving instance.
         self._serving = self._serving_cls()
 
-    def init_serving(self, endpoint_config: EndpointConfig):
+    def init_serving(
+        self,
+        plugin_config: PluginConfig,
+        endpoint_config: EndpointConfig,
+    ):
         """Initialize the serving endpoint.
 
         Args:
+            plugin_config: The plugin config.
             endpoint_config: The endpoint config.
         """
+        # Initialize the plugin
+        self._ksana_plugin = KsanaPlugin(plugin_config)
+
         if endpoint_config.endpoint != "python":
             self._serving.endpoint_config.type = libtorch_serving.EndpointType.RPC
             self._serving.endpoint_config.rpc_plugin_name = endpoint_config.endpoint
@@ -163,15 +106,16 @@ class ServingModel(object):
         self._serving.endpoint_config.port = endpoint_config.port
         self._serving.endpoint_config.access_log = endpoint_config.access_log
 
+        # Then initialize the serving server
         self._serving.init_serving(self._config_file)
-        self._ksana_plugin = KsanaPlugin(self._serving.plugin_path)
 
     @torch.no_grad()
     def generate(
         self,
-        model_name: str = None,
-        inputs: list[int] = None,
-        generation_config: GenerationConfig = None,
+        model_name: Optional[str] = None,
+        inputs: Optional[List[int]] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        messages: Optional[str] = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor],
@@ -179,17 +123,18 @@ class ServingModel(object):
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
         streamer: Optional["BaseStreamer"] = None,
-        req_ctx: Dict[str, str] = None,
+        req_ctx: Optional[Dict[str, str]] = None,
         **kwargs,
     ) -> List[List[int]]:
         """The model generate interface, invoked by venus.
         """
-
         if req_ctx is None:
             req_ctx = {}
+
         ksana_python_input = libtorch_serving.KsanaPythonInput()
         ksana_python_input.model_name = model_name
-        ksana_python_input.input_tokens = inputs
+        if inputs is not None:
+            ksana_python_input.input_tokens = inputs
         sampling_config = ksana_python_input.sampling_config
 
         def get_generation_value(generation_config: GenerationConfig, key: str, default_val):
@@ -229,9 +174,19 @@ class ServingModel(object):
         self._check_do_sample_params(generation_config, sampling_config, get_generation_value)
         if 'input_refit_embedding' in kwargs and 'pos' in kwargs['input_refit_embedding']:
             ksana_python_input.input_refit_embedding.pos = kwargs['input_refit_embedding']['pos']
-
         if 'input_refit_embedding' in kwargs and 'embeddings' in kwargs['input_refit_embedding']:
             ksana_python_input.input_refit_embedding.embeddings = kwargs['input_refit_embedding']['embeddings']
+
+        # `messages` is the OpenAI Chat Completion API that can contain visual input
+        # `additonal_params` are model specific params packed in a dict, e.g., `max_pixels`, `fps` for imgs and videos
+        kwargs = {
+            "messages": messages,
+            "additional_params": kwargs.get('additional_params', {}),
+        }
+
+        # If user does not provide the input embeddings, compute it by the preprocessing of ksana plugin
+        if not ksana_python_input.input_refit_embedding.pos:
+            self._ksana_plugin.preprocess(ksana_python_input, **kwargs)
 
         if streamer is None:
             status, ksana_python_output = self._serving.generate(ksana_python_input, req_ctx)
@@ -247,7 +202,7 @@ class ServingModel(object):
 
     @torch.no_grad()
     def forward(self, request_bytes: bytes,
-                req_ctx: Dict[str, str] = None) -> Optional[bytes]:
+                req_ctx: Optional[Dict[str, str]] = None) -> Optional[bytes]:
         """The model forward interface.
         This function just forwards the raw request bytes to the serving in the C++ side.
         """

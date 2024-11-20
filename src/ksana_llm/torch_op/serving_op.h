@@ -48,9 +48,6 @@ class ServingOp : public torch::jit::CustomClassHolder {
   // The config of endpoint.
   EndpointConfig endpoint_config_;
 
-  // The path of plugin.
-  std::string plugin_path_;
-
  private:
   // The inference server.
   std::shared_ptr<InferenceServer> inference_server_;

@@ -26,6 +26,7 @@ from transformers.models.auto.tokenization_auto import get_tokenizer_config
 
 import ksana_llm
 
+
 model_executor = futures.ThreadPoolExecutor(max_workers=256)
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
@@ -66,25 +67,41 @@ def args_config():
                         default=None,
                         help="FastAPI root_path when app is behind a path based routing proxy")
     args = parser.parse_args()
-
-    if not args.tokenizer_dir:
-        with open(args.config_file, "r") as yaml_file:
-            yaml_data = yaml.safe_load(yaml_file)
-            args.tokenizer_dir = os.path.abspath(yaml_data["model_spec"]["base_model"]["model_dir"])
-    if args.endpoint is None:
-        with open(args.config_file, "r") as yaml_file:
-            yaml_data = yaml.safe_load(yaml_file)
-            if "endpoint_type" in yaml_data["setting"]:
-                args.endpoint = yaml_data["setting"]["endpoint_type"]
-            else:  # Use Python endpoint by default
-                args.endpoint = "python"
-    # normalize the endpoint type
-    args.endpoint = args.endpoint.lower()
-
     return args
 
 
-def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **kwargs):
+def prepare_config():
+    """ Automatically adjust the configuration.
+    """
+    # Parse the yaml config file
+    with open(args.config_file, "r") as yaml_file:
+        yaml_config = yaml.safe_load(yaml_file)
+    args.model_dir = os.path.abspath(yaml_config["model_spec"]["base_model"]["model_dir"])
+    if not args.tokenizer_dir:
+        args.tokenizer_dir = args.model_dir
+
+    args.plugin_model_enable_trt = True
+    if ("plugin_model" in yaml_config["model_spec"] and
+            "enable_tensorrt" in yaml_config["model_spec"]["plugin_model"]):
+        args.plugin_model_enable_trt = \
+            yaml_config["model_spec"]["plugin_model"]["enable_tensorrt"]
+
+    if args.endpoint is None:
+        # Use Python endpoint by default
+        args.endpoint = yaml_config["setting"].get("endpoint_type", "python")
+    # Normalize the endpoint type
+    args.endpoint = args.endpoint.lower()
+
+    # Parse the model json config
+    model_config = AutoConfig.from_pretrained(args.model_dir,
+                                              trust_remote_code=True).to_dict()
+    args.model_type = model_config["model_type"]
+    # Adjust the model type for qwen_vl
+    if args.model_type == "qwen" and "visual" in model_config:
+        args.model_type = "qwen_vl"
+
+
+def streaming_generate(model_name, input_tokens, messages, generation_config, req_ctx, **kwargs):
     """Perform streaming generation.
     """
     # Create a results iterator for the model's generation
@@ -92,6 +109,7 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
+        messages=messages,  # pass the OpenAI chat messages
         streamer=True,  # enable streaming generation
         req_ctx = req_ctx,  # request trace context
         **kwargs,
@@ -121,9 +139,9 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
                 output_texts.append(output_text)
             ret = {
                 "texts": output_texts,
-                "output_token_ids": output_token_ids,
+                "output_token_ids": output_token_ids,  # the output token IDs
                 "logprobs": ksana_python_output.logprobs,
-                "input_token_ids": input_tokens
+                "input_token_ids": input_tokens  # the input token IDs
             }
             yield orjson.dumps(ret) + b"\0"
 
@@ -131,7 +149,7 @@ def streaming_generate(model_name, input_tokens, generation_config, req_ctx, **k
     return status, stream_results()
 
 
-def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwargs):
+def batch_generate(model_name, input_tokens, messages, generation_config, req_ctx, **kwargs):
     """Perform batch generation.
     """
     # Generate output tokens using the model
@@ -139,6 +157,7 @@ def batch_generate(model_name, input_tokens, generation_config, req_ctx, **kwarg
         model_name=model_name,  # specify the model name
         inputs=input_tokens,  # provide the input tokens
         generation_config=generation_config,  # configure the generation
+        messages=messages,  # pass the OpenAI chat messages
         streamer=None,  # disable streaming generation
         req_ctx = req_ctx,  # request trace context
         **kwargs,
@@ -188,23 +207,32 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     """
 
     model_name = request_dict.pop("model_name", "")
-    prompt_text = request_dict.pop("prompt", None)
+    prompt_text: Optional[str] = request_dict.pop("prompt", None)
+    # `messages` is compatible with the OpenAI Chat Completion API.
+    # Unlike `prompt`, it is a List[Dict] that can contain visual information,
+    # e.g., image url and base64 encoded images.
+    # See https://platform.openai.com/docs/guides/vision for details.
+    messages: Optional[List[Dict]] = request_dict.pop("messages", None)
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
-    input_refit_embedding = request_dict.pop("input_refit_embedding", None)
     input_tokens = request_dict.pop("input_tokens", None)
-    if input_tokens is None:
+    if input_tokens is None and prompt_text is not None:
         input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
     kwargs = {
         "input_refit_embedding": {},
+        "additional_params": {},  # any model-specific parameters packed in a dict
     }
 
+    input_refit_embedding = request_dict.pop("input_refit_embedding", None)
     if input_refit_embedding is not None and "pos" in input_refit_embedding:
         kwargs['input_refit_embedding']["pos"] = input_refit_embedding["pos"]
-
     if input_refit_embedding is not None and "embeddings" in input_refit_embedding:
         kwargs['input_refit_embedding']["embeddings"] = input_refit_embedding["embeddings"]
+    additional_params: Optional[Dict] = request_dict.pop("additional_params", None)
+    if additional_params is not None:
+        kwargs['additional_params'] = additional_params
+
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)
     if (
@@ -253,6 +281,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
                 streaming_generate,  # partial function to call
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
+                messages=messages,  # pass OpenAI chat messages as an argument
                 generation_config=generation_config,  # pass generation config as an argument
                 req_ctx = req_ctx,  # request trace context
                 **kwargs,
@@ -267,6 +296,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
                 batch_generate,  # partial function to call
                 model_name=model_name,  # pass model name as an argument
                 input_tokens=input_tokens,  # pass input tokens as an argument
+                messages=messages,  # pass OpenAI chat messages as an argument
                 generation_config=generation_config,  # pass generation config as an argument
                 req_ctx = req_ctx,  # request trace context
                 **kwargs,
@@ -347,15 +377,19 @@ def load_tokenizer(model_path):
         return AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
     return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
+
 if __name__ == "__main__":
     uvloop.install()
     args = args_config()
+    prepare_config()
 
     # Initialize model serving based on configs.
     model = ksana_llm.AutoModel.from_config(args.config_file)
+    plugin_config = ksana_llm.PluginConfig(args.model_dir, args.config_file,
+                                           args.model_type, args.plugin_model_enable_trt)
     endpoint_config = ksana_llm.EndpointConfig(args.endpoint, args.host,
                                                args.port, args.access_log)
-    model.init_serving(endpoint_config)
+    model.init_serving(plugin_config, endpoint_config)
     if args.endpoint != "python":
         signal.pause()
         sys.exit(0)

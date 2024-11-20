@@ -36,9 +36,6 @@ class ModelInstance {
   // Load model with specified model config.
   void Load();
 
-  // Load Plugin
-  void InitPlugin();
-
   // The instance name.
   std::string name;
   std::string type;
@@ -135,8 +132,6 @@ class ModelInstance {
   static std::vector<std::shared_ptr<BaseWeight>> weights_;
 
   std::shared_ptr<ThreadPool> loader_weight_threadpool_ = nullptr;
-
-  std::shared_ptr<py::object> plugin_;
 };
 
 }  // namespace ksana_llm

@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/runtime/model_instance.h"
+
 #include <future>
 #include <memory>
 #include <vector>
@@ -36,60 +37,7 @@ namespace ksana_llm {
 std::vector<std::shared_ptr<BaseModel>> ModelInstance::models_;
 std::vector<std::shared_ptr<BaseWeight>> ModelInstance::weights_;
 
-void ModelInstance::InitPlugin() {
-  // search optional plugin
-  std::string plugin_name = model_config_.type;
-  if (model_config_.type == "qwen" && model_config_.is_visual && model_config_.hidden_units == 4096) {
-    plugin_name = "qwenvl";
-  }
-
-  auto optional_file = Singleton<OptionalFile>::GetInstance();
-  std::string& plugin_path =
-      optional_file->GetOptionalFile(model_config_.path, "ksana_plugin/" + plugin_name, "ksana_plugin.py");
-  py::gil_scoped_acquire acquire;
-  // try to load plugin
-  try {
-    py::module importlib_util = py::module::import("importlib.util");
-    py::object spec = importlib_util.attr("spec_from_file_location")("ksana_plugin", plugin_path);
-    py::object module = importlib_util.attr("module_from_spec")(spec);
-    spec.attr("loader").attr("exec_module")(module);
-
-    plugin_ = std::make_shared<py::object>(module.attr("KsanaPlugin")());
-
-    KLLM_LOG_INFO << "Using Plugin";
-  } catch (const py::error_already_set& e) {
-    KLLM_LOG_WARNING << "Error loading plugin: " << e.what();
-    PyErr_Clear();
-  }
-  // if load plugin success, try to init plugin
-  if (plugin_) {
-    py::dict kwargs;
-    kwargs["model_path"] = model_config_.path;
-    kwargs["enable_trt"] = model_config_.enable_trt;
-    kwargs["preprocess"] = true;
-    try {
-      py::object result = plugin_->attr("init_plugin")(**kwargs);
-      if (!result.is_none()) {
-        if (py::isinstance<py::dict>(result)) {
-          py::dict result_dict = result.cast<py::dict>();
-          if (result_dict.contains("reserved_device_memory_ratio")) {
-            float reserved_device_memory_ratio = result_dict["reserved_device_memory_ratio"].cast<float>();
-            KLLM_LOG_DEBUG << "Plugin fixed reserved_device_memory_ratio : " << reserved_device_memory_ratio;
-            Singleton<Environment>::GetInstance()->SetReservedDeviceRatio(reserved_device_memory_ratio);
-          }
-        }
-      }
-    } catch (const py::error_already_set& e) {
-      KLLM_LOG_WARNING << "Error initializing plugin: " << e.what();
-      PyErr_Clear();
-    }
-  }
-  g_plugin = plugin_;
-}
-
 void ModelInstance::Load() {
-  InitPlugin();
-
   std::string unified_model_type = model_config_.type;
   // unify it to lower case
   std::transform(unified_model_type.begin(), unified_model_type.end(), unified_model_type.begin(),

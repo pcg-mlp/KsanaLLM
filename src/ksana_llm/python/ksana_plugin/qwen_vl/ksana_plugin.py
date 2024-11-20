@@ -12,13 +12,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(parent_dir)
 
-from qwenvl.ksana_plugin_model import VITModel
-
-
-def free_cache():
-    import gc
-    gc.collect()
-    torch.cuda.empty_cache()
+from qwen_vl.ksana_plugin_model import VITModel
+from utils import free_cache, adjust_device_memory_ratio
 
 
 class KsanaPlugin:
@@ -52,19 +47,16 @@ class KsanaPlugin:
                 print(f"[I] Initializing the Torch model successfully!")
 
             free_cache()
+            
+            adjust_device_memory_ratio(kwargs["config_file"], 0.01 if self.trt else 0.04)
 
-            # Return to the block manager config 
-            reserved_device_memory_ratio = 0.04
-            if self.trt:
-                reserved_device_memory_ratio = 0.01
             # Ensure the result is a dictionary
             return {
-                       'reserved_device_memory_ratio' : reserved_device_memory_ratio,
                        'plugin_trt' : self.trt,
                    }
 
         if "postprocess" in kwargs:
-            return
+            pass
 
     # Method for pre-processing
     def preprocess(self, **kwargs):
@@ -92,7 +84,6 @@ class KsanaPlugin:
 
         ksana_python_input.input_refit_embedding.pos = url_srt
         ksana_python_input.input_refit_embedding.embedding_tensors = torch.unbind(image_embedding.cpu().float())
-
 
     # Method for post-processing
     def postprocess(self, **kwargs):

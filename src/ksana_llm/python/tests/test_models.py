@@ -111,7 +111,7 @@ def run_test(
 
         # Initialize the model
         model = ksana_llm.AutoModel.from_config(ksana_yaml_path)
-        model.init_serving(ksana_llm.EndpointConfig())
+        model.init_serving(ksana_llm.PluginConfig(), ksana_llm.EndpointConfig())
         logger.debug("Initialized ksana_llm model.")
 
         generate_results = []
@@ -162,7 +162,7 @@ def run_test(
         # Re-initialize the model with updated YAML
         del model
         model = ksana_llm.AutoModel.from_config(ksana_yaml_path)
-        model.init_serving(ksana_llm.EndpointConfig())
+        model.init_serving(ksana_llm.PluginConfig(), ksana_llm.EndpointConfig())
         logger.debug(
             "Re-initialized ksana_llm model with updated configuration."
         )

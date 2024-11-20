@@ -187,8 +187,17 @@ For more detailed information, please refer to the following link: [Optional Wei
 
 #### 6.2 Plugin
 
-Custom plugins can perform some special pre-process and post-processing. You need to place ksana_plugin.py in the model directory.
-[Example](examples/qwenvl/ksana_plugin.py)
+Custom plugins can perform some special pre-processing and post-processing tasks. You need to place your `ksana_plugin.py` in the
+model directory.
+
+You should implement a `KsanaPlugin` class with three optional methods:
+`init_plugin(self, **kwargs)`, `preprocess(self, **kwargs)` and `postprocess(self, **kwargs)`.
+
+- `init_plugin` is called during plugin initialization
+- `preprocess` is called at the start of each request (e.g., ViT inference)
+- `postprocess` is called at the end of each request (e.g., PPL calculation)
+
+See [Example](src/ksana_llm/python/ksana_plugin/qwen_vl/ksana_plugin.py) for more details.
 
 #### 6.3 KV Cache Scaling Factors
 

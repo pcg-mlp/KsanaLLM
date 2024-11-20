@@ -15,13 +15,11 @@
 
 namespace ksana_llm {
 
-std::shared_ptr<pybind11::object> g_plugin;
 template <typename T>
 CommonModel<T>::CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) {
   model_config_ = model_config;
   context_ = context;
   rank_ = rank;
-  plugin_ = g_plugin;
 
   // auto create matmul layers
   matmul_layer_factory_ =
@@ -730,6 +728,12 @@ template <typename T>
 Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
+
+  // Load embeddings from input refit.
+  if (rank_ == 0) {
+    LoadEmbeddings(forward_reqs);
+  }
+
   model_input_->ParseFromRequests(forward_reqs);
   bool is_context_stage = model_input_->context_num > 0;
 
@@ -856,48 +860,23 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
 }
 
 template <typename T>
-Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs) {
-  size_t batch_size = forward_reqs.size();
+Status CommonModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs) {
+  const size_t batch_size = forward_reqs.size();
   for (size_t idx = 0; idx < batch_size && forward_reqs[idx].infer_stage == STAGE_CONTEXT; idx++) {
     py::gil_scoped_acquire acquire;
 
-    auto ksana_python_input = std::make_shared<KsanaPythonInput>();
-    ksana_python_input->input_tokens = *forward_reqs[idx].output_tokens;
-    ksana_python_input->input_refit_embedding.pos = (*forward_reqs[idx].input_refit_embedding).pos;
-
+    auto& embedding_tensors = (*forward_reqs[idx].input_refit_embedding).embedding_tensors;
     auto& embeddings = (*forward_reqs[idx].input_refit_embedding).embeddings;
-    auto& tensors = ksana_python_input->input_refit_embedding.embedding_tensors;
-    tensors.resize(embeddings.size());
-    auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
-
-    // vector<vector<float>> to list[tensor]
+    embeddings.resize(embedding_tensors.size());
+    // Get embeddings (`std::vector<std::vector<float>>`) from embedding_tensors (`std::vector<py::object>`).
     for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
-      torch::Tensor input_refit_embedding_tensor =
-          torch::from_blob(embeddings[i].data(), {static_cast<int64_t>(embeddings[i].size())}, options);
-      tensors[i] =
-          pybind11::reinterpret_borrow<pybind11::object>(py::handle(THPVariable_Wrap(input_refit_embedding_tensor)));
+      torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(embedding_tensors[i].ptr());
+      int64_t embedding_size = input_refit_embedding_tensor.numel();
+      embeddings[i].resize(embedding_size);
+      memcpy(embeddings[i].data(), input_refit_embedding_tensor.data_ptr(), sizeof(float) * embedding_size);
     }
-
-    py::dict kwargs;
-    kwargs["ksana_python_input"] = ksana_python_input;
-    try {
-      plugin_->attr("preprocess")(**kwargs);
-    } catch (const py::error_already_set& e) {
-      KLLM_LOG_ERROR << "Error preprocess plugin: " << e.what();
-      PyErr_Clear();
-    }
-
-    // list[tensor] to vector<vector<float>>
-    embeddings.resize(tensors.size());
-    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
-      py::object value_obj = py::reinterpret_borrow<py::object>(tensors[i]);
-      torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(value_obj.ptr());
-      int64_t output_number = input_refit_embedding_tensor.numel();
-      embeddings[i].resize(output_number);
-      memcpy(embeddings[i].data(), input_refit_embedding_tensor.data_ptr(), sizeof(float) * output_number);
-    }
-    // list[int] to vector<int>
-    (*forward_reqs[idx].input_refit_embedding).pos = std::move(ksana_python_input->input_refit_embedding.pos);
+    // Early release the torch tensors to free memory.
+    embedding_tensors.clear();
   }
   return Status();
 }
@@ -905,9 +884,6 @@ Status CommonModel<T>::PythonPluginPreproces(std::vector<ForwardRequest>& forwar
 template <typename T>
 Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                      std::vector<ForwardRequest>& forward_reqs) {
-  if (plugin_ && rank_ == 0) {
-    PythonPluginPreproces(forward_reqs);
-  }
   return CommonForward(base_weight, forward_reqs);
 }
 
@@ -915,9 +891,6 @@ template <typename T>
 Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs) {
   // TODO(zakwang): Remove ContextDecode
-  if (plugin_ && rank_ == 0) {
-    PythonPluginPreproces(forward_reqs);
-  }
   return CommonForward(base_weight, forward_reqs);
 }
 

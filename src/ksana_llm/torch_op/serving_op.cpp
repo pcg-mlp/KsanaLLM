@@ -14,8 +14,6 @@
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
-#include "ksana_llm/utils/search_path.h"
-#include "ksana_llm/utils/singleton.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -33,10 +31,6 @@ ServingOp::~ServingOp() { inference_server_->Stop(); }
 void ServingOp::InitServing(const std::string &config_file) {
   inference_server_ = std::make_shared<InferenceServer>(config_file, endpoint_config_);
   STATUS_CHECK_FAILURE(inference_server_->Start());
-
-  ModelConfig model_config;
-  STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetModelConfig("", model_config));
-  plugin_path_ = model_config.path;
 }
 
 Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
@@ -185,7 +179,6 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def(pybind11::init<>())
       .def("init_serving", &ksana_llm::ServingOp::InitServing)
       .def_readwrite("endpoint_config", &ksana_llm::ServingOp::endpoint_config_)
-      .def_readwrite("plugin_path", &ksana_llm::ServingOp::plugin_path_)
       .def("generate",
            [](std::shared_ptr<ksana_llm::ServingOp> &self,
               const std::shared_ptr<ksana_llm::KsanaPythonInput> &ksana_python_input,

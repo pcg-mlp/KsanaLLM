@@ -120,6 +120,8 @@ struct PythonTensor {
 class Request {
  public:
   // Build Request based on the given KsanaPythonInput.
+  // The lifetime of the KsanaPythonInput object must be longer than Request,
+  // since some members in Request are references to KsanaPythonInput.
   explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                    const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx);
 
@@ -139,7 +141,7 @@ class Request {
   size_t logits_custom_length = 0;
 
   // Embedding slice used to refit input embedding
-  EmbeddingSlice input_refit_embedding;
+  EmbeddingSlice& input_refit_embedding;
 
   // TODO(zakwang): Replace output_tokens
   std::vector<OutputTuple> output_group;

@@ -10,3 +10,4 @@ sys.path.append(os.path.abspath("./lib"))
 
 from .auto_model import AutoModel
 from .serving_model import EndpointConfig
+from .ksana_plugin import PluginConfig

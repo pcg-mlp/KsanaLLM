@@ -582,7 +582,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir, const std::st
       KLLM_LOG_ERROR << fmt::format(
           "The max_token_num configured in the model's config.json is less than the "
           "max_token_len configured in the ksana yaml file. {} < {}",
-          batch_scheduler_config_.max_token_len, model_config.max_token_num);
+          model_config.max_token_num, batch_scheduler_config_.max_token_len);
       return Status(RetCode::RET_INVALID_ARGUMENT,
                     fmt::format("Load model config file: {} error. The max_token_num configured in the model's "
                                 "config.json is less than the max_token_len configured in the ksana yaml file."

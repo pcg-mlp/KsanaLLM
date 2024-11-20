@@ -38,9 +38,6 @@ namespace ksana_llm {
 // The layernorm position type.
 enum class LayerNormPosition { PRE_NORM = 0, POST_NORM = 1 };
 
-// TODO(ttsybyweng): del g_plugin
-extern std::shared_ptr<pybind11::object> g_plugin;
-
 // Describe the model architecture.
 struct ModelRunConfig {
   // The model position embedding.
@@ -126,11 +123,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> mlp_down_proj_layer_;
   std::shared_ptr<BaseLayer> lm_head_proj_layer_;
 
-  std::shared_ptr<py::object> plugin_;
-
-  #ifdef ENABLE_CUDA
-    std::shared_ptr<CudaGraphRunner> cudagraph_runner;
-  #endif
+#ifdef ENABLE_CUDA
+  std::shared_ptr<CudaGraphRunner> cudagraph_runner;
+#endif
 
   // The layer number of the model
   int num_layer_;
@@ -245,7 +240,8 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   virtual Status EmbedTokensUseGpu(Tensor& embedding_weight);
 
-  Status PythonPluginPreproces(std::vector<ForwardRequest>& forward_reqs);
+  // Load embeddings obtained from external input or computed by plugins.
+  virtual Status LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs);
 };
 
 }  // namespace ksana_llm
