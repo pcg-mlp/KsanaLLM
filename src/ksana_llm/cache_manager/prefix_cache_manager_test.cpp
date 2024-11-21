@@ -527,3 +527,73 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   cache_manager->DestroyFinishedRequest(req_id_2);
   cache_manager->DestroyFinishedRequest(req_id_4);
 }
+
+TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
+  if (cache_manager != nullptr) {
+    delete cache_manager;
+    cache_manager_config.min_flexible_cache_num = 32;
+    cache_manager = new PrefixCacheManager(cache_manager_config);
+  }
+  cache_manager->InitializeCachedBlocks();
+
+  // All blocks should be used.
+  EXPECT_EQ(GetBlockManager()->GetDeviceFreeBlockNumber(), 0);
+  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num);
+  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num);
+
+  // Create a faked request.
+  std::vector<int> output_token_ids;
+  faked_token_generator->GeneratePromptTokens({std::make_pair(1, 89)}, output_token_ids);
+
+  // Check needed block num.
+  int64_t req_id = 1;
+  size_t shared_token_num;
+  size_t shared_block_num;
+  size_t unique_block_num;
+  cache_manager->GetRequestPrefixBlockNumber(req_id, output_token_ids, shared_block_num, unique_block_num,
+                                             shared_token_num);
+
+  // Allocate request block.
+  std::vector<std::vector<int>> req_block_ids;
+  req_block_ids.resize(tensor_para_size);
+  Status status = cache_manager->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids);
+  EXPECT_TRUE(status.OK());
+
+  // Generate new token and update request.
+  faked_token_generator->GenerateOneToken(1, output_token_ids);
+  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, req_block_ids);
+  EXPECT_TRUE(status.OK());
+  cache_manager->DestroyFinishedRequest(req_id);
+  int req_id_2 = 2;
+  std::vector<int> dst_prefix16_tokens = output_token_ids;
+  for (int i = block_token_num; i < dst_prefix16_tokens.size(); i++) {
+    dst_prefix16_tokens[i] = (dst_prefix16_tokens[i] + 1) % faked_token_generator->GetVocabSize();
+  }
+  cache_manager->GetRequestPrefixBlockNumber(req_id_2, dst_prefix16_tokens, shared_block_num, unique_block_num,
+                                             shared_token_num);
+  status = cache_manager->AllocateRequestBlocks(req_id_2, unique_block_num, req_block_ids);
+  // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_toeken|
+  // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_toeken|
+  for (int last_token_num = 1; last_token_num <= block_token_num; last_token_num++) {
+    for (int delete_token_num = 1; delete_token_num <= block_token_num; delete_token_num++) {
+      std::vector<int> dst_tokens;
+      int src_token_index = 0;
+      for (; src_token_index < shared_token_num + last_token_num; src_token_index++) {
+        dst_tokens.push_back(output_token_ids[src_token_index]);
+      }
+      src_token_index += delete_token_num;
+      for (; src_token_index < output_token_ids.size(); src_token_index++) {
+        dst_tokens.push_back(output_token_ids[src_token_index]);
+      }
+      std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
+      cache_manager->UpdateFlexibleCache(req_id_2, dst_tokens, shared_token_num, flexible_cached_copy_tasks);
+      auto hit_num = dst_tokens.size() / block_token_num * block_token_num - last_token_num - shared_token_num;
+      if (shared_token_num + cache_manager_config.min_flexible_cache_num + block_token_num * 2 > dst_tokens.size()) {
+        hit_num = 0;
+      }
+      hit_num = hit_num >= cache_manager_config.min_flexible_cache_num ? hit_num : 0;
+      hit_num = hit_num / block_token_num * block_token_num;
+      EXPECT_EQ(hit_num, flexible_cached_copy_tasks.size());
+    }
+  }
+}

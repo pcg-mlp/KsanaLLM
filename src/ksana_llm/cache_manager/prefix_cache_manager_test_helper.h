@@ -298,6 +298,10 @@ class FakedTokenGenerator {
     }
   }
 
+  size_t GetVocabSize() {
+    return vocab_size;
+  }
+
  private:
   size_t vocab_size = 32000;
 };
