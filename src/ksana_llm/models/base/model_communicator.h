@@ -5,12 +5,12 @@
 
 #include <memory>
 #ifdef ENABLE_CUDA
-#include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
-#include "ksana_llm/layers/nccl_all_gather_layer.h"
-#include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
+#  include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
+#  include "ksana_llm/layers/nccl_all_gather_layer.h"
+#  include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #elif defined(ENABLE_ACL)
-#include "ksana_llm/layers/hccl_all_gather_layer.h"
-#include "ksana_llm/layers/hccl_all_reduce_sum_layer.h"
+#  include "ksana_llm/layers/hccl_all_gather_layer.h"
+#  include "ksana_llm/layers/hccl_all_reduce_sum_layer.h"
 #endif
 
 namespace ksana_llm {
@@ -63,7 +63,7 @@ class ModelCommunicator {
   Tensor* input_;
 
   // Whether the communication is finished.
-  Event nccl_finish_event_;
+  Event comm_finish_event_;
 
  private:
   bool CheckIfUseCustomReduceSum(size_t batch_size, bool use_custom) {

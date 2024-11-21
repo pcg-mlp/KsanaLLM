@@ -12,6 +12,11 @@
 
 namespace ksana_llm {
 
+struct WorkspaceMeta {
+  int block_id = -1;
+  size_t block_size = 0ul;
+};
+
 // The memory pool management.
 class BlockManagerInterface {
  public:
@@ -109,6 +114,9 @@ class BlockManagerInterface {
 
   // Get the first allocated block id
   virtual int GetBlocksBaseId() = 0;
+
+  // Get each device workspace buffer block id and size
+  virtual WorkspaceMeta& GetWorkspaceMeta() = 0;
 };
 
 }  // namespace ksana_llm

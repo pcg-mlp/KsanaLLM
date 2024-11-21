@@ -22,7 +22,7 @@ Status NcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_].Get());
+    stream = &(context_->GetCommStreams()[rank_].Get());
   }
 
   NCCL_CHECK(ncclGroupStart());

@@ -47,7 +47,7 @@ Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tens
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_].Get());
+    stream = &(context_->GetCommStreams()[rank_].Get());
   }
   if (context_->GetTensorParallelSize() > 1) {
     void* input = input_tensors[0].GetPtr<void>();

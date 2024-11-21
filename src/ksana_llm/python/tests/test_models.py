@@ -5,9 +5,9 @@ import sys
 import tempfile
 import shutil
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import msgpack
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from transformers import AutoTokenizer
 from transformers.generation.configuration_utils import GenerationConfig
 from utils import modify_yaml_field

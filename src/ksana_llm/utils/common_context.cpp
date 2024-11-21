@@ -31,7 +31,7 @@ ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_paralle
   h2d_streams_.reserve(tensor_parallel_size_);
   d2h_streams_.reserve(tensor_parallel_size_);
   d2d_streams_.reserve(tensor_parallel_size_);
-  nccl_streams_.reserve(tensor_parallel_size_);
+  comm_streams_.reserve(tensor_parallel_size_);
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     InitStreams(worker_id);
   }
@@ -50,7 +50,7 @@ ContextT<T>::~ContextT() {
     h2d_streams_[worker_id].Destroy();
     d2h_streams_[worker_id].Destroy();
     d2d_streams_[worker_id].Destroy();
-    nccl_streams_[worker_id].Destroy();
+    comm_streams_[worker_id].Destroy();
   }
 
   memory_manage_streams_.clear();
@@ -58,7 +58,7 @@ ContextT<T>::~ContextT() {
   h2d_streams_.clear();
   d2h_streams_.clear();
   d2d_streams_.clear();
-  nccl_streams_.clear();
+  comm_streams_.clear();
 }
 
 template <int T>
@@ -68,7 +68,7 @@ void ContextT<T>::InitStreams(const int worker_id) {
   h2d_streams_.emplace_back(worker_id);
   d2h_streams_.emplace_back(worker_id);
   d2d_streams_.emplace_back(worker_id);
-  nccl_streams_.emplace_back(worker_id);
+  comm_streams_.emplace_back(worker_id);
 }
 
 template class ContextT<ACTIVE_DEVICE_TYPE>;

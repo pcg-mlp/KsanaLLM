@@ -66,7 +66,6 @@ void BaseAllocator::PreAllocateBlocks() {
       memory_ptr = base_mem_ptr + i * allocator_config_.block_size;
       if (i == 0) {
         block_base_id = block_id;
-        KLLM_LOG_WARNING << "block_base_id: " << block_base_id;
       }
     } else {
       AllocateMemory(&memory_ptr, allocator_config_.block_size);

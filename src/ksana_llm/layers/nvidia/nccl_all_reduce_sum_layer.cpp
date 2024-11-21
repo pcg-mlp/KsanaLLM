@@ -16,7 +16,7 @@ Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
   } else {
-    stream = &(context_->GetNCCLStreams()[rank_].Get());
+    stream = &(context_->GetCommStreams()[rank_].Get());
   }
 
   if (context_->GetTensorParallelSize() > 1) {

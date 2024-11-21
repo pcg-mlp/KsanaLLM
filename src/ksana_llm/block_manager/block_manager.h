@@ -113,6 +113,9 @@ class BlockManager : public BlockManagerInterface {
   // Get the first allocated block id from continuous blocks memory space
   int GetBlocksBaseId();
 
+  // Get each device workspace buffer block id and size
+  WorkspaceMeta& GetWorkspaceMeta();
+
   // Update block magager config
   Status UpdateConfig(const BlockManagerConfig& update_block_manager_config);
 
@@ -146,6 +149,9 @@ class BlockManager : public BlockManagerInterface {
 
   // The target prefix cache token
   std::vector<int> prefix_cache_tokens_;
+
+  // Each device's workspace buffer meta
+  std::vector<WorkspaceMeta> workspace_metas_;
 };
 
 }  // namespace ksana_llm

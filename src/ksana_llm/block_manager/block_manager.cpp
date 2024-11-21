@@ -35,6 +35,9 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
         std::make_shared<DeviceAllocator>(block_manager_config.device_allocator_config, context, worker_id);
     device_allocators_.push_back(device_allocator);
   }
+
+  // Create device workspace buffer
+  workspace_metas_.resize(context_->GetTensorParallelSize());
 }
 
 Status BlockManager::PreAllocateBlocks() {
@@ -64,7 +67,19 @@ Status BlockManager::ResetPreAllocatedBlocks() {
 
   for (auto& allocator : device_allocators_) {
     KLLM_LOG_INFO << "Start to preallocate device blocks on " << allocator->GetDeviceId();
+#ifdef ENABLE_ACL
+    int default_device_id = GetDeviceId();
+
+    if (device_allocators_.size() > 1) {
+      SetDeviceId(allocator->GetDeviceId());
+    }
+#endif
     allocator->ResetPreAllocatedBlocks(device_blocks_num);
+#ifdef ENABLE_ACL
+    if (device_allocators_.size() > 1) {
+      SetDeviceId(default_device_id);
+    }
+#endif
     KLLM_LOG_INFO << "Finish to preallocate device blocks on " << allocator->GetDeviceId();
   }
 
@@ -255,6 +270,11 @@ const AllocatorConfig& BlockManager::GetAllocatorConfig() {
 int BlockManager::GetBlocksBaseId() {
   int device_id = GetDeviceId();
   return device_allocators_[device_id]->GetBlocksBaseId();
+}
+
+WorkspaceMeta& BlockManager::GetWorkspaceMeta() {
+  int device_id = GetDeviceId();
+  return workspace_metas_[device_id];
 }
 
 Status BlockManager::UpdateConfig(const BlockManagerConfig& update_block_manager_config) {

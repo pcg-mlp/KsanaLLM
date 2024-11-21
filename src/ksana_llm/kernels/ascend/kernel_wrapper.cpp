@@ -175,7 +175,7 @@ Status TransLayout(Tensor& tensor, Stream& stream) {
     in_tensor_shape.clear();
     in_tensor_shape.resize(TRANSDATA_IN_DIMS, 1);
     for (size_t dim_idx = TRANSDATA_IN_DIMS - src_shape.size(), src_dim_idx = 0;
-         dim_idx < TRANSDATA_IN_DIMS, src_dim_idx < src_shape.size(); ++dim_idx, ++src_dim_idx) {
+         dim_idx < TRANSDATA_IN_DIMS && src_dim_idx < src_shape.size(); ++dim_idx, ++src_dim_idx) {
       in_tensor_shape[dim_idx] = src_shape[src_dim_idx];
     }
   } else if (src_shape.size() > TRANSDATA_IN_DIMS) {

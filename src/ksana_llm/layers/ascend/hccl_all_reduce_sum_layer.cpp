@@ -17,6 +17,7 @@ Status HcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, s
   all_reduce_param.commMode = atb::infer::CommMode::COMM_MULTI_THREAD;
   all_reduce_param.rank = rank;
   all_reduce_param.hcclComm = context_->ext->GetHCCLComm()[rank_];
+  all_reduce_param.rankSize = context_->GetComputeStreams().size();
   atb_op_executor_.Init(rank, all_reduce_param);
   return Status();
 }

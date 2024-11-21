@@ -149,16 +149,19 @@ Status GetHostMemoryInfo(size_t* free, size_t* total) {
 
 void GetWorkSpaceImpl(size_t size, void** ws_addr) {
   if (size > 0) {
-    static int block_id = -1;
-    static size_t block_size = 0;
+    WorkspaceMeta& workspace_meta = GetBlockManager()->GetWorkspaceMeta();
+    int block_id = workspace_meta.block_id;
+    size_t block_size = workspace_meta.block_size;
     if (block_size < size) {
       if (block_id >= 0) {
         GetBlockManager()->FreeContiguous(block_id);
       }
       GetBlockManager()->AllocateContiguous(size, block_id);
       block_size = size;
+      // update workspace metaATBOperationExecutor using work
+      workspace_meta.block_id = block_id;
+      workspace_meta.block_size = block_size;
     }
-
     GetBlockManager()->GetContiguousPtr(block_id, *ws_addr);
   }
 }

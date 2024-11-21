@@ -27,8 +27,8 @@ void AscendContextExtension<T>::InitHcclParam() {
   if (base_ptr_->tensor_parallel_size_ <= 1) {
     return;
   }
-  rank_ids_.resize(base_ptr_->tensor_parallel_size_);
-  std::iota(rank_ids_.begin(), rank_ids_.end(), int32_t(1));
+  rank_ids_.resize(base_ptr_->tensor_parallel_size_, int32_t(0));
+  std::iota(rank_ids_.begin() + 1, rank_ids_.end(), int32_t(1));
   hccl_params_.resize(base_ptr_->tensor_parallel_size_);
 
   HCCL_CHECK(HcclCommInitAll(base_ptr_->tensor_parallel_size_, rank_ids_.data(), hccl_params_.data()));

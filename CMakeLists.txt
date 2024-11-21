@@ -187,8 +187,3 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 add_subdirectory(3rdparty)
 add_subdirectory(examples)
 add_subdirectory(src)
-
-# for integration test
-if(WITH_TESTING)
-  add_subdirectory(tests)
-endif()

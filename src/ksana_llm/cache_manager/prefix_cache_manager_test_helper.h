@@ -19,6 +19,7 @@ class FakedBlockManager : public BlockManagerInterface {
     block_manager_config_ = block_manager_config;
 
     device_num_ = device_num;
+    workspace_metas_.resize(device_num_);
     cur_device_id_ = 0;
   }
 
@@ -255,9 +256,12 @@ class FakedBlockManager : public BlockManagerInterface {
 
   int GetBlocksBaseId() { return 0; }
 
+  WorkspaceMeta& GetWorkspaceMeta() {return workspace_metas_[0];}
+
  private:
   BlockManagerConfig block_manager_config_;
 
+  std::vector<WorkspaceMeta> workspace_metas_;
   size_t device_num_;
   int cur_device_id_ = 0;
 

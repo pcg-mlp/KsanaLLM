@@ -243,6 +243,8 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   int GetBlocksBaseId() { return 0; }
 
+  WorkspaceMeta& GetWorkspaceMeta() { return dummy_workspace_meta_; }
+
  public:  // Functions not in BlockManagerInferface
   void CollectKvCacheContent(std::shared_ptr<InferRequest>& req, std::vector<int>& kv_cache_contents) {
     std::lock_guard<std::recursive_mutex> guard(mux_);
@@ -409,6 +411,8 @@ class BlockManagerSimulator : public BlockManagerInterface {
   int device_block_num_;
   int device_num_;
   int tp_num_;
+
+  WorkspaceMeta dummy_workspace_meta_;
 
   std::unordered_set<int> host_free_block_;
   std::vector<std::unordered_set<int>> device_free_block_;

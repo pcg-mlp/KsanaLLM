@@ -59,7 +59,7 @@ TEST_F(ContextTest, NvidiaCommonTest) {
   EXPECT_EQ(context->GetH2DStreams().size(), total_rank_num);
   EXPECT_EQ(context->GetD2HStreams().size(), total_rank_num);
   EXPECT_EQ(context->GetD2DStreams().size(), total_rank_num);
-  EXPECT_EQ(context->GetNCCLStreams().size(), total_rank_num);
+  EXPECT_EQ(context->GetCommStreams().size(), total_rank_num);
   EXPECT_EQ(context->ext->GetCublasHandles().size(), total_rank_num);
   EXPECT_EQ(context->ext->GetCublasLtHandles().size(), total_rank_num);
   EXPECT_EQ(context->ext->GetNCCLParam().size(), total_rank_num);
@@ -74,7 +74,7 @@ TEST_F(ContextTest, NvidiaCommonTest) {
     StreamSynchronize(context->GetH2DStreams()[rank_idx]);
     StreamSynchronize(context->GetD2HStreams()[rank_idx]);
     StreamSynchronize(context->GetD2DStreams()[rank_idx]);
-    StreamSynchronize(context->GetNCCLStreams()[rank_idx]);
+    StreamSynchronize(context->GetCommStreams()[rank_idx]);
 
     // check nccl
     EXPECT_NE(context->ext->GetNCCLParam()[rank_idx].nccl_comm, nullptr);

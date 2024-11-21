@@ -9,7 +9,7 @@ namespace ksana_llm {
 template <typename T>
 ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, std::shared_ptr<Context> context)
     : rank_(rank), context_(context), buffer_(buffer), input_(input) {
-  EventCreateWithFlags(&nccl_finish_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&comm_finish_event_, EVENT_DISABLE_TIMING);
 
 #ifdef ENABLE_CUDA
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer<T>>();
@@ -57,7 +57,7 @@ ModelCommunicator<T>::~ModelCommunicator() {
   STATUS_CHECK_FAILURE(DestroyTensor(rank_tensor_0_, rank_));
 #endif
 
-  EventDestroy(nccl_finish_event_);
+  EventDestroy(comm_finish_event_);
 }
 
 template <typename T>
@@ -65,14 +65,22 @@ Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors,
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
+    EventRecord(comm_finish_event_, context_->GetCommStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], comm_finish_event_);
   }
 #endif
 
 #ifdef ENABLE_ACL
-  MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
-              MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+  if (context_->GetTensorParallelSize() > 1) {
+    STATUS_CHECK_RETURN(hccl_all_gather_layer_->Forward(input_tensors, output_tensors));
+    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+      EventRecord(comm_finish_event_, context_->GetCommStreams()[rank_]);
+      StreamWaitEvent(context_->GetComputeStreams()[rank_], comm_finish_event_);
+    }
+  } else {
+    MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+                MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+  }
 #endif
   return Status();
 }
@@ -91,16 +99,24 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
     }
   }
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    EventRecord(nccl_finish_event_, context_->GetNCCLStreams()[rank_]);
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], nccl_finish_event_);
+    EventRecord(comm_finish_event_, context_->GetCommStreams()[rank_]);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], comm_finish_event_);
   }
 #endif
 
 #ifdef ENABLE_ACL
-  MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
-              MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  if (context_->GetTensorParallelSize() > 1) {
+    STATUS_CHECK_RETURN(hccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
+    if (!context_->IsRunContextDecodeAndDecodeSerially()) {
+      EventRecord(comm_finish_event_, context_->GetCommStreams()[rank_]);
+      StreamWaitEvent(context_->GetComputeStreams()[rank_], comm_finish_event_);
+    }
+  } else {
+    MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+                MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+    output_tensors[0].shape = input_tensors[0].shape;
+    output_tensors[0].dtype = input_tensors[0].dtype;
+  }
 #endif
 
   return Status();

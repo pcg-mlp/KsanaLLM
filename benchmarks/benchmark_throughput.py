@@ -484,6 +484,7 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         while True:
             # Record the start time of the request
             request_start_time = time.perf_counter()
+            output = None
 
             # Send a POST request to the API URL with the specified headers and data
             async with session.post(api_url, headers=headers,
@@ -593,7 +594,10 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
 
     output_len = len(output_text)
     result_list[req_id] = output_text
-    print(f"req_id : {req_id} input_token_num={input_token_num}, output_token_num={output_token_num}, output_text_len={output_len}, output_text=\n{output_text}")
+    print(
+        "req_id : {} input_token_num={}, output_token_num={}, output_text_len={}, output_text=\n{}"
+        .format(req_id, input_token_num, output_token_num, output_len,
+                output_text))
     REQUEST_LATENCY.append(
         (len(prompt), output_len if output_len > 0 else 1, input_token_num,
          output_token_num, request_latency,

@@ -38,7 +38,7 @@ class ContextT {
 
   std::vector<Stream>& GetD2DStreams() { return d2d_streams_; }
 
-  std::vector<Stream>& GetNCCLStreams() { return nccl_streams_; }
+  std::vector<Stream>& GetCommStreams() { return comm_streams_; }
 
   const std::set<int>& GetSupportedCudaGraphCaptureSizes() { return cudagraph_captured_batchsizes; }
 
@@ -70,7 +70,7 @@ class ContextT {
   std::vector<Stream> h2d_streams_;
   std::vector<Stream> d2h_streams_;
   std::vector<Stream> d2d_streams_;
-  std::vector<Stream> nccl_streams_;
+  std::vector<Stream> comm_streams_;
 
  private:
   // Initialize and destroy extension, implemented by device.

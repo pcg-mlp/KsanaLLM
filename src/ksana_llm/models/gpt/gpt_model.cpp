@@ -93,7 +93,7 @@ Status GPTModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_l
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
-    StreamWaitEvent(context_->GetNCCLStreams()[rank_], model_output_->compute_ready_event);
+    StreamWaitEvent(context_->GetCommStreams()[rank_], model_output_->compute_ready_event);
   }
 
   // Attn AllReduceSum
@@ -137,7 +137,7 @@ Status GPTModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::Ba
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
-    StreamWaitEvent(context_->GetNCCLStreams()[rank_], model_output_->compute_ready_event);
+    StreamWaitEvent(context_->GetCommStreams()[rank_], model_output_->compute_ready_event);
   }
 
   // Mlp AllReduceSum
@@ -162,7 +162,7 @@ Status GPTModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight) {
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
-    StreamWaitEvent(context_->GetNCCLStreams()[rank_], model_output_->compute_ready_event);
+    StreamWaitEvent(context_->GetCommStreams()[rank_], model_output_->compute_ready_event);
   }
 
   if (model_communicator_) {

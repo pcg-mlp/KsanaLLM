@@ -55,5 +55,15 @@ void ATBOperationExecutor::Run(atb::Context* context, void (*ws_func)(size_t, vo
       operation_->Execute(variant_pack_, reinterpret_cast<uint8_t*>(workspace_ptr_), workspace_size_, context));
 }
 
+size_t ATBOperationExecutor::GetWorkSpaceSize(atb::Context* context) {
+  ATB_CHECK_RET(operation_->Setup(variant_pack_, workspace_size_, context));
+  return workspace_size_;
+}
+
+void ATBOperationExecutor::Run(atb::Context* context, void* workspace_ptr) {
+  ATB_CHECK_RET(
+      operation_->Execute(variant_pack_, reinterpret_cast<uint8_t*>(workspace_ptr), workspace_size_, context));
+}
+
 }  // namespace utils
 }  // namespace llm_kernels
