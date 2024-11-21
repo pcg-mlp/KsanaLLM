@@ -93,6 +93,7 @@ class Profiler {
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_waiting_size;
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_swapped_size;
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_manager_schedule_ms;
+      std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> req_total_cost_in_queue_ms;
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> token_num_in_batch;
       std::unique_ptr<opentelemetry::metrics::Histogram<double>> token_fill_ratio;
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> block_num_free;
@@ -149,6 +150,7 @@ class Profiler {
   static constexpr std::string_view kBatchSchedulerWaitingSize = "batch_scheduler_waiting_size";
   static constexpr std::string_view kBatchSchedulerSwappedSize = "batch_scheduler_swapped_size";
   static constexpr std::string_view kBatchManagerScheduleMs = "batch_manager_schedule_ms";
+  static constexpr std::string_view kReqTotalCostInQueueMs = "req_total_cost_in_queue_ms";
   static constexpr std::string_view kTokenNumInBatch = "token_num_in_batch";
   static constexpr std::string_view kTokenFillRatio = "token_fill_ratio";
   static constexpr std::string_view kBlockNumFree = "block_num_free";
@@ -176,6 +178,7 @@ class Profiler {
                                                    kBatchSchedulerWaitingSize,
                                                    kBatchSchedulerSwappedSize,
                                                    kBatchManagerScheduleMs,
+                                                   kReqTotalCostInQueueMs,
                                                    kTokenNumInBatch,
                                                    kTokenFillRatio,
                                                    kBlockNumFree,

@@ -138,7 +138,10 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
     const auto current_time = ProfileTimer::GetCurrentTimeInMs();
     for (const auto& req : batch_state_->running_queue) {
       token_num += req->output_tokens.size();
-      REPORT_METRIC(batch_manager_schedule_ms, current_time - req->timestamp_in_ms);
+      if (req->step == 0) {
+        REPORT_METRIC(batch_manager_schedule_ms, current_time - req->timestamp_in_ms);
+      }
+      REPORT_METRIC(req_total_cost_in_queue_ms, current_time - req->timestamp_in_ms);
     }
     REPORT_METRIC(token_num_in_batch, token_num);
 

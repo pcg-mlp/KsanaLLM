@@ -171,6 +171,10 @@ void Profiler::InitMetrics() {
     monitor_.call.batch_manager_schedule_ms = meter->CreateUInt64Histogram(
         opentelemetry::v1::nostd::string_view{kBatchManagerScheduleMs.data(), kBatchManagerScheduleMs.size()});
   }
+  if (metrics_.find(kReqTotalCostInQueueMs) != metrics_.end()) {
+    monitor_.call.req_total_cost_in_queue_ms = meter->CreateUInt64Histogram(
+        opentelemetry::v1::nostd::string_view{kReqTotalCostInQueueMs.data(), kReqTotalCostInQueueMs.size()});
+  }
   if (metrics_.find(kTokenNumInBatch) != metrics_.end()) {
     monitor_.call.token_num_in_batch = meter->CreateUInt64Histogram(
         opentelemetry::v1::nostd::string_view{kTokenNumInBatch.data(), kTokenNumInBatch.size()});
