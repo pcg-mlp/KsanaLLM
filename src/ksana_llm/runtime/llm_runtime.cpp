@@ -28,7 +28,7 @@ inline Value& GetMapValue(std::unordered_map<Key, Value>& m, const Key& key, T&&
 LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::shared_ptr<Context> context)
     : batch_schedule_config_(batch_scheduler_config), context_(context) {
   worker_group_ =
-      std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetTensorParallelSize(), context_);
+      std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), context_->GetPipeLineParallelSize(), context_);
 
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     samplers_.push_back(std::make_shared<Sampler>(batch_schedule_config_, worker_id, context_));
@@ -87,9 +87,11 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.request_target = &req_ptr->request_target;
     forward_req.response = &req_ptr->response;
     forward_req.output_tokens = &(req_ptr->output_tokens);
+    forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
     forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
-    forward_req.prefix_cache_len = req_ptr->prefix_cache_len;
+    forward_req.flexible_cache_len = req_ptr->flexible_cached_copy_tasks.size();
+    forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;
     forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;
     forward_req.span_context = req_ptr->span_context;
     forward_req.is_cudagraph_capture_request = req_ptr->is_cudagraph_capture_request;

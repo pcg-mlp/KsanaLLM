@@ -106,7 +106,10 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,
                  int stride_size, float k_scale, float v_scale, int tensor_para_size, bool is_causal, int rank,
                  int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
-                 const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr = nullptr,
+                 const std::optional<void*>& alibi_slopes, int layer_index, void* flexible_rotary_embedding_pos_ptr,
+                 void* flexible_rotary_embedding_mask_ptr, void* dst_flexible_kv_cache_ptr,
+                 void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr, void* src_flexible_token_idx_ptr,
+                 void* flexible_offset_uint64_ptr, int flexible_len, cudaStream_t stream, void* k_cache_ptr = nullptr,
                  void* v_cache_ptr = nullptr, int32_t* block_table_ptr = nullptr, int64_t kv_cache_block_num = 0,
                  int max_blocks_per_seq = 0, size_t* without_prefix_offsets = nullptr,
                  int without_prefix_max_tokens = 0);

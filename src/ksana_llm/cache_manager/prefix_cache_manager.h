@@ -43,7 +43,8 @@ struct PrefixCachedBlock {
   PrefixCachedBlock* parent = nullptr;
 
   // The child blocks, key is hash code of tokens.
-  std::unordered_map<size_t, std::list<PrefixCachedBlock*>> children;
+  // std::unordered_map<size_t, std::list<PrefixCachedBlock*>> children;
+  std::unordered_map<std::vector<int>, PrefixCachedBlock*, TokensHash, TokensEqual> children;
 
   // Whether this block contain valid cache data and be shareable.
   bool is_shareable = false;
@@ -194,12 +195,20 @@ class PrefixCacheManager : public CacheManagerInterface,
 
   // Update the internal state and ref count of specific request.
   Status UpdateCachedRequestState(int64_t req_id, RequestState req_state);
+  void QueryIncompleteBlock(PrefixCachedBlock* last_block, const std::vector<int>& token_ids, int start_idx,
+                            PrefixCachedBlock*& prefix_append_block, size_t& prefix_append_len);
+  void EraseFlexibleCacheMap(PrefixCachedBlock* cached_block);
+  void InsertFlexibleCacheMap(PrefixCachedBlock* cached_block);
+  void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
+                           std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks);
+  int GetPrefixLen(PrefixCachedBlock* block);
 
  private:
   // The root block of block tree, not contain any memory block.
   // The tree struct only contain computed blocks, non-computed block is maintain by cached request itself.
   PrefixCachedBlock* root_cached_block_;
-
+  std::unordered_map<std::vector<int>, std::unordered_set<PrefixCachedBlock*>, TokensHash, TokensEqual>
+      flexible_cache_map_;
   // The cached blocks that have filled, but no request referenced it.
   std::unordered_set<PrefixCachedBlock*> reusable_cached_blocks_;
 

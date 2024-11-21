@@ -33,7 +33,8 @@ namespace nvidia {
 
 template <typename T, bool IS_NEOX>
 inline __device__ void ApplyRotaryEmbedding(T* __restrict__ arr, const T* __restrict__ cos_ptr,
-                                            const T* __restrict__ sin_ptr, int rot_offset, int embed_dim) {
+                                            const T* __restrict__ sin_ptr, int rot_offset, int embed_dim,
+                                            bool reverse = false) {
   int x_index, y_index;
   T cos, sin;
   if (IS_NEOX) {
@@ -49,7 +50,16 @@ inline __device__ void ApplyRotaryEmbedding(T* __restrict__ arr, const T* __rest
     cos = __ldg(cos_ptr + x_index / 2);
     sin = __ldg(sin_ptr + x_index / 2);
   }
-
+  const float cos_f = cos;
+  const float sin_f = sin;
+  if (reverse) {
+    const float d = cos_f * cos_f + sin_f * sin_f;
+    const float x = arr[x_index];
+    const float y = arr[y_index];
+    arr[x_index] = (x * cos_f + y * sin_f) / d;
+    arr[y_index] = (y * cos_f - x * sin_f) / d;
+    return;
+  }
   const T x = arr[x_index];
   const T y = arr[y_index];
   arr[x_index] = x * cos - y * sin;
@@ -84,7 +94,9 @@ __global__ void InvokeRotaryEmbeddingKernel(
     const int head_idx = i / embed_dim;
     const int64_t token_head = token_idx * query_stride + head_idx * head_size;
     const int rot_offset = i % embed_dim;
-    ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+    if (query != nullptr) {
+      ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+    }
   }
 
   const int nk = num_kv_heads * embed_dim;
@@ -92,7 +104,7 @@ __global__ void InvokeRotaryEmbeddingKernel(
     const int head_idx = i / embed_dim;
     const int64_t token_head = token_idx * key_stride + head_idx * head_size;
     const int rot_offset = i % embed_dim;
-    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, query == nullptr);
   }
 }
 

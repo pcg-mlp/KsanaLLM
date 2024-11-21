@@ -126,7 +126,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
     if (i != req_block_num - 1) {
       EXPECT_EQ(cb->parent, cb_prev);
-      EXPECT_EQ(cb->parent->children[cb->hash_code].front(), cb);
+      EXPECT_EQ(cb->parent->children[cb->token_ids], cb);
       EXPECT_EQ(cb->active_requests.size(), 1);
       EXPECT_EQ(cb->inactive_requests.size(), 0);
       EXPECT_EQ(cb->is_shareable, true);
@@ -262,7 +262,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
     if (i != req_block_num - 1) {
       EXPECT_EQ(cb->parent, cb_prev);
-      EXPECT_EQ(cb->parent->children[cb->hash_code].front(), cb);
+      EXPECT_EQ(cb->parent->children[cb->token_ids], cb);
       EXPECT_EQ(cb->active_requests.size(), 1);
       EXPECT_EQ(cb->inactive_requests.size(), 0);
       EXPECT_EQ(cb->is_shareable, true);

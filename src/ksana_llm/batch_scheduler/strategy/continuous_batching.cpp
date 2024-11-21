@@ -567,6 +567,8 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
             step_token_num >= batch_scheduler_config_.split_fuse_token_num) {
           break;
         }
+        cache_manager_->UpdateFlexibleCache(req->req_id, req->output_tokens, shared_token_num,
+                                            req->flexible_cached_copy_tasks);
         continue;
       }
       KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();

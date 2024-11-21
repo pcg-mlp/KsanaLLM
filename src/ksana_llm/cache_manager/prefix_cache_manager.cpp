@@ -140,19 +140,14 @@ bool PrefixCacheManager::CheckSameTokens(const PrefixCachedBlock* block, const i
 }
 
 PrefixCachedBlock* PrefixCacheManager::FindChildCacheBlock(PrefixCachedBlock* block, const int* start, size_t len) {
-  size_t hash_code = CalcIntVecHash(start, len);
+  std::vector<int> token_ids(start, start + len);
 
-  auto it = block->children.find(hash_code);
+  auto it = block->children.find(token_ids);
   if (it == block->children.end()) {
     return nullptr;
   }
 
-  for (PrefixCachedBlock* cb : it->second) {
-    if (CheckSameTokens(cb, start, len)) {
-      return cb;
-    }
-  }
-  return nullptr;
+  return it->second;
 }
 
 PrefixCachedBlock* PrefixCacheManager::CreateEmptyCachedBlock() {
@@ -169,20 +164,15 @@ PrefixCachedBlock* PrefixCacheManager::CreateEmptyCachedBlock() {
 PrefixCachedBlock* PrefixCacheManager::CreateCachedBlock(size_t block_id) {
   PrefixCachedBlock* cached_block = CreateEmptyCachedBlock();
   cached_block->block_id = block_id;
-
-  // Use block id temporarily, updated to correct one after block filled.
-  cached_block->hash_code = cached_block->block_id;
-
   return cached_block;
 }
 
 void PrefixCacheManager::ResetCachedBlock(PrefixCachedBlock* cached_block) {
   // Keep block id unchanged, reset hashcode.
-  cached_block->hash_code = cached_block->block_id;
 
   cached_block->is_shareable = false;
   cached_block->is_device_location = true;
-
+  EraseFlexibleCacheMap(cached_block);
   cached_block->token_ids.clear();
   cached_block->token_ids.resize(cache_manager_config_.block_token_num);
 
@@ -191,6 +181,185 @@ void PrefixCacheManager::ResetCachedBlock(PrefixCachedBlock* cached_block) {
 
   cached_block->parent = nullptr;
   cached_block->children.clear();
+}
+
+/**
+ * @brief Find the longest matching prefix block among children of the last block.
+ */
+void PrefixCacheManager::QueryIncompleteBlock(PrefixCachedBlock* last_block, const std::vector<int>& token_ids,
+                                              int start_idx, PrefixCachedBlock*& prefix_append_block,
+                                              size_t& prefix_append_len) {
+  for (auto& try_block : last_block->children) {
+    size_t i = 0;
+    for (; i < cache_manager_config_.block_token_num; i++) {
+      if (try_block.second->token_ids[i] != token_ids[start_idx + i]) {
+        break;
+      }
+    }
+    if (prefix_append_len < i) {
+      prefix_append_len = i;
+      prefix_append_block = try_block.second;
+    }
+  }
+}
+
+int PrefixCacheManager::GetPrefixLen(PrefixCachedBlock* block) {
+  // Remove root node
+  int len = -1 * cache_manager_config_.block_token_num;
+  if (block == nullptr) {
+    return 0;
+  }
+  while (block->parent) {
+    len += cache_manager_config_.block_token_num;
+    block = block->parent;
+  }
+  return len;
+}
+
+/**
+ * @brief Updates the flexible cache for a given request by finding and copying matching data blocks.
+ *
+ * This function searches for the longest prefix match and extends it to form a longer matching sequence
+ * within the provided token IDs. It then copies the matched data blocks into the flexible cache task list
+ * for subsequent processing.
+ */
+void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
+                                             std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) {
+  // Check if the minimum flexible cache size is set and greater than 0
+  size_t min_flexible_cache_num = cache_manager_config_.min_flexible_cache_num;
+  if (min_flexible_cache_num == 0) {
+    return;
+  }
+
+  size_t flexible_cache_len = 0;
+  size_t flexible_cache_begin = 0;
+  auto& block_token_num = cache_manager_config_.block_token_num;
+  // Check if there are enough tokens for flexible caching
+  if (shared_token_num + min_flexible_cache_num + block_token_num * 2 > token_ids.size() && shared_token_num != 0) {
+    return;
+  }
+  auto it = cached_requests_.find(req_id);
+  if (it == cached_requests_.end()) {
+    KLLM_THROW(FormatStr("Get usable block number for req %d error, req not exist.", req_id));
+  }
+  PrefixCachedRequest* cached_request = it->second.get();
+
+  // Find the longest matching prefix tokens among children of the last block
+  std::vector<PrefixCachedBlock*> cached_blocks;
+  size_t prefix_append_len = 0;
+  PrefixCachedBlock* prefix_append_block = nullptr;
+  if (shared_token_num > 0) {
+    PrefixCachedBlock* last_block = cached_request->cached_blocks[shared_token_num / block_token_num - 1];
+    QueryIncompleteBlock(last_block, token_ids, shared_token_num, prefix_append_block, prefix_append_len);
+  }
+
+  // Update shared_token_num with the length of the prefix append block
+  auto new_shared_token_num = shared_token_num + prefix_append_len;
+
+  // Iterate through the token_ids to find the best matching block for flexible caching
+  for (int offset = new_shared_token_num; offset < new_shared_token_num + block_token_num; offset++) {
+    if (min_flexible_cache_num + offset > token_ids.size()) {
+      break;
+    }
+    PrefixCachedBlock* cached_block = nullptr;
+    std::vector<int> dst_token_ids(token_ids.begin() + offset, token_ids.begin() + offset + block_token_num);
+    auto map_it = flexible_cache_map_.find(dst_token_ids);
+    if (map_it != flexible_cache_map_.end()) {
+      for (auto block : map_it->second) {
+        int hit_num = block_token_num;
+        int start_idx = block_token_num - (offset - new_shared_token_num);
+        cached_block = block;
+        std::vector<PrefixCachedBlock*> new_cached_blocks;
+        if (offset != new_shared_token_num) {
+          if (cached_block->parent == nullptr) {
+            continue;
+          }
+          for (; start_idx < block_token_num; start_idx++) {
+            if (cached_block->parent->token_ids[start_idx] != token_ids[offset - block_token_num + start_idx]) {
+              break;
+            }
+          }
+          if (start_idx != block_token_num) {
+            continue;
+          }
+          new_cached_blocks.push_back(cached_block->parent);
+        }
+        new_cached_blocks.push_back(cached_block);
+        bool partial_match = false;
+        for (; offset + hit_num + block_token_num < token_ids.size(); hit_num += block_token_num) {
+          std::memcpy(dst_token_ids.data(), token_ids.data() + offset + hit_num, block_token_num * sizeof(int));
+          auto it = cached_block->children.find(dst_token_ids);
+          if (it != cached_block->children.end()) {
+            cached_block = it->second;
+            new_cached_blocks.push_back(cached_block);
+          } else {
+            partial_match = true;
+            break;
+          }
+        }
+        if (partial_match) {
+          PrefixCachedBlock* flexible_append_block = nullptr;
+          size_t flexible_append_len = 0;
+          QueryIncompleteBlock(cached_block, dst_token_ids, 0, flexible_append_block, flexible_append_len);
+          if (flexible_append_len > 0) {
+            hit_num += flexible_append_len;
+            new_cached_blocks.push_back(flexible_append_block);
+          }
+        }
+
+        if (hit_num >= min_flexible_cache_num && hit_num > flexible_cache_len) {
+          cached_blocks = new_cached_blocks;
+          flexible_cache_begin = (block_token_num - (offset - new_shared_token_num)) % block_token_num;
+          flexible_cache_len = offset - new_shared_token_num + hit_num;
+        }
+      }
+    }
+  }
+
+  // If no matching blocks are found, return early
+  if (cached_blocks.empty()) {
+    return;
+  }
+
+  // Calculate the number of flexible cached tokens to resize the tasks vector
+  int new_flexible_cached_tokens = (flexible_cache_len + prefix_append_len) / block_token_num * block_token_num;
+  flexible_cached_copy_tasks.resize(new_flexible_cached_tokens);
+  int idx = 0;
+  int src_shared_token_num = GetPrefixLen(prefix_append_block);
+  // Copy the prefix append block tokens to the flexible cache tasks
+  for (; idx < prefix_append_len; idx++) {
+    flexible_cached_copy_tasks[idx].Update(
+        shared_token_num + idx, src_shared_token_num + idx,
+        cached_request->cached_blocks[shared_token_num / block_token_num]->memory_block_ids,
+        prefix_append_block->memory_block_ids);
+  }
+  src_shared_token_num = GetPrefixLen(cached_blocks[0]);
+  // Copy the remaining cached block tokens to the flexible cache tasks
+  for (; idx < new_flexible_cached_tokens; idx++) {
+    auto cached_token_idx = (idx - prefix_append_len + flexible_cache_begin);
+    auto cached_blocks_idx = cached_token_idx / block_token_num;
+    flexible_cached_copy_tasks[idx].Update(
+        shared_token_num + idx, src_shared_token_num + cached_token_idx,
+        cached_request->cached_blocks[(shared_token_num + idx) / block_token_num]->memory_block_ids,
+        cached_blocks[cached_blocks_idx]->memory_block_ids);
+  }
+}
+
+void PrefixCacheManager::EraseFlexibleCacheMap(PrefixCachedBlock* cached_block) {
+  auto map_it = flexible_cache_map_.find(cached_block->token_ids);
+  if (map_it != flexible_cache_map_.end()) {
+    auto block_set_it = map_it->second.find(cached_block);
+    if (block_set_it != map_it->second.end()) {
+      map_it->second.erase(block_set_it);
+    }
+    if (map_it->second.empty()) {
+      flexible_cache_map_.erase(map_it);
+    }
+  }
+}
+
+void PrefixCacheManager::InsertFlexibleCacheMap(PrefixCachedBlock* cached_block) {
+  flexible_cache_map_[cached_block->token_ids].insert(cached_block);
 }
 
 void PrefixCacheManager::FreeCachedBlockRecursively(PrefixCachedBlock* cached_block,
@@ -208,9 +377,7 @@ void PrefixCacheManager::FreeCachedBlockRecursively(PrefixCachedBlock* cached_bl
 
   // First process all children.
   for (auto pair : cached_block->children) {
-    for (PrefixCachedBlock* cb : pair.second) {
-      FreeCachedBlockRecursively(cb, free_blocks, free_num);
-    }
+    FreeCachedBlockRecursively(pair.second, free_blocks, free_num);
   }
 
   // Force reuse itself, from reusable to free
@@ -246,17 +413,9 @@ bool PrefixCacheManager::FreeCachedBlocks(size_t block_num, size_t& free_block_n
 
     if (cb->active_requests.empty() && cb->inactive_requests.empty()) {
       // Take it and all its children from tree.
-      auto it2 = cb->parent->children.find(cb->hash_code);
+      auto it2 = cb->parent->children.find(cb->token_ids);
       if (it2 != cb->parent->children.end()) {
-        auto it_find = std::find(it2->second.begin(), it2->second.end(), cb);
-        if (it_find != it2->second.end()) {
-          it2->second.erase(it_find);
-
-          // Remove hashcode if list is empty.
-          if (it2->second.empty()) {
-            cb->parent->children.erase(it2);
-          }
-        }
+        cb->parent->children.erase(it2);
       }
       FreeCachedBlockRecursively(cb, free_blocks, free_block_num);
     }
@@ -408,37 +567,28 @@ Status PrefixCacheManager::MergeFilledCachedBlocks(PrefixCachedRequest* cached_r
 Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
                                                    PrefixCachedBlock* cached_block,
                                                    std::vector<std::vector<int>>& req_block_ids) {
-  size_t hash_code = CalcIntVecHash(cached_block->token_ids.data(), cache_manager_config_.block_token_num);
-
   PrefixCachedBlock* shadow_parent =
       (block_index == 0) ? root_cached_block_ : cached_request->cached_blocks[block_index - 1];
 
   // Try to find a brother block that have same data
-  auto it = shadow_parent->children.find(hash_code);
+  auto it = shadow_parent->children.find(cached_block->token_ids);
   if (it != shadow_parent->children.end()) {
-    // The cached block is not on tree yet, so no need to skip itself.
-    for (PrefixCachedBlock* cb : it->second) {
-      // Found it, merge to existed block.
-      if (CheckSameTokens(cb, cached_block->token_ids.data(), cache_manager_config_.block_token_num)) {
-        MergeFilledCachedBlocks(cached_request, block_index, cb, cached_block, req_block_ids);
-
-        // Reset it and move to free list.
-        ResetCachedBlock(cached_block);
-        free_cached_blocks_.push(cached_block);
-        return Status();
-      }
-    }
+    // Found it, merge to existed block.
+    MergeFilledCachedBlocks(cached_request, block_index, it->second, cached_block, req_block_ids);
+    // Reset it and move to free list.
+    ResetCachedBlock(cached_block);
+    free_cached_blocks_.push(cached_block);
+    return Status();
   }
 
   // Not found, mark it shareable, trace request info.
   cached_block->is_shareable = true;
-  cached_block->hash_code = hash_code;
   cached_block->active_requests[cached_request->req_id] = std::make_pair(block_index, cached_request);
 
   // add to tree block.
   cached_block->parent = shadow_parent;
-  cached_block->parent->children[hash_code].push_back(cached_block);
-
+  cached_block->parent->children[cached_block->token_ids] = cached_block;
+  InsertFlexibleCacheMap(cached_block);
   // Record timeline.
   AppendCachedBlockToTimedList(cached_block);
 
@@ -474,31 +624,25 @@ Status PrefixCacheManager::MergeSwapinCachedBlocks(PrefixCachedRequest* cached_r
 Status PrefixCacheManager::AppendSwapinCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
                                                    PrefixCachedBlock* cached_block,
                                                    std::vector<std::vector<int>>& req_block_ids) {
-  size_t hash_code = cached_block->hash_code;
-
   PrefixCachedBlock* shadow_parent =
       (block_index == 0) ? root_cached_block_ : cached_request->cached_blocks[block_index - 1];
 
   // Try to find a brother block that have same data.
-  auto it = shadow_parent->children.find(hash_code);
+  auto it = shadow_parent->children.find(cached_block->token_ids);
   if (it != shadow_parent->children.end()) {
-    // The cached block is not on the tree now, no need to skip itself.
-    for (PrefixCachedBlock* cb : it->second) {
-      // Found it, merge to existed block.
-      if (CheckSameTokens(cb, cached_block->token_ids.data(), cache_manager_config_.block_token_num)) {
-        MergeSwapinCachedBlocks(cached_request, block_index, cb, cached_block, req_block_ids);
+    // Found it, merge to existed block.
+    MergeSwapinCachedBlocks(cached_request, block_index, it->second, cached_block, req_block_ids);
 
-        // Reset it and move to free list.
-        ResetCachedBlock(cached_block);
-        free_cached_blocks_.push(cached_block);
-        return Status();
-      }
-    }
+    // Reset it and move to free list.
+    ResetCachedBlock(cached_block);
+    free_cached_blocks_.push(cached_block);
+    return Status();
   }
 
   // Not found, the node is shareable if arrive here, so add to the tree.
   cached_block->parent = shadow_parent;
-  cached_block->parent->children[hash_code].push_back(cached_block);
+  cached_block->parent->children[cached_block->token_ids] = cached_block;
+  InsertFlexibleCacheMap(cached_block);
 
   // Update internal memory block ids of current request.
   for (size_t i = 0; i < cache_manager_config_.tensor_para_size; ++i) {
@@ -687,17 +831,9 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
   for (PrefixCachedBlock* cb : dev_swapout_blocks) {
     // If block is already filled, remove from parent's children list
     if (cb->is_shareable) {
-      auto it3 = cb->parent->children.find(cb->hash_code);
+      auto it3 = cb->parent->children.find(cb->token_ids);
       if (it3 != cb->parent->children.end()) {
-        auto it_find = std::find(it3->second.begin(), it3->second.end(), cb);
-        if (it_find != it3->second.end()) {
-          it3->second.erase(it_find);
-
-          // Remove hashcode if list is empty.
-          if (it3->second.empty()) {
-            cb->parent->children.erase(it3);
-          }
-        }
+        cb->parent->children.erase(it3);
       }
       cb->parent = nullptr;
 
@@ -705,9 +841,7 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
       if (!cb->children.empty()) {
         std::vector<PrefixCachedBlock*> free_blocks;
         for (auto pair : cb->children) {
-          for (PrefixCachedBlock* icb : pair.second) {
-            FreeCachedBlockRecursively(icb, free_blocks, free_block_num);
-          }
+          FreeCachedBlockRecursively(pair.second, free_blocks, free_block_num);
         }
 
         // Remove from timed block list, no processed in FreeCachedBlockRecursively.

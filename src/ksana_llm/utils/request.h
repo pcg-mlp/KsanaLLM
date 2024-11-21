@@ -117,6 +117,22 @@ struct PythonTensor {
   std::string dtype;
 };
 
+// A vector containing pointers to FlexibleCachedCopyTask objects, which represent tasks that involve copying data
+// flexibly between different memory regions.
+struct FlexibleCachedCopyTask {
+  FlexibleCachedCopyTask() = default;
+  void Update(int dst_token_idx, int src_token_idx, std::vector<int>& dst_block_id, std::vector<int>& src_block_id) {
+    dst_token_idx_ = dst_token_idx;
+    src_token_idx_ = src_token_idx;
+    dst_block_id_ = dst_block_id;
+    src_block_id_ = src_block_id;
+  }
+  int dst_token_idx_ = 0;
+  int src_token_idx_ = 0;
+  std::vector<int> dst_block_id_;
+  std::vector<int> src_block_id_;
+};
+
 class Request {
  public:
   // Build Request based on the given KsanaPythonInput.

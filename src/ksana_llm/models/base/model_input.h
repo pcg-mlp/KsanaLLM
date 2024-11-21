@@ -114,6 +114,14 @@ class ModelInput {
   // Due to the optimization of PrefixCaching for computation reuse, a mask is used during
   // rotary_embedding computation to avoid multiple executions of rotary_embedding on the prefix block.
   Tensor rotary_embedding_mask;
+  // Indicate the corresponding index position of the input during the flexible rotary_embedding kernel computation,
+  // considering the impact of flexible cache optimization.
+  Tensor flexible_rotary_embedding_pos;
+
+  // Due to the optimization of PrefixCaching for computation reuse, incorporating the effects of flexible caching, a
+  // mask is used during the flexible rotary_embedding computation to avoid multiple executions of flexible
+  // rotary_embedding on the prefix block.
+  Tensor flexible_rotary_embedding_mask;
 
   // The input's prefix length
   Tensor input_prefix_uint64_tensor;
@@ -129,6 +137,12 @@ class ModelInput {
   Tensor kv_cache_offset_tensor;
   Tensor kv_list;
   std::vector<void*> cpu_kv_list;
+
+  Tensor dst_flexible_kv_cache_tensor;
+  Tensor src_flexible_kv_cache_tensor;
+  Tensor dst_flexible_token_idx_tensor;
+  Tensor src_flexible_token_idx_tensor;
+  Tensor flexible_offset_uint64_tensor;
 
   // Tensors to hold pairs(pos, data_length) and embeddings ptr of positions for input_refit on the CPU.
   InputRefitCPUTensor cpu_input_refit_tensor;

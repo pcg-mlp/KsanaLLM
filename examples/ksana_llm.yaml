@@ -44,6 +44,10 @@ setting:
     swap_threadpool_size: 8
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
     preempt_mode: 0
+    # 多轮对话场景可以设置此值，在前缀缓存查询后，继续查询非前缀的连续灵活缓存，提高cache命中率。
+    # 此时命中的前缀缓存为prefix_tokens + flexible_tokens + 剩余tokens
+    # 此值为最小的命中长度，推荐设置为64，值为0或超过模型最长长度表示不启用。
+    min_flexible_cache_num: 0
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

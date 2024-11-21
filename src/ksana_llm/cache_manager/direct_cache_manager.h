@@ -77,7 +77,8 @@ class DirectCacheManager : public CacheManagerInterface,
   // Update the token ids of this request.
   Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& token_ids,
                              std::vector<std::vector<int>>& req_block_ids);
-
+  void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
+                           std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) {}
   // Get the freeable/needed block num if swap out/in a request.
   Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num);
   Status GetRequestNeededBlockNum(int64_t req_id, size_t& block_num);

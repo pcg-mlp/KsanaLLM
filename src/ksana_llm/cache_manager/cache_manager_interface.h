@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
 
@@ -44,6 +45,8 @@ class CacheManagerInterface {
   virtual Status AllocateRequestBlocks(int64_t req_id, size_t block_num,
                                        std::vector<std::vector<int>>& req_block_ids) = 0;
 
+  virtual void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
+                                   std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) = 0;
   // Update the token ids of this request.
   // This method will update request memory blocks if the origin block is merged.
   virtual Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& token_ids,

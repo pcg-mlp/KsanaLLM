@@ -46,6 +46,14 @@ struct ForwardRequest {
   // The kv cache addresses, for every device.
   std::vector<std::vector<void*>> kv_cache_ptrs;
 
+  // The length of the flexible cache, indicating the number of elements stored in the flexible cache for potential
+  // reuse in subsequent computations.
+  int flexible_cache_len = 0;
+
+  // A vector containing pointers to FlexibleCachedCopyTask objects, which represent tasks that involve copying data
+  // flexibly between different memory regions.
+  std::vector<FlexibleCachedCopyTask>* flexible_cached_copy_tasks = nullptr;
+
   // The flag for tagging request prefix cache usage
   bool is_use_prefix_cache = false;
 

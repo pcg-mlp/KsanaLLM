@@ -114,13 +114,21 @@ TEST_F(LayerTest, AttentionLayerTest) {
                 context, 0)
           .OK());
 
-  Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape;
+  Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape, flexible_rotary_embedding_pos,
+      flexible_rotary_embedding_mask, dst_flexible_kv_cache_tensor, src_flexible_kv_cache_tensor,
+      dst_flexible_token_idx_tensor, src_flexible_token_idx_tensor;
   std::vector<size_t> input_shape = {2, 12288};
   CreateHalfDataTypeTensor(qkv, input_shape, GetDataType<half>());
   CreateHalfDataTypeTensor(input_len, {2}, GetDataType<uint64_t>(), sizeof(uint64_t));
   CreateHalfDataTypeTensor(prefix_offsets, {2}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(pos, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
   CreateHalfDataTypeTensor(mask, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
+  CreateHalfDataTypeTensor(flexible_rotary_embedding_pos, {0}, GetDataType<int>(), sizeof(int));
+  CreateHalfDataTypeTensor(flexible_rotary_embedding_mask, {0}, GetDataType<int>(), sizeof(int));
+  CreateHalfDataTypeTensor(dst_flexible_kv_cache_tensor, {0}, GetDataType<int>(), sizeof(int));
+  CreateHalfDataTypeTensor(src_flexible_kv_cache_tensor, {0}, GetDataType<int>(), sizeof(int));
+  CreateHalfDataTypeTensor(dst_flexible_token_idx_tensor, {0}, GetDataType<int>(), sizeof(int));
+  CreateHalfDataTypeTensor(src_flexible_token_idx_tensor, {0}, GetDataType<int>(), sizeof(int));
   forward_shape.shape = {1, 2, 1, 0};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
@@ -176,6 +184,13 @@ TEST_F(LayerTest, AttentionLayerTest) {
                           block_offsets,
                           pos,
                           mask,
+                          flexible_rotary_embedding_pos,
+                          flexible_rotary_embedding_mask,
+                          dst_flexible_kv_cache_tensor,
+                          src_flexible_kv_cache_tensor,
+                          dst_flexible_token_idx_tensor,
+                          src_flexible_token_idx_tensor,
+                          prefix_offsets,
                           forward_shape
 #  if defined(ENABLE_FLASH_ATTN_WITH_CACHE)
                           ,

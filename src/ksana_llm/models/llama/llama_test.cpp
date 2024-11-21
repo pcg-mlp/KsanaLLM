@@ -116,6 +116,8 @@ class LlamaTest : public testing::Test {
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
     forward.output_tokens = &input_ids;
+    std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
+    forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(1);
     forward.logits_buf[0] = llama->GetLogitsPtr();
     forward.logits_offset = 0;

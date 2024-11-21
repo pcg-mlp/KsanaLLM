@@ -129,6 +129,42 @@ __global__ void ReverseCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** 
   }
 }
 
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+__global__ void FlexibleReverseCacheCopyKernel(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_src, int* kv_list_dst,
+                                               int block_size, int layer_idx, int total_len, int num_heads,
+                                               int head_size, int stride_size) {
+  /*
+    x:           In PagedAttention storage, KV-Blocks are divided into chunks to store head_size.
+                 The variable x represents the size of each chunk.
+    head_size_i: Indicates which chunk the head_size to be processed belongs to.
+    j:           Represents the offset of the head_size to be processed within a single chunk.
+  */
+  int x = k_chunk_size / sizeof(SCALAR_T);
+  int input_idx = blockIdx.y;
+  if (input_idx < total_len) {
+    int64_t layer_size = block_size * num_heads * head_size;
+    CACHE_T* k_src = kv_src[input_idx] + layer_size * 2 * layer_idx;
+    CACHE_T* k_dst = kv_dst[input_idx] + layer_size * 2 * layer_idx;
+    CACHE_T* v_src = k_src + layer_size;
+    CACHE_T* v_dst = k_dst + layer_size;
+    int idx_src = kv_list_src[input_idx] % block_size;
+    int idx_dst = kv_list_dst[input_idx] % block_size;
+    for (int hs_i = threadIdx.x; hs_i < head_size; hs_i += blockDim.x) {
+      int head_size_i = hs_i / x;
+      int j = hs_i % x;
+      for (int num_head_i = blockIdx.x; num_head_i < num_heads; num_head_i += gridDim.x) {
+        int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + idx_dst * x + j;
+        int k_src_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + idx_src * x + j;
+        int i = head_size_i * x + j;
+        int v_dst_index = num_head_i * (head_size * block_size) + i * block_size + idx_dst;
+        int v_src_index = num_head_i * (head_size * block_size) + i * block_size + idx_src;
+        k_dst[k_dst_index] = k_src[k_src_index];
+        v_dst[v_dst_index] = v_src[v_src_index];
+      }
+    }
+  }
+}
+
 /*
   block_size:    Number of tokens stored in each block.
   block_offsets: Records the number of blocks for each batch size   [bs + 1,]
@@ -239,6 +275,16 @@ void ConvertFP8AndBack(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size
       <<<blocks_per_grid, threads_per_block, 0, stream>>>(data, dim0, dim1, stride_size, scale);
 }
 
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void FlexibleReverseCacheCopy(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_src, int* kv_list_dst, int block_size,
+                              int layer_idx, int total_len, int num_heads, int head_size, int stride_size,
+                              cudaStream_t stream) {
+  dim3 grid_shape(num_heads, total_len);
+  dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
+  FlexibleReverseCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
+      kv_src, kv_dst, kv_list_src, kv_list_dst, block_size, layer_idx, total_len, num_heads, head_size, stride_size);
+}
+
 #define CACHE_COPY_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                                   \
   template void CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                                \
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, size_t* input_offsets, size_t* prefix_offsets, \
@@ -252,6 +298,9 @@ void ConvertFP8AndBack(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, void* pos, size_t* input_offsets,              \
       int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size,        \
       float k_scale, float v_scale, cudaStream_t stream);                                                              \
+  template void FlexibleReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                 \
+      CACHE_T * *kv_src, CACHE_T * *kv_dst, int* kv_list_src, int* kv_list_dst, int block_size, int layer_idx,         \
+      int total_len, int num_heads, int head_size, int stride_size, cudaStream_t stream);                              \
   template void ConvertFP8AndBack<SCALAR_T, CACHE_T, KV_DTYPE>(SCALAR_T * data, size_t dim0, size_t dim1,              \
                                                                int stride_size, float scale, cudaStream_t stream);
 

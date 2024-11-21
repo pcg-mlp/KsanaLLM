@@ -327,6 +327,8 @@ Status Environment::ParseConfig(const std::string &config_file) {
   // Load cache manager config
   cache_manager_config_.swap_threadpool_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 2);
+  cache_manager_config_.min_flexible_cache_num =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.min_flexible_cache_num", 0);
   cache_manager_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   cache_manager_config_.tensor_para_size = tensor_parallel_size_;
   cache_manager_config_.enable_prefix_caching =

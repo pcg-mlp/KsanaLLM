@@ -356,7 +356,11 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
   STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
        model_input_->input_prefix_uint64_tensor, model_input_->kv_cache_offset_tensor,
-       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask, forward_shape_
+       model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
+       model_input_->flexible_rotary_embedding_pos, model_input_->flexible_rotary_embedding_mask,
+       model_input_->dst_flexible_kv_cache_tensor, model_input_->src_flexible_kv_cache_tensor,
+       model_input_->dst_flexible_token_idx_tensor, model_input_->src_flexible_token_idx_tensor,
+       model_input_->flexible_offset_uint64_tensor, forward_shape_
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
        ,
        model_input_->layer_kv_cache_ptr_tensor, model_input_->prefill_block_table,

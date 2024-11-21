@@ -228,6 +228,9 @@ struct CacheManagerConfig {
   // The tp num, cache manager use this to allocat blocks for every token.
   size_t tensor_para_size = 2;
 
+  // The minimum consecutive length of flexible cache instances that can be queried.
+  size_t min_flexible_cache_num = 0;
+
   // The thread number used for async swap in/out.
   size_t swap_threadpool_size = 2;
 

@@ -65,8 +65,13 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
       CreateTensor(input_tokens_int32_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(CreateTensor(rotary_embedding_pos, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(CreateTensor(rotary_embedding_mask, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(flexible_rotary_embedding_pos, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(
+      CreateTensor(flexible_rotary_embedding_mask, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(input_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(
+      CreateTensor(flexible_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(logits_length_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
@@ -74,6 +79,14 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
                                     MemoryDevice::MEMORY_HOST));
   STATUS_CHECK_FAILURE(CreateTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, input_ids.shape, TYPE_POINTER, rank_,
                                     MemoryDevice::MEMORY_HOST));
+  STATUS_CHECK_FAILURE(CreateTensor(dst_flexible_kv_cache_tensor, {max_token_num_ * max_batch_size_}, TYPE_POINTER,
+                                    rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(src_flexible_kv_cache_tensor, {max_token_num_ * max_batch_size_}, TYPE_POINTER,
+                                    rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(dst_flexible_token_idx_tensor, {max_token_num_ * max_batch_size_}, TYPE_INT32,
+                                    rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(src_flexible_token_idx_tensor, {max_token_num_ * max_batch_size_}, TYPE_INT32,
+                                    rank_, MEMORY_DEVICE));
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
@@ -203,14 +216,58 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   context_num = 0;
   decode_num = 0;
   total_prefix_len = 0;
+  std::vector<int> dst_flexible_kv_cache_id_cpu;
+  std::vector<int> src_flexible_kv_cache_id_cpu;
+  std::vector<void*> dst_flexible_kv_cache_cpu;
+  std::vector<void*> src_flexible_kv_cache_cpu;
+  std::vector<int> dst_flexible_token_idx_cpu;
+  std::vector<int> src_flexible_token_idx_cpu;
+
+  std::vector<uint64_t> flexible_offset_uint64_cpu = {0};
   for (size_t idx = 0; idx < batch_size; ++idx) {
     if (forward_reqs[idx].infer_stage == STAGE_CONTEXT) {
+      for (auto& task : *forward_reqs[idx].flexible_cached_copy_tasks) {
+        dst_flexible_kv_cache_id_cpu.push_back(task.dst_block_id_[rank_]);
+        src_flexible_kv_cache_id_cpu.push_back(task.src_block_id_[rank_]);
+        dst_flexible_token_idx_cpu.push_back(task.dst_token_idx_);
+        src_flexible_token_idx_cpu.push_back(task.src_token_idx_);
+      }
+      if (rank_ == 0) {
+        KLLM_LOG_DEBUG << forward_reqs[idx].output_tokens->size() << " " << forward_reqs[idx].prefix_cache_len << " "
+                       << forward_reqs[idx].flexible_cache_len;
+      }
+      flexible_offset_uint64_cpu.push_back(flexible_offset_uint64_cpu.back() + forward_reqs[idx].prefix_cache_len -
+                                           forward_reqs[idx].flexible_cache_len);
       context_num++;
       context_total_seq_len += forward_reqs[idx].output_tokens->size();
     } else {
       decode_num++;
     }
     total_prefix_len += forward_reqs[idx].prefix_cache_len;
+  }
+  dst_flexible_kv_cache_tensor.shape = {0};
+  GetBlockManager()->SetDeviceId(rank_);
+  MemcpyAsync(flexible_offset_uint64_tensor.GetPtr<void>(), flexible_offset_uint64_cpu.data(),
+              flexible_offset_uint64_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
+  if (!dst_flexible_kv_cache_id_cpu.empty()) {
+    dst_flexible_kv_cache_cpu.resize(dst_flexible_kv_cache_id_cpu.size());
+    src_flexible_kv_cache_cpu.resize(src_flexible_kv_cache_id_cpu.size());
+    GetBlockManager()->GetBlockPtrs(dst_flexible_kv_cache_id_cpu, dst_flexible_kv_cache_cpu);
+    GetBlockManager()->GetBlockPtrs(src_flexible_kv_cache_id_cpu, src_flexible_kv_cache_cpu);
+    MemcpyAsync(dst_flexible_kv_cache_tensor.GetPtr<void>(), dst_flexible_kv_cache_cpu.data(),
+                dst_flexible_kv_cache_cpu.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE,
+                context_->GetH2DStreams()[rank_]);
+    dst_flexible_kv_cache_tensor.shape[0] = dst_flexible_kv_cache_cpu.size();
+    MemcpyAsync(src_flexible_kv_cache_tensor.GetPtr<void>(), src_flexible_kv_cache_cpu.data(),
+                src_flexible_kv_cache_cpu.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE,
+                context_->GetH2DStreams()[rank_]);
+    MemcpyAsync(dst_flexible_token_idx_tensor.GetPtr<void>(), dst_flexible_token_idx_cpu.data(),
+                dst_flexible_token_idx_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
+                context_->GetH2DStreams()[rank_]);
+    MemcpyAsync(src_flexible_token_idx_tensor.GetPtr<void>(), src_flexible_token_idx_cpu.data(),
+                src_flexible_token_idx_cpu.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
+                context_->GetH2DStreams()[rank_]);
   }
 
   KLLM_LOG_DEBUG << "ContextDecode reqs num: " << context_num << ", Decode reqs num: " << decode_num;
@@ -373,7 +430,9 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
   for (size_t idx = 0; idx < context_num; ++idx) {
     if (forward_reqs[idx].prefix_cache_len > 0) {
       std::fill(cpu_rotary_mask.begin() + cpu_rotary_pos_idx,
-                cpu_rotary_mask.begin() + cpu_rotary_pos_idx + forward_reqs[idx].prefix_cache_len, 0);
+                cpu_rotary_mask.begin() + cpu_rotary_pos_idx + forward_reqs[idx].prefix_cache_len -
+                    forward_reqs[idx].flexible_cache_len,
+                0);
     }
     for (size_t pos = 0; pos < forward_reqs[idx].output_tokens->size(); ++pos) {
       cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
@@ -387,6 +446,29 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
 #endif
   MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * cpu_rotary_mask.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+  if (dst_flexible_kv_cache_tensor.shape[0]) {
+    int cpu_flexible_rotary_pos_idx = 0;
+    std::vector<int64_t> cpu_flexible_rotary_pos(context_total_seq_len, 0);
+    std::vector<int64_t> cpu_flexible_rotary_mask(context_total_seq_len, 0);
+    for (size_t idx = 0; idx < context_num; ++idx) {
+      if (forward_reqs[idx].flexible_cache_len > 0) {
+        std::fill(cpu_flexible_rotary_mask.begin() + cpu_flexible_rotary_pos_idx + forward_reqs[idx].prefix_cache_len -
+                      forward_reqs[idx].flexible_cache_len,
+                  cpu_flexible_rotary_mask.begin() + cpu_flexible_rotary_pos_idx + forward_reqs[idx].prefix_cache_len,
+                  1);
+        for (auto& task : *forward_reqs[idx].flexible_cached_copy_tasks) {
+          cpu_flexible_rotary_pos[cpu_flexible_rotary_pos_idx + task.dst_token_idx_] = task.src_token_idx_;
+        }
+      }
+      cpu_flexible_rotary_pos_idx += forward_reqs[idx].output_tokens->size();
+    }
+    MemcpyAsync(flexible_rotary_embedding_pos.GetPtr<void>(), cpu_flexible_rotary_pos.data(),
+                sizeof(int64_t) * cpu_flexible_rotary_pos.size(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetD2HStreams()[rank_]);
+    MemcpyAsync(flexible_rotary_embedding_mask.GetPtr<void>(), cpu_flexible_rotary_mask.data(),
+                sizeof(int64_t) * cpu_flexible_rotary_mask.size(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetD2HStreams()[rank_]);
+  }
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
 }
 

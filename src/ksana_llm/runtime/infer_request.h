@@ -155,6 +155,10 @@ class InferRequest {
   // The prefix cache blocks number
   int prefix_cache_blocks_number = 0;
 
+  // A vector containing pointers to FlexibleCachedCopyTask objects, which represent tasks that involve copying data
+  // flexibly between different memory regions.
+  std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
+
   // The no_repeate ngram sampling map
   NgramDict ngram_dict;
 
