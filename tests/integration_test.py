@@ -60,6 +60,7 @@ def read_popen_pipes(p):
 def wait_for_server_launch(server_proc, server_status_queue):
     for _, err_line in read_popen_pipes(server_proc):
         if len(err_line) > 0:
+            print(err_line, end="")
             server_status_queue.put_nowait(err_line)
 
 
@@ -161,7 +162,7 @@ if __name__ == "__main__":
             break
     os.system(
         "python {} --port {} --model {} --input_csv {} --prompt_num 2 --output_csv integration_test_output.csv"
-        .format(client_python_script_path, port_str, args.model,
+        .format(client_python_script_path, PORT_STR, args.model,
                 client_input_csv_path))
     server.terminate()
 

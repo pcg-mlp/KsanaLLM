@@ -118,19 +118,19 @@ if __name__ == "__main__":
     response = post_http_request(prompt, api_url, n, stream)
     # Initialize an empty result string
     # pylint: disable-next=invalid-name
-    result = str()
+    RESULT = str()
     # Handle the response based on the stream flag
     if stream:
         # Iterate over the streaming response
         for output in get_streaming_response(response):
             # Clear the previous lines
-            num_printed_lines = len(result.splitlines())
+            num_printed_lines = len(RESULT.splitlines())
             clear_line(num_printed_lines)
 
             # Append the output to the result string
-            result += (output + " ")
+            RESULT += (output + " ")
             # Print the result string to the console
-            print(result, flush=True)
+            print(RESULT, flush=True)
     else:
         # Get the response output
         output = get_response(response)

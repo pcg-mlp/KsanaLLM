@@ -38,10 +38,12 @@ if(NOT WITH_CUDA AND NOT WITH_ACL)
 endif()
 
 set(USE_CXX11_ABI, "False")
+
 # according prepare ABI version
 execute_process(COMMAND python "-c" "import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   RESULT_VARIABLE _PYTHON_SUCCESS
   OUTPUT_VARIABLE USE_CXX11_ABI)
+
 if(NOT _PYTHON_SUCCESS EQUAL 0)
   message(FATAL_ERROR "run python -c \"import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');\" failed.")
 endif()
@@ -54,7 +56,6 @@ else()
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
   message(STATUS "Compile without CXX11 ABI")
 endif()
-
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

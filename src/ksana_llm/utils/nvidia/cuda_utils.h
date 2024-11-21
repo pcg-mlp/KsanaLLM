@@ -11,11 +11,18 @@
 #include <string>
 
 #include <cublasLt.h>
+#include <cudaTypedefs.h>
 
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 
 namespace ksana_llm {
+
+static const char* GetErrorString(CUresult error) {
+  const char* err_str;
+  cuGetErrorString(error, &err_str);
+  return err_str;
+}
 
 static const char* GetErrorString(cublasStatus_t error) {
   switch (error) {
@@ -65,10 +72,16 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
 
 #define CUDA_CHECK(val) CheckCUDAError((val), #val, __FILE__, __LINE__)
 
-#define CUDA_CHECK_LAST_ERROR(...) do {                               \
-        (__VA_ARGS__);                                                \
-        cudaError_t result = cudaGetLastError();                      \
-        CheckCUDAError(result, #__VA_ARGS__, __FILE__, __LINE__);     \
-        } while (0)
+#define CUDA_CHECK_LAST_ERROR(...)                            \
+  do {                                                        \
+    (__VA_ARGS__);                                            \
+    cudaError_t result = cudaGetLastError();                  \
+    CheckCUDAError(result, #__VA_ARGS__, __FILE__, __LINE__); \
+  } while (0)
+
+#define CUDA_CHECK_RETURN(status) \
+  if (status != CUDA_SUCCESS) {   \
+    return status;                \
+  }
 
 }  // namespace ksana_llm
