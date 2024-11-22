@@ -43,7 +43,17 @@ if __name__ == "__main__":
     with open("triton_wrapper_test_kernel.cubin", "wb") as _f:
         _f.write(kernel.asm['cubin'])
     with open("triton_wrapper_test_kernel.ptx", "w") as _f:
-        print("//shared_memory:", kernel.metadata["shared"], end=", ", file=_f)
-        print("kernel_name:", kernel.metadata["name"], file=_f)
+        SHM_SIZE = 0
+        try:
+            SHM_SIZE = kernel.metadata["shared"]
+        except TypeError:
+            SHM_SIZE = kernel.metadata.shared
+        KERNEL_NAME = "default"
+        try:
+            KERNEL_NAME = kernel.metadata["name"]
+        except TypeError:
+            KERNEL_NAME = kernel.metadata.name
+        print("//shared_memory:", SHM_SIZE, end=", ", file=_f)
+        print("kernel_name:", KERNEL_NAME, file=_f)
         print(kernel.asm['ptx'], file=_f)
     exit(0)
