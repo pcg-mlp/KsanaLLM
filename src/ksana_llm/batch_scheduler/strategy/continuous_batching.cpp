@@ -43,7 +43,7 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
       (req->sampling_config.max_new_tokens > 0 &&
        req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
       req->output_tokens.size() >= batch_scheduler_config_.max_token_len) {
-      stop_checker_->CheckCompleteStopStrings(req, tokenizer_);
+    stop_checker_->CheckCompleteStopStrings(req, tokenizer_);
     return true;
   }
 
@@ -110,15 +110,26 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
     // Check if finished.
     if (CheckRequestFinish(req)) {
       cache_manager_->DestroyFinishedRequest(req->req_id);
-
-      StopRequest(req, Status(RET_SUCCESS));
-      it = batch_state_->running_queue.erase(it);
-      uint64_t duration = ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms;
+      auto end_time = ProfileTimer::GetCurrentTimeInMs();
       size_t output_token_num = req->output_tokens.size();
+      uint64_t duration = end_time - req->timestamp_in_ms;
 
       REPORT_METRIC(forward_cost_time_ms, duration, attributes);
       REPORT_METRIC(metric_output_token_num, output_token_num, attributes);
-      REPORT_METRIC(time_to_per_output_token_ms, output_token_num / duration, attributes);
+
+      // TODO(shawnding): Adjust to microsecond precision
+      if (duration != 0) {
+        REPORT_METRIC(time_to_per_output_token_ms, output_token_num / duration, attributes);
+      } else {
+        KLLM_LOG_WARNING << fmt::format(
+            "Req duration is zero, req_id: {}, input_token_num: {} ,output_token_num: {} "
+            "req start time is: {} req end time is: {}",
+            req->req_id, req->input_tokens.size(), output_token_num, req->timestamp_in_ms, end_time);
+        REPORT_METRIC(time_to_per_output_token_ms, output_token_num, attributes);
+      }
+
+      StopRequest(req, Status(RET_SUCCESS));
+      it = batch_state_->running_queue.erase(it);
 
       continue;
     }

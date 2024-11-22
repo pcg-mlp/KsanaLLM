@@ -23,7 +23,7 @@ class EndpointConfig:
     endpoint: str = "python"  # endpoint type
     host: str = "0.0.0.0"  # endpoint host address
     port: int = 8080  # endpoint port
-    access_log: bool = False  # whether to enable the endpoint access log
+    access_log: bool = True  # whether to enable the endpoint access log
 
 
 class PyAsyncStreamingIterator(object):

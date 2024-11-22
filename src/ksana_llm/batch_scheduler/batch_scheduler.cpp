@@ -147,9 +147,11 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
 
     // token_fill_ratio represents token number per block compared to BlockTokenNum
     // It is always less than 1. If kv caches are shared, it may be greater than 1.
-    REPORT_METRIC(
+    if (GetBlockManager()->GetDeviceUsedBlockNumber() > 0) {
+      REPORT_METRIC(
         token_fill_ratio,
         token_num * 1.0 / (GetBlockManager()->GetDeviceUsedBlockNumber() * GetBlockManager()->GetBlockTokenNum()));
+    }
   }
   REPORT_METRIC(block_num_free, GetBlockManager()->GetDeviceFreeBlockNumber());
   REPORT_METRIC(block_num_used, GetBlockManager()->GetDeviceUsedBlockNumber());

@@ -257,7 +257,7 @@ struct EndpointConfig {
   uint32_t port = 8080;
 
   // Whether to enable the endpoint access log.
-  bool access_log = false;
+  bool access_log = true;
 };
 
 // The config of profiler.

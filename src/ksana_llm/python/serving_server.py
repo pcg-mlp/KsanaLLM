@@ -58,7 +58,8 @@ def args_config():
                         help="server endpoint type (e.g., python/trpc). If not specified, "
                         "it will be inferred based on the config file.")
     parser.add_argument("--access-log",
-                        action="store_true",
+                        type=bool,
+                        default=True,
                         help="enable the endpoint access log")
     parser.add_argument("--ssl-keyfile", type=str, default=None)
     parser.add_argument("--ssl-certfile", type=str, default=None)
