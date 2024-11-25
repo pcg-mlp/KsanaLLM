@@ -563,7 +563,6 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   faked_token_generator->GenerateOneToken(1, output_token_ids);
   status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, req_block_ids);
   EXPECT_TRUE(status.OK());
-  cache_manager->DestroyFinishedRequest(req_id);
   int req_id_2 = 2;
   std::vector<int> dst_prefix16_tokens = output_token_ids;
   for (int i = block_token_num; i < dst_prefix16_tokens.size(); i++) {
@@ -574,7 +573,7 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   status = cache_manager->AllocateRequestBlocks(req_id_2, unique_block_num, req_block_ids);
   // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_toeken|
   // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_toeken|
-  for (int last_token_num = 1; last_token_num <= block_token_num; last_token_num++) {
+  for (int last_token_num = 1; last_token_num < block_token_num; last_token_num++) {
     for (int delete_token_num = 1; delete_token_num <= block_token_num; delete_token_num++) {
       std::vector<int> dst_tokens;
       int src_token_index = 0;
@@ -587,13 +586,41 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
       }
       std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
       cache_manager->UpdateFlexibleCache(req_id_2, dst_tokens, shared_token_num, flexible_cached_copy_tasks);
-      auto hit_num = dst_tokens.size() / block_token_num * block_token_num - last_token_num - shared_token_num;
+      auto hit_num = output_token_ids.size() / block_token_num * block_token_num - last_token_num - shared_token_num -
+                     delete_token_num;
+      hit_num = hit_num >= cache_manager_config.min_flexible_cache_num ? hit_num : 0;
+      hit_num += last_token_num;
       if (shared_token_num + cache_manager_config.min_flexible_cache_num + block_token_num * 2 > dst_tokens.size()) {
         hit_num = 0;
       }
-      hit_num = hit_num >= cache_manager_config.min_flexible_cache_num ? hit_num : 0;
-      hit_num = hit_num / block_token_num * block_token_num;
       EXPECT_EQ(hit_num, flexible_cached_copy_tasks.size());
     }
   }
+
+  // Swap out base request.
+  size_t swapped_block_num = 0;
+  size_t free_block_num = 0;
+  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num);
+  EXPECT_TRUE(status.OK());
+
+  // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_toeken|
+  // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_toeken|
+  for (int last_token_num = 1; last_token_num < block_token_num; last_token_num++) {
+    for (int delete_token_num = 1; delete_token_num <= block_token_num; delete_token_num++) {
+      std::vector<int> dst_tokens;
+      int src_token_index = 0;
+      for (; src_token_index < shared_token_num + last_token_num; src_token_index++) {
+        dst_tokens.push_back(output_token_ids[src_token_index]);
+      }
+      src_token_index += delete_token_num;
+      for (; src_token_index < output_token_ids.size(); src_token_index++) {
+        dst_tokens.push_back(output_token_ids[src_token_index]);
+      }
+      std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
+      cache_manager->UpdateFlexibleCache(req_id_2, dst_tokens, shared_token_num, flexible_cached_copy_tasks);
+      EXPECT_EQ(0, flexible_cached_copy_tasks.size());
+    }
+  }
+  cache_manager->DestroyFinishedRequest(req_id);
+  cache_manager->DestroyFinishedRequest(req_id_2);
 }

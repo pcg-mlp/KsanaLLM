@@ -190,6 +190,9 @@ void PrefixCacheManager::QueryIncompleteBlock(PrefixCachedBlock* last_block, con
                                               int start_idx, PrefixCachedBlock*& prefix_append_block,
                                               size_t& prefix_append_len) {
   for (auto& try_block : last_block->children) {
+    if (!try_block.second->inactive_requests.empty()) {
+      continue;
+    }
     size_t i = 0;
     for (; i < cache_manager_config_.block_token_num; i++) {
       if (try_block.second->token_ids[i] != token_ids[start_idx + i]) {
@@ -269,9 +272,15 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
         int hit_num = block_token_num;
         int start_idx = block_token_num - (offset - new_shared_token_num);
         cached_block = block;
+        if (!cached_block->inactive_requests.empty()) {
+          continue;
+        }
         std::vector<PrefixCachedBlock*> new_cached_blocks;
         if (offset != new_shared_token_num) {
           if (cached_block->parent == nullptr) {
+            continue;
+          }
+          if (!cached_block->parent->inactive_requests.empty()) {
             continue;
           }
           for (; start_idx < block_token_num; start_idx++) {
@@ -291,6 +300,9 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
           auto it = cached_block->children.find(dst_token_ids);
           if (it != cached_block->children.end()) {
             cached_block = it->second;
+          if (!cached_block->inactive_requests.empty()) {
+            continue;
+          }
             new_cached_blocks.push_back(cached_block);
           } else {
             partial_match = true;
@@ -322,7 +334,7 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
   }
 
   // Calculate the number of flexible cached tokens to resize the tasks vector
-  int new_flexible_cached_tokens = (flexible_cache_len + prefix_append_len) / block_token_num * block_token_num;
+  int new_flexible_cached_tokens = flexible_cache_len + prefix_append_len;
   flexible_cached_copy_tasks.resize(new_flexible_cached_tokens);
   int idx = 0;
   int src_shared_token_num = GetPrefixLen(prefix_append_block);
