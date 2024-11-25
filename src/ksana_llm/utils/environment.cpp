@@ -152,13 +152,20 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
     KLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
                                   model_config.rope_scaling_factor_config.factor);
 
-    if (model_config.rope_scaling_factor_config.type != "su") {
+    std::unordered_set<std::string> possible_rope_types = {"su", "longrope", "llama3"};
+    if (possible_rope_types.find(model_config.rope_scaling_factor_config.type) == possible_rope_types.end()) {
       if (model_config.rope_scaling_factor_config.type == "yarn") {
         derived_max_model_len = rope_scaling_setting.value("original_max_position_embeddings", derived_max_model_len);
         model_config.rope_scaling_factor_config.original_max_position_embeddings =
             rope_scaling_setting.value("original_max_position_embeddings", 32768);
       }
-      derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
+      // for dynamic alpha
+      if (model_config.rope_scaling_factor_config.type == "dynamic" && rope_scaling_setting.contains("alpha")) {
+        model_config.rope_scaling_factor_config.has_alpha = true;
+        model_config.rope_scaling_factor_config.scaling_alpha = rope_scaling_setting.value("alpha", 1.0f);
+      } else {
+        derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
+      }
     }
 
     if (model_config.rope_scaling_factor_config.type == "llama3") {

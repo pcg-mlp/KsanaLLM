@@ -25,6 +25,8 @@ struct RoPEScalingFactor {
   float low_freq_factor{1.0f};
   float high_freq_factor{4.0f};
   int original_max_position_embeddings{8192};
+  bool has_alpha{false};
+  float scaling_alpha{1.0f};  // for dynamic alpha rope
 };
 
 enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3, MOE_QUANT_NONE };

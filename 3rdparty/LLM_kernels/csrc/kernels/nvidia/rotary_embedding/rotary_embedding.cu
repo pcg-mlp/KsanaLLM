@@ -234,6 +234,9 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam<T>& params) {
                                    (params.scaling_factor - 1)),
                     (params.rotary_dim / (params.rotary_dim - 2)));
   }
+  if (params.rotary_embedding_type == RotaryEmbeddingType::DYNAMIC_NTK_ALPHA) {
+    base = params.base * std::pow(params.scaling_alpha, params.rotary_dim / (params.rotary_dim - 2));
+  }
   if (params.rotary_embedding_type == RotaryEmbeddingType::LINEAR_SCALING) {
     extend_max_len = params.max_position_embeddings * params.scaling_factor;
     scaling = params.scaling_factor;
@@ -250,8 +253,8 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam<T>& params) {
                                             low_freq_factor, high_freq_factor, original_max_position_embeddings);
   } else if (params.rotary_embedding_type == RotaryEmbeddingType::YARN_SCALING) {
     scaling = params.scaling_factor;
-    extend_max_len = params.max_position_embeddings * scaling;
     int original_max_position_embeddings = params.original_max_position_embeddings;
+    extend_max_len = original_max_position_embeddings * scaling;
     dim3 grid(extend_max_len);
     InvokeYarnComputeCosSinWithCacheKernel<T><<<grid, block, 0, params.stream>>>(
         params.cos_sin_cache, params.rotary_dim, original_max_position_embeddings, base, scaling);
@@ -304,7 +307,8 @@ void RotaryEmbeddingCuda<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, c
                                        const int num_kv_heads, const int stride_size, const bool is_neox,
                                        cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type,
                                        const float scaling_factor, const float low_freq_factor,
-                                       const float high_freq_factor, const int original_max_position_embeddings) {
+                                       const float high_freq_factor, const int original_max_position_embeddings,
+                                       const float scaling_alpha) {
   params_.cos_sin_cache = cos_sin_cache;
   params_.rotary_dim = rotary_dim;
   params_.max_position_embeddings = max_position_embeddings;
@@ -321,6 +325,7 @@ void RotaryEmbeddingCuda<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, c
   params_.low_freq_factor = low_freq_factor;
   params_.high_freq_factor = high_freq_factor;
   params_.original_max_position_embeddings = original_max_position_embeddings;
+  params_.scaling_alpha = scaling_alpha;
   ComputeCosSinWithCache(params_);
 }
 
@@ -328,17 +333,19 @@ template void RotaryEmbeddingCuda<float>::SetConfig(
     float* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
     cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor,
-    const float low_freq_factor, const float high_freq_factor, const int original_max_position_embeddings);
+    const float low_freq_factor, const float high_freq_factor, const int original_max_position_embeddings,
+    const float scaling_alpha);
 template void RotaryEmbeddingCuda<half>::SetConfig(
     half* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base, const int head_size,
     const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox, cudaStream_t& stream,
     const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor, const float low_freq_factor,
-    const float high_freq_factor, const int original_max_position_embeddings);
+    const float high_freq_factor, const int original_max_position_embeddings, const float scaling_alpha);
 template void RotaryEmbeddingCuda<__nv_bfloat16>::SetConfig(
     __nv_bfloat16* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
     cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor,
-    const float low_freq_factor, const float high_freq_factor, const int original_max_position_embeddings);
+    const float low_freq_factor, const float high_freq_factor, const int original_max_position_embeddings,
+    const float scaling_alpha);
 
 }  // namespace nvidia
 }  // namespace llm_kernels
