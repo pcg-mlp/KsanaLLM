@@ -282,6 +282,15 @@ def args_config():
     parser.add_argument('--ignore_eos',
                         action="store_true",
                         help="Whether to ignore any EOS tokens.")
+    parser.add_argument('--structured_output_file',
+                        type=str,
+                        default=None,
+                        help="The Structured output regex file")
+    parser.add_argument('--structured_output_regex',
+                        type=str,
+                        default="",
+                        help="The Structured output regex format. "
+                             "e.g. \"{'name': '[*]', 'type': '[*]'}\"")
     parser.add_argument('--client_timeout',
                         type=int,
                         default=30*3600,
@@ -393,6 +402,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
                 "stop_strings": args.stop_strings,
                 "ignore_eos": args.ignore_eos,
             },
+            "structured_output_regex": args.structured_output_regex,
             "stream": args.stream,
         }
     elif args.backend == "trt-llm":
@@ -748,6 +758,11 @@ def main(args: argparse.Namespace):
     # Adjust the length of the input list based on the provided arguments
     if args.shuffle:
         random.shuffle(inputs)
+
+    if args.structured_output_file is not None:
+        with open(args.structured_output_file, "r") as file:
+            args.structured_output_regex = file.read()
+
     inputs = adjust_list_length(inputs, args)
     inputs = [construct_request_data(tokenizer, input, args) for input in inputs]
     perf_result_list: List[Tuple[BenchmarkMetrics, BenchmarkStreamMetrics]] = []
@@ -794,7 +809,6 @@ def main(args: argparse.Namespace):
 
         # Compute the latency statistics
         metrics.avg_latency = np.mean([latency for _, _, _, _, latency, _, _ in REQUEST_LATENCY])
-
         metrics.avg_input_chars = np.mean(
             [prompt_len for prompt_len, _, _, _, _, _, _ in REQUEST_LATENCY]
         )

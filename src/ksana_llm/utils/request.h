@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ksana_llm/profiler/profiler.h"
+#include "ksana_llm/utils/finite_state_machine.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
@@ -104,6 +105,9 @@ struct KsanaPythonInput {
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
   std::map<std::string, TargetDescribe> request_target;
+
+  // The structured output regex to build the finite state machine.
+  std::string structured_output_regex;
 
   // Verifiy that the above `request_target` describes valid targets.
   // This function also converts negative `slice_pos` parameters to their corresponding positive values, if exist.
@@ -224,6 +228,9 @@ class Request {
 
   // Whether the request contains stop strings
   bool has_stop_strings = false;
+
+  // The FiniteStateMachine when using structured output optimization.
+  std::shared_ptr<FiniteStateMachine> req_fsm;
 
  private:
   // The id generator

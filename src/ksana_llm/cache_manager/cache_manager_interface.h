@@ -32,6 +32,10 @@ class CacheManagerInterface {
   // Get the needed block num for specific request.
   virtual size_t GetRequestStepBlockNumber(int64_t req_id) = 0;
 
+  // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
+  // number for the specific request.
+  virtual size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) = 0;
+
   // Get the usable block num for specific request.
   virtual size_t GetRequestUsableBlockNumber(int64_t req_id) = 0;
 

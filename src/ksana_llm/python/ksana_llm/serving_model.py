@@ -176,17 +176,19 @@ class ServingModel(object):
             ksana_python_input.input_refit_embedding.pos = kwargs['input_refit_embedding']['pos']
         if 'input_refit_embedding' in kwargs and 'embeddings' in kwargs['input_refit_embedding']:
             ksana_python_input.input_refit_embedding.embeddings = kwargs['input_refit_embedding']['embeddings']
+        if 'structured_output_regex' in kwargs:
+            ksana_python_input.structured_output_regex = kwargs['structured_output_regex']
 
         # `messages` is the OpenAI Chat Completion API that can contain visual input
         # `additonal_params` are model specific params packed in a dict, e.g., `max_pixels`, `fps` for imgs and videos
-        kwargs = {
+        plugin_kwargs = {
             "messages": messages,
             "additional_params": kwargs.get('additional_params', {}),
         }
 
         # If user does not provide the input embeddings, compute it by the preprocessing of ksana plugin
         if not ksana_python_input.input_refit_embedding.pos:
-            self._ksana_plugin.preprocess(ksana_python_input, **kwargs)
+            self._ksana_plugin.preprocess(ksana_python_input, **plugin_kwargs)
 
         if streamer is None:
             status, ksana_python_output = self._serving.generate(ksana_python_input, req_ctx)

@@ -14,6 +14,11 @@ void RequestPacker::InitTokenizer(const std::string& tokenizer_path) {
   tokenizer_ = auto_tokenizer.attr("from_pretrained")(tokenizer_path, py::arg("trust_remote_code") = true);
 }
 
+void RequestPacker::DestroyTokenizer() {
+  py::gil_scoped_acquire acquire;
+  tokenizer_ = py::none();
+}
+
 Status RequestPacker::Unpack(const std::string& request_bytes,
                              std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
   // Return early if `request_bytes` is empty.
@@ -97,9 +102,16 @@ Status RequestPacker::Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>&
   return Status();
 }
 
-Status RequestPacker::Tokenize(const std::string& prompt, std::vector<int>& input_tokens) {
+Status RequestPacker::DeTokenize(const std::vector<int>& input_tokens, std::string& prompt) {
   pybind11::gil_scoped_acquire acquire;
-  py::object tokens = tokenizer_.attr("encode")(prompt, py::arg("add_special_tokens") = true);
+  prompt = tokenizer_.attr("decode")(input_tokens, py::arg("skip_special_tokens") = true).cast<std::string>();
+  pybind11::gil_scoped_release release;
+  return Status();
+}
+
+Status RequestPacker::Tokenize(const std::string& prompt, std::vector<int>& input_tokens, bool add_special_tokens) {
+  pybind11::gil_scoped_acquire acquire;
+  py::object tokens = tokenizer_.attr("encode")(prompt, py::arg("add_special_tokens") = add_special_tokens);
   input_tokens = tokens.cast<std::vector<int>>();
   pybind11::gil_scoped_release release;
   return Status();

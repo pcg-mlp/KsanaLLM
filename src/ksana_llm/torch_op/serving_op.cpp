@@ -26,11 +26,23 @@ namespace ksana_llm {
 
 ServingOp::ServingOp() {}
 
-ServingOp::~ServingOp() { inference_server_->Stop(); }
+ServingOp::~ServingOp() {
+  Singleton<RequestPacker>::GetInstance()->DestroyTokenizer();
+  inference_server_->Stop();
+}
 
 void ServingOp::InitServing(const std::string &config_file) {
   inference_server_ = std::make_shared<InferenceServer>(config_file, endpoint_config_);
   STATUS_CHECK_FAILURE(inference_server_->Start());
+
+  ModelConfig model_config;
+  STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetModelConfig("", model_config));
+  try {
+    Singleton<RequestPacker>::GetInstance()->InitTokenizer(model_config.path);
+  } catch (const py::error_already_set &e) {
+    PyErr_Clear();
+    KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
+  }
 }
 
 Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
@@ -130,7 +142,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("sampling_config", &ksana_llm::KsanaPythonInput::sampling_config)
       .def_readwrite("input_tokens", &ksana_llm::KsanaPythonInput::input_tokens)
       .def_readwrite("request_target", &ksana_llm::KsanaPythonInput::request_target)
-      .def_readwrite("input_refit_embedding", &ksana_llm::KsanaPythonInput::input_refit_embedding);
+      .def_readwrite("input_refit_embedding", &ksana_llm::KsanaPythonInput::input_refit_embedding)
+      .def_readwrite("structured_output_regex", &ksana_llm::KsanaPythonInput::structured_output_regex);
 
   // Export `PythonTensor` to python.
   pybind11::class_<ksana_llm::PythonTensor, std::shared_ptr<ksana_llm::PythonTensor>>(m, "PythonTensor")

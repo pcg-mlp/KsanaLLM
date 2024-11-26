@@ -216,6 +216,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     messages: Optional[List[Dict]] = request_dict.pop("messages", None)
     enable_streaming = request_dict.pop("stream", True)
     sampling_config = request_dict.pop("sampling_config", None)
+    structured_output_regex = request_dict.pop("structured_output_regex", None)
     input_tokens = request_dict.pop("input_tokens", None)
     if input_tokens is None and prompt_text is not None:
         input_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
@@ -233,6 +234,8 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     additional_params: Optional[Dict] = request_dict.pop("additional_params", None)
     if additional_params is not None:
         kwargs['additional_params'] = additional_params
+    if structured_output_regex is not None:
+        kwargs['structured_output_regex'] = structured_output_regex
 
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)

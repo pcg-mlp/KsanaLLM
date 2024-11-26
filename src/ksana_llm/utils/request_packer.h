@@ -12,10 +12,13 @@ namespace ksana_llm {
 
 // RequestPacker is responsible for packing and unpacking requests and responses serialized in msgpack format
 // bytes into corresponding KsanaPythonInput and KsanaPythonOutput objects.
-class __attribute__((visibility("hidden"))) RequestPacker {
+class RequestPacker {
  public:
   // Initialize the tokenizer from the given tokenizer_path.
   void InitTokenizer(const std::string& tokenizer_path);
+
+  // Destroy the tokenier
+  void DestroyTokenizer();
 
   // Unpack a serialized request into KsanaPythonInput objects.
   Status Unpack(const std::string& request_bytes, std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs);
@@ -24,10 +27,13 @@ class __attribute__((visibility("hidden"))) RequestPacker {
   Status Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
               const std::vector<KsanaPythonOutput>& ksana_python_outputs, std::string& response_bytes);
 
- private:
-  // Tokenize the given prompt into input tokens.
-  Status Tokenize(const std::string& prompt, std::vector<int>& input_tokens);
+  // Detokenize the giver token_list into prompt.
+  Status DeTokenize(const std::vector<int>& input_tokens, std::string& prompt);
 
+  // Tokenize the given prompt into input tokens.
+  Status Tokenize(const std::string& prompt, std::vector<int>& input_tokens, bool add_special_tokens = true);
+
+ private:
   py::object tokenizer_;
 };
 

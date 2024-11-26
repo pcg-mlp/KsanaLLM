@@ -25,6 +25,15 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // True if request finished, that is, arrive max output len or encounter eos.
   inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
 
+  // Returns true if the request needs to jump forward with a constant string.
+  void CheckJumpForwardRequest(std::shared_ptr<InferRequest> req);
+
+  // Expand structured output with a constant string (dependent on the execution of Retokenizationr by Tokenizer).
+  void ExtendTokensWithRetokenization(std::shared_ptr<InferRequest> req);
+
+  // Expand structured output with a constant string (independent of Retokenizationr execution by Tokenizer).
+  void ExtendTokensWithoutRetokenization(std::shared_ptr<InferRequest> req);
+
   // Destroy the request and add it to the begining of waiting queue to recompute.
   void RecomputeRequest(std::shared_ptr<InferRequest> req);
 

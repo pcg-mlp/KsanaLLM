@@ -42,7 +42,8 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       span_context(request->span_context),
       timestamp_in_ms(request->timestamp_in_ms),
       is_cudagraph_capture_request(request->is_cudagraph_capture_request),
-      req_ctx(request->req_ctx) {}
+      req_ctx(request->req_ctx),
+      req_fsm(request->req_fsm) {}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }
 

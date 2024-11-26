@@ -176,6 +176,12 @@ class InferRequest {
 
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
+
+  // The output structure fsm
+  std::shared_ptr<FiniteStateMachine> req_fsm;
+
+  // The current state id of the FSM (Finite State Machine).
+  size_t fsm_state_id = 0;
 };
 
 }  // namespace ksana_llm

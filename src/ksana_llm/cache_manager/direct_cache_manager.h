@@ -63,6 +63,9 @@ class DirectCacheManager : public CacheManagerInterface,
   // Get the needed block num for specific request.
   size_t GetRequestStepBlockNumber(int64_t req_id);
 
+  // Same with GetRequestStepBlockNumber(int64_t req_id)
+  size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens);
+
   // Get the usable block num for specific request.
   size_t GetRequestUsableBlockNumber(int64_t req_id);
 

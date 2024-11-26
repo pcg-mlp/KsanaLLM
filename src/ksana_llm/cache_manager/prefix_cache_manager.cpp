@@ -78,6 +78,20 @@ size_t PrefixCacheManager::GetHostFreeBlockNumber() {
   return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetHostFreeBlockNumber();
 }
 
+size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
+  auto it = cached_requests_.find(req_id);
+  if (it == cached_requests_.end()) {
+    KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
+  }
+  size_t block_token_num = cache_manager_config_.block_token_num;
+  if (input_token_lens + block_token_num <= it->second->cached_blocks.size() * block_token_num) {
+    KLLM_LOG_ERROR << fmt::format(
+        "GetError RequestStepBlockNumber req_id:{}, input_token_lens:{}, cached_blocks_size:{}", req_id,
+        input_token_lens, it->second->cached_blocks.size());
+  }
+  return (input_token_lens + block_token_num) / block_token_num - it->second->cached_blocks.size();
+}
+
 size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {

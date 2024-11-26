@@ -61,6 +61,10 @@ size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id) {
   return (it->second->output_token_num % cache_manager_config_.block_token_num == 0) ? 1 : 0;
 }
 
+size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
+  return GetRequestStepBlockNumber(req_id);
+}
+
 Status DirectCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids,
                                                        size_t& shared_block_num, size_t& unique_block_num,
                                                        size_t& shared_token_num) {
