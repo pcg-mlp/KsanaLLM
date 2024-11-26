@@ -13,7 +13,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(parent_dir)
 
 from qwen_vl.ksana_plugin_model import VITModel
-from utils import free_cache, adjust_device_memory_ratio
+from plugin_utils import free_cache, adjust_device_memory_ratio
 
 
 class KsanaPlugin:
@@ -47,7 +47,7 @@ class KsanaPlugin:
                 print(f"[I] Initializing the Torch model successfully!")
 
             free_cache()
-            
+
             adjust_device_memory_ratio(kwargs["config_file"], 0.01 if self.trt else 0.04)
 
             # Ensure the result is a dictionary

@@ -42,7 +42,6 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
 #endif
   // output_tensors:
   //   0: paged attention output
-  // KLLM_LOG_WARNING <<"";
   const Tensor& query = input_tensors[0];
   const Tensor& context_lens = input_tensors[1];
   // 块的位移情况

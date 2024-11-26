@@ -174,6 +174,17 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
       model_config.rope_scaling_factor_config.original_max_position_embeddings =
           rope_scaling_setting.value("original_max_position_embeddings", 8192);
     }
+
+    if (model_config.rope_scaling_factor_config.type == "mrope") {
+      auto &mrope_section = model_config.rope_scaling_factor_config.mrope_section;
+      mrope_section = rope_scaling_setting["mrope_section"].get<std::vector<int>>();
+      KLLM_CHECK_WITH_INFO(mrope_section.size() == 3,
+                           "The length of mrope section used for multimodal rotary embedding must be 3.");
+      // Perform a prefix sum to facilitate the MRotaryEmbedding kernel.
+      for (int i = 1; i < 3; i++) {
+        mrope_section[i] += mrope_section[i - 1];
+      }
+    }
   }
 
   model_config.max_token_num = static_cast<int>(derived_max_model_len);
@@ -375,15 +386,10 @@ Status Environment::ParseConfig(const std::string &config_file) {
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
   std::string tokenizer_dir =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.tokenizer_dir", "");
-
   if (tokenizer_dir.empty()) {
     tokenizer_dir = base_model_dir;
   }
-  bool enable_trt = yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "model_spec.enable_trt", true);
-  status = ParseModelConfig(base_model_dir, tokenizer_dir, enable_trt);
-  if (!status.OK()) {
-    return status;
-  }
+  STATUS_CHECK_RETURN(ParseModelConfig(base_model_dir, tokenizer_dir));
 
   if (model_configs_[""].is_quant == true && model_configs_[""].quant_config.method == QUANT_FP8_E4M3 &&
       model_configs_[""].quant_config.is_checkpoint_fp8_serialized == false) {
@@ -519,7 +525,7 @@ Status Environment::ParseModelConfigFromGGUF(const std::string &meta_file_path, 
   return Status();
 }
 
-Status Environment::ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir, bool enable_trt) {
+Status Environment::ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir) {
   std::filesystem::path abs_model_dir_path = std::filesystem::absolute(model_dir);
   std::filesystem::path abs_tokenizer_dir_path = std::filesystem::absolute(tokenizer_dir);
   std::string config_file = abs_model_dir_path.u8string() + "/config.json";
@@ -530,7 +536,7 @@ Status Environment::ParseModelConfig(const std::string &model_dir, const std::st
   model_config.path = abs_model_dir_path.u8string();
   model_config.tokenizer_path = abs_tokenizer_dir_path.u8string();
   model_config.tensor_para_size = tensor_parallel_size_;
-  model_config.enable_trt = enable_trt;
+
   std::vector<std::string> weights_file_list = SearchLocalPath(model_dir, model_file_format);
   model_config.model_file_format = model_file_format;
 

@@ -66,9 +66,12 @@ bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_out
   }
 
   total_token_nums_ = total_token_nums;
+  ksana_python_output.input_tokens = request_->input_tokens;
   for (size_t i = 0; i < request_->output_group.size(); i++) {
     OutputTuple& output = request_->output_group[i];
-    ksana_python_output.output_tokens.push_back(std::get<0>(output));
+    const auto& output_tokens = std::get<0>(output);
+    ksana_python_output.output_tokens.emplace_back(
+        output_tokens.begin() + request_->input_tokens.size() + request_->padded_size, output_tokens.end());
     if (return_logprobs_) ksana_python_output.logprobs.push_back(std::get<1>(output));
   }
   return true;

@@ -93,7 +93,7 @@ class KsanaPlugin(object):
             else:
                 print("[W] Load plugin failed: the plugin does not have KsanaPlugin class.")
                 return None
-        except Exception as e:  # pylint: disable-next=broad-except
+        except Exception as e:  # pylint: disable=broad-except
             print(f"[W] Load plugin failed: {e}")
             return None
 

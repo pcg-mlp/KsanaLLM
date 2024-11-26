@@ -124,7 +124,7 @@ def args_config():
                         type=str,
                         default="0.0.0.0",
                         help='server host address')
-    parser.add_argument('--port', type=int, default=8888, help='server port')
+    parser.add_argument('--port', type=int, default=8080, help='server port')
     parser.add_argument('--input_csv',
                         type=str,
                         default="benchmark_input.csv",
@@ -492,9 +492,10 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         # Loop until the request is succeeds or the max_reties is reached
         retries = 0
         while True:
+            # The server response output
+            output = None
             # Record the start time of the request
             request_start_time = time.perf_counter()
-            output = None
 
             # Send a POST request to the API URL with the specified headers and data
             async with session.post(api_url, headers=headers,
@@ -521,7 +522,6 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                             break
                         # Accumulate this chunk
                         chunk_acc += chunk
-                        # Response is error-prone
                         try:
                             output = orjson.loads(chunk_acc)
                             # Reset the chunk_acc

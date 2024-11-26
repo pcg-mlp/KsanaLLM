@@ -15,7 +15,7 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
-from utils import free_cache, load_safetensors, check_file_dir, get_module
+from plugin_utils import free_cache, load_safetensors, check_file_dir, get_module
 
 
 class VITModel:

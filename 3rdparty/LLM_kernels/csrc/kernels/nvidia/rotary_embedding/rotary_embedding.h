@@ -32,7 +32,8 @@ enum RotaryEmbeddingType {
   DYNAMIC_NTK_SCALING,
   DYNAMIC_NTK_ALPHA,
   MULTIFREQ_SCALING,
-  YARN_SCALING
+  YARN_SCALING,
+  MROPE,
 };
 
 template <typename T>
@@ -64,6 +65,7 @@ struct RotaryEmbeddingParam {
   float high_freq_factor = 4.0f;
   int original_max_position_embeddings = 8192;
   float scaling_alpha = 1.0f;
+  const int* mrope_section = nullptr;
 };
 
 template <typename T>
@@ -75,7 +77,7 @@ class RotaryEmbeddingCuda {
                  cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT,
                  const float scaling_factor = 1.0f, const float low_freq_factor = 1.0f,
                  const float high_freq_factor = 4.0f, const int original_max_position_embeddings = 8192,
-                 const float scaling_alpha = 1.0f);
+                 const float scaling_alpha = 1.0f, const int* mrope_section = nullptr);
 
   void SetInput(const int64_t* positions,  // [batch_size, seq_len] or [num_tokens]
                 const int64_t* mask,       // [batch_size, seq_len] or [num_tokens]

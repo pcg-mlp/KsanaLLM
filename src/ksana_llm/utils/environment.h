@@ -26,7 +26,8 @@ struct RoPEScalingFactor {
   float high_freq_factor{4.0f};
   int original_max_position_embeddings{8192};
   bool has_alpha{false};
-  float scaling_alpha{1.0f};  // for dynamic alpha rope
+  float scaling_alpha{1.0f};         // for dynamic alpha rope
+  std::vector<int> mrope_section{};  // for multimodal rope
 };
 
 enum QuantMode { QUANT_NONE, QUANT_GPTQ, QUANT_AWQ, QUANT_FP8_E4M3, MOE_QUANT_NONE };
@@ -118,14 +119,11 @@ struct ModelConfig {
   std::string activation_function{"swiglu"};
 
   // Determines if the model is a visual llm model.
-  bool is_visual;
+  bool is_visual = false;
 
   // Determines if the model is a quant model.
   bool is_quant;
   QuantConfig quant_config;
-
-  // Determines whether the model is preprocessed with trt.
-  bool enable_trt;
 
   // Determines if the model is a moe model.
   bool is_moe = false;
@@ -282,7 +280,7 @@ class Environment {
   Status ParseConfig(const std::string &config_file);
 
   // Parse model config from model dir.
-  Status ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir, bool enable_trt);
+  Status ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir);
 
   // Parse command line options.
   Status ParseOptions(int argc, char **argv);

@@ -89,6 +89,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.output_tokens = &(req_ptr->output_tokens);
     forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
     forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
+    forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
     forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
     forward_req.flexible_cache_len = req_ptr->flexible_cached_copy_tasks.size();
     forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;

@@ -26,6 +26,9 @@ struct ForwardRequest {
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
 
+  // Multimodal rotary position embedding offset, this points to the corresponding member in infer_request.
+  int64_t *mrotary_embedding_pos_offset = nullptr;
+
   // The input tokens.
   std::vector<int>* output_tokens;
 

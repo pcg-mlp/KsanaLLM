@@ -44,7 +44,8 @@ def adjust_device_memory_ratio(config_file: str, reserved_device_memory_ratio: f
     # Use regular expressions to preserve the original order and comments
     match = re.search(r'(\s*reserved_device_memory_ratio:)(\s*\d+\.\d+|\d+)(.*)',
                       yaml_data)
-    if match:
+    # Only adjust if the current configuration value is too low
+    if match and float(match.group(2)) < reserved_device_memory_ratio:
         yaml_data = re.sub(r'(\s*reserved_device_memory_ratio:)(\s*\d+\.\d+|\d+)(.*)',
                            f'{match.group(1)} {reserved_device_memory_ratio}{match.group(3)}',
                            yaml_data)

@@ -117,7 +117,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def(pybind11::init<>())
       .def_readwrite("pos", &ksana_llm::EmbeddingSlice::pos)
       .def_readwrite("embeddings", &ksana_llm::EmbeddingSlice::embeddings)
-      .def_readwrite("embedding_tensors", &ksana_llm::EmbeddingSlice::embedding_tensors);
+      .def_readwrite("embedding_tensors", &ksana_llm::EmbeddingSlice::embedding_tensors)
+      .def_readwrite("additional_tensors", &ksana_llm::EmbeddingSlice::additional_tensors);
 
   // Export `TokenReduceMode` to python.
   pybind11::enum_<ksana_llm::TokenReduceMode>(m, "TokenReduceMode", pybind11::arithmetic())
@@ -157,6 +158,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
   // Export `KsanaPythonOutput` to python.
   pybind11::class_<ksana_llm::KsanaPythonOutput, std::shared_ptr<ksana_llm::KsanaPythonOutput>>(m, "KsanaPythonOutput")
       .def(pybind11::init<>())
+      .def_readwrite("input_tokens", &ksana_llm::KsanaPythonOutput::input_tokens)
       .def_readwrite("output_tokens", &ksana_llm::KsanaPythonOutput::output_tokens)
       .def_readwrite("logprobs", &ksana_llm::KsanaPythonOutput::logprobs)
       .def_readwrite("response", &ksana_llm::KsanaPythonOutput::response)

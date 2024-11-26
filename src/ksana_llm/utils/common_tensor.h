@@ -67,8 +67,10 @@ class TensorT {
     if (refer_ptr != nullptr) {
       return reinterpret_cast<TP*>(refer_ptr);
     } else {
-      KLLM_CHECK_WITH_INFO(
-          block_id >= 0, fmt::format("Tensor GetPtr() error, invalid block id {} in Tensor {}.", block_id, ToString()));
+      // Return null pointer if this tensor does not own any blocks.
+      if (block_id < 0) {
+        return nullptr;
+      }
       if (device == MEMORY_HOST) return GetHostContiguousPtr<TP>(block_id);
       return GetContiguousPtr<TP>(block_id);
     }

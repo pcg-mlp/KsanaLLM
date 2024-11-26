@@ -23,6 +23,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   //     3: prefix_offset_tensor shape [max_batch_size + 1], type int32
   //     4: kv_cache_offset_tensor shape [max_batch_size + 1], type int32
   //     5: rotary embedding pos tensor shape [max_token_num], type int64
+  //        mrotary embedding pos tensor shape [3, max_token_num], type int64 (only for qwen2_vl)
   //     6: rotary embedding mask tensor shape [max_token_num], type int64
   //     7: flexible_rotary_embedding_pos,
   //     8: flexible_rotary_embedding_mask,

@@ -9,7 +9,7 @@ import signal
 import sys
 from concurrent import futures
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 import uvicorn
@@ -123,11 +123,11 @@ def streaming_generate(model_name, input_tokens, messages, generation_config, re
         async for ksana_python_output in results_iterator:  # iterate over the results
             if ksana_python_output is None:
                 return
+            input_token_ids = ksana_python_output.input_tokens
             output_texts = []
             output_token_ids = []
             for request_output in ksana_python_output.output_tokens:
                 # Decode the output tokens using the tokenizer
-                request_output = request_output[len(input_tokens):]
                 output_token_ids.append(request_output)
                 try:
                     output_text = tokenizer.decode(
@@ -135,14 +135,14 @@ def streaming_generate(model_name, input_tokens, messages, generation_config, re
                         skip_special_tokens=True  # skip special tokens
                     ).rstrip('\ufffd')
                 except:
-                    print("except occurred, invalid token ids:", input_tokens)
+                    print("except occurred, invalid token ids:", input_token_ids)
                     raise ValueError("Invalid token ids!")
                 output_texts.append(output_text)
             ret = {
                 "texts": output_texts,
                 "output_token_ids": output_token_ids,  # the output token IDs
                 "logprobs": ksana_python_output.logprobs,
-                "input_token_ids": input_tokens  # the input token IDs
+                "input_token_ids": input_token_ids  # the input token IDs
             }
             yield orjson.dumps(ret) + b"\0"
 
@@ -180,7 +180,7 @@ def batch_generate(model_name, input_tokens, messages, generation_config, req_ct
         "texts": output_text,  # the generated text
         "output_token_ids": ksana_python_output.output_tokens,  # the generated token IDs
         "logprobs": ksana_python_output.logprobs,
-        "input_token_ids": input_tokens  # the input token IDs
+        "input_token_ids": ksana_python_output.input_tokens  # the input token IDs
     }
 
 
@@ -240,7 +240,8 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     stop_token_ids = get_sampling_value(sampling_config, "stop_token_ids", [])
     ignore_eos = get_sampling_value(sampling_config, "ignore_eos", False)
     if (
-        tokenizer.eos_token_id is not None
+        hasattr(tokenizer, "eos_token_id")
+        and tokenizer.eos_token_id is not None
         and not ignore_eos
         and not tokenizer.eos_token_id in stop_token_ids
     ):
@@ -384,6 +385,9 @@ def load_tokenizer(model_path):
 
 if __name__ == "__main__":
     uvloop.install()
+    # Set the verbosity of transformers to ERROR.
+    logging.set_verbosity_error()
+
     args = args_config()
     prepare_config()
 
@@ -398,8 +402,6 @@ if __name__ == "__main__":
         signal.pause()
         sys.exit(0)
 
-    # Set the verbosity of transformers to ERROR.
-    logging.set_verbosity_error()
     tokenizer = load_tokenizer(args.tokenizer_dir)
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         print(

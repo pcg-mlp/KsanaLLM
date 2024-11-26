@@ -66,14 +66,14 @@ __global__ void CacheCopyFlashAttnLayoutKernel(SCALAR_T* k_src, SCALAR_T* v_src,
 */
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 __global__ void CachePosCopyFlashAttnLayoutKernel(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list,
-                                                  void* pos, size_t* input_offsets, int* block_offsets, int block_size,
-                                                  int bs, int total_len, int num_heads, int head_size, int stride_size,
+                                                  int* input_lengths, int* block_offsets, int block_size, int bs,
+                                                  int total_len, int num_heads, int head_size, int stride_size,
                                                   float k_scale, float v_scale) {
   int idx = blockIdx.y;
   if (idx < total_len) {
-    int input_len = reinterpret_cast<int64_t*>(pos)[idx];
-    int cur_block_offset = input_len / block_size;
-    int cur_batch_offset = input_len % block_size;
+    int input_offset = input_lengths[idx] - 1;
+    int cur_block_offset = input_offset / block_size;
+    int cur_batch_offset = input_offset % block_size;
     CACHE_T* k_dst_base = reinterpret_cast<CACHE_T*>(k_list[block_offsets[idx] + cur_block_offset]);
     CACHE_T* v_dst_base = reinterpret_cast<CACHE_T*>(v_list[block_offsets[idx] + cur_block_offset]);
     SCALAR_T* k_src_ptr = k_src + idx * stride_size;
@@ -114,15 +114,14 @@ void CacheCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, v
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, void* pos,
-                                 size_t* input_offsets, int* block_offsets, int block_size, int bs, int total_len,
-                                 int num_heads, int head_size, int stride_size, float k_scale, float v_scale,
-                                 cudaStream_t stream) {
+void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, int* input_lengths,
+                                 int* block_offsets, int block_size, int bs, int total_len, int num_heads,
+                                 int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
   dim3 grid_shape(num_heads, total_len);
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
-  CachePosCopyFlashAttnLayoutKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
-      k_src, v_src, k_list, v_list, pos, input_offsets, block_offsets, block_size, bs, total_len, num_heads, head_size,
-      stride_size, k_scale, v_scale);
+  CachePosCopyFlashAttnLayoutKernel<SCALAR_T, CACHE_T, KV_DTYPE>
+      <<<grid_shape, block_shape, 0, stream>>>(k_src, v_src, k_list, v_list, input_lengths, block_offsets, block_size,
+                                               bs, total_len, num_heads, head_size, stride_size, k_scale, v_scale);
 }
 
 #define CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                 \
@@ -131,9 +130,9 @@ void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list
       size_t* without_prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int num_heads,        \
       int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream);                              \
   template void CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(                                              \
-      SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, void* pos, size_t* input_offsets,              \
-      int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size,        \
-      float k_scale, float v_scale, cudaStream_t stream);
+      SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, int* input_lengths, int* block_offsets,        \
+      int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size, float k_scale,             \
+      float v_scale, cudaStream_t stream);
 
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);

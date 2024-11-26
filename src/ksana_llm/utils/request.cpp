@@ -55,8 +55,9 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
 }
 
 KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
+  input_tokens = req->input_tokens;
   for (const auto& [output, req_logprobs, total_score] : req->output_group) {
-    std::vector<int> req_output = {output.begin() + req->input_tokens.size() + req->padded_size, output.end()};
+    std::vector<int> req_output = {output.begin() + input_tokens.size() + req->padded_size, output.end()};
     output_tokens.emplace_back(req_output);
     if (req->sampling_config.logprobs_num > 0) {
       logprobs.emplace_back(req_logprobs);

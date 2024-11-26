@@ -180,10 +180,10 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   model_input_ = std::make_shared<ModelInput>(model_config_, rank_, context_);
 
   if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
-    CreateTensor(cpu_input_tokens_tensor_, model_input_->input_ids.shape, model_input_->input_ids.dtype, rank_,
-                 MemoryDevice::MEMORY_HOST);
-    CreateTensor(cpu_tokens_emb_tensor_, {model_input_->input_ids.shape[0] * hidden_units},
-                 model_input_->input_ids.dtype, rank_, MemoryDevice::MEMORY_HOST);
+    STATUS_CHECK_FAILURE(CreateTensor(cpu_input_tokens_tensor_, model_input_->input_ids.shape,
+                                      model_input_->input_ids.dtype, rank_, MemoryDevice::MEMORY_HOST));
+    STATUS_CHECK_FAILURE(CreateTensor(cpu_tokens_emb_tensor_, {model_input_->input_ids.shape[0] * hidden_units},
+                                      model_input_->input_ids.dtype, rank_, MemoryDevice::MEMORY_HOST));
   }
   model_output_ = std::make_shared<ModelOutput>(max_batch_size, vocab_size_pad_, rank_, context_);
 
@@ -225,8 +225,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(max_batch_size);
     std::vector<std::any> flash_attention_param = attention_param;
     std::vector<std::any> paged_attention_param = attention_param;
-    // NOTE(karlluo): bool for is_context_decode_stage
+    // NOTE(karlluo): bool for is_context_stage
     flash_attention_param.push_back(true);
+    flash_attention_param.push_back(model_input_->mrotary_section_tensor.GetPtr<const int>());
     paged_attention_param.push_back(false);
     flash_attention_layers_[idx]->Init(flash_attention_param, context_, rank_);
     paged_attention_layers_[idx]->Init(paged_attention_param, context_, rank_);
@@ -404,13 +405,13 @@ Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
 #ifdef ENABLE_CUDA
   if (is_cudagraph_enabled && model_input_->is_cudagraph_batchsize_matched) {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
-        {hidden_buffer_0_[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
+        {hidden_buffer_0_[0], model_input_->input_length_int32_tensor, model_input_->kv_list,
          model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
          model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]},
         cuda_graph_input_));
   } else {
     STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
-        {hidden_buffer_0_[0], model_input_->input_tokens_int32_tensor, model_input_->kv_list,
+        {hidden_buffer_0_[0], model_input_->input_length_int32_tensor, model_input_->kv_list,
          model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
          model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE

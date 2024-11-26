@@ -101,12 +101,15 @@ class ModelInput {
 
   // The ids offset tensor, uint64
   Tensor input_offset_uint64_tensor;
+
+  // The input length tensor, int32
+  Tensor input_length_int32_tensor;
+
   // If use_logits_custom_length is true, use logits_custom_length_uint64_tensor instead of input_offset_uint64_tensor
   // for calculation.
   Tensor logits_custom_length_uint64_tensor;
   // Flag to indicate if custom logits length is used.
   bool use_logits_custom_length = false;
-  Tensor input_tokens_int32_tensor;
 
   // Indicate the corresponding index position of the input during rotary_embedding kernel.
   Tensor rotary_embedding_pos;
@@ -122,6 +125,13 @@ class ModelInput {
   // mask is used during the flexible rotary_embedding computation to avoid multiple executions of flexible
   // rotary_embedding on the prefix block.
   Tensor flexible_rotary_embedding_mask;
+
+  // The 3-dimentional index position for multimodal rotarty embedding.
+  Tensor mrotary_embedding_pos;
+
+  // The mrope sections for multimodal rotary embedding.
+  // Corresponds to `model_config.rope_scaling_factor_config.mrope_section`.
+  Tensor mrotary_section_tensor;
 
   // The input's prefix length
   Tensor input_prefix_uint64_tensor;

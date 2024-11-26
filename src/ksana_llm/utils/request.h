@@ -61,6 +61,9 @@ struct __attribute__((visibility("default"))) EmbeddingSlice {
 
   // The same as embeddings but is python object
   std::vector<py::object> embedding_tensors;
+
+  // Additional tensors computed on Python side and required by C++ for further processing.
+  std::vector<py::object> additional_tensors;
 };
 
 enum TokenReduceMode {
@@ -154,7 +157,7 @@ class Request {
   // The requested model name.
   std::string model_name;
 
-  // The tokens of this request.
+  // The input tokens of this request.
   std::vector<int> input_tokens;
 
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
@@ -242,6 +245,9 @@ struct KsanaPythonOutput {
 
   // Build KsanaPythonOutput based on the specified Request.
   explicit KsanaPythonOutput(std::shared_ptr<Request> req);
+
+  // The input tokens of this request.
+  std::vector<int> input_tokens;
 
   // The output tokens of this request.
   std::vector<std::vector<int>> output_tokens;

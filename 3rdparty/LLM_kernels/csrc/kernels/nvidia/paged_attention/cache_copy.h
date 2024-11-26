@@ -11,7 +11,7 @@ void CacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, s
                int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void CachePosCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, void* pos, size_t* input_offsets,
+void CachePosCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, int* input_lengths,
                   int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size,
                   int stride_size, float k_scale, float v_scale, cudaStream_t stream);
 

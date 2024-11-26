@@ -16,8 +16,6 @@ class GPTWeight : public CommonWeight<T> {
 
   void ProcessWeights() override;
 
-  void SetEmbeddingsConfig() override;
-
  protected:
   using CommonWeight<T>::context_;
   using CommonWeight<T>::rank_;

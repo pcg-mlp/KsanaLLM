@@ -57,14 +57,18 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 
   STATUS_CHECK_FAILURE(
       CreateTensor(input_offset_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
-
+  STATUS_CHECK_FAILURE(CreateTensor(input_length_int32_tensor, {max_batch_size_}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(logits_custom_length_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 
-  STATUS_CHECK_FAILURE(
-      CreateTensor(input_tokens_int32_tensor, {max_batch_size_ + 1}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(CreateTensor(rotary_embedding_pos, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(CreateTensor(rotary_embedding_mask, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
+  if (model_config.type == "qwen2_vl") {
+    STATUS_CHECK_FAILURE(CreateTensor(mrotary_embedding_pos, {3, max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
+    STATUS_CHECK_FAILURE(CreateTensor(mrotary_section_tensor, {3}, TYPE_INT32, rank_, MEMORY_DEVICE));
+    MemcpyAsync(mrotary_section_tensor.GetPtr<void>(), model_config.rope_scaling_factor_config.mrope_section.data(),
+                3 * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+  }
   STATUS_CHECK_FAILURE(CreateTensor(flexible_rotary_embedding_pos, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(
       CreateTensor(flexible_rotary_embedding_mask, {max_token_num_}, TYPE_INT64, rank_, MEMORY_DEVICE));
@@ -164,14 +168,18 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(input_ids, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_offset_uint64_tensor, rank_));
+  STATUS_CHECK_FAILURE(DestroyTensor(input_length_int32_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(logits_custom_length_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.pos_pair_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(input_tokens_int32_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(logits_length_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_pos, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_mask, rank_));
+  if (model_config_.type == "qwen2_vl") {
+    STATUS_CHECK_FAILURE(DestroyTensor(mrotary_embedding_pos, rank_));
+    STATUS_CHECK_FAILURE(DestroyTensor(mrotary_section_tensor, rank_));
+  }
   STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_buffer, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_offset_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(kv_list, rank_));
@@ -289,7 +297,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   kv_cache_offset_tensor.shape = {kv_cache_offset_list.size()};
   MemcpyAsync(kv_cache_offset_tensor.GetPtr<void>(), kv_cache_offset_list.data(),
               kv_cache_offset_list.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
-  KLLM_LOG_DEBUG << " Total Block Num " << context_total_block_num + decode_total_block_num;
+  KLLM_LOG_DEBUG << "Total Block Num " << context_total_block_num + decode_total_block_num;
 
   input_offset_list_uint64 = {0};
   input_prefix_list_uint64.resize(context_num + 1, 0ul);
@@ -441,9 +449,6 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
 #endif
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * cpu_rotary_pos.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetD2HStreams()[rank_]);
-#endif
   MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * cpu_rotary_mask.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   if (dst_flexible_kv_cache_tensor.shape[0]) {
@@ -470,6 +475,10 @@ void ModelInput::PreparePrefillPositionIds(const std::vector<ForwardRequest>& fo
                 context_->GetD2HStreams()[rank_]);
   }
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
+
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+#endif
 }
 
 void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs) {
@@ -638,6 +647,9 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
   std::vector<int64_t> cpu_rotary_mask(decode_num, 1);
   for (size_t idx = context_num; idx < batch_size; ++idx) {
     cpu_rotary_pos[idx - context_num] = forward_reqs[idx].output_tokens->size() - 1;
+    if (model_config_.type == "qwen2_vl") {
+      cpu_rotary_pos[idx - context_num] += *forward_reqs[idx].mrotary_embedding_pos_offset;
+    }
   }
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * context_total_seq_len, cpu_rotary_pos.data(),
               sizeof(int64_t) * cpu_rotary_pos.size(), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
@@ -645,10 +657,11 @@ void ModelInput::PrepareDecodePositionIds(const std::vector<ForwardRequest>& for
               sizeof(int64_t) * cpu_rotary_mask.size(), MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
   rotary_embedding_pos.shape = {context_total_seq_len + decode_num};
   rotary_embedding_mask.shape = {context_total_seq_len + decode_num};
+  EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
+
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
-  EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
 }
 
 void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs) {
@@ -711,13 +724,13 @@ void ModelInput::PreparePrefillInputIds(const std::vector<ForwardRequest>& forwa
 }
 
 void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forward_reqs) {
-  std::vector<int> input_tokens_list_int32(decode_num, 0);
+  std::vector<int> input_length_list_int32(decode_num, 0);
   for (size_t idx = context_num; idx < batch_size; ++idx) {
     std::vector<int>* req_input = forward_reqs[idx].output_tokens;
     size_t length = req_input->size();
     input_ids_cpu.push_back(req_input->at(length - 1));
     decode_max_tokens = std::max(decode_max_tokens, length);
-    input_tokens_list_int32[idx - context_num] = length;
+    input_length_list_int32[idx - context_num] = static_cast<int>(length);
     input_offset_list_uint64.push_back(input_offset_list_uint64.back() + 1);
     input_offset_list.push_back(input_offset_list.back() + 1);
     input_prefix_list.push_back(input_prefix_list.back());
@@ -728,12 +741,11 @@ void ModelInput::PrepareDecodeInputIds(const std::vector<ForwardRequest>& forwar
               context_->GetH2DStreams()[rank_]);
 
   // create input offset tensor int32 and uint64
-  input_tokens_int32_tensor.shape = {static_cast<uint64_t>(decode_num)};
+  input_length_int32_tensor.shape = {static_cast<uint64_t>(decode_num)};
   input_offset_uint64_tensor.shape = {static_cast<uint64_t>(batch_size) + 1};
-  void* input_tokens_int32_ptr = input_tokens_int32_tensor.GetPtr<void>();
-
-  MemcpyAsync(input_tokens_int32_ptr, input_tokens_list_int32.data(), input_tokens_list_int32.size() * sizeof(int),
-              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+  MemcpyAsync(input_length_int32_tensor.GetPtr<void>(), input_length_list_int32.data(),
+              input_length_list_int32.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
               input_offset_list_uint64.size() * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);

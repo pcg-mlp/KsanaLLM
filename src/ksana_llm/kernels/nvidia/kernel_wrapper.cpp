@@ -212,7 +212,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
@@ -665,7 +665,6 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   void* v_tensor_ptr = v_tensor.data_ptr();
 
   if (rotary_embedding_cuda.has_value()) {
-    // When the alibi_slopes parameter is empty, execute the rotary embedding.
     rotary_embedding_cuda->SetInput(
         reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
         reinterpret_cast<SCALAR_T*>(q_tensor_ptr), reinterpret_cast<SCALAR_T*>(k_tensor_ptr), total_tokens, stream);
@@ -675,15 +674,13 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
-      value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
-      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      k_scale, v_scale, stream));
+      value_cache_ptrs, reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size,
+      batch, total_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
 #else
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
-      value_cache_ptrs, rotary_embedding_pos, reinterpret_cast<size_t*>(context_lens_ptr),
-      reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      k_scale, v_scale, stream));
+      value_cache_ptrs, reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size,
+      batch, total_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
 #endif
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   auto cache_options = options;

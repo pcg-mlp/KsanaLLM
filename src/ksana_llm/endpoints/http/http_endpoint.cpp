@@ -59,7 +59,6 @@ Status HttpEndpoint::HandleRequest(const httplib::Request &http_req, httplib::Re
     for (int v_id = 0; v_id < input_tokens_length; ++v_id) {
       tokens_vec[v_id] = std::stoi(http_req.get_param_value("input_tokens", v_id));
     }
-    req->input_tokens = tokens_vec;
     req->output_tokens = tokens_vec;
 
     Status req_prepare_status = Accept(req);

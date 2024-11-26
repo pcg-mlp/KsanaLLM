@@ -23,6 +23,7 @@
 #include "ksana_llm/models/mixtral/mixtral_weight.h"
 #include "ksana_llm/models/qwen/qwen_weight.h"
 #include "ksana_llm/models/qwen2_moe/qwen2_moe_weight.h"
+#include "ksana_llm/models/qwen2_vl/qwen2_vl_weight.h"
 
 #include "ksana_llm/models/baichuan/baichuan_model.h"
 #include "ksana_llm/models/chatglm/chatglm_model.h"
@@ -31,6 +32,7 @@
 #include "ksana_llm/models/mixtral/mixtral_model.h"
 #include "ksana_llm/models/qwen/qwen_model.h"
 #include "ksana_llm/models/qwen2_moe/qwen2_moe_model.h"
+#include "ksana_llm/models/qwen2_vl/qwen2_vl_model.h"
 
 namespace ksana_llm {
 
@@ -49,6 +51,9 @@ void ModelInstance::Load() {
   } else if (unified_model_type.find("qwen2_moe") != std::string::npos) {
     type = "qwen2_moe";
     CreateModelInstance<Qwen2MoeModel, Qwen2MoeWeight>(unified_model_type);
+  } else if (unified_model_type.find("qwen2_vl") != std::string::npos) {
+    type = "qwen2_vl";
+    CreateModelInstance<Qwen2VLModel, Qwen2VLWeight>(unified_model_type);
   } else if (unified_model_type.find("qwen") != std::string::npos) {
     type = "qwen";
     CreateModelInstance<QwenModel, QwenWeight>(unified_model_type);

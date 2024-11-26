@@ -115,7 +115,7 @@ class ServingModel(object):
         model_name: Optional[str] = None,
         inputs: Optional[List[int]] = None,
         generation_config: Optional[GenerationConfig] = None,
-        messages: Optional[str] = None,
+        messages: Optional[List[Dict]] = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor],

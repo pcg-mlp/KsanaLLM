@@ -205,9 +205,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   bool IsPrefixCachingComputationReuse();
 
-  Status FlashAttentionForward(const int layer_idx);
+  virtual Status FlashAttentionForward(const int layer_idx);
 
-  Status PagedAttentionForward(const int layer_idx);
+  virtual Status PagedAttentionForward(const int layer_idx);
 
   virtual Status LayerNormForward(const std::string& layer_name, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                   const std::vector<Tensor>& layernorm_input, std::vector<Tensor>& layernorm_output);
