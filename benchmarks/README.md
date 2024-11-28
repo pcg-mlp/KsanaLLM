@@ -1,3 +1,7 @@
+# Test Set Description
+ - share_gpt_500.csv: Contains 500 data records, which are randomly selected  from 
+  the original [ShareGPT dataset](https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered) with seed of 0.
+
 # Download model
 ```
 cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
