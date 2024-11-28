@@ -28,6 +28,7 @@ else()
   message(STATUS "ASCEND_CORE_TYPE: ${ASCEND_CORE_TYPE}")
   message(STATUS "ASCEND_PRODUCT_TYPE: ${ASCEND_PRODUCT_TYPE}")
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type Release/Debug (default Debug)" FORCE)
+
   if(EXISTS ${ASCEND_CANN_PACKAGE_PATH}/compiler/tikcpp/ascendc_kernel_cmake)
     set(ASCENDC_CMAKE_DIR ${ASCEND_CANN_PACKAGE_PATH}/compiler/tikcpp/ascendc_kernel_cmake)
   elseif(EXISTS ${ASCEND_CANN_PACKAGE_PATH}/ascendc_devkit/tikcpp/samples/cmake)
@@ -35,6 +36,7 @@ else()
   else()
     message(FATAL_ERROR "ascendc_kernel_cmake does not exist, please check whether the compiler package is installed.")
   endif()
+
   include(${ASCENDC_CMAKE_DIR}/ascendc.cmake)
   list(APPEND CMAKE_MODULE_PATH ${CCE_CMAKE_PATH})
 
@@ -66,6 +68,11 @@ set(CMAKE_CXX_STANDARD "${CXX_STD}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+
+if(WITH_TESTING)
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage")
+  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage")
+endif()
 
 # set cmake output path
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
