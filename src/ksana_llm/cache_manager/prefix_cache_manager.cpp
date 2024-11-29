@@ -252,7 +252,7 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
   size_t flexible_cache_begin = 0;
   auto& block_token_num = cache_manager_config_.block_token_num;
   // Check if there are enough tokens for flexible caching
-  if (shared_token_num + min_flexible_cache_num + block_token_num * 2 > token_ids.size() && shared_token_num != 0) {
+  if (shared_token_num + min_flexible_cache_num + block_token_num * 2 > token_ids.size() || shared_token_num == 0) {
     return;
   }
   auto it = cached_requests_.find(req_id);
