@@ -27,15 +27,6 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
                                                                  std::vector<Tensor>& output_tensors) {
-  // NOTE(karlluo): for ACLNN input_tensors:
-  //   0: qkv_tensor shape [max_token_num, (2*kv_head_num + head_num)*head_dim], type same as weight
-  //   1: input offset tensor shape [max_batch_size + 1], type uint64
-  //   2: kv_list shape [num_layer, max_block_num, 2], type pointer
-  //   3: block_offset_tensor shape [max_batch_size + 1], type int32
-  //   4: rotary embedding pos tensor shape [max_token_num], type int64
-  //   5: rotary embedding mask tensor shape [max_token_num], type int64
-  //   6: workspace, type int64
-  //   7: forward shape: [batch_size, max_tokens, kv_cache_offset_list.back()]
   // NOTE(karlluo): for ATB input_tensors:
   //   0: qkv_tensor shape [max_token_num, hidden_units * 3], type same as weight
   //   1: rotary_embedding_pos shape [max_token_num], type int64_t

@@ -187,6 +187,15 @@ include_directories(${TORCH_DIR}/include/torch/csrc/api/include/)
 include_directories(${TORCH_DIR}/include/)
 find_library(TORCH_PYTHON_LIBRARY NAMES torch_python PATHS "${TORCH_DIR}/lib" NO_DEFAULT_PATH)
 find_package(PythonLibs REQUIRED)
+
+# NOTE(karlluo): for NPU environment openssl conflict with conda's ssl, take conda's ssl as libs
+if(WITH_ACL AND WITH_TRPC_ENDPOINT)
+  set(PY_LIB_DIR "")
+  get_filename_component(PY_LIB_DIR ${PYTHON_LIBRARY} DIRECTORY)
+  message(STATUS "WITH_TRPC_ENDPOINT using PY_LIB_DIR: " ${PY_LIB_DIR})
+  link_directories(${PY_LIB_DIR})
+endif()
+
 include_directories(${PYTHON_INCLUDE_DIRS})
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 

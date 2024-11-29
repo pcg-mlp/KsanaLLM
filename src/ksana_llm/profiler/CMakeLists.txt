@@ -1,7 +1,7 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.13)
 
 include(external/opentelemetry)
 file(GLOB_RECURSE profiler_SRCS
