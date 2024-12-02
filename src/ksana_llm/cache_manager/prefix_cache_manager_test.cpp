@@ -531,9 +531,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   if (cache_manager != nullptr) {
     delete cache_manager;
-    cache_manager_config.min_flexible_cache_num = 32;
-    cache_manager = new PrefixCacheManager(cache_manager_config);
   }
+  cache_manager_config.min_flexible_cache_num = 32;
+  cache_manager = new PrefixCacheManager(cache_manager_config);
   cache_manager->InitializeCachedBlocks();
 
   // All blocks should be used.
