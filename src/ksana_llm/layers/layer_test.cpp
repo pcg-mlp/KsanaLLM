@@ -168,11 +168,12 @@ TEST_F(LayerTest, AttentionLayerTest) {
   layer_kv_cache_ptr[0] = h_kv_list_ptrs[0];
   layer_kv_cache_ptr[1] = h_kv_list_ptrs[1];
 
-  std::vector<int32_t> prefill_block_table_host = {0};
-  Tensor prefill_block_table;
-  CreateTensor(prefill_block_table, {static_cast<uint64_t>(1), static_cast<uint64_t>(1)}, TYPE_INT32, 0, MEMORY_DEVICE);
-  Memcpy(prefill_block_table.GetPtr<void>(), prefill_block_table_host.data(),
-         prefill_block_table_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE);
+  std::vector<int32_t> multi_token_request_block_table_host = {0};
+  Tensor multi_token_request_block_table;
+  CreateTensor(multi_token_request_block_table, {static_cast<uint64_t>(1), static_cast<uint64_t>(1)}, TYPE_INT32, 0,
+               MEMORY_DEVICE);
+  Memcpy(multi_token_request_block_table.GetPtr<void>(), multi_token_request_block_table_host.data(),
+         multi_token_request_block_table_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE);
 #  endif
   EXPECT_TRUE(flash_attention_layer
                   .Forward(
@@ -195,7 +196,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
 #  if defined(ENABLE_FLASH_ATTN_WITH_CACHE)
                           ,
                           layer_kv_cache_ptr_tensor,
-                          prefill_block_table,
+                          multi_token_request_block_table,
                           input_len,
 #  endif
                       },

@@ -419,7 +419,7 @@ Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
          model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
          ,
-         model_input_->layer_kv_cache_ptr_tensor, model_input_->decode_block_table
+         model_input_->layer_kv_cache_ptr_tensor, model_input_->single_token_request_block_table
 #  endif
         },
         hidden_buffer_1_));

@@ -39,7 +39,7 @@ Status Qwen2VLModel<T>::FlashAttentionForward(const int layer_idx) {
        model_input_->flexible_offset_uint64_tensor, forward_shape_
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
        ,
-       model_input_->layer_kv_cache_ptr_tensor, model_input_->prefill_block_table,
+       model_input_->layer_kv_cache_ptr_tensor, model_input_->multi_token_request_block_table,
        model_input_->input_without_prefix_uint64_tensor
 #  endif
       },
