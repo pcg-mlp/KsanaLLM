@@ -104,10 +104,13 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
 
 void Sampler::GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
                         NgramDict* ngram_dict) {
+  if (ngram_dict == nullptr) {
+    KLLM_THROW("The ngram_dict cannot be nullptr");
+  }
   std::vector<std::vector<int>> ngrams;
-  if (ngram_dict != nullptr && !ngram_dict->empty()) {
+  if (!ngram_dict->empty()) {
     return;
-  }  // for  tokens recompute
+  }  // for tokens recompute
   for (int i = 0; i <= cur_output_size - ngram_size; ++i) {
     std::vector<int> sub_ngram(output_tokens->begin() + i, output_tokens->begin() + i + ngram_size);
     ngrams.push_back(sub_ngram);
