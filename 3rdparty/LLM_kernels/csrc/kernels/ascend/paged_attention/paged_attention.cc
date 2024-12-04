@@ -187,8 +187,8 @@ void PagedAttention<T>::InitSliceTiling(aclrtStream stream) {
 }
 
 template <typename T>
-void PagedAttention<T>::InitTilingData(bool is_context_stage) {
-  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+void PagedAttention<T>::InitTilingData(bool is_multi_token_forward) {
+  PagedAttentionTilingData* tiling_data = is_multi_token_forward ? &prefill_tiling_data_ : &decode_tiling_data_;
 
   if (std::is_same<T, aclFloat16>::value) {
     tiling_data->data_type = static_cast<uint32_t>(TilingDataType::FLOAT16);
@@ -196,7 +196,7 @@ void PagedAttention<T>::InitTilingData(bool is_context_stage) {
     tiling_data->data_type = static_cast<uint32_t>(TilingDataType::FLOAT32);
   }
 
-  tiling_data->context_stage = static_cast<uint32_t>(is_context_stage);
+  tiling_data->multi_token_forward = static_cast<uint32_t>(is_multi_token_forward);
   tiling_data->block_token_num = block_token_num_;
   tiling_data->head_size = head_size_;
   tiling_data->head_dim = head_dim_;
@@ -211,9 +211,9 @@ void PagedAttention<T>::InitTilingData(bool is_context_stage) {
 }
 
 template <typename T>
-void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num,
+void PagedAttention<T>::GenerateTilingData(bool is_multi_token_forward, uint32_t seq_len, uint32_t seq_block_num,
                                            int32_t token_pos) {
-  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+  PagedAttentionTilingData* tiling_data = is_multi_token_forward ? &prefill_tiling_data_ : &decode_tiling_data_;
 
   tiling_data->seq_len = seq_len;
   tiling_data->seq_block_num = seq_block_num;
@@ -237,8 +237,8 @@ void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_l
     qk_tiling.SetBias(false);
     qk_tiling.SetBufferSpace(-1, -1, -1);
 
-    size_t m = is_context_stage ? seq_len : 1;
-    size_t n = is_context_stage ? seq_len : 1;
+    size_t m = is_multi_token_forward ? seq_len : 1;
+    size_t n = is_multi_token_forward ? seq_len : 1;
     size_t k = head_dim_;
 
     qk_tiling.SetOrgShape(m, n, k);
@@ -246,8 +246,8 @@ void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_l
 
     optiling::TCubeTiling cube_tiling_data;
     if (qk_tiling.GetTiling(cube_tiling_data) == -1) {
-      std::cerr << "Get " << (is_context_stage ? "prefil" : "decode") << " qk TCubeTiling error, m:" << m << ", n:" << n
-                << ", k:" << k << std::endl;
+      std::cerr << "Get " << (is_multi_token_forward ? "prefil" : "decode") << " qk TCubeTiling error, m:" << m
+                << ", n:" << n << ", k:" << k << std::endl;
       assert(false);
     }
 
@@ -266,17 +266,17 @@ void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_l
     vw_tiling.SetBias(false);
     vw_tiling.SetBufferSpace(-1, -1, -1);
 
-    size_t m = is_context_stage ? seq_len : 1;
+    size_t m = is_multi_token_forward ? seq_len : 1;
     size_t n = head_dim_;
-    size_t k = is_context_stage ? seq_len : 1;
+    size_t k = is_multi_token_forward ? seq_len : 1;
 
     vw_tiling.SetOrgShape(m, n, k);
     vw_tiling.SetShape(m, n, k);
 
     optiling::TCubeTiling cube_tiling_data;
     if (vw_tiling.GetTiling(cube_tiling_data) == -1) {
-      std::cerr << "Get " << (is_context_stage ? "prefil" : "decode") << " vw TCubeTiling error, m:" << m << ", n:" << n
-                << ", k:" << k << std::endl;
+      std::cerr << "Get " << (is_multi_token_forward ? "prefil" : "decode") << " vw TCubeTiling error, m:" << m
+                << ", n:" << n << ", k:" << k << std::endl;
       assert(false);
     }
 
@@ -297,8 +297,8 @@ void PagedAttention<T>::GenerateTilingData(bool is_context_stage, uint32_t seq_l
 }
 
 template <typename T>
-void PagedAttention<T>::CopyTilingToDevice(bool is_context_stage, aclrtStream stream) {
-  PagedAttentionTilingData* tiling_data = is_context_stage ? &prefill_tiling_data_ : &decode_tiling_data_;
+void PagedAttention<T>::CopyTilingToDevice(bool is_multi_token_forward, aclrtStream stream) {
+  PagedAttentionTilingData* tiling_data = is_multi_token_forward ? &prefill_tiling_data_ : &decode_tiling_data_;
 
   ACL_CHECK_RET(aclrtMemcpyAsync(tiling_buffer_gm_, tiling_size_, tiling_data, tiling_size_,
                                  aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE, stream));
@@ -307,7 +307,7 @@ void PagedAttention<T>::CopyTilingToDevice(bool is_context_stage, aclrtStream st
 template <typename T>
 void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset, void** kv_list, void* block_offset,
                                 void* rope_pos, int batch_size, int total_token_num, int total_block_num,
-                                int layer_index, bool is_context_stage, aclrtStream stream) {
+                                int layer_index, bool is_multi_token_forward, aclrtStream stream) {
   ACL_CHECK_RET(aclrtMemcpyAsync(kv_list_, layer_num_ * total_block_num * 2 * sizeof(void*), kv_list,
                                  layer_num_ * total_block_num * 2 * sizeof(void*),
                                  aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST, stream));
@@ -318,7 +318,7 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
 
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     ACL_CHECK_RET(aclrtMemcpy(prefill_token_offset_, (batch_size + 1) * sizeof(uint64_t), seq_offset,
                               (batch_size + 1) * sizeof(uint64_t), aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST));
 
@@ -411,7 +411,7 @@ void PagedAttention<T>::Forward(void* output, void* qkv_tensor, void* seq_offset
       total_block_num_idx += cur_block_num;
     }
   } else {
-    // Decode.
+    // SingleTokenForward.
     ACL_CHECK_RET(aclrtMemcpy(decode_tokens_len_, batch_size * sizeof(int32_t), seq_offset,
                               batch_size * sizeof(int32_t), aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST));
 

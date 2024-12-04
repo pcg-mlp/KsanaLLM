@@ -20,11 +20,8 @@ class __attribute__((visibility("hidden"))) LlamaModel : public BaseModel {
 
   float* GetLogitsPtr();
 
-  // The prefill stage.
-  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
-
-  // The decode stage.
-  Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+  // Forward model.
+  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
  private:
   // The common model instance.

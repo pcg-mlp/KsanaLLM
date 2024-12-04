@@ -27,7 +27,6 @@
 #include "ksana_llm/utils/string_utils.h"
 #include "ksana_llm/utils/tokenizer.h"
 
-
 namespace ksana_llm {
 
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, int tp_num)
@@ -45,9 +44,7 @@ void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cach
   schedule_strategy_->SetCacheManager(cache_manager);
 }
 
-void BatchScheduler::SetTokenizer(std::shared_ptr<Tokenizer> tokenizer) {
-  schedule_strategy_->SetTokenizer(tokenizer);
-}
+void BatchScheduler::SetTokenizer(std::shared_ptr<Tokenizer> tokenizer) { schedule_strategy_->SetTokenizer(tokenizer); }
 
 std::shared_ptr<CacheManagerInterface>& BatchScheduler::GetCacheManager() {
   return schedule_strategy_->GetCacheManager();
@@ -138,7 +135,7 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
     const auto current_time = ProfileTimer::GetCurrentTimeInMs();
     for (const auto& req : batch_state_->running_queue) {
       token_num += req->output_tokens.size();
-      if (req->step == 0) {
+      if (req->kv_cached_token_num == 0) {
         REPORT_METRIC(batch_manager_schedule_ms, current_time - req->timestamp_in_ms);
       }
       REPORT_METRIC(req_total_cost_in_queue_ms, current_time - req->timestamp_in_ms);
@@ -149,8 +146,8 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
     // It is always less than 1. If kv caches are shared, it may be greater than 1.
     if (GetBlockManager()->GetDeviceUsedBlockNumber() > 0) {
       REPORT_METRIC(
-        token_fill_ratio,
-        token_num * 1.0 / (GetBlockManager()->GetDeviceUsedBlockNumber() * GetBlockManager()->GetBlockTokenNum()));
+          token_fill_ratio,
+          token_num * 1.0 / (GetBlockManager()->GetDeviceUsedBlockNumber() * GetBlockManager()->GetBlockTokenNum()));
     }
   }
   REPORT_METRIC(block_num_free, GetBlockManager()->GetDeviceFreeBlockNumber());

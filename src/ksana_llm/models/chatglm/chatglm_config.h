@@ -24,7 +24,7 @@ inline void PrepareChatglmAttributes(const nlohmann::json &config_json, ModelCon
   if (config_json.contains("eos_token_id") && config_json["eos_token_id"].is_array()) {
     model_config.end_ids = config_json["eos_token_id"].get<std::vector<uint32_t>>();
   } else {
-    model_config.end_ids = std::vector<uint32_t>{config_json.value("eos_token_id", 2)};
+    model_config.end_ids = std::vector<uint32_t>{static_cast<uint32_t>(config_json.value("eos_token_id", 2))};
   }
   model_config.pad_id = config_json.value("pad_token_id", 0);
   model_config.max_position_embeddings = config_json.value("seq_length", 32768);

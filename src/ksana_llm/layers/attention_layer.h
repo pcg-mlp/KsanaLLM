@@ -75,7 +75,7 @@ class AttentionLayer : public BaseLayer {
   void PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr);
 
   size_t max_batch_size_;
-  bool is_context_stage_;
+  bool is_multi_token_forward_;
 #endif
 };
 

@@ -444,7 +444,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr, void* src_flexible_token_idx_ptr,
                  void* flexible_offset_uint64_ptr, int flexible_len, cudaStream_t stream, void* k_cache_ptr,
                  void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
-                 size_t* without_prefix_offsets, int without_prefix_max_tokens) {
+                 size_t* without_prefix_offsets, int max_forwarding_tokens) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
       torch::from_blob(qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
@@ -547,8 +547,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   c10::optional<at::Tensor> block_table = torch::from_blob(block_table_ptr, {batch, max_blocks_per_seq}, int32_options);
   std::vector<at::Tensor> mha_output = mha_varlen_fwd(
       q_tmp_tensor, k_cache_tensor, v_cache_tensor, out_tensor, seqlen_q_tensor.to(torch::kInt32),
-      seqlen_tensor.to(torch::kInt32), seqused_k, block_table, alibi_slopes_tensor, without_prefix_max_tokens,
-      max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+      seqlen_tensor.to(torch::kInt32), seqused_k, block_table, alibi_slopes_tensor, max_forwarding_tokens, max_tokens,
+      0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.f, false, c10::nullopt);
 
 #    else
   c10::optional<at::Tensor> block_table = c10::nullopt;  // batch_size x max_num_blocks_per_seq
@@ -594,7 +594,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       void* dst_flexible_kv_cache_ptr, void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,          \
       void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len, cudaStream_t stream,   \
       void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                  \
-      int max_blocks_per_seq, size_t* without_prefix_offsets, int without_prefix_max_tokens)
+      int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens)
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);

@@ -21,7 +21,7 @@ class __attribute__((visibility("hidden"))) Qwen2MoeModel : public CommonMoeMode
 
  protected:
   Status CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                   const std::vector<Tensor>& mlp_input, const bool is_context_stage) override;
+                   const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) override;
 
  protected:
   using CommonModel<T>::context_;

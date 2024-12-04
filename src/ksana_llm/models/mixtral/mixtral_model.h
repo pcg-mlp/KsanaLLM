@@ -15,11 +15,8 @@ class __attribute__((visibility("hidden"))) MixtralModel : public BaseModel {
 
   float* GetLogitsPtr();
 
-  // The prefill stage.
-  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
-
-  // The decode stage.
-  Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+  // Forward.
+  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
  private:
   // The commonmoe model instance.

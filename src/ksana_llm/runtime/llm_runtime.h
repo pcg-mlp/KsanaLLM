@@ -44,7 +44,14 @@ class LlmRuntime {
   void BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>> &reqs,
                             std::vector<SamplingRequest> &sampling_reqs);
 
-  // Run context decode and decode serially in single thread.
+  // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
+  // and the requests from the Single-Token Forwarding at the back.
+  void ReorderInferRequests(std::vector<std::shared_ptr<InferRequest>> &reqs);
+
+  // Update Request's kv_cached_token_num.
+  void UpdateRequestKVCachedTokenNum(std::vector<std::shared_ptr<InferRequest>> &reqs);
+
+  // Run multi-token and single-token serially in single thread.
   Status RunSerially(
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 

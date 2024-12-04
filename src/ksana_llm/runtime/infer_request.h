@@ -134,6 +134,9 @@ class InferRequest {
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
 
+  // The number of tokens for which kv caches have been generated.
+  int kv_cached_token_num = 0;
+
   // The kv cache blocks this request used, the index is used as device_id.
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;

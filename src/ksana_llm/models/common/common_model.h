@@ -68,13 +68,10 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   float* GetLogitsPtr() override;
 
-  // The prefill stage.
-  Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                       std::vector<ForwardRequest>& forward_reqs) override;
-
-  // The decode stage.
-  Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                std::vector<ForwardRequest>& forward_reqs) override;
+  // refer
+  // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
+  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                 std::vector<ForwardRequest>& forward_reqs) override;
 
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
@@ -215,26 +212,22 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L257
   virtual Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                 const std::vector<Tensor>& attention_input, const bool is_context_stage);
+                                 const std::vector<Tensor>& attention_input, const bool is_multi_token_forward);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L211
   virtual Status CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                           const std::vector<Tensor>& mlp_input, const bool is_context_stage);
+                           const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L694
   Status CommonDecoderPreNorm(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                              const bool is_context_stage);
+                              const bool is_multi_token_forward);
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/openai/modeling_openai.py#L247
   Status CommonDecoderPostNorm(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                               const bool is_context_stage);
-
-  // refer
-  // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
-  Status CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+                               const bool is_multi_token_forward);
 
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs);
 

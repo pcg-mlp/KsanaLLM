@@ -21,16 +21,12 @@ class BaseModel {
 
   virtual ~BaseModel();
 
+  // Forward model.
+  virtual Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                         std::vector<ForwardRequest>& forward_reqs) = 0;
+
   // The output logits pointer on device, used by sampler to avoid memory copy.
   virtual float* GetLogitsPtr() = 0;
-
-  // The prefill stage.
-  virtual Status ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                               std::vector<ForwardRequest>& forward_reqs) = 0;
-
-  // The decode stage.
-  virtual Status Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                        std::vector<ForwardRequest>& forward_reqs) = 0;
 
   // Implement this method if cuda graph is used.
   virtual Status WarmUpCudaGraph() { return Status(); }

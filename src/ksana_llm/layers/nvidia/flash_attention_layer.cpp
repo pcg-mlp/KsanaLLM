@@ -32,7 +32,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   //     11: dst_flexible_token_idx_tensor,
   //     12: src_flexible_token_idx_tensor,
   //     13: flexible_offset_uint64_tensor,
-  //     14: forward shape: [batch_size, max_tokens, kv_cache_offset_list.back(), xx, xx, xx, without_prefix_max_tokens]
+  //     14: forward shape: [batch_size, max_tokens, kv_cache_offset_list.back(), xx, xx, xx, max_forwarding_tokens]
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   //     15: kv_cache_base_ptr_tensor: [1 + layer_num * 2]
   //     16: block_table: [batch_size, max_tokens]
@@ -56,7 +56,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   int32_t* block_table_ptr = input_tensors[16].GetPtr<int32_t>();
   int max_blocks_per_seq = input_tensors[16].shape[1];
   size_t* input_without_prefix_offset = input_tensors[17].GetPtr<size_t>();
-  int without_prefix_max_tokens = input_tensors[14].shape[6];
+  int max_forwarding_tokens = input_tensors[14].shape[6];
 #endif
 
   AttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
@@ -70,7 +70,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
       input_tensors[12].GetPtr<void>(), input_tensors[13].GetPtr<void>(), input_tensors[9].shape[0],
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
       this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table_ptr,
-      kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset, without_prefix_max_tokens);
+      kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset, max_forwarding_tokens);
 #else
       this->context_->GetComputeStreams()[this->rank_].Get());
 #endif

@@ -468,6 +468,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "stop_token_ids": args.stop_token_ids,
             "max_new_tokens": args.max_new_tokens,
             "ignore_eos": args.ignore_eos,
+            "structured_output_regex": args.structured_output_regex,
         }
     return prompt, orjson.dumps(data)
 

@@ -26,12 +26,12 @@ class __attribute__((visibility("hidden"))) GPTModel : public CommonModel<T> {
   // refer to
   // github huggingface/transformers main/src/transformers/models/openai/modeling_openai.py#L130
   Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         const std::vector<Tensor>& attention_input, const bool is_context_stage) override;
+                         const std::vector<Tensor>& attention_input, const bool is_multi_token_forward) override;
 
   // refer to
   // github huggingface/transformers main/src/transformers/models/openai/modeling_openai.py#L223
   Status CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                   const std::vector<Tensor>& mlp_input, const bool is_context_stage) override;
+                   const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) override;
 
   Status EmbedTokensUseGpu(Tensor& embedding_weight) override;
 

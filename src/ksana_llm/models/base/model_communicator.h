@@ -26,8 +26,8 @@ class ModelCommunicator {
   Status AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
   // The reduce-sum reduce.
-  Status ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors, bool is_context_stage,
-                   bool use_custom);
+  Status ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                   bool is_multi_token_forward, bool use_custom);
 
  private:
   // Whether use the custom reduce layer.
@@ -67,10 +67,9 @@ class ModelCommunicator {
 
  private:
   bool CheckIfUseCustomReduceSum(size_t batch_size, bool use_custom) {
-    return enable_custom_all_reduce_
-          && use_custom
-          && context_->GetSupportedCudaGraphCaptureSizes().find(batch_size)
-              == context_->GetSupportedCudaGraphCaptureSizes().end();
+    return enable_custom_all_reduce_ && use_custom &&
+           context_->GetSupportedCudaGraphCaptureSizes().find(batch_size) ==
+               context_->GetSupportedCudaGraphCaptureSizes().end();
   }
 };
 

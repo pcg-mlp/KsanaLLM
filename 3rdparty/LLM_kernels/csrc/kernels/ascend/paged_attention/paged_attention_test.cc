@@ -86,9 +86,9 @@ class AscendPagedAttentionTestSuit : public AscendTestSuitBase {
   void TearDown() override { AscendTestSuitBase::TearDown(); }
 };
 
-TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionPrefillTest) {
+TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionMultiTokenForwardTest) {
   int total_token_num = 163;
-  bool is_context_stage = true;
+  bool is_multi_token_forward = true;
 
   uint32_t hidden_units = head_size * head_dim;
 
@@ -132,7 +132,7 @@ TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionPrefillTest) {
 
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   paged_attention.Forward(output, qkv_tensor, seq_offset, (void**)kv_list, block_offset, rope_pos, batch_size,
-                          total_token_num, total_block_num, layer_idx, is_context_stage, stream);
+                          total_token_num, total_block_num, layer_idx, is_multi_token_forward, stream);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
   std::vector<aclFloat16> result_host(total_token_num * hidden_units, 0);
@@ -161,9 +161,9 @@ TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionPrefillTest) {
   ACL_CHECK_RET(aclrtFree(output));
 }
 
-TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionDecodeTest) {
+TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionSingleTokenForwardTest) {
   int total_token_num = 2;
-  bool is_context_stage = false;
+  bool is_multi_token_forward = false;
 
   uint32_t hidden_units = head_size * head_dim;
 
@@ -208,7 +208,7 @@ TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionDecodeTest) {
 
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
   paged_attention.Forward(output, qkv_tensor, seq_offset, (void**)kv_list, block_offset, rope_pos, batch_size,
-                          total_token_num, total_block_num, layer_idx, is_context_stage, stream);
+                          total_token_num, total_block_num, layer_idx, is_multi_token_forward, stream);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
   std::vector<aclFloat16> result_host(batch_size * hidden_units, 0);
@@ -237,17 +237,17 @@ TEST_F(AscendPagedAttentionTestSuit, AscendCPagedAttentionDecodeTest) {
   ACL_CHECK_RET(aclrtFree(output));
 }
 
-TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
+TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionMultiTokenForwardTest) {
   constexpr int total_token_num = 163;
-  constexpr bool is_context_stage = true;
+  constexpr bool is_multi_token_forward = true;
   constexpr size_t max_position_embeddings = 2048;
   constexpr float rope_base = 10000.0f;
   uint32_t hidden_units = head_size * head_dim;
   uint32_t max_batch_size = 2;
   ATBAttention<aclFloat16> atb_paged_attention;
   atb_paged_attention.Initialize(max_batch_size, head_size, kv_head_size, head_dim, layer_num, layer_idx,
-                                 block_token_num, stream, default_device, is_context_stage, max_position_embeddings,
-                                 rope_base);
+                                 block_token_num, stream, default_device, is_multi_token_forward,
+                                 max_position_embeddings, rope_base);
   void* output;
   size_t output_size = total_token_num * hidden_units * sizeof(aclFloat16);
   ACL_CHECK_RET(aclrtMalloc(&output, output_size, ACL_MEM_MALLOC_HUGE_FIRST));
@@ -309,8 +309,8 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
   atb_paged_attention.Forward(output, qkv_tensor, rope_pos, slot_mapping, k_cache, v_cache, /*block_tables*/ nullptr,
                               /*max_num_blocks_per_query*/ 0, static_cast<uint32_t>(batch_size),
                               static_cast<uint32_t>(total_token_num), static_cast<uint32_t>(total_block_num),
-                              block_token_num, static_cast<uint32_t>(layer_idx), seq_len_host.data(), is_context_stage,
-                              atb_context, llm_kernels::utils::GetTestWorkSpaceFunc);
+                              block_token_num, static_cast<uint32_t>(layer_idx), seq_len_host.data(),
+                              is_multi_token_forward, atb_context, llm_kernels::utils::GetTestWorkSpaceFunc);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
   std::vector<aclFloat16> result_host(total_token_num * hidden_units, 0);
@@ -339,9 +339,9 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionPrefillTest) {
   ACL_CHECK_RET(aclrtFree(output));
 }
 
-TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
+TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionSingleTokenForwardTest) {
   int total_token_num = 2;
-  bool is_context_stage = false;
+  bool is_multi_token_forward = false;
   constexpr size_t max_position_embeddings = 2048;
   constexpr float rope_base = 10000.0f;
   uint32_t hidden_units = head_size * head_dim;
@@ -349,8 +349,8 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
 
   ATBAttention<aclFloat16> atb_paged_attention;
   atb_paged_attention.Initialize(max_batch_size, head_size, kv_head_size, head_dim, layer_num, layer_idx,
-                                 block_token_num, stream, default_device, is_context_stage, max_position_embeddings,
-                                 rope_base);
+                                 block_token_num, stream, default_device, is_multi_token_forward,
+                                 max_position_embeddings, rope_base);
 
   void* output;
   size_t output_size = batch_size * hidden_units * sizeof(aclFloat16);
@@ -421,8 +421,8 @@ TEST_F(AscendPagedAttentionTestSuit, ATBPagedAttentionDecodeTest) {
   atb_paged_attention.Forward(output, qkv_tensor, rope_pos, slot_mapping, k_cache, v_cache, block_tables_device,
                               max_num_blocks_per_query, static_cast<uint32_t>(batch_size),
                               static_cast<uint32_t>(total_token_num), static_cast<uint32_t>(total_block_num),
-                              block_token_num, static_cast<uint32_t>(layer_idx), seq_len_host.data(), is_context_stage,
-                              atb_context, llm_kernels::utils::GetTestWorkSpaceFunc);
+                              block_token_num, static_cast<uint32_t>(layer_idx), seq_len_host.data(),
+                              is_multi_token_forward, atb_context, llm_kernels::utils::GetTestWorkSpaceFunc);
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
 
   std::vector<aclFloat16> result_host(batch_size * hidden_units, 0);

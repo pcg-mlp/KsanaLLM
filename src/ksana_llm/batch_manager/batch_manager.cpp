@@ -70,6 +70,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     infer_req->pad_id = model_instance->GetModelConfig().pad_id;
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
     infer_req->step = 0;
+    infer_req->kv_cached_token_num = 0;
   }
 
   for (auto &infer_req : infer_request_group) {

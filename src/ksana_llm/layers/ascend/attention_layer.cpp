@@ -30,7 +30,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
   RoPEScalingFactor rope_scaling_factor_config = std::any_cast<const RoPEScalingFactor>(parameters[parameter_index++]);
   max_batch_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  is_context_stage_ = std::any_cast<const bool>(parameters[parameter_index++]);
+  is_multi_token_forward_ = std::any_cast<const bool>(parameters[parameter_index++]);
 
   // TODO(zhongzhicao): The cast should be removed after implementing ROPE.
   // Cast the unused variables to void to suppress the -Wunused-value warnings.

@@ -225,7 +225,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(max_batch_size);
     std::vector<std::any> flash_attention_param = attention_param;
     std::vector<std::any> paged_attention_param = attention_param;
-    // NOTE(karlluo): bool for is_context_stage
+    // NOTE(karlluo): bool for is_multi_token_forward
     flash_attention_param.push_back(true);
     flash_attention_param.push_back(model_input_->mrotary_section_tensor.GetPtr<const int>());
     paged_attention_param.push_back(false);
@@ -297,11 +297,12 @@ Status CommonModel<T>::AddAttentionPrefixCache() {
     size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
     size_t copy_size = (input_length - prefix_length) * size_per_token;
     size_t dst_offset = (model_input_->input_offset_list[idx] + prefix_length) * size_per_token;
-    if (idx >= model_input_->context_num && model_input_->decode_num > 0) {
+    if (idx >= model_input_->multi_token_request_num && model_input_->single_token_request_num > 0) {
       MemcpyAsync(shared_buffer_[0].GetPtr<void>(), mmha_origin_input.GetPtr<void>() + src_offset,
-                  copy_size * model_input_->decode_num, MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
-      shared_buffer_[0].shape = {copy_size / dtype_size, model_input_->decode_num};
-      total_token_num += model_input_->decode_num;
+                  copy_size * model_input_->single_token_request_num, MEMCPY_DEVICE_TO_DEVICE,
+                  context_->GetComputeStreams()[rank_]);
+      shared_buffer_[0].shape = {copy_size / dtype_size, model_input_->single_token_request_num};
+      total_token_num += model_input_->single_token_request_num;
       break;
     }
     MemcpyAsync(mmha_prefix_input.GetPtr<void>() + dst_offset, mmha_origin_input.GetPtr<void>() + src_offset, copy_size,
@@ -328,7 +329,7 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
   size_t src_offset = 0;
   size_t dtype_size = GetTypeSize(mmha_prefix_output.dtype);
   size_t size_per_token = mmha_prefix_output.shape[1] * dtype_size;
-  for (size_t idx = 0; idx < model_input_->context_num; ++idx) {
+  for (size_t idx = 0; idx < model_input_->multi_token_request_num; ++idx) {
     size_t prefix_length = model_input_->input_prefix_list[idx + 1] - model_input_->input_prefix_list[idx];
     size_t input_length = model_input_->input_offset_list[idx + 1] - model_input_->input_offset_list[idx];
     src_offset += prefix_length * size_per_token;
@@ -342,12 +343,14 @@ Status CommonModel<T>::RemoveAttentionPrefixCache() {
   }
   mmha_output.shape = {total_token_num_without_prefix, mmha_prefix_output.shape[1]};
   mmha_output.dtype = mmha_prefix_output.dtype;
-  if (model_input_->decode_num > 0) {
-    MemcpyAsync(hidden_buffer_0_[0].GetPtr<void>() +
-                    shared_buffer_[0].GetTotalBytes() / model_input_->decode_num * total_token_num_without_prefix,
+  if (model_input_->single_token_request_num > 0) {
+    MemcpyAsync(hidden_buffer_0_[0].GetPtr<void>() + shared_buffer_[0].GetTotalBytes() /
+                                                         model_input_->single_token_request_num *
+                                                         total_token_num_without_prefix,
                 shared_buffer_[0].GetPtr<void>(), shared_buffer_[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
                 context_->GetComputeStreams()[rank_]);
-    hidden_buffer_0_[0].shape = {total_token_num_without_prefix + model_input_->decode_num, attention_input_shape[1]};
+    hidden_buffer_0_[0].shape = {total_token_num_without_prefix + model_input_->single_token_request_num,
+                                 attention_input_shape[1]};
   }
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
 
@@ -376,7 +379,7 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
        model_input_->flexible_offset_uint64_tensor, forward_shape_
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
        ,
-       model_input_->layer_kv_cache_ptr_tensor, model_input_->prefill_block_table,
+       model_input_->layer_kv_cache_ptr_tensor, model_input_->multi_token_request_block_table,
        model_input_->input_without_prefix_uint64_tensor
 #  endif
       },
@@ -446,7 +449,7 @@ Status CommonModel<T>::LayerNormForward(const std::string& layer_name,
 
 template <typename T>
 Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                       const std::vector<Tensor>& attention_input, const bool is_context_stage) {
+                                       const std::vector<Tensor>& attention_input, const bool is_multi_token_forward) {
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layer_->Forward(empty_tensors, empty_tensors);
@@ -468,20 +471,20 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
   }
-  if (model_input_->context_num) {
+  if (model_input_->multi_token_request_num) {
     FlashAttentionForward(layer_idx);
-    if (model_input_->decode_num) {
+    if (model_input_->single_token_request_num) {
       std::swap(hidden_buffer_1_, hidden_buffer_0_);
     }
   }
-  if (model_input_->decode_num) {
+  if (model_input_->single_token_request_num) {
     PagedAttentionForward(layer_idx);
   }
 
 #ifdef ENABLE_CUDA
   if (is_cudagraph_enabled) {
     std::string cudagraph_batch_size = fmt::format("{}_{}", model_input_->input_ids.shape[0], layer_idx);
-    if (model_input_->is_cudagraph_capture_request && !is_context_stage &&
+    if (model_input_->is_cudagraph_capture_request && !is_multi_token_forward &&
         cudagraph_runner->captured_batch_sizes.find(cudagraph_batch_size) ==
             cudagraph_runner->captured_batch_sizes.end()) {
       KLLM_LOG_DEBUG << "rank: " << rank_ << "cudagraph start to capture batch size " << cudagraph_batch_size;
@@ -489,7 +492,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
       cudagraph_runner->captured_batch_sizes.insert(cudagraph_batch_size);
       cudagraph_runner->is_capturing_graph = true;
     }
-    if (!is_context_stage && cudagraph_runner->CheckIfGraphExec(cudagraph_batch_size)) {
+    if (!is_multi_token_forward && cudagraph_runner->CheckIfGraphExec(cudagraph_batch_size)) {
       cudagraph_runner->LaunchGraph(cudagraph_batch_size, context_->GetComputeStreams()[rank_].Get());
       return Status();
     }
@@ -524,7 +527,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
 
   // Attn AllReduceSum
   if (model_communicator_) {
-    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
+    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_multi_token_forward, true);
   }
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   set_torch_stream_layer_->Clear();
@@ -534,7 +537,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
 
 template <typename T>
 Status CommonModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                 const std::vector<Tensor>& mlp_input, const bool is_context_stage) {
+                                 const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) {
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
@@ -566,14 +569,14 @@ Status CommonModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm:
   }
   // Mlp AllReduceSum
   if (model_communicator_) {
-    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
+    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_multi_token_forward, true);
   }
   return Status();
 }
 
 template <typename T>
 Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                            const bool is_context_stage) {
+                                            const bool is_multi_token_forward) {
   KLLM_CHECK_WITH_INFO(model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM,
                        "CommonDecoderPreNorm should be called by pre norm models");
 
@@ -583,10 +586,10 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
                    hidden_buffer_0_);
 
   // Common attention
-  STATUS_CHECK_RETURN(CommonAttention(layer_idx, base_weight, hidden_buffer_0_, is_context_stage));
+  STATUS_CHECK_RETURN(CommonAttention(layer_idx, base_weight, hidden_buffer_0_, is_multi_token_forward));
 
   // If this is cudagraph request, then graph is replayed, no need to do following steps
-  if (is_cudagraph_enabled && !is_context_stage && model_input_->is_cudagraph_batchsize_matched &&
+  if (is_cudagraph_enabled && !is_multi_token_forward && model_input_->is_cudagraph_batchsize_matched &&
       !model_input_->is_cudagraph_capture_request) {
     return Status();
   }
@@ -605,7 +608,7 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
                    residual_buffer_, hidden_buffer_0_);
 
   // Common mlp
-  STATUS_CHECK_RETURN(CommonMlp(layer_idx, base_weight, hidden_buffer_0_, is_context_stage));
+  STATUS_CHECK_RETURN(CommonMlp(layer_idx, base_weight, hidden_buffer_0_, is_multi_token_forward));
 
   // Mlp residual add
   STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, residual_buffer_));
@@ -625,13 +628,13 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
 
 template <typename T>
 Status CommonModel<T>::CommonDecoderPostNorm(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                             const bool is_context_stage) {
+                                             const bool is_multi_token_forward) {
   KLLM_CHECK_WITH_INFO(model_run_config_.layernorm_position == LayerNormPosition::POST_NORM,
                        "CommonDecoderPostNorm should be called by post norm models");
 
   // Common attention
   // Post layernorm uses attention input for residual connection.
-  STATUS_CHECK_RETURN(CommonAttention(layer_idx, base_weight, residual_buffer_, is_context_stage));
+  STATUS_CHECK_RETURN(CommonAttention(layer_idx, base_weight, residual_buffer_, is_multi_token_forward));
 
   // Attn residual add
   STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, hidden_buffer_0_));
@@ -642,7 +645,7 @@ Status CommonModel<T>::CommonDecoderPostNorm(const int layer_idx, std::shared_pt
 
   // Common mlp
   // Post layernorm uses mlp input for residual connection.
-  STATUS_CHECK_RETURN(CommonMlp(layer_idx, base_weight, residual_buffer_, is_context_stage));
+  STATUS_CHECK_RETURN(CommonMlp(layer_idx, base_weight, residual_buffer_, is_multi_token_forward));
 
   // Mlp residual add
   STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, hidden_buffer_0_));
@@ -741,8 +744,8 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
 }
 
 template <typename T>
-Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                     std::vector<ForwardRequest>& forward_reqs) {
+Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                               std::vector<ForwardRequest>& forward_reqs) {
   GetBlockManager()->SetDeviceId(rank_);
 
   // Load embeddings from input refit.
@@ -751,7 +754,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   }
 
   model_input_->ParseFromRequests(forward_reqs);
-  bool is_context_stage = model_input_->context_num > 0;
+  bool is_multi_token_forward = model_input_->multi_token_request_num > 0;
 
   // CPU embedding lookup
   // The output is stored in `residual_buffer_` for residual connection in common decoder.
@@ -761,23 +764,23 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   }
 
   // create forward shape tensor
-  forward_shape_.shape = {model_input_->context_num,
-                          model_input_->context_max_tokens,
-                          model_input_->context_total_block_num,
-                          model_input_->decode_num,
-                          model_input_->decode_max_tokens,
-                          model_input_->decode_total_block_num
+  forward_shape_.shape = {model_input_->multi_token_request_num,
+                          model_input_->multi_token_request_max_tokens,
+                          model_input_->multi_token_request_total_block_num,
+                          model_input_->single_token_request_num,
+                          model_input_->single_token_request_max_tokens,
+                          model_input_->single_token_request_total_block_num
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
                           ,
-                          model_input_->context_without_prefix_max_tokens
+                          model_input_->max_forwarding_tokens
 #endif
   };
 #ifdef ENABLE_ACL
-  forward_shape_.shape = {std::max(model_input_->context_num, model_input_->decode_num),
-                          std::max(model_input_->context_max_tokens, model_input_->decode_max_tokens),
-                          static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
+  forward_shape_.shape = {
+      std::max(model_input_->multi_token_request_num, model_input_->single_token_request_num),
+      std::max(model_input_->multi_token_request_max_tokens, model_input_->single_token_request_max_tokens),
+      static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
 #endif
-
   if (model_input_->is_cudagraph_capture_request) {
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
@@ -789,8 +792,8 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
     EmbedTokensUseGpu(embedding_weight);
   }
 
-  // refit input needs to be processed only in the context stage.
-  if (is_context_stage) {
+  // refit input needs to be processed only in the multi-token forwarding.
+  if (is_multi_token_forward) {
     input_refit_layer_->Forward({model_input_->cpu_input_refit_tensor.pos_pair_tensor,
                                  model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor},
                                 residual_buffer_);
@@ -799,15 +802,15 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
   // CommonDecoder
   if (model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM) {
     for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
-      STATUS_CHECK_RETURN(CommonDecoderPreNorm(layer_idx, base_weight, is_context_stage));
+      STATUS_CHECK_RETURN(CommonDecoderPreNorm(layer_idx, base_weight, is_multi_token_forward));
     }
   } else {  // LayerNormPosition::POST_NORM
     for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
-      STATUS_CHECK_RETURN(CommonDecoderPostNorm(layer_idx, base_weight, is_context_stage));
+      STATUS_CHECK_RETURN(CommonDecoderPostNorm(layer_idx, base_weight, is_multi_token_forward));
     }
   }
 
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     if (UpdateResponse(forward_reqs, residual_buffer_[0], "transformer")) {
       StreamSynchronize(context_->GetComputeStreams()[rank_]);
       input_refit_layer_->Clear();
@@ -822,7 +825,7 @@ Status CommonModel<T>::CommonForward(std::shared_ptr<ksana_llm::BaseWeight>& bas
     LayerNormForward("model.norm.weight", base_weight, residual_buffer_, residual_buffer_);
   }
 
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     if (UpdateResponse(forward_reqs, residual_buffer_[0], "layernorm")) {
       StreamSynchronize(context_->GetComputeStreams()[rank_]);
       input_refit_layer_->Clear();
@@ -895,19 +898,6 @@ Status CommonModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs)
     embedding_tensors.clear();
   }
   return Status();
-}
-
-template <typename T>
-Status CommonModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                     std::vector<ForwardRequest>& forward_reqs) {
-  return CommonForward(base_weight, forward_reqs);
-}
-
-template <typename T>
-Status CommonModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                              std::vector<ForwardRequest>& forward_reqs) {
-  // TODO(zakwang): Remove ContextDecode
-  return CommonForward(base_weight, forward_reqs);
 }
 
 template class CommonModel<float>;

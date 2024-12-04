@@ -47,7 +47,7 @@ Status GPTModel<T>::LayerNormForward(const std::string& layer_name, std::shared_
 
 template <typename T>
 Status GPTModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                    const std::vector<Tensor>& attention_input, const bool is_context_stage) {
+                                    const std::vector<Tensor>& attention_input, const bool is_multi_token_forward) {
   // Attn proj MatMul
   Tensor attn_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.query_key_value.weight", layer_idx));
@@ -62,13 +62,13 @@ Status GPTModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_l
     // only need sync in the first layer
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
   }
-  if (model_input_->context_num) {
+  if (model_input_->multi_token_request_num) {
     CommonModel<T>::FlashAttentionForward(layer_idx);
-    if (model_input_->decode_num) {
+    if (model_input_->single_token_request_num) {
       std::swap(hidden_buffer_1_, hidden_buffer_0_);
     }
   }
-  if (model_input_->decode_num) {
+  if (model_input_->single_token_request_num) {
     CommonModel<T>::PagedAttentionForward(layer_idx);
   }
 
@@ -98,14 +98,14 @@ Status GPTModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksana_l
 
   // Attn AllReduceSum
   if (model_communicator_) {
-    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
+    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_multi_token_forward, true);
   }
   return Status();
 }
 
 template <typename T>
 Status GPTModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                              const std::vector<Tensor>& mlp_input, const bool is_context_stage) {
+                              const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) {
   // Mlp gate_proj MatMul
   Tensor gate_proj_weight =
       base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate_proj.weight", layer_idx));
@@ -142,7 +142,7 @@ Status GPTModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::Ba
 
   // Mlp AllReduceSum
   if (model_communicator_) {
-    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
+    model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_multi_token_forward, true);
   }
   return Status();
 }

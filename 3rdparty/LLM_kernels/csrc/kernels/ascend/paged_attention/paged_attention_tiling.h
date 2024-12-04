@@ -21,7 +21,7 @@ struct PagedAttentionTilingData {
   uint32_t data_type;
 
   // Whether it is a context decode stage, 0 or 1.
-  uint32_t context_stage;
+  uint32_t multi_token_forward;
 
   // The seq len of current prompt. for decode stage, it is always 1.
   uint32_t seq_len;

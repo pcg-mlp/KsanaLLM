@@ -23,22 +23,23 @@ class ATBAttention {
   ~ATBAttention();
 
   // Invoke paged attention.
-  void Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache, void* v_cache, void* block_tables,
-               const uint32_t max_num_blocks_per_query, const uint32_t batch_size, const uint32_t total_token_num,
-               const uint32_t total_block_num, const uint32_t block_token_num, const uint32_t layer_index,
-               void* seq_len, const bool is_context_stage, atb::Context* atb_context, void (*ws_func)(size_t, void**));
+  void Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache, void* v_cache,
+               void* block_tables, const uint32_t max_num_blocks_per_query, const uint32_t batch_size,
+               const uint32_t total_token_num, const uint32_t total_block_num, const uint32_t block_token_num,
+               const uint32_t layer_index, void* seq_len, const bool is_multi_token_forward, atb::Context* atb_context,
+               void (*ws_func)(size_t, void**));
 
   // Initialize some necessary information.
   void Initialize(uint32_t max_batch_size, uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,
                   uint32_t layer_num, uint32_t layer_idx, uint32_t block_token_num, aclrtStream& stream, const int rank,
-                  const bool is_context_stage, const size_t max_position_embeddings, const float rope_base,
+                  const bool is_multi_token_forward, const size_t max_position_embeddings, const float rope_base,
                   const RotaryEmbeddingType scaling_type = RotaryEmbeddingType::DEFAULT,
                   const float scaling_factor = 1.0f);
 
-  bool IsPrefillOp() { return is_prefill_; }
+  bool IsMultiTokenForwardOp() { return is_multi_token_forward_; }
 
  private:
-  bool is_prefill_{true};
+  bool is_multi_token_forward_{true};
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
 
   size_t max_position_embeddings_;

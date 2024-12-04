@@ -35,7 +35,7 @@ void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids,
                                   void* v_cache, void* block_tables, const uint32_t max_num_blocks_per_query,
                                   const uint32_t batch_size, const uint32_t total_token_num,
                                   const uint32_t total_block_num, const uint32_t block_token_num,
-                                  const uint32_t layer_index, void* seq_len, const bool is_context_stage,
+                                  const uint32_t layer_index, void* seq_len, const bool is_multi_token_forward,
                                   atb::Context* atb_context, void (*ws_func)(size_t, void**)) {
   aclDataType acl_dtype;
   if (std::is_same<DTYPE, aclFloat16>::value) {
@@ -58,7 +58,7 @@ void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids,
   atb_op_executor_.SetInputTensor(rope_cos_workspace_ptr_, {max_position_embeddings_, head_dim_}, acl_dtype);
   // rope_sin_input_tensor_id
   atb_op_executor_.SetInputTensor(rope_sin_workspace_ptr_, {max_position_embeddings_, head_dim_}, acl_dtype);
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     // mask_input_tensor_id
     atb_op_executor_.SetInputTensor(attn_mask_ptr_, {MAX_SEQ_LEN, MAX_SEQ_LEN}, acl_dtype);
   }
@@ -68,7 +68,7 @@ void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids,
   atb_op_executor_.SetInputTensor(v_cache, {total_block_num, block_token_num, kv_head_size_, head_dim_}, acl_dtype);
   // slots_input_tensor_id
   atb_op_executor_.SetInputTensor(slot_mapping, {total_token_num}, aclDataType::ACL_INT32);
-  if (!is_context_stage) {
+  if (!is_multi_token_forward) {
     // block_tables_input_tensor_id
     atb_op_executor_.SetInputTensor(block_tables, {total_token_num, max_num_blocks_per_query}, aclDataType::ACL_INT32);
   }
@@ -83,7 +83,7 @@ template <typename DTYPE>
 void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size, uint32_t kv_head_size,
                                      uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx,
                                      uint32_t block_token_num, aclrtStream& stream, const int rank,
-                                     const bool is_context_stage, const size_t max_position_embeddings,
+                                     const bool is_multi_token_forward, const size_t max_position_embeddings,
                                      const float rope_base, const RotaryEmbeddingType scaling_type,
                                      const float scaling_factor) {
   max_batch_size_ = max_batch_size;
@@ -93,7 +93,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   layer_num_ = layer_num;
   block_token_num_ = block_token_num;
   rank_ = rank;
-  is_prefill_ = is_context_stage;
+  is_multi_token_forward_ = is_multi_token_forward;
   max_position_embeddings_ = max_position_embeddings;
 
   // TODO(karlluo): tag which query should be handle
@@ -102,7 +102,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   // init rope cos and sin
   InitRopeCosSinWorkspace(max_position_embeddings, rope_base, head_dim, scaling_factor, scaling_type, stream);
 
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     InitAttnMask();
   }
 
@@ -116,18 +116,18 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   uint32_t rope_cos_input_tensor_id = tensor_id++;
   // shape: (ntokens, head_dim)
   uint32_t rope_sin_input_tensor_id = tensor_id++;
-  // is_context_stage == true:
+  // is_multi_token_forward == true:
   //   shape: (MAX_SEQ_LEN, MAX_SEQ_LEN)
-  uint32_t mask_input_tensor_id = is_context_stage ? tensor_id++ : 0;
+  uint32_t mask_input_tensor_id = is_multi_token_forward ? tensor_id++ : 0;
   // shape: (num_blocks, block_size, k_head_num, head_size)
   uint32_t k_cache_input_tensor_id = tensor_id++;
   // shape: (num_blocks, block_size, k_head_num, head_size)
   uint32_t v_cache_input_tensor_id = tensor_id++;
   // shape: (ntokens)
   uint32_t slots_input_tensor_id = tensor_id++;
-  // is_context_stage == false:
+  // is_multi_token_forward == false:
   //   shape: (num_tokens, max_num_blocks_per_query)
-  uint32_t block_tables_input_tensor_id = !is_context_stage ? tensor_id++ : 0;
+  uint32_t block_tables_input_tensor_id = !is_multi_token_forward ? tensor_id++ : 0;
   // shape: (batch)
   uint32_t seqlen_input_tensor_id = tensor_id++;
   // output
@@ -144,7 +144,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   uint32_t sin_inner_tensor_id = tensor_id++;
 
   atb::GraphParam op_graph;
-  op_graph.name = is_context_stage ? "ATBSelfAttentionOp" : "ATBPagedAttentionOp";
+  op_graph.name = is_multi_token_forward ? "ATBSelfAttentionOp" : "ATBPagedAttentionOp";
   op_graph.inTensorNum = seqlen_input_tensor_id - qkv_input_tensor_id + 1;
   op_graph.outTensorNum = 1;
   op_graph.internalTensorNum = sin_inner_tensor_id - q_inner_tensor_id + 1;
@@ -212,7 +212,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   }
 
   // flash attn or paged attn
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     atb::Node& op_node = op_graph.nodes.at(node_idx++);
     atb::infer::SelfAttentionParam op_param;
     op_param.headNum = head_size;
@@ -301,9 +301,9 @@ void ATBAttention<DTYPE>::InitRopeCosSinWorkspace(const size_t max_position_embe
         float cos_val = std::cos(freq);
         float sin_val = std::cos(freq);
         // NOTE(karlluo): there is not bfloat16 type in cann, so we take int16_t as bfloat16 as dtype indicator
-        cos_workspace_host[pos * head_dim + rid] = (*reinterpret_cast<int *>(&(cos_val)))>>16;
+        cos_workspace_host[pos * head_dim + rid] = (*reinterpret_cast<int*>(&(cos_val))) >> 16;
         cos_workspace_host[pos * head_dim + head_dim / 2 + rid] = cos_workspace_host[pos * head_dim + rid];
-        sin_workspace_host[pos * head_dim + rid] = (*reinterpret_cast<int *>(&(sin_val)))>>16;
+        sin_workspace_host[pos * head_dim + rid] = (*reinterpret_cast<int*>(&(sin_val))) >> 16;
         sin_workspace_host[pos * head_dim + head_dim / 2 + rid] = sin_workspace_host[pos * head_dim + rid];
       } else {
         throw std::invalid_argument("Invalid rope compute type, only support float16, bfloat16 or float32.");

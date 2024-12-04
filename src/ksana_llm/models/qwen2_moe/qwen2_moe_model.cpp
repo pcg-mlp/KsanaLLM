@@ -55,7 +55,7 @@ void Qwen2MoeModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std
 
 template <typename T>
 Status Qwen2MoeModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                   const std::vector<Tensor>& mlp_input, const bool is_context_stage) {
+                                   const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) {
   if (model_config_.has_shared_experts) {
 #ifdef ENABLE_CUDA
     // Expert gating MatMul
@@ -125,11 +125,11 @@ Status Qwen2MoeModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_ll
 
     // Mlp AllReduceSum
     if (model_communicator_) {
-      model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_context_stage, true);
+      model_communicator_->ReduceSum(reduce_buffer_, hidden_buffer_0_, is_multi_token_forward, true);
     }
 #endif
   } else {
-    CommonMoeModel<T>::CommonMlp(layer_idx, base_weight, mlp_input, is_context_stage);
+    CommonMoeModel<T>::CommonMlp(layer_idx, base_weight, mlp_input, is_multi_token_forward);
   }
   return Status();
 }

@@ -23,11 +23,14 @@ struct ForwardRequest {
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
 
+  // The number of tokens whose kv caches have been generated.
+  int kv_cached_token_num = 0;
+
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
 
   // Multimodal rotary position embedding offset, this points to the corresponding member in infer_request.
-  int64_t *mrotary_embedding_pos_offset = nullptr;
+  int64_t* mrotary_embedding_pos_offset = nullptr;
 
   // The input tokens.
   std::vector<int>* output_tokens;

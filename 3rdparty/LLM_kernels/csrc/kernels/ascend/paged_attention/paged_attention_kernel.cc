@@ -58,12 +58,12 @@ class PagedAttentionKernel {
   __aicore__ inline void ContextCompute(uint32_t head_idx, uint32_t tok_idx);
   __aicore__ inline void ContextCopyOut(uint32_t head_idx, uint32_t tok_idx);
 
-  __aicore__ inline void DecodeCopyIn(uint32_t head_idx, uint32_t tok_idx);
-  __aicore__ inline void DecodeCompute(uint32_t head_idx, uint32_t tok_idx);
-  __aicore__ inline void DecodeCopyOut(uint32_t head_idx, uint32_t tok_idx);
+  __aicore__ inline void SingleTokenForwardCopyIn(uint32_t head_idx, uint32_t tok_idx);
+  __aicore__ inline void SingleTokenForwardCompute(uint32_t head_idx, uint32_t tok_idx);
+  __aicore__ inline void SingleTokenForwardCopyOut(uint32_t head_idx, uint32_t tok_idx);
 
-  __aicore__ inline void ProcessPrefill();
-  __aicore__ inline void ProcessDecode();
+  __aicore__ inline void ProcessMultiTokenForward();
+  __aicore__ inline void ProcessSingleTokenForward();
 
   TPipe* pipe_;
 
@@ -125,7 +125,7 @@ __aicore__ void PagedAttentionKernel<T>::Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, G
   k_gm_.SetGlobalBuffer((__gm__ T*)k);
   v_gm_.SetGlobalBuffer((__gm__ T*)v);
 
-  if (tiling_->context_stage == 0) {
+  if (tiling_->multi_token_forward == 0) {
     k_list_gm_.SetGlobalBuffer((__gm__ uint32_t*)k_list);
     v_list_gm_.SetGlobalBuffer((__gm__ uint32_t*)v_list);
   }
@@ -140,7 +140,7 @@ __aicore__ void PagedAttentionKernel<T>::Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, G
 
   pipe_->InitBuffer(mask_input_queue_, BUFFER_NUM, padded_seq_len_ * sizeof(T));
 
-  if (tiling_->context_stage == 0) {
+  if (tiling_->multi_token_forward == 0) {
     pipe_->InitBuffer(attn_wv_result_queue_, BUFFER_NUM, tiling_->head_dim * sizeof(T));
     pipe_->InitBuffer(attn_wv_buffer_queue_, BUFFER_NUM, tiling_->head_dim * sizeof(T));
   }
@@ -149,7 +149,7 @@ __aicore__ void PagedAttentionKernel<T>::Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, G
 }
 
 template <typename T>
-__aicore__ void PagedAttentionKernel<T>::ProcessPrefill() {
+__aicore__ void PagedAttentionKernel<T>::ProcessMultiTokenForward() {
   REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &tiling_->cube_tiling_qk, mm2_, &tiling_->cube_tiling_wv);
 
   uint32_t head_idx = block_idx_;
@@ -180,7 +180,7 @@ __aicore__ void PagedAttentionKernel<T>::ProcessPrefill() {
 }
 
 template <typename T>
-__aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
+__aicore__ void PagedAttentionKernel<T>::ProcessSingleTokenForward() {
   REGIST_MATMUL_OBJ(pipe_, GetSysWorkSpacePtr(), mm_, &tiling_->cube_tiling_qk, mm2_, &tiling_->cube_tiling_wv);
 
   uint32_t head_idx = block_idx_;
@@ -206,9 +206,9 @@ __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
   }
 
   // scaling & attn_mask & softmax.
-  DecodeCopyIn(head_idx, tiling_->token_pos);
-  DecodeCompute(head_idx, tiling_->token_pos);
-  DecodeCopyOut(head_idx, tiling_->token_pos);
+  SingleTokenForwardCopyIn(head_idx, tiling_->token_pos);
+  SingleTokenForwardCompute(head_idx, tiling_->token_pos);
+  SingleTokenForwardCopyOut(head_idx, tiling_->token_pos);
 
   LocalTensor<T> local_tensor_result = attn_wv_result_queue_.AllocTensor<T>();
   LocalTensor<T> local_tensor_buffer = attn_wv_buffer_queue_.AllocTensor<T>();
@@ -252,10 +252,10 @@ __aicore__ void PagedAttentionKernel<T>::ProcessDecode() {
 
 template <typename T>
 __aicore__ void PagedAttentionKernel<T>::Process() {
-  if (tiling_->context_stage == 1) {
-    ProcessPrefill();
-  } else if (tiling_->context_stage == 0) {
-    ProcessDecode();
+  if (tiling_->multi_token_forward == 1) {
+    ProcessMultiTokenForward();
+  } else if (tiling_->multi_token_forward == 0) {
+    ProcessSingleTokenForward();
   }
 }
 
@@ -320,7 +320,7 @@ __aicore__ void PagedAttentionKernel<T>::ContextCopyOut(uint32_t head_idx, uint3
 }
 
 template <typename T>
-__aicore__ void PagedAttentionKernel<T>::DecodeCopyIn(uint32_t head_idx, uint32_t tok_idx) {
+__aicore__ void PagedAttentionKernel<T>::SingleTokenForwardCopyIn(uint32_t head_idx, uint32_t tok_idx) {
   LocalTensor<T> local_tensor = input_queue_.AllocTensor<T>();
 
   uint32_t head_offset = head_idx * 1 * tiling_->seq_len;
@@ -342,7 +342,7 @@ __aicore__ void PagedAttentionKernel<T>::DecodeCopyIn(uint32_t head_idx, uint32_
 }
 
 template <typename T>
-__aicore__ void PagedAttentionKernel<T>::DecodeCompute(uint32_t head_idx, uint32_t tok_idx) {
+__aicore__ void PagedAttentionKernel<T>::SingleTokenForwardCompute(uint32_t head_idx, uint32_t tok_idx) {
   LocalTensor<T> local_tensor = input_queue_.DeQue<T>();
 
   LocalTensor<T> softmax_max_tensor = softmax_max_queue_.AllocTensor<T>();
@@ -368,7 +368,7 @@ __aicore__ void PagedAttentionKernel<T>::DecodeCompute(uint32_t head_idx, uint32
 }
 
 template <typename T>
-__aicore__ void PagedAttentionKernel<T>::DecodeCopyOut(uint32_t head_idx, uint32_t tok_idx) {
+__aicore__ void PagedAttentionKernel<T>::SingleTokenForwardCopyOut(uint32_t head_idx, uint32_t tok_idx) {
   LocalTensor<T> local_tensor = output_queue_.DeQue<T>();
 
   uint32_t head_offset = head_idx * 1 * tiling_->seq_len;

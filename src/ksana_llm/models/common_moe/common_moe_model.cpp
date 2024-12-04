@@ -33,7 +33,7 @@ void CommonMoeModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, st
 
 template <typename T>
 Status CommonMoeModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                    const std::vector<Tensor>& mlp_input, const bool is_context_stage) {
+                                    const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) {
 #ifdef ENABLE_CUDA
   // Expert share gating MatMul
   Tensor expert_gating_weight = base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.gate.weight", layer_idx));
@@ -56,7 +56,7 @@ Status CommonMoeModel<T>::CommonMlp(const int layer_idx, std::shared_ptr<ksana_l
 
   // Mlp AllReduceSum
   if (model_communicator_) {
-    model_communicator_->ReduceSum(hidden_buffer_1_, hidden_buffer_0_, is_context_stage, true);
+    model_communicator_->ReduceSum(hidden_buffer_1_, hidden_buffer_0_, is_multi_token_forward, true);
   }
 #endif
   return Status();

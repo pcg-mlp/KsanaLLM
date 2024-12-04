@@ -87,9 +87,9 @@ Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors,
 
 template <typename T>
 Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                                       bool is_context_stage, bool use_custom) {
+                                       bool is_multi_token_forward, bool use_custom) {
 #ifdef ENABLE_CUDA
-  if (is_context_stage) {
+  if (is_multi_token_forward) {
     STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
   } else {
     if (CheckIfUseCustomReduceSum(input_tensors[0].shape[0], use_custom)) {

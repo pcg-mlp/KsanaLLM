@@ -119,10 +119,6 @@ void ContinuousBatchingStrategy::CheckJumpForwardRequest(std::shared_ptr<InferRe
     // We use retokenizer to avoid issues related to tokenization boundaries during constrained decoding.
     ExtendTokensWithRetokenization(req);
     // ExtendTokensWithoutRetokenization(req);
-    if (req->req_fsm->IsStopState(req->fsm_state_id)) {
-      return;
-    }
-    req->infer_stage = InferStage::STAGE_CONTEXT;
   } else if (state->state_type_ == FiniteStateType::GENERATION_STATE) {
     // generation states
     size_t next_state_id = state->GetNextStateId(req->output_tokens.back());
@@ -147,6 +143,7 @@ void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> 
   req->kv_cache_blocks.resize(tp_num_);
   req->infer_stage = InferStage::STAGE_CONTEXT;
   req->step = 0;
+  req->kv_cached_token_num = 0;
   req->complete_output_tokens = req->output_tokens;
 }
 
@@ -418,11 +415,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       cache_manager_->DestroyFinishedRequest(req->req_id);
 
       // Add recomputed request to the begining of waiting queue.
-      req->kv_cache_blocks.clear();
-      req->kv_cache_blocks.resize(tp_num_);
-      req->infer_stage = InferStage::STAGE_CONTEXT;
-      req->step = 0;
-      req->complete_output_tokens = req->output_tokens;
+      RecomputeRequest(req);
       batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
       batch_state_->running_queue.erase(it);
 

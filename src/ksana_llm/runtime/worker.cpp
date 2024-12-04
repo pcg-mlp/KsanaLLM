@@ -20,20 +20,7 @@ Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWei
   SetDevice(rank_);
   opentelemetry::trace::StartSpanOptions options;
 
-  switch (stage) {
-    case InferStage::STAGE_CONTEXT:
-      KLLM_LOG_DEBUG << "ContextDecode infer on work_id: " << rank_;
-      model->ContextDecode(weight, forward_reqs);
-      break;
-    case InferStage::STATE_DECODE:
-      KLLM_LOG_DEBUG << "Decode infer on work_id: " << rank_;
-      model->Decode(weight, forward_reqs);
-      break;
-    default:
-      KLLM_THROW(fmt::format("Invalid infer stage: {}. Valid stages include STAGE_CONTEXT and STATE_DECODE", stage));
-  }
-
-  return Status();
+  return model->Forward(weight, forward_reqs);
 }
 
 std::future<Status> Worker::ForwardAsync(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
@@ -44,8 +31,7 @@ std::future<Status> Worker::ForwardAsync(std::shared_ptr<BaseModel> model, std::
 Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs) {
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
-  sampler->Sampling(sampling_reqs, context_->GetComputeStreams()[rank_]);
-  return Status();
+  return sampler->Sampling(sampling_reqs, context_->GetComputeStreams()[rank_]);
 }
 
 std::future<Status> Worker::SamplingAsync(std::shared_ptr<Sampler> sampler,

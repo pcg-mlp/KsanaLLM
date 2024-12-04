@@ -23,15 +23,9 @@ float* LlamaModel<T>::GetLogitsPtr() {
 }
 
 template <typename T>
-Status LlamaModel<T>::ContextDecode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                    std::vector<ForwardRequest>& forward_reqs) {
-  return common_model_->ContextDecode(base_weight, forward_reqs);
-}
-
-template <typename T>
-Status LlamaModel<T>::Decode(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                             std::vector<ForwardRequest>& forward_reqs) {
-  return common_model_->Decode(base_weight, forward_reqs);
+Status LlamaModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                              std::vector<ForwardRequest>& forward_reqs) {
+  return common_model_->Forward(base_weight, forward_reqs);
 }
 
 template class LlamaModel<float>;

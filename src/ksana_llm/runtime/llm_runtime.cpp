@@ -51,10 +51,6 @@ void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   int logits_offset = 0;
-  std::sort(reqs.begin(), reqs.end(),
-            [](const std::shared_ptr<InferRequest>& a, const std::shared_ptr<InferRequest>& b) {
-              return a->infer_stage < b->infer_stage;
-            });
   for (size_t i = 0; i < reqs.size(); ++i) {
     std::shared_ptr<InferRequest>& req_ptr = reqs[i];
     req_ptr->step += 1;
@@ -80,6 +76,7 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.req_id = req_ptr->req_id;
     forward_req.infer_stage = req_ptr->infer_stage;
     forward_req.step = req_ptr->step;
+    forward_req.kv_cached_token_num = req_ptr->kv_cached_token_num;
     forward_req.logits_custom_length = req_ptr->logits_custom_length;
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = req_ptr->GetLogitsPtr();
@@ -171,6 +168,28 @@ Status LlmRuntime::RunSerially(
   return result_status;
 }
 
+void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+  // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
+  // the requests are first sorted to utilize contiguous space for accelerated inference.
+  // Sort the infer_reqs list based on the number of tokens that need to be calculated for the KV cache.
+  std::sort(reqs.begin(), reqs.end(),
+            [](const std::shared_ptr<InferRequest>& a, const std::shared_ptr<InferRequest>& b) {
+              int a_token_num = a->output_tokens.size() - a->kv_cached_token_num;
+              int b_token_num = b->output_tokens.size() - b->kv_cached_token_num;
+              if (a_token_num != b_token_num) {
+                return a_token_num >= b_token_num;
+              }
+              return a->kv_cached_token_num <= b->kv_cached_token_num;
+            });
+}
+
+void LlmRuntime::UpdateRequestKVCachedTokenNum(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    std::shared_ptr<InferRequest>& req_ptr = reqs[i];
+    req_ptr->kv_cached_token_num = req_ptr->output_tokens.size() - 1;
+  }
+}
+
 Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
   BuildForwardRequests(reqs, grouped_reqs);
@@ -198,6 +217,7 @@ Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
       }
     }
   }
+
   return result_status;
 }
 
@@ -262,8 +282,11 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
 
 Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   KLLM_LOG_DEBUG << "llm runtime step invoked.";
+  ReorderInferRequests(reqs);
   Forward(reqs);
-  return Sampling(reqs);
+  Sampling(reqs);
+  UpdateRequestKVCachedTokenNum(reqs);
+  return Status();
 }
 
 }  // namespace ksana_llm

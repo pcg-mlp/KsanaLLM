@@ -25,7 +25,7 @@ class PagedAttention {
 
   // Invoke paged attention.
   void Forward(void* output, void* qkv_tensor, void* seq_offset, void** kv_list, void* block_offset, void* rope_pos,
-               int batch_size, int total_token_num, int total_block_num, int layer_index, bool is_context_stage,
+               int batch_size, int total_token_num, int total_block_num, int layer_index, bool is_multi_token_forward,
                aclrtStream stream);
 
   // Initialize some necessary information.
@@ -35,13 +35,13 @@ class PagedAttention {
                   const float scaling_factor = 1.0f);
 
  private:
-  void GenerateTilingData(bool is_context_stage, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos);
+  void GenerateTilingData(bool is_multi_token_forward, uint32_t seq_len, uint32_t seq_block_num, int32_t token_pos);
 
   // Initialize common tiling data.
-  void InitTilingData(bool is_context_stage);
+  void InitTilingData(bool is_multi_token_forward);
 
   // Copy the tiling data from host to global memory.
-  void CopyTilingToDevice(bool is_context_stage, aclrtStream stream);
+  void CopyTilingToDevice(bool is_multi_token_forward, aclrtStream stream);
 
   void InitAttnMask();
   void InitPermuteTiling(aclrtStream stream);

@@ -37,13 +37,13 @@ class ModelInput {
                                 size_t total_block_num, Tensor& block_table);
 #endif
 
-  void PreparePrefillPositionIds(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareMultiTokenRequestPositionIds(const std::vector<ForwardRequest>& forward_reqs);
 
-  void PrepareDecodePositionIds(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareSingleTokenRequestPositionIds(const std::vector<ForwardRequest>& forward_reqs);
 
-  void PreparePrefillInputIds(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareMultiTokenRequestInputIds(const std::vector<ForwardRequest>& forward_reqs);
 
-  void PrepareDecodeInputIds(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareSingleTokenRequestInputIds(const std::vector<ForwardRequest>& forward_reqs);
 
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
 
@@ -52,32 +52,32 @@ class ModelInput {
 #endif
 
 #ifdef ENABLE_ACL
-  void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_context_stage);
+  void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward);
 #endif
 
  public:
   // The input batch size.
   size_t batch_size;
 
-  // The context total sequence length.
-  size_t context_total_seq_len = 0;
+  // The multi-token forwarding request total sequence length.
+  size_t multi_token_request_total_seq_len = 0;
 
-  // ContextDecode reqs num.
-  size_t context_num = 0;
+  // Number of requests who are forwarding multi-tokens in this step.
+  size_t multi_token_request_num = 0;
 
-  // Decode reqs num.
-  size_t decode_num = 0;
+  // Number of requests who are forwarding single-token in this step.
+  size_t single_token_request_num = 0;
 
   // The total prefix length.
   size_t total_prefix_len = 0;
 
-  // The total block numbe.
-  size_t context_total_block_num = 0;
-  size_t decode_total_block_num = 0;
+  // The total block number.
+  size_t multi_token_request_total_block_num = 0;
+  size_t single_token_request_total_block_num = 0;
 
   // The max tokens.
-  size_t context_max_tokens = 0;
-  size_t decode_max_tokens = 0;
+  size_t multi_token_request_max_tokens = 0;
+  size_t single_token_request_max_tokens = 0;
 
   size_t cudagraph_batch_size = 0;
 
@@ -170,12 +170,13 @@ class ModelInput {
   Tensor k_cache_blocks_base;
   Tensor v_cache_blocks_base;
 
-  // for prefill stage: layers_slot_mapping shape is [num_layers, all_reqs_tokens_num]
-  // for decode stage: layers_block_table shape is [num_layers, batch_size]
+  // for multi-token forwarding: layers_slot_mapping shape is [num_layers, all_reqs_tokens_num]
+  // for single-token forwarding: layers_block_table shape is [num_layers, batch_size]
   std::vector<int32_t> layers_slot_mapping_host;
   Tensor layers_slot_mapping;
 
-  // only used for decode stage: layers_block_table shape is [num_layers, batch_size * max_num_blocks_per_query]
+  // only used for single-token forwarding: layers_block_table shape is [num_layers, batch_size *
+  // max_num_blocks_per_query]
   std::vector<int32_t> layers_block_table_host;
   Tensor layers_block_table;
 
@@ -193,11 +194,11 @@ class ModelInput {
 
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   std::vector<int32_t> block_table_host;
-  Tensor prefill_block_table, decode_block_table;
+  Tensor multi_token_request_block_table, single_token_request_block_table;
   Tensor layer_kv_cache_ptr_tensor;
   std::vector<size_t> input_without_prefix_list_uint64;
   Tensor input_without_prefix_uint64_tensor;
-  size_t context_without_prefix_max_tokens = 0;
+  size_t max_forwarding_tokens = 0;
 #endif
 
  private:

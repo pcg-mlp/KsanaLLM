@@ -2,8 +2,8 @@
 
 ==============================================================================*/
 
-#include <stdlib.h>
 #include <Python.h>
+#include <stdlib.h>
 #include <filesystem>
 
 #include "ksana_llm/block_manager/block_manager.h"
@@ -140,7 +140,7 @@ class LlamaTest : public testing::Test {
         (uintptr_t(forward.kv_cache_ptrs[0][0]) - uintptr_t(GetBlockManager()->GetBlockBasePtr())) /
         (2 * model_config.num_layer * model_config.block_token_num * model_config.head_num *
          model_config.size_per_head) /
-         GetTypeSize(block_manager->GetBlockManagerConfig().device_allocator_config.kv_cache_dtype);
+        GetTypeSize(block_manager->GetBlockManagerConfig().device_allocator_config.kv_cache_dtype);
     forward.atb_kv_cache_base_blk_ids[0].push_back(
         {static_cast<int32_t>(origin_block_id * 2 * model_config.num_layer)});
 #endif
@@ -148,12 +148,12 @@ class LlamaTest : public testing::Test {
     KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
                                   forward.kv_cache_ptrs[0][0] + (GetBlockManager()->GetBlockSize()));
     std::vector<ForwardRequest> forward_reqs = {forward};
-    EXPECT_TRUE(llama->ContextDecode(llama_weight, forward_reqs).OK());
+    EXPECT_TRUE(llama->Forward(llama_weight, forward_reqs).OK());
 
     std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
     EventRecord(start, context_->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
-      llama->ContextDecode(llama_weight, multi_forward_reqs);
+      llama->Forward(llama_weight, multi_forward_reqs);
     }
     EventRecord(stop, context_->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -200,14 +200,18 @@ class LlamaTest : public testing::Test {
 
     for (auto &forward_req : forward_reqs) {
       forward_req.infer_stage = InferStage::STATE_DECODE;
+      forward_req.kv_cached_token_num = forward_req.output_tokens->size() - 1;
     }
     // Decode
-    EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+    EXPECT_TRUE(llama->Forward(llama_weight, forward_reqs).OK());
     sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29896, (*forward_reqs[0].output_tokens)[3]);
+    for (auto &forward_req : forward_reqs) {
+      forward_req.kv_cached_token_num = forward_req.output_tokens->size() - 1;
+    }
 
 #ifdef ENABLE_CUDA
-    EXPECT_TRUE(llama->Decode(llama_weight, forward_reqs).OK());
+    EXPECT_TRUE(llama->Forward(llama_weight, forward_reqs).OK());
     sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29929, (*forward_reqs[0].output_tokens)[4]);
 #endif
@@ -215,9 +219,10 @@ class LlamaTest : public testing::Test {
     EventRecord(start, context_->GetComputeStreams()[device_id]);
     for (auto &forward_req : multi_forward_reqs) {
       forward_req.infer_stage = InferStage::STATE_DECODE;
+      forward_req.kv_cached_token_num = forward_req.output_tokens->size() - 1;
     }
     for (int i = 0; i < rounds; ++i) {
-      llama->Decode(llama_weight, multi_forward_reqs);
+      llama->Forward(llama_weight, multi_forward_reqs);
     }
     EventRecord(stop, context_->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -249,7 +254,7 @@ class LlamaTest : public testing::Test {
       EXPECT_EQ(result[i], dst[i]);
     }
     EXPECT_TRUE(model_input.use_logits_custom_length);
-    EXPECT_TRUE(llama->ContextDecode(llama_weight, prompt_probs_forward_reqs).OK());
+    EXPECT_TRUE(llama->Forward(llama_weight, prompt_probs_forward_reqs).OK());
 #else
     // NOTE(karlluo): ACL inference is slower than CUDA
     EXPECT_TRUE((milliseconds / rounds) < 300) << "milliseconds / " << rounds << " is: " << milliseconds / rounds;

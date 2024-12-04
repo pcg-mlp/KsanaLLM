@@ -18,7 +18,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<
     atb_paged_attn_ = std::make_shared<llm_kernels::ascend::ATBAttention<SCALAR_T>>();
     atb_paged_attn_->Initialize(static_cast<uint32_t>(this->max_batch_size_), this->num_heads_, this->num_kv_heads_,
                                 this->head_size_, this->layer_num_, this->layer_index_, this->block_token_num_,
-                                context->GetComputeStreams()[rank].Get(), rank, /*is_context_stage*/ false,
+                                context->GetComputeStreams()[rank].Get(), rank, /*is_multi_token_forward*/ false,
                                 this->max_position_embeddings_, this->base_);
   }
   return Status();
@@ -61,13 +61,14 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   int32_t* slot_mapping = input_tensors[2].GetPtr<int32_t>() + this->layer_index_ * slot_mapping_dim_1;
   int32_t* blocks_table =
       input_tensors[3].GetPtr<int32_t>() + this->layer_index_ * batch_size * max_num_blocks_per_query;
-  atb_paged_attn_->Forward(
-      output, qkv_tensor, rotary_embedding_pos, reinterpret_cast<void*>(slot_mapping), k_cache, v_cache,
-      /*block_tables*/ reinterpret_cast<void*>(blocks_table),
-      /*max_num_blocks_per_query*/ max_num_blocks_per_query, static_cast<uint32_t>(batch_size),
-      static_cast<uint32_t>(total_token_num), static_cast<uint32_t>(total_block_num), this->block_token_num_,
-      static_cast<uint32_t>(this->layer_index_), seq_len_host.data(),
-      /*is_context_stage*/ false, reinterpret_cast<atb::Context*>(GetRuntimeContext(this->rank_)), GetWorkSpaceFunc());
+  atb_paged_attn_->Forward(output, qkv_tensor, rotary_embedding_pos, reinterpret_cast<void*>(slot_mapping), k_cache,
+                           v_cache,
+                           /*block_tables*/ reinterpret_cast<void*>(blocks_table),
+                           /*max_num_blocks_per_query*/ max_num_blocks_per_query, static_cast<uint32_t>(batch_size),
+                           static_cast<uint32_t>(total_token_num), static_cast<uint32_t>(total_block_num),
+                           this->block_token_num_, static_cast<uint32_t>(this->layer_index_), seq_len_host.data(),
+                           /*is_multi_token_forward*/ false,
+                           reinterpret_cast<atb::Context*>(GetRuntimeContext(this->rank_)), GetWorkSpaceFunc());
   return Status();
 }
 

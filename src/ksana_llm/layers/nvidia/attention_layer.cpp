@@ -63,7 +63,7 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
       scaling_factor = rope_scaling_factor_config.factor;
       original_max_position_embeddings = rope_scaling_factor_config.original_max_position_embeddings;
     } else if (rope_scaling_factor_config.type == "mrope") {
-      if (/* is_context_stage */ std::any_cast<const bool>(parameters[parameter_index + 1])) {
+      if (/* is_multi_token_forward */ std::any_cast<const bool>(parameters[parameter_index + 1])) {
         rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::MROPE;
         mrope_section_ptr = std::any_cast<const int*>(parameters[parameter_index + 2]);
       } else {

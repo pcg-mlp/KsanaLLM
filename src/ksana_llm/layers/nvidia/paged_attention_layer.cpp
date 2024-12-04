@@ -33,8 +33,8 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   //   4: rotary_embedding_pos
   //   5: rotary_embedding_mask
   //   6: workspace 空间
-  //   7: forward_shape (context_num, context_max_tokens, context_total_block_num, decode_num, decode_max_tokens,
-  //      decode_total_block_num)
+  //   7: forward_shape (multi_token_request_num, multi_token_request_max_tokens, context_total_block_num,
+  //      single_token_request_num, single_token_request_max_tokens, decode_total_block_num)
   //   8: 用于存储 qk 的临时空间(TODO:)
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   //   9: kv_cache_base_ptr_tensor: [layer_num, 2]
@@ -52,7 +52,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   // cache_offset是0,3,9
   const Tensor& kv_list = input_tensors[2];
   const Tensor& cache_offset = input_tensors[3];
-  size_t context_num = input_tensors[7].shape[0];
+  size_t multi_token_request_num = input_tensors[7].shape[0];
   const Tensor& rotary_embedding_pos = input_tensors[4];
   const Tensor& rotary_embedding_mask = input_tensors[5];
   const Tensor& workspace = input_tensors[6];
@@ -82,7 +82,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   auto skipped_context_out_ptr = out.GetPtr<void>() + context_tokens * (out.GetTotalBytes() / out.shape[0]);
   auto skipped_context_query_ptr = query.GetPtr<void>() + context_tokens * (query.GetTotalBytes() / query.shape[0]);
   auto skipped_context_cache_offset_ptr =
-      cache_offset.GetPtr<void>() + (context_num + 1) * GetTypeSize(cache_offset.dtype);
+      cache_offset.GetPtr<void>() + (multi_token_request_num + 1) * GetTypeSize(cache_offset.dtype);
   auto skipped_context_rotary_embedding_pos_ptr =
       rotary_embedding_pos.GetPtr<void>() +
       (rotary_embedding_pos.shape[0] - batch_size) * GetTypeSize(rotary_embedding_pos.dtype);
