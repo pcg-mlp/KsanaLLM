@@ -26,6 +26,7 @@
 
 #include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/kernels/permute.h"
+#include "ksana_llm/kernels/trans_layout.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/optional_file.h"
@@ -403,11 +404,7 @@ Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_t
 
     Tensor t = last_qkv_tensor;
     last_qkv_tensor = qkv_weight_tensor;
-#ifdef ENABLE_ACL
-    if (t.shape[1] % 16 == 0 && t.shape[0] % 16 == 0) {
-      TransLayout(t, context_->GetMemoryManageStreams()[rank_]);
-    }
-#endif
+    TransLayout(t, context_->GetMemoryManageStreams()[rank_]);
     weights_map_[qkv_name] = t;
   }
   return Status();
@@ -421,9 +418,7 @@ Status CommonWeight<T>::CommonPermuteWeight(const std::string& origin_tensor_nam
   swap_tensor = origin_mlp_tensor;
   t.shape = {origin_mlp_tensor.shape[1], origin_mlp_tensor.shape[0]};
 #ifdef ENABLE_ACL
-  if (t.shape[1] % 16 == 0 && t.shape[0] % 16 == 0) {
-    TransLayout(t, context_->GetMemoryManageStreams()[rank_]);
-  }
+  TransLayout(t, context_->GetMemoryManageStreams()[rank_]);
 #endif
   weights_map_[origin_tensor_name] = t;
   return Status();

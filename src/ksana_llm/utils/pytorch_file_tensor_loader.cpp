@@ -38,12 +38,6 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
     KLLM_LOG_DEBUG << "read " << tensor_name << std::endl;
     py::object value_obj = py::reinterpret_borrow<py::object>(item.second);
     pytorch_tensor_map_[tensor_name] = THPVariable_Unpack(value_obj.ptr());
-#ifdef ENABLE_ACL
-#  ifndef ENABLE_BFLOAT16
-    // TODO(karlluo): will enhance after support bf16
-    pytorch_tensor_map_[tensor_name] = pytorch_tensor_map_[tensor_name].to(torch::kFloat16);
-#  endif
-#endif
   }
 }
 

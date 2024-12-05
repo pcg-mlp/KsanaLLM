@@ -30,12 +30,15 @@ message(STATUS "nvidia_kernels_SRCS: ${nvidia_kernels_SRCS}")
 
 set(ascend_kernels_LIBS "")
 set(ascend_kernels_SRCS "")
+set(ascend_kernels_test_SRCS "")
 
 if(WITH_ACL)
   file(GLOB_RECURSE ascend_kernels_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/ascend/*.cpp)
   list(FILTER ascend_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
   list(APPEND ascend_kernels_LIBS ${ACL_SHARED_LIBS} atb_plugin_operations)
+
+  file(GLOB_RECURSE ascend_kernels_test_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/ascend/*test.cpp)
 endif()
 
 message(STATUS "ascend_kernels_SRCS: ${ascend_kernels_SRCS}")
@@ -59,4 +62,9 @@ if(WITH_CUDA)
 
   message(STATUS "nvidia_kernels_test_SRCS: ${nvidia_kernels_test_SRCS}")
   cpp_test(kernels_test SRCS ${nvidia_kernels_test_SRCS} DEPS kernels)
+endif()
+
+if(WITH_ACL AND WITH_STANDALONE_TEST)
+  message(STATUS "ascend_kernels_test_SRCS: ${ascend_kernels_test_SRCS}")
+  cpp_test(kernels_test SRCS ${ascend_kernels_test_SRCS} DEPS kernels)
 endif()

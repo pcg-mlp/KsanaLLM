@@ -37,8 +37,4 @@ class ArgMaxATBExecutor {
 void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_table, const aclTensor* position_table,
                      aclTensor* output, aclrtStream stream, WorkSpaceFunc ws_func);
 
-// NOTE(karlluo): for some case: matmul, layout NZ/ND has much better performance. TransLayout is such operation to
-// trans layout
-Status TransLayout(Tensor& tensor, Stream& stream);
-
 }  // namespace ksana_llm
