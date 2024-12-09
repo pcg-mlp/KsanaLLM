@@ -147,9 +147,9 @@ class ServingModel(object):
             get_generation_value(generation_config, 'num_beams', 1)
         sampling_config.topk = get_generation_value(generation_config, 'top_k', 1)
         sampling_config.topp = \
-            get_generation_value(generation_config, 'top_p', 0.0)
+            get_generation_value(generation_config, 'top_p', 1.0)
         sampling_config.temperature = \
-            get_generation_value(generation_config, 'temperature', 0.0)
+            get_generation_value(generation_config, 'temperature', 1.0)
         sampling_config.max_new_tokens = \
             get_generation_value(generation_config, 'max_new_tokens', -1)
         sampling_config.logprobs_num = \

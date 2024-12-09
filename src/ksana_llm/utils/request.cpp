@@ -9,6 +9,26 @@
 
 namespace ksana_llm {
 
+Status SamplingConfig::VerifyArgs() {
+  if (topp == 0.f) {
+    topp = 1.f;
+  }
+  if (temperature == 0.f) {
+    temperature = 1.f;
+  }
+  // The TopkSampling kernel of TensorRT requires that `1 <= topk <= 1024`.
+  // Refer to
+  // https://github.com/NVIDIA/TensorRT-LLM/blob/main/cpp/tensorrt_llm/kernels/samplingTopKKernels.cu#L377
+  if (topk < 1 || topk > 1024) {
+    return Status(RET_INVALID_ARGUMENT, fmt::format("topk should be between 1 and 1024, but {} was provided", topk));
+  }
+  if (no_repeat_ngram_size > 0 && encoder_no_repeat_ngram_size > 0) {
+    return Status(RET_INVALID_ARGUMENT,
+                  "no_repeat_ngram_size and encoder_no_repeat_ngram_size can not be used at the same time");
+  }
+  return Status();
+}
+
 Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                  const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx)
     : req_id(0),

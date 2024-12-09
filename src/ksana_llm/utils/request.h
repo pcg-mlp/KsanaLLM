@@ -23,10 +23,18 @@ struct SamplingConfig {
   int topk = 1;
   int num_beams = 1;
   int num_return_sequences = 1;
-  float topp = 0.0f;
-  float temperature = 0.0f;
+
+  // The smallest set of most probable tokens with probabilities that add up
+  // to or higher than `topp` are considered
+  float topp = 1.0f;
+
+  // Modulate the next token probabilities
+  float temperature = 1.0f;
+
   // The parameter for repetition penalty. 1.0 means no penalty
   float repetition_penalty = 1.0f;
+
+  // The parameter for length penalty. 1.0 means no penalty
   float length_penalty = 1.0f;
 
   // Tokens that stop the generation when they are generated.
@@ -48,6 +56,9 @@ struct SamplingConfig {
 
   // In generation phasse, when stop strings are meet, the request will be stopped and truncated
   std::vector<std::string> stop_strings;
+
+  // Check and adjust sampling config arguments.
+  Status VerifyArgs();
 };
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;

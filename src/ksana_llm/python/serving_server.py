@@ -250,8 +250,8 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     generation_config = GenerationConfig(
         top_k=get_sampling_value(sampling_config, "topk", 1),
         do_sample=get_sampling_value(sampling_config, "do_sample", None),
-        top_p=get_sampling_value(sampling_config, "topp", 0.0),
-        temperature=get_sampling_value(sampling_config, "temperature", 0.0),
+        top_p=get_sampling_value(sampling_config, "topp", 1.0),
+        temperature=get_sampling_value(sampling_config, "temperature", 1.0),
         max_new_tokens=get_sampling_value(sampling_config, "max_new_tokens",
                                           -1),
         logprobs_num=get_sampling_value(sampling_config, "logprobs", 0),

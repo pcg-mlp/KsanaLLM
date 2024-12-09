@@ -66,20 +66,12 @@ Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_
 #endif
   } else {
 #ifdef ENABLE_CUDA
-    bool logitHasProbs = false;
-    if (sampling_devide_parameter.device_temperatures || sampling_devide_parameter.device_topPs) {
-      logitHasProbs = true;
-      CUDA_CHECK_LAST_ERROR(tensorrt_llm::kernels::invokeAddBiasSoftMax<float>(
-          logits, nullptr, sampling_devide_parameter.device_temperatures, nullptr, nullptr, nullptr, nullptr,
-          sampling_devide_parameter.bs, 0, 1, sampling_devide_parameter.vocab_size_padded,
-          sampling_devide_parameter.vocab_size_padded, false, true, stream.Get()));
-    }
     CUDA_CHECK_LAST_ERROR(tensorrt_llm::kernels::invokeBatchTopKSampling(
         workspace_, workspace_size_, logits, sampling_devide_parameter.device_output_tokens_ptrs, nullptr, nullptr,
         nullptr, nullptr, nullptr, sampling_devide_parameter.device_curandstates, sampling_devide_parameter.max_topK,
         sampling_devide_parameter.device_topKs, 1.0, sampling_devide_parameter.device_topPs,
         static_cast<int>(sampling_devide_parameter.vocab_size_padded), nullptr, nullptr, stream.Get(),
-        static_cast<int>(sampling_devide_parameter.bs), 0, nullptr, false, logitHasProbs));
+        static_cast<int>(sampling_devide_parameter.bs), 0, nullptr, false, sampling_devide_parameter.logits_softmax));
 #else
     KLLM_THROW("Not support topk > 1 in Ascend NPU.");
 #endif

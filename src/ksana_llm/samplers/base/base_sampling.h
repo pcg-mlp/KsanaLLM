@@ -23,6 +23,10 @@ struct SamplingDevideParameter {
   float* device_temperatures = nullptr;
   int** device_output_tokens_ptrs = nullptr;
   RandState* device_curandstates = nullptr;
+  // Whether to perform softmax on logits.
+  bool logits_softmax{false};
+  // Whether to do sampling, i.e., get tokens based on logits.
+  bool do_sampling{false};
   int vocab_size_padded = 0;
   int max_topK = 0;
   int bs = 0;

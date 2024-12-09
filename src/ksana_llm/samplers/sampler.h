@@ -21,7 +21,7 @@ class Sampler {
   Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
                                  SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
 
-  void SamplingParameterToDevide(bool use_top_p, bool use_temperature, bool logits_softmax,
+  void SamplingParameterToDevide(bool use_top_k, bool use_top_p, bool use_temperature,
                                  SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
 
   Status PrepareDevideLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
