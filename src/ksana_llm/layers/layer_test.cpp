@@ -114,7 +114,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                 context, 0)
           .OK());
 
-  Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape, flexible_rotary_embedding_pos,
+  Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape, flag_tensor, flexible_rotary_embedding_pos,
       flexible_rotary_embedding_mask, dst_flexible_kv_cache_tensor, src_flexible_kv_cache_tensor,
       dst_flexible_token_idx_tensor, src_flexible_token_idx_tensor;
   std::vector<size_t> input_shape = {2, 12288};
@@ -123,6 +123,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   CreateHalfDataTypeTensor(prefix_offsets, {2}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(pos, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
   CreateHalfDataTypeTensor(mask, {2}, GetDataType<uint64_t>(), /*dtype_size*/ sizeof(uint64_t));
+  CreateTensor(flag_tensor, {1}, TYPE_BOOL, /* rank */ 0, MemoryDevice::MEMORY_HOST);
   CreateHalfDataTypeTensor(flexible_rotary_embedding_pos, {0}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(flexible_rotary_embedding_mask, {0}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(dst_flexible_kv_cache_tensor, {0}, GetDataType<int>(), sizeof(int));
@@ -140,6 +141,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   std::vector<uint64_t> input_len_cpu({0, 2});
   Memcpy(input_len_ptr, input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
   Memset(prefix_offsets.GetPtr<void>(), 0, 2 * sizeof(int));
+  flag_tensor.GetPtr<bool>()[0] = true;  // use_cache
   Tensor output_tensor;
   CreateHalfDataTypeTensor(output_tensor, input_shape, GetDataType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
@@ -192,7 +194,8 @@ TEST_F(LayerTest, AttentionLayerTest) {
                           dst_flexible_token_idx_tensor,
                           src_flexible_token_idx_tensor,
                           prefix_offsets,
-                          forward_shape
+                          forward_shape,
+                          flag_tensor
 #  if defined(ENABLE_FLASH_ATTN_WITH_CACHE)
                           ,
                           layer_kv_cache_ptr_tensor,

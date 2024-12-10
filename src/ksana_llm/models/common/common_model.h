@@ -175,6 +175,10 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::vector<Tensor> cuda_graph_output_{1};
 
   Tensor forward_shape_;
+
+  // This tensor is used to store boolean flag variables.
+  Tensor flag_tensor_;
+
   Tensor cos_sin_cache_tensor_;
   Tensor cpu_input_tokens_tensor_;
   Tensor cpu_tokens_emb_tensor_;

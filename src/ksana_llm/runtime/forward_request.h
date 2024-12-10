@@ -72,6 +72,9 @@ struct ForwardRequest {
   // is cudagraph capture call
   bool is_cudagraph_capture_request;
 
+  // The sampling config.
+  SamplingConfig* sampling_config = nullptr;
+
   // Opentelemetry SpanContext
   opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
 

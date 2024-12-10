@@ -55,6 +55,9 @@ class ModelInput {
   void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward);
 #endif
 
+  // Determine whether to use cache for the current batch of multi token requests.
+  void CheckUseCache(const std::vector<ForwardRequest>& forward_reqs);
+
  public:
   // The input batch size.
   size_t batch_size;
@@ -86,6 +89,9 @@ class ModelInput {
 
   // if current req is cudagraph capture request
   bool is_cudagraph_capture_request = false;
+
+  // Whether to use kv cache.
+  bool use_cache = true;
 
   // The cache offset list.
   std::vector<int> kv_cache_offset_list;

@@ -300,6 +300,9 @@ class Environment {
   // Whether the auto-prefix-caching is enabled.
   bool IsPrefixCachingEnabled();
 
+  // Whether the flexible caching is enabled.
+  bool IsFlexibleCachingEnabled();
+
   // Get the config of block manager.
   Status GetBlockManagerConfig(BlockManagerConfig &block_manager_config);
 

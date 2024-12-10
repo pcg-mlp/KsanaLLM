@@ -109,9 +109,10 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  const std::optional<void*>& alibi_slopes, int layer_index, void* flexible_rotary_embedding_pos_ptr,
                  void* flexible_rotary_embedding_mask_ptr, void* dst_flexible_kv_cache_ptr,
                  void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr, void* src_flexible_token_idx_ptr,
-                 void* flexible_offset_uint64_ptr, int flexible_len, cudaStream_t stream, void* k_cache_ptr = nullptr,
-                 void* v_cache_ptr = nullptr, int32_t* block_table_ptr = nullptr, int64_t kv_cache_block_num = 0,
-                 int max_blocks_per_seq = 0, size_t* without_prefix_offsets = nullptr, int max_forwarding_tokens = 0);
+                 void* flexible_offset_uint64_ptr, int flexible_len, bool use_cache, cudaStream_t stream,
+                 void* k_cache_ptr = nullptr, void* v_cache_ptr = nullptr, int32_t* block_table_ptr = nullptr,
+                 int64_t kv_cache_block_num = 0, int max_blocks_per_seq = 0, size_t* without_prefix_offsets = nullptr,
+                 int max_forwarding_tokens = 0);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]

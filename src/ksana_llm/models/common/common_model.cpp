@@ -179,6 +179,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
   model_input_ = std::make_shared<ModelInput>(model_config_, rank_, context_);
 
+  STATUS_CHECK_FAILURE(CreateTensor(flag_tensor_, {1}, TYPE_BOOL, rank_, MemoryDevice::MEMORY_HOST));
+
   if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
     STATUS_CHECK_FAILURE(CreateTensor(cpu_input_tokens_tensor_, model_input_->input_ids.shape,
                                       model_input_->input_ids.dtype, rank_, MemoryDevice::MEMORY_HOST));
@@ -376,7 +378,7 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
        model_input_->flexible_rotary_embedding_pos, model_input_->flexible_rotary_embedding_mask,
        model_input_->dst_flexible_kv_cache_tensor, model_input_->src_flexible_kv_cache_tensor,
        model_input_->dst_flexible_token_idx_tensor, model_input_->src_flexible_token_idx_tensor,
-       model_input_->flexible_offset_uint64_tensor, forward_shape_
+       model_input_->flexible_offset_uint64_tensor, forward_shape_, flag_tensor_
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
        ,
        model_input_->layer_kv_cache_ptr_tensor, model_input_->multi_token_request_block_table,
@@ -781,6 +783,9 @@ Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
       std::max(model_input_->multi_token_request_max_tokens, model_input_->single_token_request_max_tokens),
       static_cast<size_t>(model_input_->kv_cache_offset_list.back())};
 #endif
+  // Pass the `use_cache` flag to `flag_tensor_`.
+  flag_tensor_.GetPtr<bool>()[0] = model_input_->use_cache;
+
   if (model_input_->is_cudagraph_capture_request) {
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);

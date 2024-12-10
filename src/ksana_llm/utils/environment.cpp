@@ -720,4 +720,6 @@ Status Environment::GetProfilerConfig(ProfilerConfig &profiler_config) {
 
 bool Environment::IsPrefixCachingEnabled() { return cache_manager_config_.enable_prefix_caching; }
 
+bool Environment::IsFlexibleCachingEnabled() { return cache_manager_config_.min_flexible_cache_num > 0; }
+
 }  // namespace ksana_llm

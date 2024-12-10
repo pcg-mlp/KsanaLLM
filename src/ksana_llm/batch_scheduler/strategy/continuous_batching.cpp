@@ -210,9 +210,9 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
       if (duration != 0) {
         REPORT_METRIC(time_to_per_output_token_ms, output_token_num / duration, attributes);
       } else {
-        KLLM_LOG_WARNING << fmt::format(
-            "Req duration is zero, req_id: {}, input_token_num: {} ,output_token_num: {} "
-            "req start time is: {} req end time is: {}",
+        KLLM_LOG_DEBUG << fmt::format(
+            "Req duration is zero, req_id: {}, input_token_num: {}, output_token_num: {}, "
+            "req start time is: {}, req end time is: {}",
             req->req_id, req->input_tokens.size(), output_token_num, req->timestamp_in_ms, end_time);
         REPORT_METRIC(time_to_per_output_token_ms, output_token_num, attributes);
       }

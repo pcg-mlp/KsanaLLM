@@ -309,11 +309,17 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   input_offset_list_uint64 = {0};
   input_prefix_list_uint64.resize(multi_token_request_num + 1, 0ul);
   input_ids_cpu.clear();
-  PrepareKVCacheBlocks(forward_reqs, 0, multi_token_request_num, multi_token_request_total_block_num);
+
+  CheckUseCache(forward_reqs);
+  if (use_cache) {
+    PrepareKVCacheBlocks(forward_reqs, 0, multi_token_request_num, multi_token_request_total_block_num);
+  }
   PrepareKVCacheBlocks(forward_reqs, multi_token_request_num, batch_size, single_token_request_total_block_num);
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
-  PrepareKVCacheBlockTable(forward_reqs, 0, multi_token_request_num, multi_token_request_total_block_num,
-                           multi_token_request_block_table);
+  if (use_cache) {
+    PrepareKVCacheBlockTable(forward_reqs, 0, multi_token_request_num, multi_token_request_total_block_num,
+                             multi_token_request_block_table);
+  }
   PrepareKVCacheBlockTable(forward_reqs, multi_token_request_num, batch_size, single_token_request_total_block_num,
                            single_token_request_block_table);
 #endif
@@ -780,6 +786,23 @@ void ModelInput::PrepareSingleTokenRequestInputIds(const std::vector<ForwardRequ
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
+}
+
+// If the batch of multi token requests all require the next token (`max_new_tokens = 1`),
+// and all the caching optimizations are disabled, then the kv cache is unnecessary.
+void ModelInput::CheckUseCache(const std::vector<ForwardRequest>& forward_reqs) {
+  const auto& env = Singleton<Environment>::GetInstance();
+  use_cache = env->IsPrefixCachingEnabled() | env->IsFlexibleCachingEnabled();
+  if (use_cache) {
+    return;
+  }
+
+  for (size_t i = 0; i < multi_token_request_num; i++) {
+    if (forward_reqs[i].sampling_config == nullptr || forward_reqs[i].sampling_config->max_new_tokens != 1) {
+      use_cache = true;
+      return;
+    }
+  }
 }
 
 }  // namespace ksana_llm

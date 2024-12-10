@@ -28,11 +28,12 @@ class LlamaTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
-    Singleton<Environment>::GetInstance()->ParseConfig(config_path);
-    Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
+    const auto &env = Singleton<Environment>::GetInstance();
+    env->ParseConfig(config_path);
+    env->GetModelConfig("", model_config);
 
     BlockManagerConfig block_manager_config;
-    Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
+    env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
     block_manager = new BlockManager(block_manager_config, context_);
@@ -112,10 +113,13 @@ class LlamaTest : public testing::Test {
     EXPECT_EQ(wrong_tensor.device, MEMORY_HOST);
     EXPECT_TRUE(wrong_tensor.shape.empty());
 
+    SamplingConfig sampling_config;
+
     // ContextDecode
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
     forward.output_tokens = &input_ids;
+    forward.sampling_config = &sampling_config;
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(1);
@@ -181,15 +185,7 @@ class LlamaTest : public testing::Test {
     sample_req.output_mutex = &output_mutex;
     sample_req.logits_buf = forward_reqs[0].logits_buf;
     sample_req.model_config = &model_config;
-    SamplingConfig sample_config;
-    sample_config.num_beams = 1;
-    sample_config.topk = 1;
-    sample_config.topp = 0;
-    sample_config.temperature = 0;
-    sample_config.repetition_penalty = 1;
-    sample_config.no_repeat_ngram_size = 0;
-    sample_config.encoder_no_repeat_ngram_size = 0;
-    sample_req.sampling_config = &sample_config;
+    sample_req.sampling_config = &sampling_config;
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
 

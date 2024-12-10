@@ -91,8 +91,9 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.flexible_cache_len = req_ptr->flexible_cached_copy_tasks.size();
     forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;
     forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;
-    forward_req.span_context = req_ptr->span_context;
     forward_req.is_cudagraph_capture_request = req_ptr->is_cudagraph_capture_request;
+    forward_req.sampling_config = &(req_ptr->sampling_config);
+    forward_req.span_context = req_ptr->span_context;
     forward_req.timestamp_in_ms = req_ptr->timestamp_in_ms;
     forward_req.req_ctx = req_ptr->req_ctx;
 #if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
@@ -177,9 +178,9 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<InferRequest>>
               int a_token_num = a->output_tokens.size() - a->kv_cached_token_num;
               int b_token_num = b->output_tokens.size() - b->kv_cached_token_num;
               if (a_token_num != b_token_num) {
-                return a_token_num >= b_token_num;
+                return a_token_num > b_token_num;
               }
-              return a->kv_cached_token_num <= b->kv_cached_token_num;
+              return a->kv_cached_token_num < b->kv_cached_token_num;
             });
 }
 

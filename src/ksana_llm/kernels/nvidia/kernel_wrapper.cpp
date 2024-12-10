@@ -442,9 +442,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  const std::optional<void*>& alibi_slopes, int layer_index, void* flexible_rotary_embedding_pos_ptr,
                  void* flexible_rotary_embedding_mask_ptr, void* dst_flexible_kv_cache_ptr,
                  void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr, void* src_flexible_token_idx_ptr,
-                 void* flexible_offset_uint64_ptr, int flexible_len, cudaStream_t stream, void* k_cache_ptr,
-                 void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
-                 size_t* without_prefix_offsets, int max_forwarding_tokens) {
+                 void* flexible_offset_uint64_ptr, int flexible_len, bool use_cache, cudaStream_t stream,
+                 void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,
+                 int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens) {
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor qkv_tensor =
       torch::from_blob(qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, options);
@@ -464,11 +464,13 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
 
 #ifndef ENABLE_FLASH_ATTN_WITH_CACHE
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
-      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
-      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
-      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      k_scale, v_scale, stream));
+  if (use_cache) {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+        reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
+        v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
+        reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+        k_scale, v_scale, stream));
+  }
 #endif
 
   if (rotary_embedding_cuda.has_value()) {
@@ -486,19 +488,21 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
   }
 
+  if (use_cache) {
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
-      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
-      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets), without_prefix_offsets,
-      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      k_scale, v_scale, stream));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
+        reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
+        v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets), without_prefix_offsets,
+        reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+        k_scale, v_scale, stream));
 #else
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
-      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
-      v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(flexible_offset_uint64_ptr),
-      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-      k_scale, v_scale, stream));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+        reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
+        v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(flexible_offset_uint64_ptr),
+        reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
+        k_scale, v_scale, stream));
 #endif
+  }
 
 // flash attention 2 or flash attention 1
 #if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
@@ -583,17 +587,17 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 #endif
 }
 
-#define ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                  \
-  template void AttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                          \
-      void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,             \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens,  \
-      int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, float k_scale,   \
-      float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list, \
-      void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, int layer_index,        \
-      void* flexible_rotary_embedding_pos_ptr, void* flexible_rotary_embedding_mask_ptr,                           \
-      void* dst_flexible_kv_cache_ptr, void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,          \
-      void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len, cudaStream_t stream,   \
-      void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                  \
+#define ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                      \
+  template void AttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                              \
+      void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,                 \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens,      \
+      int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, float k_scale,       \
+      float v_scale, int tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,     \
+      void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, int layer_index,            \
+      void* flexible_rotary_embedding_pos_ptr, void* flexible_rotary_embedding_mask_ptr,                               \
+      void* dst_flexible_kv_cache_ptr, void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,              \
+      void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len, bool use_cache,            \
+      cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, \
       int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens)
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
