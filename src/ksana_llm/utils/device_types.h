@@ -9,6 +9,7 @@
 // All supported device type.
 #define DEVICE_TYPE_NVIDIA 0
 #define DEVICE_TYPE_ASCEND 1
+#define DEVICE_TYPE_ZIXIAO 2
 
 // Unknown device type.
 #define DEVICE_TYPE_UNKNOWN -1
@@ -18,6 +19,8 @@
 #  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_NVIDIA
 #elif defined(ENABLE_ACL)
 #  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_ASCEND
+#elif defined(ENABLE_TOPS)
+#  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_ZIXIAO
 #else
 #  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_UNKNOWN
 #endif
@@ -27,9 +30,10 @@
 #  include <cublasLt.h>
 #  include <cublas_v2.h>
 #  include <cuda_runtime.h>
-#endif
-#ifdef ENABLE_FP8
-#  include <cuda_fp8.h>
+// Include cuda fp8 header
+#  ifdef ENABLE_FP8
+#    include <cuda_fp8.h>
+#  endif
 #endif
 
 #ifdef ENABLE_ACL
@@ -51,6 +55,11 @@ typedef aclFloat16 float16;
 #  ifdef ENABLE_BFLOAT16
 typedef int16_t bfloat16;
 #  endif
+#elif defined(ENABLE_TOPS)
+typedef int16_t float16;
+#  ifdef ENABLE_BFLOAT16
+typedef uint16_t bfloat16;
+#  endif
 #endif
 
 // All the available data format, for ascend aclTensor.
@@ -61,6 +70,8 @@ enum DataFormat {
   FORMAT_DEFAULT = aclFormat::ACL_FORMAT_ND,
   FORMAT_ND = aclFormat::ACL_FORMAT_ND,
   FORMAT_NZ = aclFormat::ACL_FORMAT_FRACTAL_NZ
+#elif defined(ENABLE_TOPS)
+  FORMAT_DEFAULT
 #endif
 };
 
@@ -132,6 +143,32 @@ enum DataType {
   TYPE_FP8_E5M2 = aclDataType::ACL_DT_UNDEFINED,
   TYPE_VOID = aclDataType::ACL_DT_UNDEFINED,
   TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED
+#elif defined(ENABLE_TOPS)
+  TYPE_INVALID,
+  TYPE_FP32,
+  TYPE_FP16,
+  TYPE_BF16,
+  TYPE_TF24,
+  TYPE_TF32,
+  TYPE_INT8,
+  TYPE_UINT8,
+  TYPE_INT32,
+  TYPE_INT64,
+  TYPE_UINT32,
+  TYPE_UINT64,
+  TYPE_BOOL,
+  TYPE_BIT,
+  TYPE_BIT2,
+  TYPE_BIT4,
+  TYPE_INT16,
+  TYPE_FP8_E4M3,
+  TYPE_FP8_E5M2,
+  TYPE_FP64,
+  TYPE_UINT16,
+  TYPE_BYTES,
+  TYPE_VOID,
+  TYPE_POINTER,
+  TYPE_I4_GROUP
 #endif
 };
 

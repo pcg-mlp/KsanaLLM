@@ -21,6 +21,13 @@ if(WITH_ACL)
   list(FILTER runtime_SRCS EXCLUDE REGEX ".*cuda_graph_runner.cpp")
 endif()
 
+set(runtime_zixiao_LIBS, "")
+
+if(WITH_TOPS)
+  list(APPEND runtime_ascend_LIBS ${TOPS_SHARED_LIBS})
+  list(FILTER runtime_SRCS EXCLUDE REGEX ".*cuda_graph_runner.cpp")
+endif()
+
 add_library(runtime STATIC ${runtime_SRCS})
 add_dependencies(runtime utils fmt gflags)
 target_link_libraries(runtime PUBLIC

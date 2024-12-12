@@ -43,7 +43,17 @@ endif()
 
 message(STATUS "ascend_kernels_SRCS: ${ascend_kernels_SRCS}")
 
-add_library(kernels STATIC ${nvidia_kernels_SRCS} ${ascend_kernels_SRCS})
+set(zixiao_kernels_LIBS "")
+set(zixiao_kernels_SRCS "")
+set(zixiao_kernels_test_SRCS "")
+
+if(WITH_TOPS)
+  file(GLOB_RECURSE zixiao_kernels_SRCS
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/zixiao/*.cpp)
+  list(FILTER zixiao_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
+endif()
+
+add_library(kernels STATIC ${nvidia_kernels_SRCS} ${ascend_kernels_SRCS} ${zixiao_kernels_SRCS})
 target_link_libraries(kernels PUBLIC utils block_manager ${Python3_LIBRARIES} ${nvidia_kernels_LIBS} ${ascend_kernels_LIBS})
 
 if(WITH_CUDA)

@@ -3,8 +3,16 @@
 # ==============================================================================
 
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
+
+# support NVIDIA GPU
 option(WITH_CUDA "Enable CUDA" ON)
+
+# support Huawei NPU
 option(WITH_ACL "Enable Ascend" OFF)
+
+# support Tencent ZiXiao
+option(WITH_TOPS "Enable Tops" OFF)
+
 option(WITH_TESTING "Enable testing" OFF)
 option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
 option(WITH_EVENT_RECORD "Enable event record" OFF)
@@ -19,8 +27,10 @@ endif()
 set(BUILD_SHARED_LIBS OFF)
 
 if(WITH_CUDA)
+  # support NVIDIA GPU
   project(ksana_llm LANGUAGES CXX CUDA)
-else()
+elseif(WITH_ACL)
+  # support Huawei NPU
   set(ASCEND_PRODUCT_TYPE "ascend910")
   set(ASCEND_PLATFORM_NAME "Ascend910B2C")
   set(ASCEND_CORE_TYPE "AiCore")
@@ -30,16 +40,25 @@ else()
   list(APPEND CMAKE_MODULE_PATH ${CCE_CMAKE_PATH})
 
   # NOTE(karlluo): languages cce need configured cmake module before
-  project(LLMKernels LANGUAGES CCE CXX)
+  project(ksana_llm LANGUAGES CCE CXX)
+
+elseif(WITH_TOPS)
+  # support Tencent ZiXiao
+  set(ARCH "gcu300")
+  list(APPEND CMAKE_MODULE_PATH "/opt/tops/cmake_modules")
+  include(FindTOPS)
+  project(ksana_llm LANGUAGES CXX TOPS)
+else()
+  message(FATAL_ERROR "Support platform is not selected. Select NVIDIA GPU with -DWITH_CUDA=ON, Huawei NPU with -DWITH_ACL=ON and Tencent ZiXiao with -DWITH_TOPS=ON")
 endif()
 
-if(NOT WITH_CUDA AND NOT WITH_ACL)
-  message(FATAL_ERROR "WITH_CUDA=OFF and WITH_ACL=OFF is not allow")
+if(NOT WITH_CUDA AND NOT WITH_ACL AND NOT WITH_TOPS)
+  message(FATAL_ERROR "WITH_CUDA=OFF and WITH_ACL=OFF and WITH_TOPS=OFF is not allow")
 endif()
 
 set(USE_CXX11_ABI, "False")
 
-# according prepare ABI version
+# prepare ABI version
 execute_process(COMMAND python "-c" "import torch;print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   RESULT_VARIABLE _PYTHON_SUCCESS
   OUTPUT_VARIABLE USE_CXX11_ABI)
@@ -115,6 +134,10 @@ if(WITH_ACL)
   include(ascend)
 endif()
 
+if(WITH_TOPS)
+  include(zixiao)
+endif()
+
 # set cmake output path
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -131,12 +154,14 @@ include_directories(
   ${COMMON_HEADER_DIRS}
   ${CUDA_INC_DIRS}
   ${ACL_INC_DIRS}
+  ${TOPS_INC_DIRS}
 )
 
 # set linked libraries
 link_directories(
   ${CUDA_LIB_DIRS}
   ${ACL_LIB_DIRS}
+  ${TOPS_LIB_DIRS}
 )
 
 if(WITH_TESTING)

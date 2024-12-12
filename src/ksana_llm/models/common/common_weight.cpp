@@ -417,9 +417,7 @@ Status CommonWeight<T>::CommonPermuteWeight(const std::string& origin_tensor_nam
   Tensor t = swap_tensor;
   swap_tensor = origin_mlp_tensor;
   t.shape = {origin_mlp_tensor.shape[1], origin_mlp_tensor.shape[0]};
-#ifdef ENABLE_ACL
   TransLayout(t, context_->GetMemoryManageStreams()[rank_]);
-#endif
   weights_map_[origin_tensor_name] = t;
   return Status();
 }

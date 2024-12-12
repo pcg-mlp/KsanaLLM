@@ -10,7 +10,7 @@ message(STATUS "torch_op_SRCS: ${torch_op_SRCS}")
 
 add_library(torch_serving SHARED ${torch_op_SRCS} ${host_stub_SRCS})
 
-if(WITH_CUDA)
+if(WITH_CUDA OR WITH_TOPS)
   target_link_libraries(torch_serving PRIVATE "${TORCH_LIBRARIES}" ksana_llm_libs)
 endif()
 

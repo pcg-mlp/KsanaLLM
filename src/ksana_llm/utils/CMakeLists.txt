@@ -8,6 +8,7 @@ file(GLOB_RECURSE utils_SRCS
 list(FILTER utils_SRCS EXCLUDE REGEX ".*test.cpp")
 list(FILTER utils_SRCS EXCLUDE REGEX ".*/nvidia/.*.cpp")
 list(FILTER utils_SRCS EXCLUDE REGEX ".*/ascend/.*.cpp")
+list(FILTER utils_SRCS EXCLUDE REGEX ".*/zixiao/.*.cpp")
 message(STATUS "utils_SRCS: ${utils_SRCS}")
 
 set(utils_nvidia_SRCS, "")
@@ -26,10 +27,18 @@ if(WITH_ACL)
   list(APPEND utils_ascend_LIBS ${ACL_SHARED_LIBS} hccl)
 endif()
 
-add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS} ${utils_ascend_SRCS})
+set(utils_zixiao_SRCS, "")
+set(utils_zixiao_LIBS, "")
+
+if(WITH_TOPS)
+  file(GLOB_RECURSE utils_zixiao_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/zixiao/*.cpp)
+  list(APPEND utils_zixiao_LIBS ${ZIXIAO_SHARED_LIBS} topsrt)
+endif()
+
+add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS} ${utils_ascend_SRCS} ${utils_zixiao_SRCS})
 add_dependencies(utils fmt gflags)
 target_link_libraries(utils PUBLIC
-  -lpthread -ldl gflags loguru yaml-cpp profiler ${utils_nvidia_LIBS} ${utils_ascend_LIBS}
+  -lpthread -ldl gflags loguru yaml-cpp profiler ${utils_nvidia_LIBS} ${utils_ascend_LIBS} ${utils_zixiao_LIBS}
   absl::base absl::strings re2
 )
 

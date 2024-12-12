@@ -2,14 +2,21 @@
 
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 
-option(WITH_CUDA "Enable Cuda" ON)
+# # support NVIDIA GPU
+option(WITH_CUDA "Enable CUDA" ON)
+
+# # support Huawei NPU
 option(WITH_ACL "Enable Ascend" OFF)
+
+# # support Tencent ZiXiao
+option(WITH_TOPS "Enable Tops" OFF)
+
 option(WITH_TESTING "Enable testing" OFF)
 option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 
 if(WITH_CUDA)
   project(LLMKernels LANGUAGES CXX CUDA)
-else()
+elseif(WITH_ACL)
   set(ASCEND_PRODUCT_TYPE "ascend910")
   set(ASCEND_CORE_TYPE "AiCore")
   set(ASCEND_RUN_MODE "ONBOARD")
@@ -42,6 +49,11 @@ else()
 
   # NOTE(karlluo): languages cce need configured cmake module before
   project(LLMKernels LANGUAGES CCE CXX)
+elseif(WITH_TOPS)
+  set(ARCH "gcu300")
+  project(LLMKernels LANGUAGES CXX)
+else()
+  message(FATAL_ERROR "Support platform is not selected. Select NVIDIA GPU with -DWITH_CUDA=ON, Huawei NPU with -DWITH_ACL=ON and Tencent ZiXiao with -DWITH_TOPS=ON")
 endif()
 
 find_package(Git QUIET)

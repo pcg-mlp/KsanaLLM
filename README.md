@@ -12,7 +12,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 - Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180)
 - Detailed optimization of task-scheduling and memory-uitlization for dynamic batching 
 - (Experimental) Prefix caching support
-- Sufficient testing has been conducted on GPU cards such as A10, A100, L40, etc
+- Sufficient testing has been conducted on GPU/NPU cards such as A10, A100, L20, L40, 910B2C etc
 
 **Flexibility and easy to use:**
 

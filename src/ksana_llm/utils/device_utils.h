@@ -11,6 +11,10 @@
 #  include "ksana_llm/utils/ascend/ascend_device.h"
 #endif
 
+#ifdef ENABLE_TOPS
+#  include "ksana_llm/utils/zixiao/zixiao_device.h"
+#endif
+
 namespace ksana_llm {
 
 // The stream for different device type.

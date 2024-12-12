@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
 #  include "ksana_llm/layers/nccl_all_gather_layer.h"
@@ -11,6 +12,9 @@
 #elif defined(ENABLE_ACL)
 #  include "ksana_llm/layers/hccl_all_gather_layer.h"
 #  include "ksana_llm/layers/hccl_all_reduce_sum_layer.h"
+#elif defined(ENABLE_TOPS)
+#  include "ksana_llm/layers/eccl_all_gather_layer.h"
+#  include "ksana_llm/layers/eccl_all_reduce_sum_layer.h"
 #endif
 
 namespace ksana_llm {

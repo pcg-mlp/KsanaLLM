@@ -12,7 +12,7 @@
 - 基于 [PagedAttention](https://arxiv.org/abs/2309.06180) 实现地对注意力机制中key和value的高效显存管理
 - 对任务调度和显存占用精细调优的动态batching
 - (实验版) 支持前缀缓存(Prefix caching)
-- 在A10, A100和L40等卡上做了较充分的验证测试
+- 在A10, A100, L20, L40, 910B2C等卡上做了较充分的验证测试
 
 **灵活易用:**
 

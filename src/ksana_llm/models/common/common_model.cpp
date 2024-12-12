@@ -850,7 +850,7 @@ Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
         {residual_buffer_[0], model_input_->input_offset_uint64_tensor, model_input_->input_prefix_uint64_tensor},
         hidden_buffer_0_));
-#else
+#elif defined(ENABLE_ACL)
     STATUS_CHECK_RETURN(assemble_last_token_layer_->Forward(
         {residual_buffer_[0], model_input_->last_token_index_tensor, model_input_->input_prefix_uint64_tensor},
         hidden_buffer_0_));

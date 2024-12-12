@@ -48,4 +48,11 @@ template class CpuEmbLookupLayer<bfloat16>;
 #  endif
 #endif
 
+#ifdef ENABLE_TOPS
+template class CpuEmbLookupLayer<float16>;
+#  ifdef ENABLE_BFLOAT16
+template class CpuEmbLookupLayer<bfloat16>;
+#  endif
+#endif
+
 }  // namespace ksana_llm
