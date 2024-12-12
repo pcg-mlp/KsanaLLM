@@ -73,7 +73,8 @@ Status RequestPacker::Unpack(const std::string& request_bytes,
 }
 
 Status RequestPacker::Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
-                           const std::vector<KsanaPythonOutput>& ksana_python_outputs, std::string& response_bytes) {
+                           const std::vector<KsanaPythonOutput>& ksana_python_outputs, const Status& response_status,
+                           std::string& response_bytes) {
   // Construct a ResponseSerial object from a KsanaPythonInput and a KsanaPythonOutput object.
   auto GetResponseSerial = [](const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                               const KsanaPythonOutput& ksana_python_output) -> ResponseSerial {
@@ -91,11 +92,16 @@ Status RequestPacker::Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>&
   // Convert the batch of KsanaPythonOutput objects into BatchResponseSerial objects and pack to response bytes.
   msgpack::sbuffer sbuf;
   BatchResponseSerial batch_rsp;
-  const size_t batch_size = ksana_python_outputs.size();
+  const size_t batch_size =
+      response_status.OK()
+          ? ksana_python_outputs.size()
+          : 0ul;  // If the request failed, do not return the responses, and only return the message and code.
   batch_rsp.responses.reserve(batch_size);
   for (size_t i = 0; i < batch_size; i++) {
     batch_rsp.responses.push_back(GetResponseSerial(ksana_python_inputs[i], ksana_python_outputs[i]));
   }
+  batch_rsp.message = response_status.GetMessage();
+  batch_rsp.code = static_cast<int>(response_status.GetCode());
   msgpack::pack(sbuf, batch_rsp);
 
   response_bytes.assign(sbuf.data(), sbuf.size());

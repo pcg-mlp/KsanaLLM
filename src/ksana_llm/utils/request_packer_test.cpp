@@ -7,7 +7,7 @@
 #include "logger.h"
 #include "msgpack.hpp"
 #include "request_serial.h"
-#include "test.h"
+#include "tests/test.h"
 
 namespace ksana_llm {
 
@@ -268,9 +268,10 @@ TEST_F(RequestPackerTest, NormalPack) {
   memcpy(tensor.data.data(), probs_output.data(), tensor.data.size());
   ksana_python_output.response["logits"] = tensor;
   ksana_python_outputs.push_back(ksana_python_output);
+  Status response_status;
 
   std::string response_bytes;
-  ASSERT_TRUE(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_bytes).OK());
+  ASSERT_TRUE(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes).OK());
 
   auto handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
   auto object = handle.get();
@@ -285,6 +286,8 @@ TEST_F(RequestPackerTest, NormalPack) {
   std::vector<float> probs_response(probs_output.size());
   memcpy(probs_response.data(), probs_response_bytes.data(), probs_response_bytes.size());
   ASSERT_EQ(probs_response, probs_output);
+  ASSERT_EQ(batch_response.message, response_status.GetMessage());
+  ASSERT_EQ(batch_response.code, response_status.GetCode());
 }
 
 }  // namespace ksana_llm

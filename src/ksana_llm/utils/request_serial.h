@@ -72,9 +72,12 @@ struct ResponseSerial {
 
 // Forward response interface
 struct BatchResponseSerial {
-  std::vector<ResponseSerial> responses;
+  std::vector<ResponseSerial> responses;  // the list of response data
+  std::string message;                    // the response message
+  int code;                               // the response code
 
-  MSGPACK_DEFINE_MAP(responses);
+  // {responses: responses, message: message, code: code}
+  MSGPACK_DEFINE_MAP(responses, message, code);
 };
 
 }  // namespace ksana_llm

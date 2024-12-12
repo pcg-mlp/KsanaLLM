@@ -4,7 +4,9 @@
 
 #include <pybind11/embed.h>
 #include <pybind11/stl.h>
+
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/status.h"
 
 namespace py = pybind11;
 
@@ -25,7 +27,8 @@ class RequestPacker {
 
   // Pack KsanaPythonOutput objects into a serialized response.
   Status Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
-              const std::vector<KsanaPythonOutput>& ksana_python_outputs, std::string& response_bytes);
+              const std::vector<KsanaPythonOutput>& ksana_python_outputs, const Status& response_status,
+              std::string& response_bytes);
 
   // Detokenize the giver token_list into prompt.
   Status DeTokenize(const std::vector<int>& input_tokens, std::string& prompt);

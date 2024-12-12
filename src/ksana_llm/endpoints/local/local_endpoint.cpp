@@ -111,14 +111,19 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
   std::vector<KsanaPythonOutput> ksana_python_outputs;
   ksana_python_outputs.reserve(batch_size);
   for (const auto &[finish_status, req] : reqs) {
+    // If any status fails, `status` is set to fail.
     if (!finish_status.OK()) {
       status = finish_status;
+    }
+    if (!req->finish_status.OK()) {
+      status = req->finish_status;
     }
     ksana_python_outputs.emplace_back(req);
   }
 
   // Pack ksana_python_output objects into response.
-  STATUS_CHECK_RETURN_AND_REPORT(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_bytes), span);
+  STATUS_CHECK_RETURN_AND_REPORT(
+      request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, status, response_bytes), span);
   STATUS_CHECK_AND_REPORT(status, span);
 }
 

@@ -11,6 +11,7 @@ from concurrent import futures
 from functools import partial
 from typing import Any, Dict, List, Optional
 
+import msgpack
 import orjson
 import uvicorn
 import uvloop
@@ -344,10 +345,10 @@ async def generate(request: Request) -> Response:
     request_dict = orjson.loads(await request.body())
     enable_streaming = request_dict.get("stream", True)
     status, response_data = await process_request(request_dict, req_ctx)
-    if not status.OK():
-        error_response = {"Message": status.GetMessage(), "code": status.GetCode().value}
+    if not status.OK():  # Request failed
+        error_response = {"message": status.GetMessage(), "code": status.GetCode().value}
         return Response(content = orjson.dumps(error_response),
-             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
+                        status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
     if enable_streaming:
         return StreamingResponse(response_data)
     else:
@@ -366,10 +367,11 @@ async def forward(request: Request):
     status, response_bytes = await forward_request(request_bytes, req_ctx)
     if status.OK() and response_bytes is not None:
         return Response(content=response_bytes, media_type="application/x-msgpack")
-    else:  # Bad request
-        error_response = {"Message": status.GetMessage(), "code": status.GetCode().value}
-        return Response(content = orjson.dumps(error_response),
-             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
+    else:  # Request failed
+        error_response = {"message": status.GetMessage(), "code": status.GetCode().value}
+        return Response(content = msgpack.packb(error_response),
+                        media_type="application/x-msgpack",
+                        status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def load_tokenizer(model_path):

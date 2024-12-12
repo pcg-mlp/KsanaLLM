@@ -27,10 +27,19 @@ def args_config():
 def post_request_msgpack(serv, data, queue=None):
     packed_data = msgpack.packb(data)
     responses = requests.post(serv, data=packed_data, headers={'Content-Type': 'application/x-msgpack'})
-    if responses.status_code == 200:
-        result = msgpack.unpackb(responses.content)
-    else:
-        result = f"Failed to get response: {responses}"
+    result = None
+    try:
+        if responses.status_code == 200:  # Request succeeded
+            result = msgpack.unpackb(responses.content)
+        elif responses.status_code == 500:  # Internal server error
+            result = msgpack.unpackb(responses.content)
+        else:
+            result = f"Request failed with response content: {responses.content}, " \
+                     f"response code: {responses.status_code}"
+    except Exception as e:  # pylint: disable=broad-except
+        result = f"Failed to parse the response: {e}\n" \
+                 f"response content: {responses.content}, response code: {responses.status_code}"
+
     if queue is None:
         return result
     else:
@@ -102,6 +111,7 @@ def show_response(result):
                         f"input_token_ids : {input_token_ids}, target : {target}, "
                         f"tensor : \n{python_tensor_to_numpy(python_tensor)}"
                     )
+        print(f"message: \"{result['message']}\", code: {result['code']}")
     else:
         print(result)
 
