@@ -184,6 +184,7 @@ class ServingModel(object):
         plugin_kwargs = {
             "messages": messages,
             "additional_params": kwargs.get('additional_params', {}),
+            "prompt": kwargs.get("prompt", ""),
         }
 
         # If user does not provide the input embeddings, compute it by the preprocessing of ksana plugin

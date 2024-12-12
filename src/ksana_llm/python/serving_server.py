@@ -224,6 +224,7 @@ async def process_request(request_dict: Dict[str, Any], req_ctx: Dict[str, str])
     kwargs = {
         "input_refit_embedding": {},
         "additional_params": {},  # any model-specific parameters packed in a dict
+        "prompt": prompt_text,
     }
 
     input_refit_embedding = request_dict.pop("input_refit_embedding", None)
