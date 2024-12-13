@@ -221,8 +221,11 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
 #ifdef ENABLE_CUDA
     auto& offset = sampling_req.logits_offset;
     auto& vocab_size = sampling_devide_parameter.vocab_size_padded;
-    CalcLogprobs(device_logits + (offset * vocab_size), sampling_devide_parameter.device_temperatures + offset,
-                 vocab_size, 1, sampling_req.sampling_config->logprobs_num, logprobs.data(), token_ids.data());
+    float* device_temperatures_ptr = sampling_devide_parameter.device_temperatures == nullptr
+                                         ? nullptr
+                                         : sampling_devide_parameter.device_temperatures + offset;
+    CalcLogprobs(device_logits + (offset * vocab_size), device_temperatures_ptr, vocab_size, 1,
+                 sampling_req.sampling_config->logprobs_num, logprobs.data(), token_ids.data());
 #endif
     std::vector<std::pair<int, float>> logprobs_output;
     for (int logprobs_index = 0; logprobs_index < sampling_req.sampling_config->logprobs_num; logprobs_index++) {

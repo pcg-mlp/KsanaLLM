@@ -976,15 +976,16 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
                   int64_t* token_ids) {
   auto options = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kFloat32);
   auto logits_tensor = torch::from_blob(logits, {bs, vocab_size}, options);
-  auto temperatures_tensor = torch::from_blob(temperatures, {bs}, options);
 
   torch::Tensor logits_sort, logits_idx;
   std::tie(logits_sort, logits_idx) = logits_tensor.sort(-1, true);
-  logits_sort = logits_sort.narrow(1, 0, logprobs_num)
-                    .div_(temperatures_tensor.unsqueeze_(1))
-                    .log_softmax(-1)
-                    .to(torch::kCPU)
-                    .view({-1});
+
+  logits_sort = logits_sort.narrow(1, 0, logprobs_num);
+  if (temperatures != nullptr) {
+    auto temperatures_tensor = torch::from_blob(temperatures, {bs}, options);
+    logits_sort = logits_sort.div_(temperatures_tensor.unsqueeze_(1));
+  }
+  logits_sort = logits_sort.log_softmax(-1).to(torch::kCPU).view({-1});
   logits_idx = logits_idx.narrow(1, 0, logprobs_num).to(torch::kCPU).view({-1});
 
   memcpy(logprobs, logits_sort.data_ptr<float>(), logprobs_num * bs * sizeof(float));

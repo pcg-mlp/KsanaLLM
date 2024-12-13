@@ -24,3 +24,8 @@ endif()
 
 add_library(samplers STATIC ${samplers_SRCS})
 target_link_libraries(samplers PUBLIC block_manager utils ${samplers_nvidia_LIBS} ${samplers_ascend_LIBS})
+
+# for test
+file(GLOB_RECURSE samplers_test_SRCS
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/samplers/*test.cpp)
+cpp_test(samplers_test SRCS ${samplers_test_SRCS} DEPS samplers)
