@@ -29,6 +29,7 @@ class ModelInputTest : public testing::Test {
     env->GetModelConfig("", model_config);
 
     // Initialize the block manager.
+    env->InitializeBlockManagerConfig();
     BlockManagerConfig& block_manager_config = env->block_manager_config_;
     block_manager_config.block_host_memory_factor = 0.0;
     block_manager_ = std::make_unique<BlockManager>(block_manager_config, context);

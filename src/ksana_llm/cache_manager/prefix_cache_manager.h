@@ -17,7 +17,7 @@ struct PrefixCachedRequest;
 
 // Describe a cached data, on either device or host.
 struct PrefixCachedBlock {
-  /////////////////////////////////////////////////////////////////////////////
+  // ///////////////////////////////////////////////////////////////////////////
   // Common field for base class.
 
   // The unique id of this block, independent with content, not changed after created.
@@ -30,7 +30,7 @@ struct PrefixCachedBlock {
   // If this cached block is swaped out, the value is host block id of every device.
   std::vector<int> memory_block_ids;
 
-  /////////////////////////////////////////////////////////////////////////////
+  // ///////////////////////////////////////////////////////////////////////////
   // Prefix cached block only.
 
   // The hash code of this block's content.
@@ -130,8 +130,10 @@ class PrefixCacheManager : public CacheManagerInterface,
   Status GetRequestNeededBlockNum(int64_t req_id, size_t& block_num);
 
   // Swap out/in specific request async.
-  Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num);
-  Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<std::vector<int>>& req_block_ids);
+  Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
+                             std::vector<int>& swapped_memory_block_ids);
+  Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<std::vector<int>>& req_block_ids,
+                            std::vector<int>& swapped_memory_block_ids);
 
   // Waiting until at lease on swap out/in task done, return the pending task number.
   Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true);
@@ -154,6 +156,14 @@ class PrefixCacheManager : public CacheManagerInterface,
   // Free at least block_num cached blocks that could resued, reserve some blocks if needed.
   bool FreeCachedBlocks(size_t block_num, size_t& free_block_num,
                         const std::vector<PrefixCachedBlock*>& reserved_blocks = {});
+
+  // Swap out/in memory blocks referenced by req_id.
+  Status SwapoutRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids);
+  Status SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids);
+
+  // Wait until all memory block swappness referenced by req_ids finished.
+  Status WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids);
+  Status WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids);
 
  private:
   // Whether the block token is equal to specific ones.

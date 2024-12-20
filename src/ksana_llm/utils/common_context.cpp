@@ -9,6 +9,7 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -35,6 +36,11 @@ ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_paralle
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     InitStreams(worker_id);
   }
+
+  // Initialize pipeline configure.
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
+  is_chief_ = pipeline_config_.world_size == 1 || pipeline_config_.node_rank == 0;
+  is_standalone_ = pipeline_config_.world_size == 1;
 
   // Initialize the device extension.
   InitializeExtension();
@@ -69,6 +75,16 @@ void ContextT<T>::InitStreams(const int worker_id) {
   d2h_streams_.emplace_back(worker_id);
   d2d_streams_.emplace_back(worker_id);
   comm_streams_.emplace_back(worker_id);
+}
+
+template <int T>
+bool ContextT<T>::IsStandalone() const {
+  return is_standalone_;
+}
+
+template <int T>
+bool ContextT<T>::IsChief() const {
+  return is_chief_;
 }
 
 template class ContextT<ACTIVE_DEVICE_TYPE>;

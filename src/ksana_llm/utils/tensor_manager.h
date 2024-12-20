@@ -35,6 +35,7 @@ class TensorManager {
     GetBlockManager()->SetDeviceId(rank_);
     GetBlockManager()->AllocateContiguous(length, block_id);
 
+    KLLM_LOG_DEBUG << "TensorManager::AddWeightTensor, create weight " << weight_name;
     weights_map_.emplace(weight_name, Tensor(MemoryDevice::MEMORY_DEVICE, dtype, shapes, block_id));
     return Status();
   }

@@ -188,8 +188,8 @@ class ParallelTester {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     // schedule and generate tokens
     while (true) {
-      std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
-      scheduled_reqs = batch_scheduler_->Schedule();
+      ScheduleOutput* scheduled_out = batch_scheduler_->Schedule();
+      std::vector<std::shared_ptr<InferRequest>>& scheduled_reqs = scheduled_out->running_reqs;
       if (scheduled_reqs.empty()) {
         if (client_simulator.IsAllRequestFinished()) {
           KLLM_LOG_INFO << "All requests finished";

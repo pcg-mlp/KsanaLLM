@@ -25,8 +25,8 @@ float* ChatglmModel<T>::GetLogitsPtr() {
 
 template <typename T>
 Status ChatglmModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                std::vector<ForwardRequest>& forward_reqs) {
-  return common_model_->Forward(base_weight, forward_reqs);
+                                std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
+  return common_model_->Forward(base_weight, forward_reqs, epilogue);
 }
 
 template class ChatglmModel<float>;

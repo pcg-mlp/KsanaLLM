@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
+#include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/runtime/infer_request.h"
 
 namespace ksana_llm {
@@ -16,7 +17,7 @@ class BatchSchedulerInterface {
   virtual ~BatchSchedulerInterface() {}
 
   // Get the next infer reqs that ready to run.
-  virtual std::vector<std::shared_ptr<InferRequest>> &Schedule() = 0;
+  virtual ScheduleOutput* Schedule() = 0;
 
   // Add infer request to waiting list.
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) = 0;

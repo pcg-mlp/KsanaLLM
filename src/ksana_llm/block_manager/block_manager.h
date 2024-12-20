@@ -17,8 +17,10 @@ namespace ksana_llm {
 class BlockManager : public BlockManagerInterface {
  public:
   BlockManager(const BlockManagerConfig& block_manager_config, std::shared_ptr<Context> context);
+  ~BlockManager();
 
-  ~BlockManager() {}
+  // Calculate the block number.
+  Status GetBlockNumber(size_t& device_blocks_num, size_t& host_block_num);
 
   // Preallocate blocks.
   Status PreAllocateBlocks();
@@ -120,9 +122,6 @@ class BlockManager : public BlockManagerInterface {
   Status UpdateConfig(const BlockManagerConfig& update_block_manager_config);
 
  private:
-  // Calculate the block number.
-  Status CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num);
-
   // Get the device allocator for current selected device.
   std::shared_ptr<DeviceAllocator>& GetDeviceAllocator();
 

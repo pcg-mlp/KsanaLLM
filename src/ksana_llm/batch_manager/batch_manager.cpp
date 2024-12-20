@@ -8,14 +8,17 @@
 #include <thread>
 
 #include "ksana_llm/batch_manager/batch_manager.h"
+#include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/string_utils.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
+
 namespace ksana_llm {
 
 BatchManager::BatchManager(std::shared_ptr<Context> context) {
@@ -105,14 +108,12 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
 Status BatchManager::WaitAllDone() { return Status(); }
 
-Status BatchManager::Process() {
+Status BatchManager::MainProcess() {
   GetBlockManager()->SetDeviceId(0);
+
   while (!terminated_) {
-    std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
-
-    scheduled_reqs = batch_scheduler_->Schedule();
-
-    if (scheduled_reqs.empty()) {
+    ScheduleOutput *schedule_output = batch_scheduler_->Schedule();
+    if (schedule_output->running_reqs.empty()) {
       if (batch_scheduler_->IsIdle()) {
         queue_waiter_->Wait();
         queue_waiter_->Reset(1);
@@ -126,7 +127,7 @@ Status BatchManager::Process() {
     time_t start_time_ns = ProfileTimer::GetCurrentTimeInNs();
     uint64_t forward_token_num = 0;  // number of tokens computed in this step
     uint64_t input_token_num = 0;    // number of tokens may consume kv-cache
-    for (auto &req : scheduled_reqs) {
+    for (auto &req : schedule_output->running_reqs) {
       input_token_num += req->output_tokens.size();
       // number of tokens computed in this step for current request
       int token_num =
@@ -143,17 +144,57 @@ Status BatchManager::Process() {
     RECORD_TRACE_EVENT(std::to_string(forward_token_num), TraceEventType::ForwardTokenNum, TRACE_PROCESS_NAME_METRICS,
                        TRACE_THREAD_NAME_FORWARD_TOKEN_NUM, TraceEventPhase::Begin, start_time_ns);
 
-    for (auto &req : scheduled_reqs) {
+    for (auto &req : schedule_output->running_reqs) {
       RECORD_TRACE_EVENT(req_infos[req->req_id].first, req_infos[req->req_id].second, std::to_string(req->req_id),
                          TRACE_THREAD_NAME_PREFILL_DECODE, TraceEventPhase::Begin, start_time_ns);
     }
 #endif
 
     {
-      Status status = llm_runtime_->Step(scheduled_reqs);
+      // Send schedule result to all workers if in distributed mode.
+      if (!context_->IsStandalone()) {
+        KLLM_LOG_DEBUG << "Broadcast schedule output " << schedule_output->schedule_id << " to all workers.";
+        BroadcastScheduleOutput(schedule_output);
+      }
+
+      // Use a fixed hidden unit buffer.
+      KLLM_LOG_DEBUG << "Start to get a free device buffer.";
+      HiddenUnitDeviceBuffer *hidden_unit_buffer = GetHiddenUnitBufferPool()->GetDeviceBuffer();
+      if (!hidden_unit_buffer) {
+        break;
+      }
+
+      // Set as current device buffer.
+      KLLM_LOG_DEBUG << "Set current hidden_unit buffer to " << hidden_unit_buffer;
+      SetCurrentHiddenUnitBuffer(hidden_unit_buffer);
+
+      Status status = llm_runtime_->Step(schedule_output, false);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();
       }
+
+      // Wait until last worker done.
+      if (!context_->IsStandalone()) {
+        SendHiddenUnits(hidden_unit_buffer);
+        GetHiddenUnitBufferPool()->FreeDeviceBuffer(hidden_unit_buffer);
+
+        KLLM_LOG_DEBUG << "Wait last hidden unit from upstream worker.";
+        HiddenUnitDeviceBuffer *hidden_unit_buffer = GetHiddenUnitBufferPool()->GetFromDeviceRecvQueue();
+        if (!hidden_unit_buffer) {
+          break;
+        }
+
+        SetCurrentHiddenUnitBuffer(hidden_unit_buffer);
+
+        // lm head & sampling
+        Status status = llm_runtime_->Step(schedule_output, true);
+        if (!status.OK()) {
+          KLLM_LOG_ERROR << status.ToString();
+        }
+      }
+
+      // free again.
+      GetHiddenUnitBufferPool()->FreeDeviceBuffer(hidden_unit_buffer);
     }
 
 #ifdef ENABLE_RECORD_EVENT
@@ -186,7 +227,7 @@ Status BatchManager::Process() {
                        TRACE_THREAD_NAME_FUTURE_BLK_NUM, TraceEventPhase::End, end_time_ns);
 
     // Record end of trace events
-    for (auto &req : scheduled_reqs) {
+    for (auto &req : schedule_output->running_reqs) {
       RECORD_TRACE_EVENT(req_infos[req->req_id].first, req_infos[req->req_id].second, std::to_string(req->req_id),
                          TRACE_THREAD_NAME_PREFILL_DECODE, TraceEventPhase::End, end_time_ns);
     }
@@ -197,8 +238,51 @@ Status BatchManager::Process() {
   return Status();
 }
 
+Status BatchManager::WorkerProcess() {
+  GetBlockManager()->SetDeviceId(0);
+
+  while (!terminated_) {
+    KLLM_LOG_DEBUG << "Wait schedule_output from upstream node.";
+    ScheduleOutput *schedule_output = GetScheduleOutputPool()->GetFromRecvQueue();
+    if (!schedule_output) {
+      break;
+    }
+
+    KLLM_LOG_DEBUG << "Wait hidden_unit from upstream node.";
+    HiddenUnitDeviceBuffer *hidden_unit_buffer = GetHiddenUnitBufferPool()->GetFromDeviceRecvQueue();
+    if (!hidden_unit_buffer) {
+      break;
+    }
+
+    // Set as current device buffer.
+    SetCurrentHiddenUnitBuffer(hidden_unit_buffer);
+
+    Status status = llm_runtime_->Step(schedule_output, false);
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << status.ToString();
+    }
+
+    // Send hidden units to downstream node.
+    SendHiddenUnits(hidden_unit_buffer);
+
+    // Free schedule output and hidden_unit..
+    KLLM_LOG_DEBUG << "Free schedule output and hidden_unit.";
+    GetScheduleOutputPool()->FreeScheduleOutput(schedule_output);
+    GetHiddenUnitBufferPool()->FreeDeviceBuffer(hidden_unit_buffer);
+  }
+
+  return Status();
+}
+
 Status BatchManager::Start() {
-  batch_manager_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::Process, this));
+  // Start main thread for standalone or master node of distributed mode.
+  if (context_->IsChief()) {
+    main_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::MainProcess, this));
+  } else {
+    // Start worker thread only if in distributed mode, for worker node only.
+    worker_thread_ = std::unique_ptr<std::thread>(new std::thread(&BatchManager::WorkerProcess, this));
+  }
+
   return Status();
 }
 
@@ -210,9 +294,24 @@ Status BatchManager::Stop() {
   // Break process loop.
   queue_waiter_->Notify();
 
-  if (batch_manager_thread_ && batch_manager_thread_->joinable()) {
-    batch_manager_thread_->join();
+  // stop data hub pool, will unlock the blocking Get().
+  KLLM_LOG_INFO << "Stop data hub pool.";
+  GetScheduleOutputPool()->Stop();
+  GetHiddenUnitBufferPool()->Stop();
+
+  KLLM_LOG_INFO << "Stop work thread.";
+  if (context_->IsChief()) {
+    if (main_thread_ && main_thread_->joinable()) {
+      main_thread_->join();
+    }
+  } else {
+    if (worker_thread_ && worker_thread_->joinable()) {
+      worker_thread_->join();
+    }
   }
+
+  // Clear model intances.
+  model_instances_.clear();
 
   KLLM_LOG_INFO << "batch manager stopped.";
   return Status();

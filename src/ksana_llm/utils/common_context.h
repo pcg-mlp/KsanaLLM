@@ -3,9 +3,10 @@
 ==============================================================================*/
 #pragma once
 
-#include <vector>
 #include <set>
+#include <vector>
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
 
@@ -44,6 +45,12 @@ class ContextT {
 
   inline bool IsGemmFp8Supported() { return is_gemm_fp8_supported_; }
 
+  // Whether current node is standalone mode.
+  bool IsStandalone() const;
+
+  // Whether current node is master node.
+  bool IsChief() const;
+
  public:
   friend class ExtensionTypeTraits<T>::value_type;
   typename ExtensionTypeTraits<T>::value_type* ext = nullptr;
@@ -71,6 +78,15 @@ class ContextT {
   std::vector<Stream> d2h_streams_;
   std::vector<Stream> d2d_streams_;
   std::vector<Stream> comm_streams_;
+
+  // pipeline config.
+  PipelineConfig pipeline_config_;
+
+  // single node.
+  bool is_standalone_ = false;
+
+  // Single node or master node of distributed model
+  bool is_chief_ = false;
 
  private:
   // Initialize and destroy extension, implemented by device.

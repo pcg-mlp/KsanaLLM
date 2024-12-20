@@ -4,21 +4,23 @@
 
 #include "ksana_llm/service/inference_engine.h"
 
+#include <chrono>
 #include <memory>
 #include <thread>
-#include <chrono>
 
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
+#include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/periphery/version_reporter.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/singleton.h"
-#include "ksana_llm/utils/waiter.h"
+#include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tokenizer.h"
+#include "ksana_llm/utils/waiter.h"
 #ifdef ENABLE_CUDA
-#include "ksana_llm/runtime/cuda_graph_runner.h"
+#  include "ksana_llm/runtime/cuda_graph_runner.h"
 #endif
-
 
 namespace ksana_llm {
 
@@ -27,13 +29,7 @@ InferenceEngine::InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Reque
   Initialize();
 }
 
-InferenceEngine::~InferenceEngine() {
-  model_instances_.clear();
-  if (block_manager_) {
-    delete block_manager_;
-    block_manager_ = nullptr;
-  }
-}
+InferenceEngine::~InferenceEngine() { KLLM_LOG_DEBUG << "InferenceEngine destroyed."; }
 
 Status InferenceEngine::Initialize() {
   std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
@@ -41,11 +37,66 @@ Status InferenceEngine::Initialize() {
     return Status(RET_INVALID_ARGUMENT, "The Environment is nullptr.");
   }
 
+  // Environment is must be initialized befroe context.
+  KLLM_LOG_DEBUG << "Get tensor parallel: " << env->GetTensorParallelSize();
   context_.reset(new Context(env->GetTensorParallelSize(), env->GetPipeLineParallelSize()));
+
+  // Load model configs.
+  std::unordered_map<std::string, ModelConfig> model_configs;
+  Status status = env->GetModelConfigs(model_configs);
+  if (!status.OK()) {
+    return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
+  }
+  if (model_configs.empty()) {
+    return Status(RET_INVALID_ARGUMENT, "No model config found.");
+  }
+  KLLM_LOG_DEBUG << "Get model instance size: " << model_configs.size();
+
+  // Initialize schedule output and hidden unit buffer pool.
+  // Must be called after block manager is set.
+  InitializeScheduleOutputPool();
+  InitializeHiddenUnitBufferPool();
+
+  // Only for distributed mode.
+  if (!context_->IsStandalone()) {
+    distributed_coordinator_ = std::make_shared<DistributedCoordinator>(
+        context_, GetPacketObject, GetScheduleOutputPool(), GetHiddenUnitBufferPool(), env);
+
+    KLLM_LOG_INFO << "Initialize distributed coordinator.";
+    distributed_coordinator_->InitializeCluster();
+  }
+
+  // Set model layers for standalone mode, assume only one model now.
+  KLLM_LOG_INFO << "InferenceEngine IsStandalone:" << context_->IsStandalone();
+  if (context_->IsStandalone()) {
+    ModelConfig model_config = model_configs.begin()->second;
+
+    PipelineConfig pipeline_config;
+    Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+    pipeline_config.lower_layer_idx = 0;
+    pipeline_config.upper_layer_idx = model_config.num_layer - 1;
+    Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
+    KLLM_LOG_INFO << "InferenceEngine Set layer range:[" << pipeline_config.lower_layer_idx << ", "
+                  << pipeline_config.upper_layer_idx << "].";
+  } else {
+    KLLM_LOG_INFO << "Start to synchronize node layers.";
+    distributed_coordinator_->SynchronizeNodeLayers();
+
+    PipelineConfig pipeline_config;
+    Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+    KLLM_LOG_INFO << "InferenceEngine Synchronize layer range:[" << pipeline_config.lower_layer_idx << ", "
+                  << pipeline_config.upper_layer_idx << "].";
+  }
+
+  // Get block manager config of specific layers.
+  status = env->InitializeBlockManagerConfig();
+  if (!status.OK()) {
+    return Status(RET_INVALID_ARGUMENT, "Initialize block manager config error:" + status.ToString());
+  }
 
   // Initialize global block manager.
   BlockManagerConfig block_manager_config;
-  Status status = env->GetBlockManagerConfig(block_manager_config);
+  status = env->GetBlockManagerConfig(block_manager_config);
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get block manager config error:" + status.ToString());
   }
@@ -55,14 +106,6 @@ Status InferenceEngine::Initialize() {
   ProfilerConfig profiler_config;
   status = env->GetProfilerConfig(profiler_config);
   Singleton<Profiler>::GetInstance()->Init(profiler_config);
-
-  // Load model instances.
-  std::unordered_map<std::string, ModelConfig> model_configs;
-  status = env->GetModelConfigs(model_configs);
-  if (!status.OK()) {
-    return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
-  }
-  KLLM_LOG_DEBUG << "Get model instance size: " << model_configs.size();
 
   size_t max_batch_size = 0;
   size_t max_vocab_size = 0;
@@ -86,12 +129,16 @@ Status InferenceEngine::Initialize() {
 
   // Register model instance.
   for (auto &[model_name, model_config] : model_configs) {
+    // Update pipeline_config first, and then load model.
     std::shared_ptr<ModelInstance> model_instance = std::make_shared<ModelInstance>(model_config, context_);
     model_instance->Load();
 
     // Register model instance.
     model_instances_.push_back(model_instance);
     batch_manager_->RegisterModelInstance(model_instance);
+
+    // Register to data hub.
+    SetModelInstance(model_name, model_instance);
   }
 
   // Update block manager after model loading successfully
@@ -115,6 +162,7 @@ Status InferenceEngine::Initialize() {
 
   // Create llm runtime
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, context_);
+  llm_runtime_->SetCacheManager(cache_manager_);
 
   batch_manager_->SetBatchScheduler(batch_scheduler_);
   batch_manager_->SetLlmRuntime(llm_runtime_);
@@ -210,20 +258,17 @@ Status InferenceEngine::CudaGraphCapture() {
   // for VRAM usage consideration (each cudagraph for specific bs takes 15~25mb VRAM)
   const int capture_batch_sizes = 3;
   size_t max_batch_size =
-    cuda_graph_builder->GetMaxGraphBatchSize(model_instances_[0]->GetModelConfig().max_batch_size);
+      cuda_graph_builder->GetMaxGraphBatchSize(model_instances_[0]->GetModelConfig().max_batch_size);
   std::vector<int> batch_size_capture_list;
   batch_size_capture_list.reserve(cuda_graph_builder->GetBatchSizeCaptureList().size());
-  std::copy_if(
-      cuda_graph_builder->GetBatchSizeCaptureList().begin(),
-      cuda_graph_builder->GetBatchSizeCaptureList().end(),
-      std::back_inserter(batch_size_capture_list),
-      [&](size_t bs) { return bs <= max_batch_size; });
+  std::copy_if(cuda_graph_builder->GetBatchSizeCaptureList().begin(),
+               cuda_graph_builder->GetBatchSizeCaptureList().end(), std::back_inserter(batch_size_capture_list),
+               [&](size_t bs) { return bs <= max_batch_size; });
   std::vector<int> input_tokens(batch_size_capture_list.back(), 0);
   for (int batchsize = 1; batchsize <= capture_batch_sizes; ++batchsize) {
     KLLM_LOG_INFO << "start to capture graph: batchsize: " << batchsize;
     auto warmup_run_input = std::make_shared<KsanaPythonInput>();
-    warmup_run_input->input_tokens =
-      std::vector<int>(input_tokens.begin(), input_tokens.begin() + capture_batch_sizes);
+    warmup_run_input->input_tokens = std::vector<int>(input_tokens.begin(), input_tokens.begin() + capture_batch_sizes);
     auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
     auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
     for (int i = 0; i <= batchsize; ++i) {
@@ -246,8 +291,17 @@ Status InferenceEngine::CudaGraphCapture() {
 }
 #endif
 
-
 Status InferenceEngine::Start() {
+  if (!context_->IsStandalone()) {
+    KLLM_LOG_INFO << "Start to synchronize cache block num.";
+    distributed_coordinator_->SynchronizeCacheBlockNum();
+
+    PipelineConfig pipeline_config;
+    Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+    KLLM_LOG_INFO << "InferenceEngine Synchronize device block num " << pipeline_config.device_block_num
+                  << ", host block_num " << pipeline_config.host_block_num << ".";
+  }
+
   // Reset block num via device memory usage.
   block_manager_->ResetPreAllocatedBlocks();
 
@@ -256,20 +310,28 @@ Status InferenceEngine::Start() {
   Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
   KLLM_CHECK_WITH_INFO((block_manager_->GetDeviceFreeBlockNumber() * block_manager_->GetBlockTokenNum()) >=
                            (batch_scheduler_config.max_token_len),
-                       "Total device block_num * block_token_size must large than max_token_len.");
+                       FormatStr("Total device block_num(%d) * block_token_size(%d) must large than max_token_len(%d).",
+                                 block_manager_->GetDeviceFreeBlockNumber(), block_manager_->GetBlockTokenNum(),
+                                 batch_scheduler_config.max_token_len));
 
-  // Initialize blocks from block manager.
-  cache_manager_->InitializeCachedBlocks();
+  // Initialize cached block tree only for chief node.
+  if (context_->IsChief()) {
+    cache_manager_->InitializeCachedBlocks();
+  }
 
   // Start batch manager.
   batch_manager_->Start();
 
   // Start service handler.
-  StartHandler();
+  if (context_->IsChief()) {
+    StartHandler();
+  }
 
 #ifndef ENABLE_ACL
   // Start warmup run
-  DoWarmupRun();
+  if (context_->IsChief()) {
+    DoWarmupRun();
+  }
 #endif
 
 #ifdef ENABLE_CUDA
@@ -285,7 +347,14 @@ Status InferenceEngine::Stop() {
   }
 
   terminated_ = true;
-  handle_thread_.join();
+
+  request_queue_.Write({Status(RET_TERMINATED), nullptr});
+
+  if (handle_thread_.joinable()) {
+    handle_thread_.join();
+  }
+
+  request_queue_.Close();
 
   // Wait all request done.
   KLLM_LOG_INFO << "Waiting all running request.";
@@ -294,15 +363,44 @@ Status InferenceEngine::Stop() {
     KLLM_LOG_ERROR << "Wait all requests done error:" << status.ToString();
   }
 
+  if (!context_->IsStandalone()) {
+    KLLM_LOG_INFO << "Destroy distributed coordinator.";
+    distributed_coordinator_->DestroyCluster();
+    distributed_coordinator_ = nullptr;
+  }
+
   // Stop the batch manger.
   KLLM_LOG_INFO << "Stop batch manager.";
   batch_manager_->Stop();
   batch_manager_ = nullptr;
   llm_runtime_ = nullptr;
 
+  // Destroy all model instances.
+  KLLM_LOG_INFO << "Destroy model instances.";
+  DestroyModelInstance();
+  model_instances_.clear();
+
+  // Clear batch scheduler
+  KLLM_LOG_INFO << "Destroy batch scheduler.";
+  batch_scheduler_.reset();
+
+  // Destroy schedule output and hidden unit buffer pool.
+  DestroyScheduleOutputPool();
+  DestroyHiddenUnitBufferPool();
+
+  // Clear model instance.
+  ModelInstance::Reset();
+
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
+    KLLM_LOG_INFO << "Stop version reporter.";
     VersionReporter::GetInstance().StopReporting();
     VersionReporter::GetInstance().Destroy();
+  }
+
+  KLLM_LOG_INFO << "Destroy block manager.";
+  if (block_manager_) {
+    delete block_manager_;
+    block_manager_ = nullptr;
   }
 
   KLLM_LOG_INFO << "The Inference Engine has stopped.";

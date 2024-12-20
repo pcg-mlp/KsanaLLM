@@ -100,6 +100,11 @@ inline void CheckAssert(bool result, const char* const file, int const line, std
   }
 }
 
+// Get current time in sec.
+inline uint64_t GetCurrentTime() {
+  return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 // Get current time in ms.
 inline uint64_t GetCurrentTimeInMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())

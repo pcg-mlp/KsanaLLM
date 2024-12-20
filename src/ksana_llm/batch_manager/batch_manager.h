@@ -41,7 +41,16 @@ class BatchManager {
   Status WaitAllDone();
 
   // Process and get next running jobs.
-  Status Process();
+  // Used for standalone mode, or master node of distributed mode.
+  //
+  // In distributed mode,
+  // the master node is responsible for lookup embedding, layers forward, and the final lm head and sampling,
+  // the worker node is responsible for layers forward only.
+  Status MainProcess();
+
+  // Process received request in distributed mode.
+  // Used only for worker node of distributed mode.
+  Status WorkerProcess();
 
   // Start the batch manager.
   Status Start();
@@ -56,8 +65,9 @@ class BatchManager {
   // The batch scheduler.
   std::shared_ptr<BatchSchedulerInterface> batch_scheduler_ = nullptr;
 
-  // The process thread.
-  std::unique_ptr<std::thread> batch_manager_thread_;
+  // The master and worker thread.
+  std::unique_ptr<std::thread> main_thread_;
+  std::unique_ptr<std::thread> worker_thread_;
 
   // Whether batch manager should be stopped.
   std::atomic<bool> terminated_ = false;

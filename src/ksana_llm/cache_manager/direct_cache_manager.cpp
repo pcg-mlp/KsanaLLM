@@ -19,7 +19,7 @@ DirectCacheManager::DirectCacheManager(const CacheManagerConfig& cache_manager_c
   cache_manager_config_ = cache_manager_config;
 }
 
-DirectCacheManager::~DirectCacheManager() {}
+DirectCacheManager::~DirectCacheManager() { KLLM_LOG_DEBUG << "DirectCacheManager destroyed."; }
 
 void DirectCacheManager::InitializeCachedBlocks() {
   size_t total_device_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
@@ -178,7 +178,8 @@ Status DirectCacheManager::GetRequestNeededBlockNum(int64_t req_id, size_t& bloc
   return Status();
 }
 
-Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num) {
+Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
+                                               std::vector<int>& swapped_memory_block_ids) {
   {
     if (!swapin_task_queue_.empty() || !swapin_cached_block_buffer_.empty() || !finish_swapin_request_.empty()) {
       return Status(RET_RUNTIME, FormatStr("Cannot swapout req %d, some swapin jobs is in progress.", req_id));
@@ -195,8 +196,12 @@ Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
   for (auto it2 = it->second->cached_blocks.rbegin(); it2 != it->second->cached_blocks.rend(); ++it2) {
     DirectCachedBlock* cb = *it2;
     dev_swapout_blocks.push_back(cb);
+
+    // Assume every device have same memory block id.
+    swapped_memory_block_ids.push_back(cb->memory_block_ids[0]);
   }
 
+  free_block_num = 0;
   swapped_block_num = dev_swapout_blocks.size();
   if (GetBlockManager()->GetHostFreeBlockNumber() < cache_manager_config_.tensor_para_size * swapped_block_num) {
     return Status(RET_OUT_OF_MEMORY, FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.",
@@ -224,7 +229,8 @@ Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
 }
 
 Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
-                                              std::vector<std::vector<int>>& req_block_ids) {
+                                              std::vector<std::vector<int>>& req_block_ids,
+                                              std::vector<int>& swapped_memory_block_ids) {
   if (!swapout_task_queue_.empty() || !swapout_cached_block_buffer_.empty() || !finish_swapout_request_.empty()) {
     return Status(RET_RUNTIME, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
   }
@@ -255,6 +261,9 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
     DirectCachedBlock* cached_block = free_cached_blocks_.front();
     free_cached_blocks_.pop();
     swapin_dev_blocks.push_back(cached_block);
+
+    // Assume every device have same memory block id.
+    swapped_memory_block_ids.push_back(cached_block->memory_block_ids[0]);
 
     // Append to buffer list.
     swapin_cached_block_buffer_[req_id].push_back(swapin_host_blocks[i]);
@@ -339,6 +348,24 @@ void DirectCacheManager::DestroySwapedRequest(int64_t req_id) {
   }
 
   cached_requests_.erase(it);
+}
+
+Status DirectCacheManager::SwapoutRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::SwapoutRequestMemoryBlockAsync(req_id,
+                                                                                                  memory_block_ids);
+}
+
+Status DirectCacheManager::SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::SwapinRequestMemoryBlockAsync(req_id,
+                                                                                                 memory_block_ids);
+}
+
+Status DirectCacheManager::WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::WaitSwapoutRequestMemoryBlock(req_ids);
+}
+
+Status DirectCacheManager::WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::WaitSwapinRequestMemoryBlock(req_ids);
 }
 
 }  // namespace ksana_llm

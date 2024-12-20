@@ -37,6 +37,10 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::
   threadpool_->Start();
 }
 
+void LlmRuntime::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) {
+  cache_manager_ = cache_manager;
+}
+
 #ifdef ENABLE_CUDA
 // In a CUDA environment, it's necessary to compute perfill and decode together.
 // Therefore, kGroupStageMap is required to map to a single stage for synchronized processing.
@@ -152,12 +156,77 @@ void LlmRuntime::BuildForwardRequests(
   }
 }
 
-Status LlmRuntime::RunSerially(
+void LlmRuntime::BuildForwardRequests(
+    std::vector<std::shared_ptr<WorkerInferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
+  int logits_offset = 0;
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    std::shared_ptr<WorkerInferRequest>& req_ptr = reqs[i];
+    req_ptr->step += 1;
+    ModelInstance* key = req_ptr->model_instance.get();
+    InferStage grouped_stage = kGroupStageMap[req_ptr->infer_stage];
+
+    if (grouped_reqs.find(key) == grouped_reqs.end()) {
+      grouped_reqs[key] = {};
+    }
+
+    if (grouped_reqs[key].find(grouped_stage) == grouped_reqs[key].end()) {
+      grouped_reqs[key][grouped_stage] = {};
+    }
+
+    ForwardRequest forward_req;
+    forward_req.req_id = req_ptr->req_id;
+    forward_req.infer_stage = req_ptr->infer_stage;
+    forward_req.step = req_ptr->step;
+    forward_req.kv_cached_token_num = req_ptr->kv_cached_token_num;
+    forward_req.logits_custom_length = 0;
+    forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
+    forward_req.logits_buf = {};
+    forward_req.logits_offset = ++logits_offset;
+    forward_req.request_target = &req_ptr->request_target;
+    forward_req.response = &req_ptr->response;
+    forward_req.output_tokens = &(req_ptr->output_tokens);
+    forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
+    forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
+    forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
+    forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
+    forward_req.flexible_cache_len = 0;
+    forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;
+    forward_req.prefix_cache_blocks_number = req_ptr->prefix_cache_blocks_number;
+    forward_req.is_cudagraph_capture_request = false;
+    forward_req.timestamp_in_ms = 0;
+#if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
+    uint32_t layer_num = req_ptr->model_instance->GetLayerNum();
+    size_t rank_num = req_ptr->kv_cache_blocks.size();
+    // prepare base block ids
+    forward_req.atb_kv_cache_base_blk_ids.resize(rank_num);
+    for (size_t rank = 0; rank < rank_num; ++rank) {
+      GetBlockManager()->SetDeviceId(rank);
+      forward_req.atb_kv_cache_base_blk_ids[rank].clear();
+      // for dedicate device kv blocks
+      std::vector<int32_t> device_kv_cache_block_ids;
+      for (int ksana_block_id : req_ptr->kv_cache_blocks[rank]) {
+        size_t original_block_id = (ksana_block_id - GetBlockManager()->GetBlocksBaseId());
+        // NOTE(karlluo): only support bfloat16 or float16, so we just dedicate sizeof(float16) here is fine
+        int32_t ascend_atb_block_id = original_block_id * layer_num * 2;
+        device_kv_cache_block_ids.push_back(ascend_atb_block_id);
+      }
+      forward_req.atb_kv_cache_base_blk_ids[rank].insert(forward_req.atb_kv_cache_base_blk_ids[rank].end(),
+                                                         device_kv_cache_block_ids.begin(),
+                                                         device_kv_cache_block_ids.end());
+    }
+#endif
+    grouped_reqs[key][grouped_stage].push_back(forward_req);
+  }
+}
+
+Status LlmRuntime::RunSerially(
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
+    bool epilogue) {
   Status result_status = Status();
   for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
     for (auto& [stage, vec_req] : stage_vec_reqs) {
-      std::vector<std::future<Status>> inst_results = model_inst->ForwardAsync(worker_group_, stage, vec_req);
+      std::vector<std::future<Status>> inst_results = model_inst->ForwardAsync(worker_group_, stage, vec_req, epilogue);
       for (auto& worker_result : inst_results) {
         Status status = worker_result.get();
         if (!status.OK()) {
@@ -180,7 +249,28 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<InferRequest>>
               if (a_token_num != b_token_num) {
                 return a_token_num > b_token_num;
               }
-              return a->kv_cached_token_num < b->kv_cached_token_num;
+              if (a->kv_cached_token_num != b->kv_cached_token_num) {
+                return a->kv_cached_token_num < b->kv_cached_token_num;
+              }
+              return a->req_id < b->req_id;
+            });
+}
+
+void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<WorkerInferRequest>>& reqs) {
+  // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
+  // the requests are first sorted to utilize contiguous space for accelerated inference.
+  // Sort the infer_reqs list based on the number of tokens that need to be calculated for the KV cache.
+  std::sort(reqs.begin(), reqs.end(),
+            [](const std::shared_ptr<WorkerInferRequest>& a, const std::shared_ptr<WorkerInferRequest>& b) {
+              int a_token_num = a->output_tokens.size() - a->kv_cached_token_num;
+              int b_token_num = b->output_tokens.size() - b->kv_cached_token_num;
+              if (a_token_num != b_token_num) {
+                return a_token_num > b_token_num;
+              }
+              if (a->kv_cached_token_num != b->kv_cached_token_num) {
+                return a->kv_cached_token_num < b->kv_cached_token_num;
+              }
+              return a->req_id < b->req_id;
             });
 }
 
@@ -191,20 +281,33 @@ void LlmRuntime::UpdateRequestKVCachedTokenNum(std::vector<std::shared_ptr<Infer
   }
 }
 
-Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+Status LlmRuntime::Forward(std::vector<std::shared_ptr<InferRequest>>& reqs, bool epilogue) {
   std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
   BuildForwardRequests(reqs, grouped_reqs);
 
+  return AuxForward(grouped_reqs, epilogue);
+}
+
+Status LlmRuntime::Forward(std::vector<std::shared_ptr<WorkerInferRequest>>& reqs, bool epilogue) {
+  std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
+  BuildForwardRequests(reqs, grouped_reqs);
+
+  return AuxForward(grouped_reqs, epilogue);
+}
+
+Status LlmRuntime::AuxForward(
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
+    bool epilogue) {
   // context decode and decode run serially in single thread
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     // Wait all instances done and check status.
-    return RunSerially(grouped_reqs);
+    return RunSerially(grouped_reqs, epilogue);
   }
 
   std::vector<std::vector<std::future<Status>>> results;
   for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
     for (auto& [stage, vec_req] : stage_vec_reqs) {
-      results.push_back(model_inst->ForwardAsync(worker_group_, stage, vec_req));
+      results.push_back(model_inst->ForwardAsync(worker_group_, stage, vec_req, epilogue));
     }
   }
 
@@ -281,12 +384,63 @@ Status LlmRuntime::Sampling(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   return result_status;
 }
 
-Status LlmRuntime::Step(std::vector<std::shared_ptr<InferRequest>>& reqs) {
+Status LlmRuntime::Step(ScheduleOutput* schedule_output, bool epilogue) {
   KLLM_LOG_DEBUG << "llm runtime step invoked.";
-  ReorderInferRequests(reqs);
-  Forward(reqs);
-  Sampling(reqs);
-  UpdateRequestKVCachedTokenNum(reqs);
+
+  if (context_->IsChief()) {
+    ReorderInferRequests(schedule_output->running_reqs);
+  } else {
+    ReorderInferRequests(schedule_output->worker_running_reqs);
+  }
+
+  if (!epilogue) {
+    if (!context_->IsChief()) {
+      if (!schedule_output->swapout_req_block_ids.empty()) {
+        for (auto it = schedule_output->swapout_req_block_ids.begin();
+             it != schedule_output->swapout_req_block_ids.end(); ++it) {
+          KLLM_LOG_DEBUG << "Swapout req " << it->first << ", block num:" << it->second.size();
+          Status status = cache_manager_->SwapoutRequestMemoryBlockAsync(it->first, it->second);
+          if (!status.OK()) {
+            return status;
+          }
+        }
+      }
+
+      if (!schedule_output->swapin_req_block_ids.empty()) {
+        for (auto it = schedule_output->swapin_req_block_ids.begin(); it != schedule_output->swapin_req_block_ids.end();
+             ++it) {
+          KLLM_LOG_DEBUG << "Swapin req " << it->first << ", block num:" << it->second.size();
+          Status status = cache_manager_->SwapinRequestMemoryBlockAsync(it->first, it->second);
+          if (!status.OK()) {
+            return status;
+          }
+        }
+      }
+
+      // For worker, Waiting necessary swappiness finished.
+      // Must invoked after SwapxxxRequestMemoryBlockAsync,
+      // because we may need swap and wait same block id in one step.
+      KLLM_LOG_DEBUG << "Wait swapout reqs finish, size:" << schedule_output->merged_swapout_req_ids.size();
+      cache_manager_->WaitSwapoutRequestMemoryBlock(schedule_output->merged_swapout_req_ids);
+
+      KLLM_LOG_DEBUG << "Wait swapin reqs finish, size:" << schedule_output->merged_swapin_req_ids.size();
+      cache_manager_->WaitSwapinRequestMemoryBlock(schedule_output->merged_swapin_req_ids);
+    }
+  }
+
+  // Inference forward.
+  if (context_->IsChief()) {
+    Forward(schedule_output->running_reqs, epilogue);
+  } else {
+    Forward(schedule_output->worker_running_reqs, epilogue);
+  }
+
+  // Sampling only in standalone mode.
+  if (context_->IsStandalone() || epilogue) {
+    Sampling(schedule_output->running_reqs);
+    UpdateRequestKVCachedTokenNum(schedule_output->running_reqs);
+  }
+
   return Status();
 }
 

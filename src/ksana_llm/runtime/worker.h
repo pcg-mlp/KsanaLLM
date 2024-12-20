@@ -31,10 +31,10 @@ class Worker {
 
   // The async forward and sampling.
   std::future<Status> ForwardAsync(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
-                                   InferStage stage, std::vector<ForwardRequest>& forward_reqs);
+                                   InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue);
 
   Status Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight, InferStage stage,
-                 std::vector<ForwardRequest>& forward_reqs);
+                 std::vector<ForwardRequest>& forward_reqs, bool epilogue);
 
   std::future<Status> SamplingAsync(std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs);
 

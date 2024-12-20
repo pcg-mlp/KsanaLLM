@@ -13,7 +13,7 @@ namespace ksana_llm {
 class InferenceServer {
  public:
   InferenceServer(const std::string &config_file, const EndpointConfig &endpoint_config);
-  ~InferenceServer() {}
+  ~InferenceServer();
 
   // Start the inference server.
   Status Start();
@@ -35,6 +35,10 @@ class InferenceServer {
   Status HandleForward(const std::string &request_bytes,
                        const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                        std::string &response_bytes);
+
+ private:
+  // Read distributed config from environment variables.
+  void InitializePipelineConfig();
 
  private:
   // The inference engine.

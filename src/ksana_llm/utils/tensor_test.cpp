@@ -13,7 +13,7 @@
 
 namespace ksana_llm {
 
-TEST(WorkspaceTest, CommonTest) {
+void SetTestBlockManager() {
   std::filesystem::path current_path = __FILE__;
   std::filesystem::path parent_path = current_path.parent_path();
   std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm.yaml";
@@ -22,10 +22,14 @@ TEST(WorkspaceTest, CommonTest) {
   Singleton<Environment>::GetInstance()->ParseConfig(config_path);
 
   BlockManagerConfig block_manager_config;
+  Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
   Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
   BlockManager* block_manager = new BlockManager(block_manager_config, std::make_shared<Context>(1, 1));
   SetBlockManager(block_manager);
+}
 
+TEST(WorkspaceTest, CommonTest) {
+  SetTestBlockManager();
   WorkSpaceFunc f = GetWorkSpaceFunc();
 
   void* ws_addr_1 = nullptr;
@@ -43,22 +47,14 @@ TEST(WorkspaceTest, CommonTest) {
 }
 
 TEST(TensorTest, CommonTest) {
+  SetTestBlockManager();
+
   constexpr int tensor_parallel_size = 1;
   constexpr int pipeline_parallel_size = 1;
   std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, pipeline_parallel_size);
   constexpr size_t ELEM_NUM = 16;
   constexpr int RANK = 0;
-  std::filesystem::path current_path = __FILE__;
-  std::filesystem::path parent_path = current_path.parent_path();
-  std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm.yaml";
-  std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
-  Singleton<Environment>::GetInstance()->ParseConfig(config_path);
-
-  BlockManagerConfig block_manager_config;
-  Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-  BlockManager* block_manager = new BlockManager(block_manager_config, std::make_shared<Context>(1, 1));
-  SetBlockManager(block_manager);
   std::vector<int32_t> src_data(ELEM_NUM, 0);
 
   std::iota(src_data.begin(), src_data.end(), 1);

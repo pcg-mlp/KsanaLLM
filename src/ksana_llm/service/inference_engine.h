@@ -3,9 +3,11 @@
 ==============================================================================*/
 #pragma once
 
+#include <memory>
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
+#include "ksana_llm/distributed/distributed_coordinator.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/status.h"
@@ -50,6 +52,9 @@ class InferenceEngine {
 
   // Global context for inference
   std::shared_ptr<Context> context_ = nullptr;
+
+  // Used for pipeline mode.
+  std::shared_ptr<DistributedCoordinator> distributed_coordinator_ = nullptr;
 
   // The global block manager.
   BlockManager *block_manager_ = nullptr;

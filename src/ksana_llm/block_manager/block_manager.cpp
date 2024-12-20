@@ -14,6 +14,7 @@
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
+#include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
 
@@ -40,6 +41,8 @@ BlockManager::BlockManager(const BlockManagerConfig& block_manager_config, std::
   workspace_metas_.resize(context_->GetTensorParallelSize());
 }
 
+BlockManager::~BlockManager() { KLLM_LOG_DEBUG << "BlockManager destroyed."; }
+
 Status BlockManager::PreAllocateBlocks() {
   host_allocator_->ResetPreAllocatedBlocks(block_manager_config_.host_allocator_config.blocks_num);
   for (auto& allocator : device_allocators_) {
@@ -50,13 +53,22 @@ Status BlockManager::PreAllocateBlocks() {
 }
 
 Status BlockManager::ResetPreAllocatedBlocks() {
-  size_t host_block_num;
   size_t device_blocks_num;
+  size_t host_block_num;
 
-  Status status = CalculateBlockNumber(device_blocks_num, host_block_num);
-  if (!status.OK()) {
-    KLLM_LOG_ERROR << "Calculate block num error.";
-    return status;
+  if (context_->IsStandalone()) {
+    Status status = GetBlockNumber(device_blocks_num, host_block_num);
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << "Calculate block num error.";
+      return status;
+    }
+  } else {
+    // Get block number from pipeline config if in distributed mode.
+    PipelineConfig pipeline_config;
+    Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+
+    device_blocks_num = pipeline_config.device_block_num;
+    host_block_num = pipeline_config.host_block_num;
   }
 
   KLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_block_num;
@@ -87,7 +99,7 @@ Status BlockManager::ResetPreAllocatedBlocks() {
   return Status();
 }
 
-Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& host_block_num) {
+Status BlockManager::GetBlockNumber(size_t& device_blocks_num, size_t& host_block_num) {
   size_t host_total, host_free;
   size_t device_total, device_free;
 
@@ -103,7 +115,10 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
   }
 
   KLLM_LOG_INFO << "Get memory info, host_total:" << host_total << ", host_free:" << host_free
-                << ", device_total:" << device_total << ", device_free:" << device_free;
+                << ", device_total:" << device_total << ", device_free:" << device_free
+                << ", block_device_memory_ratio:" << block_manager_config_.block_device_memory_ratio
+                << ", reserved_device_memory_ratio:" << block_manager_config_.reserved_device_memory_ratio
+                << ", block_host_memory_factor:" << block_manager_config_.block_host_memory_factor;
 
   KLLM_CHECK_WITH_INFO(block_manager_config_.reserved_device_memory_ratio > 0.0,
                        "reserved_device_memory_ratio must be large than 0.0");
@@ -134,6 +149,10 @@ Status BlockManager::CalculateBlockNumber(size_t& device_blocks_num, size_t& hos
                                        host_free * block_host_memory_ratio)),
           alignment_bytes) *
       alignment_bytes;
+
+  KLLM_LOG_INFO << "Get block memory info, host_free:" << host_block_memory_size
+                << ", device_free:" << device_block_memory_size
+                << ", block_size:" << block_manager_config_.host_allocator_config.block_size;
 
   device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
   host_block_num = host_block_memory_size / block_manager_config_.host_allocator_config.block_size;

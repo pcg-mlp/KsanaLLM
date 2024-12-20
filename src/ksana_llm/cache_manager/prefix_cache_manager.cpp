@@ -26,7 +26,10 @@ PrefixCacheManager::PrefixCacheManager(const CacheManagerConfig& cache_manager_c
   root_cached_block_->is_root = true;
 }
 
-PrefixCacheManager::~PrefixCacheManager() { delete root_cached_block_; }
+PrefixCacheManager::~PrefixCacheManager() {
+  KLLM_LOG_DEBUG << "PrefixCacheManager destroyed.";
+  delete root_cached_block_;
+}
 
 void PrefixCacheManager::InitializeCachedBlocks() {
   size_t total_device_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
@@ -314,9 +317,9 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
           auto it = cached_block->children.find(dst_token_ids);
           if (it != cached_block->children.end()) {
             cached_block = it->second;
-          if (!cached_block->inactive_requests.empty()) {
-            continue;
-          }
+            if (!cached_block->inactive_requests.empty()) {
+              continue;
+            }
             new_cached_blocks.push_back(cached_block);
           } else {
             partial_match = true;
@@ -812,7 +815,8 @@ Status PrefixCacheManager::GetRequestNeededBlockNum(int64_t req_id, size_t& bloc
   return Status();
 }
 
-Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num) {
+Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
+                                               std::vector<int>& swapped_memory_block_ids) {
   if (!swapin_task_queue_.empty() || !swapin_cached_block_buffer_.empty() || !finish_swapin_request_.empty()) {
     return Status(RET_RUNTIME, FormatStr("Cannot swapout req %d, some swapin jobs is in progress.", req_id));
   }
@@ -841,6 +845,9 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
         // request's unique block, no children, no requests, swap directly.
         dev_swapout_blocks.push_back(cb);
       }
+
+      // Assume every device have same memory block id.
+      swapped_memory_block_ids.push_back(cb->memory_block_ids[0]);
     }
   }
 
@@ -904,7 +911,8 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
 }
 
 Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
-                                              std::vector<std::vector<int>>& req_block_ids) {
+                                              std::vector<std::vector<int>>& req_block_ids,
+                                              std::vector<int>& swapped_memory_block_ids) {
   if (!swapout_task_queue_.empty() || !swapout_cached_block_buffer_.empty() || !finish_swapout_request_.empty()) {
     return Status(RET_RUNTIME, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
   }
@@ -940,6 +948,9 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
     PrefixCachedBlock* cached_block = free_cached_blocks_.front();
     free_cached_blocks_.pop();
     swapin_dev_blocks.push_back(cached_block);
+
+    // Assume every device have same memory block id.
+    swapped_memory_block_ids.push_back(cached_block->memory_block_ids[0]);
 
     // Append to buffer list.
     swapin_cached_block_buffer_[req_id].push_back(swapin_host_blocks[i]);
@@ -1071,6 +1082,24 @@ void PrefixCacheManager::DestroySwapedRequest(int64_t req_id) {
   }
 
   cached_requests_.erase(it);
+}
+
+Status PrefixCacheManager::SwapoutRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::SwapoutRequestMemoryBlockAsync(req_id,
+                                                                                                  memory_block_ids);
+}
+
+Status PrefixCacheManager::SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::SwapinRequestMemoryBlockAsync(req_id,
+                                                                                                 memory_block_ids);
+}
+
+Status PrefixCacheManager::WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::WaitSwapoutRequestMemoryBlock(req_ids);
+}
+
+Status PrefixCacheManager::WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::WaitSwapinRequestMemoryBlock(req_ids);
 }
 
 }  // namespace ksana_llm

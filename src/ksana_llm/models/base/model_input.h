@@ -7,6 +7,7 @@
 
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
+#include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
@@ -209,13 +210,21 @@ class ModelInput {
 
  private:
   ModelConfig model_config_;
+  PipelineConfig pipeline_config_;
+
   int rank_;
   std::shared_ptr<Context> context_;
 
   int block_size_;
   size_t max_batch_size_;
   size_t max_token_num_;
-  int num_layer_;
+  int layer_num_on_node_;
+
+  // Used for assisant.
+  std::vector<int64_t> multi_token_cpu_rotary_pos_;
+  std::vector<int64_t> multi_token_cpu_rotary_mask_;
+  std::vector<int64_t> single_token_cpu_rotary_pos_;
+  std::vector<int64_t> single_token_cpu_rotary_mask_;
 };
 
 }  // namespace ksana_llm

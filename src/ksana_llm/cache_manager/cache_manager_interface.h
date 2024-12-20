@@ -9,8 +9,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
@@ -61,13 +61,22 @@ class CacheManagerInterface {
   virtual Status GetRequestNeededBlockNum(int64_t req_id, size_t& block_num) = 0;
 
   // Swap out/in specific request async.
-  virtual Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num) = 0;
-  virtual Status SwapinRequestAsync(int64_t req_id, size_t& block_num,
-                                    std::vector<std::vector<int>>& req_block_ids) = 0;
+  virtual Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
+                                     std::vector<int>& swapped_memory_block_ids) = 0;
+  virtual Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<std::vector<int>>& req_block_ids,
+                                    std::vector<int>& swapped_memory_block_ids) = 0;
 
   // Waiting until at lease on swap out/in task done, return the pending task number.
   virtual Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) = 0;
   virtual Status WaitSwapinRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) = 0;
+
+  // Swap out/in memory blocks referenced by req_id.
+  virtual Status SwapoutRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) = 0;
+  virtual Status SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) = 0;
+
+  // Wait until all memory block swappness referenced by req_ids finished.
+  virtual Status WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids) = 0;
+  virtual Status WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids) = 0;
 
   // Merge the swapped out blocks to free list, no need to get host block ids.
   // The swapout of the request's block must be done before call this.

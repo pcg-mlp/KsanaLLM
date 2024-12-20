@@ -12,10 +12,13 @@ namespace ksana_llm {
 
 ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
     : model_config_(model_config), rank_(rank), context_(context) {
+  // Get pipeline config.
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
+
   block_size_ = GetBlockManager()->GetBlockSize();
   max_batch_size_ = model_config_.max_batch_size;
   max_token_num_ = model_config.max_scheduler_token_num;
-  num_layer_ = model_config.num_layer;
+  layer_num_on_node_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
 
   int head_num = model_config.head_num;
   int tensor_para_size = model_config.tensor_para_size;
@@ -46,8 +49,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   // The "2" is necessary because both the multi-token and single-token operations require starting from index 0.
   STATUS_CHECK_FAILURE(CreateTensor(kv_cache_offset_tensor, {max_batch_size_ + 2}, TYPE_INT32, rank_, MEMORY_DEVICE));
   STATUS_CHECK_FAILURE(CreateTensor(input_ids, {max_token_num_}, TYPE_INT32, rank_, MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(
-      CreateTensor(kv_list, {static_cast<uint64_t>(num_layer_), max_block_num, 2}, TYPE_POINTER, rank_, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(kv_list, {static_cast<uint64_t>(layer_num_on_node_), max_block_num, 2},
+                                    TYPE_POINTER, rank_, MEMORY_DEVICE));
 
   STATUS_CHECK_FAILURE(
       CreateTensor(kv_cache_buffer,
@@ -129,13 +132,13 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   GetBlockManager()->SetDeviceId(rank);
   STATUS_CHECK_FAILURE(
       CreateTensor(seq_len_host, {static_cast<uint64_t>(max_batch_size_)}, TYPE_INT32, rank, MEMORY_HOST));
-  STATUS_CHECK_FAILURE(CreateTensor(
-      layers_slot_mapping, {static_cast<uint64_t>(model_config.num_layer), static_cast<uint64_t>(max_token_num_)},
-      TYPE_INT32, rank, MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(CreateTensor(
-      layers_block_table,
-      {static_cast<uint64_t>(model_config.num_layer), static_cast<uint64_t>(max_batch_size_ * max_block_num)},
-      TYPE_INT32, rank, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(CreateTensor(layers_slot_mapping,
+                                    {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_token_num_)},
+                                    TYPE_INT32, rank, MEMORY_DEVICE));
+  STATUS_CHECK_FAILURE(
+      CreateTensor(layers_block_table,
+                   {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_batch_size_ * max_block_num)},
+                   TYPE_INT32, rank, MEMORY_DEVICE));
   void* cur_rank_block_base_ptr = GetBlockManager()->GetBlockBasePtr();
   void* k_cache_base_ptr = cur_rank_block_base_ptr;
   void* v_cache_base_ptr = cur_rank_block_base_ptr + (block_size_ / 2);
@@ -160,11 +163,17 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   STATUS_CHECK_FAILURE(CreateTensor(single_token_request_block_table,
                                     {static_cast<uint64_t>(max_batch_size_ * max_block_num)}, TYPE_INT32, rank,
                                     MEMORY_DEVICE));
-  STATUS_CHECK_FAILURE(CreateTensor(layer_kv_cache_ptr_tensor, {1 + static_cast<uint64_t>(model_config.num_layer * 2)},
+  STATUS_CHECK_FAILURE(CreateTensor(layer_kv_cache_ptr_tensor, {1 + static_cast<uint64_t>(layer_num_on_node_ * 2)},
                                     TYPE_INT64, rank, MEMORY_HOST));
   STATUS_CHECK_FAILURE(
       CreateTensor(input_without_prefix_uint64_tensor, {max_batch_size_ + 1}, TYPE_UINT64, rank_, MEMORY_DEVICE));
 #endif
+
+  // For contiguous memory.
+  multi_token_cpu_rotary_pos_.resize(max_token_num_);
+  multi_token_cpu_rotary_mask_.resize(max_token_num_);
+  single_token_cpu_rotary_pos_.resize(max_token_num_);
+  single_token_cpu_rotary_mask_.resize(max_token_num_);
 }
 
 ModelInput::~ModelInput() {
@@ -172,8 +181,6 @@ ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(input_offset_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_length_int32_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(logits_custom_length_uint64_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.pos_pair_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(cpu_input_refit_tensor.emb_fp32_ptr_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(logits_length_prefix_uint64_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(rotary_embedding_pos, rank_));
@@ -187,19 +194,15 @@ ModelInput::~ModelInput() {
   STATUS_CHECK_FAILURE(DestroyTensor(kv_list, rank_));
 
 #ifdef ENABLE_ACL
-  STATUS_CHECK_FAILURE(DestroyTensor(seq_len_host, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(k_cache_blocks_base, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(v_cache_blocks_base, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(layers_slot_mapping, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(layers_block_table, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(atb_attention_attr, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(last_token_index_tensor, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(kv_cache_ptrs_tensor, rank_));
 #endif
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   STATUS_CHECK_FAILURE(DestroyTensor(multi_token_request_block_table, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(single_token_request_block_table, rank_));
-  STATUS_CHECK_FAILURE(DestroyTensor(layer_kv_cache_ptr_tensor, rank_));
   STATUS_CHECK_FAILURE(DestroyTensor(input_without_prefix_uint64_tensor, rank_));
 #endif
   EventDestroy(kvcache_offset_event);
@@ -235,6 +238,8 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 
   std::vector<uint64_t> flexible_offset_uint64_cpu = {0};
   for (size_t idx = 0; idx < batch_size; ++idx) {
+    infer_stage = forward_reqs[idx].infer_stage;
+
     // Judging whether the current request needs to go through the multi-token forwarding or the single-token
     // forwarding.
     bool multi_token_forward =
@@ -358,18 +363,18 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
                                       size_t total_block_num) {
   size_t copy_offset = 0;
   if (begin_idx != 0) {
-    copy_offset = model_config_.num_layer * multi_token_request_total_block_num * 2 * sizeof(void*);
+    copy_offset = layer_num_on_node_ * multi_token_request_total_block_num * 2 * sizeof(void*);
   }
-  kv_list.shape = {model_config_.num_layer, total_block_num * 2};
-  cpu_kv_list.resize(model_config_.num_layer * total_block_num * 2);
-  for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+  kv_list.shape = {layer_num_on_node_, total_block_num * 2};
+  cpu_kv_list.resize(layer_num_on_node_ * total_block_num * 2);
+  for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
     int kv_list_index = 0;
     // 处理k
     for (size_t idx = begin_idx; idx < end_idx; ++idx) {
       size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++) {
         void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
-        kv_cache_ptr += layer_idx * block_size_ / model_config_.num_layer;
+        kv_cache_ptr += layer_idx * block_size_ / layer_num_on_node_;
         cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = kv_cache_ptr;
         kv_list_index++;
       }
@@ -379,7 +384,7 @@ void ModelInput::PrepareKVCacheBlocks(const std::vector<ForwardRequest>& forward
       size_t block_num = forward_reqs[idx].kv_cache_ptrs[rank_].size();
       for (size_t block_idx = 0; block_idx < block_num; block_idx++) {
         void* kv_cache_ptr = forward_reqs[idx].kv_cache_ptrs[rank_][block_idx];
-        kv_cache_ptr += layer_idx * block_size_ / model_config_.num_layer + block_size_ / model_config_.num_layer / 2;
+        kv_cache_ptr += layer_idx * block_size_ / layer_num_on_node_ + block_size_ / layer_num_on_node_ / 2;
         cpu_kv_list[layer_idx * total_block_num * 2 + kv_list_index] = kv_cache_ptr;
         kv_list_index++;
       }
@@ -402,14 +407,14 @@ void ModelInput::PrepareKVCacheBlockTable(const std::vector<ForwardRequest>& for
     // kv_cache[num_blocks, num_layers, 2, block_size, num_kv_heads, head_size]
     // block_size is [num_layers, 2, block_size, num_kv_heads, head_size]
     void* k_cache_base_ptr = GetBlockManager()->GetBlockBasePtr();
-    void* v_cache_base_ptr = k_cache_base_ptr + block_size_ / model_config_.num_layer / 2;
+    void* v_cache_base_ptr = k_cache_base_ptr + block_size_ / layer_num_on_node_ / 2;
 
     int64_t* kv_cache_block_num = layer_kv_cache_ptr_tensor.GetPtr<int64_t>();
-    *kv_cache_block_num = GetBlockManager()->GetAllocatorConfig().blocks_num * model_config_.num_layer * 2;
+    *kv_cache_block_num = GetBlockManager()->GetAllocatorConfig().blocks_num * layer_num_on_node_ * 2;
     void** layer_kv_cache_ptr = layer_kv_cache_ptr_tensor.GetPtr<void*>() + 1;
-    for (uint32_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
-      layer_kv_cache_ptr[layer_idx * 2 + 0] = k_cache_base_ptr + layer_idx * block_size_ / model_config_.num_layer;
-      layer_kv_cache_ptr[layer_idx * 2 + 1] = v_cache_base_ptr + layer_idx * block_size_ / model_config_.num_layer;
+    for (uint32_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
+      layer_kv_cache_ptr[layer_idx * 2 + 0] = k_cache_base_ptr + layer_idx * block_size_ / layer_num_on_node_;
+      layer_kv_cache_ptr[layer_idx * 2 + 1] = v_cache_base_ptr + layer_idx * block_size_ / layer_num_on_node_;
     }
 
     size_t max_num_blocks_per_query = 0;
@@ -430,7 +435,7 @@ void ModelInput::PrepareKVCacheBlockTable(const std::vector<ForwardRequest>& for
     MemcpyAsync(block_table.GetPtr<void>(), block_table_host.data(), block_table_host.size() * sizeof(int32_t),
                 MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
     block_table.shape = {end_idx - begin_idx, max_num_blocks_per_query};
-    layer_kv_cache_ptr_tensor.shape = {1 + model_config_.num_layer * 2};
+    layer_kv_cache_ptr_tensor.shape = {1 + layer_num_on_node_ * 2};
   }
 
 #  ifdef ENABLE_ACL
@@ -441,32 +446,35 @@ void ModelInput::PrepareKVCacheBlockTable(const std::vector<ForwardRequest>& for
 #endif
 
 void ModelInput::PrepareMultiTokenRequestPositionIds(const std::vector<ForwardRequest>& forward_reqs) {
-  std::vector<int64_t> cpu_rotary_pos(multi_token_request_total_seq_len);
-  std::vector<int64_t> cpu_rotary_mask(multi_token_request_total_seq_len, 1);
+  std::fill(multi_token_cpu_rotary_mask_.begin(),
+            multi_token_cpu_rotary_mask_.begin() + multi_token_request_total_seq_len, 1);
+
   int cpu_rotary_pos_idx = 0;
 #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
   for (size_t idx = 0; idx < multi_token_request_num; ++idx) {
     for (size_t pos = forward_reqs[idx].prefix_cache_len; pos < forward_reqs[idx].output_tokens->size(); ++pos) {
-      cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
+      multi_token_cpu_rotary_pos_[cpu_rotary_pos_idx++] = pos;
     }
   }
 #else
   for (size_t idx = 0; idx < multi_token_request_num; ++idx) {
     if (forward_reqs[idx].prefix_cache_len > 0) {
-      std::fill(cpu_rotary_mask.begin() + cpu_rotary_pos_idx,
-                cpu_rotary_mask.begin() + cpu_rotary_pos_idx + forward_reqs[idx].prefix_cache_len -
+      std::fill(multi_token_cpu_rotary_mask_.begin() + cpu_rotary_pos_idx,
+                multi_token_cpu_rotary_mask_.begin() + cpu_rotary_pos_idx + forward_reqs[idx].prefix_cache_len -
                     forward_reqs[idx].flexible_cache_len,
                 0);
     }
     for (size_t pos = 0; pos < forward_reqs[idx].output_tokens->size(); ++pos) {
-      cpu_rotary_pos[cpu_rotary_pos_idx++] = pos;
+      multi_token_cpu_rotary_pos_[cpu_rotary_pos_idx++] = pos;
     }
   }
 #endif
-  MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), cpu_rotary_pos.data(), sizeof(int64_t) * cpu_rotary_pos.size(),
-              MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
-  MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), cpu_rotary_mask.data(), sizeof(int64_t) * cpu_rotary_mask.size(),
-              MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+  MemcpyAsync(rotary_embedding_pos.GetPtr<void>(), multi_token_cpu_rotary_pos_.data(),
+              sizeof(int64_t) * multi_token_request_total_seq_len, MEMCPY_HOST_TO_DEVICE,
+              context_->GetD2HStreams()[rank_]);
+  MemcpyAsync(rotary_embedding_mask.GetPtr<void>(), multi_token_cpu_rotary_mask_.data(),
+              sizeof(int64_t) * multi_token_request_total_seq_len, MEMCPY_HOST_TO_DEVICE,
+              context_->GetD2HStreams()[rank_]);
   if (dst_flexible_kv_cache_tensor.shape[0]) {
     int cpu_flexible_rotary_pos_idx = 0;
     std::vector<int64_t> cpu_flexible_rotary_pos(multi_token_request_total_seq_len, 0);
@@ -528,19 +536,19 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   // NOTE(karlluo): block manager will change the block number in
   // ResetPreAllocatedBlocks, block_managr's allocator's blocks_num is difference from the allocator's member config, so
   // we need get it from allocator instance.
-  size_t total_block_num = GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * model_config_.num_layer;
+  size_t total_block_num = GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * layer_num_on_node_;
   if (total_block_num != k_cache_blocks_base.shape[0]) {
     void* cur_rank_block_base_ptr = GetBlockManager()->GetBlockBasePtr();
     void* k_cache_base_ptr = cur_rank_block_base_ptr;
     void* v_cache_base_ptr = cur_rank_block_base_ptr + (block_size_ / 2);
     STATUS_CHECK_FAILURE(
         CreateTensor(k_cache_blocks_base,
-                     {GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * model_config_.num_layer,
+                     {GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * layer_num_on_node_,
                       model_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
                      TYPE_FP16, rank_, MEMORY_DEVICE, k_cache_base_ptr));
     STATUS_CHECK_FAILURE(
         CreateTensor(v_cache_blocks_base,
-                     {GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * model_config_.num_layer,
+                     {GetBlockManager()->GetAllocatorConfig().blocks_num * 2 * layer_num_on_node_,
                       model_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
                      TYPE_FP16, rank_, MEMORY_DEVICE, v_cache_base_ptr));
   }
@@ -568,7 +576,7 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
     }
     all_seq_len += forward_reqs[f_req_idx].output_tokens->size();
   }
-  layers_slot_mapping_host.resize(model_config_.num_layer * slot_mapping_dim_1, 0);
+  layers_slot_mapping_host.resize(layer_num_on_node_ * slot_mapping_dim_1, 0);
   // NOTE(karlluo): for ATb, all device blocks locate on a flatten plane memory space.
   // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
   // guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,
@@ -611,7 +619,7 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   if (is_multi_token_forward) {
     size_t layers_slot_mapping_offset = 0;
     for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-      for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+      for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
         for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx].output_tokens->size(); ++token_idx) {
           int32_t inner_block_offset = token_idx % model_config_.block_token_num;
           layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset + token_idx] =
@@ -624,17 +632,17 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
       layers_slot_mapping_offset += forward_reqs[f_req_idx].output_tokens->size();
     }
   } else {
-    layers_block_table_host.resize(model_config_.num_layer * batch_size * max_num_blocks_per_query, -1);
+    layers_block_table_host.resize(layer_num_on_node_ * batch_size * max_num_blocks_per_query, -1);
     for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
       size_t cur_query_blocks_num = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_].size();
-      for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+      for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
         for (uint32_t base_block_idx = 0; base_block_idx < cur_query_blocks_num; ++base_block_idx) {
           layers_block_table_host[layer_idx * batch_size * max_num_blocks_per_query +
                                   f_req_idx * max_num_blocks_per_query + base_block_idx] =
               forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_][base_block_idx] + layer_idx;
         }
       }
-      for (size_t layer_idx = 0; layer_idx < model_config_.num_layer; ++layer_idx) {
+      for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
         int32_t block_id =
             forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[rank_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
                                                                      model_config_.block_token_num];
@@ -650,7 +658,7 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   MemcpyAsync(last_token_index_tensor.GetPtr<void>(), last_token_index_host.data(), batch_size * sizeof(int64_t),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
   MemcpyAsync(layers_slot_mapping.GetPtr<void>(), layers_slot_mapping_host.data(),
-              model_config_.num_layer * slot_mapping_dim_1 * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+              layer_num_on_node_ * slot_mapping_dim_1 * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
   atb_attention_attr.GetPtr<uint64_t>()[0] = slot_mapping_dim_1;
   atb_attention_attr.GetPtr<uint64_t>()[1] = max_num_blocks_per_query;
@@ -659,19 +667,20 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
 #endif
 
 void ModelInput::PrepareSingleTokenRequestPositionIds(const std::vector<ForwardRequest>& forward_reqs) {
-  std::vector<int64_t> cpu_rotary_pos(single_token_request_num);
-  std::vector<int64_t> cpu_rotary_mask(single_token_request_num, 1);
+  std::fill(single_token_cpu_rotary_mask_.begin(), single_token_cpu_rotary_mask_.begin() + single_token_request_num, 1);
+
   for (size_t idx = multi_token_request_num; idx < batch_size; ++idx) {
-    cpu_rotary_pos[idx - multi_token_request_num] = forward_reqs[idx].output_tokens->size() - 1;
+    single_token_cpu_rotary_pos_[idx - multi_token_request_num] = forward_reqs[idx].output_tokens->size() - 1;
     if (model_config_.type == "qwen2_vl") {
-      cpu_rotary_pos[idx - multi_token_request_num] += *forward_reqs[idx].mrotary_embedding_pos_offset;
+      single_token_cpu_rotary_pos_[idx - multi_token_request_num] += *forward_reqs[idx].mrotary_embedding_pos_offset;
     }
   }
+
   MemcpyAsync(rotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * multi_token_request_total_seq_len,
-              cpu_rotary_pos.data(), sizeof(int64_t) * cpu_rotary_pos.size(), MEMCPY_HOST_TO_DEVICE,
+              single_token_cpu_rotary_pos_.data(), sizeof(int64_t) * single_token_request_num, MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
   MemcpyAsync(rotary_embedding_mask.GetPtr<void>() + sizeof(int64_t) * multi_token_request_total_seq_len,
-              cpu_rotary_mask.data(), sizeof(int64_t) * cpu_rotary_mask.size(), MEMCPY_HOST_TO_DEVICE,
+              single_token_cpu_rotary_mask_.data(), sizeof(int64_t) * single_token_request_num, MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
   rotary_embedding_pos.shape = {multi_token_request_total_seq_len + single_token_request_num};
   rotary_embedding_mask.shape = {multi_token_request_total_seq_len + single_token_request_num};

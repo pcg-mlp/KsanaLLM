@@ -421,12 +421,24 @@ if __name__ == "__main__":
         print(
             f"Uvicorn's logging not support env: KLLM_LOG_LEVEL={LOG_LEVEL}, keep it as defalt(info)."
         )
-    app.root_path = args.root_path
-    uvicorn.run(app,
-                host=args.host,
-                port=args.port,
-                log_level=LOG_LEVEL,
-                access_log=args.access_log,
-                timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
-                ssl_keyfile=args.ssl_keyfile,
-                ssl_certfile=args.ssl_certfile)
+
+    # distributed config.
+    world_size = int(os.environ.get('WORLD_SIZE', "1"))
+    node_rank = int(os.environ.get("NODE_RANK", "0"))
+
+    # For standalone or distributed master node, listen on server port.
+    # For distributed worker node, wait until cluster destroyed.
+    if world_size == 1 or node_rank == 0:
+        app.root_path = args.root_path
+        uvicorn.run(app,
+                    host=args.host,
+                    port=args.port,
+                    log_level=LOG_LEVEL,
+                    access_log=args.access_log,
+                    timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
+                    ssl_keyfile=args.ssl_keyfile,
+                    ssl_certfile=args.ssl_certfile)
+    else:
+        print("Uvicorn running on NONE.")
+        import threading
+        threading.Event().wait()

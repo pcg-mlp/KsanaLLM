@@ -21,7 +21,8 @@ class __attribute__((visibility("hidden"))) ChatglmModel : public BaseModel {
   float* GetLogitsPtr();
 
   // Forward model.
-  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
+  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
+                 bool epilogue);
 
  private:
   // The common model instance.

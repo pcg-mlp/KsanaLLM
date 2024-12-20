@@ -23,25 +23,25 @@ setting:
     # 每一步推理时的最大batch_size。如果要获得在910B2C上获得最佳性能，建议将此值改成256。
     max_batch_size: 128
     # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens。如果要获得在910B2C上获得最佳性能，建议将此值改越小越好。
-    max_token_len: 840
+    max_token_len: 2048
     # 单个请求可用blck小于该值触发换出
     swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入
-    swapin_block_threshold: 0.5
+    swapin_block_threshold: 2.0
     # 单个请求可用block大于该值拉起新任务
-    launch_block_threshold: 0.5
+    launch_block_threshold: 2.0
     # 是否开启自动前缀匹配
     enable_auto_prefix_cache: false
     # 用于执行异步swap的线程池大小
-    swap_threadpool_size: 64
+    swap_threadpool_size: 8
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
-    preempt_mode: 0
+    preempt_mode: 1
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数。如果要获得在910B2C上获得最佳性能，建议将此值改成128。
     block_token_num: 16
     # 保留的显存占比，单位为百分比。
-    reserved_device_memory_ratio: 0.02
+    reserved_device_memory_ratio: 0.01
     # Lora权重的显存占比
     lora_deivce_memory_ratio: 0.0
     # Lora权重在host上的预分配大小，相比device上的倍数
@@ -49,7 +49,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 5.0
+    block_host_memory_factor: 0.01
   # 量化相关配置
   quantization_config:
     # block中kv cache的量化

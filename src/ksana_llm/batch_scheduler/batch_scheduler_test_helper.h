@@ -82,7 +82,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // The data type of the memory block allocated.
   DataType GetDtype() {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::GetDtype not implemented");
     return TYPE_INVALID;
   }
 
@@ -94,7 +94,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Allocate contiguous memory on device.
   Status AllocateContiguous(int64_t size, int& block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::AllocateContiguous not implemented");
     return Status();
   }
 
@@ -106,25 +106,25 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Free contiguous memory on device.
   Status FreeContiguous(int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::FreeContiguous not implemented");
     return Status();
   }
 
   // Check contiguous memory is in used.
   bool IsContiguousUsed(const int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::IsContiguousUsed not implemented");
     return false;
   }
 
   // Get memory addresses of blocked memory on device.
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::GetBlockPtrs not implemented");
     return Status();
   }
 
   // Get memory address of contiguous memory on device.
   Status GetContiguousPtr(int block_id, void*& addr) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::GetContiguousPtr not implemented");
     return Status();
   }
 
@@ -142,7 +142,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Allocate contiguous memory on host.
   Status AllocateHostContiguous(int64_t size, int& block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::AllocateHostContiguous not implemented");
     return Status();
   }
 
@@ -153,19 +153,19 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Free contiguous memory on host.
   Status FreeHostContiguous(int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::FreeHostContiguous not implemented");
     return Status();
   }
 
   // Get memory addresses of blocked memory on host.
   Status GetHostBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::GetHostBlockPtrs not implemented");
     return Status();
   }
 
   // Get memory address of contiguous memory on host.
   Status GetHostContiguousPtr(int block_id, void*& addr) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::GetHostContiguousPtr not implemented");
     return Status();
   }
 
@@ -227,7 +227,7 @@ class BlockManagerSimulator : public BlockManagerInterface {
 
   // Get the size in bytes for one block.
   size_t GetBlockSize() const {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "BlockManagerSimulator::GetBlockSize not implemented");
     return 0;
   }
 

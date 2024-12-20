@@ -74,6 +74,9 @@ class CommonWeight : public BaseWeight {
 
   ModelConfig model_config_;
 
+  // The pipeline config, load necessary layers only.
+  PipelineConfig pipeline_config_;
+
   std::shared_ptr<TensorManager> tensor_manager_;
 
   std::shared_ptr<QuantWeight<T>> quant_weight_slover_;

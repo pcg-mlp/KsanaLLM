@@ -3,7 +3,9 @@
 ==============================================================================*/
 
 #include "ksana_llm/torch_op/serving_op.h"
+#include <unistd.h>
 
+#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -12,8 +14,10 @@
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
 #include "ksana_llm/profiler/profiler.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/service/service_lifetime.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/service_utils.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -24,14 +28,21 @@ PYBIND11_MAKE_OPAQUE(std::vector<std::pair<int, int>>);
 
 namespace ksana_llm {
 
+void SignalHandler(int signal_num) { GetServiceLifetimeManager()->ShutdownService(); }
+
 ServingOp::ServingOp() {}
 
 ServingOp::~ServingOp() {
   Singleton<RequestPacker>::GetInstance()->DestroyTokenizer();
   inference_server_->Stop();
+
+  // unreferenced inference_server.
+  SetServiceLifetimeManager(nullptr);
 }
 
 void ServingOp::InitServing(const std::string &config_file) {
+  KLLM_LOG_DEBUG << "ServingOp::InitServing, pid:" << getpid();
+
   inference_server_ = std::make_shared<InferenceServer>(config_file, endpoint_config_);
   STATUS_CHECK_FAILURE(inference_server_->Start());
 
@@ -43,6 +54,12 @@ void ServingOp::InitServing(const std::string &config_file) {
     PyErr_Clear();
     KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
   }
+
+  // Create lifetime manager.
+  SetServiceLifetimeManager(std::make_shared<KsanaServiceLifetimeManager>(inference_server_));
+
+  // Use TERM signal to shutdown service.
+  signal(SIGTERM, SignalHandler);
 }
 
 Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,

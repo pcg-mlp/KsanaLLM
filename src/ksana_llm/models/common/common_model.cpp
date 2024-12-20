@@ -6,11 +6,15 @@
 #include <memory>
 #include <vector>
 
+#include "fmt/core.h"
+#include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/string_utils.h"
 #include "torch/csrc/autograd/python_variable.h"
 
 namespace ksana_llm {
@@ -24,6 +28,9 @@ CommonModel<T>::CommonModel(const ModelConfig& model_config, const int rank, std
   // auto create matmul layers
   matmul_layer_factory_ =
       std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_, rank_, context_);
+
+  KLLM_LOG_DEBUG << "Working mode info, is_standalone:" << context_->IsStandalone()
+                 << ", is_chief:" << context_->IsChief();
 }
 
 template <typename T>
@@ -34,10 +41,12 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   GetBlockManager()->SetDeviceId(rank_);
 
   prefix_caching_enabled_ = Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled();
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
 
   model_run_config_ = model_run_config;
 
-  num_layer_ = model_config_.num_layer;
+  layer_num_on_node_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+
   vocab_size_ = model_config_.vocab_size;
   vocab_size_pad_ =
       DivRoundUp(model_config_.vocab_size, model_config_.tensor_para_size) * model_config_.tensor_para_size;
@@ -110,29 +119,6 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
         weight_type));
   }
 
-#ifdef ENABLE_ACL
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(ascend_buffer_0_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(ascend_buffer_1_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(ascend_buffer_2_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(ascend_buffer_3_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-  STATUS_CHECK_FAILURE(
-      CreateBufferTensor(ascend_buffer_4_, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-
-  for (int idx = 0; idx < num_layer_; ++idx) {
-    Tensor key_cache;
-    Tensor val_cache;
-    STATUS_CHECK_FAILURE(CreateBufferTensor(key_cache, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-    STATUS_CHECK_FAILURE(CreateBufferTensor(val_cache, {max_token_num, static_cast<size_t>(hidden_units)}, TYPE_FP16));
-
-    ascend_key_caches_.push_back(key_cache);
-    ascend_val_caches_.push_back(val_cache);
-  }
-
-#endif
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   STATUS_CHECK_FAILURE(CreateBufferTensor(forward_shape_, {1}, TYPE_INT32));
 
@@ -198,17 +184,17 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     model_communicator_ = nullptr;
   }
 
-  flash_attention_layers_.resize(num_layer_);
-  paged_attention_layers_.resize(num_layer_);
+  flash_attention_layers_.resize(layer_num_on_node_);
+  paged_attention_layers_.resize(layer_num_on_node_);
   void* cos_sin_cache_ptr = cos_sin_cache_tensor_.GetPtr<void>();
-  for (int idx = 0; idx < num_layer_; ++idx) {
+  for (int idx = 0; idx < layer_num_on_node_; ++idx) {
     flash_attention_layers_[idx] = CreateAttentionLayer<T, FlashAttentionLayer>(GetBlockManager()->GetDtype());
     paged_attention_layers_[idx] = CreateAttentionLayer<T, PagedAttentionLayer>(GetBlockManager()->GetDtype());
     // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert from ‘<brace-enclosed initializer list>’
     // to ‘std::vector<std::any>’ so we use push back to make it work.
     std::vector<std::any> attention_param;
     attention_param.push_back(idx);
-    attention_param.push_back(num_layer_);
+    attention_param.push_back(layer_num_on_node_);
     attention_param.push_back(max_position_embeddings);
     attention_param.push_back(head_num_per_tp);
     attention_param.push_back(num_kv_heads_per_tp);
@@ -216,8 +202,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     attention_param.push_back(stride_size);
     attention_param.push_back(tensor_para_size);
     attention_param.push_back(GetBlockManager()->GetDtype());
-    attention_param.push_back(model_config_.k_scales[idx]);
-    attention_param.push_back(model_config_.v_scales[idx]);
+    attention_param.push_back(model_config_.k_scales[idx + pipeline_config_.lower_layer_idx]);
+    attention_param.push_back(model_config_.v_scales[idx + pipeline_config_.lower_layer_idx]);
     attention_param.push_back(rotary_embedding);
     attention_param.push_back(rope_theta);
     attention_param.push_back(model_run_config_.is_neox);
@@ -248,26 +234,30 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
   DataType input_type = weight_type;
   DataType output_type = weight_type;
 
+  std::string layer_prefix = fmt::format("model.layers.{}", pipeline_config_.lower_layer_idx);
+
   attn_qkv_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(
-      base_weight, "model.layers.0.self_attn.query_key_value.weight", weight_type, input_type, output_type, {});
-  attn_o_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.self_attn.o_proj.weight",
+      base_weight, layer_prefix + ".self_attn.query_key_value.weight", weight_type, input_type, output_type, {});
+  attn_o_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, layer_prefix + ".self_attn.o_proj.weight",
                                                               weight_type, input_type, output_type, {});
 
   if (!model_config_.is_moe) {
-    mlp_gate_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.gate_proj.weight",
+    mlp_gate_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, layer_prefix + ".mlp.gate_proj.weight",
                                                                   weight_type, input_type, output_type, {});
     // Only gated activation has up_proj.
-    if (base_weight->GetModelWeights("model.layers.0.mlp.up_proj.weight").GetBlockId() >= 0) {
-      mlp_up_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.up_proj.weight",
+    if (base_weight->GetModelWeights(layer_prefix + ".mlp.up_proj.weight").GetBlockId() >= 0) {
+      mlp_up_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, layer_prefix + ".mlp.up_proj.weight",
                                                                   weight_type, input_type, output_type, {});
     } else {
       mlp_up_proj_layer_ = nullptr;
     }
-    mlp_down_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, "model.layers.0.mlp.down_proj.weight",
+    mlp_down_proj_layer_ = matmul_layer_factory_->AutoCreateLayer(base_weight, layer_prefix + ".mlp.down_proj.weight",
                                                                   weight_type, input_type, output_type, {});
   }
-  lm_head_proj_layer_ =
-      matmul_layer_factory_->AutoCreateLayer(base_weight, "lm_head.weight", weight_type, input_type, output_type, {});
+  if (context_->IsChief()) {
+    lm_head_proj_layer_ =
+        matmul_layer_factory_->AutoCreateLayer(base_weight, "lm_head.weight", weight_type, input_type, output_type, {});
+  }
 
 #ifdef ENABLE_ACL
   attn_qkv_proj_layer_->Init({}, context_, rank_);
@@ -277,7 +267,10 @@ Status CommonModel<T>::CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight)
     mlp_up_proj_layer_->Init({}, context_, rank_);
   }
   mlp_down_proj_layer_->Init({}, context_, rank_);
-  lm_head_proj_layer_->Init({}, context_, rank_);
+
+  if (context_->IsChief()) {
+    lm_head_proj_layer_->Init({}, context_, rank_);
+  }
 #endif
 
   return Status();
@@ -371,7 +364,7 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
 #endif
 
 #ifdef ENABLE_CUDA
-  STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
+  STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx - pipeline_config_.lower_layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->input_offset_uint64_tensor, model_input_->kv_list,
        model_input_->input_prefix_uint64_tensor, model_input_->kv_cache_offset_tensor,
        model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
@@ -387,8 +380,9 @@ Status CommonModel<T>::FlashAttentionForward(const int layer_idx) {
       },
       hidden_buffer_1_));
 #elif defined(ENABLE_ACL)
+
   // inference on NPU with ATB
-  STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx]->Forward(
+  STATUS_CHECK_RETURN(flash_attention_layers_[layer_idx - pipeline_config_.lower_layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->rotary_embedding_pos, model_input_->layers_slot_mapping,
        model_input_->k_cache_blocks_base, model_input_->v_cache_blocks_base, model_input_->seq_len_host, forward_shape_,
        model_input_->atb_attention_attr},
@@ -409,13 +403,13 @@ template <typename T>
 Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
 #ifdef ENABLE_CUDA
   if (is_cudagraph_enabled && model_input_->is_cudagraph_batchsize_matched) {
-    STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
+    STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx - pipeline_config_.lower_layer_idx]->Forward(
         {hidden_buffer_0_[0], model_input_->input_length_int32_tensor, model_input_->kv_list,
          model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
          model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]},
         cuda_graph_input_));
   } else {
-    STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
+    STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx - pipeline_config_.lower_layer_idx]->Forward(
         {hidden_buffer_0_[0], model_input_->input_length_int32_tensor, model_input_->kv_list,
          model_input_->kv_cache_offset_tensor, model_input_->rotary_embedding_pos, model_input_->rotary_embedding_mask,
          model_input_->kv_cache_buffer, forward_shape_, /* workspace */ paged_buffer_[0]
@@ -429,7 +423,7 @@ Status CommonModel<T>::PagedAttentionForward(const int layer_idx) {
   }
 #elif defined(ENABLE_ACL)
   // inference on NPU with ATB
-  STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx]->Forward(
+  STATUS_CHECK_RETURN(paged_attention_layers_[layer_idx - pipeline_config_.lower_layer_idx]->Forward(
       {hidden_buffer_0_[0], model_input_->rotary_embedding_pos, model_input_->layers_slot_mapping,
        model_input_->layers_block_table, model_input_->k_cache_blocks_base, model_input_->v_cache_blocks_base,
        model_input_->seq_len_host, forward_shape_, model_input_->atb_attention_attr},
@@ -479,6 +473,7 @@ Status CommonModel<T>::CommonAttention(const int layer_idx, std::shared_ptr<ksan
       std::swap(hidden_buffer_1_, hidden_buffer_0_);
     }
   }
+
   if (model_input_->single_token_request_num) {
     PagedAttentionForward(layer_idx);
   }
@@ -582,6 +577,11 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
   KLLM_CHECK_WITH_INFO(model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM,
                        "CommonDecoderPreNorm should be called by pre norm models");
 
+  // Copy to residual_buffer_ if first layer and not chief.
+  if (!context_->IsChief() && layer_idx == pipeline_config_.lower_layer_idx) {
+    CopyFromHiddenUnitBuffer(residual_buffer_[0], GetCurrentHiddenUnitBuffer());
+  }
+
   // Pre attn layernorm
   // Pre layernorm uses layernorm input for residual connection.
   LayerNormForward(fmt::format("model.layers.{}.input_layernorm.weight", layer_idx), base_weight, residual_buffer_,
@@ -615,6 +615,11 @@ Status CommonModel<T>::CommonDecoderPreNorm(const int layer_idx, std::shared_ptr
   // Mlp residual add
   STATUS_CHECK_RETURN(add_layer_->Forward({hidden_buffer_0_[0], residual_buffer_[0]}, residual_buffer_));
 
+  // Copy to hidden_unit_buffer if last layer and not standalone.
+  if (!context_->IsStandalone() && layer_idx == pipeline_config_.upper_layer_idx) {
+    CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(), residual_buffer_[0]);
+  }
+
 #ifdef ENABLE_CUDA
   if (is_cudagraph_enabled && cudagraph_runner->is_capturing_graph) {
     cudaGraphExec_t graph_exec = cudagraph_runner->EndCapture(context_->GetComputeStreams()[rank_].Get(), rank_);
@@ -633,6 +638,11 @@ Status CommonModel<T>::CommonDecoderPostNorm(const int layer_idx, std::shared_pt
                                              const bool is_multi_token_forward) {
   KLLM_CHECK_WITH_INFO(model_run_config_.layernorm_position == LayerNormPosition::POST_NORM,
                        "CommonDecoderPostNorm should be called by post norm models");
+
+  // Copy to residual_buffer_ if first layer and not chief.
+  if (!context_->IsChief() && layer_idx == pipeline_config_.lower_layer_idx) {
+    CopyFromHiddenUnitBuffer(residual_buffer_[0], GetCurrentHiddenUnitBuffer());
+  }
 
   // Common attention
   // Post layernorm uses attention input for residual connection.
@@ -655,6 +665,12 @@ Status CommonModel<T>::CommonDecoderPostNorm(const int layer_idx, std::shared_pt
   // Post mlp layernorm
   LayerNormForward(fmt::format("model.layers.{}.post_attention_layernorm.weight", layer_idx), base_weight,
                    hidden_buffer_0_, residual_buffer_);
+
+  // Copy to hidden_unit_buffer if last layer and not standalone.
+  if (!context_->IsStandalone() && layer_idx == pipeline_config_.upper_layer_idx) {
+    CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(), residual_buffer_[0]);
+  }
+
   return Status();
 }
 
@@ -746,24 +762,82 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
 }
 
 template <typename T>
+Status CommonModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs) {
+  const size_t batch_size = forward_reqs.size();
+  for (size_t idx = 0; idx < batch_size && forward_reqs[idx].infer_stage == STAGE_CONTEXT; idx++) {
+    py::gil_scoped_acquire acquire;
+
+    auto& embedding_tensors = (*forward_reqs[idx].input_refit_embedding).embedding_tensors;
+    auto& embeddings = (*forward_reqs[idx].input_refit_embedding).embeddings;
+    embeddings.resize(embedding_tensors.size());
+    // Get embeddings (`std::vector<std::vector<float>>`) from embedding_tensors (`std::vector<py::object>`).
+    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
+      torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(embedding_tensors[i].ptr());
+      int64_t embedding_size = input_refit_embedding_tensor.numel();
+      embeddings[i].resize(embedding_size);
+      memcpy(embeddings[i].data(), input_refit_embedding_tensor.data_ptr(), sizeof(float) * embedding_size);
+    }
+    // Early release the torch tensors to free memory.
+    embedding_tensors.clear();
+  }
+  return Status();
+}
+
+template <typename T>
+Status CommonModel<T>::CopyFromHiddenUnitBuffer(Tensor& tensor, HiddenUnitDeviceBuffer* device_buffer) {
+#ifdef ENABLE_ACL
+  if (model_input_->infer_stage == InferStage::STAGE_CONTEXT) {
+    tensor.shape = device_buffer->prefill_tensors[rank_].shape;
+    tensor.dtype = device_buffer->prefill_tensors[rank_].dtype;
+    Memcpy(tensor.GetPtr<void>(), device_buffer->prefill_tensors[rank_].template GetPtr<void>(),
+           device_buffer->prefill_tensors[rank_].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE);
+  } else {
+#endif
+    tensor.shape = device_buffer->tensors[rank_].shape;
+    tensor.dtype = device_buffer->tensors[rank_].dtype;
+    Memcpy(tensor.GetPtr<void>(), device_buffer->tensors[rank_].template GetPtr<void>(),
+           device_buffer->tensors[rank_].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE);
+#ifdef ENABLE_ACL
+  }
+#endif
+
+  return Status();
+}
+
+template <typename T>
+Status CommonModel<T>::CopyToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buffer, Tensor& tensor) {
+  // Must sync before memcpy.
+  StreamSynchronize(context_->GetComputeStreams()[rank_]);
+
+#ifdef ENABLE_ACL
+  if (model_input_->infer_stage == InferStage::STAGE_CONTEXT) {
+    device_buffer->prefill_tensors[rank_].shape = tensor.shape;
+    device_buffer->prefill_tensors[rank_].dtype = tensor.dtype;
+
+    Memcpy(device_buffer->prefill_tensors[rank_].template GetPtr<void>(), tensor.GetPtr<void>(), tensor.GetTotalBytes(),
+           MEMCPY_DEVICE_TO_DEVICE);
+    device_buffer->prefill_enabled = true;
+  } else {
+#endif
+    device_buffer->tensors[rank_].shape = tensor.shape;
+    device_buffer->tensors[rank_].dtype = tensor.dtype;
+
+    Memcpy(device_buffer->tensors[rank_].template GetPtr<void>(), tensor.GetPtr<void>(), tensor.GetTotalBytes(),
+           MEMCPY_DEVICE_TO_DEVICE);
+#ifdef ENABLE_ACL
+    device_buffer->decode_enabled = true;
+  }
+#endif
+
+  return Status();
+}
+
+template <typename T>
 Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                               std::vector<ForwardRequest>& forward_reqs) {
+                               std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   GetBlockManager()->SetDeviceId(rank_);
 
-  // Load embeddings from input refit.
-  if (rank_ == 0) {
-    LoadEmbeddings(forward_reqs);
-  }
-
   model_input_->ParseFromRequests(forward_reqs);
-  bool is_multi_token_forward = model_input_->multi_token_request_num > 0;
-
-  // CPU embedding lookup
-  // The output is stored in `residual_buffer_` for residual connection in common decoder.
-  Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
-  if (embedding_weight.device == MemoryDevice::MEMORY_HOST) {
-    EmbedTokensUseCpu(embedding_weight, forward_reqs);
-  }
 
   // create forward shape tensor
   forward_shape_.shape = {model_input_->multi_token_request_num,
@@ -786,6 +860,39 @@ Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   // Pass the `use_cache` flag to `flag_tensor_`.
   flag_tensor_.GetPtr<bool>()[0] = model_input_->use_cache;
 
+  if (!epilogue) {
+    if (context_->IsChief()) {
+      LookupEmbedding(base_weight, forward_reqs);
+    }
+
+    LayerForward(base_weight);
+  }
+
+  // Invode lm head only in standalone mode.
+  if (context_->IsStandalone() || epilogue) {
+    LmHead(base_weight, forward_reqs);
+  }
+
+  return Status();
+}
+
+template <typename T>
+Status CommonModel<T>::LookupEmbedding(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                       std::vector<ForwardRequest>& forward_reqs) {
+  // Load embeddings from input refit.
+  if (rank_ == 0) {
+    LoadEmbeddings(forward_reqs);
+  }
+
+  bool is_multi_token_forward = model_input_->multi_token_request_num > 0;
+
+  // CPU embedding lookup
+  // The output is stored in `residual_buffer_` for residual connection in common decoder.
+  Tensor embedding_weight = base_weight->GetModelWeights("model.embed_tokens.weight");
+  if (embedding_weight.device == MemoryDevice::MEMORY_HOST) {
+    EmbedTokensUseCpu(embedding_weight, forward_reqs);
+  }
+
   if (model_input_->is_cudagraph_capture_request) {
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->kvcache_offset_event);
     StreamWaitEvent(context_->GetComputeStreams()[rank_], model_input_->rotary_embedding_event);
@@ -804,15 +911,34 @@ Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
                                 residual_buffer_);
   }
 
-  // CommonDecoder
+  return Status();
+}
+
+template <typename T>
+Status CommonModel<T>::LayerForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight) {
+  bool is_multi_token_forward = model_input_->multi_token_request_num > 0;
+
   if (model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM) {
-    for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
+    for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
       STATUS_CHECK_RETURN(CommonDecoderPreNorm(layer_idx, base_weight, is_multi_token_forward));
     }
   } else {  // LayerNormPosition::POST_NORM
-    for (int layer_idx = 0; layer_idx < num_layer_; ++layer_idx) {
+    for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
       STATUS_CHECK_RETURN(CommonDecoderPostNorm(layer_idx, base_weight, is_multi_token_forward));
     }
+  }
+
+  return Status();
+}
+
+template <typename T>
+Status CommonModel<T>::LmHead(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                              std::vector<ForwardRequest>& forward_reqs) {
+  bool is_multi_token_forward = model_input_->multi_token_request_num > 0;
+
+  // Copy to residual_buffer_ if in distributed mode and as master node.
+  if (!context_->IsStandalone() && context_->IsChief()) {
+    CopyFromHiddenUnitBuffer(residual_buffer_[0], GetCurrentHiddenUnitBuffer());
   }
 
   if (is_multi_token_forward) {
@@ -880,28 +1006,6 @@ Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
 
   input_refit_layer_->Clear();
-  return Status();
-}
-
-template <typename T>
-Status CommonModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs) {
-  const size_t batch_size = forward_reqs.size();
-  for (size_t idx = 0; idx < batch_size && forward_reqs[idx].infer_stage == STAGE_CONTEXT; idx++) {
-    py::gil_scoped_acquire acquire;
-
-    auto& embedding_tensors = (*forward_reqs[idx].input_refit_embedding).embedding_tensors;
-    auto& embeddings = (*forward_reqs[idx].input_refit_embedding).embeddings;
-    embeddings.resize(embedding_tensors.size());
-    // Get embeddings (`std::vector<std::vector<float>>`) from embedding_tensors (`std::vector<py::object>`).
-    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
-      torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(embedding_tensors[i].ptr());
-      int64_t embedding_size = input_refit_embedding_tensor.numel();
-      embeddings[i].resize(embedding_size);
-      memcpy(embeddings[i].data(), input_refit_embedding_tensor.data_ptr(), sizeof(float) * embedding_size);
-    }
-    // Early release the torch tensors to free memory.
-    embedding_tensors.clear();
-  }
   return Status();
 }
 

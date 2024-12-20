@@ -27,7 +27,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   ~BatchScheduler() {}
 
   // Get the next infer reqs that ready to run.
-  std::vector<std::shared_ptr<InferRequest>> &Schedule();
+  ScheduleOutput *Schedule();
 
   // Add infer request to waiting list.
   Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);

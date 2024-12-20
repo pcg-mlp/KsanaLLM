@@ -40,6 +40,9 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status req_status);
 
+  // Check the running queue to determine whether it exceeds the max_step_tokens.
+  void CheckRunningQueueStepTokens(size_t& step_token_num);
+
   // Update cache manager, process finished and timeout requests.
   void UpdateRunningRequests(size_t &total_needed_block_num);
 

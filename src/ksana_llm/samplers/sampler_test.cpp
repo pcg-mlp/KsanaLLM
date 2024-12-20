@@ -30,6 +30,7 @@ class SamplerTest : public testing::Test {
     env->ParseConfig(config_path);
     env->GetModelConfig("", model_config_);
     BlockManagerConfig block_manager_config;
+    env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
     block_manager_ = new BlockManager(block_manager_config, context_);
     SetBlockManager(block_manager_);

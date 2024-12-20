@@ -49,6 +49,31 @@ class PrefixCacheManagerTest : public testing::Test {
     delete faked_block_manager;
   }
 
+  // All blocks except last should be on tree, check state of every block.
+  void CheckCachedRequetBlocks(int64_t req_id) {
+    size_t req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
+    for (size_t i = 0; i < req_block_num; ++i) {
+      PrefixCachedBlock* cb = cache_manager->cached_requests_[req_id]->cached_blocks[i];
+      PrefixCachedBlock* cb_prev =
+          (i == 0) ? cache_manager->root_cached_block_ : cache_manager->cached_requests_[req_id]->cached_blocks[i - 1];
+
+      if (i != req_block_num - 1) {
+        EXPECT_EQ(cb->parent, cb_prev);
+        EXPECT_EQ(cb->parent->children[cb->token_ids], cb);
+        EXPECT_EQ(cb->active_requests.size(), 1);
+        EXPECT_EQ(cb->inactive_requests.size(), 0);
+        EXPECT_EQ(cb->is_shareable, true);
+        EXPECT_EQ(cb->is_device_location, true);
+      } else {
+        EXPECT_EQ(cb->parent, nullptr);
+        EXPECT_EQ(cb->active_requests.size(), 0);
+        EXPECT_EQ(cb->inactive_requests.size(), 0);
+        EXPECT_EQ(cb->is_shareable, false);
+        EXPECT_EQ(cb->is_device_location, true);
+      }
+    }
+  }
+
  protected:
   BlockManagerConfig block_manager_config;
 
@@ -118,27 +143,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_TRUE(status.OK());
 
   // All blocks except last should be on tree, check state of every block.
-  size_t req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
-  for (size_t i = 0; i < req_block_num; ++i) {
-    PrefixCachedBlock* cb = cache_manager->cached_requests_[req_id]->cached_blocks[i];
-    PrefixCachedBlock* cb_prev =
-        (i == 0) ? cache_manager->root_cached_block_ : cache_manager->cached_requests_[req_id]->cached_blocks[i - 1];
-
-    if (i != req_block_num - 1) {
-      EXPECT_EQ(cb->parent, cb_prev);
-      EXPECT_EQ(cb->parent->children[cb->token_ids], cb);
-      EXPECT_EQ(cb->active_requests.size(), 1);
-      EXPECT_EQ(cb->inactive_requests.size(), 0);
-      EXPECT_EQ(cb->is_shareable, true);
-      EXPECT_EQ(cb->is_device_location, true);
-    } else {
-      EXPECT_EQ(cb->parent, nullptr);
-      EXPECT_EQ(cb->active_requests.size(), 0);
-      EXPECT_EQ(cb->inactive_requests.size(), 0);
-      EXPECT_EQ(cb->is_shareable, false);
-      EXPECT_EQ(cb->is_device_location, true);
-    }
-  }
+  CheckCachedRequetBlocks(req_id);
 
   // Check freeable block of this request.
   size_t freeable_block_num;
@@ -149,7 +154,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   // Swap out this request.
   size_t swapped_block_num = 0;
   size_t free_block_num = 0;
-  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num);
+  std::vector<int> swapped_memory_block_ids;
+  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num, swapped_memory_block_ids);
   EXPECT_TRUE(status.OK());
 
   // Check swapped and free block num.
@@ -163,7 +169,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_TRUE(status.OK());
 
   // All blocks should be on host, no parent, no children, no active reqeust, some inactive reqeust.
-  req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
+  size_t req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
   for (size_t i = 0; i < req_block_num; ++i) {
     PrefixCachedBlock* cb = cache_manager->cached_requests_[req_id]->cached_blocks[i];
 
@@ -208,7 +214,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   // Start to swapin.
   size_t swapin_block_num;
-  status = cache_manager->SwapinRequestAsync(req_id, swapin_block_num, req_block_ids);
+  std::vector<int> swapped_in_memory_block_ids;
+  status = cache_manager->SwapinRequestAsync(req_id, swapin_block_num, req_block_ids, swapped_in_memory_block_ids);
   EXPECT_TRUE(status.OK());
 
   // check swapin block num.
@@ -254,27 +261,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   }
 
   // All block is on the tree again.
-  req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
-  for (size_t i = 0; i < req_block_num; ++i) {
-    PrefixCachedBlock* cb = cache_manager->cached_requests_[req_id]->cached_blocks[i];
-    PrefixCachedBlock* cb_prev =
-        (i == 0) ? cache_manager->root_cached_block_ : cache_manager->cached_requests_[req_id]->cached_blocks[i - 1];
-
-    if (i != req_block_num - 1) {
-      EXPECT_EQ(cb->parent, cb_prev);
-      EXPECT_EQ(cb->parent->children[cb->token_ids], cb);
-      EXPECT_EQ(cb->active_requests.size(), 1);
-      EXPECT_EQ(cb->inactive_requests.size(), 0);
-      EXPECT_EQ(cb->is_shareable, true);
-      EXPECT_EQ(cb->is_device_location, true);
-    } else {
-      EXPECT_EQ(cb->parent, nullptr);
-      EXPECT_EQ(cb->active_requests.size(), 0);
-      EXPECT_EQ(cb->inactive_requests.size(), 0);
-      EXPECT_EQ(cb->is_shareable, false);
-      EXPECT_EQ(cb->is_device_location, true);
-    }
-  }
+  CheckCachedRequetBlocks(req_id);
 
   // Finish request
   cache_manager->DestroyFinishedRequest(req_id);
@@ -413,7 +400,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   size_t swapped_block_num_2 = 0;
   size_t free_block_num_2 = 0;
-  status = cache_manager->SwapoutRequestAsync(req_id_2, swapped_block_num_2, free_block_num_2);
+  std::vector<int> swapped_memory_block_ids_2;
+  status =
+      cache_manager->SwapoutRequestAsync(req_id_2, swapped_block_num_2, free_block_num_2, swapped_memory_block_ids_2);
   EXPECT_TRUE(status.OK());
 
   // Swap out req 3.
@@ -426,7 +415,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   size_t swapped_block_num_3 = 0;
   size_t free_block_num_3 = 0;
-  status = cache_manager->SwapoutRequestAsync(req_id_3, swapped_block_num_3, free_block_num_3);
+  std::vector<int> swapped_memory_block_ids_3;
+  status =
+      cache_manager->SwapoutRequestAsync(req_id_3, swapped_block_num_3, free_block_num_3, swapped_memory_block_ids_3);
   EXPECT_TRUE(status.OK());
 
   // 5 used, (2 shared) + (1 mergee) + 2 * (1 unique) = 5, the 1 unmatched was free when swapped out.
@@ -477,7 +468,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_TRUE(status.OK());
 
   size_t swapin_block_num_2;
-  status = cache_manager->SwapinRequestAsync(req_id_2, swapin_block_num_2, req_block_ids_2);
+  std::vector<int> swapped_in_memory_block_ids_2;
+  status =
+      cache_manager->SwapinRequestAsync(req_id_2, swapin_block_num_2, req_block_ids_2, swapped_in_memory_block_ids_2);
   EXPECT_TRUE(status.OK());
 
   // Wait req 2 swapped in.
@@ -600,7 +593,8 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   // Swap out base request.
   size_t swapped_block_num = 0;
   size_t free_block_num = 0;
-  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num);
+  std::vector<int> swapped_memory_block_ids;
+  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num, swapped_memory_block_ids);
   EXPECT_TRUE(status.OK());
 
   // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_toeken|

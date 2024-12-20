@@ -1,10 +1,13 @@
+# Copyright 2024 Tencent Inc.  All rights reserved.
+#
+# ==============================================================================
+
 import sys
 import argparse
 import threading
 import queue
 import os
 import subprocess
-import random
 
 from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +29,14 @@ def args_config():
                         type=str,
                         default="/model/llama-hf/13B",
                         help='tokenizer dir')
-    parser.add_argument('--model', type=str, default="qwen", help='model type')
+    parser.add_argument('--model',
+                        type=str,
+                        default="qwen",
+                        help='model type')
+    parser.add_argument("--distributed",
+                        type=bool,
+                        default=False,
+                        help="enable the distributed mode")
     args = parser.parse_args()
     return args
 
@@ -120,54 +130,163 @@ def get_ref_results(model):
         ]
 
 
-# Main function to run the script
-if __name__ == "__main__":
-    # Load the configuration arguments
-    args = args_config()
+def get_free_port():
+    """ Get a free tcp port on local host.
+    """
+    import socket
+    from contextlib import closing
 
-    abs_config_path = os.path.abspath(args.config_file)
-    abs_tokenizer_dir = os.path.abspath(args.tokenizer_dir)
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
 
-    server_python_script_path = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                     "../src/ksana_llm/python/serving_server.py"))
-    PORT_STR = str(random.randint(10000, 65530))
-    client_python_script_path = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                     "../benchmarks/benchmark_throughput.py"))
-    client_input_csv_path = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                     "../benchmarks/benchmark_input.csv"))
 
-    server = subprocess.Popen([
-        'python',
-        server_python_script_path,
-        '--config_file',
-        abs_config_path,
-        '--port',
-        PORT_STR,
-    ],
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE,
-                              text=True)
+def start_standalone_node(script_path: str,
+                          config_file: str,
+                          server_port: int):
+    """Start standalone process
+    """
+    cmds = ['python',
+            server_python_script_path,
+            '--config_file',
+            abs_config_path,
+            '--port',
+            str(server_port)]
 
+    node_proc = subprocess.Popen(cmds,
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE,
+                                 text=True)
+
+    return node_proc
+
+
+def start_distributed_node(script_path: str,
+                           config_file: str,
+                           server_port: int,
+                           master_port: int,
+                           world_size: int,
+                           node_rank: int):
+    """Start master process
+    """
+    os.environ["MASTER_HOST"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["NODE_RANK"] = str(node_rank)
+
+    cmds = ['python',
+            server_python_script_path,
+            '--config_file',
+            abs_config_path,
+            '--port',
+            str(server_port)]
+
+    if node_rank == 0:
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ["ASCEND_RT_VISIBLE_DEVICES"] = "0"
+        os.environ["KLLM_LOG_FILE"] = "log/master_ksana_llm.log"
+        os.environ["KLLM_LOG_LEVEL"] = "DEBUG"
+
+        node_proc = subprocess.Popen(cmds,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE,
+                                     text=True)
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+        os.environ["ASCEND_RT_VISIBLE_DEVICES"] = "1"
+        os.environ["KLLM_LOG_FILE"] = "log/worker_ksana_llm.log"
+        os.environ["KLLM_LOG_LEVEL"] = "DEBUG"
+
+        node_proc = subprocess.Popen(cmds,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+
+    return node_proc
+
+
+def wait_server_started(server_proc):
+    """Wait until distributed cluster started.
+    """
     server_status_queue = queue.Queue()
     server_status_watcher = threading.Thread(target=wait_for_server_launch,
-                                             args=(server,
+                                             args=(server_proc,
                                                    server_status_queue))
     server_status_watcher.start()
     while True:
         status_raw_line = server_status_queue.get()
         if "Uvicorn running on" in status_raw_line:
             break
+
+
+def start_throughput_client(
+        script_path: str,
+        server_port: int,
+        model: str,
+        input_csv_path: str):
+    """Start client script and wait until finished.
+    """
     os.system(
         "python {} --port {} --model {} --input_csv {} --prompt_num 2 --output_csv integration_test_output.csv"
-        .format(client_python_script_path, PORT_STR, args.model,
-                client_input_csv_path))
-    server.terminate()
+        .format(script_path, str(server_port), model, input_csv_path))
 
+
+# Main function to run the script
+if __name__ == "__main__":
+    # Load the configuration arguments
+    args = args_config()
+
+    abs_config_path = os.path.abspath(args.config_file)
+    server_python_script_path = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                     "../src/ksana_llm/python/serving_server.py"))
+
+    server_port = get_free_port()
+    if args.distributed:
+        # start cluster
+        worker_port = get_free_port()
+        master_port = get_free_port()
+        server_proc = start_distributed_node(server_python_script_path,
+                                             abs_config_path,
+                                             server_port,
+                                             master_port,
+                                             2,
+                                             0)
+        worker_proc = start_distributed_node(server_python_script_path,
+                                             abs_config_path,
+                                             worker_port,
+                                             master_port,
+                                             2,
+                                             1)
+    else:
+        # start process
+        server_proc = start_standalone_node(server_python_script_path,
+                                            abs_config_path,
+                                            server_port)
+
+    # wait cluster started.
+    wait_server_started(server_proc)
+
+    # start client
+    client_python_script_path = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                     "../benchmarks/benchmark_throughput.py"))
+    client_input_csv_path = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                     "../benchmarks/benchmark_input.csv"))
+    start_throughput_client(
+        client_python_script_path,
+        server_port,
+        args.model,
+        client_input_csv_path)
+
+    # stop cluster or process.
+    server_proc.terminate()
+    if args.distributed:
+        worker_proc.terminate()
+
+    # check result.
     results = read_from_csv("./integration_test_output.csv")
-
     ref_results = get_ref_results(args.model)
     for r, ref in zip(results, ref_results):
         assert r == ref

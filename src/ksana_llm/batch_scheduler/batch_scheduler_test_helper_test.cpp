@@ -200,10 +200,21 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
     prefix_block_num_ = prefix_token_num_ / block_token_num_;
 
     PreparePrefixCacheBlocks();
+
+    schedule_output = new ScheduleOutput();
   }
+
+  virtual ~FixPrefixBatchScheduler() {
+    if (schedule_output != nullptr) {
+      free(schedule_output);
+      schedule_output = nullptr;
+    }
+  }
+
   std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return dummy_cache_mgr_; }
 
-  std::vector<std::shared_ptr<InferRequest>>& Schedule() override {
+
+  ScheduleOutput* Schedule() override {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     KLLM_LOG_DEBUG << " ============= Schedule, step " << step_ << ", running_reqs.size=" << running_reqs.size()
                    << ", waiting_reqs.size=" << waiting_reqs.size();
@@ -272,7 +283,8 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
       step_++;
     }
     KLLM_LOG_DEBUG << " ========= Schedule, running_reqs.size = " << running_reqs.size();
-    return running_reqs;
+    schedule_output->running_reqs = running_reqs;
+    return schedule_output;
   }
 
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) override {
@@ -382,6 +394,8 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   std::mutex mux_;
   std::shared_ptr<CacheManagerInterface> dummy_cache_mgr_ = nullptr;
+
+  ScheduleOutput* schedule_output = nullptr;
 };
 
 TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {

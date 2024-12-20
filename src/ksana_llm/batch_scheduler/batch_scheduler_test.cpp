@@ -14,6 +14,7 @@
 #include "ksana_llm/cache_manager/direct_cache_manager.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 
+#include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/timer.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
@@ -29,6 +30,8 @@ class BatchSchedulerTest : public testing::Test {
   void CommonSetUp() {
     // Init BatchSchedulerEnvironmentSimulator and BatchScheduler
     InitDefaultConfig();
+
+    InitializeScheduleOutputPool();
     env_simulator = new BatchSchedulerEnvironmentSimulator(block_manager_config, tp_num);
     batch_scheduler = new BatchScheduler(batch_scheduler_config, tp_num);
 
@@ -40,6 +43,7 @@ class BatchSchedulerTest : public testing::Test {
   void TearDown() override {
     delete batch_scheduler;
     delete env_simulator;
+    DestroyScheduleOutputPool();
   }
 
  protected:

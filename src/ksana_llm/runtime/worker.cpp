@@ -15,17 +15,18 @@
 namespace ksana_llm {
 
 Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight, InferStage stage,
-                       std::vector<ForwardRequest>& forward_reqs) {
+                       std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
   opentelemetry::trace::StartSpanOptions options;
 
-  return model->Forward(weight, forward_reqs);
+  return model->Forward(weight, forward_reqs, epilogue);
 }
 
 std::future<Status> Worker::ForwardAsync(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
-                                         InferStage stage, std::vector<ForwardRequest>& forward_reqs) {
-  return threadpool_->Submit([=, &forward_reqs]() -> Status { return Forward(model, weight, stage, forward_reqs); });
+                                         InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
+  return threadpool_->Submit(
+      [=, &forward_reqs]() -> Status { return Forward(model, weight, stage, forward_reqs, epilogue); });
 }
 
 Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs) {

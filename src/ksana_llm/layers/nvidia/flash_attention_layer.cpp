@@ -4,6 +4,7 @@
 
 #include "ksana_llm/layers/flash_attention_layer.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
 

@@ -7,6 +7,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -16,8 +17,17 @@
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
+
+// Used to describe memory block swappness.
+struct RequestMemoryBlockSwappinessTask {
+  std::vector<int> device_memory_blocks;
+
+  // Eevery device block need multiple host blocks.
+  std::vector<std::vector<int>> host_memory_blocks;
+};
 
 template <class CachedBlockType, class CachedRequestType>
 class BaseCacheManager {
@@ -184,6 +194,107 @@ class BaseCacheManager {
     return Status();
   }
 
+  // Swap out/in memory blocks referenced by req_id.
+  Status SwapoutRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
+    RequestMemoryBlockSwappinessTask req_memory_block_swappiness;
+
+    req_memory_block_swappiness.device_memory_blocks = memory_block_ids;
+    for (int i = 0; i < memory_block_ids.size(); ++i) {
+      std::vector<int> host_block_ids;
+      Status status = GetBlockManager()->AllocateHostBlocks(cache_manager_config_.tensor_para_size, host_block_ids);
+      if (!status.OK()) {
+        return status;
+      }
+
+      req_memory_block_swappiness.host_memory_blocks.push_back(host_block_ids);
+    }
+    request_memory_block_swap_task_[req_id] = req_memory_block_swappiness;
+
+    request_memory_block_swap_result_[req_id] = threadpool_->Submit([=] {
+      for (int i = 0; i < memory_block_ids.size(); ++i) {
+        int dev_block_id = memory_block_ids[i];
+        for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+          GetBlockManager()->SetDeviceId(j);
+          GetBlockManager()->SwapOut(req_memory_block_swappiness.host_memory_blocks[i][j], dev_block_id);
+        }
+      }
+    });
+
+    return Status();
+  }
+
+  Status SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
+    auto it = request_memory_block_swap_task_.find(req_id);
+    if (it == request_memory_block_swap_task_.end()) {
+      return Status(RET_RUNTIME, FormatStr("SwapinRequestMemoryBlockAsync req_id %d not found.", req_id));
+    }
+
+    auto it2 = request_memory_block_swap_result_.find(req_id);
+    if (it2 != request_memory_block_swap_result_.end()) {
+      return Status(RET_RUNTIME,
+                    FormatStr("SwapinRequestMemoryBlockAsync Swapin req %d fail, please merge swapout first.", req_id));
+    }
+
+    RequestMemoryBlockSwappinessTask& req_memory_block_swappiness = it->second;
+    req_memory_block_swappiness.device_memory_blocks = memory_block_ids;
+
+    request_memory_block_swap_result_[req_id] = threadpool_->Submit([=] {
+      for (int i = 0; i < memory_block_ids.size(); ++i) {
+        for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+          GetBlockManager()->SetDeviceId(j);
+          GetBlockManager()->SwapIn(req_memory_block_swappiness.device_memory_blocks[j],
+                                    req_memory_block_swappiness.host_memory_blocks[i][j]);
+          GetBlockManager()->FreeHostBlocks({req_memory_block_swappiness.host_memory_blocks[i][j]});
+        }
+      }
+    });
+
+    return Status();
+  }
+
+  // Wait until all memory block swappness referenced by req_ids finished.
+  Status WaitSwappinessRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+    for (int64_t req_id : req_ids) {
+      auto it = request_memory_block_swap_result_.find(req_id);
+      if (it == request_memory_block_swap_result_.end()) {
+        KLLM_LOG_WARNING << "Wait swapout request " << req_id << " not found.";
+        continue;
+      }
+
+      try {
+        it->second.get();
+      } catch (const std::exception& e) {
+        KLLM_LOG_FATAL << "Exception in swapout, info: " << e.what();
+      }
+    }
+
+    return Status();
+  }
+
+  // Wait until all memory block swappness referenced by req_ids finished.
+  // The task will be removed after wait() finished.
+  Status WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+    Status status = WaitSwappinessRequestMemoryBlock(req_ids);
+    for (int64_t req_id : req_ids) {
+      // Keep request_memory_block_swap_task_ for following swapin.
+      request_memory_block_swap_result_.erase(req_id);
+    }
+
+    return Status();
+  }
+
+  // Wait until all memory block swappness referenced by req_ids finished.
+  // The task will be removed after wait() finished.
+  Status WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids) {
+    Status status = WaitSwappinessRequestMemoryBlock(req_ids);
+    for (int64_t req_id : req_ids) {
+      request_memory_block_swap_task_.erase(req_id);
+      request_memory_block_swap_result_.erase(req_id);
+    }
+
+    return Status();
+  }
+
  protected:
   CacheManagerConfig cache_manager_config_;
 
@@ -208,6 +319,10 @@ class BaseCacheManager {
   // The key is request id.
   std::unordered_map<int64_t, std::vector<CachedBlockType*>> swapout_cached_block_buffer_;
   std::unordered_map<int64_t, std::vector<CachedBlockType*>> swapin_cached_block_buffer_;
+
+  // The future result of memory swap.
+  std::unordered_map<int64_t, RequestMemoryBlockSwappinessTask> request_memory_block_swap_task_;
+  std::unordered_map<int64_t, std::future<void>> request_memory_block_swap_result_;
 };
 
 }  // namespace ksana_llm

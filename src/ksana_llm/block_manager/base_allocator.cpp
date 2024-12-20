@@ -61,7 +61,8 @@ void BaseAllocator::PreAllocateBlocks() {
   }
 #endif
   for (size_t i = 0; i < allocator_config_.blocks_num; ++i) {
-    int block_id = id_generator_.Gen();
+    // Make sure block ids on all worker nodes have same id range.
+    int block_id = i;
     if (is_continuous_mode) {
       memory_ptr = base_mem_ptr + i * allocator_config_.block_size;
       if (i == 0) {
@@ -159,6 +160,16 @@ Status BaseAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<v
       addrs.push_back(it->second.address);
       continue;
     }
+
+    // For distributed worker node, get from free blocks.
+    if (!context_->IsChief()) {
+      auto it2 = free_blocks_.find(block_id);
+      if (it2 != free_blocks_.end()) {
+        addrs.push_back(it2->second.address);
+        continue;
+      }
+    }
+
     KLLM_LOG_ERROR << "Get block id " << block_id << " address error on device " << allocator_config_.device;
     return Status(RET_SEGMENT_FAULT, FormatStr("Get block address error, block id ", block_id));
   }

@@ -42,7 +42,7 @@ class FakedBlockManager : public BlockManagerInterface {
 
   // Reset the preallocated blocks for device & host.
   Status ResetPreAllocatedBlocks() {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::ResetPreAllocatedBlocks not implemented");
     return Status();
   }
 
@@ -54,7 +54,7 @@ class FakedBlockManager : public BlockManagerInterface {
   int GetDeviceId() { return cur_device_id_; }
 
   DataType GetDtype() {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetDtype not implemented");
     return TYPE_INVALID;
   }
 
@@ -77,37 +77,37 @@ class FakedBlockManager : public BlockManagerInterface {
 
   // Allocate contiguous memory on device.
   Status AllocateContiguous(int64_t size, int& block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::AllocateContiguous not implemented");
     return Status();
   }
 
   // Free blocked memory on device.
   Status FreeBlocks(const std::vector<int>& blocks) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FreeBlocks not implemented");
     return Status();
   }
 
   // Free contiguous memory on device.
   Status FreeContiguous(int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FreeContiguous not implemented");
     return Status();
   }
 
   // Check contiguous memory is in used.
   bool IsContiguousUsed(const int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::IsContiguousUsed not implemented");
     return false;
   }
 
   // Get memory addresses of blocked memory on device.
   Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetBlockPtrs not implemented");
     return Status();
   }
 
   // Get memory address of contiguous memory on device.
   Status GetContiguousPtr(int block_id, void*& addr) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetContiguousPtr not implemented");
     return Status();
   }
 
@@ -136,7 +136,7 @@ class FakedBlockManager : public BlockManagerInterface {
 
   // Allocate contiguous memory on host.
   Status AllocateHostContiguous(int64_t size, int& block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::AllocateHostContiguous not implemented");
     return Status();
   }
 
@@ -155,19 +155,19 @@ class FakedBlockManager : public BlockManagerInterface {
 
   // Free contiguous memory on host.
   Status FreeHostContiguous(int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FreeHostContiguous not implemented");
     return Status();
   }
 
   // Get memory addresses of blocked memory on host.
   Status GetHostBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetHostBlockPtrs not implemented");
     return Status();
   }
 
   // Get memory address of contiguous memory on host.
   Status GetHostContiguousPtr(int block_id, void*& addr) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetHostContiguousPtr not implemented");
     return Status();
   }
 
@@ -180,13 +180,13 @@ class FakedBlockManager : public BlockManagerInterface {
   // Swap out blocks from device to host,
   Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
                  const int host_block_num_to_add) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::SwapOut not implemented");
     return Status();
   }
 
   // Swap in blocks from host to device.
   Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::SwapIn not implemented");
     return Status();
   }
 
@@ -210,7 +210,7 @@ class FakedBlockManager : public BlockManagerInterface {
 
   // Get the size in bytes for one block.
   size_t GetBlockSize() const {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetBlockSize not implemented");
     return 0;
   }
 
@@ -219,31 +219,31 @@ class FakedBlockManager : public BlockManagerInterface {
 
   // Prepare blocks for prefix cache
   Status PreparePrefixCacheBlocks() {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::PreparePrefixCacheBlocks not implemented");
     return Status();
   }
 
   // Get the prefix cache tokens numbers
   int GetPrefixCacheTokensNumber() const {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetPrefixCacheTokensNumber not implemented");
     return 0;
   }
 
   // Get the prefix cache blocks numbers
   size_t GetPrefixCacheBlocksNumber() const {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetPrefixCacheBlocksNumber not implemented");
     return 0;
   }
 
   // Check the input token is valid for prefix cache
   bool CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::CheckReqIsValidForPrefixCache not implemented");
     return false;
   }
 
   // Fill prefix kv cache to input blocks vector
   Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) {
-    KLLM_CHECK_WITH_INFO(false, "Not implemented");
+    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FillPrefixCacheBlocks not implemented");
     return Status();
   }
 
@@ -256,7 +256,7 @@ class FakedBlockManager : public BlockManagerInterface {
 
   int GetBlocksBaseId() { return 0; }
 
-  WorkspaceMeta& GetWorkspaceMeta() {return workspace_metas_[0];}
+  WorkspaceMeta& GetWorkspaceMeta() { return workspace_metas_[0]; }
 
  private:
   BlockManagerConfig block_manager_config_;
@@ -298,9 +298,7 @@ class FakedTokenGenerator {
     }
   }
 
-  size_t GetVocabSize() {
-    return vocab_size;
-  }
+  size_t GetVocabSize() { return vocab_size; }
 
  private:
   size_t vocab_size = 32000;

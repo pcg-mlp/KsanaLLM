@@ -22,6 +22,9 @@ class BlockManagerInterface {
  public:
   virtual ~BlockManagerInterface() {}
 
+  // Get calculated block number.
+  virtual Status GetBlockNumber(size_t& device_blocks_num, size_t& host_block_num) { return Status(); }
+
   // Preallocate blocks.
   virtual Status PreAllocateBlocks() = 0;
 

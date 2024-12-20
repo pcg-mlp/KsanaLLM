@@ -93,22 +93,22 @@ std::vector<float*> ModelInstance::GetLogitsPtr() {
 }
 
 std::vector<Status> ModelInstance::Forward(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                                           std::vector<ForwardRequest>& forward_reqs) {
+                                           std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   std::vector<Status> results;
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(
-        worker_group->GetWorker(worker_id)->Forward(models_[worker_id], weights_[worker_id], stage, forward_reqs));
+    results.push_back(worker_group->GetWorker(worker_id)->Forward(models_[worker_id], weights_[worker_id], stage,
+                                                                  forward_reqs, epilogue));
   }
   return results;
 }
 
 std::vector<std::future<Status>> ModelInstance::ForwardAsync(std::shared_ptr<WorkerGroup> worker_group,
                                                              InferStage stage,
-                                                             std::vector<ForwardRequest>& forward_reqs) {
+                                                             std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   std::vector<std::future<Status>> results;
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(
-        worker_group->GetWorker(worker_id)->ForwardAsync(models_[worker_id], weights_[worker_id], stage, forward_reqs));
+    results.push_back(worker_group->GetWorker(worker_id)->ForwardAsync(models_[worker_id], weights_[worker_id], stage,
+                                                                       forward_reqs, epilogue));
   }
   return results;
 }

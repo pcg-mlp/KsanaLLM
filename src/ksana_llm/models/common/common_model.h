@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "ksana_llm/data_hub/hidden_unit_buffer.h"
 #include "ksana_llm/layers/add_layer.h"
 #include "ksana_llm/layers/assemble_last_token_layer.h"
 #include "ksana_llm/layers/base_layer.h"
@@ -15,6 +16,7 @@
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
+#include "ksana_llm/runtime/infer_stage.h"
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
 #  include "ksana_llm/layers/set_torch_stream_layer.h"
 #endif
@@ -71,10 +73,21 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
   Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                 std::vector<ForwardRequest>& forward_reqs) override;
+                 std::vector<ForwardRequest>& forward_reqs, bool epilogue) override;
 
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
+
+ private:
+  // Execute the embedding lookup.
+  Status LookupEmbedding(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                         std::vector<ForwardRequest>& forward_reqs);
+
+  // Execute the forward of specific layers.
+  Status LayerForward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight);
+
+  // Execute the lm head, and generate the logits.
+  Status LmHead(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs);
 
  protected:
   using BaseModel::context_;
@@ -85,6 +98,9 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   // The model config.
   ModelConfig model_config_;
+
+  // The pipeline_config for distributed mode.
+  PipelineConfig pipeline_config_;
 
   // The model run config.
   ModelRunConfig model_run_config_;
@@ -124,8 +140,8 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   std::shared_ptr<CudaGraphRunner> cudagraph_runner;
 #endif
 
-  // The layer number of the model
-  int num_layer_;
+  // The layer number of the model on current node.
+  int layer_num_on_node_;
 
   // The original vocab size of the model
   size_t vocab_size_;
@@ -185,18 +201,6 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   std::shared_ptr<Tensor> shared_matmul_workspace_buffer_ = nullptr;
 
-#ifdef ENABLE_ACL
-  // Used for ascend attention.
-  Tensor ascend_buffer_0_;
-  Tensor ascend_buffer_1_;
-  Tensor ascend_buffer_2_;
-  Tensor ascend_buffer_3_;
-  Tensor ascend_buffer_4_;
-
-  std::vector<Tensor> ascend_key_caches_;
-  std::vector<Tensor> ascend_val_caches_;
-#endif
-
  protected:
   Status CreateProjLayer(std::shared_ptr<BaseWeight>& base_weight);
 
@@ -239,6 +243,10 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
 
   // Load embeddings obtained from external input or computed by plugins.
   virtual Status LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs);
+
+  // Copy between hidden_unit_buffer and tensor.
+  Status CopyFromHiddenUnitBuffer(Tensor& tensor, HiddenUnitDeviceBuffer* device_buffer);
+  Status CopyToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buffer, Tensor& tensor);
 };
 
 }  // namespace ksana_llm

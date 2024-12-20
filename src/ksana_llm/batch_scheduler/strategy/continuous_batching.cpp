@@ -164,8 +164,28 @@ void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, 
   req->Notify();
 }
 
+void ContinuousBatchingStrategy::CheckRunningQueueStepTokens(size_t &step_token_num) {
+  for (auto it = batch_state_->schedule_output->running_reqs.begin();
+       it != batch_state_->schedule_output->running_reqs.end();) {
+    auto req = *it;
+    bool is_multi_token_forward = req->output_tokens.size() > req->kv_cached_token_num + 1;
+    size_t current_token_num = is_multi_token_forward ? req->output_tokens.size() : 1;
+    if (step_token_num + current_token_num > batch_scheduler_config_.max_step_tokens) {
+      RecomputeRequest(req);
+      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
+      KLLM_LOG_WARNING << fmt::format(
+          "The Running Queue has exceeded the max_step_tokens limit. Remove the req {} from the queue.", req->req_id);
+      continue;
+    }
+    step_token_num += current_token_num;
+    ++it;
+  }
+}
+
 void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_block_num) {
-  for (auto it = batch_state_->running_queue.begin(); it != batch_state_->running_queue.end();) {
+  for (auto it = batch_state_->schedule_output->running_reqs.begin();
+       it != batch_state_->schedule_output->running_reqs.end();) {
     auto req = *it;
     // All req here should be decode now.
     req->infer_stage = InferStage::STATE_DECODE;
@@ -177,7 +197,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
       req->infer_stage = InferStage::STAGE_CONTEXT;
       req->output_tokens = req->complete_output_tokens;
       batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      it = batch_state_->running_queue.erase(it);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
       continue;
     }
 
@@ -190,7 +210,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
       RecomputeRequest(req);
 
       batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      it = batch_state_->running_queue.erase(it);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
+
       continue;
     }
 
@@ -217,8 +238,11 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
         REPORT_METRIC(time_to_per_output_token_ms, output_token_num, attributes);
       }
 
+      // Record finish req_id
+      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+
       StopRequest(req, Status(RET_SUCCESS));
-      it = batch_state_->running_queue.erase(it);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
 
       continue;
     }
@@ -229,8 +253,11 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       cache_manager_->DestroyFinishedRequest(req->req_id);
 
+      // Record finish req_id
+      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+
       StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
-      it = batch_state_->running_queue.erase(it);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
       REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), attributes);
 
       continue;
@@ -242,8 +269,11 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
       cache_manager_->DestroyFinishedRequest(req->req_id);
 
+      // Record finish req_id
+      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+
       StopRequest(req, Status(RET_TERMINATED, "client aborted."));
-      it = batch_state_->running_queue.erase(it);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
       REPORT_COUNTER(forward_req_aborted_num, static_cast<size_t>(1), attributes);
 
       continue;
@@ -285,7 +315,8 @@ Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_pt
 }
 
 void ContinuousBatchingStrategy::ProcessRunningQueue() {
-  KLLM_LOG_DEBUG << "ProcessRunningQueue invoked, running queue size:" << batch_state_->running_queue.size()
+  KLLM_LOG_DEBUG << "ProcessRunningQueue invoked, running queue size:"
+                 << batch_state_->schedule_output->running_reqs.size()
                  << ", free block num:" << cache_manager_->GetUsableBlockNumber()
                  << ", future block num:" << cache_manager_->GetFutureBlockNumber();
 
@@ -303,7 +334,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
   // Update cache manager, process finished and timeout requests.
   UpdateRunningRequests(total_needed_block_num);
 
-  if (batch_state_->running_queue.empty() && batch_state_->waiting_queue.empty()) {
+  if (batch_state_->schedule_output->running_reqs.empty() && batch_state_->waiting_queue.empty()) {
     // If running & waiting queue in current step is empty, wait all swapin jobs done if existed.
     // In order to make sure the schedule result not empty.
     if (!batch_state_->swapin_pending_requests_.empty()) {
@@ -312,16 +343,22 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
         KLLM_LOG_ERROR << "MergePendingSwapinRequests error, info: " << status.GetMessage();
       }
 
-      KLLM_LOG_DEBUG << "ProcessRunningQueue update, running queue size:" << batch_state_->running_queue.size()
+      KLLM_LOG_DEBUG << "ProcessRunningQueue update, running queue size:"
+                     << batch_state_->schedule_output->running_reqs.size()
                      << ", free block num:" << cache_manager_->GetUsableBlockNumber()
                      << ", future block num:" << cache_manager_->GetFutureBlockNumber();
     }
   }
 
+  // Check Running Queue to determine whether it exceeds the max_step_tokens.
+  size_t step_token_num = 0;
+  CheckRunningQueueStepTokens(step_token_num);
+
   // Swapout necessary blocks.
   bool skip_swapout_check = false;
-  for (size_t running_batch_size = batch_state_->running_queue.size(); running_batch_size > 0; --running_batch_size) {
-    auto it = batch_state_->running_queue.begin() + running_batch_size - 1;
+  for (size_t running_batch_size = batch_state_->schedule_output->running_reqs.size(); running_batch_size > 0;
+       --running_batch_size) {
+    auto it = batch_state_->schedule_output->running_reqs.begin() + running_batch_size - 1;
     auto req = *it;
 
     // No need to check max_batch_size and max_step_tokens here.
@@ -395,12 +432,17 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
         RECORD_TRACE_EVENT_BEGIN("SO", TraceEventType::SwapOut, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
         size_t free_block_num = 0;
         size_t swapped_block_num = 0;
-        status = cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num);
+        std::vector<int> swapout_memory_blocks;
+        status =
+            cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num, swapout_memory_blocks);
         if (status.OK()) {
           batch_state_->swapout_pending_requests_[req->req_id] = req;
-          batch_state_->running_queue.erase(it);
+          batch_state_->schedule_output->running_reqs.erase(it);
 
           total_needed_block_num -= step_block_num;
+
+          // Record swapout operation.
+          batch_state_->schedule_output->swapout_req_block_ids[req->req_id] = swapout_memory_blocks;
           continue;
         }
         KLLM_LOG_ERROR << "Swap out request error, recompute it. info: " << status.GetMessage();
@@ -417,7 +459,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       // Add recomputed request to the begining of waiting queue.
       RecomputeRequest(req);
       batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      batch_state_->running_queue.erase(it);
+      batch_state_->schedule_output->running_reqs.erase(it);
 
       total_needed_block_num -= step_block_num;
       continue;
@@ -453,8 +495,9 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
     return;
   }
 
-  size_t step_batch_size = batch_state_->running_queue.size();
-  size_t step_token_num = batch_state_->running_queue.size();
+  size_t step_batch_size = batch_state_->schedule_output->running_reqs.size();
+  size_t step_token_num = 0;
+  CheckRunningQueueStepTokens(step_token_num);
   for (auto it = batch_state_->swapped_queue.begin(); it != batch_state_->swapped_queue.end();) {
     auto req = it->second;
 
@@ -463,6 +506,9 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
       KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in swapped.";
 
       cache_manager_->DestroySwapedRequest(req->req_id);
+
+      // Record finish req_id
+      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
 
       StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
       it = batch_state_->swapped_queue.erase(it);
@@ -474,6 +520,9 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
       KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in swapped.";
 
       cache_manager_->DestroySwapedRequest(req->req_id);
+
+      // Record finish req_id
+      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
 
       StopRequest(req, Status(RET_TERMINATED, "client aborted."));
       it = batch_state_->swapped_queue.erase(it);
@@ -501,13 +550,19 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
         MergePendingSwapoutRequests(true, false);
       }
       RECORD_TRACE_EVENT_BEGIN("SI", TraceEventType::SwapIn, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
-      status = cache_manager_->SwapinRequestAsync(req->req_id, swapin_needed_block_num, req->kv_cache_blocks);
+      std::vector<int> swapin_memory_blocks;
+      status = cache_manager_->SwapinRequestAsync(req->req_id, swapin_needed_block_num, req->kv_cache_blocks,
+                                                  swapin_memory_blocks);
       if (status.OK()) {
         step_batch_size += 1;
         step_token_num += 1;
 
         batch_state_->swapin_pending_requests_[req->req_id] = req;
         it = batch_state_->swapped_queue.erase(it);
+
+        // Record swapin operation.
+        batch_state_->schedule_output->swapin_req_block_ids[req->req_id] = swapin_memory_blocks;
+
         continue;
       }
       KLLM_LOG_ERROR << "Swap in request error, info: " << status.GetMessage();
@@ -575,10 +630,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   }
 
   size_t total_logits_extra_length = 0;
-  size_t decode_request_num = batch_state_->running_queue.size();
+  size_t decode_request_num = batch_state_->schedule_output->running_reqs.size();
 
-  size_t step_batch_size = batch_state_->running_queue.size();
-  size_t step_token_num = batch_state_->running_queue.size();
+  size_t step_batch_size = batch_state_->schedule_output->running_reqs.size();
+  size_t step_token_num = 0;
+  CheckRunningQueueStepTokens(step_token_num);
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
@@ -652,7 +708,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       Status status = cache_manager_->AllocateRequestBlocks(req->req_id, unique_block_num, req->kv_cache_blocks);
       KLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch, prefix_len:" << req->prefix_cache_len
                      << ", share_block_num:" << req->prefix_cache_blocks_number
-                     << ", unique_block_num:" << unique_block_num << ", free_block_num:" << total_free_block_num;
+                     << ", unique_block_num:" << unique_block_num << ", free_block_num:" << total_free_block_num
+                     << ", step_token_num:" << step_token_num << ", current_token_num:" << current_token_num
+                     << ", max_step_tokens:" << batch_scheduler_config_.max_step_tokens;
       if (status.OK()) {
         step_batch_size += 1;
         step_token_num += current_token_num;
@@ -668,9 +726,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
           req->prefix_cache_len = 0;
           req->prefix_cache_blocks_number = 0;
           req->is_use_prefix_cache = false;
-          batch_state_->running_queue.insert(batch_state_->running_queue.begin() + decode_request_num, req);
+          batch_state_->schedule_output->running_reqs.insert(
+              batch_state_->schedule_output->running_reqs.begin() + decode_request_num, req);
         } else {
-          batch_state_->running_queue.push_back(req);
+          batch_state_->schedule_output->running_reqs.push_back(req);
         }
 
         it = batch_state_->waiting_queue.erase(it);
@@ -715,6 +774,9 @@ Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, boo
         return status;
       }
 
+      // Record merged swapin request.
+      batch_state_->schedule_output->merged_swapin_req_ids.push_back(req->req_id);
+
       RECORD_TRACE_EVENT_END("SI", TraceEventType::SwapIn, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
       KLLM_LOG_DEBUG << "MergePendingSwapinRequests swap in req " << req->req_id
                      << ", current_block_num:" << req->kv_cache_blocks[0].size()
@@ -751,6 +813,9 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
       if (!status.OK()) {
         return status;
       }
+
+      // Record merged swapout request.
+      batch_state_->schedule_output->merged_swapout_req_ids.push_back(req->req_id);
 
       RECORD_TRACE_EVENT_END("SO", TraceEventType::SwapOut, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
       KLLM_LOG_DEBUG << "MergePendingSwapinRequests swapout req " << req->req_id

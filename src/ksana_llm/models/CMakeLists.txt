@@ -27,7 +27,7 @@ if(WITH_CUDA)
 endif()
 
 add_library(models STATIC ${models_SRCS})
-target_link_libraries(models PUBLIC block_manager layers samplers runtime "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
+target_link_libraries(models PUBLIC block_manager layers samplers runtime data_hub "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
 
 # for test
 file(GLOB_RECURSE models_test_SRCS
@@ -37,8 +37,8 @@ message(STATUS "models_test_SRCS: ${models_test_SRCS} ")
 
 if(WITH_STANDALONE_TEST)
   if(WITH_VLLM_FLASH_ATTN)
-    cpp_test(models_test SRCS ${models_test_SRCS} DEPS models runtime LIBS "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY})
+    cpp_test(models_test SRCS ${models_test_SRCS} DEPS models runtime data_hub LIBS "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY})
   else()
-    cpp_test(models_test SRCS ${models_test_SRCS} DEPS models runtime)
+    cpp_test(models_test SRCS ${models_test_SRCS} DEPS models runtime data_hub)
   endif()
 endif()

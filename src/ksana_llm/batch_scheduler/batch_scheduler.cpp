@@ -119,13 +119,13 @@ inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<Infer
          req->logits_custom_length > std::min(req->input_tokens.size(), batch_scheduler_config_.max_batch_size);
 }
 
-std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
+ScheduleOutput* BatchScheduler::Schedule() {
   KLLM_LOG_DEBUG << "Try scheduler loop.";
   std::lock_guard<std::mutex> guard(batch_state_->queue_mutex);
 
   schedule_strategy_->Schedule();
 
-  size_t batch_size = batch_state_->running_queue.size();
+  size_t batch_size = batch_state_->schedule_output->running_reqs.size();
   REPORT_METRIC(batch_scheduler_batch_size, batch_size);
   REPORT_METRIC(batch_scheduler_waiting_size, batch_state_->waiting_queue.size());
   REPORT_METRIC(batch_scheduler_swapped_size, batch_state_->swapped_queue.size());
@@ -133,7 +133,7 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
   if (batch_size > 0) {
     size_t token_num = 0;
     const auto current_time = ProfileTimer::GetCurrentTimeInMs();
-    for (const auto& req : batch_state_->running_queue) {
+    for (const auto& req : batch_state_->schedule_output->running_reqs) {
       token_num += req->output_tokens.size();
       if (req->kv_cached_token_num == 0) {
         REPORT_METRIC(batch_manager_schedule_ms, current_time - req->timestamp_in_ms);
@@ -153,8 +153,8 @@ std::vector<std::shared_ptr<InferRequest>>& BatchScheduler::Schedule() {
   REPORT_METRIC(block_num_free, GetBlockManager()->GetDeviceFreeBlockNumber());
   REPORT_METRIC(block_num_used, GetBlockManager()->GetDeviceUsedBlockNumber());
 
-  KLLM_LOG_DEBUG << "batch scheduler result: " << batch_state_->running_queue.size();
-  return batch_state_->running_queue;
+  KLLM_LOG_DEBUG << "batch scheduler result: " << batch_state_->schedule_output->running_reqs.size();
+  return batch_state_->schedule_output;
 }
 
 }  // namespace ksana_llm

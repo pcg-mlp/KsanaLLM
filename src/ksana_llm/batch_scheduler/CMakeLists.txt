@@ -12,12 +12,12 @@ add_library(batch_scheduler STATIC ${batch_scheduler_SRCS})
 
 
 if(WITH_VLLM_FLASH_ATTN)
-cpp_test(batch_scheduler_helper_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test_helper_test.cpp DEPS batch_scheduler runtime
+cpp_test(batch_scheduler_helper_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test_helper_test.cpp DEPS batch_scheduler runtime data_hub
          LIBS "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY})
-cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test.cpp DEPS batch_scheduler runtime
+cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test.cpp DEPS batch_scheduler runtime data_hub
          LIBS "${TORCH_LIBRARIES}" ${TORCH_PYTHON_LIBRARY})
 else()
-cpp_test(batch_scheduler_helper_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test_helper_test.cpp DEPS batch_scheduler runtime)
-cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test.cpp DEPS batch_scheduler runtime)
+cpp_test(batch_scheduler_helper_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test_helper_test.cpp DEPS batch_scheduler runtime data_hub)
+cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_test.cpp DEPS batch_scheduler runtime data_hub)
 endif()
 

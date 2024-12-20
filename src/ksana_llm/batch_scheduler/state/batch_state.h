@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
 
@@ -17,7 +19,9 @@ namespace ksana_llm {
 struct BatchState {
   explicit BatchState(const BatchSchedulerConfig& batch_scheduler_config)
       : batch_scheduler_config_(batch_scheduler_config) {
-    running_queue.reserve(batch_scheduler_config_.max_batch_size);
+    schedule_output = GetScheduleOutputPool()->GetScheduleOutput();
+
+    schedule_output->running_reqs.reserve(batch_scheduler_config_.max_batch_size);
     waiting_buffer_queue.reserve(batch_scheduler_config_.max_waiting_queue_len);
   }
 
@@ -45,13 +49,18 @@ struct BatchState {
   void MergeRunningBufferQueue() {
     std::lock_guard<std::mutex> guard(queue_buffer_mutex);
 
-    running_queue.insert(running_queue.end(), running_buffer_queue.begin(), running_buffer_queue.end());
+    schedule_output->running_reqs.insert(schedule_output->running_reqs.end(), running_buffer_queue.begin(),
+                                         running_buffer_queue.end());
     running_buffer_queue.clear();
   }
 
   void ResetInfoBeforeSchedule() {
     schedule_time_in_ms = GetCurrentTimeInMs();
     step_sched_finish = false;
+
+    // Reset all swap info.
+    schedule_output->Reset();
+    schedule_output->schedule_id += 1;
   }
 
   // The config of batch scheduler.
@@ -87,6 +96,9 @@ struct BatchState {
 
   // Whether current scheduler step have finished.
   bool step_sched_finish = false;
+
+  // The current schedule output
+  ScheduleOutput* schedule_output = nullptr;
 };
 
 }  // namespace ksana_llm

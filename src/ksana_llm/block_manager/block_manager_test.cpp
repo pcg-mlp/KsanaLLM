@@ -86,8 +86,8 @@ TEST_F(BlockManagerTest, AllocateAndFreeContiguousMemory) {
 
   // 分配成功的情况下，状态应该是 OK
   EXPECT_TRUE(status.OK());
-  // 分配成功后，block_id 应该大于 0
-  EXPECT_GT(block_id, 0);
+  // 分配成功后，block_id 应该大于等于 0
+  EXPECT_GE(block_id, 0);
 
   // 获取分配的设备存储空间指针
   void* addr;

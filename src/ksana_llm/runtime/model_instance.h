@@ -15,6 +15,7 @@
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/search_path.h"
+#include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
@@ -41,17 +42,10 @@ class ModelInstance {
   std::string type;
 
   std::vector<Status> Forward(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                              std::vector<ForwardRequest>& forward_reqs);
+                              std::vector<ForwardRequest>& forward_reqs, bool epilogue);
 
   std::vector<std::future<Status>> ForwardAsync(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                                                std::vector<ForwardRequest>& forward_reqs);
-
-  // Get the kv cache size per token needed, its size is:
-  //   (num_layer / pipeline_para) * (head_num / tensor_para) * size_per_head;
-  int GetTokenCacheSize() {
-    return (model_config_.num_layer / context_->GetPipeLineParallelSize()) *
-           (model_config_.head_num / context_->GetTensorParallelSize()) * model_config_.size_per_head;
-  }
+                                                std::vector<ForwardRequest>& forward_reqs, bool epilogue);
 
   // Get  the data type.
   DataType GetWeightDataType() { return model_config_.weight_data_type; }
@@ -63,7 +57,20 @@ class ModelInstance {
 
   size_t GetMaxTokenNum() { return model_config_.max_token_num; }
 
-  uint32_t GetLayerNum() { return model_config_.num_layer; }
+  uint32_t GetLayerNum() {
+    static bool initialized = false;
+    if (!initialized) {
+      Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
+      initialized = true;
+    }
+    return (pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1);
+  }
+
+  static void Reset() {
+    KLLM_LOG_INFO << "ModelInstance::Reset clear models and weights.";
+    models_.clear();
+    weights_.clear();
+  }
 
  private:
   // Create the object and return a shared pointer.
@@ -123,6 +130,8 @@ class ModelInstance {
  private:
   // The model config.
   ModelConfig model_config_;
+
+  PipelineConfig pipeline_config_;
 
   // The global context.
   std::shared_ptr<Context> context_ = nullptr;

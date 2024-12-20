@@ -3,6 +3,9 @@
 ==============================================================================*/
 
 #include "ksana_llm/service/inference_server.h"
+#include <cstdlib>
+#include <stdexcept>
+#include <string>
 
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/utils/logger.h"
@@ -20,6 +23,7 @@ InferenceServer::InferenceServer(const std::string &config_file, const EndpointC
     KLLM_THROW("The Environment is nullptr.");
   }
   STATUS_CHECK_FAILURE(env->ParseConfig(config_file));
+  InitializePipelineConfig();
 
   // Init inference engine.
   inference_engine_ = std::make_shared<InferenceEngine>(request_queue_);
@@ -32,6 +36,34 @@ InferenceServer::InferenceServer(const std::string &config_file, const EndpointC
   }
 
   KLLM_LOG_INFO << "Inference server is initialized.";
+}
+
+InferenceServer::~InferenceServer() { KLLM_LOG_DEBUG << "InferenceServer destroyed."; }
+
+void InferenceServer::InitializePipelineConfig() {
+  const char *master_host = std::getenv("MASTER_HOST");
+  const char *master_port = std::getenv("MASTER_PORT");
+  const char *world_size = std::getenv("WORLD_SIZE");
+  const char *node_rank = std::getenv("NODE_RANK");
+
+  PipelineConfig pipeline_config;
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+
+  pipeline_config.world_size = world_size ? std::stoi(world_size) : 1;
+  pipeline_config.node_rank = node_rank ? std::stoi(node_rank) : 0;
+  if (pipeline_config.world_size > 1) {
+    if (!master_host || !master_port) {
+      throw std::runtime_error("The environment variable MASTER_HOST and MASTER_PORT must be set in distributed mode.");
+    }
+  }
+
+  pipeline_config.master_host = master_host ? master_host : "";
+  pipeline_config.master_port = master_port ? std::stoi(master_port) : 0;
+
+  KLLM_LOG_INFO << "InferenceServer initialize pipeline config, master_host:" << pipeline_config.master_host
+                << ", master_port:" << pipeline_config.master_port << ", world_size:" << pipeline_config.world_size
+                << ", node_rank:" << pipeline_config.node_rank;
+  Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
 }
 
 Status InferenceServer::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
@@ -75,7 +107,6 @@ Status InferenceServer::Start() {
 Status InferenceServer::Stop() {
   KLLM_LOG_INFO << "Inference server stop.";
 
-  request_queue_.Close();
   inference_engine_->Stop();
   if (rpc_endpoint_) {
     rpc_endpoint_->Stop();
@@ -83,9 +114,6 @@ Status InferenceServer::Stop() {
 
   // Force exit here.
   KLLM_LOG_INFO << "Inference server exit.";
-#ifdef ENABLE_ACL
-  _exit(0);
-#endif
   return Status();
 }
 

@@ -272,6 +272,33 @@ struct ProfilerConfig {
   std::unordered_map<std::string, std::string> resource_attributes;
 };
 
+// For multiple node pipeline.
+struct PipelineConfig {
+  std::string master_host;
+  uint16_t master_port;
+
+  // Default for standalone mode.
+  size_t world_size = 1;
+  size_t node_rank = 0;
+
+  // layer id range.
+  int16_t lower_layer_idx = -1;
+  int16_t upper_layer_idx = -1;
+
+  // The cache block num.
+  // All pipeline nodes must be same.
+  size_t device_block_num;
+  size_t host_block_num;
+
+  // The current port for data transfer.
+  std::string data_host;
+  uint16_t data_port;
+
+  // The downstream data port for data transfer.
+  std::string downstream_host;
+  uint16_t downstream_port;
+};
+
 class Environment {
  public:
   Environment() {}
@@ -325,10 +352,18 @@ class Environment {
   // Modify reserved_device_memory_ratio
   void SetReservedDeviceRatio(float reserved_device_memory_ratio);
 
- private:
-  // Calculate block size via model configs.
-  void InitializeBlockManagerConfig();
+  // Set and get multiple node pipeline config.
+  void SetPipelineConfig(const PipelineConfig &pipeline_config) { pipeline_config_ = pipeline_config; }
 
+  Status GetPipelineConfig(PipelineConfig &pipeline_config) const {
+    pipeline_config = pipeline_config_;
+    return Status();
+  }
+
+  // Calculate block size via model configs.
+  Status InitializeBlockManagerConfig();
+
+ private:
   // Check Whether the environment config is valid.
   Status CheckEnvironment();
 
@@ -370,6 +405,9 @@ class Environment {
   bool embed_tokens_use_cpu_ = false;
   bool is_version_report_ = true;
   bool cuda_graph_ = false;
+
+  // For distributed multiple node pipeline.
+  PipelineConfig pipeline_config_;
 };
 
 }  // namespace ksana_llm

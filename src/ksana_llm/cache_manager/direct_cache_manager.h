@@ -87,8 +87,10 @@ class DirectCacheManager : public CacheManagerInterface,
   Status GetRequestNeededBlockNum(int64_t req_id, size_t& block_num);
 
   // Swap out/in specific request async.
-  Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num);
-  Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<std::vector<int>>& req_block_ids);
+  Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
+                             std::vector<int>& swapped_memory_block_ids);
+  Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<std::vector<int>>& req_block_ids,
+                            std::vector<int>& swapped_memory_block_ids);
 
   // Waiting until at lease on swap out/in task done, return the pending task number.
   Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true);
@@ -107,6 +109,14 @@ class DirectCacheManager : public CacheManagerInterface,
 
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id);
+
+  // Swap out/in memory blocks referenced by req_id.
+  Status SwapoutRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids);
+  Status SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids);
+
+  // Wait until all memory block swappness referenced by req_ids finished.
+  Status WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids);
+  Status WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids);
 
  private:
   // Create a new cached block.

@@ -23,7 +23,8 @@ class BaseModel {
 
   // Forward model.
   virtual Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         std::vector<ForwardRequest>& forward_reqs) = 0;
+                         std::vector<ForwardRequest>& forward_reqs,
+                         bool epilogue) = 0;
 
   // The output logits pointer on device, used by sampler to avoid memory copy.
   virtual float* GetLogitsPtr() = 0;

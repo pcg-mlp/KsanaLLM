@@ -14,6 +14,8 @@
 
 #include <regex>
 #include "ksana_llm/utils/common_device.h"
+#include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/singleton.h"
 #include "nlohmann/json.hpp"
 
 #ifdef ENABLE_CUDA
@@ -63,6 +65,10 @@ CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::sh
   }
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
   quant_weight_slover_ = std::make_shared<QuantWeight<T>>(model_config, rank, context, weights_map_);
+
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
+  KLLM_LOG_INFO << "CommonWeight IsChief:" << context_->IsChief() << ", layer:[" << pipeline_config_.lower_layer_idx
+                << ", " << pipeline_config_.upper_layer_idx << "].";
 }
 
 int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_heads) {
@@ -154,9 +160,11 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       continue;
     }
 
-    if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu() &&
-        tensor_name.find("embed_positions") != std::string::npos) {
-      KLLM_THROW("CPU embedding lookup does not support learned absolute position encoding, please turn it off.");
+    if (context_->IsChief()) {
+      if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu() &&
+          tensor_name.find("embed_positions") != std::string::npos) {
+        KLLM_THROW("CPU embedding lookup does not support learned absolute position encoding, please turn it off.");
+      }
     }
 
     bool transpose_first = false;  // 使用 transpose_first 表明转置(若存在)是否在分卡(若存在)之前
@@ -267,25 +275,39 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     } else if (tensor_name.find("_proj.") != std::string::npos || tensor_name.find("norm.") != std::string::npos ||
                tensor_name == "model.embed_positions.weight" || tensor_name.find("gate.") != std::string::npos ||
                (tensor_name == "lm_head.weight" && !model_config_.tie_word_embeddings)) {
-      LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
-                        weight_size);
-    } else if (tensor_name == "model.embed_tokens.weight") {
-      LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
-                        weight_size);
-      if (model_config_.tie_word_embeddings) {
-        /* When the "tie-word-embeddings" is set to True in the model's config.json, the model's
-         * "model.embed_tokens.weight" and "lm_head.weight" share the same data space. Therefore, it is necessary
-         * to load the data from "weight_ptr" twice and store it in the corresponding device spaces of the two weights.
-         */
-        KLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
-        if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
-          tensor_para_offset = rank_;
-        } else {
-          weight_shape[1] *= tensor_para_size_;
+      if (tensor_name == "model.embed_positions.weight" ||
+          (tensor_name == "lm_head.weight" && !model_config_.tie_word_embeddings)) {
+        // Load embd only for standalone or distributed master node.
+        if (context_->IsChief()) {
+          LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first,
+                            tensor_para_offset, weight_size);
         }
-        std::vector<size_t> lm_head_shape = {DivRoundUp(weight_shape[0], tensor_para_size_), weight_shape[1]};
-        LoadRegularTensor(weight_ptr, "lm_head.weight", lm_head_shape, weight_data_type, /*transpose_first*/ false,
-                          tensor_para_offset, weight_size);
+      } else {
+        LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
+                          weight_size);
+      }
+
+    } else if (tensor_name == "model.embed_tokens.weight") {
+      // Load lm head only for standalone or distributed master node.
+      if (context_->IsChief()) {
+        LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
+                          weight_size);
+        if (model_config_.tie_word_embeddings) {
+          /* When the "tie-word-embeddings" is set to True in the model's config.json, the model's
+           * "model.embed_tokens.weight" and "lm_head.weight" share the same data space. Therefore, it is necessary
+           * to load the data from "weight_ptr" twice and store it in the corresponding device spaces of the two
+           * weights.
+           */
+          KLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
+          if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+            tensor_para_offset = rank_;
+          } else {
+            weight_shape[1] *= tensor_para_size_;
+          }
+          std::vector<size_t> lm_head_shape = {DivRoundUp(weight_shape[0], tensor_para_size_), weight_shape[1]};
+          LoadRegularTensor(weight_ptr, "lm_head.weight", lm_head_shape, weight_data_type, /*transpose_first*/ false,
+                            tensor_para_offset, weight_size);
+        }
       }
     } else if (tensor_name.find("self_attn.W_pack.weight") != std::string::npos) {
       std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value.weight";
@@ -379,7 +401,8 @@ Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_t
   // dst tensor: last_kv_tensor[d2, head_num / num_kv_heads * d1 + d1 + d1]
   int head_num = model_config_.head_num;
   int num_kv_heads = model_config_.num_key_value_heads;
-  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
+  for (size_t layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= (size_t)pipeline_config_.upper_layer_idx;
+       ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& qkv_weight_tensor = weights_map_[qkv_name];
     auto qkv_shape = qkv_weight_tensor.shape;
@@ -425,7 +448,8 @@ Status CommonWeight<T>::CommonPermuteWeight(const std::string& origin_tensor_nam
 template <typename T>
 Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_down_up_tensor, Tensor& last_gate_tensor, const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
-  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
+  for (size_t layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= (size_t)pipeline_config_.upper_layer_idx;
+       ++layer_idx) {
     std::string down_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.down_proj.weight";
     CommonPermuteWeight(down_proj_name, last_down_up_tensor);
 
@@ -444,7 +468,8 @@ Status CommonWeight<T>::PermuteMLPWeight(Tensor& last_down_up_tensor, Tensor& la
 template <typename T>
 Status CommonWeight<T>::PermuteOutputProjectWeight(Tensor& last_o_proj_tensor, const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
-  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
+  for (size_t layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= (size_t)pipeline_config_.upper_layer_idx;
+       ++layer_idx) {
     std::string o_proj_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.o_proj.weight";
     CommonPermuteWeight(o_proj_name, last_o_proj_tensor);
   }
@@ -489,18 +514,22 @@ Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_n
 
 template <typename T>
 Status CommonWeight<T>::ConvertLmheadTensor() {
-  // permute lm_head: permute(1, 0)
-  tensor_manager_->CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
-  Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
-  CommonPermuteWeight("lm_head.weight", lm_head_transpose_tensor);
-  GetBlockManager()->FreeContiguous(lm_head_transpose_tensor.GetBlockId());
-  weights_map_.erase("empty_lm_head_tensor");
+  // Worker node do not need lm head.
+  if (context_->IsChief()) {
+    // permute lm_head: permute(1, 0)
+    tensor_manager_->CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
+    Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
+    CommonPermuteWeight("lm_head.weight", lm_head_transpose_tensor);
+    GetBlockManager()->FreeContiguous(lm_head_transpose_tensor.GetBlockId());
+    weights_map_.erase("empty_lm_head_tensor");
+  }
   return Status();
 }
 
 template <typename T>
 Status CommonWeight<T>::ReshapeQkvTensor(int num_layer) {
-  for (size_t layer_idx = 0; layer_idx < (size_t)num_layer; ++layer_idx) {
+  for (size_t layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= (size_t)pipeline_config_.upper_layer_idx;
+       ++layer_idx) {
     std::string qkv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.query_key_value.weight";
     Tensor& tensor = weights_map_[qkv_name];
     if (tensor.shape.size() == 3) {
@@ -606,19 +635,22 @@ void CommonWeight<T>::ProcessWeights() {
     }
   }
 
-  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
-    KLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
-    auto weight_name = "model.embed_tokens.weight";
-    Tensor& tensor = weights_map_[weight_name];
-    int block_id = 0;
-    size_t length = tensor.GetTotalBytes();
-    GetBlockManager()->AllocateHostContiguous(length, block_id);
-    Tensor cpu_tensor(MemoryDevice::MEMORY_HOST, tensor.dtype, tensor.shape, block_id);
-    MemcpyAsync(cpu_tensor.GetPtr<void>(), tensor.GetPtr<void>(), length, MEMCPY_DEVICE_TO_HOST,
-                context_->GetMemoryManageStreams()[rank_]);
-    GetBlockManager()->FreeContiguous(tensor.GetBlockId());
-    weights_map_.insert_or_assign(weight_name, cpu_tensor);
-    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+  // Load embed only for standalone or distributed master node.
+  if (context_->IsChief()) {
+    if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+      KLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
+      auto weight_name = "model.embed_tokens.weight";
+      Tensor& tensor = weights_map_[weight_name];
+      int block_id = 0;
+      size_t length = tensor.GetTotalBytes();
+      GetBlockManager()->AllocateHostContiguous(length, block_id);
+      Tensor cpu_tensor(MemoryDevice::MEMORY_HOST, tensor.dtype, tensor.shape, block_id);
+      MemcpyAsync(cpu_tensor.GetPtr<void>(), tensor.GetPtr<void>(), length, MEMCPY_DEVICE_TO_HOST,
+                  context_->GetMemoryManageStreams()[rank_]);
+      GetBlockManager()->FreeContiguous(tensor.GetBlockId());
+      weights_map_.insert_or_assign(weight_name, cpu_tensor);
+      StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+    }
   }
 
   if (quant_weight_slover_->IsEnable()) {
@@ -694,7 +726,8 @@ void CommonWeight<T>::ProcessWeights() {
 template <typename T>
 void CommonWeight<T>::ChunkGateWeight(const int num_layer) {
   GetBlockManager()->SetDeviceId(rank_);
-  for (size_t layer_idx = 0; layer_idx < size_t(num_layer); ++layer_idx) {
+  for (size_t layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= (size_t)pipeline_config_.upper_layer_idx;
+       ++layer_idx) {
     std::string gate_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.gate_proj.weight";
     std::string up_proj_name = "model.layers." + std::to_string(layer_idx) + ".mlp.up_proj.weight";
     Tensor& gate_weight = weights_map_[gate_proj_name];

@@ -434,8 +434,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
     }
   }
 
-  InitializeBlockManagerConfig();
-  return CheckEnvironment();
+  return Status();
 }
 
 void Environment::SetReservedDeviceRatio(float reserved_device_memory_ratio) {
@@ -638,11 +637,17 @@ Status Environment::ParseOptions(int argc, char **argv) {
   return Status();
 }
 
-void Environment::InitializeBlockManagerConfig() {
+Status Environment::InitializeBlockManagerConfig() {
   KLLM_CHECK_WITH_INFO(model_configs_.size() > 0, "No model configed.");
   const ModelConfig &model_config = model_configs_.begin()->second;
 
-  size_t token_size = (model_config.num_layer / GetPipeLineParallelSize()) *
+  if (pipeline_config_.lower_layer_idx < 0 || pipeline_config_.upper_layer_idx < 0) {
+    pipeline_config_.lower_layer_idx = 0;
+    pipeline_config_.upper_layer_idx = model_configs_.begin()->second.num_layer - 1;
+  }
+
+  size_t node_layer_num = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+  size_t token_size = (node_layer_num / GetPipeLineParallelSize()) *
                       (model_config.num_key_value_heads / GetTensorParallelSize()) * model_config.size_per_head;
   size_t block_token_num = block_manager_config_.device_allocator_config.block_token_num;
   size_t block_dtype_size = 0ul;
@@ -651,9 +656,9 @@ void Environment::InitializeBlockManagerConfig() {
   block_manager_config_.host_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
   block_manager_config_.device_allocator_config.block_size = token_size * block_token_num * 2 * block_dtype_size;
 
-  KLLM_LOG_INFO << fmt::format("Init block num for key or value: ({} / {}) * ({} / {}) * {} = {}",
-                               model_config.num_layer, GetPipeLineParallelSize(), model_config.num_key_value_heads,
-                               GetTensorParallelSize(), model_config.size_per_head, token_size);
+  KLLM_LOG_INFO << fmt::format("Init block num for key or value: ({} / {}) * ({} / {}) * {} = {}", node_layer_num,
+                               GetPipeLineParallelSize(), model_config.num_key_value_heads, GetTensorParallelSize(),
+                               model_config.size_per_head, token_size);
 
   KLLM_LOG_INFO << fmt::format("Init token size (bytes) of init block for both key and value: {} * {} * 2 * {} = {}",
                                token_size, block_token_num, block_dtype_size,
@@ -665,6 +670,8 @@ void Environment::InitializeBlockManagerConfig() {
   // The default block number, will be overwrited through memory usage.
   block_manager_config_.host_allocator_config.blocks_num = 512 * 10;
   block_manager_config_.device_allocator_config.blocks_num = 512;
+
+  return CheckEnvironment();
 }
 
 Status Environment::CheckEnvironment() {

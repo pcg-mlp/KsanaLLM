@@ -21,6 +21,8 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<
                                 this->head_size_, this->layer_num_, this->layer_index_, this->block_token_num_,
                                 context->GetComputeStreams()[rank].Get(), rank, /*is_multi_token_forward*/ true,
                                 this->max_position_embeddings_, this->base_);
+
+    KLLM_LOG_DEBUG << "FlashAttentionLayer Init, layer_num:" << this->layer_num_;
   }
   return Status();
 }

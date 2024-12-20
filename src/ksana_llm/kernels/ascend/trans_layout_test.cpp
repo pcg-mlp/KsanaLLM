@@ -24,6 +24,7 @@ class TransLayoutTest : public testing::Test {
     Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
 
     BlockManagerConfig block_manager_config;
+    Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
