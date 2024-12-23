@@ -91,12 +91,6 @@ class RawSocket {
   // Check whether a socket is readable.
   bool CheckSocketReadable(int socket_fd, int timeout_sec);
 
-  // Clear the disconnected sockets.
-  void ClearDisconnectedSockets();
-
-  // Mark the socket as disconnected.
-  void AddDisconnectedSocket(int socket_fd);
-
  private:
   // For both server and client.
   int epoll_fd_;
@@ -116,7 +110,8 @@ class RawSocket {
   std::unordered_map<int, PacketHandle> fd_packet_handle_;
   std::unordered_map<NodeInfo, int, NodeInfoHash, NodeInfoEqual> node_fd_;
 
-  BlockingQueue<int> disconnected_fds_;
+  // Protect packet handles.
+  std::mutex mutex_;
 
   bool is_connected_ = false;
 };

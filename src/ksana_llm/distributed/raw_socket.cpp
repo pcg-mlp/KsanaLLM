@@ -231,9 +231,6 @@ void RawSocket::InitPacketHandle(PacketHandle& packet_handle) {
         }
       }
     }
-
-    // Wait to be reaped.
-    AddDisconnectedSocket(packet_handle.socket_fd);
   };
 
   packet_handle.recv_thread = std::make_shared<std::thread>(thread_fn);
@@ -241,6 +238,8 @@ void RawSocket::InitPacketHandle(PacketHandle& packet_handle) {
 
 void RawSocket::AddPacketHandle(const NodeInfo& node_info, int socket_fd) {
   KLLM_LOG_INFO << "Add packet handle for " << node_info.host << ":" << node_info.port << ", fd:" << socket_fd;
+
+  std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = node_fd_.find(node_info);
   if (it != node_fd_.end()) {
@@ -280,6 +279,8 @@ void RawSocket::StopPacketHandle(PacketHandle& packet_handle) {
 void RawSocket::DelPacketHandle(int socket_fd) {
   KLLM_LOG_INFO << "Remove packet handle for fd " << socket_fd;
 
+  std::lock_guard<std::mutex> lock(mutex_);
+
   if (fd_packet_handle_.find(socket_fd) != fd_packet_handle_.end()) {
     PacketHandle& packet_handle = fd_packet_handle_[socket_fd];
 
@@ -289,17 +290,6 @@ void RawSocket::DelPacketHandle(int socket_fd) {
 
     StopPacketHandle(packet_handle);
     fd_packet_handle_.erase(socket_fd);
-  }
-}
-
-void RawSocket::AddDisconnectedSocket(int socket_fd) { disconnected_fds_.Put(socket_fd); }
-
-void RawSocket::ClearDisconnectedSockets() {
-  while (!disconnected_fds_.Empty()) {
-    int client_fd = disconnected_fds_.Get();
-
-    // Del the packet handle.
-    DelPacketHandle(client_fd);
   }
 }
 
@@ -351,9 +341,6 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
     struct epoll_event events[max_event];
 
     while (!terminated_) {
-      // clear disconnected sockets first.
-      ClearDisconnectedSockets();
-
       int num_events = epoll_wait(epoll_fd_, events, max_event, 1000);
       if (num_events == -1) {
         throw std::runtime_error("Wait for epoll event error.");
@@ -398,13 +385,17 @@ Status RawSocket::Close() {
   close(epoll_fd_);
   close(server_fd_);
 
-  // Waiting all packet handler finished.
-  for (auto& pair : fd_packet_handle_) {
-    PacketHandle& packet_handle = pair.second;
-    StopPacketHandle(packet_handle);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Waiting all packet handler finished.
+    for (auto& pair : fd_packet_handle_) {
+      PacketHandle& packet_handle = pair.second;
+      StopPacketHandle(packet_handle);
+    }
+    fd_packet_handle_.clear();
+    node_fd_.clear();
   }
-  fd_packet_handle_.clear();
-  node_fd_.clear();
 
   if (server_thread_) {
     server_thread_->join();
@@ -448,6 +439,8 @@ Status RawSocket::Disconnect() {
 }
 
 Status RawSocket::Send(NodeInfo node_info, const Packet* packet) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
   auto it = node_fd_.find(node_info);
   if (it == node_fd_.end()) {
     return Status(RET_RUNTIME, fmt::format("Node {}:{} not found.", node_info.host, node_info.port));
