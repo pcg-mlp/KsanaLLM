@@ -67,6 +67,9 @@ class BenchmarkMetrics:
     avg_input_tokens: float = 0.
     avg_output_tokens: float = 0.
     avg_tokens_per_sec: float = 0.  # token throughput
+    percentile_latency: List[Tuple[int, float]] = field(
+        default_factory=list
+    )
 
     def __str__(self):
         return '\n'.join([
@@ -80,7 +83,8 @@ class BenchmarkMetrics:
             f"Average input len: {self.avg_input_tokens:.3f} tokens",
             f"Average output len: {self.avg_output_tokens:.3f} tokens",
             f"Token throughput: {self.avg_tokens_per_sec:.3f} tokens/s",
-        ])
+        ] + [f"P{percentile} latency: {percentiles_latency:.3f} s"
+             for [percentile, percentiles_latency] in self.percentile_latency])
 
 
 @dataclass
@@ -810,6 +814,11 @@ def main(args: argparse.Namespace):
 
         # Compute the latency statistics
         metrics.avg_latency = np.mean([latency for _, _, _, _, latency, _, _ in REQUEST_LATENCY])
+        metrics.percentile_latency = [
+            (percentile, np.percentile(
+                [latency for _, _, _, _, latency, _, _ in REQUEST_LATENCY], percentile))
+            for percentile in args.percentiles
+        ]
         metrics.avg_input_chars = np.mean(
             [prompt_len for prompt_len, _, _, _, _, _, _ in REQUEST_LATENCY]
         )
@@ -887,6 +896,7 @@ def main(args: argparse.Namespace):
             header = ["Request rate", "Concurrency", "Total latency", "Request throughput", "Avg latency",
                       "Avg input chars", "Avg output chars", "Avg input tokens", "Avg output tokens",
                       "Token throughput"]
+            header.extend([f"P{percentile} latency" for percentile in args.percentiles])
             if args.stream:
                 header.extend(["Avg TTFT", "Median TTFT"] +
                               [f"P{percentile} TTFT" for percentile in args.percentiles] +
@@ -896,13 +906,17 @@ def main(args: argparse.Namespace):
                               [f"P{percentile} TPOT" for percentile in args.percentiles])
             writer.writerow(header)
             for (metrics, stream_metrics) in perf_result_list:
-                row = [f"{value:.3f}" for value in metrics.__dict__.values()]
-                if args.stream:
-                    for value in stream_metrics.__dict__.values():
+                def process_metrics(metrics_values, row):
+                    for value in metrics_values:
                         if isinstance(value, list):
                             row.extend([f"{percentile_value[1]:.3f}" for percentile_value in value])
                         else:
                             row.append(f"{value:.3f}")
+
+                row = []
+                process_metrics(metrics.__dict__.values(), row)
+                if args.stream:
+                    process_metrics(stream_metrics.__dict__.values(), row)
                 writer.writerow(row)
 
 
