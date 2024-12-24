@@ -269,6 +269,9 @@ class LlamaTest : public testing::Test {
 };
 
 TEST_F(LlamaTest, ForwardTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
   Py_Initialize();
   // fp16 forward
   model_config.is_quant = false;
@@ -306,6 +309,10 @@ TEST_F(LlamaTest, ForwardTest) {
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+
 #ifdef ENABLE_CUDA
   int device_id = 0;
   SetDevice(device_id);

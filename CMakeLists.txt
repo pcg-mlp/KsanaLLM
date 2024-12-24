@@ -45,6 +45,7 @@ elseif(WITH_ACL)
 elseif(WITH_TOPS)
   # support Tencent ZiXiao
   set(ARCH "gcu300")
+  set(CMAKE_TOPS_COMPILER_TOOLKIT_ROOT "/opt/tops")
   list(APPEND CMAKE_MODULE_PATH "/opt/tops/cmake_modules")
   include(FindTOPS)
   project(ksana_llm LANGUAGES CXX TOPS)

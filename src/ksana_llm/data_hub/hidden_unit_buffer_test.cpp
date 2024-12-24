@@ -19,6 +19,10 @@
 #include "ksana_llm/helpers/block_manager_test_helper.h"
 #include "ksana_llm/helpers/environment_test_helper.h"
 
+#ifdef ENABLE_TOPS
+#  include "3rdparty/half/include/half.hpp"
+#endif
+
 using namespace ksana_llm;
 
 class HiddenUnitBufferTest : public testing::Test {
@@ -66,6 +70,14 @@ class HiddenUnitBufferTest : public testing::Test {
         std::vector<aclFloat16> vec;
         for (size_t j = 0; j < dim0 * dim1; ++j) {
           vec.push_back(aclFloatToFloat16(1.0 * (j + 1) * (i + 1)));
+        }
+#endif
+
+#ifdef ENABLE_TOPS
+        std::vector<float16> vec;
+
+        for (size_t j = 0; j < dim0 * dim1; ++j) {
+          vec.push_back(half_float::half(1.0 * (j + 1) * (i + 1)));
         }
 #endif
         memcpy(host_hidden_unit->data + (i * buffer_size), vec.data(), buffer_size);

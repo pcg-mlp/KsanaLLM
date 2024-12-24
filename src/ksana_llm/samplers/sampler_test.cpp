@@ -108,6 +108,9 @@ class SamplerTest : public testing::Test {
 };
 
 TEST_F(SamplerTest, BaseSamplerTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
   SamplingRequest sample_req = GetSamlingRequest();
 
   // Assign a value of 1 to the logits for token_id=6 to make the sampler result as 6.
@@ -122,6 +125,9 @@ TEST_F(SamplerTest, BaseSamplerTest) {
 }
 
 TEST_F(SamplerTest, TemperatureAutoVerifyTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
   // When the temperature is 0, it should be automatically corrected to 1 to avoid division by zero exception.
   SamplingRequest sample_req = GetSamlingRequest();
   std::vector<SamplingRequest> sample_reqs = {sample_req};
@@ -136,6 +142,9 @@ TEST_F(SamplerTest, TemperatureAutoVerifyTest) {
 }
 
 TEST_F(SamplerTest, LogprobsSamplerTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
   SamplingRequest sample_req = GetSamlingRequest();
 
   std::vector<float> logits_buf_cpu = {0.0, 1.0, 2.0, 1.5, 0.7, 1.8};

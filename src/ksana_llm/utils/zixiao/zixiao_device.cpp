@@ -165,13 +165,18 @@ void MemcpyAsyncT<DEVICE_TYPE_ZIXIAO>(void* dst, const void* src, size_t count, 
 template <>
 void Memcpy2DT<DEVICE_TYPE_ZIXIAO>(void* dst, size_t dpitch, const void* src, size_t spitch, size_t width,
                                    size_t height, enum MemcpyKind kind) {
-  KLLM_THROW(fmt::format("Memcpy2D is not supported on ZiXiao."));
+  for (size_t row_idx = 0; row_idx < height; ++row_idx) {
+    TOPS_CHECK(topsMemcpy(dst + row_idx * dpitch, src + row_idx * spitch, width, GetTopsMemcpyKind(kind)));
+  }
 }
 
 template <>
 void Memcpy2DAsyncT<DEVICE_TYPE_ZIXIAO>(void* dst, size_t dpitch, const void* src, size_t spitch, size_t width,
                                         size_t height, enum MemcpyKind kind, StreamT<DEVICE_TYPE_ZIXIAO> stream) {
-  KLLM_THROW(fmt::format("Memcpy2DAsync is not supported on ZiXiao."));
+  for (size_t row_idx = 0; row_idx < height; ++row_idx) {
+    TOPS_CHECK(
+        topsMemcpyAsync(dst + row_idx * dpitch, src + row_idx * spitch, width, GetTopsMemcpyKind(kind), stream.Get()));
+  }
 }
 
 template <>
