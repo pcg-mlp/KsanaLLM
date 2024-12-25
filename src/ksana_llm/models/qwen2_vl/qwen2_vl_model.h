@@ -21,7 +21,12 @@ class __attribute__((visibility("hidden"))) Qwen2VLModel : public CommonModel<T>
  protected:
   Status FlashAttentionForward(const int layer_idx) override;
 
-  Status LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs) override;
+  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
+                 bool epilogue) override;
+
+ private:
+  // Get MRotary embedding positions from the input additional tensors.
+  Status PrepareMRopePos(std::vector<ForwardRequest>& forward_reqs);
 
  protected:
   using CommonModel<T>::context_;
@@ -39,6 +44,7 @@ class __attribute__((visibility("hidden"))) Qwen2VLModel : public CommonModel<T>
   using CommonModel<T>::hidden_buffer_1_;
 
   using CommonModel<T>::forward_shape_;
+  using CommonModel<T>::flag_tensor_;
 };
 
 }  // namespace ksana_llm

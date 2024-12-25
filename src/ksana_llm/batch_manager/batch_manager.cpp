@@ -109,6 +109,8 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 Status BatchManager::WaitAllDone() { return Status(); }
 
 Status BatchManager::MainProcess() {
+  // Get block related information from device 0.
+  // All devices have the same number of blocks.
   GetBlockManager()->SetDeviceId(0);
 
   while (!terminated_) {

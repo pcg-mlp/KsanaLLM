@@ -3,6 +3,10 @@
 ==============================================================================*/
 
 #include "ksana_llm/models/base/model_input.h"
+
+#include <torch/csrc/autograd/python_variable.h>
+#include <torch/torch.h>
+
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/environment.h"
@@ -505,28 +509,74 @@ void ModelInput::PrepareMultiTokenRequestPositionIds(const std::vector<ForwardRe
 #endif
 }
 
+/**
+ * Process the input refit information for the current batch of requests.
+ *
+ * Inputs:
+ * 1. input_refit_embeddings (`std::vector<std::vector<float>>`) is obtained from the user request and placed on the
+ * CPU.
+ * 2. input_refit_embedding_tensors (`std::vector<py::object>)` is obtained from the Python plugin, which can be placed
+ * on the CPU or GPU (not supported yet).
+ *
+ * Outputs:
+ * 1. input_refit_pos_pair contains pairs of (start refit position offset in this batch, embedding length) for each
+ * input refit. e.g., [(emb_pos_offset1, emb_length1), (emb_pos_offset2, emb_length2), ...]
+ * 2. input_refit_emb_fp32_ptr contains pointers to all input refit on the CPU. e.g., [emb_ptr1, emb_ptr2, ...]
+ *
+ * After embedding lookup, the input refit embeddings will be placed to their respective intervals according to the
+ * above outputs (by `input_refit_layer`).
+ */
 void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs) {
-  size_t pos = 0;
+  size_t pos_offset = 0;
   size_t cpu_input_refit_pos_pair_idx = 0;
   // Get pointers to the CPU input_refit position pair and CPU input_refit embedding float32 tensors
-  int64_t* cpu_input_refit_pos_pair = reinterpret_cast<int64_t*>(cpu_input_refit_tensor.pos_pair_tensor.GetPtr<void>());
-  void** cpu_input_refit_emb_fp32_ptr =
-      reinterpret_cast<void**>(cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<void>());
+  int64_t* cpu_input_refit_pos_pair = cpu_input_refit_tensor.pos_pair_tensor.GetPtr<int64_t>();
+  float** cpu_input_refit_emb_fp32_ptr = cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<float*>();
 
   for (size_t bs_idx = 0; bs_idx < multi_token_request_num; ++bs_idx) {
     const ForwardRequest& forward_req = forward_reqs[bs_idx];
-    std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
-    std::vector<std::vector<float>>& input_refit_embedding = (*forward_req.input_refit_embedding).embeddings;
+    const std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
+    std::vector<std::vector<float>>& input_refit_embeddings = (*forward_req.input_refit_embedding).embeddings;
+    std::vector<py::object>& input_refit_embedding_tensors = (*forward_req.input_refit_embedding).embedding_tensors;
+    KLLM_CHECK_WITH_INFO(input_refit_pos.size() == input_refit_embeddings.size() ||
+                             input_refit_pos.size() == input_refit_embedding_tensors.size(),
+                         "`input_refit_pos.size()` should be equal to `input_refit_embeddings.size()` or "
+                         "`input_refit_embedding_tensors.size()`.");
+
     // Iterate over the input_refit positions and embeddings
-    for (size_t input_refit_idx = 0;
-         input_refit_idx < input_refit_pos.size() && input_refit_idx < input_refit_embedding.size();
-         input_refit_idx++) {
-      cpu_input_refit_emb_fp32_ptr[cpu_input_refit_pos_pair_idx >> 1] = input_refit_embedding[input_refit_idx].data();
-      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx++] = input_refit_pos[input_refit_idx] + pos;
-      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx++] = input_refit_embedding[input_refit_idx].size();
+    for (size_t input_refit_idx = 0; input_refit_idx < input_refit_pos.size(); input_refit_idx++) {
+      int64_t input_refit_pos_offset = input_refit_pos[input_refit_idx] + pos_offset;
+      int64_t input_refit_size = 0;
+      float* input_refit_fp32_ptr = nullptr;
+
+      if (!input_refit_embedding_tensors.empty()) {
+        // Get pointers from input refit embedding tensors first
+        torch::Tensor input_refit_embedding_tensor;
+        {
+          py::gil_scoped_acquire acquire;
+          input_refit_embedding_tensor = THPVariable_Unpack(input_refit_embedding_tensors[input_refit_idx].ptr());
+        }
+        if (input_refit_embedding_tensor.get_device() != -1) {
+          KLLM_THROW("Input refit embedding tensor on GPU is not supported.");
+        }
+        // The input refit embedding tensor is on CPU.
+        input_refit_size = input_refit_embedding_tensor.numel();
+        input_refit_fp32_ptr = reinterpret_cast<float*>(input_refit_embedding_tensor.data_ptr());
+      } else {
+        // Get pointers from input refit embeddings
+        input_refit_size = input_refit_embeddings[input_refit_idx].size();
+        input_refit_fp32_ptr = input_refit_embeddings[input_refit_idx].data();
+      }
+
+      // Store the input refit information
+      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx] = input_refit_pos_offset;
+      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx + 1] = input_refit_size;
+      cpu_input_refit_emb_fp32_ptr[cpu_input_refit_pos_pair_idx / 2] = input_refit_fp32_ptr;
+      cpu_input_refit_pos_pair_idx += 2;
     }
-    pos += forward_req.output_tokens->size();
+    pos_offset += forward_req.output_tokens->size();
   }
+
   cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape = {cpu_input_refit_pos_pair_idx / 2};
   cpu_input_refit_tensor.pos_pair_tensor.shape = {cpu_input_refit_pos_pair_idx / 2, 2};
 }

@@ -2,8 +2,9 @@
 #
 # ==============================================================================
 
-import os
 import json
+import os
+import sys
 from glob import glob
 from typing import List
 
@@ -14,6 +15,11 @@ import requests
 from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
+
+# parent_dir: ./KsanaLLM/src/ksana_llm/python/ksana_plugin
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
+sys.path.append(parent_dir)
 
 from plugin_utils import free_cache, load_safetensors, check_file_dir, get_module
 
@@ -36,6 +42,10 @@ class VITModel:
 
         # Using torch infer does not require defining encode
         self.image_pre_obj = None
+
+        # Initialize and set the model device, assume on GPU
+        self.device = torch.device("cuda:0")
+        torch.cuda.set_device(self.device)
 
     def get_preprocess(self):
         if self.image_pre_obj is not None:
@@ -73,7 +83,7 @@ class VITModel:
         # assign gpu and precision
         visual = visual.to(dtype=precision)
         visual.load_state_dict(visual_weights)
-        visual = visual.to(device="cuda")
+        visual = visual.to(device=self.device)
 
         free_cache()
         return visual
@@ -108,10 +118,10 @@ class VITModel:
                           (self.max_batch, self.dim, self.image_size, self.image_size)]
             }
 
-    def get_sample_input(self, device='cuda'):
+    def get_sample_input(self):
         
         return (
-            torch.randn(self.opt_batch, self.dim, self.image_size, self.image_size).to(device)
+            torch.randn(self.opt_batch, self.dim, self.image_size, self.image_size).to(self.device)
         )
 
     def get_infer_shape(self, infer_batch):

@@ -19,10 +19,10 @@ def load_safetensors(file_path: str):
     return loaded
 
 
-def check_file_dir(file_path):
+def check_file_dir(file_path: str):
     import os
     file_dir = os.path.dirname(file_path)
-    if not file_dir == '' and not os.path.exists(file_dir):
+    if file_dir != '' and not os.path.exists(file_dir):
         os.makedirs(file_dir)
 
 
@@ -38,7 +38,7 @@ def adjust_device_memory_ratio(config_file: str, reserved_device_memory_ratio: f
     """Adjust the memory ratio for multi-modal models
     """
     import re
-    with open(config_file, "r") as yaml_file:
+    with open(config_file, "r", encoding="utf-8") as yaml_file:
         yaml_data = yaml_file.read()
     # Overwrite the yaml config file
     # Use regular expressions to preserve the original order and comments
@@ -49,5 +49,5 @@ def adjust_device_memory_ratio(config_file: str, reserved_device_memory_ratio: f
         yaml_data = re.sub(r'(\s*reserved_device_memory_ratio:)(\s*\d+\.\d+|\d+)(.*)',
                            f'{match.group(1)} {reserved_device_memory_ratio}{match.group(3)}',
                            yaml_data)
-    with open(config_file, "w") as yaml_file:
+    with open(config_file, "w", encoding="utf-8") as yaml_file:
         yaml_file.write(yaml_data)

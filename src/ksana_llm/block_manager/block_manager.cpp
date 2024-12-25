@@ -103,6 +103,8 @@ Status BlockManager::GetBlockNumber(size_t& device_blocks_num, size_t& host_bloc
   size_t host_total, host_free;
   size_t device_total, device_free;
 
+  // Allocate blocks according to the memory status of device 0.
+  SetDeviceId(0);
   Status status =
       GetDeviceMemoryInfo(block_manager_config_.device_allocator_config.device, &device_free, &device_total);
   if (!status.OK()) {

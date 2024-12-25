@@ -15,7 +15,6 @@
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/string_utils.h"
-#include "torch/csrc/autograd/python_variable.h"
 
 namespace ksana_llm {
 
@@ -762,28 +761,6 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
 }
 
 template <typename T>
-Status CommonModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs) {
-  const size_t batch_size = forward_reqs.size();
-  for (size_t idx = 0; idx < batch_size && forward_reqs[idx].infer_stage == STAGE_CONTEXT; idx++) {
-    py::gil_scoped_acquire acquire;
-
-    auto& embedding_tensors = (*forward_reqs[idx].input_refit_embedding).embedding_tensors;
-    auto& embeddings = (*forward_reqs[idx].input_refit_embedding).embeddings;
-    embeddings.resize(embedding_tensors.size());
-    // Get embeddings (`std::vector<std::vector<float>>`) from embedding_tensors (`std::vector<py::object>`).
-    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
-      torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(embedding_tensors[i].ptr());
-      int64_t embedding_size = input_refit_embedding_tensor.numel();
-      embeddings[i].resize(embedding_size);
-      memcpy(embeddings[i].data(), input_refit_embedding_tensor.data_ptr(), sizeof(float) * embedding_size);
-    }
-    // Early release the torch tensors to free memory.
-    embedding_tensors.clear();
-  }
-  return Status();
-}
-
-template <typename T>
 Status CommonModel<T>::CopyFromHiddenUnitBuffer(Tensor& tensor, HiddenUnitDeviceBuffer* device_buffer) {
 #ifdef ENABLE_ACL
   if (model_input_->infer_stage == InferStage::STAGE_CONTEXT) {
@@ -835,8 +812,6 @@ Status CommonModel<T>::CopyToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buf
 template <typename T>
 Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
-  GetBlockManager()->SetDeviceId(rank_);
-
   model_input_->ParseFromRequests(forward_reqs);
 
   // create forward shape tensor
@@ -879,11 +854,6 @@ Status CommonModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weig
 template <typename T>
 Status CommonModel<T>::LookupEmbedding(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                        std::vector<ForwardRequest>& forward_reqs) {
-  // Load embeddings from input refit.
-  if (rank_ == 0) {
-    LoadEmbeddings(forward_reqs);
-  }
-
   bool is_multi_token_forward = model_input_->multi_token_request_num > 0;
 
   // CPU embedding lookup

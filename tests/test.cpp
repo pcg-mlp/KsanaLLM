@@ -2,9 +2,9 @@
 
 ==============================================================================*/
 
-#include <pybind11/embed.h>
+#include "tests/test.h"
 
-#include "test.h"
+#include <pybind11/embed.h>
 
 namespace py = pybind11;
 

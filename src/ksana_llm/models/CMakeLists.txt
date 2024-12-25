@@ -32,8 +32,9 @@ target_link_libraries(models PUBLIC block_manager layers samplers runtime data_h
 # for test
 file(GLOB_RECURSE models_test_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/*test.cpp
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/*test.cpp)
-message(STATUS "models_test_SRCS: ${models_test_SRCS} ")
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/*test.cpp
+  ${PROJECT_SOURCE_DIR}/tests/test.cpp)
+message(STATUS "models_test_SRCS: ${models_test_SRCS}")
 
 if(WITH_STANDALONE_TEST)
   if(WITH_VLLM_FLASH_ATTN)

@@ -2,7 +2,6 @@
 
 ==============================================================================*/
 
-#include <Python.h>
 #include <stdlib.h>
 #include <filesystem>
 
@@ -13,7 +12,7 @@
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
-#include "test.h"
+#include "tests/test.h"
 
 using namespace ksana_llm;
 
@@ -272,7 +271,6 @@ TEST_F(LlamaTest, ForwardTest) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
-  Py_Initialize();
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -305,7 +303,6 @@ TEST_F(LlamaTest, ForwardTest) {
 #    endif
 #  endif
 #endif
-  Py_Finalize();
 }
 
 TEST(TorchTensorTest, TorchTensorTest) {

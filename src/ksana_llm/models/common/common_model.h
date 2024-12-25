@@ -35,6 +35,7 @@
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/runtime/cuda_graph_runner.h"
 #endif
+
 namespace ksana_llm {
 
 // The layernorm position type.
@@ -240,9 +241,6 @@ class __attribute__((visibility("hidden"))) CommonModel : public BaseModel {
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs);
 
   virtual Status EmbedTokensUseGpu(Tensor& embedding_weight);
-
-  // Load embeddings obtained from external input or computed by plugins.
-  virtual Status LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs);
 
   // Copy between hidden_unit_buffer and tensor.
   Status CopyFromHiddenUnitBuffer(Tensor& tensor, HiddenUnitDeviceBuffer* device_buffer);

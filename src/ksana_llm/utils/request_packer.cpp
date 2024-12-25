@@ -111,7 +111,6 @@ Status RequestPacker::Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>&
 Status RequestPacker::DeTokenize(const std::vector<int>& input_tokens, std::string& prompt) {
   pybind11::gil_scoped_acquire acquire;
   prompt = tokenizer_.attr("decode")(input_tokens, py::arg("skip_special_tokens") = true).cast<std::string>();
-  pybind11::gil_scoped_release release;
   return Status();
 }
 
@@ -119,7 +118,6 @@ Status RequestPacker::Tokenize(const std::string& prompt, std::vector<int>& inpu
   pybind11::gil_scoped_acquire acquire;
   py::object tokens = tokenizer_.attr("encode")(prompt, py::arg("add_special_tokens") = add_special_tokens);
   input_tokens = tokens.cast<std::vector<int>>();
-  pybind11::gil_scoped_release release;
   return Status();
 }
 

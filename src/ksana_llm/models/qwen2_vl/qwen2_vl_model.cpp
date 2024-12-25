@@ -36,7 +36,7 @@ Status Qwen2VLModel<T>::FlashAttentionForward(const int layer_idx) {
        model_input_->flexible_rotary_embedding_pos, model_input_->flexible_rotary_embedding_mask,
        model_input_->dst_flexible_kv_cache_tensor, model_input_->src_flexible_kv_cache_tensor,
        model_input_->dst_flexible_token_idx_tensor, model_input_->src_flexible_token_idx_tensor,
-       model_input_->flexible_offset_uint64_tensor, forward_shape_
+       model_input_->flexible_offset_uint64_tensor, forward_shape_, flag_tensor_
 #  ifdef ENABLE_FLASH_ATTN_WITH_CACHE
        ,
        model_input_->layer_kv_cache_ptr_tensor, model_input_->multi_token_request_block_table,
@@ -60,26 +60,24 @@ Status Qwen2VLModel<T>::FlashAttentionForward(const int layer_idx) {
 }
 
 template <typename T>
-Status Qwen2VLModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs) {
+Status Qwen2VLModel<T>::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
+  STATUS_CHECK_RETURN(PrepareMRopePos(forward_reqs));
+  return CommonModel<T>::Forward(base_weight, forward_reqs, epilogue);
+}
+
+/**
+ * The MRope position information (position and offset) of qwen2_vl is computed by the `_get_input_positions` function
+ * in the Python plugin and is passed as additional tensors.
+ * Before model inference, copy the position tensor (`additional_tensors[0]`) to the corresponding GPU tensor
+ * (`mrotary_embedding_pos`), and record the offset value (`additioanl_tensors[1]`).
+ */
+template <typename T>
+Status Qwen2VLModel<T>::PrepareMRopePos(std::vector<ForwardRequest>& forward_reqs) {
   const size_t batch_size = forward_reqs.size();
   int64_t mrotary_embedding_pos_size = 0;
 
   for (size_t idx = 0; idx < batch_size && forward_reqs[idx].infer_stage == STAGE_CONTEXT; idx++) {
-    py::gil_scoped_acquire acquire;
-
-    auto& embedding_tensors = (*forward_reqs[idx].input_refit_embedding).embedding_tensors;
-    auto& embeddings = (*forward_reqs[idx].input_refit_embedding).embeddings;
-    embeddings.resize(embedding_tensors.size());
-    // Get embeddings (`std::vector<std::vector<float>>`) from embedding_tensors (`std::vector<py::object>`).
-    for (int i = 0; i < static_cast<int>(embeddings.size()); i++) {
-      torch::Tensor input_refit_embedding_tensor = THPVariable_Unpack(embedding_tensors[i].ptr());
-      int64_t tensor_size = input_refit_embedding_tensor.numel();
-      embeddings[i].resize(tensor_size);
-      memcpy(embeddings[i].data(), input_refit_embedding_tensor.data_ptr(), sizeof(float) * tensor_size);
-    }
-    // Early release the torch tensors to free memory.
-    embedding_tensors.clear();
-
     auto& tensors = (*forward_reqs[idx].input_refit_embedding).additional_tensors;
     // This is a plain text input.
     if (tensors.empty()) {
@@ -88,24 +86,30 @@ Status Qwen2VLModel<T>::LoadEmbeddings(std::vector<ForwardRequest>& forward_reqs
       for (int64_t i = 0; i < list_size; i += 3) {
         mrotary_embedding_pos_list[i] = mrotary_embedding_pos_list[i + 1] = mrotary_embedding_pos_list[i + 2] = i;
       }
-      Memcpy(model_input_->mrotary_embedding_pos.template GetPtr<void>() + sizeof(int64_t) * mrotary_embedding_pos_size,
-             mrotary_embedding_pos_list.data(), sizeof(int64_t) * list_size, MEMCPY_HOST_TO_DEVICE);
+      MemcpyAsync(
+          model_input_->mrotary_embedding_pos.template GetPtr<void>() + sizeof(int64_t) * mrotary_embedding_pos_size,
+          mrotary_embedding_pos_list.data(), sizeof(int64_t) * list_size, MEMCPY_HOST_TO_DEVICE,
+          context_->GetD2HStreams()[rank_]);
       mrotary_embedding_pos_size += list_size;
 
       *forward_reqs[idx].mrotary_embedding_pos_offset = 0;
       continue;
     }
     // This is a input with visual information.
-    torch::Tensor mrotary_embedding_pos_tensor = THPVariable_Unpack(tensors[0].ptr());
+    torch::Tensor mrotary_embedding_pos_tensor;
+    {
+      py::gil_scoped_acquire acquire;
+      mrotary_embedding_pos_tensor = THPVariable_Unpack(tensors[0].ptr());
+    }
     int64_t tensor_size = mrotary_embedding_pos_tensor.numel();
-    Memcpy(model_input_->mrotary_embedding_pos.template GetPtr<void>() + sizeof(int64_t) * mrotary_embedding_pos_size,
-           mrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size, MEMCPY_HOST_TO_DEVICE);
+    MemcpyAsync(
+        model_input_->mrotary_embedding_pos.template GetPtr<void>() + sizeof(int64_t) * mrotary_embedding_pos_size,
+        mrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size, MEMCPY_HOST_TO_DEVICE,
+        context_->GetD2HStreams()[rank_]);
     mrotary_embedding_pos_size += tensor_size;
 
     torch::Tensor mrotary_embedding_pos_offset_tensor = THPVariable_Unpack(tensors[1].ptr());
     *forward_reqs[idx].mrotary_embedding_pos_offset = mrotary_embedding_pos_offset_tensor.item().toLong();
-    // Early release the additioanl torch tensors to free memory.
-    tensors.clear();
   }
   return Status();
 }

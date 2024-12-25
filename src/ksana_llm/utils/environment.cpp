@@ -308,13 +308,13 @@ Status Environment::ParseConfig(const std::string &config_file) {
   batch_scheduler_config_.waiting_timeout_in_ms =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
   batch_scheduler_config_.max_waiting_queue_len =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 256);
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_waiting_queue_len", 1200);
   batch_scheduler_config_.max_token_len =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 0);
   batch_scheduler_config_.max_step_tokens =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
   batch_scheduler_config_.max_batch_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 8);
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 128);
   batch_scheduler_config_.swapout_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
   batch_scheduler_config_.swapin_block_threshold =
@@ -332,7 +332,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.reserved_device_memory_ratio = yaml_reader.GetScalar<float>(
-      yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.05);
+      yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.01);
   block_manager_config_.lora_deivce_memory_ratio =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_deivce_memory_ratio", 0.0);
   block_manager_config_.block_device_memory_ratio =
@@ -340,7 +340,7 @@ Status Environment::ParseConfig(const std::string &config_file) {
   block_manager_config_.lora_host_memory_factor =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.lora_host_memory_factor", 10.0);
   block_manager_config_.block_host_memory_factor =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 10.0);
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 2.0);
 
   // Load cache manager config
   cache_manager_config_.swap_threadpool_size =

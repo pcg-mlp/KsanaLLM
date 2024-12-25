@@ -151,7 +151,7 @@ class KsanaPlugin:
         return image_embedding
 
     def _infer_trt(self, image_url):
-        images = self.model.image_pre_obj.encode(image_url).to('cuda').contiguous()
+        images = self.model.image_pre_obj.encode(image_url).to(self.model.device).contiguous()
 
         # TRT engine can split the input according to the engine's maximum batch size
         split_size = self.model.max_batch
@@ -163,7 +163,7 @@ class KsanaPlugin:
         for image in images_list:
             batch_size = image.size(0)
             infer_shape = self.model.get_infer_shape(batch_size)
-            self.visual.allocate_buffers(infer_shape)
+            self.visual.allocate_buffers(infer_shape, device=self.model.device)
 
             infer_data = self.model.get_infer_data(image)
             target = self.model.get_output_names()[0]

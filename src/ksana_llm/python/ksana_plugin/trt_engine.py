@@ -79,7 +79,7 @@ class Engine():
                 'shape': shape,
                 'dtype': dtype}
 
-    def _allocate_buffers(self, shape_dict=None, device='cuda', binding=None):
+    def _allocate_buffers(self, shape_dict=None, device='cuda:0', binding=None):
         def allocate_buffer_for(binding):
             name = self.engine.get_tensor_name(binding)
             if shape_dict and name in shape_dict:
@@ -98,7 +98,7 @@ class Engine():
             for binding in range(self.engine.num_io_tensors):
                 allocate_buffer_for(binding)
 
-    def allocate_buffers(self, cur_shape_dict=None, device='cuda'):
+    def allocate_buffers(self, cur_shape_dict=None, device='cuda:0'):
         if cur_shape_dict == self._cache_shape_dict:
             return
 
@@ -111,7 +111,7 @@ class Engine():
             prev_shape = self._cache_shape_dict[tensor_name]
             if prev_shape != cur_shape:
                 binding_idx = self._binding_infos[tensor_name]['binding']
-                self._allocate_buffers(shape_dict=cur_shape_dict, binding=binding_idx)
+                self._allocate_buffers(shape_dict=cur_shape_dict, device=device, binding=binding_idx)
         self._cache_shape_dict = cur_shape_dict
 
 

@@ -91,7 +91,7 @@ class KsanaPlugin:
         )
         input_tokens = inputs["input_ids"][0].tolist()
         ksana_python_input.input_tokens = input_tokens
-        inputs = inputs.to("cuda")
+        inputs = inputs.to(self.model.device)
 
         vision_srt = [int(pos + 1) for pos, id in enumerate(input_tokens) if id == config.vision_start_token_id]
         vision_end = [int(pos - 1) for pos, id in enumerate(input_tokens) if id == config.vision_end_token_id]

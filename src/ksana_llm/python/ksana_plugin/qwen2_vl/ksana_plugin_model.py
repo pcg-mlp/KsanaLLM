@@ -27,6 +27,10 @@ class VITModel:
         self.config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         self.precision = self.config.torch_dtype
 
+        # Initialize the model device, assume on GPU
+        self.device = torch.device("cuda:0")
+        torch.cuda.set_device(self.device)
+
     def get_model(self, model_path, precision=None):
         if precision is None:
             precision = self.precision
@@ -60,7 +64,7 @@ class VITModel:
         # assign gpu and precision
         visual = visual.to(dtype=precision)
         visual.load_state_dict(visual_weights)
-        visual = visual.to(device="cuda")
+        visual = visual.to(device=self.device)
 
         free_cache()
         return visual

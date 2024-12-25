@@ -2,11 +2,19 @@
 
 ==============================================================================*/
 
-#include <gtest/gtest.h>
+#include <pybind11/pybind11.h>
+#include <torch/csrc/autograd/python_variable.h>
+#include <torch/torch.h>
+
+#include <cstring>
 #include <filesystem>
+#include <random>
 
 #include "ksana_llm/models/base/model_input.h"
 #include "ksana_llm/models/common/common_model.h"
+#include "tests/test.h"
+
+namespace py = pybind11;
 
 namespace ksana_llm {
 
@@ -40,6 +48,9 @@ class ModelInputTest : public testing::Test {
 
     // Initialize the model input object.
     model_input_ = std::make_unique<ModelInput>(model_config, rank, context);
+
+    // Initialize the random seed with 0.
+    std::srand(0);
   }
 
   void TearDown() override {}
@@ -49,6 +60,114 @@ class ModelInputTest : public testing::Test {
 
   std::unique_ptr<ModelInput> model_input_;
 };
+
+TEST_F(ModelInputTest, PrepareInputRefitTest) {
+  std::vector<float*> input_refit_emb_ptr;
+  std::vector<std::pair<int64_t, int64_t>> input_refit_pos_pair;
+
+  auto VerifyPrepareInputRefit = [&]() {
+    const size_t input_refit_size = input_refit_emb_ptr.size();
+    EXPECT_EQ(model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape.size(), 1);
+    EXPECT_EQ(model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape[0], input_refit_size);
+    EXPECT_EQ(model_input_->cpu_input_refit_tensor.pos_pair_tensor.shape.size(), 2);
+    EXPECT_EQ(model_input_->cpu_input_refit_tensor.pos_pair_tensor.shape[0], input_refit_size);
+    EXPECT_EQ(model_input_->cpu_input_refit_tensor.pos_pair_tensor.shape[1], 2);
+    void** cpu_input_refit_emb_fp32_ptr =
+        reinterpret_cast<void**>(model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<void>());
+    int64_t* cpu_input_refit_pos_pair =
+        reinterpret_cast<int64_t*>(model_input_->cpu_input_refit_tensor.pos_pair_tensor.GetPtr<void>());
+    for (size_t i = 0; i < input_refit_size; i++) {
+      EXPECT_EQ(cpu_input_refit_emb_fp32_ptr[i], input_refit_emb_ptr[i]);
+      EXPECT_EQ(cpu_input_refit_pos_pair[i * 2], input_refit_pos_pair[i].first);
+      EXPECT_EQ(cpu_input_refit_pos_pair[i * 2 + 1], input_refit_pos_pair[i].second);
+    }
+  };
+
+  // Ensure that torch is imported, so that `THPVariableClass` is not nullptr.
+  py::module torch = py::module::import("torch");
+
+  // Test for each selected batch size.
+  for (const int batch_size : {1, 3, 4}) {
+    input_refit_emb_ptr.clear();
+    input_refit_pos_pair.clear();
+
+    std::vector<ForwardRequest> forward_reqs;
+
+    // Reserve memory to avoid memory address being moved.
+    std::vector<std::vector<int>> output_tokens;
+    std::vector<EmbeddingSlice> embedding_slices;
+    forward_reqs.reserve(batch_size);
+    output_tokens.reserve(batch_size);
+    embedding_slices.reserve(batch_size);
+
+    model_input_->multi_token_request_num = batch_size;
+    size_t pos_offset = 0;
+
+    // Construct input refit embeddings.
+    for (int i = 0; i < batch_size; i++) {
+      ForwardRequest forward_req;
+      const size_t output_tokens_size = std::rand() % 4096 + 10;
+      output_tokens.emplace_back(output_tokens_size);
+      forward_req.output_tokens = &output_tokens.back();
+      EmbeddingSlice embedding_slice;
+      const int input_refit_size = std::rand() % 3 + 1;
+      for (int j = 0; j < input_refit_size; j++) {
+        const size_t embedding_size = std::rand() % output_tokens_size + 1;
+        const size_t embedding_start_pos = std::rand() % embedding_size;
+        embedding_slice.embeddings.emplace_back(embedding_size);
+        embedding_slice.pos.push_back(embedding_start_pos);
+        input_refit_emb_ptr.emplace_back(embedding_slice.embeddings.back().data());
+        input_refit_pos_pair.emplace_back(pos_offset + embedding_start_pos, embedding_size);
+      }
+      embedding_slices.push_back(std::move(embedding_slice));
+      forward_req.input_refit_embedding = &embedding_slices.back();
+      forward_reqs.push_back(std::move(forward_req));
+      pos_offset += output_tokens_size;
+    }
+
+    // Parse and load the input refit embeddings.
+    model_input_->PrepareInputRefit(forward_reqs);
+
+    // Check the result of PrepareInputRefit.
+    VerifyPrepareInputRefit();
+
+    // Construct input refit embedding tensors.
+    input_refit_emb_ptr.clear();
+    for (int i = 0; i < batch_size; i++) {
+      ForwardRequest& forward_req = forward_reqs[i];
+      auto& embedding_slice = forward_req.input_refit_embedding;
+      embedding_slice->embedding_tensors.reserve(embedding_slice->embeddings.size());
+      for (const auto& embedding : embedding_slice->embeddings) {
+        torch::Tensor embedding_tensor = torch::randn(static_cast<int64_t>(embedding.size()), torch::kFloat32);
+        input_refit_emb_ptr.push_back(reinterpret_cast<float*>(embedding_tensor.data_ptr()));
+        {
+          py::gil_scoped_acquire acquire;
+          embedding_slice->embedding_tensors.push_back(
+              py::reinterpret_steal<py::object>(THPVariable_Wrap(embedding_tensor)));
+        }
+      }
+      embedding_slice->embeddings.clear();
+    }
+
+    // Parse and load the input refit embeddings.
+    model_input_->PrepareInputRefit(forward_reqs);
+
+    // Check the result of PrepareInputRefit.
+    VerifyPrepareInputRefit();
+
+    // Construct bad input.
+    forward_reqs[0].input_refit_embedding->embedding_tensors.clear();
+    EXPECT_THROW(
+        try { model_input_->PrepareInputRefit(forward_reqs); } catch (const std::runtime_error& e) {
+          EXPECT_NE(strstr(e.what(),
+                           "`input_refit_pos.size()` should be equal to `input_refit_embeddings.size()` or "
+                           "`input_refit_embedding_tensors.size()`."),
+                    nullptr);
+          throw;
+        },
+        std::runtime_error);
+  }
+}
 
 TEST_F(ModelInputTest, CheckUseCacheTest) {
   // Construct forward requests as test input.
