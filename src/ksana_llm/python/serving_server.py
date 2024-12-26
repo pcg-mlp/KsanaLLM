@@ -83,10 +83,14 @@ def prepare_config():
         args.tokenizer_dir = args.model_dir
 
     args.plugin_model_enable_trt = True
-    if ("plugin_model" in yaml_config["model_spec"] and
-            "enable_tensorrt" in yaml_config["model_spec"]["plugin_model"]):
-        args.plugin_model_enable_trt = \
-            yaml_config["model_spec"]["plugin_model"]["enable_tensorrt"]
+    args.plugin_thread_pool_size = 1
+    if "plugin_model" in yaml_config["model_spec"]:
+        if "enable_tensorrt" in yaml_config["model_spec"]["plugin_model"]:
+            args.plugin_model_enable_trt = \
+                yaml_config["model_spec"]["plugin_model"]["enable_tensorrt"]
+        if "plugin_thread_pool_size" in yaml_config["model_spec"]["plugin_model"]:
+            args.plugin_thread_pool_size = \
+                yaml_config["model_spec"]["plugin_model"]["plugin_thread_pool_size"]
 
     if args.endpoint is None:
         # Use Python endpoint by default
@@ -397,7 +401,8 @@ if __name__ == "__main__":
     # Initialize model serving based on configs.
     model = ksana_llm.AutoModel.from_config(args.config_file)
     plugin_config = ksana_llm.PluginConfig(args.model_dir, args.config_file,
-                                           args.model_type, args.plugin_model_enable_trt)
+                                           args.model_type, args.plugin_model_enable_trt,
+                                           args.plugin_thread_pool_size)
     endpoint_config = ksana_llm.EndpointConfig(args.endpoint, args.host,
                                                args.port, args.access_log)
     model.init_serving(plugin_config, endpoint_config)

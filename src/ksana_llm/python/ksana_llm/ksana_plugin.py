@@ -3,12 +3,15 @@
 # ==============================================================================
 
 import importlib.util
+import multiprocessing
 import os
 import sys
 from concurrent import futures
 from dataclasses import dataclass
+from threading import current_thread
 from typing import List, Optional
 
+import torch
 import libtorch_serving
 
 
@@ -22,6 +25,7 @@ class PluginConfig:
     # you need to manually configure it in yaml to adjust to False to use
     # the Torch inference.
     enable_trt: bool = True
+    thread_pool_size: int = 1  # The thread pool size for running plugins
 
 
 class KsanaPlugin(object):
@@ -51,15 +55,23 @@ class KsanaPlugin(object):
         if self._ksana_plugin is None:
             return
 
+        # Adjust the thread pool size to a reasonable number based on the number of CPUs.
+        config.thread_pool_size = min(config.thread_pool_size,
+                                      min(32, (multiprocessing.cpu_count() or 1) * 5))
         # We utilize a thread pool to manage the execution of plugin operations, to control
         # the level of concurrency. This is primarily aimed at preventing concurrent model
         # inference task from competing for GPU memory and computational resources.
-        try:
-            max_workers = int(os.getenv('KSANA_PLUGIN_MAX_WORKERS', 1))
-        except ValueError:
-            max_workers = 1
+        # When `plugin_thread_pool_size > 1`, the preprocess and postprocess methods in the
+        # plugin must be **thread-safe**.
+        print(f"[I] Plugin thread pool size is set to {config.thread_pool_size}")
+        self._thread_pool = futures.ThreadPoolExecutor(config.thread_pool_size)
 
-        self._thread_pool = futures.ThreadPoolExecutor(max_workers)
+        # Initialize a non-default stream pool.
+        # We place all computations within the plugin in these streams, to avoid affecting
+        # the computations in KsanaLLM that use the default stream.
+        self.streams = [torch.cuda.Stream() for _ in range(config.thread_pool_size)]
+        # Map thread to 0-indexed stream id to get the corresponding stream.
+        self.stream_id_map = {}
 
     def __del__(self):
         """
@@ -97,6 +109,19 @@ class KsanaPlugin(object):
             print(f"[W] Load plugin failed: {e}")
             return None
 
+    def _get_thread_id(self):
+        """
+        Get the 0-indexed thread ID based on the thread identifier.
+        """
+        return self.stream_id_map.setdefault(current_thread().ident, len(self.stream_id_map))
+
+    def _preprocess(self, **kwargs):
+        """
+        This is a wrapper around the preprocess method of the loaded plugin to run in a non-default stream.
+        """
+        with torch.cuda.stream(self.streams[self._get_thread_id()]):
+            self._ksana_plugin.preprocess(**kwargs)
+
     def preprocess(self,
                    ksana_python_input: libtorch_serving.KsanaPythonInput,
                    **kwargs):
@@ -109,8 +134,15 @@ class KsanaPlugin(object):
         kwargs.update({
             "ksana_python_input": ksana_python_input,
         })
-        future = self._thread_pool.submit(self._ksana_plugin.preprocess, **kwargs)
+        future = self._thread_pool.submit(self._preprocess, **kwargs)
         return future.result()
+
+    def _postprocess(self, **kwargs):
+        """
+        This is a wrapper around the postprocess method of the loaded plugin to run in a non-default stream.
+        """
+        with torch.cuda.stream(self.streams[self._get_thread_id()]):
+            self._ksana_plugin.postprocess(**kwargs)
 
     def postprocess(self,
                     ksana_python_input: libtorch_serving.KsanaPythonInput,
@@ -126,7 +158,7 @@ class KsanaPlugin(object):
             "ksana_python_input": ksana_python_input,
             "ksana_python_output": ksana_python_output,
         })
-        future = self._thread_pool.submit(self._ksana_plugin.postprocess, **kwargs)
+        future = self._thread_pool.submit(self._postprocess, **kwargs)
         return future.result()
 
     @staticmethod

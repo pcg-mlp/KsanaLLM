@@ -140,7 +140,6 @@ class KsanaPlugin:
 
         # Load trt
         trt_engine.load()
-        self.stream = torch.cuda.current_stream().cuda_stream
         self.model.get_preprocess()
 
         return trt_engine
@@ -167,7 +166,7 @@ class KsanaPlugin:
 
             infer_data = self.model.get_infer_data(image)
             target = self.model.get_output_names()[0]
-            out = self.visual.infer(infer_data, self.stream)[target]
+            out = self.visual.infer(infer_data, torch.cuda.current_stream().cuda_stream)[target]
 
             outs_list.append(out)
         image_embedding = torch.cat(outs_list, dim=0)
