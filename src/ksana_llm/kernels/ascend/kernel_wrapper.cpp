@@ -114,8 +114,8 @@ Status ArgMaxATBExecutor<T>::Init(const int rank, const size_t max_batch_size) {
 }
 
 template <typename T>
-Status ArgMaxATBExecutor<T>::Run(const int rank, const T* input, const uint32_t* ids_offset, const int32_t batch_size,
-                                 const int32_t vocab_size, uint32_t* result, Stream& stream) {
+Status ArgMaxATBExecutor<T>::Run(const int rank, const T* input, const int32_t batch_size, const int32_t vocab_size,
+                                 uint32_t* result, Stream& stream) {
   // NOTE(karlluo): get argmax and output int32 type
   atb_argmax_op_executor_.ResetVariantPack();
   atb_argmax_op_executor_.SetInputTensor(reinterpret_cast<void*>(const_cast<T*>(input)),
@@ -137,25 +137,21 @@ Status ArgMaxATBExecutor<T>::Run(const int rank, const T* input, const uint32_t*
 template class ArgMaxATBExecutor<float>;
 
 template <typename T>
-Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, const int32_t vocab_size,
-              uint32_t* result, Stream& stream, void* buffer_ptr) {
-  if (ids_offset != nullptr) {
-    KLLM_THROW("Not supported ids offset.");
-  }
+Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
+              void* buffer_ptr) {
   if (std::is_same<T, float>::value) {
     int32_t rank = GetBlockManager()->GetDeviceId();
     reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
     ArgMaxATBExecutor<T>* arg_max_atb_executor_ptr = reinterpret_cast<ArgMaxATBExecutor<T>*>(buffer_ptr);
-    arg_max_atb_executor_ptr->Run(rank, input, ids_offset, batch_size, vocab_size, result, stream);
-  } else {
-    KLLM_THROW("Not supported argmax data type.");
+    return arg_max_atb_executor_ptr->Run(rank, input, batch_size, vocab_size, result, stream);
   }
-  return Status();
+
+  return Status(RET_UNDEFINED_REFERENCE, "Not supported argmax data type.");
 }
 
-#define INSTANTIATE_ARG_MAX(T)                                                                 \
-  template Status ArgMax(const T* input, const uint32_t* ids_offset, const int32_t batch_size, \
-                         const int32_t vocab_size, uint32_t* result, Stream& stream, void* buffer_ptr);
+#define INSTANTIATE_ARG_MAX(T)                                                                                    \
+  template Status ArgMax<T>(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, \
+                            Stream& stream, void* buffer_ptr);
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(float16);

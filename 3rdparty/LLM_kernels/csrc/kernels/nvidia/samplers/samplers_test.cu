@@ -3,15 +3,16 @@
  */
 
 #include <gtest/gtest.h>
-#include <cub/cub.cuh>
 
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/kernels/nvidia/samplers/repetition_penalty.h"
 #include "csrc/kernels/nvidia/samplers/samplingTopKKernels.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
+
 namespace llm_kernels {
 namespace nvidia {
 namespace test {
+
 class LlamaNvidiaSamplersTestSuit : public NvidiaTestSuitBase {
  public:
   void SetUp() override { NvidiaTestSuitBase::SetUp(); }
@@ -36,52 +37,102 @@ class LlamaNvidiaSamplersTestSuit : public NvidiaTestSuitBase {
     }
     return max_index;
   }
+
+  template <typename T>
+  void TestGreedyCommon() {
+    // create kernel's buffer
+    int32_t batch_size = 2;
+    int32_t vocab_size = 10;
+    T max_logit = 101.0;
+    T logit_range = 100.0;
+    std::vector<uint32_t> base_result = {5, 7};
+
+    // [batch_size, vocab_size]
+    BufferMeta cpu_input =
+        CreateBuffer<T>(MemoryType::MEMORY_CPU_PINNED,
+                        {static_cast<size_t>(batch_size), static_cast<size_t>(vocab_size)}, true, 0, logit_range);
+    T* intput_data = static_cast<T*>(cpu_input.data_ptr);
+    for (size_t i = 0; i < base_result.size(); i++) {
+      uint32_t index = i * vocab_size + base_result[i];
+      intput_data[index] = max_logit;
+    }
+    BufferMeta input = CopyToDevice<T>(cpu_input);
+    // [batch_size]
+    BufferMeta result = CreateBuffer<uint32_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
+
+    InvokeArgMaxReduce<T>(static_cast<T*>(input.data_ptr), batch_size, vocab_size,
+                          static_cast<uint32_t*>(result.data_ptr), stream);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+    BufferMeta cpu_result = CopyToHost<int32_t>(result);
+    int32_t* cpu_result_ptr = static_cast<int32_t*>(cpu_result.data_ptr);
+    for (int i = 0; i < batch_size; i++) {
+      EXPECT_EQ(base_result[i], cpu_result_ptr[i]);
+    }
+
+    DeleteBuffer(cpu_result);
+    DeleteBuffer(result);
+    DeleteBuffer(input);
+    DeleteBuffer(cpu_input);
+  }
+
+  template <typename T>
+  void TestGreedyEqual() {
+    // create kernel's buffer
+    int32_t batch_size = 3;
+    int32_t vocab_size = 120;
+    T max_logit = -0.5;
+    // construct multiple maximum values for each batch
+    std::vector<std::vector<uint32_t>> max_pos = {{1, 23}, {8, 87, 119}, {31, 45, 99, 100}};
+    // When there are multiple maximum values, return the first one
+    std::vector<uint32_t> base_result = {1, 8, 31};
+
+    // [batch_size, vocab_size]
+    BufferMeta cpu_input =
+        CreateBuffer<T>(MemoryType::MEMORY_CPU_PINNED,
+                        {static_cast<size_t>(batch_size), static_cast<size_t>(vocab_size)}, true, -5.0, -1.0);
+    T* intput_data = static_cast<T*>(cpu_input.data_ptr);
+    for (size_t i = 0; i < base_result.size(); i++) {
+      for (size_t j = 0; j < max_pos[i].size(); j++) {
+        uint32_t index = i * vocab_size + max_pos[i][j];
+        intput_data[index] = max_logit;
+      }
+    }
+    BufferMeta input = CopyToDevice<T>(cpu_input);
+    // [batch_size]
+    BufferMeta result = CreateBuffer<uint32_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
+
+    InvokeArgMaxReduce<T>(static_cast<T*>(input.data_ptr), batch_size, vocab_size,
+                          static_cast<uint32_t*>(result.data_ptr), stream);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+    BufferMeta cpu_result = CopyToHost<int32_t>(result);
+    int32_t* cpu_result_ptr = static_cast<int32_t*>(cpu_result.data_ptr);
+    for (int i = 0; i < batch_size; i++) {
+      EXPECT_EQ(base_result[i], cpu_result_ptr[i]);
+    }
+
+    DeleteBuffer(cpu_result);
+    DeleteBuffer(result);
+    DeleteBuffer(input);
+    DeleteBuffer(cpu_input);
+  }
 };
 
 TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyCommonTest) {
-  using DataType = half;
-  // create kernel's buffer
-  int32_t batch_size = 2;
-  std::vector<uint32_t> seqlens = {6, 3};
-  int32_t total_seqlens = std::accumulate(seqlens.begin(), seqlens.end(), 0);
-  int32_t vocab_size = 10;
-  DataType max_logit = 101.0;
-  DataType logit_range = 100.0;
-  std::vector<uint32_t> base_result = {5, 7};
-  // [total_seqlens]
-  BufferMeta cpu_pos = CreateBuffer<uint32_t>(MemoryType::MEMORY_CPU_PINNED, {static_cast<size_t>(total_seqlens)});
-  uint32_t* cpu_pos_ptr = static_cast<uint32_t*>(cpu_pos.data_ptr);
-  uint32_t index = 0;
-  for (size_t i = 0; i < seqlens.size(); i++) {
-    index += seqlens[i];
-    cpu_pos_ptr[i] = index - 1;
-  }
-  BufferMeta input_pos = CopyToDevice<uint32_t>(cpu_pos);
+  TestGreedyCommon<float>();
+  TestGreedyCommon<half>();
+#ifdef ENABLE_BF16
+  TestGreedyCommon<__nv_bfloat16>();
+#endif
+}
 
-  // [total_seqlens, vocab_size]
-  BufferMeta cpu_input = CreateBuffer<DataType>(MemoryType::MEMORY_CPU_PINNED,
-                                                {static_cast<size_t>(total_seqlens), static_cast<size_t>(vocab_size)},
-                                                true, 0, logit_range);
-  DataType* intput_data = static_cast<DataType*>(cpu_input.data_ptr);
-
-  for (size_t i = 0; i < base_result.size(); i++) {
-    uint32_t index = cpu_pos_ptr[i] * vocab_size + base_result[i];
-    intput_data[index] = max_logit;
-  }
-
-  BufferMeta input = CopyToDevice<DataType>(cpu_input);
-  // [batch_size]
-  BufferMeta result = CreateBuffer<uint32_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
-
-  InvokeArgMaxReduce<DataType>(static_cast<DataType*>(input.data_ptr), static_cast<uint32_t*>(input_pos.data_ptr),
-                               batch_size, vocab_size, static_cast<uint32_t*>(result.data_ptr), stream);
-  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-  BufferMeta cpu_result = CopyToHost<int32_t>(result);
-  int32_t* cpu_result_ptr = static_cast<int32_t*>(cpu_result.data_ptr);
-  for (size_t i = 0; i < base_result.size(); i++) {
-    EXPECT_EQ(base_result[i], cpu_result_ptr[i]);
-  }
+TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyEqualTest) {
+  TestGreedyEqual<float>();
+  TestGreedyEqual<half>();
+#ifdef ENABLE_BF16
+  TestGreedyEqual<__nv_bfloat16>();
+#endif
 }
 
 TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyLargeVocabSizeTest) {
@@ -91,21 +142,11 @@ TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyLargeVocabSizeTest) {
   LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float.npy", MemoryType::MEMORY_GPU, input_data);
   int32_t batch_size = input_data.shape[0];
   int32_t vocab_size = input_data.shape[1];
-  std::vector<uint32_t> seqlens = {1};
-  int32_t total_seqlens = std::accumulate(seqlens.begin(), seqlens.end(), 0);
-  BufferMeta cpu_pos = CreateBuffer<uint32_t>(MemoryType::MEMORY_CPU_PINNED, {static_cast<size_t>(total_seqlens)});
-  uint32_t* cpu_pos_ptr = static_cast<uint32_t*>(cpu_pos.data_ptr);
-  uint32_t index = 0;
-  for (size_t i = 0; i < seqlens.size(); i++) {
-    index += seqlens[i];
-    cpu_pos_ptr[i] = index - 1;
-  }
-  BufferMeta input_pos = CopyToDevice<uint32_t>(cpu_pos);
   // prepare output data
   BufferMeta result = CreateBuffer<uint32_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
 
-  InvokeArgMaxReduce<DataType>(static_cast<DataType*>(input_data.data_ptr), static_cast<uint32_t*>(input_pos.data_ptr),
-                               batch_size, vocab_size, static_cast<uint32_t*>(result.data_ptr), stream);
+  InvokeArgMaxReduce<DataType>(static_cast<DataType*>(input_data.data_ptr), batch_size, vocab_size,
+                               static_cast<uint32_t*>(result.data_ptr), stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
   BufferMeta cpu_result = CopyToHost<int32_t>(result);
@@ -116,6 +157,11 @@ TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyLargeVocabSizeTest) {
         cpu_result_ptr[i],
         RefArgMax<DataType>(reinterpret_cast<const DataType*>(input_data_host.data_ptr) + i * vocab_size, vocab_size));
   }
+
+  DeleteBuffer(input_data_host);
+  DeleteBuffer(cpu_result);
+  DeleteBuffer(result);
+  DeleteBuffer(input_data);
 }
 
 TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKSampling) {
@@ -169,6 +215,15 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKSampling) {
   for (int32_t i = 0; i < batch_size; i++) {
     EXPECT_EQ(h_ids_ptr[i], result[i]);
   }
+
+  DeleteBuffer(h_ids);
+  DeleteBuffer(d_ids);
+  DeleteBuffer(d_id_vec);
+  DeleteBuffer(ids);
+  DeleteBuffer(randomSeeds);
+  DeleteBuffer(d_topKs);
+  DeleteBuffer(topKs);
+  DeleteBuffer(logProbs);
 }
 
 TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKTopPSampling) {
@@ -236,6 +291,21 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKTopPSampling) {
   }
   cudaFree(workspace);
   cudaFree(d_state);
+
+  DeleteBuffer(h_ids);
+  DeleteBuffer(d_topPs);
+  DeleteBuffer(d_topKs);
+  DeleteBuffer(d_temperatures);
+  DeleteBuffer(d_batch_slots);
+  DeleteBuffer(d_ids);
+  DeleteBuffer(temperatures);
+  DeleteBuffer(d_id_vec);
+  DeleteBuffer(batch_slots);
+  DeleteBuffer(ids);
+  DeleteBuffer(randomSeeds);
+  DeleteBuffer(topPs);
+  DeleteBuffer(topKs);
+  DeleteBuffer(logProbs);
 }
 
 TEST_F(LlamaNvidiaSamplersTestSuit, InvokeRepetitionPenaltyTest) {

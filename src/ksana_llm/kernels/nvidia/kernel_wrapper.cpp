@@ -993,16 +993,15 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
 }
 
 template <typename T>
-Status ArgMax(const T* input, const uint32_t* ids_offsets, const int32_t batch_size, const int32_t vocab_size,
-              uint32_t* result, Stream& stream, void* buffer_ptr) {
-  CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::InvokeArgMaxReduce(input, ids_offsets, batch_size, vocab_size, result, stream.Get()));
+Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
+              void* buffer_ptr) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeArgMaxReduce(input, batch_size, vocab_size, result, stream.Get()));
   return Status();
 }
 
-#define INSTANTIATE_ARG_MAX(T)                                                                  \
-  template Status ArgMax(const T* input, const uint32_t* ids_offsets, const int32_t batch_size, \
-                         const int32_t vocab_size, uint32_t* result, Stream& stream, void* workspace_ptr);
+#define INSTANTIATE_ARG_MAX(T)                                                                                    \
+  template Status ArgMax<T>(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, \
+                            Stream& stream, void* buffer_ptr);
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(half);

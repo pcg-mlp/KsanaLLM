@@ -35,7 +35,6 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, s
   };
   AlignedMemoryQueue aligned_memory_queue(kCudaMemAlignmentSize, allocator);
   aligned_memory_queue.Add(device_output_tokens_, max_batch_size);
-  aligned_memory_queue.Add(device_offset_, max_batch_size);
   aligned_memory_queue.Add(device_topKs_, max_batch_size);
   aligned_memory_queue.Add(device_topPs_, max_batch_size);
   aligned_memory_queue.Add(device_temperatures_, max_batch_size);
@@ -390,7 +389,7 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
   }
   // Get the next tokens based on logits and the sampling parameters.
   if (sampling_devide_parameter.do_sampling) {
-    STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, nullptr, device_output_tokens_, nullptr,
+    STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, device_output_tokens_, nullptr,
                                                 sampling_devide_parameter, nullptr, stream));
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);

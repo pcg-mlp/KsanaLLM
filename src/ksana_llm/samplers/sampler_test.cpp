@@ -3,7 +3,7 @@
  * ==============================================================================*/
 
 #include "ksana_llm/samplers/sampler.h"
-#include "test.h"
+#include "tests/test.h"
 
 using namespace ksana_llm;
 
@@ -78,10 +78,9 @@ class SamplerTest : public testing::Test {
   }
 
   void SetLogitsBuf(const std::vector<float> &logits_buf_cpu) {
-    if (logits_buf_cpu.size() > vocab_size_ * max_batch_size_) {
-      KLLM_LOG_ERROR << fmt::format("logits_buf_cpu is out of space in logits_buf: {} > {}", logits_buf_cpu.size(),
-                                    vocab_size_ * max_batch_size_);
-      return;
+    if (static_cast<int>(logits_buf_cpu.size()) > vocab_size_ * max_batch_size_) {
+      KLLM_THROW(fmt::format("logits_buf_cpu is out of space in logits_buf: {} > {}", logits_buf_cpu.size(),
+                             vocab_size_ * max_batch_size_));
     }
     MemcpyAsync(logits_buf_, logits_buf_cpu.data(), logits_buf_cpu.size() * sizeof(float), MEMCPY_HOST_TO_DEVICE,
                 context_->GetH2DStreams()[device_id_]);
@@ -107,7 +106,7 @@ class SamplerTest : public testing::Test {
   SamplingConfig sampling_config_;
 };
 
-TEST_F(SamplerTest, BaseSamplerTest) {
+TEST_F(SamplerTest, ArgMaxSamplerTest) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
@@ -115,13 +114,35 @@ TEST_F(SamplerTest, BaseSamplerTest) {
 
   // Assign a value of 1 to the logits for token_id=6 to make the sampler result as 6.
   std::vector<float> logits_buf_cpu(vocab_size_);
-  logits_buf_cpu[6] = 1;
+  logits_buf_cpu[6] = 1.f;
   SetLogitsBuf(logits_buf_cpu);
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
   sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(6, (*sample_req.output_tokens).size());
   EXPECT_EQ(6, (*sample_req.output_tokens).back());
+}
+
+TEST_F(SamplerTest, ArgMaxEqualSamplerTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+  // If there are multiple maximal values then the indices of the first maximal value are returned.
+  // Refer to
+  // https://pytorch.org/docs/stable/generated/torch.argmax.html
+  SamplingRequest sample_req = GetSamlingRequest();
+
+  // Assign a value of 1 to the logits for token_id=3 and token_id=10, and the sampler result
+  // should be 3.
+  std::vector<float> logits_buf_cpu(vocab_size_);
+  logits_buf_cpu[3] = 1.f;
+  logits_buf_cpu[10] = 1.f;
+  SetLogitsBuf(logits_buf_cpu);
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+
+  sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
+  EXPECT_EQ(6, (*sample_req.output_tokens).size());
+  EXPECT_EQ(3, (*sample_req.output_tokens).back());
 }
 
 TEST_F(SamplerTest, TemperatureAutoVerifyTest) {

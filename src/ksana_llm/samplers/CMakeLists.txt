@@ -15,7 +15,7 @@ set(samplers_nvidia_LIBS "")
 set(samplers_ascend_LIBS "")
 
 if(WITH_CUDA)
-  list(APPEND samplers_nvidia_LIBS cudart llm_kernels_nvidia_kernel_greedy)
+  list(APPEND samplers_nvidia_LIBS cudart llm_kernels_nvidia_kernel_samplers)
 endif()
 
 if(WITH_ACL)

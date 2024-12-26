@@ -23,8 +23,8 @@ class ArgMaxATBExecutor {
 
   Status Init(const int rank, const size_t max_batch_size);
 
-  Status Run(const int rank, const T* input, const uint32_t* ids_offset, const int32_t batch_size,
-             const int32_t vocab_size, uint32_t* result, Stream& stream);
+  Status Run(const int rank, const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result,
+             Stream& stream);
 
  private:
   llm_kernels::utils::ATBOperationExecutor atb_argmax_op_executor_;

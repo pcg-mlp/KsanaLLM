@@ -52,17 +52,15 @@ TopkSampling::~TopkSampling() {
   }
 }
 
-Status TopkSampling::RunSampling(float* logits, const uint32_t* offsets, uint32_t* output_token,
-                                 const SamplingConfig* sampling_config,
+Status TopkSampling::RunSampling(float* logits, uint32_t* output_token, const SamplingConfig* sampling_config,
                                  SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
                                  Stream& stream) {
   if (sampling_devide_parameter.device_topKs == nullptr) {
 #ifdef ENABLE_CUDA
-    ArgMax(logits, offsets, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token,
-           stream);
+    ArgMax(logits, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token, stream);
 #elif defined(ENABLE_ACL)
-    ArgMax(logits, offsets, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token,
-           stream, atb_executors_ptr_);
+    ArgMax(logits, sampling_devide_parameter.bs, sampling_devide_parameter.vocab_size_padded, output_token, stream,
+           atb_executors_ptr_);
 #endif
   } else {
 #ifdef ENABLE_CUDA
