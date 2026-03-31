@@ -32,16 +32,15 @@ try:
     from flash_attn.flash_attn_interface import \
         flash_attn_varlen_qkvpacked_func
     HAS_FLASH_ATTN = True
-except:  # pylint: disable=bare-except 
+except ImportError:  # pylint: disable=bare-except
     print('FlashAttention2 is not installed.')
     HAS_FLASH_ATTN = False
-    
+
 IMG_START_TOKEN = '<img>'
 IMG_END_TOKEN = '</img>'
 IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
 
 
 class InternVLTwoPointFivePreprocess:
