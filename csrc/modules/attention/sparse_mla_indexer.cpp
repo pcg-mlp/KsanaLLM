@@ -66,6 +66,7 @@ SparseMlaIndexer::SparseMlaIndexer(int layer_idx, LayerCreationContext& creation
   indexer_param.push_back(attn_config.max_position_embeddings);                  // 12: max_seq_len
   indexer_param.push_back(attn_config.idx);                                      // 13: local_layer_idx
   indexer_param.push_back(model_config.dsa_config.indexer_rope_interleave);      // 14: rope_interleave
+  indexer_param.push_back(model_config.quant_config.scale_fmt);                  // 15: scale_fmt
   flash_sparse_mla_indexer_layer_->Init(indexer_param, creation_context.runtime_config, creation_context.context,
                                         creation_context.rank);
   flash_sparse_mla_indexer_layer_->SetWorkspaceBuffer(

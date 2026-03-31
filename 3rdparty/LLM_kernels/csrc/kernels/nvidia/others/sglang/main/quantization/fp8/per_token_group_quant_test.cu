@@ -62,7 +62,7 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
     // Call the kernel
     per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_meta.data_ptr, output_s_meta.data_ptr, m, n, group_size_,
-                                 is_column_major, /*fuse_silu_mul*/ false, stream);
+                                 is_column_major, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // Copy output data back to host
@@ -103,7 +103,8 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
   }
 
   template <typename T>
-  void TestSiluMulPerTokenGroupQuantFp8(const size_t m, const size_t n, cudaStream_t stream, bool is_column_major) {
+  void TestSiluMulPerTokenGroupQuantFp8(const size_t m, const size_t n, cudaStream_t stream, bool is_column_major,
+                                        bool scale_ue8m0) {
     size_t q_size = m * n;
     size_t s_size = m * n / group_size_;
 
@@ -121,13 +122,13 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
     // Invoke the fused version
     per_token_group_quant_fp8<T>(input_meta.data_ptr, fused_output_q_meta.data_ptr, fused_output_s_meta.data_ptr, m, n,
-                                 group_size_, is_column_major, /*fuse_silu_mul*/ true, stream);
+                                 group_size_, is_column_major, /*fuse_silu_mul*/ true, scale_ue8m0, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     // Invoke the unfused version
     InvokeRowBasedActivation<SiluActivation, T>(reinterpret_cast<T*>(input_meta.data_ptr),
                                                 reinterpret_cast<const T*>(input_meta.data_ptr), m, n * 2, stream);
     per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_meta.data_ptr, output_s_meta.data_ptr, m, n, group_size_,
-                                 is_column_major, /*fuse_silu_mul*/ false, stream);
+                                 is_column_major, /*fuse_silu_mul*/ false, scale_ue8m0, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // Verify accuracy
@@ -183,9 +184,9 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_PerTokenGroupQuantFp8P
     const int warmups = 5;
     const int iterations = 10;
     auto cuda_run = [&]() {
-      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
-                                               hidden_size, group_size_,
-                                               /*is_column_major*/ false, /*fuse_silu_mul*/ false, stream);
+      per_token_group_quant_fp8<__nv_bfloat16>(
+          d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num, hidden_size, group_size_,
+          /*is_column_major*/ false, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false, stream);
     };
     const float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
     std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
@@ -200,18 +201,22 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_PerTokenGroupQuantFp8P
 TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, HalfSiluMulPerTokenGroupQuantFp8Test) {
   for (const auto& m_n_pair : m_n_pairs_) {
     TestSiluMulPerTokenGroupQuantFp8<half>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
-                                           stream, true);
+                                           stream, true, false);
     TestSiluMulPerTokenGroupQuantFp8<half>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
-                                           stream, false);
+                                           stream, false, false);
+    TestSiluMulPerTokenGroupQuantFp8<half>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
+                                           stream, false, true);
   }
 }
 
 TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, BFloat16SiluMulPerTokenGroupQuantFp8Test) {
   for (const auto& m_n_pair : m_n_pairs_) {
     TestSiluMulPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first),
-                                                    static_cast<size_t>(m_n_pair.second), stream, true);
+                                                    static_cast<size_t>(m_n_pair.second), stream, true, false);
     TestSiluMulPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first),
-                                                    static_cast<size_t>(m_n_pair.second), stream, false);
+                                                    static_cast<size_t>(m_n_pair.second), stream, false, false);
+    TestSiluMulPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first),
+                                                    static_cast<size_t>(m_n_pair.second), stream, false, true);
   }
 }
 
@@ -234,18 +239,18 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_SiluMulPerTokenGroupQu
     const int iterations = 10;
     // Run the fused version
     auto cuda_run_fused = [&]() {
-      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
-                                               hidden_size, group_size_,
-                                               /*is_column_major*/ false, /*fuse_silu_mul*/ true, stream);
+      per_token_group_quant_fp8<__nv_bfloat16>(
+          d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num, hidden_size, group_size_,
+          /*is_column_major*/ false, /*fuse_silu_mul*/ true, /*scale_ue8m0*/ false, stream);
     };
     // Run the unfused version
     auto cuda_run_unfused = [&]() {
       InvokeRowBasedActivation<SiluActivation, __nv_bfloat16>(reinterpret_cast<__nv_bfloat16*>(d_input.data_ptr),
                                                               reinterpret_cast<const __nv_bfloat16*>(d_input.data_ptr),
                                                               token_num, hidden_size * 2, stream);
-      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
-                                               hidden_size, group_size_,
-                                               /*is_column_major*/ false, /*fuse_silu_mul*/ false, stream);
+      per_token_group_quant_fp8<__nv_bfloat16>(
+          d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num, hidden_size, group_size_,
+          /*is_column_major*/ false, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false, stream);
     };
     const float elapsed_ms_fused = MeasureCudaExecutionTime(cuda_run_fused, stream, warmups, iterations);
     const float elapsed_ms_unfused = MeasureCudaExecutionTime(cuda_run_unfused, stream, warmups, iterations);

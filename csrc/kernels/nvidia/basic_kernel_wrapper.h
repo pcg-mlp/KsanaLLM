@@ -275,7 +275,6 @@ void Max(float* out, float* a, float* b, int n, int device_rank);
 void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, int logprobs_num, float* logprobs,
                   int64_t* token_ids);
 
-
 void CalcInputLogprobs(float* logits, float* temperatures, int vocab_size, int bs,
                        std::vector<std::vector<std::pair<int, float>>>& input_top_logprobs_res, int max_top_num);
 
@@ -316,6 +315,7 @@ size_t InvokeGetBlockGemmWorkspaceSize(int m, int k, int n);
 
 struct PerTokenGroupQuantFusionParams {
   bool fuse_silu_mul{false};  // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`
+  bool scale_ue8m0{false};    // Use UE8M0 (uint8 exponential) format for scales
 };
 template <typename T>
 void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,

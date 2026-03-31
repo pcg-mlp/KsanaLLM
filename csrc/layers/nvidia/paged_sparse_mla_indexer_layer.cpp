@@ -58,8 +58,8 @@ Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
                                         std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   // Parse parameters
-  if (parameters.size() < 17) {
-    KLLM_THROW("PagedSparseMlaIndexerLayer requires at least 17 parameters");
+  if (parameters.size() < 18) {
+    KLLM_THROW("PagedSparseMlaIndexerLayer requires at least 18 parameters");
   }
 
   dim_ = std::any_cast<int>(parameters[0]);
@@ -85,11 +85,12 @@ Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   max_position_embeddings_ = std::any_cast<int>(parameters[12]);
   layer_index_ = std::any_cast<int>(parameters[13]);  // Add layer_index initialization
   const bool is_neox = !(std::any_cast<bool>(parameters[14]));
+  scale_ue8m0_ = (std::any_cast<std::string>(parameters[15]) == "ue8m0");
   max_seq_len_ = runtime_config.max_seq_len;
   max_step_token_num_ = runtime_config.max_step_token_num;  // Save max_step_token_num from runtime_config
 
-  layer_num_ = std::any_cast<int>(parameters[15]);
-  max_decode_tokens_per_req_ = std::any_cast<int>(parameters[16]);
+  layer_num_ = std::any_cast<int>(parameters[16]);
+  max_decode_tokens_per_req_ = std::any_cast<int>(parameters[17]);
   block_size_per_layer_ = runtime_config.attn_backend_config.block_size / layer_num_;
 
   // Initialize RoPE based on data type
@@ -209,15 +210,16 @@ static void PrepareQuantWorkspace(size_t total_tokens, PagedQuantWorkspace& work
 
 template <typename SCALAR_T>
 static Status QuantizeQK(SCALAR_T* q_ptr, SCALAR_T* k_ptr, PagedQuantWorkspace& workspace, size_t total_tokens,
-                         cudaStream_t stream, int n_heads, int head_dim, int quant_block_size) {
+                         cudaStream_t stream, int n_heads, int head_dim, int quant_block_size, bool scale_ue8m0) {
   // Quantize Q: [total_tokens, n_heads, head_dim]
   InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(q_ptr, workspace.q_fp8_ptr, workspace.q_scale_ptr, total_tokens * n_heads,
-                                            head_dim,
-                                            /*is_column_major=*/false, stream, quant_block_size);
+                                            head_dim, /*is_column_major=*/false, stream, quant_block_size,
+                                            PerTokenGroupQuantFusionParams{.scale_ue8m0 = scale_ue8m0});
 
   // Quantize K: [total_tokens, head_dim]
   InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(k_ptr, workspace.k_fp8_ptr, workspace.k_scale_ptr, total_tokens, head_dim,
-                                            /*is_column_major=*/false, stream, quant_block_size);
+                                            /*is_column_major=*/false, stream, quant_block_size,
+                                            PerTokenGroupQuantFusionParams{.scale_ue8m0 = scale_ue8m0});
 
   return Status();
 }
@@ -377,7 +379,7 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
 
   // Step 4: Quantize Q/K
   QuantizeQK<SCALAR_T>(q_ptr, k_ptr, workspace, input_data.total_tokens, input_data.stream, n_heads_, head_dim_,
-                       quant_block_size_);
+                       quant_block_size_, scale_ue8m0_);
 
   // Step 5: Store KV to cache
   StoreKVCache<SCALAR_T>(q_ptr, k_ptr, input_data, workspace, layer_index_, block_size_, head_dim_);

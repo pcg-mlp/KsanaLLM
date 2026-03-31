@@ -47,6 +47,7 @@ class PagedSparseMlaIndexerLayer : public BaseLayer {
   int layer_num_;                  // number of layers on this node
   int max_decode_tokens_per_req_;  // number of tokens per request requiring decode computation
   int block_size_per_layer_;       // block size per layer = block_size / layer_num
+  bool scale_ue8m0_;               // use ue8m0 format for fp8 scales
 
 #ifdef ENABLE_CUDA
   // RoPE embedding

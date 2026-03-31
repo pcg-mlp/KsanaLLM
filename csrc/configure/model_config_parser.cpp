@@ -132,6 +132,10 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
       KLLM_THROW(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
     }
   }
+  // Force v32 to use ue8m0 scale for accuracy
+  if (model_config.is_quant && model_config.type == "deepseek_v32") {
+    model_config.quant_config.scale_fmt = "ue8m0";
+  }
 
   if (model_config.quant_config.method == QUANT_GPTQ && model_config.quant_config.desc_act == true) {
     model_config.quant_config.backend = MARLIN_LINEAR_BACKEND;

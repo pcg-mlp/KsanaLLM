@@ -43,6 +43,7 @@ void ParseFP8QuantConfig(const nlohmann::json &config_json, bool is_moe, QuantCo
   if (is_moe && quant_config.is_fp8_blockwise == false && !quant_config.is_activation_scheme_static) {
     KLLM_THROW(fmt::format("Not support dyanmic fp8 quant_method for moe model."));
   }
+  quant_config.scale_fmt = config_json.value("scale_fmt", "none");
   KLLM_LOG_INFO << fmt::format(
       "using quant model, quant method fp8, method type: {}, is_checkpoint_fp8_serialized: {}, "
       "is_activation_scheme_static: {}",

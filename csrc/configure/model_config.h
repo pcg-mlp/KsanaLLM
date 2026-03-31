@@ -160,6 +160,11 @@ struct QuantConfig {
   // (fp8) Whether enable int4 moe in fp8 model.
   bool enable_moe_int4 = false;
 
+  // (fp8) format for fp8 scales
+  //       "none" (default, standard float32 scale, e.g., GLM-5)
+  //       "ue8m0" (uint8 exponential, powers-of-2 scales, e.g., DeepSeek-V3.2)
+  std::string scale_fmt{"none"};
+
   // Adaptation layers
   std::vector<std::string> pattern_layers;
 

@@ -61,8 +61,8 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
                                         std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   // Parse parameters
-  if (parameters.size() < 15) {
-    KLLM_THROW("FlashSparseMlaIndexerLayer requires at least 15 parameters");
+  if (parameters.size() < 16) {
+    KLLM_THROW("FlashSparseMlaIndexerLayer requires at least 16 parameters");
   }
 
   dim_ = std::any_cast<int>(parameters[0]);
@@ -88,6 +88,7 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   max_position_embeddings_ = std::any_cast<int>(parameters[12]);
   layer_index_ = std::any_cast<int>(parameters[13]);
   const bool is_neox = !(std::any_cast<bool>(parameters[14]));
+  scale_ue8m0_ = (std::any_cast<std::string>(parameters[15]) == "ue8m0");
   max_seq_len_ = runtime_config.max_seq_len;
   max_step_token_num_ = runtime_config.max_step_token_num;  // Save max_step_token_num from runtime_config
 
@@ -222,17 +223,19 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, size_t total_tokens, Fl
 
 template <typename SCALAR_T>
 static Status QuantizeQK(SCALAR_T* q_ptr, SCALAR_T* k_ptr, FlashQuantWorkspace& workspace, size_t total_q_tokens,
-                         cudaStream_t stream, int n_heads, int head_dim, int quant_block_size) {
+                         cudaStream_t stream, int n_heads, int head_dim, int quant_block_size, bool scale_ue8m0) {
   // Quantize Q: [total_q_tokens, n_heads, head_dim]
   if (q_ptr != nullptr) {
     InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(q_ptr, workspace.q_fp8_ptr, workspace.q_scale_ptr,
-                                              total_q_tokens * n_heads, head_dim,
-                                              /*is_column_major=*/false, stream, quant_block_size);
+                                              total_q_tokens * n_heads, head_dim, /*is_column_major=*/false, stream,
+                                              quant_block_size,
+                                              PerTokenGroupQuantFusionParams{.scale_ue8m0 = scale_ue8m0});
   }
 
   // Quantize K: [total_q_tokens, head_dim]
   InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(k_ptr, workspace.k_fp8_ptr, workspace.k_scale_ptr, total_q_tokens, head_dim,
-                                            /*is_column_major=*/false, stream, quant_block_size);
+                                            /*is_column_major=*/false, stream, quant_block_size,
+                                            PerTokenGroupQuantFusionParams{.scale_ue8m0 = scale_ue8m0});
 
   return Status();
 }
@@ -401,7 +404,7 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
 
   // Step 4: Quantize Q/K
   QuantizeQK<SCALAR_T>(context_use_dsa ? q_ptr : nullptr, k_ptr, workspace, input_data.total_q_tokens,
-                       input_data.stream, n_heads_, head_dim_, quant_block_size_);
+                       input_data.stream, n_heads_, head_dim_, quant_block_size_, scale_ue8m0_);
 
   // Step 5: Store KV to cache (only the storage part, quantization is already done)
   StoreKVCache<SCALAR_T>(input_data, workspace, layer_index_, block_size_, head_dim_, context_use_dsa);

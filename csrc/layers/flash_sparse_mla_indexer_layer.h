@@ -45,6 +45,7 @@ class FlashSparseMlaIndexerLayer : public BaseLayer {
   int layer_index_;              // layer index
   size_t max_step_token_num_;    // max step token num from runtime_config
   size_t chunk_size_;            // chunk size for logits computation to avoid a large logits buffer
+  bool scale_ue8m0_;             // use ue8m0 format for fp8 scales
 
 #ifdef ENABLE_CUDA
   // RoPE embedding

@@ -1196,7 +1196,7 @@ void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* ou
                                      const PerTokenGroupQuantFusionParams& params) {
 #ifdef ENABLE_FP8
   llm_kernels::nvidia::per_token_group_quant_fp8<T>(input, output_q, output_s, m, n, group_size, is_column_major,
-                                                    params.fuse_silu_mul, stream);
+                                                    params.fuse_silu_mul, params.scale_ue8m0, stream);
 #else
   KLLM_THROW("FP8 is not supported in this build. Please enable FP8 support.");
 #endif
