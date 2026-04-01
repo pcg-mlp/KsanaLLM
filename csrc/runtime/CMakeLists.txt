@@ -38,3 +38,5 @@ cpp_test(generation_controller_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/gene
 
 cpp_test(schedule_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/schedule_output_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
+cpp_test(sampling_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/sampling_output_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+

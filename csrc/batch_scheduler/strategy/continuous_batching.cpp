@@ -703,6 +703,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       continue;
     }
 
+    // Ignore draft tokens when speculative decoding is disabled
+    if (!req->draft_tokens.spec.empty() && !batch_scheduler_config_.enable_speculative_decoding) {
+      req->draft_tokens.spec.clear();
+    }
+
     bool is_first_prefill_step = true;
     bool is_last_prefill_step = true;
     size_t req_step_block_num = 0;  // block number to be allocated in this step
@@ -716,11 +721,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       if (runtime_config_.enable_prefix_caching) {
         auto it = req->request_target.find("logits");
         if (it != req->request_target.end() && !it->second.slice_pos.empty()) {
-            prepared_shared_token_num = it->second.slice_pos.front().first;
+          prepared_shared_token_num = it->second.slice_pos.front().first;
         }
       }
-      KLLM_LOG_SCHEDULER << "req_id: " << req->req_id
-                         << ", seq token num = " << seq_token_num
+      KLLM_LOG_SCHEDULER << "req_id: " << req->req_id << ", seq token num = " << seq_token_num
                          << ", prepared for prefix cached token num = " << prepared_shared_token_num;
       // Find shared blocks in first step
       size_t shared_block_num = 0;
@@ -738,8 +742,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       is_first_prefill_step = false;
       shared_token_num = planning_workload.prefill_start_offset;
     }
-    REPORT_METRIC("prefix_cache_hit_ratio",
-                 static_cast<double>(shared_token_num) / req->GetPrefillingTokens().size());
+    REPORT_METRIC("prefix_cache_hit_ratio", static_cast<double>(shared_token_num) / req->GetPrefillingTokens().size());
     if (req->req_ctx && shared_token_num > 0) {
       (*req->req_ctx)["prefix_cache_hit_tokens"] = std::to_string(shared_token_num);
     }
@@ -854,7 +857,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
           REPORT_COUNTER("flexible_cache_hit_req_num", static_cast<size_t>(1));
           REPORT_COUNTER("flexible_cache_hit_token_num", req->flexible_cached_copy_tasks.size());
           REPORT_METRIC("flexible_cache_hit_ratio",
-                       static_cast<double>(req->flexible_cache_len) / req->GetPrefillingTokens().size());
+                        static_cast<double>(req->flexible_cache_len) / req->GetPrefillingTokens().size());
         }
 
         req->SetCacheHitStatus(shared_token_num, is_first_prefill_step);
@@ -988,9 +991,8 @@ void ContinuousBatchingStrategy::SyncSwapoutRequest(std::shared_ptr<InferRequest
   size_t swapped_block_num = 0;
   std::vector<int> swapout_memory_blocks;
   std::vector<int> swapout_host_block_ids;
-  Status status =
-      cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num, swapout_memory_blocks,
-                                          swapout_host_block_ids);
+  Status status = cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num,
+                                                      swapout_memory_blocks, swapout_host_block_ids);
   if (status.OK()) {
     batch_state_->swapout_pending_requests[req->req_id] = req;
 
@@ -999,7 +1001,7 @@ void ContinuousBatchingStrategy::SyncSwapoutRequest(std::shared_ptr<InferRequest
       batch_state_->schedule_output->swapout_req_block_ids.emplace_back(
           std::unordered_map<int64_t, SwapReqBlockInfo>());
     }
-    auto& swapout_info = batch_state_->schedule_output->swapout_req_block_ids[0][req->req_id];
+    auto &swapout_info = batch_state_->schedule_output->swapout_req_block_ids[0][req->req_id];
     swapout_info.dev_block_ids = std::move(swapout_memory_blocks);
     swapout_info.host_block_ids = std::move(swapout_host_block_ids);
 
@@ -1111,7 +1113,7 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
           batch_state_->schedule_output->swapin_req_block_ids.emplace_back(
               std::unordered_map<int64_t, SwapReqBlockInfo>());
         }
-        auto& swapin_info = batch_state_->schedule_output->swapin_req_block_ids[0][req->req_id];
+        auto &swapin_info = batch_state_->schedule_output->swapin_req_block_ids[0][req->req_id];
         swapin_info.dev_block_ids = std::move(swapin_memory_blocks);
         swapin_info.host_block_ids = std::move(swapin_host_block_ids);
         continue;

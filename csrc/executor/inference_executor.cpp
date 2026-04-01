@@ -11,6 +11,9 @@
 #include <mutex>
 
 #include "executor/layer_progress_tracker.h"
+#include "runtime/draft_generator/asr_custom_generator.h"
+#include "runtime/draft_generator/ptp_generator.h"
+#include "runtime/draft_generator/trie_generator.h"
 #include "runtime/weight_instance.h"
 #include "utils/host_memory_pool.h"
 #include "utils/memory_allocator.h"
@@ -213,14 +216,19 @@ Status InferenceExecutor::Initialize() {
   }
 
   // Create draft generator controller.
-  // TrieGenerator and PtpGenerator are independent draft generators that can be enabled separately:
-  //   - TrieGenerator: controlled by enable_speculative_decoding, predicts draft tokens via a trie built from history.
-  //   - PtpGenerator:  controlled by ptp_step_num (from model config ptp_step_num), does NOT require
-  //                    enable_speculative_decoding.
+  // Trie/AsrCustomGenerator and PtpGenerator are independent draft generators that can be enabled separately:
+  //   - Trie/AsrCustomGenerator: controlled by enable_speculative_decoding, predicts draft tokens via specific method.
+  //   - PtpGenerator: controlled by ptp_step_num (from model config ptp_step_num), does NOT require
+  //                   enable_speculative_decoding.
   auto draft_generator_controller = std::make_shared<DraftGeneratorController>();
   if (batch_scheduler_config.enable_speculative_decoding) {
-    draft_generator_controller->AppendDraftGenerator(std::make_shared<TrieGenerator>());
-    KLLM_LOG_INFO << "Added TrieGenerator to DraftGeneratorController";
+    if (batch_scheduler_config.speculative_method == "trie") {
+      draft_generator_controller->AppendDraftGenerator(std::make_shared<TrieGenerator>());
+      KLLM_LOG_INFO << "Added TrieGenerator to DraftGeneratorController";
+    } else {  // batch_scheduler_config.speculative_method == "asr_custom"
+      draft_generator_controller->AppendDraftGenerator(std::make_shared<AsrCustomGenerator>());
+      KLLM_LOG_INFO << "Added AsrCustomGenerator to DraftGeneratorController";
+    }
   }
   if (batch_scheduler_config.ptp_step_num > 0) {
     draft_generator_controller->AppendDraftGenerator(

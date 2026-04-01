@@ -113,10 +113,10 @@ void Tensor::AcquireImpl() {
         // 注意：不修改 location，仅通过 host_memory_source_ 标记区分
         HostAlloc(&data_ptr, total_bytes);
         host_memory_source_ = HostMemorySource::DIRECT;
-        KLLM_LOG_WARNING << "Tensor[" << name << "] fallback to direct allocation"
-                         << ", requested_size: " << total_bytes << ", ptr: " << data_ptr
-                         << ", pool_initialized: " << (pool != nullptr && pool->IsInitialized())
-                         << ", pool_free: " << (pool != nullptr ? pool->GetFreeSize() : 0);
+        KLLM_LOG_DEBUG << "Tensor[" << name << "] fallback to direct allocation"
+                       << ", requested_size: " << total_bytes << ", ptr: " << data_ptr
+                       << ", pool_initialized: " << (pool != nullptr && pool->IsInitialized())
+                       << ", pool_free: " << (pool != nullptr ? pool->GetFreeSize() : 0);
       }
     } else {
       KLLM_THROW(fmt::format("Unexpected memory location: {}", location));

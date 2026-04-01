@@ -184,7 +184,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("input_tokens", &ksana_llm::KsanaPythonInput::input_tokens)
       .def_readwrite("request_target", &ksana_llm::KsanaPythonInput::request_target)
       .def_readwrite("input_refit_embedding", &ksana_llm::KsanaPythonInput::input_refit_embedding)
-      .def_readwrite("structured_output_regex", &ksana_llm::KsanaPythonInput::structured_output_regex);
+      .def_readwrite("structured_output_regex", &ksana_llm::KsanaPythonInput::structured_output_regex)
+      .def_readwrite("draft_tokens", &ksana_llm::KsanaPythonInput::draft_tokens);
 
   // Export `PythonTensor` to python.
   pybind11::class_<ksana_llm::PythonTensor, std::shared_ptr<ksana_llm::PythonTensor>>(m, "PythonTensor")

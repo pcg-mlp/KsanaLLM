@@ -56,7 +56,8 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
       request_target(ksana_python_input->request_target),
       response(),
       timestamp_in_ms(ProfileTimer::GetCurrentTimeInMs()),
-      req_ctx(req_ctx) {
+      req_ctx(req_ctx),
+      draft_tokens(ksana_python_input->draft_tokens) {
   for (auto& [output, req_logprobs, total_score] : output_group) {
     output = ksana_python_input->input_tokens;
     req_ids.push_back(id_generator_.Gen());

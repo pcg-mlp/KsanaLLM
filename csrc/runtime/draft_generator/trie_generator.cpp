@@ -148,7 +148,7 @@ void TrieGenerator::GenerateDraft(std::shared_ptr<ExecutorInferRequest> req) {
   constexpr double kOutputWeight = 0.2;
   constexpr int kSuggestedDraftNum = 16;
   tokens.insert(tokens.end(), input_tokens.begin() + usable_length, input_tokens.end());
-  Predict(tokens, req->draft_tokens.trie, kSuggestedDraftNum, 0, "OneBranch", kOutputWeight);
+  Predict(tokens, req->draft_tokens.spec, kSuggestedDraftNum, 0, "OneBranch", kOutputWeight);
 }
 
 void TrieGenerator::StreamPut(const std::vector<int>& token_ids, int last_pos, bool is_final,

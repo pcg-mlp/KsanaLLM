@@ -272,7 +272,7 @@ Status ModelRunner::HandlePostprocess() {
     Singleton<LayerProgressTracker>::GetInstance()->ResetState();
 
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
-      generation_results[req->req_id].draft_tokens = req->draft_tokens.GetDraftTokens();
+      generation_results[req->req_id].draft_tokens = req->draft_tokens;
     }
 
     SerializeGenerationResultToSamplingResult(generation_results, sampling_output);

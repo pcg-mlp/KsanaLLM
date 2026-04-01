@@ -14,8 +14,6 @@
 #include "executor/model_runner.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "runtime/draft_generator/draft_generator_controller.h"
-#include "runtime/draft_generator/ptp_generator.h"
-#include "runtime/draft_generator/trie_generator.h"
 #include "runtime/hidden_unit_buffer_pool.h"
 #include "runtime/model_instance.h"
 #include "runtime/weight_instance_inferface.h"

@@ -154,8 +154,8 @@ void GenerationController::FilterGeneratorDraftTokens(std::vector<std::shared_pt
     if (req->sampling_result_tokens.size() - kStepGenerateTokenNum != req->draft_tokens.size() &&
         req->logits_custom_length == 0) {
       KLLM_LOG_ERROR << fmt::format(
-          "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, trie_draft_tokens.size = {}",
-          req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.trie.size());
+          "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, spec_draft_tokens.size = {}",
+          req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.spec.size());
       continue;
     }
     // Check which tokens are predicted correctly.
@@ -200,8 +200,8 @@ void GenerationController::FilterGeneratorDraftTokens(std::vector<std::shared_pt
     req->accepted_tokens.swap(draft_tokens);
     req->accepted_tokens.resize(draft_hit_num);
     // Delete logprobs of tokens that were not accepted.
-    size_t unaccepted_num = draft_tokens.size() > 0 ?
-                            req->sampling_result_tokens.size() - kStepGenerateTokenNum - draft_hit_num : 0;
+    size_t unaccepted_num =
+        draft_tokens.size() > 0 ? req->sampling_result_tokens.size() - kStepGenerateTokenNum - draft_hit_num : 0;
     for (size_t i = 0; i < unaccepted_num; ++i) {
       if (!req->logprobs.empty()) req->logprobs.pop_back();
     }

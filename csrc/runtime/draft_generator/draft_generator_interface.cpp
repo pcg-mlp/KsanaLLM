@@ -20,9 +20,9 @@ size_t DefaultFilterDraftTokens(std::shared_ptr<ExecutorInferRequest> req) {
   if (req->sampling_result_tokens.size() - kStepGenerateTokenNum != req->draft_tokens.size() &&
       req->logits_custom_length == 0) {
     KLLM_LOG_ERROR << fmt::format(
-        "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, trie_draft_tokens.size = {}, "
+        "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, spec_draft_tokens.size = {}, "
         "ptp_draft_tokens.size = {}",
-        req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.trie.size(),
+        req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.spec.size(),
         req->draft_tokens.ptp.size());
     return 0;
   }

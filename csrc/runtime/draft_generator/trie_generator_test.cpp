@@ -324,7 +324,7 @@ class DraftTokenFilterTest : public testing::Test {
     executor_req->grammar_matcher = grammar_matcher;
 
     executor_req->draft_tokens.mtp = draft_tokens_mtp;
-    executor_req->draft_tokens.trie = draft_tokens_trie;
+    executor_req->draft_tokens.spec = draft_tokens_trie;
     executor_req->sampling_result_tokens = sampling_result_tokens;
 
     return executor_req;
@@ -398,7 +398,7 @@ class TrieWithControllerTest : public testing::Test {
     executor_req->grammar_matcher = grammar_matcher;
 
     executor_req->draft_tokens.mtp = draft_tokens_mtp;
-    executor_req->draft_tokens.trie = draft_tokens_trie;
+    executor_req->draft_tokens.spec = draft_tokens_trie;
     executor_req->sampling_result_tokens = sampling_result_tokens;
 
     return executor_req;

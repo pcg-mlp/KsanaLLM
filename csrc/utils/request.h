@@ -145,6 +145,9 @@ struct KsanaPythonInput {
   // The structured output regex to build the finite state machine.
   std::string structured_output_regex;
 
+  // User-provided draft tokens
+  std::vector<int> draft_tokens;
+
   // Verifiy that the above `request_target` describes valid targets.
   // This function also converts negative `slice_pos` parameters to their corresponding positive values, if exist.
   Status VerifyRequestTarget();
@@ -276,6 +279,9 @@ class Request {
 
   // Structured generator configuration for structured output
   StructuredGeneratorConfig structured_generator_config;
+
+  // User-provided draft tokens
+  std::vector<int> draft_tokens;
 
   // This is a unique ID for the KV transformer group.
   int64_t kv_comm_request_id;

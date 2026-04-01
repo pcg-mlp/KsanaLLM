@@ -42,7 +42,9 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
       kv_comm_group_key(request->kv_comm_group_key),
       beam_search_group(request->beam_search_group),
       timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
-      req_ctx(request->req_ctx) {}
+      req_ctx(request->req_ctx) {
+  draft_tokens.spec = request->draft_tokens;
+}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }
 
@@ -198,14 +200,14 @@ void InferRequest::ResetPrefillingTokens() {
   step = 0;
   suggested_draft_num = 0;
   prefix_cache_len = 0;
-  draft_tokens.clear();  // TODO(lijiajieli): do not reset draft
   remaining_workload_.Reset();
   remaining_workload_.prefill_token_num = prefilling_tokens_.size();
 
+  const size_t draft_token_num = draft_tokens.size();
   // Assumption: if logits_custom_length > 0, then sampling_token_num = logits_custom_length
   //             because user asked to generate logits for a specific number of tokens
   //             In runtime implementation, sampling_token_num is used to determine the number of logits to generate
-  remaining_workload_.sampling_token_num = std::max(kStepGenerateTokenNum, logits_custom_length);
+  remaining_workload_.sampling_token_num = std::max(kStepGenerateTokenNum + draft_token_num, logits_custom_length);
 
   planning_workload_ = remaining_workload_;
   sampling_token_num = planning_workload_.sampling_token_num;
@@ -316,6 +318,15 @@ void InferRequest::LaunchPlanningTask() {
                                                                inflight_task_.workload.prefill_start_offset +
                                                                inflight_task_.workload.prefill_token_num);
       SetKvCachedTokenNum(inflight_task_.workload.prefill_start_offset);
+    }
+
+    // Append draft tokens at the last step of prefill
+    if (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset ==
+        prefilling_tokens_.size()) {
+      const size_t draft_token_num = draft_tokens.spec.size();
+      forwarding_tokens.insert(forwarding_tokens.end(), draft_tokens.spec.begin(), draft_tokens.spec.end());
+      inflight_task_.workload.draft_token_num = draft_token_num;
+      inflight_task_.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
     }
   } else {
     auto merged_draft_tokens = draft_tokens.GetDraftTokens();

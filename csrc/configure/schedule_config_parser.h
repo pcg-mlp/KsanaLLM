@@ -105,6 +105,8 @@ struct BatchSchedulerConfig {
   size_t transfer_layer_chunk_size = 1;
 
   bool enable_speculative_decoding = false;
+  std::string speculative_method;
+
   size_t mtp_step_num = 0;
 
   // The token length for Parallel Token Prediction
@@ -362,7 +364,10 @@ struct RuntimeConfig {
   size_t max_step_token_num;  //  The max token number of step
 
   size_t mtp_step_num = 0;
+
   bool enable_speculative_decoding = false;
+  std::string speculative_method;
+
   bool enable_async = false;
 
   // TODO(robertyuan): No body set it?

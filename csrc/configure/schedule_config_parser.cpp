@@ -225,8 +225,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   }
 
   // Read batch scheduler config.
-  int scheduler_type_int = yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(),
-                                                      "setting.batch_scheduler.scheduler_type", 0);
+  int scheduler_type_int =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.scheduler_type", 0);
   if (scheduler_type_int != static_cast<int>(SchedulerType::DEFAULT) &&
       scheduler_type_int != static_cast<int>(SchedulerType::EVENT_DRIVEN)) {
     KLLM_LOG_ERROR << "Unknown scheduler_type: " << scheduler_type_int << ", fallback to DEFAULT.";
@@ -265,6 +265,24 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.split_fuse_token_num", 0);
   batch_scheduler_config_.enable_speculative_decoding = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_speculative_decoding", false);
+  batch_scheduler_config_.speculative_method =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.batch_scheduler.speculative_method", "");
+  if (batch_scheduler_config_.enable_speculative_decoding) {
+    if (batch_scheduler_config_.speculative_method.empty()) {
+      // Use trie by default
+      batch_scheduler_config_.speculative_method = "trie";
+    } else if (batch_scheduler_config_.speculative_method != "trie" &&
+               batch_scheduler_config_.speculative_method != "asr_custom") {
+      KLLM_LOG_WARNING << fmt::format("Unknown speculative_method: {}, disable speculative decoding.",
+                                      batch_scheduler_config_.speculative_method);
+      batch_scheduler_config_.enable_speculative_decoding = false;
+      batch_scheduler_config_.speculative_method.clear();
+    }
+  } else if (!batch_scheduler_config_.speculative_method.empty()) {
+    KLLM_LOG_WARNING << fmt::format("Speculative decoding is disabled, ignore speculative_method: {}",
+                                    batch_scheduler_config_.speculative_method);
+    batch_scheduler_config_.speculative_method.clear();
+  }
   batch_scheduler_config_.mtp_step_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.mtp_step_num", 0);
   batch_scheduler_config_.ptp_step_num = model_config.ptp_step_num;

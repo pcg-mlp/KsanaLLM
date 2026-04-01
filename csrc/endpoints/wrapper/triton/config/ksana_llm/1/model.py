@@ -40,7 +40,8 @@ TRITON_TO_KSANA = {
     "embedding_bytes": "embedding_bytes",
     "embedding_dtype": "embedding_dtype",
     "request_type": "request_type",
-    "request_bytes": "request_bytes"
+    "request_bytes": "request_bytes",
+    "draft_tokens": "draft_tokens"
 }
 
 GENERATION_CONFIG_KEYS = {

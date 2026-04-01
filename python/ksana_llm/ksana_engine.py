@@ -416,6 +416,9 @@ class KsanaLLMEngine:
                 "structured_output_regex"
             ]
 
+        if "draft_tokens" in request_dict:
+            ksana_python_input.draft_tokens = request_dict["draft_tokens"]
+
         plugin_kwargs = {
             "messages": messages,
             "additional_params": request_dict.get("additional_params", {}),

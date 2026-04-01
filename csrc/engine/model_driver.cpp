@@ -477,7 +477,7 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
       auto req = req_it->second;
       req->generated_tokens = gen_result.generated_tokens;
       req->accepted_tokens = gen_result.accepted_tokens;
-      req->draft_tokens.mtp = gen_result.draft_tokens;
+      req->draft_tokens = gen_result.draft_tokens;
 
       // 如果有transfer_engine，准备发送token数据
       if (transfer_engine_ && transfer_engine_->GetGroupRole() == GroupRole::PREFILL) {

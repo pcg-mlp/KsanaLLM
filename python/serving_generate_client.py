@@ -79,6 +79,8 @@ if __name__ == "__main__":
                 "repetition_penalty": 1.0,  # penalty for repetitive responses
                 "stop_token_ids": []  # list of tokens that stop the generation
             },
+            # User can provide draft tokens
+            # "draft_tokens": [5761, 6387, 6354, 5671, 6727, 5952, 5141, 5919, 7258, 4990, 6794],
             # Set stream mode to False
             "stream": False,
         }

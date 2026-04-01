@@ -218,6 +218,12 @@ input [
     data_type: TYPE_BOOL
     dims: [ 1 ]
     optional: true
+  },
+  {
+    name: "draft_tokens"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+    optional: true
   }
 ]
 

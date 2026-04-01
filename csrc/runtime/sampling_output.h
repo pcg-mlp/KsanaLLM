@@ -4,7 +4,9 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
+#include "runtime/draft_generator/draft_tokens.h"
 #include "runtime/sampling_request.h"
 #include "runtime/schedule_output.h"
 #include "utils/logger.h"
@@ -15,31 +17,40 @@ class GenerationResult {
  public:
   std::vector<int> accepted_tokens;
   std::vector<int> generated_tokens;
-  std::vector<int> draft_tokens;
+  DraftTokens draft_tokens;
+
   void SerializeToVector(std::vector<int>& encoded_tokens) const {
     encoded_tokens.clear();
-    encoded_tokens.push_back(accepted_tokens.size());
-    encoded_tokens.insert(encoded_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
-    encoded_tokens.push_back(generated_tokens.size());
-    encoded_tokens.insert(encoded_tokens.end(), generated_tokens.begin(), generated_tokens.end());
-    encoded_tokens.push_back(draft_tokens.size());
-    encoded_tokens.insert(encoded_tokens.end(), draft_tokens.begin(), draft_tokens.end());
+    SerializeField(accepted_tokens, encoded_tokens);
+    SerializeField(generated_tokens, encoded_tokens);
+    SerializeField(draft_tokens.mtp, encoded_tokens);
+    SerializeField(draft_tokens.spec, encoded_tokens);
+    SerializeField(draft_tokens.ptp, encoded_tokens);
   }
 
   void DeserializeFromVector(const std::vector<int>& encoded_tokens) {
     size_t idx = 0;
-    size_t accepted_size = encoded_tokens[idx++];
-    accepted_tokens.resize(accepted_size);
-    std::copy(encoded_tokens.begin() + idx, encoded_tokens.begin() + idx + accepted_size, accepted_tokens.begin());
-    idx += accepted_size;
-    size_t generated_size = encoded_tokens[idx++];
-    generated_tokens.resize(generated_size);
-    std::copy(encoded_tokens.begin() + idx, encoded_tokens.begin() + idx + generated_size, generated_tokens.begin());
-    idx += generated_size;
-    size_t draft_size = encoded_tokens[idx++];
-    draft_tokens.resize(draft_size);
-    std::copy(encoded_tokens.begin() + idx, encoded_tokens.begin() + idx + draft_size, draft_tokens.begin());
-    KLLM_CHECK((accepted_size + generated_size + draft_size + 3) == encoded_tokens.size());
+    idx = DeserializeField(encoded_tokens, idx, accepted_tokens);
+    idx = DeserializeField(encoded_tokens, idx, generated_tokens);
+    idx = DeserializeField(encoded_tokens, idx, draft_tokens.mtp);
+    idx = DeserializeField(encoded_tokens, idx, draft_tokens.spec);
+    idx = DeserializeField(encoded_tokens, idx, draft_tokens.ptp);
+    KLLM_CHECK(idx == encoded_tokens.size());
+  }
+
+ private:
+  static void SerializeField(const std::vector<int>& field, std::vector<int>& out) {
+    out.push_back(static_cast<int>(field.size()));
+    out.insert(out.end(), field.begin(), field.end());
+  }
+
+  static size_t DeserializeField(const std::vector<int>& in, size_t idx, std::vector<int>& field) {
+    KLLM_CHECK_WITH_INFO(idx < in.size(), "DeserializeField: idx out of range");
+    KLLM_CHECK_WITH_INFO(in[idx] >= 0, "DeserializeField: negative field size");
+    size_t len = static_cast<size_t>(in[idx++]);
+    KLLM_CHECK_WITH_INFO(idx + len <= in.size(), "DeserializeField: field data out of range");
+    field.assign(in.begin() + idx, in.begin() + idx + len);
+    return idx + len;
   }
 };
 

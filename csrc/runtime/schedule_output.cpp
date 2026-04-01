@@ -298,6 +298,7 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
 
     // draft_tokens
     SerializeVector<int>(req->draft_tokens.mtp, ptr, offset);
+    SerializeVector<int>(req->draft_tokens.spec, ptr, offset);
 
     // accepted_hidden_states, not supported.
 
@@ -434,6 +435,7 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
 
     // draft_tokens
     DeserializeVector<int>(req->draft_tokens.mtp, ptr, offset);
+    DeserializeVector<int>(req->draft_tokens.spec, ptr, offset);
 
     // accepted_hidden_states, not supported.
 
