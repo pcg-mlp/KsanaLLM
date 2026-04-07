@@ -352,6 +352,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 2.0);
   block_manager_config_.dynamic_reusable_memory_ratio = yaml_reader.GetScalar<float>(
       yaml_reader.GetRootNode(), "setting.block_manager.dynamic_reusable_memory_ratio", 1.0);
+  block_manager_config_.host_pool_size_gb =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.host_pool_size_gb", 0);
 
   // Load cache manager config
   cache_manager_config_.swap_threadpool_size =

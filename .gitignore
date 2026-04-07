@@ -104,3 +104,5 @@ d.*
 
 # Ignore auto-downloaded font file (downloaded during CMake build)
 python/ksana_plugin/arc_hunyuan_video/ARIAL.TTF
+
+.agent

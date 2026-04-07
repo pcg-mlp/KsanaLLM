@@ -323,8 +323,9 @@ print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   RESULT_VARIABLE _PYTHON_SUCCESS
   OUTPUT_VARIABLE USE_CXX11_ABI)
 include_directories(${PY_INCLUDE_DIR})
-include_directories(${TORCH_DIR}/include/torch/csrc/api/include/)
-include_directories(${TORCH_DIR}/include/)
+# Use SYSTEM to avoid torch's bundled headers (e.g. protobuf) shadowing local deps.
+include_directories(SYSTEM ${TORCH_DIR}/include/torch/csrc/api/include/)
+include_directories(SYSTEM ${TORCH_DIR}/include/)
 find_library(TORCH_PYTHON_LIBRARY NAMES torch_python PATHS "${TORCH_DIR}/lib" NO_DEFAULT_PATH)
 find_package(PythonLibs REQUIRED)
 

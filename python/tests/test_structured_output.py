@@ -78,7 +78,7 @@ async def run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path):
                 "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
             ).replace("%s", prompt)
             input_tokens = tokenizer.encode(formatted_prompt)
-            _, output = await model.generate(
+            _, output, _plugin_timing_metrics = await model.generate(
                 model_name="",  # Specify the model name if needed
                 request_dict={
                     "input_tokens": input_tokens,

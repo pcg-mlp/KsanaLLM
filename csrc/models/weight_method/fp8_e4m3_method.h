@@ -47,6 +47,10 @@ class Fp8E4m3Method {
   Status process_experts_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                               const std::string& weight_prefix_name, int dev_rank, int num_experts);
 
+  // Dynamic quantization: convert to FP8 and bind scale
+  Status ConvertWeightToFp8(std::unordered_map<std::string, Tensor>& device_model_weights,
+                            const std::string& weight_name, int dev_rank);
+
  private:
   // Check if weight is FP8 serialized checkpoint (static quantization)
   bool IsCheckpointFp8Serialized() const { return is_checkpoint_fp8_serialized_; }
@@ -57,10 +61,6 @@ class Fp8E4m3Method {
 
   Status LoadScaleTensor(std::unordered_map<std::string, Tensor>& device_model_weights, const std::string& weight_name,
                          const Tensor& weight_tensor, int dev_rank);
-
-  // Convert weight to FP8 for dynamic quantization and bind weight scale to it
-  Status ConvertWeightToFp8(std::unordered_map<std::string, Tensor>& device_model_weights,
-                            const std::string& weight_name, int dev_rank);
 
   // Process projection weights for FP8 quantization.
   Status ProcessProjWeight(std::unordered_map<std::string, Tensor>& device_model_weights,

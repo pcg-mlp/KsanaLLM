@@ -1,0 +1,4 @@
+git+https://github.com/liyz15/transformers.git@arc_hunyuan_video
+librosa==0.11.0
+moviepy==1.0.3
+pydub==0.25.1

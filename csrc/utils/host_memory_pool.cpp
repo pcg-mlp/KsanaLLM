@@ -16,32 +16,7 @@ HostMemoryPool* HostMemoryPool::GetInstance() {
   return &instance;
 }
 
-size_t HostMemoryPool::GetPoolSizeFromEnv() const {
-  const char* env_value = std::getenv(kHostPoolSizeEnvVar);
-  if (env_value != nullptr) {
-    try {
-      int64_t size_gb = std::stoll(env_value);
-      if (size_gb >= 0) {
-        KLLM_LOG_INFO << fmt::format("HostMemoryPool: using size from environment variable {}={} GB",
-                                     kHostPoolSizeEnvVar, size_gb);
-        return static_cast<size_t>(size_gb) * 1024 * 1024 * 1024;
-      }
-      KLLM_LOG_WARNING << fmt::format("HostMemoryPool: {} must be a non-negative integer, got: {}, using default size",
-                                      kHostPoolSizeEnvVar, env_value);
-    } catch (const std::exception& e) {
-      KLLM_LOG_WARNING << fmt::format("HostMemoryPool: invalid value for {}: {}, using default size",
-                                      kHostPoolSizeEnvVar, env_value);
-    }
-  }
-  if (kDefaultHostPoolSize == 0) {
-    KLLM_LOG_INFO << "HostMemoryPool: default size is 0, memory pool disabled";
-  } else {
-    KLLM_LOG_INFO << fmt::format("HostMemoryPool: using default size {} GB", kDefaultHostPoolSize / 1024 / 1024 / 1024);
-  }
-  return kDefaultHostPoolSize;
-}
-
-void HostMemoryPool::Initialize() {
+void HostMemoryPool::Initialize(size_t pool_size_gb) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   if (initialized_.load(std::memory_order_relaxed)) {
@@ -49,12 +24,12 @@ void HostMemoryPool::Initialize() {
     return;
   }
 
-  // 从环境变量或默认值获取内存池大小
-  size_t pool_size = GetPoolSizeFromEnv();
-
-  // 如果 pool_size 为 0，则不初始化内存池，保持 initialized_ 为 false
-  // 这样调用方检查 IsInitialized() 会返回 false，自然跳过内存池分配
-  if (pool_size == 0) {
+  size_t pool_size = 0;
+  if (pool_size_gb > 0) {
+    pool_size = pool_size_gb * 1024 * 1024 * 1024;
+    KLLM_LOG_INFO << fmt::format("HostMemoryPool: using config host_pool_size_gb={} GB", pool_size_gb);
+  } else {
+    KLLM_LOG_INFO << "HostMemoryPool: host_pool_size_gb is 0, memory pool disabled";
     return;
   }
 

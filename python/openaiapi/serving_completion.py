@@ -130,7 +130,7 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
                 self._log_inputs(request_id, prompt_inputs[0], None)
             
             try:
-                status, output = await self.llm_server.model.generate(
+                status, output, _plugin_timing_metrics = await self.llm_server.model.generate(
                     request_dict=ksana_request,
                     streamer=completion_request.stream,
                     req_ctx=req_ctx,

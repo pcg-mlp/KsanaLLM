@@ -15,8 +15,6 @@ constexpr size_t kHostMemoryAlignment = 256;
 
 constexpr size_t kDefaultHostPoolSize = 0;
 
-constexpr const char* kHostPoolSizeEnvVar = "KSANA_HOST_POOL_SIZE_GB";
-
 // Host memory pool allocated by cudaHostAlloc/HostAlloc once.
 // Notes:
 // - cudaHostAlloc usually returns page-aligned address (4KB), which is larger than 256 bytes.
@@ -26,7 +24,7 @@ class HostMemoryPool {
  public:
   static HostMemoryPool* GetInstance();
 
-  void Initialize();
+  void Initialize(size_t pool_size_gb = 0);
 
   bool IsInitialized() const { return initialized_.load(std::memory_order_acquire); }
 
@@ -55,8 +53,6 @@ class HostMemoryPool {
   // 禁止拷贝
   HostMemoryPool(const HostMemoryPool&) = delete;
   HostMemoryPool& operator=(const HostMemoryPool&) = delete;
-
-  size_t GetPoolSizeFromEnv() const;
 
  private:
   std::atomic<bool> initialized_{false};

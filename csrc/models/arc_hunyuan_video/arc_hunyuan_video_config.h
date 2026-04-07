@@ -77,6 +77,9 @@ struct ArcHunyuanVideoConfig : public BaseModelConfig {
   bool use_rotary_pos_emb = true;
 
   bool is_visual = true;
+
+  bool is_quant = false;
+  QuantConfig quant_config;
 };
 
 }  // namespace ksana_llm

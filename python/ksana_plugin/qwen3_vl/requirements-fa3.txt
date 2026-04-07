@@ -1,0 +1,5 @@
+# cuDNN 9.1.6: fixes Conv3d regression in torch 2.9.1 bundled 9.1.0 (~145x slower fallback)
+nvidia-cudnn-cu12==9.16.0.29
+
+# FA3 flash_attn with tile-scheduler optimization
+sgl-kernel==0.3.21

@@ -13,7 +13,7 @@ from transformers import GenerationConfig, PreTrainedTokenizerFast
 from utilize.logger import init_logger
 from .arg_utils import EngineArgs
 from .exceptions import KsanaEngineError
-from .ksana_plugin import KsanaPlugin, PluginConfig
+from .ksana_plugin import KsanaPlugin, PluginConfig, PluginTimingMetrics
 from .processor_op_base import TokenizerProcessorOpBase
 
 logger = init_logger(__name__)
@@ -42,6 +42,7 @@ class PyAsyncStreamingIterator:
         start_time: float = None,
         input_tokens: int = 0,
         headers_info: str = "",
+        plugin_timing_metrics: PluginTimingMetrics = None,
     ):
         self._serving_iterator = serving_iterator
         self._ksana_plugin = ksana_plugin
@@ -50,6 +51,7 @@ class PyAsyncStreamingIterator:
         self._input_tokens = input_tokens
         self._headers_info = headers_info
         self._output_tokens = 0
+        self.plugin_timing_metrics = plugin_timing_metrics or PluginTimingMetrics()
 
     def __aiter__(self):
         return self
@@ -419,16 +421,18 @@ class KsanaLLMEngine:
         if "draft_tokens" in request_dict:
             ksana_python_input.draft_tokens = request_dict["draft_tokens"]
 
+        plugin_timing_metrics = PluginTimingMetrics()
         plugin_kwargs = {
             "messages": messages,
             "additional_params": request_dict.get("additional_params", {}),
             "prompt": prompt_text,
+            "plugin_timing_metrics": plugin_timing_metrics,
         }
 
         # First exec preprocessing of ksana plugin before inference
         self._ksana_plugin.preprocess(ksana_python_input, **plugin_kwargs)
 
-        return ksana_python_input
+        return ksana_python_input, plugin_timing_metrics
 
     def _call_serving_generate(self, ksana_python_input, req_ctx):
         return self._serving.generate(ksana_python_input, req_ctx)
@@ -464,7 +468,7 @@ class KsanaLLMEngine:
         model_name: Optional[str] = None,
         streamer: Optional[bool] = None,
         req_ctx: Optional[Dict[str, str]] = None,
-    ) -> Tuple[Any, Union[Dict[str, Any], AsyncGenerator]]:
+    ) -> Tuple[Any, Union[Dict[str, Any], AsyncGenerator], PluginTimingMetrics]:
         """The model generate interface."""
         start_time = time.time()
 
@@ -478,7 +482,7 @@ class KsanaLLMEngine:
         # used to validate the values
         generation_config = self._build_generator_config(
             request_dict.get("sampling_config", {}))
-        
+
         logger.debug(f"generation_config: max_new_tokens={generation_config.max_new_tokens}, "
                     f"temperature={generation_config.temperature}, "
                     f"top_p={generation_config.top_p}, top_k={generation_config.top_k}")
@@ -486,13 +490,13 @@ class KsanaLLMEngine:
         # Build the ksana_python_input object in executor to avoid blocking event loop
         # This is especially important for KsanaPluginEPD which makes synchronous ZMQ calls
         loop = asyncio.get_running_loop()
-        ksana_python_input = await loop.run_in_executor(
+        ksana_python_input, plugin_timing_metrics = await loop.run_in_executor(
             plugin_executor,
             self._build_python_input,
             request_dict,
             generation_config
         )
-        
+
         # 获取输入 token 数量（用于 access log）
         input_tokens = len(ksana_python_input.input_tokens) if ksana_python_input.input_tokens else 0
         if streamer:
@@ -507,13 +511,14 @@ class KsanaLLMEngine:
                 elapsed_ms = (time.time() - start_time) * 1000
                 logger.info(f"ACCESS| streaming=true input_tokens={input_tokens} "
                            f"status=FAILED elapsed={elapsed_ms:.2f}ms {headers_info}")
-                return status, None
+                return status, None, plugin_timing_metrics
 
             # streaming 模式返回迭代器，完成日志在迭代器结束时记录
             return status, PyAsyncStreamingIterator(
                 streaming_iterator, self._ksana_plugin, ksana_python_input,
-                start_time=start_time, input_tokens=input_tokens, headers_info=headers_info
-            )
+                start_time=start_time, input_tokens=input_tokens, headers_info=headers_info,
+                plugin_timing_metrics=plugin_timing_metrics
+            ), plugin_timing_metrics
 
         status, ksana_python_output = await loop.run_in_executor(
             model_executor,
@@ -521,25 +526,25 @@ class KsanaLLMEngine:
             ksana_python_input,
             req_ctx
         )
-        
+
         elapsed_ms = (time.time() - start_time) * 1000
-        
+
         if not status.OK():
             logger.info(f"ACCESS| streaming=false input_tokens={input_tokens} "
                        f"output_tokens=0 status=FAILED elapsed={elapsed_ms:.2f}ms {headers_info}")
-            return status, None
-        
+            return status, None, plugin_timing_metrics
+
         self._ksana_plugin.postprocess(ksana_python_input, ksana_python_output)
-        
+
         # 获取输出 token 数量
         output_tokens = len(ksana_python_output.output_tokens) \
             if hasattr(ksana_python_output, 'output_tokens') \
                 and ksana_python_output.output_tokens else 0
-        
+
         logger.info(f"ACCESS| streaming=false input_tokens={input_tokens} "
                    f"output_tokens={output_tokens} status=OK elapsed={elapsed_ms:.2f}ms {headers_info}")
 
-        return status, ksana_python_output
+        return status, ksana_python_output, plugin_timing_metrics
 
     async def forward(
         self, request_bytes: bytes, req_ctx: Optional[Dict[str, str]] = None

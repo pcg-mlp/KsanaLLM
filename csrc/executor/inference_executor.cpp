@@ -62,7 +62,9 @@ void InferenceExecutor::Start() {
   // 在处理请求之前初始化 host 内存池。
   // 这确保了在初始化阶段 host tensor 使用动态分配，
   // 而在请求处理阶段 host tensor 使用内存池分配。
-  HostMemoryPool::GetInstance()->Initialize();
+  BlockManagerConfig block_mgr_cfg;
+  env_->GetBlockManagerConfig(block_mgr_cfg);
+  HostMemoryPool::GetInstance()->Initialize(block_mgr_cfg.host_pool_size_gb);
 
   STATUS_CHECK_FAILURE(model_runner_->Start());
   KLLM_LOG_INFO << "InferenceExecutor::Start finished.";

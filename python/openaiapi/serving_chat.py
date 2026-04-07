@@ -34,10 +34,10 @@ from openaiapi.openai_protocol import (
     ChatCompletionNamedToolChoiceParam,
     DeltaFunctionCall,
     ToolCall, FunctionCall, FunctionDefinition,
-    ChatCompletionRequest, 
-    ChatCompletionResponseStreamChoice, 
+    ChatCompletionRequest,
+    ChatCompletionResponseStreamChoice,
     ChatCompletionResponse, ChatCompletionStreamResponse,
-    ChoiceLogprobs, PromptTokenUsageInfo
+    ChoiceLogprobs, PromptTokenUsageInfo, TimesInfo
 )
 from openaiapi.request_converter import RequestConverter
 from openaiapi.transformers_utils.chat_utils import ChatTemplateContentFormatOption
@@ -101,7 +101,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     self.tool_parser.tool_call_end_token_id = vocab_dict.get(self.tool_parser.tool_call_end_token)
                 logger.info(f"Tool parser '{self.config.tool_call_parser}' initialized successfully")
             except TypeError as e:
-                logger.error(f"❌ [DEBUG] Failed to initialize tool parser: {e}")
+                logger.error(f"Failed to initialize tool parser {self.config.tool_call_parser}: {e}")
         
         if self.config.tool_call_parser == 'deepseek_v32':
             # NOTE(winminkong): The current support is only for the deepseek-v3.2 OpenAI API
@@ -193,6 +193,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         role: Optional[str] = None,
         logprobs: Optional[Dict[str, Any]] = None,
         usage: Optional[Any] = None,
+        times: Optional[Dict[str, Any]] = None,
         choice_index: int = 0,
         delta_message: Optional[DeltaMessage] = None,
         current_output_token: Optional[List[int]] = None,
@@ -206,10 +207,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             # filter out empty strings from delta_message
             delta_dict = delta_message.model_dump(exclude_unset=True, exclude_none=True)
             delta_dict = {k: v for k, v in delta_dict.items() if v != ""}
-            
+
             if not delta_dict and not finish_reason and not usage and not logprobs:
                 return ""
-            
+
             chunk_data = {
                 "id": request_id,
                 "object": "chat.completion.chunk",
@@ -224,8 +225,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             }
             if usage:
                 chunk_data["usage"] = usage
+            if times:
+                chunk_data["times"] = times
             return f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
-        
+
         converter = RequestConverter(self.config, tokenizer)
         return converter.format_chat_completion_stream_chunk(
             request_id=request_id,
@@ -235,6 +238,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             finish_reason=finish_reason,
             logprobs=logprobs,
             usage=usage,
+            times=times,
             choice_index=choice_index,
             delta_message=delta_message,
             current_output_token=current_output_token,
@@ -251,6 +255,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         request: Optional[ChatCompletionRequest] = None,
         conversation: Optional[List[Any]] = None,
         prompt_tokens_count: Optional[List[int]] = None,
+        plugin_timing_metrics=None,
     ) -> AsyncGenerator[str, None]:
 
         created_time = int(time.time())
@@ -342,6 +347,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         num_prompt_tokens = prompt_tokens_count[0]
                     else:
                         num_prompt_tokens = 0
+                    # For multimodal requests, prompt_token_ids is empty (plugin does tokenization).
+                    # Use input_tokens from engine output which reflects the real token count.
+                    if num_prompt_tokens == 0 and hasattr(ksana_python_output, 'input_tokens') \
+                            and ksana_python_output.input_tokens:
+                        num_prompt_tokens = len(ksana_python_output.input_tokens)
                     role = self.get_chat_request_role(request)
                     # Read prefix_cache_hit_tokens only once at the beginning
                     if hasattr(ksana_python_output, 'prefix_cache_hit_tokens'):
@@ -691,8 +701,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     and len(tool_parser_instance.prev_tool_call_arr) > 0:
                                     finish_reason = "tool_calls"
                             
-                            # if it is the last choice and we need usage info, send it
+                            # send usage/times info on last choice
                             usage_info = None
+                            times_info = None
                             if include_usage and i == num_choices - 1:
                                 completion_tokens = current_token_length
                                 usage_info = {
@@ -700,12 +711,42 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     "completion_tokens": completion_tokens,
                                     "total_tokens": num_prompt_tokens + completion_tokens
                                 }
+                                if plugin_timing_metrics and (plugin_timing_metrics.preprocess_time_ms > 0
+                                        or plugin_timing_metrics.encoder_time_ms > 0):
+                                    times_info = {
+                                        "preprocess_time_ms": round(
+                                            plugin_timing_metrics.preprocess_time_ms, 2
+                                        ),
+                                        "waiting_time_ms": round(
+                                            plugin_timing_metrics.waiting_time_ms, 2
+                                        ),
+                                        "encoder_time_ms": round(
+                                            plugin_timing_metrics.encoder_time_ms, 2
+                                        ),
+                                        "encoder_send_time_ms": round(
+                                            plugin_timing_metrics.encoder_send_time_ms,
+                                            2,
+                                        ),
+                                        "encoder_queue_time_ms": round(
+                                            plugin_timing_metrics.encoder_queue_time_ms,
+                                            2,
+                                        ),
+                                        "encoder_encode_time_ms": round(
+                                            plugin_timing_metrics.encoder_encode_time_ms,
+                                            2,
+                                        ),
+                                        "encoder_recv_time_ms": round(
+                                            plugin_timing_metrics.encoder_recv_time_ms,
+                                            2,
+                                        ),
+                                    }
 
                             # send finish_reason
                             chunk = await self._generate_stream_chunk(
                                 request_id, model_name, tokenizer,
                                 finish_reason=finish_reason,
                                 usage=usage_info,
+                                times=times_info,
                                 choice_index=i
                             )
                             if chunk:
@@ -728,6 +769,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             finish_reason = "tool_calls"
                     
                     usage_info = None
+                    times_info = None
                     if include_usage:
                         completion_tokens = previous_token_lengths[i]
                         usage_info = {
@@ -739,11 +781,23 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             usage_info["prompt_tokens_details"] = {
                                 "cached_tokens": prefix_cache_hit_tokens
                             }
+                        if plugin_timing_metrics and (plugin_timing_metrics.preprocess_time_ms > 0
+                                or plugin_timing_metrics.encoder_time_ms > 0):
+                            times_info = {
+                                "preprocess_time_ms": round(plugin_timing_metrics.preprocess_time_ms, 2),
+                                "waiting_time_ms": round(plugin_timing_metrics.waiting_time_ms, 2),
+                                "encoder_time_ms": round(plugin_timing_metrics.encoder_time_ms, 2),
+                                "encoder_send_time_ms": round(plugin_timing_metrics.encoder_send_time_ms, 2),
+                                "encoder_queue_time_ms": round(plugin_timing_metrics.encoder_queue_time_ms, 2),
+                                "encoder_encode_time_ms": round(plugin_timing_metrics.encoder_encode_time_ms, 2),
+                                "encoder_recv_time_ms": round(plugin_timing_metrics.encoder_recv_time_ms, 2),
+                            }
 
                     chunk = await self._generate_stream_chunk(
                         request_id, model_name, tokenizer,
                         finish_reason=finish_reason,
                         usage=usage_info,
+                        times=times_info,
                         choice_index=i
                     )
                     if chunk:
@@ -858,17 +912,23 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     ksana_request["mm_processor_kwargs"] = engine_prompt["mm_processor_kwargs"]
                 
                 # call KsanaLLM generate func, get output
-                status, output = await self.llm_server.model.generate(
+                status, output, plugin_timing_metrics = await self.llm_server.model.generate(
                     request_dict=ksana_request,
                     req_ctx=req_ctx,
                     streamer=request.stream
                 )
-                
+
                 if not status.OK():
                     logger.error(f"Engine prompt {i+1} failed: {status.GetMessage()}")
                     continue
-                
-                all_outputs.append((status, output))
+
+                # For multimodal requests, prompt_token_ids is empty (plugin does tokenization).
+                # Update prompt_tokens from the engine's input_tokens after plugin preprocessing.
+                if prompt_tokens_per_request[i] == 0 and not request.stream:
+                    if hasattr(output, 'input_tokens') and output.input_tokens:
+                        prompt_tokens_per_request[i] = len(output.input_tokens)
+
+                all_outputs.append((status, output, plugin_timing_metrics))
             
             # all output failed
             if not all_outputs:
@@ -889,16 +949,19 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         if request.stream:
             request_logprobs = getattr(request, 'logprobs', False)
 
+            # multimodal has single engine prompt, first element = max aggregation
+            stream_plugin_timing_metrics = all_outputs[0][2] if all_outputs else None
+
             async def stream_generator():
                 valid_outputs = [
                     (idx, output)
-                    for idx, (status, output) in enumerate(all_outputs)
+                    for idx, (status, output, _) in enumerate(all_outputs)
                     if status.OK()
                 ]
                 async def merged_outputs():
                     # 记录失败的输出以减少日志调用
                     failed_indices = [
-                        idx for idx, (status, _) in enumerate(all_outputs)
+                        idx for idx, (status, _, __) in enumerate(all_outputs)
                         if not status.OK()
                     ]
                     if failed_indices:
@@ -913,7 +976,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                 async for chunk in self._chat_completion_stream_generator(
                     merged_outputs(), request_id, model_name, tokenizer,
-                    request_logprobs, request, conversation, prompt_tokens_per_request
+                    request_logprobs, request, conversation, prompt_tokens_per_request,
+                    plugin_timing_metrics=stream_plugin_timing_metrics,
                 ):
                     yield chunk
 
@@ -935,7 +999,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
     async def _chat_completion_full_generator(
         self,
-        all_outputs: List[Tuple[Any, Any]],  # List of (status, output) tuples
+        all_outputs: List[Tuple[Any, Any, Any]],  # List of (status, output, plugin_timing_metrics) tuples
         request_id: str,
         model_name: str,
         request: Optional[ChatCompletionRequest] = None,
@@ -954,10 +1018,33 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         role = self.get_chat_request_role(request) if request else "assistant"
         cached_tokens_list = [0] * len(all_outputs)
 
+        # aggregate plugin_timing_metrics across outputs (take max)
+        total_preprocess_time_ms = max(
+            (pt.preprocess_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+        total_waiting_time_ms = max(
+            (pt.waiting_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+        total_encoder_time_ms = max(
+            (pt.encoder_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+        total_encoder_send_time_ms = max(
+            (pt.encoder_send_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+        total_encoder_queue_time_ms = max(
+            (pt.encoder_queue_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+        total_encoder_encode_time_ms = max(
+            (pt.encoder_encode_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+        total_encoder_recv_time_ms = max(
+            (pt.encoder_recv_time_ms for _, _, pt in all_outputs), default=0.0
+        )
+
         request_logprobs = getattr(request, 'logprobs', False) if request else False
         top_logprobs = getattr(request, 'top_logprobs', 0) if request_logprobs else 0
         try:
-            for i, (status, output) in enumerate(all_outputs):
+            for i, (status, output, _) in enumerate(all_outputs):
                 if status.OK() and hasattr(output, 'prefix_cache_hit_tokens'):
                     cached_tokens_list[i] = output.prefix_cache_hit_tokens
 
@@ -1200,6 +1287,16 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 usage.prompt_tokens_details = PromptTokenUsageInfo(
                     cached_tokens=total_cached_tokens
                 )
+            has_times = total_preprocess_time_ms > 0 or total_encoder_time_ms > 0
+            times = TimesInfo(
+                preprocess_time_ms=round(total_preprocess_time_ms, 2),
+                waiting_time_ms=round(total_waiting_time_ms, 2),
+                encoder_time_ms=round(total_encoder_time_ms, 2),
+                encoder_send_time_ms=round(total_encoder_send_time_ms, 2),
+                encoder_queue_time_ms=round(total_encoder_queue_time_ms, 2),
+                encoder_encode_time_ms=round(total_encoder_encode_time_ms, 2),
+                encoder_recv_time_ms=round(total_encoder_recv_time_ms, 2),
+            ) if has_times else None
 
             response = ChatCompletionResponse(
                 id=request_id,
@@ -1207,7 +1304,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 created=int(time.time()),
                 model=model_name,
                 choices=choices,
-                usage=usage
+                usage=usage,
+                times=times
             )
             
             response_dict = response.model_dump(exclude_none=True)

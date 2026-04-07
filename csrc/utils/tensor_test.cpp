@@ -3,10 +3,8 @@
 ==============================================================================*/
 
 #include <gtest/gtest.h>
-#include <cstdlib>
 #include <filesystem>
 #include <numeric>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -19,20 +17,13 @@
 
 namespace ksana_llm {
 
-// 辅助函数：设置内存池大小（单位 GB）
-inline void SetPoolSizeGB(int size_gb) { setenv(kHostPoolSizeEnvVar, std::to_string(size_gb).c_str(), 1); }
-
-inline void ClearPoolSizeEnv() { unsetenv(kHostPoolSizeEnvVar); }
-
 class TensorHostMemorySourceTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    // 设置 1GB 内存池用于测试
-    SetPoolSizeGB(1);
-    // 初始化内存池
+    // 初始化 1GB 内存池用于测试
     auto* pool = HostMemoryPool::GetInstance();
     if (!pool->IsInitialized()) {
-      pool->Initialize();
+      pool->Initialize(1);
     }
   }
 
@@ -40,7 +31,6 @@ class TensorHostMemorySourceTest : public ::testing::Test {
     // 销毁内存池，确保与 host_memory_pool_test 的清理策略一致
     auto* pool = HostMemoryPool::GetInstance();
     pool->Destroy();
-    ClearPoolSizeEnv();
   }
 };
 
@@ -296,8 +286,7 @@ TEST_F(TensorHostMemorySourceTest, PoolNotInitialized) {
   }
 
   // 重新初始化池，供后续测试使用
-  SetPoolSizeGB(1);
-  pool->Initialize();
+  pool->Initialize(1);
 }
 
 // 测试 12：ToString 方法正确显示来源
@@ -325,8 +314,7 @@ TEST_F(TensorHostMemorySourceTest, ToStringShowsSource) {
   }
 
   // 重新初始化池
-  SetPoolSizeGB(1);
-  pool->Initialize();
+  pool->Initialize(1);
 }
 
 // 并发测试

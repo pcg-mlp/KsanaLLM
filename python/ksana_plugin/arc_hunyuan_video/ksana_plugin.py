@@ -7,9 +7,11 @@
 import math
 import os
 import sys
+import time
 from typing import Dict, List, Optional, Union, Tuple
 
 import json
+import tempfile
 from pathlib import Path
 import numpy as np
 import librosa
@@ -38,20 +40,25 @@ parent2_dir = os.path.abspath(os.path.join(parent_dir, os.pardir))
 sys.path.append(parent2_dir)
 
 from arc_hunyuan_video.video_audio_encoder import VideoAudioEncoder
-from plugin_utils import free_cache
+from plugin_utils import free_cache, ResourceManager
 from ksana_encoder.encoder_client import EncoderClient
 
 
 class VideoProcessorConfig:
     """配置视频处理相关参数"""
 
-    def __init__(self):
+    def __init__(self, arc_model_version="V2"):
         self.image_size = 640
         self.max_num_frame = 150
         self.factor = 2
         self.dtype = torch.bfloat16
         self.hunyuan_mean = (0.48145466, 0.4578275, 0.40821073)
         self.hunyuan_std = (0.26862954, 0.26130258, 0.27577711)
+        # V1.1 uses MM:SS with 0.06 font scale; V2 uses HH:MM:SS with 0.05 font scale
+        if arc_model_version == "V1.1":
+            self.timestamp_font_scale = 0.06
+        else:
+            self.timestamp_font_scale = 0.05
 
 
 def load_state_dict_from_safetensors(path: str, prefixes: list[str]):
@@ -96,6 +103,9 @@ class KsanaPlugin:
 
         self.mm_encoder = None
         self.using_remote_encoder = False
+        # V2 (default): ARC-Hunyuan-Video-7B; V1.1: ARC-Video-7B-V1.1-OSS
+        # Loaded from {model_dir}/custom.json at init_plugin(); defaults to "V2".
+        self.arc_model_version = "V2"
 
     # Plugin initialization is automatically invoked upon service startup.
     def init_plugin(self, **kwargs):
@@ -107,12 +117,17 @@ class KsanaPlugin:
 
             self.model_path = kwargs["model_path"]
 
+            # Load arc_model_version from {model_path}/custom.json
+            self.arc_model_version = self._load_arc_model_version(self.model_path)
+
             self.config = AutoConfig.from_pretrained(self.model_path)
-            self.vision_config = VideoProcessorConfig()
+            self.vision_config = VideoProcessorConfig(self.arc_model_version)
             self.wav_processor = WhisperFeatureExtractor.from_pretrained(
                 self.model_path
             )
-            self.processor = ARCHunyuanVideoProcessor.from_pretrained(self.model_path)
+            self.processor = ARCHunyuanVideoProcessor.from_pretrained(
+                self.model_path, font_path=os.path.join(current_dir, "ARIAL.TTF")
+            )
 
             self.init_encoder()
 
@@ -125,6 +140,21 @@ class KsanaPlugin:
 
         if "postprocess" in kwargs:
             return
+
+    @staticmethod
+    def _load_arc_model_version(model_path: str) -> str:
+        """Read arc_model_version from {model_path}/custom.json, default "V2"."""
+        custom_json = os.path.join(model_path, "custom.json")
+        if os.path.isfile(custom_json):
+            try:
+                with open(custom_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                version = data.get("arc_model_version", "V2")
+                print(f"[I] Loaded arc_model_version={version!r} from {custom_json}")
+                return version
+            except Exception as e:
+                print(f"[W] Failed to parse {custom_json}: {e}, using default V2")
+        return "V2"
 
     def _init_local_encoder(self):
         self.mm_encoder = self._init_mm_encoder(
@@ -158,8 +188,14 @@ class KsanaPlugin:
         else:
             return self._remote_encode(inputs)
 
-    def _preprocess(self, messages: List[Dict], additional_params: Dict):
+    def _preprocess(
+        self, messages: List[Dict], additional_params: Dict, plugin_timing_metrics=None
+    ):
         """Internal preprocessing method that processes messages and returns results as tuple."""
+        # Resolve remote URLs / base64 data URIs to local temp files
+        rm = ResourceManager()
+        messages = rm.resolve(messages)
+
         # Convert OpenAI format messages to model-specific format
         question, video_path, audio_path, task = KsanaPlugin.convert_openai_messages(
             messages, additional_params
@@ -170,7 +206,8 @@ class KsanaPlugin:
         audio_features, duration = self._process_audio(video_path, audio_path)
 
         # 超长裁剪
-        if duration < pixel_values.shape[0]:
+        # V2 truncates frames when duration < frame count
+        if self.arc_model_version != "V1.1" and duration < pixel_values.shape[0]:
             pixel_values = pixel_values[:duration]
         if duration <= self.vision_config.max_num_frame:
             duration = pixel_values.shape[0]
@@ -182,14 +219,103 @@ class KsanaPlugin:
             pixel_values.shape[0], question, task
         )
 
-        # 多模态encoder
         encode_input = {
             "pixel_values": pixel_values,
             "audio_features": audio_features,
             "duration": duration,
         }
+        encode_start = time.time()
         encode_output = self.encode(encode_input)
+        if plugin_timing_metrics is not None:
+            plugin_timing_metrics.encoder_time_ms = (time.time() - encode_start) * 1000
+            # 远程编码器详细时间（秒→毫秒）
+            plugin_timing_metrics.encoder_send_time_ms = (
+                encode_output.pop("encoder_send_time", 0) * 1000
+            )
+            plugin_timing_metrics.encoder_queue_time_ms = (
+                encode_output.pop("encoder_queue_time", 0) * 1000
+            )
+            plugin_timing_metrics.encoder_encode_time_ms = (
+                encode_output.pop("encoder_encode_time", 0) * 1000
+            )
+            plugin_timing_metrics.encoder_recv_time_ms = (
+                encode_output.pop("encoder_recv_time", 0) * 1000
+            )
         embeddings = encode_output["embeddings"]
+
+        return self._build_output(embeddings, prompt)
+
+    def preprocess_before_encode(self, **kwargs):
+        """Phase 1 of decoupled preprocessing: CPU-heavy work before encoder I/O.
+
+        Returns:
+            (encode_input, context): encode_input is sent to encoder;
+                context carries state needed by preprocess_after_encode.
+        """
+        messages: Optional[List[Dict]] = kwargs["messages"]
+        additional_params = kwargs.get("additional_params", {})
+
+        # Resolve remote URLs / base64 data URIs to local temp files
+        rm = ResourceManager()
+        messages = rm.resolve(messages)
+
+        # Convert OpenAI format messages to model-specific format
+        question, video_path, audio_path, task = KsanaPlugin.convert_openai_messages(
+            messages, additional_params
+        )
+
+        # 解析视频和音频
+        pixel_values, num_patches = self._load_video_frames(video_path)
+        audio_features, duration = self._process_audio(video_path, audio_path)
+
+        # V2 截断超长帧；V1.1 不截断
+        if self.arc_model_version != "V1.1" and duration < pixel_values.shape[0]:
+            pixel_values = pixel_values[:duration]
+        if duration <= self.vision_config.max_num_frame:
+            duration = pixel_values.shape[0]
+        else:
+            assert pixel_values.shape[0] == self.vision_config.max_num_frame
+
+        # 生成prompt
+        prompt = "<|startoftext|>" + self._build_prompt(
+            pixel_values.shape[0], question, task
+        )
+
+        encode_input = {
+            "pixel_values": pixel_values,
+            "audio_features": audio_features,
+            "duration": duration,
+        }
+
+        context = {"prompt": prompt}
+        return encode_input, context
+
+    def preprocess_after_encode(self, encode_output, context, **kwargs):
+        """Phase 2 of decoupled preprocessing: lightweight post-encode work.
+
+        Writes results directly to ksana_python_input.
+        """
+        ksana_python_input = kwargs["ksana_python_input"]
+        prompt = context["prompt"]
+        embeddings = encode_output["embeddings"]
+
+        input_tokens, video_start, video_embeds, llm_positions, mrope_position_delta = (
+            self._build_output(embeddings, prompt)
+        )
+
+        # Write results to ksana_python_input
+        ksana_python_input.input_tokens = input_tokens
+        ksana_python_input.input_refit_embedding.pos = video_start
+        ksana_python_input.input_refit_embedding.embedding_tensors = list(
+            torch.unbind(video_embeds, dim=0)
+        )
+        ksana_python_input.input_refit_embedding.additional_tensors = [
+            llm_positions,
+            mrope_position_delta,
+        ]
+
+    def _build_output(self, embeddings, prompt):
+        """Common post-encode processing shared by both coupled and decoupled paths."""
 
         # grid构建
         num_patches = self.config.vision_config.force_image_size // 32 // 2
@@ -197,8 +323,9 @@ class KsanaPlugin:
         image_grid_thw = image_grid_thw.repeat(embeddings.shape[0], 1)
 
         # prompt替换 & token生成
-        image_replace = self._get_image_replace(embeddings.shape[1])
-        prompt = prompt.replace("<image>", image_replace)
+        num_frames = embeddings.shape[0]
+        num_image_token = embeddings.shape[1]
+        prompt = self._replace_image_placeholders(prompt, num_image_token, num_frames)
         inputs = self.processor(text=prompt, return_tensors="pt")
 
         # 类型转换
@@ -243,10 +370,11 @@ class KsanaPlugin:
 
         additional_params = kwargs.get("additional_params", {})
         ksana_python_input = kwargs["ksana_python_input"]
+        plugin_timing_metrics = kwargs.get("plugin_timing_metrics", None)
 
         # Call _preprocess to get results
         input_tokens, video_start, video_embeds, llm_positions, mrope_position_delta = (
-            self._preprocess(messages, additional_params)
+            self._preprocess(messages, additional_params, plugin_timing_metrics)
         )
 
         # Write results to ksana_python_input
@@ -391,8 +519,8 @@ class KsanaPlugin:
         mrope_position_delta = (llm_positions.max() + 1 - len(input_tokens)).item()
         llm_positions = llm_positions[:, context_len:seq_len]
 
-        # llm_positions 原始shape是(4,num_token)为了方便算子计算转置成(num_token,4)
-        # mrope_position_delta 在解析的时候按照torch.LongTensor解析的，额外包装一下
+        # llm_positions: (4, num_token) → 转置为 (num_token, 4)
+        # mrope_position_delta: 包装为 LongTensor
         return llm_positions.t().contiguous(), torch.LongTensor([mrope_position_delta])
 
     def _get_image_replace(self, num_image_token):
@@ -402,6 +530,36 @@ class KsanaPlugin:
         replace_features = IMG_CONTEXT * num_image_token
         replace_full = IMG_START + replace_features + IMG_END
         return replace_full
+
+    def _replace_image_placeholders(self, prompt, num_image_token, num_frames):
+        """Replace <image> placeholders with actual vision tokens.
+
+        V1.1 (training code chat_asr_xrope): <vid> wrapping is done here.
+            First frame:  <vid> + frame_tokens
+            Middle frames: frame_tokens
+            Last frame:   frame_tokens + </vid>
+            Single frame: <vid> + frame_tokens + </vid>
+
+        V2 (open-source): <vid>...</vid> is already in the prompt from _build_prompt,
+            so each <image> is simply replaced with <img>...<IMG_CONTEXT>...</img>.
+        """
+        frame_tokens = self._get_image_replace(num_image_token)
+
+        if self.arc_model_version == "V1.1":
+            for i in range(num_frames):
+                if num_frames == 1:
+                    replacement = f"<vid>{frame_tokens}</vid>"
+                elif i == 0:
+                    replacement = f"<vid>{frame_tokens}"
+                elif i == num_frames - 1:
+                    replacement = f"{frame_tokens}</vid>"
+                else:
+                    replacement = frame_tokens
+                prompt = prompt.replace("<image>", replacement, 1)
+        else:
+            prompt = prompt.replace("<image>", frame_tokens)
+
+        return prompt
 
     def _init_mm_encoder(self, model_path, config, device):
         multi_modal_state_dict = load_state_dict_from_safetensors(
@@ -442,30 +600,35 @@ class KsanaPlugin:
     def _build_prompt(self, num_frames: int, question: str, task: str) -> str:
         video_prefix = "<image>" * num_frames
 
-        if task == "MCQ":
-            return (
-                f"{video_prefix}\n{question}\n"
-                f"Output the thinking process in <think> </think> and "
-                f"final answer (only option index) in <answer> </answer> tags, "
-                f"i.e., <think> reasoning process here </think>"
-                f"<answer> answer here </answer>.<sep>"
-            )
-        elif task == "Grounding":
-            return (
-                f"{video_prefix}\n{question}\n"
-                f"Output the thinking process in <think> </think> and "
-                f"final answer (only time range) in <answer> </answer> tags, "
-                f"i.e., <think> reasoning process here </think>"
-                f"<answer> answer here </answer>.<sep>"
-            )
-        else:  # QA、summary、segment
-            return (
-                f"{video_prefix}\n{question}\n"
-                f"Output the thinking process in <think> </think> and "
-                f"final answer in <answer> </answer> tags, "
-                f"i.e., <think> reasoning process here </think>"
-                f"<answer> answer here </answer>.<sep>"
-            )
+        if self.arc_model_version == "V1.1":
+            # V1.1: <vid>...</vid> wrapping 由 _replace_image_placeholders 处理，末尾加 <sep>
+            return f"{video_prefix}\n{question}<sep>"
+        else:
+            # V2 (open-source): Supports MCQ, Grounding, QA/summary/segment
+            if task == "MCQ":
+                return (
+                    f"{video_prefix}\n{question}\n"
+                    f"Output the thinking process in <think> </think> and "
+                    f"final answer (only option index) in <answer> </answer> tags, "
+                    f"i.e., <think> reasoning process here </think>"
+                    f"<answer> answer here </answer>.<sep>"
+                )
+            elif task == "Grounding":
+                return (
+                    f"{video_prefix}\n{question}\n"
+                    f"Output the thinking process in <think> </think> and "
+                    f"final answer (only time range) in <answer> </answer> tags, "
+                    f"i.e., <think> reasoning process here </think>"
+                    f"<answer> answer here </answer>.<sep>"
+                )
+            else:  # QA、summary、segment
+                return (
+                    f"{video_prefix}\n{question}\n"
+                    f"Output the thinking process in <think> </think> and "
+                    f"final answer in <answer> </answer> tags, "
+                    f"i.e., <think> reasoning process here </think>"
+                    f"<answer> answer here </answer>.<sep>"
+                )
 
     def _load_video_frames(self, video_path: str) -> tuple[torch.Tensor, list]:
         video_reader = VideoReader(video_path, ctx=cpu(0), num_threads=4)
@@ -502,11 +665,13 @@ class KsanaPlugin:
             )
         except Exception as ex:
             # when no audios
-            duration = min(math.ceil(video.duration), 300)
-            silent_audio = AudioSegment.silent(duration=duration * 1000)
-            silent_audio.export(audio_path, format="mp3")
-            print("no audio", audio_path)
-            audio, sr = librosa.load(audio_path, sr=16000)
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as temp_audio:
+                audio_path = temp_audio.name
+                duration = min(math.ceil(video.duration), 300)
+                silent_audio = AudioSegment.silent(duration=duration * 1000)
+                silent_audio.export(audio_path, format="mp3")
+                print("no audio", audio_path)
+                audio, sr = librosa.load(audio_path, sr=16000)
 
         audio = self._pad_audio(audio, sr)
         duration = math.ceil(len(audio) / sr)
@@ -577,11 +742,25 @@ class KsanaPlugin:
         s = seconds % 60
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def _seconds_to_mmss(self, seconds):
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m:02d}:{s:02d}"
+
+    def _format_timestamp(self, start_sec, end_sec):
+        """Format timestamp string based on model version."""
+        if self.arc_model_version == "V1.1":
+            return (
+                f"{self._seconds_to_mmss(start_sec)}-{self._seconds_to_mmss(end_sec)}"
+            )
+        else:
+            return f"{self._sec2hms(start_sec)}-{self._sec2hms(end_sec)}"
+
     def _add_timestamp_to_frame(self, frame, start_sec, end_sec, font_size=40):
         draw = ImageDraw.Draw(frame)
-        font_size = int(frame.height * 0.05)
+        font_size = int(frame.height * self.vision_config.timestamp_font_scale)
         font = ImageFont.truetype(os.path.join(current_dir, "ARIAL.TTF"), font_size)
-        text = f"{self._sec2hms(start_sec)}-{self._sec2hms(end_sec)}"
+        text = self._format_timestamp(start_sec, end_sec)
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
@@ -652,9 +831,9 @@ class KsanaPlugin:
 
             if item_type == "text":
                 text = item.get("text")
-            elif item_type == "video":
+            elif item_type == "video_url":
                 video = item.get("video_url", {}).get("url")
-            elif item_type == "audio":
+            elif item_type == "audio_url":
                 audio = item.get("audio_url", {}).get("url")
 
         # 检查必需字段

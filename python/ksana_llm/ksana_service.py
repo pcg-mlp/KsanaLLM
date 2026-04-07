@@ -224,7 +224,7 @@ class LLMService:
             req_ctx = self.get_trace_context(request)
             request_dict = orjson.loads(await request.body())
             enable_streaming = request_dict.get("stream", True)
-            status, output = await self.model.generate(
+            status, output, _plugin_timing_metrics = await self.model.generate(
                 request_dict=request_dict,
                 streamer=enable_streaming,
                 req_ctx=req_ctx,

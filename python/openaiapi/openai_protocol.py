@@ -465,6 +465,17 @@ class ChatCompletionResponseChoice(BaseModel):
     finish_reason: Optional[str] = "stop"
 
 
+class TimesInfo(BaseModel):
+    """Multimodal plugin timing breakdown (ms). Only populated in EPD mode."""
+    preprocess_time_ms: float = 0.0       # CPU preprocessing before encoder I/O
+    waiting_time_ms: float = 0.0          # Wait for plugin thread pool slot
+    encoder_time_ms: float = 0.0          # Total encoder round-trip
+    encoder_send_time_ms: float = 0.0
+    encoder_queue_time_ms: float = 0.0
+    encoder_encode_time_ms: float = 0.0
+    encoder_recv_time_ms: float = 0.0
+
+
 class ChatCompletionResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"chatcmpl-{random_uuid()}")
     object: Literal["chat.completion"] = "chat.completion"
@@ -472,6 +483,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
+    times: Optional[TimesInfo] = None
 
 
 class DeltaMessage(BaseModel):
@@ -495,6 +507,7 @@ class ChatCompletionStreamResponse(BaseModel):
     model: str
     choices: List[ChatCompletionResponseStreamChoice]
     usage: Optional[UsageInfo] = Field(default=None)
+    times: Optional[TimesInfo] = None
 
 
 class CompletionRequest(OpenAIRequestModel):

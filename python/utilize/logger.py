@@ -159,23 +159,26 @@ def _configure_logging() -> None:
     # 确保日志目录存在
     os.makedirs(os.path.dirname(KSANA_LOG_FILE), exist_ok=True)
     
-    # 配置的 logger 名称列表
+    # logger 列表（console + file）
     logger_names = ['ksana', 'ksana_llm', 'utilize', 'multimodal', 'openaiapi']
-    
-    for logger_name in logger_names:
+    # 仅写文件的 logger 列表
+    file_only_logger_names = ['ksana_encoder']
+
+    for logger_name in logger_names + file_only_logger_names:
         log = logging.getLogger(logger_name)
         log.setLevel(log_level)
         log.propagate = False
-        
+
         # 清除已有的 handlers
         log.handlers.clear()
-        
+
         # Console handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        console_handler.setLevel(log_level)
-        log.addHandler(console_handler)
-        
+        if logger_name not in file_only_logger_names:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(formatter)
+            console_handler.setLevel(log_level)
+            log.addHandler(console_handler)
+
         # File handler (RotatingFileHandler)
         file_handler = logging.handlers.RotatingFileHandler(
             filename=KSANA_LOG_FILE,

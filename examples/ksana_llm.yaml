@@ -107,6 +107,8 @@ setting:
     block_host_memory_factor: 1.0
     # 动态可复用内存，占全量预分配时内存开销的最大比例
     dynamic_reusable_memory_ratio: 0.5
+    # host内存池大小（单位GB），0表示不启用内存池
+    host_pool_size_gb: 0
 
   # 选择attention计算中的backend
   attn_backend:

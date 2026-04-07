@@ -6,6 +6,7 @@
 
 #include "configure/json_config_utils.h"
 #include "models/arc_hunyuan_video/arc_hunyuan_video_config.h"
+#include "utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -92,6 +93,48 @@ Status ArcHunyuanVideoConfigParser::ParseModelConfig(const nlohmann::json& confi
   }
   arc_hunyuan_video_model_config->rope_scaling_factor_config.xdrope_section = int_xdrope_section;
 
+  auto env = Singleton<Environment>::GetInstance();
+  ParseQuantConfig(config_json, arc_hunyuan_video_model_config, env->GetYamlWeightQuantMethod());
+
+  return Status();
+}
+
+Status ArcHunyuanVideoConfigParser::ParseQuantConfig(const nlohmann::json& config_json,
+                                                     std::shared_ptr<ArcHunyuanVideoConfig> arc_config,
+                                                     const std::string& yaml_weight_quant_method) {
+  arc_config->is_quant = config_json.contains("quantization_config");
+  if (arc_config->is_quant) {
+    KLLM_CHECK_WITH_INFO(config_json["quantization_config"].contains("quant_method"),
+                         "ArcHunyuanVideo: quantization_config missing required field 'quant_method'");
+    std::string quant_method = config_json["quantization_config"].at("quant_method");
+    if (quant_method == "fp8") {
+      arc_config->quant_config.method = QUANT_FP8_E4M3;
+      arc_config->quant_config.is_checkpoint_fp8_serialized = true;
+      arc_config->quant_config.is_activation_scheme_static =
+          config_json["quantization_config"].value("activation_scheme", "") == "static";
+      KLLM_LOG_INFO << fmt::format(
+          "ArcHunyuanVideo: using static fp8 quant model, is_checkpoint_fp8_serialized: {}, "
+          "is_activation_scheme_static: {}",
+          arc_config->quant_config.is_checkpoint_fp8_serialized, arc_config->quant_config.is_activation_scheme_static);
+    } else {
+      KLLM_THROW(fmt::format("ArcHunyuanVideo: not support quant method: {}", quant_method));
+    }
+  } else if (yaml_weight_quant_method != "auto" && !yaml_weight_quant_method.empty()) {
+    // Dynamic quant from YAML
+    if (yaml_weight_quant_method == "fp8_e4m3") {
+      arc_config->is_quant = true;
+      arc_config->quant_config.method = QUANT_FP8_E4M3;
+      arc_config->quant_config.is_checkpoint_fp8_serialized = false;
+      arc_config->quant_config.is_activation_scheme_static = false;
+      KLLM_LOG_INFO << fmt::format(
+          "ArcHunyuanVideo: using dynamic fp8 quant model, quant method: {}, is_checkpoint_fp8_serialized: {}, "
+          "is_activation_scheme_static: {}",
+          yaml_weight_quant_method, arc_config->quant_config.is_checkpoint_fp8_serialized,
+          arc_config->quant_config.is_activation_scheme_static);
+    } else {
+      KLLM_THROW(fmt::format("ArcHunyuanVideo: not support yaml quant_method: {}", yaml_weight_quant_method));
+    }
+  }
   return Status();
 }
 

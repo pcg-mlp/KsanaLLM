@@ -33,6 +33,10 @@ class EngineArgs:
     encoder_url: Optional[List[str]] = None
     encoder_timeout: int = 30
     multimodal_cache_size: float = -1.0
+    # Embedded encoder management (auto-start encoder processes)
+    encoder_gpu: Optional[str] = None
+    llm_gpu: Optional[str] = None
+    encoder_base_port: Optional[int] = None
     # OpenAI Adapter related parameters
     tool_call_parser: Optional[str] = None
     reasoning_parser: Optional[str] = None
@@ -84,6 +88,16 @@ class EngineArgs:
             .get("plugin_model", {})
             .get("multimodal_cache_size", -1.0)
         )
+
+        # Embedded encoder management configuration
+        encoder_config = (
+            yaml_config["model_spec"]
+            .get("plugin_model", {})
+            .get("encoder", {})
+        )
+        encoder_gpu = encoder_config.get("encoder_gpu", None)
+        llm_gpu = encoder_config.get("llm_gpu", None)
+        encoder_base_port = encoder_config.get("encoder_base_port", None)
 
         endpoint = yaml_config["setting"].get("endpoint_type", "python").lower()
 
@@ -147,7 +161,10 @@ class EngineArgs:
             plugin_num_threads_per_encoder=plugin_num_threads_per_encoder,
             multimodal_vit_model_type=multimodal_vit_model_type,
             multimodal_cache_size=multimodal_cache_size,
-            tokenization=tokenization
+            tokenization=tokenization,
+            encoder_gpu=encoder_gpu,
+            llm_gpu=llm_gpu,
+            encoder_base_port=encoder_base_port,
         )
 
     @classmethod

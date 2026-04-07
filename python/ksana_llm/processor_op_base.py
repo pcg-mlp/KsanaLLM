@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 from transformers.models.auto.tokenization_auto import get_tokenizer_config
 from transformers import (
    AutoProcessor, AutoTokenizer, LlamaTokenizer,
-   VideoLlavaProcessor, PreTrainedTokenizerFast
+   VideoLlavaProcessor, PreTrainedTokenizerBase, PreTrainedTokenizerFast
 )
 
 # NOTE(jinxcwu) 目前 ARCHunyuanVideoTokenizer 还不在官方transformers库中，因此需要检查
@@ -95,7 +95,12 @@ class TokenizerProcessorOpBase:
             self.add_special_tokens = True
             self.skip_special_tokens = True
         
-        self.inner_tokenizer = getattr(self.tokenizer, 'tokenizer', self.tokenizer)
+        # Use PreTrainedTokenizerBase directly; unwrap .tokenizer only for Processors (e.g. Qwen-VL).
+        # Unwrapping a real tokenizer exposes tiktoken.Encoding, which lacks skip/add_special_tokens.
+        if isinstance(self.tokenizer, PreTrainedTokenizerBase):
+            self.inner_tokenizer = self.tokenizer
+        else:
+            self.inner_tokenizer = getattr(self.tokenizer, 'tokenizer', self.tokenizer)
         if not isinstance(self.inner_tokenizer, PreTrainedTokenizerFast):
             print(
                 "Using a slow tokenizer. This might cause a significant "

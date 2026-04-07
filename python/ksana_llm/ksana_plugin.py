@@ -5,6 +5,7 @@
 import importlib.util
 import os
 import sys
+import time
 from concurrent import futures
 import itertools
 from dataclasses import dataclass
@@ -17,6 +18,18 @@ from utilize.logger import get_logger
 from ksana_encoder.multimodal_cache import MultimodalCache
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class PluginTimingMetrics:
+    """Timing metrics collected during plugin processing."""
+    preprocess_time_ms: float = 0.0  # Wall time of the preprocess (or preprocess_before_encode) call
+    waiting_time_ms: float = 0.0  # Time waiting for a plugin thread pool slot before preprocess starts
+    encoder_time_ms: float = 0.0  # Total round-trip time of the remote encoder call (send + queue + encode + recv)
+    encoder_send_time_ms: float = 0.0  # Time spent serializing and sending the request to the encoder
+    encoder_queue_time_ms: float = 0.0  # Time the request waited in the encoder's internal queue
+    encoder_encode_time_ms: float = 0.0  # Time the encoder spent on the actual forward pass (e.g., ViT inference)
+    encoder_recv_time_ms: float = 0.0  # Time spent receiving and deserializing the encoder response
 
 
 @dataclass
@@ -61,11 +74,24 @@ class KsanaPlugin(object):
 
         :param plugin_config: The specified plugin configuration.
         """
+        self._ksana_plugin = None
+        plugin_path = KsanaPlugin.search_plugin_path(config.model_dir, config.plugin_name)
+        if plugin_path is None:
+            return
+
         self.remote_mode = config.encoder_url is not None
         if not self.remote_mode:
             config.num_threads_per_encoder = 1
         else:
             config.num_threads_per_encoder = len(config.encoder_url) * config.num_threads_per_encoder
+
+        # Thread pool for plugin operations; controls GPU resource concurrency.
+        # When num_threads_per_encoder > 1, plugin preprocess/postprocess must be thread-safe.
+        logger.info(f"Plugin thread pool size is set to {config.num_threads_per_encoder}")
+        self._thread_pool = futures.ThreadPoolExecutor(config.num_threads_per_encoder)
+
+        # Non-default CUDA stream pool; isolates plugin computation from KsanaLLM default stream.
+        self.streams = [torch.cuda.Stream() for _ in range(config.num_threads_per_encoder)]
 
         self.preprocess_router = SimplePluginRouter(config.num_threads_per_encoder)
         self.postprocess_router = SimplePluginRouter(config.num_threads_per_encoder)
@@ -77,9 +103,9 @@ class KsanaPlugin(object):
             self.multimodal_cache = None
             logger.info("Multimodal cache is disabled")
 
-        # 批量创建
-        plugin_path = KsanaPlugin.search_plugin_path(config.model_dir,
-                                                     config.plugin_name)
+        # Dedicated encoder I/O pool; only created when decoupled preprocessing is supported.
+        self._encoder_pool = None
+
         self._ksana_plugin = []
         for _ in range(config.num_threads_per_encoder):
             cur_ksana_plugin = KsanaPlugin.load_plugin(plugin_path)
@@ -112,18 +138,24 @@ class KsanaPlugin(object):
         if len(self._ksana_plugin) != config.num_threads_per_encoder:
             self._ksana_plugin = None
 
-        # We utilize a thread pool to manage the execution of plugin operations, to control
-        # the level of concurrency. This is primarily aimed at preventing concurrent model
-        # inference task from competing for GPU memory and computational resources.
-        # When `num_threads_per_encoder > 1`, the preprocess and postprocess methods in the
-        # plugin must be **thread-safe**.
-        logger.info(f"Plugin thread pool size is set to {config.num_threads_per_encoder}")
-        self._thread_pool = futures.ThreadPoolExecutor(config.num_threads_per_encoder)
-
-        # Initialize a non-default stream pool.
-        # We place all computations within the plugin in these streams, to avoid affecting
-        # the computations in KsanaLLM that use the default stream.
-        self.streams = [torch.cuda.Stream() for _ in range(config.num_threads_per_encoder)]
+        # Enable decoupled preprocessing when the plugin implements preprocess_before/after_encode,
+        # releasing the thread pool before blocking encoder I/O. Set KSANA_DISABLE_DECOUPLED_PREPROCESS=1 to disable.
+        force_disable = os.environ.get("KSANA_DISABLE_DECOUPLED_PREPROCESS", "0") == "1"
+        self._supports_decoupled = (
+            self._ksana_plugin is not None
+            and self.remote_mode
+            and hasattr(self._ksana_plugin[0], 'preprocess_before_encode')
+            and hasattr(self._ksana_plugin[0], 'preprocess_after_encode')
+            and not force_disable
+        )
+        if self._supports_decoupled:
+            # Encoder I/O pool size is 2x to avoid blocking (threads only wait on network).
+            self._encoder_pool = futures.ThreadPoolExecutor(config.num_threads_per_encoder * 2)
+            logger.info("Decoupled preprocessing enabled: preprocess threads will be released "
+                        "before encoder I/O")
+        elif force_disable:
+            logger.info("Decoupled preprocessing forcibly disabled via "
+                        "KSANA_DISABLE_DECOUPLED_PREPROCESS=1")
 
     def __del__(self):
         """
@@ -131,6 +163,8 @@ class KsanaPlugin(object):
         """
         if hasattr(self, "_thread_pool"):
             self._thread_pool.shutdown(wait=True)
+        if hasattr(self, "_encoder_pool") and self._encoder_pool is not None:
+            self._encoder_pool.shutdown(wait=True)
 
     @staticmethod
     def load_plugin(plugin_path: Optional[str]):
@@ -162,26 +196,111 @@ class KsanaPlugin(object):
             logger.warning(f"Load plugin failed: {e}")
             return None
 
-    def _preprocess(self, router_id, **kwargs):
+    def _preprocess(self, submit_time, router_id, **kwargs):
         """
         This is a wrapper around the preprocess method of the loaded plugin to run in a non-default stream.
         """
+        plugin_timing_metrics = kwargs.get("plugin_timing_metrics", None)
         with torch.cuda.stream(self.streams[router_id]):
-            self._ksana_plugin[router_id].preprocess(**kwargs)
+            try:
+                start = time.time()
+                if plugin_timing_metrics is not None:
+                    plugin_timing_metrics.waiting_time_ms = (start - submit_time) * 1000
+                self._ksana_plugin[router_id].preprocess(**kwargs)
+                if plugin_timing_metrics is not None:
+                    plugin_timing_metrics.preprocess_time_ms = (time.time() - start) * 1000
+            except Exception as e:  # pylint: disable=broad-except
+                logger.error(f"Plugin preprocess failed: {e}")
+
+    def _preprocess_before_encode(self, submit_time, router_id, **kwargs):
+        """Phase 1 of decoupled preprocessing (in preprocess thread pool): CPU work only.
+
+        Returns (router_id, encode_input, context); encode_input is forwarded to encoder,
+        context is opaque state passed to preprocess_after_encode.
+        """
+        plugin_timing_metrics = kwargs.get("plugin_timing_metrics", None)
+        with torch.cuda.stream(self.streams[router_id]):
+            try:
+                start = time.time()
+                if plugin_timing_metrics is not None:
+                    plugin_timing_metrics.waiting_time_ms = (start - submit_time) * 1000
+                encode_input, context = self._ksana_plugin[router_id].preprocess_before_encode(**kwargs)
+                if plugin_timing_metrics is not None:
+                    plugin_timing_metrics.preprocess_time_ms = (time.time() - start) * 1000
+                return router_id, encode_input, context
+            except Exception as e:  # pylint: disable=broad-except
+                logger.error(f"Plugin preprocess_before_encode failed: {e}")
+                return router_id, None, None
+
+    def _encode_remote(self, router_id, encode_input, plugin_timing_metrics):
+        """Encoder I/O phase: runs in the encoder pool (NOT in preprocess pool)."""
+        try:
+            encode_start = time.time()
+            encode_output = self._ksana_plugin[router_id].encode(encode_input)
+            if encode_output is None:
+                logger.error("Plugin encode returned None (timeout or encoder error)")
+                return None
+            if plugin_timing_metrics is not None:
+                plugin_timing_metrics.encoder_time_ms = (time.time() - encode_start) * 1000
+                plugin_timing_metrics.encoder_send_time_ms = encode_output.pop("encoder_send_time", 0) * 1000
+                plugin_timing_metrics.encoder_queue_time_ms = encode_output.pop("encoder_queue_time", 0) * 1000
+                plugin_timing_metrics.encoder_encode_time_ms = encode_output.pop("encoder_encode_time", 0) * 1000
+                plugin_timing_metrics.encoder_recv_time_ms = encode_output.pop("encoder_recv_time", 0) * 1000
+            return encode_output
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error(f"Plugin encode failed: {e}")
+            return None
+
+    def _preprocess_decoupled(self, ksana_python_input, **kwargs):
+        """Decoupled preprocessing: phase1 (thread pool) → encode (encoder pool) → phase2 (inline)."""
+        kwargs.update({
+            "ksana_python_input": ksana_python_input,
+        })
+
+        # Phase 1: CPU preprocessing in thread pool.
+        submit_time = time.time()
+        router_id_for_phase1 = self.preprocess_router.get_next()
+        before_encode_future = self._thread_pool.submit(
+            self._preprocess_before_encode, submit_time, router_id_for_phase1, **kwargs)
+        router_id, encode_input, context = before_encode_future.result()
+
+        if encode_input is None:
+            return  # preprocessing failed
+
+        # Phase 2: encoder I/O in encoder pool (does not occupy preprocess thread).
+        plugin_timing_metrics = kwargs.get("plugin_timing_metrics", None)
+        encode_future = self._encoder_pool.submit(
+            self._encode_remote, router_id, encode_input, plugin_timing_metrics)
+        encode_output = encode_future.result()
+
+        if encode_output is None:
+            return  # encode failed
+
+        # Phase 3: post-encode processing runs inline.
+        try:
+            self._ksana_plugin[router_id].preprocess_after_encode(
+                encode_output=encode_output, context=context, **kwargs)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error(f"Plugin preprocess_after_encode failed: {e}")
 
     def preprocess(self,
                    ksana_python_input: libtorch_serving.KsanaPythonInput,
                    **kwargs):
         """
         Invokes the preprocess method of the loaded plugin, if available.
+        Automatically uses decoupled path when the plugin supports it.
         """
         if self._ksana_plugin is None:
             return
 
+        if self._supports_decoupled:
+            return self._preprocess_decoupled(ksana_python_input, **kwargs)
+
         kwargs.update({
             "ksana_python_input": ksana_python_input,
         })
-        future = self._thread_pool.submit(self._preprocess, self.preprocess_router.get_next(), **kwargs)
+        submit_time = time.time()
+        future = self._thread_pool.submit(self._preprocess, submit_time, self.preprocess_router.get_next(), **kwargs)
         return future.result()
 
     def _postprocess(self, router_id, **kwargs):

@@ -7,9 +7,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <random>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -18,22 +16,9 @@
 
 namespace ksana_llm {
 
-// 辅助函数：设置内存池大小（单位 GB）
-inline void SetPoolSizeGB(int size_gb) { setenv(kHostPoolSizeEnvVar, std::to_string(size_gb).c_str(), 1); }
-
-inline void ClearPoolSizeEnv() { unsetenv(kHostPoolSizeEnvVar); }
-
 class HostMemoryPoolTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    // 默认设置 1GB 内存池用于测试
-    SetPoolSizeGB(1);
-  }
-
-  void TearDown() override {
-    HostMemoryPool::GetInstance()->Destroy();
-    ClearPoolSizeEnv();
-  }
+  void TearDown() override { HostMemoryPool::GetInstance()->Destroy(); }
 };
 
 // 测试单例获取
@@ -49,7 +34,7 @@ TEST_F(HostMemoryPoolTest, Initialize) {
   auto* pool = HostMemoryPool::GetInstance();
   EXPECT_FALSE(pool->IsInitialized());
 
-  pool->Initialize();
+  pool->Initialize(1);
   EXPECT_TRUE(pool->IsInitialized());
   EXPECT_EQ(pool->GetUsedSize(), 0);
   EXPECT_GT(pool->GetPoolSize(), 0);
@@ -58,21 +43,18 @@ TEST_F(HostMemoryPoolTest, Initialize) {
 // 测试重复初始化（应该跳过）
 TEST_F(HostMemoryPoolTest, DoubleInitialize) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
   size_t first_pool_size = pool->GetPoolSize();
 
-  // 修改环境变量
-  SetPoolSizeGB(2);
-
   // 第二次初始化应该被跳过
-  pool->Initialize();
+  pool->Initialize(2);
   EXPECT_EQ(pool->GetPoolSize(), first_pool_size);
 }
 
 // 测试基本分配和释放
 TEST_F(HostMemoryPoolTest, BasicAllocateAndFree) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   // 测试基本分配
   void* ptr1 = pool->Allocate(1024);
@@ -88,7 +70,7 @@ TEST_F(HostMemoryPoolTest, BasicAllocateAndFree) {
 // 测试零大小分配
 TEST_F(HostMemoryPoolTest, ZeroSizeAllocation) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   void* ptr = pool->Allocate(0);
   EXPECT_EQ(ptr, nullptr);
@@ -97,7 +79,7 @@ TEST_F(HostMemoryPoolTest, ZeroSizeAllocation) {
 // 测试多次分配
 TEST_F(HostMemoryPoolTest, MultipleAllocations) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   std::vector<void*> ptrs;
   for (int i = 0; i < 10; ++i) {
@@ -124,7 +106,7 @@ TEST_F(HostMemoryPoolTest, MultipleAllocations) {
 // 测试相邻块合并
 TEST_F(HostMemoryPoolTest, Coalescing) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   void* ptr1 = pool->Allocate(256);
   void* ptr2 = pool->Allocate(256);
@@ -150,7 +132,7 @@ TEST_F(HostMemoryPoolTest, Coalescing) {
 // 测试内存池耗尽
 TEST_F(HostMemoryPoolTest, PoolExhaustion) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   // 请求超过池大小（1GB + 1）
   void* ptr = pool->Allocate(static_cast<size_t>(1024) * 1024 * 1024 + 1);
@@ -160,7 +142,7 @@ TEST_F(HostMemoryPoolTest, PoolExhaustion) {
 // 测试重置功能
 TEST_F(HostMemoryPoolTest, Reset) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   // 分配一些内存
   void* ptr1 = pool->Allocate(1024);
@@ -179,7 +161,7 @@ TEST_F(HostMemoryPoolTest, Reset) {
 // 测试释放未知指针
 TEST_F(HostMemoryPoolTest, FreeUnknownPointer) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   // 释放一个不是从池中分配的指针（应该打印错误日志但不崩溃）
   int dummy = 0;
@@ -192,7 +174,7 @@ TEST_F(HostMemoryPoolTest, FreeUnknownPointer) {
 // 测试统计信息
 TEST_F(HostMemoryPoolTest, Statistics) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   EXPECT_EQ(pool->GetUsedSize(), 0);
   EXPECT_EQ(pool->GetAllocatedBlockCount(), 0);
@@ -215,7 +197,7 @@ TEST_F(HostMemoryPoolTest, Statistics) {
 // 测试对齐
 TEST_F(HostMemoryPoolTest, Alignment) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   // 测试不同大小的分配，验证对齐
   std::vector<size_t> sizes = {1, 7, 15, 33, 100, 255, 257, 500, 1000};
@@ -236,9 +218,8 @@ TEST_F(HostMemoryPoolTest, Alignment) {
 
 // 测试并发访问
 TEST_F(HostMemoryPoolTest, ConcurrentAccess) {
-  SetPoolSizeGB(10);  // 10GB
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(10);  // 10GB
 
   const int num_threads = 8;
   const int ops_per_thread = 100;
@@ -266,9 +247,8 @@ TEST_F(HostMemoryPoolTest, ConcurrentAccess) {
 
 // 测试碎片化压力
 TEST_F(HostMemoryPoolTest, FragmentationStress) {
-  SetPoolSizeGB(10);  // 10GB
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(10);  // 10GB
 
   std::vector<void*> ptrs;
   std::random_device rd;
@@ -307,23 +287,21 @@ TEST_F(HostMemoryPoolTest, FragmentationStress) {
 // 测试销毁功能
 TEST_F(HostMemoryPoolTest, Destroy) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
   EXPECT_TRUE(pool->IsInitialized());
 
   pool->Destroy();
   EXPECT_FALSE(pool->IsInitialized());
 
   // 销毁后可以重新初始化
-  SetPoolSizeGB(2);
-  pool->Initialize();
+  pool->Initialize(2);
   EXPECT_TRUE(pool->IsInitialized());
 }
 
 // 测试未初始化时的操作（内存池大小为 0）
 TEST_F(HostMemoryPoolTest, OperationsBeforeInitialize) {
-  ClearPoolSizeEnv();  // 清除环境变量，使用默认值 0
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();  // 由于默认值为 0，不会真正初始化
+  pool->Initialize(0);  // 大小为 0，不会真正初始化
   EXPECT_FALSE(pool->IsInitialized());
 
   // 未初始化时分配应返回 nullptr
@@ -343,7 +321,7 @@ TEST_F(HostMemoryPoolTest, PrintStats) {
 
   pool->PrintStats();
 
-  pool->Initialize();
+  pool->Initialize(1);
   pool->PrintStats();
 
   void* ptr = pool->Allocate(1024);
@@ -359,7 +337,7 @@ TEST_F(HostMemoryPoolTest, PrintDetailedStats) {
   // 未初始化时调用
   pool->PrintStats(true);
 
-  pool->Initialize();
+  pool->Initialize(1);
 
   // 初始化后调用
   pool->PrintStats(true);
@@ -381,7 +359,7 @@ TEST_F(HostMemoryPoolTest, PrintDetailedStats) {
 // 测试 GetFreeSize 方法
 TEST_F(HostMemoryPoolTest, GetFreeSize) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(1);
 
   size_t initial_free = pool->GetFreeSize();
   EXPECT_EQ(initial_free, pool->GetPoolSize());
@@ -402,11 +380,10 @@ TEST_F(HostMemoryPoolTest, GetFreeSize) {
   EXPECT_EQ(pool->GetFreeSize(), initial_free);
 }
 
-// 测试内存池禁用（环境变量设置为 0）
-TEST_F(HostMemoryPoolTest, PoolDisabledByEnv) {
-  SetPoolSizeGB(0);  // 显式设置为 0
+// 测试内存池禁用（host_pool_size_gb 设置为 0）
+TEST_F(HostMemoryPoolTest, PoolDisabledByZero) {
   auto* pool = HostMemoryPool::GetInstance();
-  pool->Initialize();
+  pool->Initialize(0);  // 显式设置为 0
   EXPECT_FALSE(pool->IsInitialized());
 }
 

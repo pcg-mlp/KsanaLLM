@@ -33,6 +33,26 @@ class ReasoningParser:
         self._in_reasoning = False
         self.stream_reasoning = True
 
+    # ------------------------------------------------------------------
+    # Tag boundary helpers (shared across reasoning parsers)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_partial_suffix(text: str, tag: str) -> bool:
+        """Check if any non-empty suffix of *text* is a prefix of *tag*."""
+        for i in range(min(len(tag) - 1, len(text)), 0, -1):
+            if tag.startswith(text[-i:]):
+                return True
+        return False
+
+    @staticmethod
+    def _split_partial_suffix(text: str, tag: str) -> tuple[str, str]:
+        """Return (safe_to_emit, held_back) where held_back is the longest
+        suffix of text that is a non-empty prefix of tag."""
+        for i in range(min(len(tag) - 1, len(text)), 0, -1):
+            if tag.startswith(text[-i:]):
+                return text[:-i], text[-i:]
+        return text, ""
+
     @abstractmethod
     def is_reasoning_end(self, input_ids: Sequence[int]) -> bool:
         """

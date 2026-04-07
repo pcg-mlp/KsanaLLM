@@ -258,6 +258,9 @@ void ModelDriver::ConvertMultimodalEmbedding(std::shared_ptr<Request>& req) {
                                        std::vector<size_t>(py_tensor.sizes().begin(), py_tensor.sizes().end()));
         memcpy(additional_tensors[i].GetPtr<void>(), py_tensor.data_ptr(), additional_tensors[i].GetTotalBytes());
       }
+      // Release py::object refs under GIL before Request destruction
+      req->input_refit_embedding.embedding_pyobjects.clear();
+      req->input_refit_embedding.additional_pyobjects.clear();
     }
   }
 }

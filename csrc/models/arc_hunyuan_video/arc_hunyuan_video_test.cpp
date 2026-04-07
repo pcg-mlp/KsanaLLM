@@ -2,16 +2,22 @@
 
 ==============================================================================*/
 
+#include <stdlib.h>
 #include <filesystem>
 
 #include "cache_manager/prefix_cache_manager.h"
+#include "configure/json_config_utils.h"
+#include "configure/schedule_config_parser.h"
 #include "models/arc_hunyuan_video/arc_hunyuan_video_model.h"
-#include "runtime/layer_progress_tracker.h"
+#include "runtime/hidden_unit_buffer.h"
 #include "runtime/weight_instance.h"
+#include "samplers/sampler.h"
 #include "test.h"
 #include "utils/attention_backend/attention_backend_manager.h"
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
+
+#include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
 
@@ -19,13 +25,9 @@ class ArcHunyuanVideoTest : public testing::Test {
  protected:
   void SetUp() override {
     InitLoguru();
-    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    const std::string test_name = test_info->name();
     std::string model_path = "/model/ARC-Hunyuan-Video-7B";
-    std::string yaml_path = "../../../../examples/llama7b/ksana_llm.yaml";
-    context = std::make_shared<Context>(1, 1, 1);
+    std::string yaml_path = "../../../examples/llama7b/ksana_llm.yaml";
 
-    // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / yaml_path;
@@ -33,6 +35,14 @@ class ArcHunyuanVideoTest : public testing::Test {
 
     AttentionBackendManager::GetInstance()->Initialize();
     const auto &env = Singleton<Environment>::GetInstance();
+    context = std::make_shared<Context>();
+    context->global.reset(new GlobalContext(1, 1, 1, env));
+    context->global->InitDistributedConfig();
+
+    ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
+    context->device = std::make_shared<DeviceContext>(1);
+    context->device->ext->InitNcclParam(nccl_uid);
+
     env->ParseConfig(config_path, model_path);
     BatchSchedulerConfig batch_scheduler_config;
     env->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -56,35 +66,52 @@ class ArcHunyuanVideoTest : public testing::Test {
 
     env->GetRuntimeConfig(runtime_config);
 
-    BlockAllocatorGroupConfig group_1_config;
-    group_1_config.devices = {0};
-    group_1_config.device_block_num = block_manager_config.device_allocator_config.blocks_num;
-    group_1_config.host_block_num = block_manager_config.host_allocator_config.blocks_num;
-    group_1_config.block_size = block_manager_config.device_allocator_config.block_size;
+    env->GetPipelineConfig(pipeline_config);
+
+    BlockAllocatorGroupConfig group_0_config;
+    group_0_config.devices = {0};
+    group_0_config.device_block_num = block_manager_config.device_allocator_config.blocks_num;
+    group_0_config.host_block_num = block_manager_config.host_allocator_config.blocks_num;
+    group_0_config.block_size = block_manager_config.device_allocator_config.block_size;
 
     BlockAllocatorManagerConfig block_allocator_manager_config;
-    block_allocator_manager_config[1] = group_1_config;
+    block_allocator_manager_config[0] = group_0_config;
 
     std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
-    BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context);
-    block_allocator_group = block_allocator_manager.GetBlockAllocatorGroup(1);
+    engine_block_manager =
+        std::make_shared<BlockAllocatorManager>(true, block_allocator_manager_config, memory_allocator_, context);
+    engine_block_group = engine_block_manager->GetBlockAllocatorGroup(0);
+    executor_block_manager =
+        std::make_shared<BlockAllocatorManager>(false, block_allocator_manager_config, memory_allocator_, context);
+    executor_block_group = executor_block_manager->GetBlockAllocatorGroup(0);
 
-    CacheManagerConfig cache_manager_config;
     cache_manager_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
     cache_manager_config.tensor_para_size = 1;
     cache_manager_config.swap_threadpool_size = 2;
-    cache_manager_config.enable_prefix_caching = true;
-    cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
+    cache_manager_config.enable_prefix_caching = false;
+    cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, engine_block_group);
+
+    hidden_unit_buffer_helper = std::make_shared<HiddenUnitBufferHelper>(env);
+    hidden_unit = hidden_unit_buffer_helper->CreateDeviceBuffer();
   }
 
-  void TearDown() override { std::cout << "TearDown" << std::endl; }
+  void TearDown() override {}
 
  protected:
   ModelConfig model_config;
   RuntimeConfig runtime_config;
-  std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
-  std::shared_ptr<PrefixCacheManager> cache_manager = nullptr;
+  PipelineConfig pipeline_config;
+  std::shared_ptr<BlockAllocatorManager> engine_block_manager;
+  std::shared_ptr<BlockAllocatorManager> executor_block_manager;
+  std::shared_ptr<BlockAllocatorGroupInterface> engine_block_group;
+  std::shared_ptr<BlockAllocatorGroupInterface> executor_block_group;
   std::shared_ptr<Context> context{nullptr};
+  std::shared_ptr<HiddenUnitBufferHelper> hidden_unit_buffer_helper = nullptr;
+  HiddenUnitDeviceBuffer *hidden_unit = nullptr;
+
+  CacheManagerConfig cache_manager_config;
+  std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
+
   // Sample input tokens for ARC-Hunyuan-Video model
   const std::vector<int> input_ids = {127958, 198,  15225, 100765, 101446, 100699, 88240, 198,  5207,  279,  7422,
                                       1920,   304,  366,   27963,  29,     694,    27963, 29,   323,   1620, 4320,
@@ -94,8 +121,7 @@ class ArcHunyuanVideoTest : public testing::Test {
   // Expected tokens may vary based on model behavior
   const std::vector<std::vector<int>> expected_tokens = {{14023, 771}};
 
-  template <typename weight_data_type>
-  void TestArcHunyuanVideoForwardWithGreedySampler() {
+  void TestArcHunyuanVideoForward() {
     const int device_id = 0;
     SetDevice(device_id);
     std::filesystem::path model_path(model_config.path);
@@ -103,19 +129,17 @@ class ArcHunyuanVideoTest : public testing::Test {
       KLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
       EXPECT_TRUE(std::filesystem::exists(model_path));
     }
+
     std::unique_ptr<WeightInstance> weight_instance =
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
-    std::shared_ptr<BaseWeight> arc_hunyuan_video_weight = weight_instance->GetWeight(/*rank*/ 0);
+    std::shared_ptr<BaseWeight> arc_hunyuan_video_weight = weight_instance->GetWeight();
     std::shared_ptr<ArcHunyuanVideoModel> arc_hunyuan_video = std::make_shared<ArcHunyuanVideoModel>(
         model_config, runtime_config, device_id, context, arc_hunyuan_video_weight);
 
-    std::vector<int> generated_tokens0(1), generated_tokens1(1);
-
     // ContextDecode
     auto forward = std::make_unique<ForwardRequest>();
-    forward->cache_manager = cache_manager;
-    forward->attn_dp_group_id = 0;
+    forward->block_allocator_manager = executor_block_manager;
     forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
@@ -128,24 +152,16 @@ class ArcHunyuanVideoTest : public testing::Test {
     // Initialize xdrotary_embedding_pos_offset for arc_hunyuan_video model
     int64_t xdrotary_embedding_pos_offset_value = 0;
     forward->xdrotary_embedding_pos_offset = &xdrotary_embedding_pos_offset_value;
-    SamplingConfig sample_config;
-    sample_config.num_beams = 1;
-    sample_config.topk = 1;
-    sample_config.topp = 0;
-    sample_config.temperature = 0;
-    sample_config.repetition_penalty = 1;
-    sample_config.no_repeat_ngram_size = 0;
-    sample_config.encoder_no_repeat_ngram_size = 0;
-    forward->sampling_config = &sample_config;
 
     std::vector<int> block_ids;
     int use_block_num = (input_ids.size() + runtime_config.attn_backend_config.block_token_num - 1) /
                         runtime_config.attn_backend_config.block_token_num;
-    block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
-    block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward->kv_cache_ptrs);
+    engine_block_group->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
+    executor_block_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward->kv_cache_ptrs);
 
     forward->atb_kv_cache_base_blk_ids.assign(1, {});
-    AppendFlatKVCacheBlkIds(model_config.num_layer, block_ids, forward->atb_kv_cache_base_blk_ids, cache_manager);
+    BuildFlatKVCacheBlockIds(GetTotalLayerNum(model_config, pipeline_config), block_ids,
+                             forward->atb_kv_cache_base_blk_ids, executor_block_group->GetDeviceBlockAllocator(0));
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
       Memset(forward->kv_cache_ptrs[block_idx], 0, runtime_config.attn_backend_config.block_size);
       KLLM_LOG_DEBUG << fmt::format(
@@ -154,49 +170,79 @@ class ArcHunyuanVideoTest : public testing::Test {
     }
 
     auto decode_forward = std::make_unique<ForwardRequest>(*forward);
-    decode_forward->cache_manager = cache_manager;
     std::vector<int> decode_ids = input_ids;
+    decode_forward->block_allocator_manager = executor_block_manager;
     decode_forward->forwarding_tokens = std::make_shared<std::vector<int>>(decode_ids);
     decode_forward->infer_stage = InferStage::kDecode;
     decode_forward->kv_cached_token_num = decode_forward->forwarding_tokens->size() - 1;
     // Initialize separate xdrotary_embedding_pos_offset for decode_forward
     int64_t decode_xdrotary_embedding_pos_offset_value = 0;
     decode_forward->xdrotary_embedding_pos_offset = &decode_xdrotary_embedding_pos_offset_value;
-    std::vector<ForwardRequest *> forward_reqs = {forward.get(), decode_forward.get()};
-    Singleton<LayerProgressTracker>::GetInstance()->Initialize(
-        runtime_config.parallel_basic_config.tensor_parallel_size, model_config.num_layer);
-    Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback([&](int device_id, int layer_index) {
-      KLLM_LOG_INFO << "LayerProgressTracker : device_id: " << device_id << " , layer_index: " << layer_index;
-    });
-    EXPECT_TRUE(arc_hunyuan_video->Forward(arc_hunyuan_video_weight, forward_reqs, false).OK());
-    Singleton<LayerProgressTracker>::GetInstance()->Cleanup();
-    generated_tokens0[0] = arc_hunyuan_video->GetOutputTokensPtr()[0];
-    generated_tokens1[0] = arc_hunyuan_video->GetOutputTokensPtr()[1];
+
+    std::vector<ForwardRequest> forward_reqs = {*forward, *decode_forward};
+    EXPECT_TRUE(arc_hunyuan_video->Forward(arc_hunyuan_video_weight, forward_reqs, hidden_unit, RunMode::kMain).OK());
+    StreamSynchronize(context->device->GetPrimaryComputeStream());
+
+    SamplingRequest sample_req;
+    NgramDict ngram_dict;
+    auto logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>();
+    std::vector<int> generated_tokens0, generated_tokens1;
+    auto request_target = std::make_shared<std::unordered_map<std::string, TargetDescribe>>();
+    sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
+    sample_req.sampling_token_num = 1;
+    sample_req.logits_offset = forward_reqs[0].logits_offset;
+    sample_req.sampling_result_tokens = &generated_tokens0;
+    sample_req.logprobs = logprobs;
+    sample_req.ngram_dict = &ngram_dict;
+    sample_req.logits_buf = arc_hunyuan_video->GetLogitsPtr();
+    SamplingConfig sample_config;
+    sample_config.num_beams = 1;
+    sample_config.topk = 1;
+    sample_config.topp = 0;
+    sample_config.temperature = 0;
+    sample_config.repetition_penalty = 1;
+    sample_config.no_repeat_ngram_size = 0;
+    sample_config.encoder_no_repeat_ngram_size = 0;
+    sample_req.sampling_config = &sample_config;
+    sample_req.request_target = request_target;
+
+    SamplingRequest decode_sample_req = sample_req;
+    decode_sample_req.sampling_result_tokens = &generated_tokens1;
+    decode_sample_req.logits_offset = forward_reqs[1].logits_offset;
+    decode_sample_req.logits_buf = arc_hunyuan_video->GetLogitsPtr();
+
+    BatchSchedulerConfig batch_scheduler_config;
+    Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
+
+    std::vector<SamplingRequest> sample_reqs = {sample_req, decode_sample_req};
+    std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context);
+    sampler->Sampling(sample_reqs, context->device->GetPrimaryComputeStream());
     std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
               << std::endl;
     // Check if generated tokens match expected tokens
-    EXPECT_TRUE(generated_tokens0[0] == expected_tokens[0][0]);
-    EXPECT_TRUE(generated_tokens1[0] == expected_tokens[0][0]);
+    EXPECT_EQ(expected_tokens[0][0], generated_tokens0[0]);
+    EXPECT_EQ(expected_tokens[0][0], generated_tokens1[0]);
 
     // Decode
-    (*forward_reqs[0]->forwarding_tokens).emplace_back(generated_tokens0[0]);
-    (*forward_reqs[1]->forwarding_tokens).emplace_back(generated_tokens1[0]);
+    (*forward_reqs[0].forwarding_tokens).emplace_back(generated_tokens0[0]);
+    (*forward_reqs[1].forwarding_tokens).emplace_back(generated_tokens1[0]);
+    generated_tokens0.clear();
+    generated_tokens1.clear();
     for (auto &forward_req : forward_reqs) {
-      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
+      forward_req.infer_stage = InferStage::kDecode;
+      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
-    EXPECT_TRUE(arc_hunyuan_video->Forward(arc_hunyuan_video_weight, forward_reqs, false).OK());
-    generated_tokens0[0] = arc_hunyuan_video->GetOutputTokensPtr()[0];
-    generated_tokens1[0] = arc_hunyuan_video->GetOutputTokensPtr()[1];
+    EXPECT_TRUE(arc_hunyuan_video->Forward(arc_hunyuan_video_weight, forward_reqs, hidden_unit, RunMode::kMain).OK());
+    sampler->Sampling(sample_reqs, context->device->GetPrimaryComputeStream());
     std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
               << std::endl;
-    // Check if generated tokens match expected tokens
-    EXPECT_TRUE(generated_tokens0[0] == expected_tokens[0][1]);
-    EXPECT_TRUE(generated_tokens1[0] == expected_tokens[0][1]);
+    EXPECT_EQ(expected_tokens[0][1], generated_tokens0[0]);
+    EXPECT_EQ(expected_tokens[0][1], generated_tokens1[0]);
 
     arc_hunyuan_video.reset();
     arc_hunyuan_video_weight.reset();
 
-    StreamSynchronize(context->GetMemoryManageStreams()[device_id]);
+    StreamSynchronize(context->device->GetMemoryManageStream());
     DeviceSynchronize();
   }
 };
@@ -207,6 +253,6 @@ TEST_F(ArcHunyuanVideoTest, ForwardBF16WithGreedySamplerTest) {
   model_config.weight_data_type = TYPE_BF16;
   runtime_config.inter_data_type = model_config.weight_data_type;
   std::cout << "Test BF16 weight_data_type forward with greedy sampler." << std::endl;
-  TestArcHunyuanVideoForwardWithGreedySampler<__nv_bfloat16>();
+  TestArcHunyuanVideoForward();
 #endif
 }

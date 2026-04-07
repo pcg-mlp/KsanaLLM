@@ -152,6 +152,9 @@ struct BlockManagerConfig {
 
   // The ratio of dynamic reusable memory.
   float dynamic_reusable_memory_ratio = 1.0;
+
+  // The size of host memory pool in GB, 0 means disabled.
+  int host_pool_size_gb = 0;
 };
 
 // For cached manager, used for auto-prefix-caching.

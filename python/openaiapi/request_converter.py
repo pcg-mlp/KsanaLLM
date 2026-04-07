@@ -327,6 +327,10 @@ class RequestConverter:
         # Use input_tokens as the primary input if available
         if hasattr(request, 'input_tokens') and request.input_tokens:
             ksana_request["input_tokens"] = request.input_tokens
+        
+        # for plugin preprocessing
+        if hasattr(request, 'messages') and request.messages:
+            ksana_request["messages"] = request.messages
 
         
     def _handle_completion_input(
@@ -758,6 +762,7 @@ class RequestConverter:
         finish_reason: Optional[str] = None,
         logprobs: Optional[Any] = None,
         usage: Optional[UsageInfo] = None,
+        times: Optional[Any] = None,
         choice_index: int = 0,
         #  delta_message是构建完成的增量消息
         delta_message: Optional[DeltaMessage] = None,
@@ -799,7 +804,8 @@ class RequestConverter:
                 created=int(time.time()),
                 model=model_name,
                 choices=[choice],
-                usage=usage
+                usage=usage,
+                times=times,
             )
             
             return f"data: {orjson.dumps(chunk.model_dump(exclude_unset=True)).decode()}\n\n"

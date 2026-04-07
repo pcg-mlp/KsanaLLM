@@ -1,3 +1,4 @@
+# pylint: disable=broad-except
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Ref:
@@ -354,6 +355,40 @@ class KsanaOpenAIServing:
             return self._model_info["id"]
         return model_name
     
+    _MULTIMODAL_TYPES = {"image_url", "video_url", "audio_url"}
+
+    def _is_multimodal_request(self, messages: list) -> bool:
+        """Return True if any message contains multimodal content parts.
+
+        Note: content may be a pydantic ValidatorIterator after v2 parsing,
+        so iteration is guarded with try/except.
+        """
+        if not messages:
+            return False
+
+        for message in messages:
+            if isinstance(message, dict):
+                content = message.get("content")
+            else:
+                content = getattr(message, "content", None)
+
+            if content is None or isinstance(content, str):
+                continue
+
+            try:
+                for part in content:
+                    if isinstance(part, dict):
+                        part_type = part.get("type", "")
+                    else:
+                        part_type = getattr(part, "type", "")
+                    if part_type in self._MULTIMODAL_TYPES:
+                        return True
+            except Exception:
+                # iteration failed, skip this message
+                continue
+
+        return False
+    
     def _get_trace_context(self, request: Request) -> Optional[Dict[str, str]]:
         try:
             return self.llm_server.get_trace_context(request)
@@ -665,6 +700,15 @@ class KsanaOpenAIServing:
             raise ValueError("Messages cannot be empty. At least one message is required.")
         
         model_config = self.llm_server.engine_args
+
+        # Multimodal request: let plugin handle messages directly
+        if self._is_multimodal_request(messages):
+            logger.debug("Detected multimodal request, skipping chat template processing")
+            engine_prompt = {
+                "prompt_token_ids": [],
+                "multi_modal_data": [],
+            }
+            return messages, [], [engine_prompt]
 
         if self.use_deepseek_v32_encoding:
             self.maybe_serialize_tool_calls(messages)
