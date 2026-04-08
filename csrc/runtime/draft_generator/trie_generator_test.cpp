@@ -14,6 +14,7 @@
 #include "configure/environment.h"
 #include "runtime/draft_generator/draft_generator_controller.h"
 #include "runtime/executor_infer_request.h"
+#include "runtime/structured_generation/structured_generator_interface.h"
 
 namespace ksana_llm {
 
@@ -590,6 +591,113 @@ TEST_F(DraftGeneratorInterfaceTest, FilterDraftTokensPartialMatch) {
   // 验证 generated_tokens
   EXPECT_EQ(req->generated_tokens.size(), 1);
   EXPECT_EQ(req->generated_tokens[0], 999);
+}
+
+// Mock StructuredGeneratorInterface for testing DefaultFilterDraftTokens
+class MockStructuredGeneratorForDraft : public StructuredGeneratorInterface {
+ public:
+  // Accepts tokens in order from allowed_tokens list.
+  explicit MockStructuredGeneratorForDraft(const std::vector<int>& allowed_tokens)
+      : allowed_tokens_(allowed_tokens) {}
+
+  bool AcceptToken(int token_id) override {
+    if (idx_ >= allowed_tokens_.size()) return false;
+    if (allowed_tokens_[idx_] == token_id) {
+      idx_++;
+      return true;
+    }
+    return false;
+  }
+
+  bool FillNextTokenBitmask(void* next_token_bitmask) override { return true; }
+  void Rollback(int rollback_token_num) override { idx_ -= rollback_token_num; }
+  bool FindJumpForwardTokens(std::vector<int>& jump_tokens) override { return false; }
+  bool IsTerminated() const override { return terminated_; }
+  bool IsValid() const override { return true; }
+  StructuredConstraintType GetConstraintType() const override { return StructuredConstraintType::JSON; }
+
+  void SetTerminated(bool val) { terminated_ = val; }
+
+ private:
+  std::vector<int> allowed_tokens_;
+  size_t idx_ = 0;
+  bool terminated_ = false;
+};
+
+// Tests for DefaultFilterDraftTokens with structured_generator
+class DefaultFilterDraftTokensStructuredTest : public testing::Test {
+ protected:
+  std::shared_ptr<ExecutorInferRequest> CreateReq(const std::vector<int>& draft_mtp,
+                                                  const std::vector<int>& sampling_result) {
+    auto req = std::make_shared<ExecutorInferRequest>();
+    req->req_id = 1;
+    req->input_tokens = {1, 2, 3};
+    req->draft_tokens.mtp = draft_mtp;
+    req->sampling_result_tokens = sampling_result;
+    return req;
+  }
+};
+
+// structured_generator is nullptr — should not affect filtering
+TEST_F(DefaultFilterDraftTokensStructuredTest, NullStructuredGenerator) {
+  auto req = CreateReq({10, 20}, {10, 20, 30});
+  req->structured_generator = nullptr;
+
+  size_t hit = DefaultFilterDraftTokens(req);
+  EXPECT_EQ(hit, 2);
+  EXPECT_EQ(req->accepted_tokens.size(), 2);
+  EXPECT_EQ(req->generated_tokens[0], 30);
+}
+
+// structured_generator rejects the next token after first draft — stops early
+TEST_F(DefaultFilterDraftTokensStructuredTest, StructuredGeneratorRejectsNextToken) {
+  // draft_tokens = {10, 20}, sampling_result = {10, 20, 30}
+  // Grammar allows: [20, 999] — so token 30 (sampling_result[2]) is rejected
+  auto req = CreateReq({10, 20}, {10, 20, 30});
+  req->structured_generator = std::make_shared<MockStructuredGeneratorForDraft>(std::vector<int>{20, 999});
+
+  size_t hit = DefaultFilterDraftTokens(req);
+  // i=0: draft[0]=10 == sampling[0]=10 ✓, AcceptToken(sampling[1]=20) ✓
+  // i=1: draft[1]=20 == sampling[1]=20 ✓, AcceptToken(sampling[2]=30) ✗ → break
+  EXPECT_EQ(hit, 1);
+  EXPECT_EQ(req->accepted_tokens.size(), 1);
+  EXPECT_EQ(req->accepted_tokens[0], 10);
+  EXPECT_EQ(req->generated_tokens[0], 20);
+}
+
+// structured_generator accepts all next tokens — full match
+TEST_F(DefaultFilterDraftTokensStructuredTest, StructuredGeneratorAcceptsAll) {
+  auto req = CreateReq({10, 20}, {10, 20, 30});
+  req->structured_generator = std::make_shared<MockStructuredGeneratorForDraft>(std::vector<int>{20, 30});
+
+  size_t hit = DefaultFilterDraftTokens(req);
+  EXPECT_EQ(hit, 2);
+  EXPECT_EQ(req->accepted_tokens.size(), 2);
+  EXPECT_EQ(req->generated_tokens[0], 30);
+}
+
+// structured_generator is terminated — stops immediately
+TEST_F(DefaultFilterDraftTokensStructuredTest, StructuredGeneratorTerminated) {
+  auto req = CreateReq({10, 20}, {10, 20, 30});
+  auto gen = std::make_shared<MockStructuredGeneratorForDraft>(std::vector<int>{20, 30});
+  gen->SetTerminated(true);
+  req->structured_generator = gen;
+
+  size_t hit = DefaultFilterDraftTokens(req);
+  // i=0: draft[0]=10 == sampling[0]=10 ✓, but IsTerminated() → break
+  EXPECT_EQ(hit, 0);
+  EXPECT_EQ(req->generated_tokens[0], 10);
+}
+
+// structured_generator rejects first next token — zero accepted
+TEST_F(DefaultFilterDraftTokensStructuredTest, StructuredGeneratorRejectsFirst) {
+  auto req = CreateReq({10}, {10, 20});
+  // Grammar allows [999] — so token 20 is rejected
+  req->structured_generator = std::make_shared<MockStructuredGeneratorForDraft>(std::vector<int>{999});
+
+  size_t hit = DefaultFilterDraftTokens(req);
+  EXPECT_EQ(hit, 0);
+  EXPECT_EQ(req->generated_tokens[0], 10);
 }
 
 }  // namespace ksana_llm

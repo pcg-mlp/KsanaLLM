@@ -51,6 +51,15 @@ size_t DefaultFilterDraftTokens(std::shared_ptr<ExecutorInferRequest> req) {
       }
       // Rollback the tentative acceptance since we're just checking
       req->grammar_matcher->Rollback(1);
+    } else if (req->structured_generator) {
+      // Check structured_generator for new-style structured generation (xgrammar)
+      if (req->structured_generator->IsTerminated()) {
+        break;
+      }
+      const int new_token = req->sampling_result_tokens[i + 1];
+      if (!req->structured_generator->AcceptToken(new_token)) {
+        break;
+      }
     }
   }
 
