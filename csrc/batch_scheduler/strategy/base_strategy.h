@@ -17,13 +17,14 @@
 namespace ksana_llm {
 
 class TransferEngine;
+class GlobalCachePutTracker;
 
 class BaseScheduleStrategy {
  public:
   explicit BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config)
       : batch_scheduler_config_(batch_scheduler_config), runtime_config_(runtime_config) {}
 
-  virtual void UpdateRunningRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs) = 0;
+  virtual void UpdateRunningRequests(const std::vector<std::shared_ptr<InferRequest>>& running_reqs) = 0;
 
   // Get the next infer reqs that ready to run.
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs) = 0;
@@ -39,6 +40,7 @@ class BaseScheduleStrategy {
   void SetSchedulerTickTok(std::shared_ptr<SchedulerTickTok> scheduler_ticktok);
   void SetDataParaGroupId(size_t dp_group_id);
   void SetTransferEngine(std::shared_ptr<TransferEngine> transfer_engine);
+  void SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
 
   std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return cache_manager_; }
 
@@ -61,6 +63,9 @@ class BaseScheduleStrategy {
 
   // Transfer engine for disaggregated prefill-decode mode
   std::shared_ptr<TransferEngine> transfer_engine_ = nullptr;
+
+  // 全局 cache put 追踪器（延迟析构）
+  std::shared_ptr<GlobalCachePutTracker> global_cache_put_tracker_ = nullptr;
 
   // The dp group id.
   size_t dp_group_id_;

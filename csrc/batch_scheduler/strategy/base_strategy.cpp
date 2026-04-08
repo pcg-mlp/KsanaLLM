@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "batch_scheduler/strategy/base_strategy.h"
+#include "batch_scheduler/global_cache_put_tracker.h"
 #include "transfer/transfer_engine.h"
 
 namespace ksana_llm {
@@ -25,6 +26,10 @@ void BaseScheduleStrategy::SetDataParaGroupId(size_t dp_group_id) { dp_group_id_
 
 void BaseScheduleStrategy::SetTransferEngine(std::shared_ptr<TransferEngine> transfer_engine) {
   transfer_engine_ = transfer_engine;
+}
+
+void BaseScheduleStrategy::SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
+  global_cache_put_tracker_ = tracker;
 }
 
 }  // namespace ksana_llm

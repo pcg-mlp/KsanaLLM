@@ -42,7 +42,8 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
       kv_comm_group_key(request->kv_comm_group_key),
       beam_search_group(request->beam_search_group),
       timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
-      req_ctx(request->req_ctx) {
+      req_ctx(request->req_ctx),
+      prefill_entering_forward(request->prefill_entering_forward) {
   draft_tokens.spec = request->draft_tokens;
 }
 
@@ -211,6 +212,21 @@ void InferRequest::ResetPrefillingTokens() {
 
   planning_workload_ = remaining_workload_;
   sampling_token_num = planning_workload_.sampling_token_num;
+}
+
+void InferRequest::AppendCachedTokens(const std::vector<int> &tokens) {
+  std::lock_guard<std::mutex> guard(output_mutex);
+  KLLM_LOG_DEBUG << "InferRequest::AppendCachedTokens: req_id=" << req_id << ", appending " << tokens.size()
+                 << " tokens"
+                 << ", output_tokens_before=" << output_tokens.size()
+                 << ", prefilling_tokens_before=" << prefilling_tokens_.size();
+  for (int token : tokens) {
+    output_tokens.push_back(token);
+    prefilling_tokens_.push_back(token);
+  }
+  KLLM_LOG_DEBUG << "InferRequest::AppendCachedTokens: req_id=" << req_id
+                 << ", output_tokens_after=" << output_tokens.size()
+                 << ", prefilling_tokens_after=" << prefilling_tokens_.size();
 }
 
 void InferRequest::SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num) {

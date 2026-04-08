@@ -111,6 +111,14 @@ Status StreamingIterator::GetNext(ksana_llm::KsanaPythonOutput& ksana_python_out
     // Waiting util next token generated.
     request_->step_waiter->Wait();
     request_->step_waiter->Reset(1);
+
+    // PD 分离：调度完成即将进入 Forward，返回一个空 chunk 作为 prefill 通知。
+    // Router 按位置（第一个 chunk）识别通知，无需特殊字段。
+    // exchange(false) 保证只触发一次。
+    if (request_->prefill_entering_forward.exchange(false)) {
+      return Status();
+    }
+
     all_finished = true;
     for (bool req_finished : request_->finisheds) {
       all_finished = all_finished && req_finished;

@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/strategy/continuous_batching.h"
 #include "profiler/reporter.h"
 #include "profiler/sched_event_tracer.h"
@@ -98,9 +99,13 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   current_qps_ = 0.0;
 }
 
-BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
+BatchScheduler::~BatchScheduler() {
+  threadpool_->Stop();
+}
 
-void BatchScheduler::Stop() { terminating_ = true; }
+void BatchScheduler::Stop() {
+  terminating_ = true;
+}
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int dp_idx) {
   KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
@@ -115,6 +120,13 @@ std::shared_ptr<CacheManagerInterface>& BatchScheduler::GetCacheManager(int dp_i
 void BatchScheduler::SetTransferEngine(std::shared_ptr<TransferEngine> transfer_engine) {
   for (size_t i = 0; i < dp_num_; i++) {
     schedule_strategies_[i]->SetTransferEngine(transfer_engine);
+  }
+}
+
+void BatchScheduler::SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
+  global_cache_put_tracker_ = tracker;
+  for (auto& strategy : schedule_strategies_) {
+    strategy->SetGlobalCachePutTracker(tracker);
   }
 }
 
@@ -137,7 +149,8 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
     return finish_status;
   }
 
-  UpdateQPS(infer_request_group.size());  // 更新QPS统计，传入实际请求数量
+  UpdateQPS(infer_request_group.size());
+
   return EnqueueWaitingBufferQueue(infer_request_group);
 }
 
@@ -430,6 +443,13 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
   }
 
   schedule_output_group_->schedule_id++;
+
+  // 为本轮调度中的 prefill 请求注册 pending put 计数
+  if (global_cache_put_tracker_ && total_running_size > 0) {
+    for (size_t i = 0; i < dp_num_; i++) {
+      global_cache_put_tracker_->OnBatchDispatched(batch_states_[i][multi_batch_id]->schedule_output->running_reqs);
+    }
+  }
 
   KLLM_LOG_SCHEDULER << "Finish schedule. multi_batch_id=" << multi_batch_id
                      << ", schedule_id=" << schedule_output_group_->schedule_id

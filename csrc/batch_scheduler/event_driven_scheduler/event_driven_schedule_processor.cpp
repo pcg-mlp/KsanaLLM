@@ -55,7 +55,9 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
   // Release blocks and notify clients.
   req->finished = true;
   req->finish_status = ret_status;
-  dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
+    dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  }
   req->kv_cache_blocks.clear();
   req->Notify();
 
@@ -79,10 +81,17 @@ void EventDrivenScheduleProcessor::HandleHookFailAndEnd(const std::shared_ptr<In
   RemoveReqByIdFromQueue(dp_state.swapped_reqs, req->req_id);
 
   req->Stop();
+  // 请求可能已被 GlobalCacheFetcher 拒绝并 Notify，需避免重复通知
+  bool already_finished = req->finished;
   req->finished = true;
   req->finish_status = Status(RET_RUNTIME_FAILED, reason);
+  if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
+    dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  }
   req->kv_cache_blocks.clear();
-  req->Notify();
+  if (!already_finished) {
+    req->Notify();
+  }
   schedule_state_.req_id_to_req_ptr.erase(req->req_id);
   KLLM_LOG_WARNING << "Hook fail-and-end req_id=" << req->req_id << ", reason=" << reason;
 }
@@ -105,7 +114,9 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
   req->ResetInflightTask();
   req->Restart();
   req->ResetPrefillingTokens();
-  dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
+    dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  }
   req->kv_cache_blocks.clear();
 
   if (!HasReqInQueue(dp_state.prefilling_reqs, req->req_id)) {
@@ -789,6 +800,11 @@ bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleConte
     }
   }
 
+  // 为本轮 batch 中的 prefill 请求注册 pending put 计数
+  if (global_cache_put_tracker_ && !result->schedule_output->running_reqs.empty()) {
+    global_cache_put_tracker_->OnBatchDispatched(result->schedule_output->running_reqs);
+  }
+
   ProcessScheduleDataInternal(multi_batch_id, *result);
   KLLM_LOG_SCHEDULER << "Built ScheduleResult for multi_batch_id=" << multi_batch_id
                      << ", schedule_id=" << result->schedule_output->schedule_id
@@ -855,6 +871,11 @@ void EventDrivenScheduleProcessor::UpdateAfterSwapTaskFinished(int64_t req_id, b
   event_info.block_num = block_num;
   event_info.status = status;
   processor->EnqueueSwapTaskFinished(event_info);
+}
+
+void EventDrivenScheduleProcessor::SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
+  global_cache_put_tracker_ = std::move(tracker);
+  KLLM_LOG_SCHEDULER << "GlobalCachePutTracker set for EventDrivenScheduleProcessor";
 }
 
 void EventDrivenScheduleProcessor::SetCacheManagers(

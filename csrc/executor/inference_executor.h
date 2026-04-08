@@ -12,6 +12,7 @@
 #include "distributed/distributed_data_coordinator.h"
 #include "executor/executor_block_manager.h"
 #include "executor/model_runner.h"
+#include "global_cache_connector/global_cache_connector_interface.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "runtime/draft_generator/draft_generator_controller.h"
 #include "runtime/hidden_unit_buffer_pool.h"
@@ -84,6 +85,9 @@ class InferenceExecutor {
   // NCCL executor handler for managing NCCL operations on this executor's GPU
   std::shared_ptr<NcclExecutorHandler> nccl_executor_handler_ = nullptr;
 #endif
+
+  // Global cache connector for fetching KV cache from global store
+  std::shared_ptr<GlobalCacheConnectorInterface> global_cache_connector_ = nullptr;
 };
 
 }  // namespace ksana_llm

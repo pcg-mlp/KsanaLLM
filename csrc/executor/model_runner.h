@@ -17,6 +17,7 @@
 namespace ksana_llm {
 
 class ExecutorBlockManager;
+class GlobalCachePutWorker;
 
 // Used to execute really inference calculation on the device.
 class ModelRunner {
@@ -32,6 +33,7 @@ class ModelRunner {
   void SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool);
   void SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> sampling_output_pool);
   void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller);
+  void SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker);
 
   // Start runner, all worker threads should be ready.
   Status Start();
@@ -87,6 +89,9 @@ class ModelRunner {
   std::shared_ptr<SamplingOutputPool> sampling_output_pool_ = nullptr;
 
   std::atomic<bool> terminated_ = false;
+
+  // 全局 cache put 工作器（Forward 完成后异步上传 KV cache）
+  std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker_ = nullptr;
 };
 
 }  // namespace ksana_llm

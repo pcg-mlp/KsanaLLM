@@ -15,6 +15,7 @@
 #include "configure/yaml_reader.h"
 #include "connector/config.h"
 #include "device/device_types.h"
+#include "global_cache_connector/global_cache_connector_types.h"
 #include "utils/logger.h"
 #include "utils/search_path.h"
 #include "utils/status.h"
@@ -486,6 +487,20 @@ class ScheduleConfigParser {
   // Init disaggregating prefill and decode connector config
   void InitConnectorConfig(YamlReader &yaml_reader);
 
+  Status GetGlobalCacheConnectorConfig(GlobalCacheConnectorConfig &config) const {
+    if (global_cache_connector_config_.service_endpoint.empty()) {
+      return Status(RET_CONFIG_NOT_FOUND, "Global cache connector config is not initialized.");
+    }
+    config = global_cache_connector_config_;
+    return Status();
+  }
+
+  void SetGlobalCacheConnectorConfig(const GlobalCacheConnectorConfig &config) {
+    global_cache_connector_config_ = config;
+  }
+
+  void InitGlobalCacheConnectorConfig(YamlReader &yaml_reader);
+
   // Calculate block size via model configs.
   Status InitializeBlockManagerConfig(const ModelConfig &model_config);
 
@@ -515,6 +530,9 @@ class ScheduleConfigParser {
 
   // Store parsed connector configurations
   ConnectorConfig connector_config_;
+
+  // Store global cache connector configuration
+  GlobalCacheConnectorConfig global_cache_connector_config_;
 };
 
 }  // namespace ksana_llm

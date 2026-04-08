@@ -9,6 +9,7 @@ list(FILTER batch_scheduler_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "batch_scheduler_SRCS: ${batch_scheduler_SRCS}")
 
 add_library(batch_scheduler STATIC ${batch_scheduler_SRCS})
+target_link_libraries(batch_scheduler PUBLIC runtime)
 
 if(WITH_CUDA)
   set(MODELS_TEST_LIBS ${TORCH_LIBRARIES}  ${TORCH_PYTHON_LIBRARY} )
@@ -24,6 +25,9 @@ cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/ba
 cpp_test(event_driven_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/event_driven_scheduler_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(schedule_hook_manager_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/schedule_hook_manager_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(basic_workload_balancer_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/workload_balance/basic_workload_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(global_cache_put_tracker_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/global_cache_put_tracker_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(global_cache_fetcher_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/global_cache_fetcher_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(global_cache_query_hook_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/global_cache_query_hook_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
 #cpp_test(batch_scheduler_balance_reqs_algo_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_balance_reqs_algo_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 #cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/strategy/continuous_batching_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

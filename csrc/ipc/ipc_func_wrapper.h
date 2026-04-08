@@ -18,6 +18,10 @@
 
 namespace ksana_llm {
 
+class GlobalCacheFetcher;
+class GlobalCacheConnectorInterface;
+class GlobalCachePutTracker;
+
 enum {
   IPC_FUNC_ADD_EXECUTOR = 0,
   IPC_FUNC_LOAD_WEIGHT,
@@ -51,6 +55,10 @@ enum {
   IPC_FUNC_SET_EP_COMMUNICATION_CONFIG,
 
   IPC_FUNC_BATCH_SWAP,
+
+  IPC_FUNC_GLOBAL_CACHE_QUERY,
+  IPC_FUNC_GLOBAL_CACHE_QUERY_DONE,
+  IPC_FUNC_GLOBAL_CACHE_PUT_DONE,
 };
 
 // Used to call some pre-defined functions in different process.
@@ -134,6 +142,27 @@ class IpcFuncWrapper {
   // Send BatchSwap request to executor and wait for completion (engine side, blocking)
   Status BatchSwap(int executor_id, bool is_swapin, const std::vector<int>& device_block_ids,
                    const std::vector<int>& host_block_ids);
+
+  // Engine → Executor: 向指定 executor 发送全局 cache 查询请求（异步，不阻塞）
+  Status DispatchGlobalCacheQuery(int executor_id, int64_t req_id, const std::vector<int>& token_ids,
+                                  size_t local_cached_len, int block_size, const std::vector<int>& kv_cache_block_ids);
+
+  // Executor → Engine: 报告全局 cache 查询完成（异步，不阻塞）
+  Status ReportGlobalCacheQueryDone(int64_t req_id, int device_id, const std::vector<int>& matched_ranges, bool success,
+                                    const std::vector<int>& cached_tokens = {}, bool has_cached_tokens = false);
+
+  // 设置全局 cache 查询相关的 IPC callable 依赖
+  void SetGlobalCacheQueryCallableDeps(std::shared_ptr<GlobalCacheConnectorInterface> connector,
+                                       std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager,
+                                       int dp_group_id, std::shared_ptr<Environment> env, int device_id,
+                                       const std::string& role = "", int timeout_ms = 5000);
+  void SetGlobalCacheQueryDoneCallableFetcher(std::shared_ptr<GlobalCacheFetcher> fetcher);
+
+  // Executor → Engine: 报告单个请求的 KV cache put 完成（异步，不阻塞）
+  Status ReportGlobalCachePutDone(int device_id, int64_t req_id);
+
+  // 设置 GlobalCachePutDone callable 的 tracker 依赖
+  void SetGlobalCachePutDoneCallableTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
 
 #ifdef ENABLE_CUDA
   // Connector NCCL operations through IPC - Engine to executor

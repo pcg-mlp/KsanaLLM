@@ -8,6 +8,7 @@
 #include "cache_manager/cache_manager_interface.h"
 #include "distributed/distributed_control_coordinator.h"
 #include "engine/model_driver.h"
+#include "global_cache_connector/global_cache_connector_interface.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "runtime/weight_instance_inferface.h"
 #include "transfer/transfer_engine.h"
@@ -65,6 +66,9 @@ class InferenceEngine {
 
   // Transfer engine for layer progress handling
   std::shared_ptr<TransferEngine> transfer_engine_ = nullptr;
+
+  // Global cache connector for supplementing local prefix cache
+  std::shared_ptr<GlobalCacheConnectorInterface> global_cache_connector_ = nullptr;
 
   // IPC function wrapper for inter-process communication
   std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper_ = nullptr;

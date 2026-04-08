@@ -143,6 +143,8 @@ void ModelDriver::SetScheduleProcessor(std::shared_ptr<ScheduleProcessorInterfac
   schedule_processor_ = schedule_processor;
 }
 
+void ModelDriver::SetGlobalCacheRole(const std::string& role) { global_cache_role_ = role; }
+
 Status ModelDriver::Start() {
   if (!context_->global->IsDistributedWorker()) {
     request_recv_thread_ = std::unique_ptr<std::thread>(new std::thread(&ModelDriver::HandleRequestRecv, this));
@@ -407,6 +409,21 @@ Status ModelDriver::HandleSchedule() {
           } else {
             req->need_recreate_generator = false;
             KLLM_LOG_DEBUG << "req_id " << req->req_id << " already has output tokens, skipping generator creation";
+          }
+        }
+      }
+    }
+
+    // PD 分离（GlobalCache prefill 角色）：调度完成、即将分发到 executor 前
+    // 发送 prefill 通知，让 Router 尽早并行建立 decode 连接。
+    // 仅对首次出现在调度中的 kContext 请求通知一次（compare_exchange_strong）。
+    if (global_cache_role_ == "prefill") {
+      for (auto& req : schedule_output->running_reqs) {
+        if (req->infer_stage == InferStage::kContext && !req->is_mock_req) {
+          bool expected = false;
+          if (req->prefill_entering_forward.compare_exchange_strong(expected, true)) {
+            req->NotifyStep();
+            KLLM_LOG_DEBUG << "PD prefill notification sent for req_id=" << req->req_id;
           }
         }
       }

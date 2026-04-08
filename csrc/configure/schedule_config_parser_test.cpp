@@ -11,8 +11,17 @@
 
 #include "configure/yaml_reader.h"
 #include "gtest/gtest.h"
+#include "loguru.hpp"
 
 namespace ksana_llm {
+
+namespace {
+class MaxLogVerbosityEnv : public ::testing::Environment {
+ public:
+  void SetUp() override { loguru::g_stderr_verbosity = loguru::Verbosity_MAX; }
+};
+static auto *unused_log_env = ::testing::AddGlobalTestEnvironment(new MaxLogVerbosityEnv());
+}  // namespace
 
 class ScheduleConfigParserTest : public ::testing::Test {
  protected:
@@ -652,6 +661,142 @@ TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_EQ(batch_config.split_fuse_token_num, 0)
       << "split_fuse_token_num should be 0 when PD separation + prefix_cache + split_fuse are all enabled";
+}
+
+// ==================== GlobalCacheConnector 配置解析测试 ====================
+
+TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorNotConfigured) {
+  // 默认 YAML 中没有 global_cache_connector 段
+  std::string yaml_path = CreateConnectorYamlConfig("none");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK());
+
+  GlobalCacheConnectorConfig config;
+  Status get_status = parser_->GetGlobalCacheConnectorConfig(config);
+  EXPECT_FALSE(get_status.OK()) << "Should fail when endpoint is not configured";
+}
+
+TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorFullConfig) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files_.push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+  temp_dirs_.push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  ASSERT_TRUE(file.is_open());
+
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  global_cache_connector:\n";
+  file << "    service_endpoint: \"10.0.0.1:12345\"\n";
+  file << "    backend_type: mooncake\n";
+  file << "    timeout_ms: 3000\n";
+  file << "    max_retry: 5\n";
+  file << "    fetch_thread_num: 8\n";
+  file << "    role: prefill\n";
+  file << "    protocol: rdma\n";
+  file << "    rdma_devices: mlx5_0\n";
+  file << "    master_server_addr: \"10.0.0.2:50051\"\n";
+  file << "    global_segment_size: 33554432\n";
+  file << "    local_buffer_size: 33554432\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  GlobalCacheConnectorConfig config;
+  Status get_status = parser_->GetGlobalCacheConnectorConfig(config);
+  ASSERT_TRUE(get_status.OK()) << get_status.GetMessage();
+
+  EXPECT_EQ(config.service_endpoint, "10.0.0.1:12345");
+  EXPECT_EQ(config.backend_type, "mooncake");
+  EXPECT_EQ(config.timeout_ms, 3000);
+  EXPECT_EQ(config.max_retry, 5);
+  EXPECT_EQ(config.fetch_thread_num, 8);
+  EXPECT_EQ(config.role, "prefill");
+  EXPECT_EQ(config.protocol, "rdma");
+  EXPECT_EQ(config.rdma_devices, "mlx5_0");
+  EXPECT_EQ(config.master_server_addr, "10.0.0.2:50051");
+  EXPECT_EQ(config.global_segment_size, 33554432u);
+  EXPECT_EQ(config.local_buffer_size, 33554432u);
+}
+
+TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorDefaults) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files_.push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+  temp_dirs_.push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  ASSERT_TRUE(file.is_open());
+
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  global_cache_connector:\n";
+  file << "    service_endpoint: \"localhost:9999\"\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
+  ModelConfig model_config;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  GlobalCacheConnectorConfig config;
+  ASSERT_TRUE(parser_->GetGlobalCacheConnectorConfig(config).OK());
+
+  EXPECT_EQ(config.service_endpoint, "localhost:9999");
+  EXPECT_EQ(config.backend_type, "mooncake");
+  EXPECT_EQ(config.timeout_ms, 5000);
+  EXPECT_EQ(config.max_retry, 3);
+  EXPECT_EQ(config.fetch_thread_num, 4);
+  EXPECT_EQ(config.role, "");
+  EXPECT_EQ(config.protocol, "tcp");
+  EXPECT_EQ(config.master_server_addr, "127.0.0.1:50051");
+  EXPECT_EQ(config.global_segment_size, 16u * 1024 * 1024);
+  EXPECT_EQ(config.local_buffer_size, 16u * 1024 * 1024);
 }
 
 }  // namespace ksana_llm

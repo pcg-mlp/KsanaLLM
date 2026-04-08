@@ -79,6 +79,9 @@ class ModelDriver {
 
   void SetScheduleProcessor(std::shared_ptr<ScheduleProcessorInterface> schedule_processor);
 
+  // PD 分离：设置 GlobalCache 角色（"prefill" / "decode" / ""）
+  void SetGlobalCacheRole(const std::string& role);
+
  private:
   Status Enqueue(std::shared_ptr<Request>& req);
   void UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_output);
@@ -141,6 +144,9 @@ class ModelDriver {
 
   ModelConfig model_config_;
   RuntimeConfig runtime_config_;
+
+  // PD 分离：GlobalCache 角色，"prefill" 时在调度完成后发送 prefill 通知
+  std::string global_cache_role_;
 };
 
 }  // namespace ksana_llm

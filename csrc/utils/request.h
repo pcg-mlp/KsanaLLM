@@ -4,6 +4,7 @@
 #pragma once
 
 #include <sys/stat.h>
+#include <atomic>
 #include <unordered_map>
 #include <vector>
 
@@ -288,6 +289,10 @@ class Request {
 
   // This key for kv transformer group.
   std::string kv_comm_group_key;
+
+  // PD 分离：HandleSchedule 分发到 executor 前由 ModelDriver 置 true，
+  // StreamingIterator 读取后清零，向 Router 发送空 chunk 作为 prefill 通知。
+  std::atomic<bool> prefill_entering_forward{false};
 
  private:
   // The id generator

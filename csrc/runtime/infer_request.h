@@ -3,9 +3,9 @@
 ==============================================================================*/
 #pragma once
 
+#include <sstream>
 #include <string>
 #include <vector>
-#include <sstream>
 
 #include "cache_manager/cache_manager_interface.h"
 #include "runtime/draft_generator/draft_tokens.h"
@@ -296,6 +296,9 @@ class InferRequest {
   // request context
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 
+  // PD 分离：调度完成分发到 executor 前置 true，引用自 Request。
+  std::atomic<bool> &prefill_entering_forward;
+
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
 
@@ -329,6 +332,10 @@ class InferRequest {
   bool IsEosGenerated() const { return is_eos_generated_; }
 
   void LaunchPlanningTask();
+
+  // 将全局 cache 命中的生成 token(s) 追加到 output_tokens 和 prefilling_tokens_，
+  // 供全命中后直接进入 decode 时使用（支持 MTP 多 token）。
+  void AppendCachedTokens(const std::vector<int> &tokens);
 
   std::string ScheduleStateToStr() const;
 

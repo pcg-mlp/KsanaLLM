@@ -18,6 +18,7 @@
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager.h"
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager_interface.h"
 #include "batch_scheduler/event_driven_scheduler/workload_balance/workload_balancer_interface.h"
+#include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/schedule_processor_interface.h"
 #include "cache_manager/cache_manager_interface.h"
 #include "utils/blocking_queue.h"
@@ -58,6 +59,10 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   // 设置时会自动将 UpdateAfterAsyncTaskFinished 注册为该管理器的异步完成回调。
   void SetScheduleHookManager(std::shared_ptr<ScheduleHookManagerInterface> hook_manager);
   void SetWorkloadBalancer(std::shared_ptr<WorkloadBalancerInterface> workload_balancer);
+
+  // 设置全局 cache put 追踪器。设置后 HandleStopRequest 等会在释放 block 前
+  // 检查是否有 pending put 操作，避免 put 正在进行时释放 block 导致 use-after-free。
+  void SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
 
   ScheduleState* GetScheduleState() { return &schedule_state_; }
 
@@ -120,6 +125,9 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
 
   // 延迟执行的 Stop/Recompute 请求级操作（等待 HasInflightTask()==false）。
   std::vector<ScheduleBackendEvent> delayed_backend_events_;
+
+  // 全局 cache put 追踪器（延迟析构，防止 put 进行中释放 block）
+  std::shared_ptr<GlobalCachePutTracker> global_cache_put_tracker_;
 
   size_t schedule_id_ = DEFAULT_SCHEDULE_ID;
 };

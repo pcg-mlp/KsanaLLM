@@ -18,13 +18,15 @@
 
 #include "cache_manager/cache_manager_interface.h"
 
-#include "runtime/threadpool.h"
-#include "configure/environment.h"
 #include "batch_scheduler/schedule_output_process.h"
+#include "configure/environment.h"
+#include "runtime/threadpool.h"
 #include "transfer/transfer_engine.h"
 #include "utils/status.h"
 
 namespace ksana_llm {
+
+class GlobalCachePutTracker;
 
 class BatchScheduler : public BatchSchedulerInterface {
  public:
@@ -50,6 +52,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   // Set the transfer engine instance for all schedule strategies.
   void SetTransferEngine(std::shared_ptr<TransferEngine> transfer_engine);
+
+  // 设置全局 cache put 追踪器，用于延迟析构。
+  void SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
 
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
   bool IsIdle(size_t multi_batch_id) override;
@@ -99,7 +104,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   size_t pp_batch_num_;
   bool always_return_launchable_req_ = false;  // Always return launchable request when expert parallel world size>1
 
-    // object pool of schedule output buffer.
+  // object pool of schedule output buffer.
   std::shared_ptr<ScheduleOutputPool> schedule_output_pool_ = nullptr;
 
   // The thread pool of batch scheduler.
@@ -118,6 +123,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   // The batch strategy implementations.
   std::vector<std::shared_ptr<BaseScheduleStrategy>> schedule_strategies_;
+
+  // 全局 cache put 追踪器（延迟析构）
+  std::shared_ptr<GlobalCachePutTracker> global_cache_put_tracker_;
 
   // Balance requests algorithm
   std::unique_ptr<BalanceReqsAlgo> balance_reqs_algo_ = nullptr;

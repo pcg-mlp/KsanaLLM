@@ -1,0 +1,200 @@
+# GlobalCacheConnector 独立编译配置
+#
+# 直接使用项目原始头文件，仅额外拉取 loguru + fmt 两个轻依赖。
+# 编译 logger.cpp + status.cpp 作为 .so 的一部分，不依赖整个 utils 库。
+#
+# 用法:
+#   mkdir build && cd build
+#
+#   # 仅 mock 后端 (注意 -C 指定 CMakeLists 文件)
+#   cmake -C /dev/null ../csrc/global_cache_connector/ \
+#     -DCMAKE_TOOLCHAIN_FILE= \
+#     -DSTANDALONE_BUILD=ON
+#
+#   # 或者直接复制此文件为 CMakeLists.txt 使用:
+#   cp CMakeLists.standalone.txt CMakeLists_bak.txt
+#   # cmake ../csrc/global_cache_connector/
+#
+#   # 启用真实 Mooncake Store 后端
+#   cmake ../csrc/global_cache_connector/ \
+#     -DUSE_MOONCAKE_REAL_STORE=ON \
+#     -DMOONCAKE_SOURCE_ROOT=/data/mcinstall/Mooncake
+#
+#   make -j$(nproc)
+#
+# 产物:
+#   libglobal_cache_connector.so   — 共享库
+#   test_connector                 — 功能测试
+#   bench_connector                — 性能基准测试
+
+cmake_minimum_required(VERSION 3.14)
+project(GlobalCacheConnector VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+set(CMAKE_INSTALL_RPATH "$ORIGIN")
+set(CMAKE_BUILD_RPATH "$ORIGIN;${CMAKE_BINARY_DIR}")
+
+# ---------- 路径定义 ----------
+# CMAKE_CURRENT_SOURCE_DIR = csrc/global_cache_connector/
+set(CONNECTOR_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(CSRC_DIR "${CONNECTOR_SRC_DIR}/..")
+set(PROJECT_ROOT "${CSRC_DIR}/..")
+set(MOCK_STORE_DIR "${PROJECT_ROOT}/3rdparty/mooncake-mock-store")
+set(THIRD_PARTY_PATH "${CMAKE_BINARY_DIR}/3rdparty")
+
+# ---------- 选项 ----------
+option(USE_MOONCAKE_REAL_STORE "Enable Mooncake real store backend" OFF)
+option(BUILD_TESTS "Build test programs" ON)
+
+# ---------- 依赖: fmt ----------
+include(FetchContent)
+
+set(FMT_INSTALL_DIR ${THIRD_PARTY_PATH}/install/fmt)
+FetchContent_Declare(
+    fmt
+    URL https://github.com/fmtlib/fmt/archive/9.1.0.tar.gz
+    SOURCE_DIR ${FMT_INSTALL_DIR}
+)
+FetchContent_GetProperties(fmt)
+if(NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
+    add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR})
+endif()
+
+# ---------- 依赖: loguru ----------
+set(LOGURU_INSTALL_DIR ${THIRD_PARTY_PATH}/install/loguru)
+FetchContent_Declare(
+    loguru
+    GIT_REPOSITORY https://github.com/whitelok/loguru.git
+    GIT_TAG f63653183f69c5b8987a4415773ca64d9f3fc2f4
+    SOURCE_DIR ${LOGURU_INSTALL_DIR}
+)
+add_definitions(-DLOGURU_USE_FMTLIB=1)
+add_definitions(-DLOGURU_WITH_STREAMS=1)
+FetchContent_GetProperties(loguru)
+if(NOT loguru_POPULATED)
+    FetchContent_Populate(loguru)
+    add_library(loguru SHARED ${LOGURU_INSTALL_DIR}/loguru.cpp)
+    target_link_libraries(loguru fmt)
+endif()
+
+# ---------- 依赖: CUDA ----------
+find_package(Threads REQUIRED)
+find_package(CUDAToolkit QUIET)
+if(NOT CUDAToolkit_FOUND)
+    find_package(CUDA QUIET)
+endif()
+
+# ---------- mooncake-mock-store 子项目 ----------
+add_subdirectory(${MOCK_STORE_DIR} ${CMAKE_BINARY_DIR}/mooncake-mock-store)
+
+# ---------- 源文件 ----------
+set(CONNECTOR_SOURCES
+    ${CONNECTOR_SRC_DIR}/global_cache_connector_factory.cpp
+    ${CONNECTOR_SRC_DIR}/mooncake_mock_connector.cpp
+    ${CONNECTOR_SRC_DIR}/mooncake_connector.cpp
+    ${CSRC_DIR}/utils/logger.cpp
+    ${CSRC_DIR}/utils/status.cpp
+)
+
+# ---------- 共享库 ----------
+add_library(global_cache_connector SHARED ${CONNECTOR_SOURCES})
+
+target_include_directories(global_cache_connector
+    PUBLIC
+        ${CSRC_DIR}                   # "global_cache_connector/xxx.h", "utils/xxx.h", "configure/xxx.h"
+        ${MOCK_STORE_DIR}/include     # "mooncake/store.h"
+        ${LOGURU_INSTALL_DIR}         # "loguru.hpp"
+        ${fmt_SOURCE_DIR}/include     # <fmt/xxx.h>
+)
+
+target_link_libraries(global_cache_connector
+    PUBLIC mooncake_store Threads::Threads loguru
+)
+
+if(CUDAToolkit_FOUND)
+    target_include_directories(global_cache_connector PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(global_cache_connector PUBLIC CUDA::cudart)
+elseif(CUDA_FOUND)
+    target_include_directories(global_cache_connector PUBLIC ${CUDA_INCLUDE_DIRS})
+    target_link_libraries(global_cache_connector PUBLIC ${CUDA_LIBRARIES})
+else()
+    message(WARNING "CUDA not found. cudaMemcpy calls will fail at runtime.")
+endif()
+
+# ---------- 真实 Mooncake Store ----------
+if(USE_MOONCAKE_REAL_STORE)
+    message(STATUS "Mooncake real store backend enabled")
+
+    if(NOT DEFINED MOONCAKE_SOURCE_ROOT)
+        message(FATAL_ERROR "MOONCAKE_SOURCE_ROOT must be set when USE_MOONCAKE_REAL_STORE=ON")
+    endif()
+    if(NOT DEFINED MOONCAKE_BUILD_ROOT)
+        set(MOONCAKE_BUILD_ROOT "${MOONCAKE_SOURCE_ROOT}/build")
+    endif()
+
+    target_compile_definitions(global_cache_connector PRIVATE
+        ENABLE_MOONCAKE_REAL_STORE GLOG_USE_GLOG_EXPORT YLT_ENABLE_IBV
+        CONFIG_ERDMA USE_HTTP WITH_METRICS
+    )
+    set_target_properties(global_cache_connector PROPERTIES CXX_STANDARD 20)
+    target_compile_options(global_cache_connector PRIVATE -fcoroutines)
+
+    target_include_directories(global_cache_connector PUBLIC
+        ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include
+        ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include/cachelib_memory_allocator/include
+        ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include/cachelib_memory_allocator/fake_include
+        ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include/cachelib_memory_allocator
+        ${MOONCAKE_SOURCE_ROOT}/mooncake-transfer-engine/include
+        ${MOONCAKE_SOURCE_ROOT}/mooncake-common/include
+    )
+
+    target_link_libraries(global_cache_connector PRIVATE
+        ${MOONCAKE_BUILD_ROOT}/mooncake-store/src/libmooncake_store.a
+        ${MOONCAKE_BUILD_ROOT}/mooncake-store/src/cachelib_memory_allocator/libcachelib_memory_allocator.a
+        ${MOONCAKE_BUILD_ROOT}/mooncake-transfer-engine/src/libtransfer_engine.a
+        ${MOONCAKE_BUILD_ROOT}/mooncake-common/src/libmooncake_common.a
+        ${MOONCAKE_BUILD_ROOT}/mooncake-transfer-engine/src/common/base/libbase.a
+        ibverbs glog numa pthread curl jsoncpp
+        /lib64/libssl3.so /lib64/libcrypto.so.3
+    )
+else()
+    message(STATUS "Mooncake real store backend disabled (using mock only)")
+endif()
+
+# ---------- 安装 ----------
+install(TARGETS global_cache_connector mooncake_store loguru
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib)
+
+install(FILES
+    ${CONNECTOR_SRC_DIR}/global_cache_connector_interface.h
+    ${CONNECTOR_SRC_DIR}/global_cache_connector_factory.h
+    ${CONNECTOR_SRC_DIR}/global_cache_connector_types.h
+    DESTINATION include/global_cache_connector)
+
+install(FILES
+    ${CSRC_DIR}/utils/status.h
+    ${CSRC_DIR}/utils/ret_code.h
+    ${CSRC_DIR}/utils/logger.h
+    DESTINATION include/utils)
+
+install(FILES
+    ${CSRC_DIR}/configure/log_config.h
+    DESTINATION include/configure)
+
+# ---------- 测试 / 基准程序 ----------
+if(BUILD_TESTS)
+    enable_testing()
+
+    add_executable(test_connector ${CONNECTOR_SRC_DIR}/test_connector.cpp)
+    target_link_libraries(test_connector PRIVATE global_cache_connector)
+    add_test(NAME test_connector COMMAND test_connector)
+
+    add_executable(bench_connector ${CONNECTOR_SRC_DIR}/bench_connector.cpp)
+    target_link_libraries(bench_connector PRIVATE global_cache_connector)
+endif()

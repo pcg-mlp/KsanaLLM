@@ -460,6 +460,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.global.moe_topk_score_threshold", 0.0f);
 
   InitConnectorConfig(yaml_reader);
+  InitGlobalCacheConnectorConfig(yaml_reader);
   // TODO(zhongzhicao): Support PD + prefix cache + split fuse.
   if (connector_config_.group_role != GroupRole::NONE && cache_manager_config_.enable_prefix_caching &&
       batch_scheduler_config_.split_fuse_token_num != 0) {
@@ -1023,6 +1024,46 @@ void ScheduleConfigParser::InitializeExpertParallelConfig() {
                 << ", expert_node_rank:" << expert_parallel_config.expert_node_rank
                 << ", use_tcp: " << expert_parallel_config.use_tcp;
   SetExpertParallelConfig(expert_parallel_config);
+}
+
+void ScheduleConfigParser::InitGlobalCacheConnectorConfig(YamlReader &yaml_reader) {
+  std::string endpoint = yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(),
+                                                            "setting.global_cache_connector.service_endpoint", "");
+  if (endpoint.empty()) {
+    KLLM_LOG_INFO << "Global cache connector endpoint not configured, skipping.";
+    return;
+  }
+
+  global_cache_connector_config_.service_endpoint = endpoint;
+  global_cache_connector_config_.backend_type = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.backend_type", "mooncake");
+  global_cache_connector_config_.timeout_ms =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.global_cache_connector.timeout_ms", 5000);
+  global_cache_connector_config_.max_retry =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.global_cache_connector.max_retry", 3);
+  global_cache_connector_config_.fetch_thread_num =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.global_cache_connector.fetch_thread_num", 4);
+  global_cache_connector_config_.role =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global_cache_connector.role", "");
+  if (!global_cache_connector_config_.role.empty() && global_cache_connector_config_.role != "prefill" &&
+      global_cache_connector_config_.role != "decode") {
+    KLLM_LOG_WARNING << "Unknown global cache connector role: '" << global_cache_connector_config_.role
+                     << "', expected 'prefill', 'decode' or empty. Treating as standalone.";
+    global_cache_connector_config_.role = "";
+  }
+
+  // 真实 Mooncake Store 配置字段
+  global_cache_connector_config_.protocol =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global_cache_connector.protocol", "tcp");
+  global_cache_connector_config_.rdma_devices =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global_cache_connector.rdma_devices", "");
+  global_cache_connector_config_.master_server_addr = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.master_server_addr", "127.0.0.1:50051");
+  global_cache_connector_config_.global_segment_size = yaml_reader.GetScalar<size_t>(
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.global_segment_size", 16 * 1024 * 1024);
+  global_cache_connector_config_.local_buffer_size = yaml_reader.GetScalar<size_t>(
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.local_buffer_size", 16 * 1024 * 1024);
+  KLLM_LOG_INFO << "Global cache connector config parsed: " << global_cache_connector_config_.ToString();
 }
 
 }  // namespace ksana_llm

@@ -10,7 +10,9 @@
 #include <memory>
 #include <mutex>
 
+#include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
+#include "global_cache_connector/global_cache_connector_factory.h"
 #include "runtime/draft_generator/asr_custom_generator.h"
 #include "runtime/draft_generator/ptp_generator.h"
 #include "runtime/draft_generator/trie_generator.h"
@@ -246,6 +248,31 @@ Status InferenceExecutor::Initialize() {
   Singleton<LayerProgressTracker>::GetInstance()->Initialize(
       context_->device->GetDeviceId(), model_config.num_layer + context_->global->GetMtpStepNum());
   Singleton<LayerProgressTracker>::GetInstance()->SetIpcFuncWrapper(ipc_func_wrapper_);
+
+  // Initialize global cache connector for this executor's device.
+  GlobalCacheConnectorConfig global_cache_config;
+  Status global_cache_status = env_->GetGlobalCacheConnectorConfig(global_cache_config);
+  if (global_cache_status.OK()) {
+    global_cache_config.device_id = context_->device->GetDeviceId();
+    global_cache_config.device_count = context_->global->GetAttentionTensorParallelSize();
+    global_cache_connector_ = GlobalCacheConnectorFactory::CreateConnector(global_cache_config);
+    if (global_cache_connector_) {
+      int device_id = context_->device->GetDeviceId();
+      ipc_func_wrapper_->SetGlobalCacheQueryCallableDeps(global_cache_connector_, block_allocator_manager_, dp_group_id,
+                                                         env_, device_id, global_cache_config.role,
+                                                         global_cache_config.timeout_ms);
+
+      // 创建 GlobalCachePutWorker 并注入到 ModelRunner
+      auto global_cache_put_worker =
+          std::make_shared<GlobalCachePutWorker>(global_cache_connector_, block_allocator_manager_, dp_group_id,
+                                                 device_id, ipc_func_wrapper_, global_cache_config.role);
+      global_cache_put_worker->Start();
+      model_runner_->SetGlobalCachePutWorker(global_cache_put_worker);
+
+      KLLM_LOG_INFO << "GlobalCacheConnector and GlobalCachePutWorker created in executor for device " << device_id;
+    }
+  }
+
   KLLM_LOG_INFO << "InferenceExecutor::Initialize finished.";
   return Status();
 }

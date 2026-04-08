@@ -46,6 +46,7 @@ add_subdirectory(service)
 add_subdirectory(engine)
 add_subdirectory(supervisor)
 add_subdirectory(connector)
+add_subdirectory(global_cache_connector)
 add_subdirectory(transfer)
 add_subdirectory(profiler)
 add_subdirectory(device)
@@ -68,6 +69,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   -Wl,--end-group
   utils
   connector
+  global_cache_connector
   batch_scheduler
   cache_manager
   distributed

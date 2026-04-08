@@ -12,6 +12,7 @@
 #include "configure/yaml_reader.h"
 #include "connector/config.h"
 #include "device/device_types.h"
+#include "global_cache_connector/global_cache_connector_types.h"
 #include "utils/logger.h"
 #include "utils/search_path.h"
 #include "utils/status.h"
@@ -164,6 +165,14 @@ class Environment {
 
   void SetConnectorConfigs(const ConnectorConfig &connector_config) {
     schedule_config_parser_.SetConnectorConfigs(connector_config);
+  }
+
+  Status GetGlobalCacheConnectorConfig(GlobalCacheConnectorConfig &config) const {
+    return schedule_config_parser_.GetGlobalCacheConnectorConfig(config);
+  }
+
+  void SetGlobalCacheConnectorConfig(const GlobalCacheConnectorConfig &config) {
+    schedule_config_parser_.SetGlobalCacheConnectorConfig(config);
   }
 
   // Modify reserved_device_memory_ratio

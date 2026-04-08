@@ -6,6 +6,7 @@
 
 #include <unistd.h>
 
+#include "batch_scheduler/global_cache_fetcher.h"
 #include "ipc/core/ipc_func_types.h"
 #include "ipc/functions/add_executor.h"
 #include "ipc/functions/batch_swap.h"
@@ -16,6 +17,9 @@
 #include "ipc/functions/dispatch_schdule_output.h"
 #include "ipc/functions/get_device_memory.h"
 #include "ipc/functions/get_ep_communication_config.h"
+#include "ipc/functions/global_cache_put_done.h"
+#include "ipc/functions/global_cache_query.h"
+#include "ipc/functions/global_cache_query_done.h"
 #include "ipc/functions/init_custom_communication.h"
 #include "ipc/functions/init_device_communication.h"
 #include "ipc/functions/init_multicast_communication.h"
@@ -124,6 +128,18 @@ void IpcFuncWrapper::SetIpcFunctions() {
   // batch swap: engine to executor, executor executes swap operation.
   ipc_func_proxy_->SetFuncInfo<BatchSwapCallable, BatchSwapRequest, BatchSwapResponse, BatchSwapCallback>(
       IPC_FUNC_BATCH_SWAP);
+
+  // 全局 cache 查询: engine 广播到 executor（异步）
+  ipc_func_proxy_->SetFuncInfo<GlobalCacheQueryCallable, GlobalCacheQueryRequest, GlobalCacheQueryResponse,
+                               GlobalCacheQueryCallback>(IPC_FUNC_GLOBAL_CACHE_QUERY);
+
+  // 全局 cache 查询完成: executor 报告给 engine（异步）
+  ipc_func_proxy_->SetFuncInfo<GlobalCacheQueryDoneCallable, GlobalCacheQueryDoneRequest, GlobalCacheQueryDoneResponse,
+                               GlobalCacheQueryDoneCallback>(IPC_FUNC_GLOBAL_CACHE_QUERY_DONE);
+
+  // KV cache put 完成: executor 报告给 engine（异步）
+  ipc_func_proxy_->SetFuncInfo<GlobalCachePutDoneCallable, GlobalCachePutDoneRequest, GlobalCachePutDoneResponse,
+                               GlobalCachePutDoneCallback>(IPC_FUNC_GLOBAL_CACHE_PUT_DONE);
 
 #ifdef ENABLE_CUDA
   // Connector NCCL operations
@@ -796,6 +812,82 @@ Status IpcFuncWrapper::BatchSwap(int executor_id, bool is_swapin, const std::vec
                      << ", device_block_ids=" << device_block_ids << ", host_block_ids=" << host_block_ids
                      << ", status=" << response->swap_status.GetMessage();
   return response->swap_status;
+}
+
+Status IpcFuncWrapper::DispatchGlobalCacheQuery(int executor_id, int64_t req_id, const std::vector<int>& token_ids,
+                                                size_t local_cached_len, int block_size,
+                                                const std::vector<int>& kv_cache_block_ids) {
+  std::shared_ptr<IpcContext> ipc_context =
+      CreateEngine2ExecutorContext(IPC_FUNC_GLOBAL_CACHE_QUERY, executor_id, /*is_async=*/true, /*is_oneway=*/true,
+                                   /*share_callable=*/false, /*share_callback=*/false, /*is_heavy=*/true);
+  std::shared_ptr<GlobalCacheQueryRequest> request = std::make_shared<GlobalCacheQueryRequest>();
+  request->req_id = req_id;
+  request->token_ids = token_ids;
+  request->local_cached_len = local_cached_len;
+  request->block_size = block_size;
+  request->kv_cache_block_ids = kv_cache_block_ids;
+
+  STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
+  return Status();
+}
+
+Status IpcFuncWrapper::ReportGlobalCacheQueryDone(int64_t req_id, int device_id, const std::vector<int>& matched_ranges,
+                                                  bool success, const std::vector<int>& cached_tokens,
+                                                  bool has_cached_tokens) {
+  std::shared_ptr<IpcContext> ipc_context = CreateExecutor2EngineContext(
+      IPC_FUNC_GLOBAL_CACHE_QUERY_DONE, executor_id_, /*is_async=*/true, /*is_oneway=*/true,
+      /*share_callable=*/false, /*share_callback=*/false);
+  std::shared_ptr<GlobalCacheQueryDoneRequest> request = std::make_shared<GlobalCacheQueryDoneRequest>();
+  request->req_id = req_id;
+  request->device_id = device_id;
+  request->matched_ranges = matched_ranges;
+  request->success = success;
+  request->cached_tokens = cached_tokens;
+  request->has_cached_tokens = has_cached_tokens;
+
+  STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
+  return Status();
+}
+
+void IpcFuncWrapper::SetGlobalCacheQueryCallableDeps(
+    std::shared_ptr<GlobalCacheConnectorInterface> connector,
+    std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager, int dp_group_id,
+    std::shared_ptr<Environment> env, int device_id, const std::string& role, int timeout_ms) {
+  auto callable = ipc_func_proxy_->GetIpcFuncCallable<GlobalCacheQueryCallable>(IPC_FUNC_GLOBAL_CACHE_QUERY, device_id);
+  callable->SetGlobalCacheConnector(connector);
+  callable->SetBlockAllocatorManager(block_allocator_manager, dp_group_id);
+  callable->SetIpcFuncWrapper(this);
+  callable->SetEnvironment(env);
+  callable->SetDeviceId(device_id);
+  callable->SetGlobalCacheRole(role, timeout_ms);
+}
+
+void IpcFuncWrapper::SetGlobalCacheQueryDoneCallableFetcher(std::shared_ptr<GlobalCacheFetcher> fetcher) {
+  for (size_t executor_id = 0; executor_id < executor_num_; ++executor_id) {
+    auto callable = ipc_func_proxy_->GetIpcFuncCallable<GlobalCacheQueryDoneCallable>(IPC_FUNC_GLOBAL_CACHE_QUERY_DONE,
+                                                                                      executor_id);
+    callable->SetGlobalCacheFetcher(fetcher);
+  }
+}
+
+Status IpcFuncWrapper::ReportGlobalCachePutDone(int device_id, int64_t req_id) {
+  std::shared_ptr<IpcContext> ipc_context =
+      CreateExecutor2EngineContext(IPC_FUNC_GLOBAL_CACHE_PUT_DONE, executor_id_, /*is_async=*/true, /*is_oneway=*/true,
+                                   /*share_callable=*/false, /*share_callback=*/false);
+  std::shared_ptr<GlobalCachePutDoneRequest> request = std::make_shared<GlobalCachePutDoneRequest>();
+  request->device_id = device_id;
+  request->req_id = req_id;
+
+  STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
+  return Status();
+}
+
+void IpcFuncWrapper::SetGlobalCachePutDoneCallableTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
+  for (size_t executor_id = 0; executor_id < executor_num_; ++executor_id) {
+    auto callable =
+        ipc_func_proxy_->GetIpcFuncCallable<GlobalCachePutDoneCallable>(IPC_FUNC_GLOBAL_CACHE_PUT_DONE, executor_id);
+    callable->SetGlobalCachePutTracker(tracker);
+  }
 }
 
 }  // namespace ksana_llm

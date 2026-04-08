@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "executor/executor_block_manager.h"
+#include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
 #include "runtime/structured_generation/structured_generator_interface.h"
 #include "utils/waiter.h"
@@ -62,6 +63,10 @@ void ModelRunner::SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> samp
 
 void ModelRunner::SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller) {
   executor_runtime_->SetDraftGeneratorController(draft_generator_controller);
+}
+
+void ModelRunner::SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker) {
+  global_cache_put_worker_ = global_cache_put_worker;
 }
 
 Status ModelRunner::Start() {
@@ -195,6 +200,11 @@ Status ModelRunner::HandleExecute() {
 
     executor_runtime_->Forward(model_input, hidden_unit, model_output);
 
+    // Forward 完成后立即发起异步 KV cache 保存（仅 prefill 请求）
+    if (global_cache_put_worker_) {
+      global_cache_put_worker_->SubmitBatchPut(model_input->schedule_output->executor_running_reqs);
+    }
+
     if (context_->global->IsSamplingNode()) {
       model_output->hidden_unit = hidden_unit;  // hidden_unit will free in post process
       model_output_queue_->Put(model_output);
@@ -273,6 +283,13 @@ Status ModelRunner::HandlePostprocess() {
 
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
       generation_results[req->req_id].draft_tokens = req->draft_tokens;
+    }
+
+    // 采样 + MTP 完成后，将生成的 token(s) 保存到全局 cache（generated + draft）
+    if (global_cache_put_worker_) {
+      KLLM_LOG_DEBUG << "ModelRunner::HandlePostprocess: calling SubmitFirstTokensPut, req_count="
+                     << model_output->schedule_output->executor_running_reqs.size();
+      global_cache_put_worker_->SubmitFirstTokensPut(model_output->schedule_output->executor_running_reqs);
     }
 
     SerializeGenerationResultToSamplingResult(generation_results, sampling_output);

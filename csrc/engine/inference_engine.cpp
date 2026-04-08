@@ -7,14 +7,18 @@
 #include "batch_scheduler/batch_scheduler.h"
 #include "batch_scheduler/event_driven_scheduler/continuous_batching_backend.h"
 #include "batch_scheduler/event_driven_scheduler/event_driven_schedule_processor.h"
+#include "batch_scheduler/event_driven_scheduler/global_cache_query_hook.h"
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager.h"
 #include "batch_scheduler/event_driven_scheduler/workload_balance/basic_workload_balancer.h"
+#include "batch_scheduler/global_cache_fetcher.h"
+#include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/schedule_processor.h"
 #include "cache_manager/cache_manager_factory.h"
 #include "configure/environment.h"
 #include "connector/connector.h"
 #include "engine/model_driver.h"
 #include "executor/layer_progress_tracker.h"
+#include "global_cache_connector/global_cache_connector_factory.h"
 #include "ipc/functions/report_layer_progress.h"
 #include "periphery/version_reporter.h"
 #include "profiler/reporter.h"
@@ -273,6 +277,20 @@ Status InferenceEngine::Initialize() {
     KLLM_LOG_INFO << "TransferEngine created and initialized.";
   }
 
+  // Create global cache connector if configured.
+  GlobalCacheConnectorConfig global_cache_config;
+  Status global_cache_status = env_->GetGlobalCacheConnectorConfig(global_cache_config);
+  if (global_cache_status.OK()) {
+    global_cache_config.device_count = context_->global->GetAttentionTensorParallelSize();
+
+    global_cache_connector_ = GlobalCacheConnectorFactory::CreateConnector(global_cache_config);
+    if (global_cache_connector_) {
+      KLLM_LOG_INFO << "GlobalCacheConnector created and initialized in engine.";
+    } else {
+      KLLM_LOG_WARNING << "Failed to create GlobalCacheConnector, global cache will be unavailable.";
+    }
+  }
+
   // Create batch scheduler.
   if (!context_->global->IsDistributedWorker()) {
     KLLM_LOG_INFO << "InferenceEngine create batch scheduler.";
@@ -285,7 +303,41 @@ Status InferenceEngine::Initialize() {
       event_driven_schedule_processor->SetScheduleBackend(
           std::make_shared<ContinuousBatchingBackend>(batch_scheduler_config));
       event_driven_schedule_processor->SetCacheManagers(cache_managers_);
-      event_driven_schedule_processor->SetScheduleHookManager(std::make_shared<ScheduleHookManager>());
+
+      auto hook_manager = std::make_shared<ScheduleHookManager>();
+
+      // 创建 GlobalCacheFetcher 并注入到 GlobalCacheQueryHook
+      {
+        int device_count = context_->global->GetAttentionTensorParallelSize();
+        std::shared_ptr<IpcFuncWrapper> fetcher_ipc = global_cache_connector_ ? ipc_func_wrapper_ : nullptr;
+        auto global_cache_fetcher =
+            std::make_shared<GlobalCacheFetcher>(device_count, fetcher_ipc, global_cache_config.role);
+
+        if (global_cache_connector_) {
+          ipc_func_wrapper_->SetGlobalCacheQueryDoneCallableFetcher(global_cache_fetcher);
+        }
+        global_cache_fetcher->Start();
+
+        // 创建全局 cache 查询 Hook（hook_idx=0，第一个添加的 hook）
+        auto global_cache_hook =
+            std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config, /*hook_idx=*/0);
+        hook_manager->AddHook(global_cache_hook);
+
+        KLLM_LOG_INFO << "GlobalCacheQueryHook created and added to event-driven scheduler, device_count="
+                      << device_count << ", global_cache_enabled=" << (global_cache_connector_ != nullptr);
+      }
+
+      // 创建 GlobalCachePutTracker，防止 put 进行中释放 block 导致 use-after-free
+      if (global_cache_connector_) {
+        int device_count = context_->global->GetAttentionTensorParallelSize();
+        auto put_tracker = std::make_shared<GlobalCachePutTracker>(device_count, cache_managers_[0]);
+        put_tracker->SetDpCacheManagers(cache_managers_);
+        event_driven_schedule_processor->SetGlobalCachePutTracker(put_tracker);
+        ipc_func_wrapper_->SetGlobalCachePutDoneCallableTracker(put_tracker);
+        KLLM_LOG_INFO << "GlobalCachePutTracker created for event-driven scheduler, device_count=" << device_count;
+      }
+
+      event_driven_schedule_processor->SetScheduleHookManager(hook_manager);
 
       event_driven_schedule_processor->SetWorkloadBalancer(std::make_shared<BasicWorkloadBalancer>(
           attn_dp_size, static_cast<size_t>(batch_scheduler_config.max_batch_size),
@@ -307,6 +359,15 @@ Status InferenceEngine::Initialize() {
         KLLM_LOG_INFO << "TransferEngine set for BatchScheduler.";
       }
 
+      // 创建 GlobalCachePutTracker 并注入 BatchScheduler 和 IPC callable。
+      if (global_cache_connector_) {
+        int device_count = context_->global->GetAttentionTensorParallelSize();
+        auto put_tracker = std::make_shared<GlobalCachePutTracker>(device_count, cache_managers_[0]);
+        std::dynamic_pointer_cast<BatchScheduler>(batch_scheduler)->SetGlobalCachePutTracker(put_tracker);
+        ipc_func_wrapper_->SetGlobalCachePutDoneCallableTracker(put_tracker);
+        KLLM_LOG_INFO << "GlobalCachePutTracker created and injected, device_count=" << device_count;
+      }
+
       schedule_processor_ = std::make_shared<ScheduleProcessor>(batch_scheduler_config.enable_async,
                                                                 batch_scheduler_config.max_pp_batch_num);
       schedule_processor_->Initialize(batch_scheduler);
@@ -317,6 +378,11 @@ Status InferenceEngine::Initialize() {
     }
     model_driver_->SetModelConfigAndRuntimeConfig(model_config, runtime_config);
     model_driver_->SetScheduleProcessor(schedule_processor_);
+
+    // PD 分离：将 GlobalCache 角色传递给 ModelDriver，用于在调度时发送 prefill 通知
+    if (global_cache_status.OK()) {
+      model_driver_->SetGlobalCacheRole(global_cache_config.role);
+    }
 
     // For locking with scheduler thread.
     ScheduleOutputParser::SetScheduleProcessor(schedule_processor_);
@@ -461,6 +527,12 @@ Status InferenceEngine::Stop() {
   if (transfer_engine_) {
     transfer_engine_->Stop();
     KLLM_LOG_INFO << "TransferEngine stopped.";
+  }
+
+  // 释放 global cache connector，shared_ptr 析构时自动调用 Shutdown 和 delete。
+  if (global_cache_connector_) {
+    global_cache_connector_.reset();
+    KLLM_LOG_INFO << "GlobalCacheConnector released.";
   }
 
   // Destroy the tokenizer.

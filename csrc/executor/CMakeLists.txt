@@ -33,9 +33,9 @@ cpp_test(executor_block_manager_test
   SRCS ${PROJECT_SOURCE_DIR}/csrc/executor/executor_block_manager_test.cpp
   DEPS executor cache_manager utils)
 
-# for test
-# file(GLOB_RECURSE executor_test_SRCS
-#   ${PROJECT_SOURCE_DIR}/csrc/executor/*test.cpp)
-# 
-# message(STATUS "runtime_test_SRCS: ${runtime_test_SRCS}")
-# cpp_test(executor_test SRCS ${executor_test_SRCS} DEPS executor)
+set(EXECUTOR_TEST_DEPS executor batch_scheduler runtime device utils
+    ipc distributed connector transfer engine
+    models model_loader cache_manager samplers configure service supervisor)
+cpp_test(global_cache_put_worker_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/executor/global_cache_put_worker_test.cpp
+  DEPS ${EXECUTOR_TEST_DEPS})

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base_strategy.h"
+#include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/state/scheduler_tick_tok.h"
 #include "cache_manager/prefix_cache_manager.h"
 #include "profiler/reporter.h"
@@ -340,7 +341,10 @@ void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req,
     req->Stop();
   }
 
-  cache_manager_->DestroyFinishedRequest(req->req_id);
+  // 若有 pending put，延迟调用 DestroyFinishedRequest，等待所有设备 put 完成后再释放 block
+  if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id)) {
+    cache_manager_->DestroyFinishedRequest(req->req_id);
+  }
 
   if (terminate) {
     req->Notify();
