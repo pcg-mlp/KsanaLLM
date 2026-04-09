@@ -103,14 +103,17 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
 
   // Initialize GroupedTopkLayer
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
-  GroupedTopkLayerParameters grouped_topk_params{.topk = expert_topk_,
-                                                 .renormalize = norm_topk_prob_,
-                                                 .num_expert_group = num_expert_group_,
-                                                 .topk_group = expert_groups_topk_,
-                                                 .scoring_func = scoring_func_,
-                                                 .routed_scaling_factor = routed_scaling_factor_,
-                                                 .use_e_score_correction_bias = use_e_score_correction_bias_,
-                                                 .score_threshold = 0.f};
+  GroupedTopkLayerParameters grouped_topk_params{
+      .topk = expert_topk_,
+      .renormalize = norm_topk_prob_,
+      .num_expert_group = num_expert_group_,
+      .topk_group = expert_groups_topk_,
+      .scoring_func = scoring_func_,
+      .routed_scaling_factor = routed_scaling_factor_,
+      .use_e_score_correction_bias = use_e_score_correction_bias_,
+      .score_threshold =
+          0.f  // NOTE: Disable score thresholding (set to 0) as this MoE kernel lacks handling for -1 indices
+  };
   grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
 
   // EPLB data dump configuration from runtime_config

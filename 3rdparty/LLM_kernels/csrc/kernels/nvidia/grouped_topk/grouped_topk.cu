@@ -1,54 +1,523 @@
-/* Copyright 2025 Tencent Inc.  All rights reserved.
-   Copyright 2025 Sglang Team
- * Adapted from: https://gist.github.com/whitelok/441146ab3d022bcfa74d07a3a58f2012
+/*
+ * Adapted from
+ * https://github.com/flashinfer-ai/flashinfer/blob/main/csrc/fused_moe/noAuxTcKernels.cu
+ *
+ * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright 2026 Tencent Inc.  All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-==============================================================================*/
+#include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 
-#include <algorithm>
-#include <cfloat>
-#include <cmath>
-#include <vector>
-
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include <cutlass/array.h>
-#include <cutlass/cutlass.h>
-#include <cutlass/numeric_types.h>
 #include <torch/torch.h>
+#include <cmath>
 #include <cub/cub.cuh>
 
-#include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
+#include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels {
 namespace nvidia {
 
-static constexpr int32_t kMaxCandidateExpertNum = 256;
-// Adapted from
-// [Sglang Project]
-// https://github.com/sgl-project/sglang/blob/9858113c336f4565a0a35f9a990cdada0de1988f/sgl-kernel/csrc/moe/moe_fused_gate.cu#L40
+namespace cg = cooperative_groups;
+
 static constexpr int WARP_SIZE = 32;
-static constexpr int WARPS_PER_CTA = 6;
-static constexpr int MAX_VPT = 32;
-template <typename T, int N>
-using AlignedArray = cutlass::AlignedArray<T, N>;
+static constexpr int NumKimiK2Experts = 384;
+static constexpr int NumDeepseekExperts = 256;
+static constexpr int MaxNumExpertsUnit = 128;
+static constexpr int NumTopGroupScores = 2;
+static constexpr int MaxNumTopExperts = 8;
+static constexpr int MaxNumTopGroups = 4;
 
-// Create an alias for Array using AlignedArray
-template <typename T, int N>
-using Array = AlignedArray<T, N>;
-// QQ: NOTE expression must have a constant value, this has to be > params.VPT
-template <typename T>
-using AccessType = AlignedArray<T, MAX_VPT>;
+template <typename T_>
+struct TopKRedType {
+  using T = T_;
+  static_assert(std::is_same_v<T, float> || std::is_same_v<T, half> || std::is_same_v<T, __nv_bfloat16> ||
+                    std::is_same_v<T, int>,
+                "Top K reduction only implemented for int, float, float16 and bfloat16");
 
-template <int VPT_, int NUM_EXPERTS_, int THREADS_PER_ROW_, int ROWS_PER_WARP_, int ROWS_PER_CTA_, int WARPS_PER_CTA_>
-struct KernelParams {
-  static constexpr int VPT = VPT_;
-  static constexpr int NUM_EXPERTS = NUM_EXPERTS_;
-  static constexpr int THREADS_PER_ROW = THREADS_PER_ROW_;
-  static constexpr int ROWS_PER_WARP = ROWS_PER_WARP_;
-  static constexpr int ROWS_PER_CTA = ROWS_PER_CTA_;
-  static constexpr int WARPS_PER_CTA = WARPS_PER_CTA_;
+  using TypeCmp = std::conditional_t<sizeof(T) == 4, uint64_t, uint32_t>;
+  using IdxT = std::conditional_t<sizeof(T) == 4, int32_t, int16_t>;
+
+  static constexpr int kMoveBits = (sizeof(T) == 4) ? 32 : 16;
+  static constexpr int kMaxIdx = 65535;
+  TypeCmp compValIdx;
+
+  static __host__ __device__ inline TypeCmp makeCmpVal(T val, int32_t idx = 0) {
+    auto valueBits = cub::Traits<T>::TwiddleIn(reinterpret_cast<typename cub::Traits<T>::UnsignedBits&>(val));
+    TypeCmp compactTmp = valueBits;
+    compactTmp = (compactTmp << kMoveBits) | (0xFFFF & (kMaxIdx - idx));
+    // Use 65535 minus idx to give higher priority to elements with smaller indices.
+    return compactTmp;
+  }
+
+  static __host__ __device__ void unpack(T& value, int32_t& index, TypeCmp cmp) {
+    // Since “65535-idx” is always smaller than 65536 and positive, we can directly use it as the
+    // lower 16 bits
+    index = kMaxIdx - static_cast<int32_t>((cmp & 0xFFFF));
+
+    auto compactTmp = cmp >> kMoveBits;
+    auto valueBits = cub::Traits<T>::TwiddleOut(reinterpret_cast<typename cub::Traits<T>::UnsignedBits&>(compactTmp));
+    value = reinterpret_cast<T&>(valueBits);
+  }
+
+  __host__ __device__ TopKRedType() = default;
+
+  __host__ __device__ TopKRedType(T val, int32_t idx) : compValIdx(makeCmpVal(val, idx)) {}
+
+  __host__ __device__ operator TypeCmp() const noexcept { return compValIdx; }
+
+  __device__ inline TypeCmp reduce(cg::thread_block_tile<WARP_SIZE> const& warp) {
+    return cg::reduce(warp, compValIdx, cg::greater<TypeCmp>{});
+  }
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <int K_, bool Enable_>
+struct TopKIdx {
+  // by default, empty
+};
+
+template <int K_>
+struct TopKIdx<K_, true> {
+  static constexpr int K = K_;
+  int32_t val[K];
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define TOPK_SWAP(I, J)                                         \
+  {                                                             \
+    auto pairMin = min(topK[I].compValIdx, topK[J].compValIdx); \
+    auto pairMax = max(topK[I].compValIdx, topK[J].compValIdx); \
+    topK[I].compValIdx = pairMax;                               \
+    topK[J].compValIdx = pairMin;                               \
+  }
+
+template <int N, typename RedType>
+struct Sort;
+
+template <typename RedType>
+struct Sort<1, RedType> {
+  static __device__ void run(RedType* topK) {}
+};
+
+template <typename RedType>
+struct Sort<2, RedType> {
+  static __device__ void run(RedType* topK) { TOPK_SWAP(0, 1); }
+};
+
+template <typename RedType>
+struct Sort<3, RedType> {
+  static __device__ void run(RedType* topK) {
+    TOPK_SWAP(0, 1);
+    TOPK_SWAP(1, 2);
+    TOPK_SWAP(0, 1);
+  }
+};
+
+template <typename RedType>
+struct Sort<4, RedType> {
+  static __device__ void run(RedType* topK) {
+    TOPK_SWAP(0, 2);
+    TOPK_SWAP(1, 3);
+    TOPK_SWAP(0, 1);
+    TOPK_SWAP(2, 3);
+    TOPK_SWAP(1, 2);
+  }
+};
+
+template <int K, typename Type>
+__forceinline__ __device__ void reduceTopK(cg::thread_block_tile<WARP_SIZE> const& warp, Type (&out)[K],
+                                           int32_t (&outIdx)[K], Type value, int32_t idx, Type const minValue,
+                                           int actualK = K) {
+  static_assert(K > 0, "Top K must have K > 0");
+  static_assert(K < WARP_SIZE, "Top K must have K < WARP_SIZE");
+  using RedType = TopKRedType<Type>;
+  RedType topK{value, idx};
+  typename RedType::TypeCmp packedMax{};
+#pragma unroll
+  for (int kk = 0; kk < actualK; ++kk)  //@todo: check if actualK is correct
+  {
+    topK = kk > 0 && packedMax == topK.compValIdx ? RedType{minValue, idx} : topK;
+    // get the next largest value
+    packedMax = topK.reduce(warp);
+    RedType::unpack(out[kk], outIdx[kk], packedMax);
+  }
+};
+
+template <int K, typename Type, int N, bool IsSorted = false>
+__device__ void reduceTopKFunc(cg::thread_block_tile<WARP_SIZE> const& warp, Type (&out)[K], int32_t (&outIdx)[K],
+                               Type (&value)[N], int32_t (&idx)[N], Type minValue, int actualK = K) {
+  static_assert(K > 0, "Top K must have K > 0");
+  static_assert(K < WARP_SIZE, "Top K must have K < WARP_SIZE");
+  static_assert(N > 0, "Top K must have N > 0");
+  static_assert(N < 5, "Only support candidates number less than or equal to 128");
+  using RedType = TopKRedType<Type>;
+  RedType topK[N];
+#pragma unroll
+  for (int nn = 0; nn < N; ++nn) {
+    topK[nn] = RedType{value[nn], idx[nn]};
+  }
+
+  if constexpr (!IsSorted) {
+    Sort<N, RedType>::run(topK);
+  }
+  typename RedType::TypeCmp packedMax{};
+#pragma unroll
+  for (int kk = 0; kk < actualK; ++kk) {
+    bool update = kk > 0 && packedMax == topK[0].compValIdx;
+#pragma unroll
+    for (int nn = 0; nn < N; ++nn) {
+      topK[nn] = update && nn == N - 1 ? RedType{minValue, idx[nn]} : update ? topK[nn + 1] : topK[nn];
+    }
+    // get the next largest value
+    packedMax = topK[0].reduce(warp);
+    RedType::unpack(out[kk], outIdx[kk], packedMax);
+  }
+};
+
+template <int K, typename Type, int N>
+__forceinline__ __device__ void reduceTopK(cg::thread_block_tile<WARP_SIZE> const& warp, Type (&out)[K],
+                                           int32_t (&outIdx)[K], Type (&value)[N], int32_t (&idx)[N],
+                                           Type const minValue, int actualK = K) {
+  static_assert(K > 0, "Top K must have K > 0");
+  static_assert(K < WARP_SIZE, "Top K must have K < WARP_SIZE");
+  static_assert(N > 0, "Top K must have N > 0");
+  static_assert(N <= 16, "Only support candidates number less than or equal to 16*32=512");
+  static_assert(N <= 4 || N % 4 == 0,
+                "Only support candidates number is a multiple of 4*32=128 or less than or equal to 4");
+  using RedType = TopKRedType<Type>;
+
+  if constexpr (N <= 4) {
+    reduceTopKFunc<K, Type, N>(warp, out, outIdx, value, idx, minValue, actualK);
+  } else {
+    constexpr int numLoops = N / 4;
+    constexpr int numResults = (numLoops * K - 1) / WARP_SIZE + 1;
+
+    Type topKBufferValue[numResults];
+    int32_t topKBufferIdx[numResults];
+    int32_t laneIdx = threadIdx.x % WARP_SIZE;
+
+    for (int ii = 0; ii < numResults; ++ii) {
+      topKBufferValue[ii] = minValue;
+      topKBufferIdx[ii] = ii * WARP_SIZE - 1;  //@todo: check if this is correct
+    }
+    for (int loop = 0; loop < numLoops; ++loop) {
+      int start = loop * 4;
+      Type topKValue[K];
+      int32_t topKIdx[K];
+      Type inValue[4];
+      int32_t inIdx[4];
+      for (int i = 0; i < 4; ++i) {
+        inValue[i] = value[start + i];
+        inIdx[i] = idx[start + i];
+      }
+      reduceTopKFunc<K, Type, 4>(warp, topKValue, topKIdx, inValue, inIdx, minValue, actualK);
+      int inOffset = laneIdx % K;
+      if (laneIdx >= loop * K && laneIdx < (loop + 1) * K) {
+        topKBufferValue[0] = topKValue[inOffset];
+        topKBufferIdx[0] = topKIdx[inOffset];
+      }
+      if (loop == numLoops - 1 && (laneIdx < (numLoops * K - WARP_SIZE))) {
+        topKBufferValue[1] = topKValue[inOffset];
+        topKBufferIdx[1] = topKIdx[inOffset];
+      }
+    }
+
+    reduceTopKFunc<K, Type, numResults>(warp, out, outIdx, topKBufferValue, topKBufferIdx, minValue, actualK);
+  }
+};
+
+#undef TOPK_SWAP
+
+static __device__ inline float sigmoid_accurate(float x) { return 0.5f * tanhf(0.5f * x) + 0.5f; }
+
+template <typename InputT, typename BiasT, typename OutputT, typename IdxT, int MaxNumExperts, bool UseGroups>
+__global__ void deepseek_v3_topk_kernel(InputT* scores, OutputT* topkValues, IdxT* topkIndices, BiasT* routingBias,
+                                        int64_t const numTokens, int64_t const numGroup, int64_t const topkGroup,
+                                        int64_t const topk, int64_t const numExperts, int64_t const numExpertsPerGroup,
+                                        double const routedScalingFactor, float const scoreThreshold) {
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.wait;");
+#endif
+
+  // declare shared memory structure
+  // number of experts is bounded by number of threads
+  __shared__ float __attribute((aligned(128))) smemScoreSigmoid[MaxNumExperts];
+  __shared__ float __attribute((aligned(128))) smemScoreBias[MaxNumExperts];
+  // number of expert groups is bounded by number of warps
+  int constexpr NumWarps = MaxNumExperts / WARP_SIZE;
+  __shared__ float __attribute((aligned(128))) smemGroupScores[NumWarps];
+
+  // needed for warp reduce
+  auto block = cg::this_thread_block();
+  auto warp = cg::tiled_partition<WARP_SIZE>(block);
+
+  // for the final reduction of weight norm, only some lanes need to participate
+  int32_t laneIdx = threadIdx.x % WARP_SIZE;
+  int32_t warpIdx = __shfl_sync(0xffffffff, threadIdx.x / WARP_SIZE, 0);
+
+  if constexpr (UseGroups) {
+    if (warpIdx >= numGroup) {
+      return;
+    }
+  }
+
+  // note that for invalid scores, we simply use a negative value:
+  // they work well even with the compacted format used in topK, and
+  // sigmoid / bias activated scores cannot be negative
+  static constexpr float invalidScoreFloat = float{-INFINITY};
+  const OutputT invalidScore = OutputT{invalidScoreFloat};
+
+  // load bias already; each warp represents one expert group
+  auto threadExpert = threadIdx.x;
+  bool expertSelected = threadExpert < numExperts;
+  if constexpr (UseGroups) {
+    threadExpert = warpIdx * numExpertsPerGroup + laneIdx;
+    expertSelected = laneIdx < numExpertsPerGroup;
+  }
+
+  auto scoreIdx = int64_t{blockIdx.x} * int64_t{numExperts} + threadExpert;
+  auto biasVal = expertSelected ? static_cast<float>(routingBias[threadExpert]) : invalidScoreFloat;
+  topkValues += blockIdx.x * topk;
+  topkIndices += blockIdx.x * topk;
+
+  // get our assigned thread score; each warp represents one expert group
+  float score = expertSelected ? static_cast<float>(scores[scoreIdx]) : invalidScoreFloat;
+  auto scoreSigmoid = sigmoid_accurate(score);
+  // write the sigmoid score to shared for later use
+  if (expertSelected) {
+    smemScoreSigmoid[threadExpert] = scoreSigmoid;
+  }
+
+  // get the score with bias
+  // note that with invalid values, because sigmoid is < 1 and bias is -1,
+  // we must get a negative value, which is smaller than any valid value
+  auto scoreBias = float{scoreSigmoid + float{biasVal}};
+
+  if (expertSelected) {
+    smemScoreBias[threadExpert] = scoreBias;
+  }
+
+  // registers for top group score reduction
+  float topExpGroupScores[NumTopGroupScores];
+  [[maybe_unused]] int32_t topExpGroupIdx[NumTopGroupScores];
+  float topGroups[MaxNumTopGroups];  // bound of numGroup
+  int32_t topGroupIdx[MaxNumTopGroups];
+  float expertScoreGroup[MaxNumTopGroups];
+  int32_t expertIdxGroup[MaxNumTopGroups];
+  float topScores[MaxNumTopExperts];  // bound of topk
+  int32_t topExperts[MaxNumTopExperts];
+
+  if constexpr (UseGroups) {
+    reduceTopK(warp, topExpGroupScores, topExpGroupIdx, scoreBias, threadExpert,
+               /* minValue */ invalidScoreFloat);
+
+    // get the final group score and write it to shared
+    if (laneIdx == 0) {
+      auto groupScore = topExpGroupScores[0] + topExpGroupScores[1];
+      smemGroupScores[warpIdx] = groupScore;
+    }
+  }
+
+  // make group scores available to all warps
+  __syncthreads();
+
+  if constexpr (UseGroups) {
+    if (warpIdx == 0) {
+      // a single warp performs the selection of top groups, and goes on to select the final experts
+      float groupScore = laneIdx < numGroup ? smemGroupScores[laneIdx] : invalidScoreFloat;
+
+      reduceTopK(warp, topGroups, topGroupIdx, groupScore, laneIdx,
+                 /* minValue */ invalidScoreFloat);
+
+      // final expert selection: get relevant indexes and scores from shared
+
+#pragma unroll
+      for (int ii = 0; ii < MaxNumTopGroups; ++ii) {  // bound of numGroup
+        // auto groupIdx = topGroupIdx[ii];
+        auto groupIdx = (ii < topkGroup) ? topGroupIdx[ii] : 0;
+        expertIdxGroup[ii] = groupIdx * numExpertsPerGroup + laneIdx;
+
+        expertScoreGroup[ii] =
+            (ii < topkGroup) && expertSelected ? smemScoreBias[expertIdxGroup[ii]] : invalidScoreFloat;
+      }
+
+      reduceTopK(warp, topScores, topExperts, expertScoreGroup, expertIdxGroup,
+                 /* minValue */ invalidScoreFloat, topk);
+    }
+  } else if constexpr (MaxNumExperts > MaxNumExpertsUnit) {
+    // without groups, and the expert number is larger than MaxNumExpertsUnit,
+    // we need to use multiple warps to calculate the intermediate topk results
+
+    int constexpr NumExpertWarps = (MaxNumExperts - 1) / MaxNumExpertsUnit + 1;
+    int constexpr NumInterTopK = NumExpertWarps * MaxNumTopExperts;
+    __shared__ float __attribute((aligned(128))) smemInterTopScores[NumInterTopK];
+    __shared__ int32_t __attribute((aligned(128))) smemInterTopExperts[NumInterTopK];
+    if (warpIdx < NumExpertWarps) {
+      int offset = warpIdx * WARP_SIZE * MaxNumTopGroups;
+#pragma unroll
+      for (int ii = 0; ii < MaxNumTopGroups; ++ii) {
+        auto expertIdx = ii * WARP_SIZE + laneIdx;
+        expertIdxGroup[ii] = offset + expertIdx;
+        expertScoreGroup[ii] = offset + expertIdx < numExperts ? smemScoreBias[offset + expertIdx] : invalidScoreFloat;
+      }
+      reduceTopK(warp, topScores, topExperts, expertScoreGroup, expertIdxGroup,
+                 /* minValue */ invalidScoreFloat, topk);
+
+      if (laneIdx < topk) {
+        smemInterTopScores[warpIdx * MaxNumTopExperts + laneIdx] = topScores[laneIdx];
+        smemInterTopExperts[warpIdx * MaxNumTopExperts + laneIdx] = topExperts[laneIdx];
+      }
+    }
+    __syncthreads();
+    if (warpIdx == 0) {
+      int constexpr NumInterTopKPerThread = (NumInterTopK * NumExpertWarps - 1) / WARP_SIZE + 1;
+      float intermidiateScore[NumInterTopKPerThread];
+      int32_t intermidiateExpert[NumInterTopKPerThread];
+      for (int i = laneIdx; i < NumInterTopKPerThread * WARP_SIZE; i += WARP_SIZE) {
+        int ii = i / WARP_SIZE;
+        if (i < NumInterTopK) {
+          intermidiateScore[ii] = smemInterTopScores[i];
+          intermidiateExpert[ii] = smemInterTopExperts[i];
+        } else {
+          intermidiateScore[ii] = invalidScoreFloat;
+          intermidiateExpert[ii] = MaxNumExperts - 1;
+        }
+      }
+      reduceTopK(warp, topScores, topExperts, intermidiateScore, intermidiateExpert,
+                 /* minValue */ invalidScoreFloat, topk);
+    }
+  } else {
+    // without groups, and the expert number is smaller than MaxNumExpertsUnit
+    // each thread just takes `MaxNumTopGroups` experts
+    if (warpIdx == 0) {
+#pragma unroll
+      for (int ii = 0; ii < MaxNumTopGroups; ++ii) {
+        auto expertIdx = ii * WARP_SIZE + laneIdx;
+        expertIdxGroup[ii] = expertIdx;
+        expertScoreGroup[ii] = expertIdx < numExperts ? smemScoreBias[expertIdx] : invalidScoreFloat;
+      }
+      reduceTopK(warp, topScores, topExperts, expertScoreGroup, expertIdxGroup,
+                 /* minValue */ invalidScoreFloat, topk);
+    }
+  }
+
+  if (warpIdx == 0) {
+    // determine our lane's expert index and write to output
+    int32_t expertIdx = laneIdx < topk ? topExperts[laneIdx] : MaxNumExperts - 1;
+    // norm the value
+    float scoreNorm = laneIdx < topk ? smemScoreSigmoid[expertIdx] : 0.F;
+    auto redNorm = cg::reduce(warp, scoreNorm, cg::plus<float>{});
+    auto finalScore = scoreNorm * routedScalingFactor / (redNorm + 1e-20);
+
+    // Score threshold sparsification: zero out experts below threshold and re-normalize
+    if (scoreThreshold > 0.F) {
+      // First normalize to get per-expert ratio
+      float normalizedScore = finalScore / (routedScalingFactor + 1e-20f);
+      // Mark experts below threshold as cut
+      bool isCut = (laneIdx < topk) && (normalizedScore < scoreThreshold);
+      float cutScore = isCut ? finalScore : 0.F;
+      float totalCutScore = cg::reduce(warp, cutScore, cg::plus<float>{});
+      float remainingSum = routedScalingFactor - totalCutScore;
+
+      if (isCut) {
+        finalScore = 0.F;
+        // NOTE: Experts with normalized scores below the threshold are marked with index -1,
+        // which the MoE kernel must handle accordingly
+        expertIdx = -1;
+      } else if (laneIdx < topk && remainingSum > 1e-20f) {
+        // Re-normalize remaining experts to preserve total scaling factor
+        finalScore = finalScore * routedScalingFactor / remainingSum;
+      }
+    }
+
+    // store the topk scores and experts to output
+    if (laneIdx < topk) {
+      topkValues[laneIdx] = static_cast<OutputT>(finalScore);
+      topkIndices[laneIdx] = expertIdx;
+    }
+  }
+
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.launch_dependents;");
+#endif
+}
+
+// Wrapper function for external calls
+template <typename T>
+void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed_scaling_factor, void* topk_weights,
+                                 void* topk_ids, int tokens_num, int num_experts, int topk, int num_expert_group,
+                                 int topk_group, float score_threshold, cudaStream_t stream) {
+  // Check if we can use the optimized deepseek_v3_topk_kernel
+  bool const is_single_group = (num_expert_group == 1) && (num_experts <= NumKimiK2Experts);
+
+  KLLM_KERNEL_CHECK_WITH_INFO(num_experts % num_expert_group == 0,
+                              "num_experts (%d) must be divisible by num_expert_group (%d)", num_experts,
+                              num_expert_group);
+  KLLM_KERNEL_CHECK_WITH_INFO(topk <= MaxNumTopExperts, "topk (%d) exceeds MaxNumTopExperts (%d)", topk,
+                              MaxNumTopExperts);
+  KLLM_KERNEL_CHECK_WITH_INFO(topk_group <= MaxNumTopGroups, "topk_group (%d) exceeds MaxNumTopGroups (%d)", topk_group,
+                              MaxNumTopGroups);
+  int64_t const experts_per_group = num_experts / num_expert_group;
+  bool const is_multi_group = (num_expert_group != 1) && (num_experts <= NumDeepseekExperts) &&
+                              (experts_per_group <= WARP_SIZE) && (experts_per_group * topk_group <= MaxNumExpertsUnit);
+
+  KLLM_KERNEL_CHECK_WITH_INFO(is_single_group || is_multi_group, "Unsupported input configuration for grouped topk");
+  cudaLaunchConfig_t config;
+  auto* kernel_instance = &deepseek_v3_topk_kernel<T, float, float, int, NumDeepseekExperts, true>;
+  int num_threads = NumDeepseekExperts;
+  if (is_single_group) {
+    if (num_experts > MaxNumExpertsUnit) {
+      kernel_instance = &deepseek_v3_topk_kernel<T, float, float, int, NumKimiK2Experts, false>;
+      num_threads = NumKimiK2Experts;
+    } else {
+      kernel_instance = &deepseek_v3_topk_kernel<T, float, float, int, MaxNumExpertsUnit, false>;
+      num_threads = MaxNumExpertsUnit;
+    }
+  }
+
+  config.gridDim = tokens_num;
+  config.blockDim = num_threads;
+  config.dynamicSmemBytes = 0;
+  config.stream = stream;
+  cudaLaunchAttribute attrs[1];
+  attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attrs[0].val.programmaticStreamSerializationAllowed = llm_kernels::utils::GetEnablePDL();
+  config.numAttrs = 1;
+  config.attrs = attrs;
+
+  cudaLaunchKernelEx(&config, kernel_instance, reinterpret_cast<T*>(gating_output),
+                     reinterpret_cast<float*>(topk_weights), reinterpret_cast<int*>(topk_ids),
+                     reinterpret_cast<float*>(e_bias), tokens_num, num_expert_group, topk_group, topk, num_experts,
+                     experts_per_group, routed_scaling_factor, score_threshold);
+}
+#define INVOKE_DEEPSEEK_V3_GROUPED_TOPK(T)                                                                      \
+  template void InvokeDeepSeekV3GroupedTopk<T>(void* gating_output, void* e_bias, float routed_scaling_factor,  \
+                                               void* topk_weights_ptr, void* topk_ids_ptr, int tokens_num,      \
+                                               int num_experts, int topk, int num_expert_group, int topk_group, \
+                                               float score_threshold, cudaStream_t stream)
+INVOKE_DEEPSEEK_V3_GROUPED_TOPK(float);
+INVOKE_DEEPSEEK_V3_GROUPED_TOPK(half);
+INVOKE_DEEPSEEK_V3_GROUPED_TOPK(__nv_bfloat16);
+#undef INVOKE_DEEPSEEK_V3_GROUPED_TOPK
 
 template <int MAX_K>
 __device__ void GetTopKIndices(const float* data, int* indices, int n, int k, int index_offset) {
@@ -282,418 +751,6 @@ __device__ void GetTopKIndices(const float* data, int* indices, int n, int k, in
 
   indices[k - 1] = heap_indices[0];
 }
-
-// Adapted from
-// [Sglang Project]
-// https://github.com/sgl-project/sglang/blob/9858113c336f4565a0a35f9a990cdada0de1988f/sgl-kernel/csrc/moe/moe_fused_gate.cu#L51
-// typename T: the type of the compute type in kernel
-// typename Input_T: the type of the input data
-// typename BT: the type of the bias data
-template <typename T, typename Input_T, typename BT, typename Params>
-__device__ void moe_fused_gate_impl(void* input, void* bias, float* output_ptr, int32_t* indices_ptr, int64_t num_rows,
-                                    int64_t topk_group, int64_t topk, int64_t n_share_experts_fusion,
-                                    float routed_scaling_factor, float score_threshold, Params params) {
-  int tidx = threadIdx.x;
-  int64_t thread_row =
-      blockIdx.x * params.ROWS_PER_CTA + threadIdx.y * params.ROWS_PER_WARP + tidx / params.THREADS_PER_ROW;
-  if (thread_row >= num_rows) {
-    return;
-  }
-
-  // Calculate topk_excluding_share_expert_fusion from topk
-  int64_t topk_excluding_share_expert_fusion = topk - (n_share_experts_fusion > 0 ? 1 : 0);
-
-  // Cast pointers to type T:
-  Input_T* input_ptr = reinterpret_cast<Input_T*>(input);
-  BT* bias_ptr = reinterpret_cast<BT*>(bias);
-  Input_T* thread_row_ptr = input_ptr + thread_row * params.NUM_EXPERTS;
-
-  int thread_group_idx = tidx % params.THREADS_PER_ROW;
-  int first_elt_read_by_thread = thread_group_idx * params.VPT;
-
-  // Create local arrays for the row chunk and bias chunk and then reinterpret the address of row_chunk as a pointer to
-  // AccessType.
-  Input_T* thread_read_ptr = thread_row_ptr + first_elt_read_by_thread;
-  Array<T, MAX_VPT> row_chunk;
-  AccessType<Input_T> const* vec_thread_read_ptr = reinterpret_cast<AccessType<Input_T> const*>(thread_read_ptr);
-
-  BT* bias_thread_read_ptr = bias_ptr + first_elt_read_by_thread;
-  Array<T, MAX_VPT> bias_chunk;
-  AccessType<BT> const* vec_bias_thread_read_ptr = reinterpret_cast<AccessType<BT> const*>(bias_thread_read_ptr);
-
-// QQ NOTE: doing the follow will be slower than loop assign and more importantly
-// have misaligned address issue when params.VPT < 8 and mismatch with MAX_VPT
-// AccessType<T>* row_chunk_vec_ptr = reinterpret_cast<AccessType<T>*>(&row_chunk);
-// row_chunk_vec_ptr[0] = vec_thread_read_ptr[0];
-#pragma unroll
-  for (int ii = 0; ii < params.VPT; ++ii) {
-    row_chunk[ii] = static_cast<T>(vec_thread_read_ptr[0][ii]);
-    bias_chunk[ii] = static_cast<T>(vec_bias_thread_read_ptr[0][ii]);
-  }
-
-  __syncthreads();
-
-////////////////////// Sigmoid //////////////////////
-#pragma unroll
-  for (int ii = 0; ii < params.VPT; ++ii) {
-    row_chunk[ii] = static_cast<T>(1.0f / (1.0f + expf(-float(row_chunk[ii]))));
-  }
-  __syncthreads();
-
-////////////////////// Add Bias //////////////////////
-#pragma unroll
-  for (int ii = 0; ii < params.VPT; ++ii) {
-    bias_chunk[ii] = row_chunk[ii] + bias_chunk[ii];
-  }
-
-////////////////////// Exclude Groups //////////////////////
-#pragma unroll
-  for (int k_idx = 0; k_idx < params.THREADS_PER_ROW - topk_group;
-       ++k_idx) {  // QQ NOTE Here params.THREADS_PER_ROW = num_expert_group
-    int expert = first_elt_read_by_thread;
-    // local argmax
-    T max_val = static_cast<T>(-FLT_MAX);
-    T max_val_second = static_cast<T>(-FLT_MAX);
-#pragma unroll
-    for (int ii = 0; ii < params.VPT; ++ii) {
-      T val = bias_chunk[ii];
-
-      if (val > max_val) {
-        max_val_second = max_val;
-        max_val = val;
-      } else if (val > max_val_second) {
-        max_val_second = val;
-      }
-    }
-
-    // QQ NOTE: currently fixed to pick top2 sigmoid weight value in each expert group and sum them as the group weight
-    // to select expert groups
-    T max_sum = max_val + max_val_second;
-
-// argmin reduce
-#pragma unroll
-    for (int mask = params.THREADS_PER_ROW / 2; mask > 0; mask /= 2) {
-      T other_max_sum =
-          static_cast<T>(__shfl_xor_sync(0xFFFFFFFF, static_cast<float>(max_sum), mask, params.THREADS_PER_ROW));
-      int other_expert = __shfl_xor_sync(0xFFFFFFFF, expert, mask, params.THREADS_PER_ROW);
-
-      // higher indices win
-      if (max_sum > other_max_sum || (other_max_sum == max_sum && other_expert > expert)) {
-        max_sum = other_max_sum;
-        expert = other_expert;
-      }
-    }
-
-    // clear the max value in the thread
-    if (k_idx < params.THREADS_PER_ROW - topk_group) {
-      int const thread_to_clear_in_group = expert / params.VPT;
-
-      if (thread_group_idx == thread_to_clear_in_group) {
-#pragma unroll
-        for (int ii = 0; ii < params.VPT; ++ii) {
-          bias_chunk[ii] = static_cast<T>(FLT_MAX);
-        }
-      }
-    }
-  }
-
-  __syncthreads();
-
-  ////////////////////// Topk //////////////////////
-  float output_sum = 0.0f;
-  for (int k_idx = 0; k_idx < topk_excluding_share_expert_fusion; ++k_idx) {
-    // local argmax
-    T max_val = bias_chunk[0];
-    int expert = first_elt_read_by_thread;
-
-    if (!(max_val == static_cast<T>(FLT_MAX))) {
-#pragma unroll
-      for (int ii = 1; ii < params.VPT; ++ii) {
-        T val = bias_chunk[ii];
-        if (val > max_val) {
-          max_val = val;
-          expert = first_elt_read_by_thread + ii;
-        }
-      }
-    } else {
-      max_val = static_cast<T>(-FLT_MAX);
-    }
-
-    // argmax reduce
-#pragma unroll
-    for (int mask = params.THREADS_PER_ROW / 2; mask > 0; mask /= 2) {
-      T other_max =
-          static_cast<T>(__shfl_xor_sync(0xFFFFFFFF, static_cast<float>(max_val), mask, params.THREADS_PER_ROW));
-      int other_expert = __shfl_xor_sync(0xFFFFFFFF, expert, mask, params.THREADS_PER_ROW);
-
-      // lower indices to win
-      if (other_max > max_val || (other_max == max_val && other_expert < expert)) {
-        max_val = other_max;
-        expert = other_expert;
-      }
-    }
-
-    int thread_to_clear_in_group = expert / params.VPT;
-    int64_t idx = topk * thread_row + k_idx;
-
-    if (thread_group_idx == thread_to_clear_in_group) {
-      int expert_to_clear_in_thread = expert % params.VPT;
-
-      // clear the max value in the thread
-      bias_chunk[expert_to_clear_in_thread] = static_cast<T>(-FLT_MAX);
-
-      // store output
-      output_ptr[idx] = static_cast<float>(row_chunk[expert_to_clear_in_thread]);
-      indices_ptr[idx] = static_cast<int32_t>(expert);
-    }
-
-    // accumulate sum for all elements
-    if (thread_group_idx == 0) {
-      output_sum += output_ptr[idx];
-    }
-
-    __syncthreads();
-  }
-
-  ////////////////////// take care shared experts //////////////////////
-  // Note(rockcao): the share_experts_fusion is not supported in this version,
-  // the following code is reserved for future use.
-  // if (thread_group_idx == 0 && n_share_experts_fusion > 0) {
-  //   int64_t last_idx = topk * thread_row + topk_excluding_share_expert_fusion;
-
-  //   // Use round-robin to select expert
-  //   int64_t expert_offset = thread_row % n_share_experts_fusion;
-  //   indices_ptr[last_idx] = static_cast<int32_t>(params.NUM_EXPERTS + expert_offset);
-
-  //   // Set the weight to the sum of all weights divided by routed_scaling_factor
-  //   output_ptr[last_idx] = output_sum / routed_scaling_factor;
-  // }
-  // __syncthreads();
-
-  ////////////////////// Rescale Output //////////////////////
-  if (thread_group_idx == 0) {
-    if (score_threshold > 0) {
-#pragma unroll
-      for (int ii = 0; ii < topk; ++ii) {
-        int64_t const idx = topk * thread_row + ii;
-        output_ptr[idx] = output_ptr[idx] / output_sum;
-      }
-      float cut_score = 0.f;
-#pragma unroll
-      for (int ii = 0; ii < topk; ++ii) {
-        int64_t const idx = topk * thread_row + ii;
-        float cur = output_ptr[idx];
-        if (cur < score_threshold) {
-          output_ptr[idx] = 0.f;
-          indices_ptr[idx] = -1;
-          cut_score += cur;
-        }
-      }
-      output_sum = 1.0f - cut_score;
-    }
-#pragma unroll
-    for (int ii = 0; ii < topk; ++ii) {
-      int64_t const idx = topk * thread_row + ii;
-      output_ptr[idx] = output_ptr[idx] / output_sum * routed_scaling_factor;
-    }
-  }
-}
-
-// Macro to compute compile-time constants and launch the kernel.
-#define LAUNCH_DSV3_FUSED_GROUPED_TOPK(T, EXPERTS, EXPERT_GROUP)                                                \
-  do {                                                                                                          \
-    constexpr int VPT = (EXPERTS) / (EXPERT_GROUP);                                                             \
-    /* If EXPERT_GROUP > WARP_SIZE, fall back to 1 row per warp */                                              \
-    constexpr int ROWS_PER_WARP = ((EXPERT_GROUP) <= WARP_SIZE) ? (WARP_SIZE / (EXPERT_GROUP)) : 1;             \
-    constexpr int ROWS_PER_CTA = WARPS_PER_CTA * ROWS_PER_WARP;                                                 \
-    moe_fused_gate_kernel<T, VPT, (EXPERTS), (EXPERT_GROUP), ROWS_PER_WARP, ROWS_PER_CTA, WARPS_PER_CTA>        \
-        <<<num_blocks, block_dim, 0, stream>>>(gating_output, e_bias, static_cast<float*>(topk_weights),        \
-                                               static_cast<int32_t*>(topk_ids), tokens_num, topk_group, topk,   \
-                                               n_share_experts_fusion, routed_scaling_factor, score_threshold); \
-  } while (0)
-
-template <typename T, int VPT, int NUM_EXPERTS, int THREADS_PER_ROW, int ROWS_PER_WARP, int ROWS_PER_CTA,
-          int WARPS_PER_CTA>
-__global__ void moe_fused_gate_kernel(void* input, void* bias, float* output_ptr, int32_t* indices_ptr,
-                                      int64_t num_rows, int64_t topk_group, int64_t topk,
-                                      int64_t n_share_experts_fusion, float routed_scaling_factor,
-                                      float score_threshold) {
-  KernelParams<VPT, NUM_EXPERTS, THREADS_PER_ROW, ROWS_PER_WARP, ROWS_PER_CTA, WARPS_PER_CTA> params;
-  moe_fused_gate_impl<float, T, float, decltype(params)>(input, bias, output_ptr, indices_ptr, num_rows, topk_group,
-                                                         topk, n_share_experts_fusion, routed_scaling_factor,
-                                                         score_threshold, params);
-}
-
-template <typename T>
-__global__ void FusedDSV3GroupedTopkKernel(const T* gating_output, const float* e_bias, float routed_scaling_factor,
-                                           float* topk_weights, int32_t* topk_ids, int num_expert_group,
-                                           int experts_per_group, int topk_group, int topk) {
-  // NOTE(karlluo): refer
-  // https://github.com/Chen-XiaoBing/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L923 memory refer
-  // range:
-  //     num_experts * sizeof(float) for original_scores
-  //     num_experts * sizeof(float) for scores
-  //     num_expert_group * sizeof(float) for group_scores
-  //     topk_group * sizeof(int32_t) for group_idx
-  //     topk_group * topk * sizeof(int32_t) for topk_id_in_group
-  extern __shared__ float buf[];
-
-  uint32_t num_experts = blockDim.x;
-  uint32_t group_idx = threadIdx.x / experts_per_group;
-
-  // for sigmoid
-  float val = static_cast<float>(gating_output[blockIdx.x * num_experts + threadIdx.x]);
-  // for add bias
-  buf[threadIdx.x] = 1.0f / (1.0f + expf(-val));  // for original_scores
-  __syncthreads();
-
-  buf[threadIdx.x + num_experts] = buf[threadIdx.x] + e_bias[threadIdx.x];  // for scores
-  // load from global memory need sync
-  __syncthreads();
-
-  // NOTE(karlluo): for original py code: group_scores = scores.view(num_token, num_expert_group, -1).max(dim=-1).values
-  // NOTE(rockcao): But here refer to
-  // https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L441, we using scores.view(num_token,
-  // num_expert_group, -1).topk(2, -1).sum(-1) [num_token, num_expert_group] get each expert group's max val
-  // TODO(karlluo): optimized with shuffle/ballot instruction
-  if (threadIdx.x % experts_per_group == 0) {
-    float group_max_val_1 = -INFINITY;
-    float group_max_val_2 = -INFINITY;
-    for (uint32_t expert_idx_in_group = 0; expert_idx_in_group < experts_per_group; ++expert_idx_in_group) {
-      if (buf[threadIdx.x + expert_idx_in_group + num_experts] > group_max_val_1) {
-        group_max_val_2 = group_max_val_1;
-        group_max_val_1 = buf[threadIdx.x + expert_idx_in_group + num_experts];
-      } else if (buf[threadIdx.x + expert_idx_in_group + num_experts] > group_max_val_2) {
-        group_max_val_2 = buf[threadIdx.x + expert_idx_in_group + num_experts];
-      }
-    }
-    buf[2 * num_experts + group_idx] = group_max_val_1 + group_max_val_2;
-  }
-  __syncthreads();
-
-  // NOTE(karlluo): for original py code: group_idx = torch.topk(group_scores, k=topk_group, dim=-1, sorted=False)[1]  #
-  // [num_token, top_k_group]
-
-  int32_t* group_indices = reinterpret_cast<int32_t*>(buf + 2 * num_experts + num_expert_group);
-  if (threadIdx.x == 0) {
-    GetTopKIndices<kMaxCandidateExpertNum>(static_cast<float*>(buf + 2 * num_experts), group_indices, num_expert_group,
-                                           topk_group, 0);
-  }
-  __syncthreads();
-
-  // NOTE(rockcao): the expert groups which are not selected exit directly
-  bool is_selected_group = false;
-  for (int topk_g_idx = 0; topk_g_idx < topk_group; ++topk_g_idx) {
-    if (group_idx == group_indices[topk_g_idx]) {
-      is_selected_group = true;
-      break;
-    }
-  }
-  if (!is_selected_group) {
-    return;
-  }
-  __syncthreads();
-
-  // NOTE(rockcao): select topk expert from its group (i.e. local topk in expert_group)
-  int32_t* group_topk_index = reinterpret_cast<int32_t*>(buf + 2 * num_experts + num_expert_group + topk_group);
-  if (threadIdx.x == group_idx * experts_per_group) {
-    for (int topk_g_idx = 0; topk_g_idx < topk_group; ++topk_g_idx) {
-      if (group_idx == group_indices[topk_g_idx]) {
-        GetTopKIndices<kMaxCandidateExpertNum>(static_cast<float*>(buf + num_experts + group_idx * experts_per_group),
-                                               group_topk_index + topk_g_idx * topk, experts_per_group, topk,
-                                               threadIdx.x);
-      }
-    }
-  }
-  __syncthreads();
-
-  // NOTE(rockcao): select topk expert from local topk experts
-  bool is_working_thread = (threadIdx.x == group_indices[0] * experts_per_group);
-  if (is_working_thread) {
-    GetTopKIndices<kMaxCandidateExpertNum>(static_cast<float*>(buf + num_experts), topk_ids + blockIdx.x * topk,
-                                           topk_group * topk, topk, group_topk_index);
-  }
-  __syncthreads();
-
-  for (int topk_idx = 0; topk_idx < topk; ++topk_idx) {
-    if (threadIdx.x == topk_ids[blockIdx.x * topk + topk_idx]) {
-      topk_weights[blockIdx.x * topk + topk_idx] = buf[threadIdx.x];
-    }
-  }
-  __syncthreads();
-
-  if (is_working_thread) {
-    float expert_sum_val = 0.0f;
-    for (int topk_idx = 0; topk_idx < topk; ++topk_idx) {
-      expert_sum_val += topk_weights[blockIdx.x * topk + topk_idx];
-    }
-    for (int topk_idx = 0; topk_idx < topk; ++topk_idx) {
-      topk_weights[blockIdx.x * topk + topk_idx] =
-          topk_weights[blockIdx.x * topk + topk_idx] / expert_sum_val * routed_scaling_factor;
-    }
-  }
-}
-
-// Main function: Implementation of grouped_topk
-template <typename T>
-void DeepSeekV3GroupedTopkCudaKernel(const T* gating_output, const float* e_bias, float routed_scaling_factor,
-                                     float* topk_weights, int32_t* topk_ids, int tokens_num, int num_experts, int topk,
-                                     int num_expert_group, int topk_group, cudaStream_t stream) {
-  // NOTE(karlluo): Calculate the number of experts per group
-  int experts_per_group = (num_experts + num_expert_group - 1) / num_expert_group;
-
-  dim3 grid_size(tokens_num);
-  dim3 block_size(num_experts);
-
-  // NOTE(karlluo): shared memory struct
-  //     num_experts * sizeof(float) for original_scores
-  //     num_experts * sizeof(float) for scores
-  //     num_expert_group * sizeof(float) for group_scores
-  //     topk_group * sizeof(int32_t) for group_idx
-  //     topk_group * topk * sizeof(int32_t) for topk_id_in_group
-
-  size_t each_token_shm_buf_size = (2 * num_experts + num_expert_group) * sizeof(float) + topk_group * sizeof(int32_t) +
-                                   topk_group * topk * sizeof(int32_t);
-
-  FusedDSV3GroupedTopkKernel<T><<<grid_size, block_size, each_token_shm_buf_size, stream>>>(
-      gating_output, e_bias, routed_scaling_factor, topk_weights, topk_ids, num_expert_group, experts_per_group,
-      topk_group, topk);
-}
-
-// Wrapper function for external calls
-template <typename T>
-void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed_scaling_factor, void* topk_weights,
-                                 void* topk_ids, int tokens_num, int num_experts, int topk, int num_expert_group,
-                                 int topk_group, float score_threshold, cudaStream_t stream) {
-  // NOTE(rockcao): for DeepSeekV3 with ep disabled, num_experts = 256, num_expert_group = 8
-  // TODO(rockcao): support more config
-  if (num_experts == 256 && num_expert_group == 8) {
-    // NOTE(rockcao): experts_fusion is not supported in this version
-    const int64_t n_share_experts_fusion = 0;
-    int num_rows = tokens_num;
-    int64_t rows_per_warp = std::max<int64_t>(1, WARP_SIZE / num_expert_group);
-    int64_t num_warps = (num_rows + rows_per_warp - 1) / rows_per_warp;
-    int64_t num_blocks = (num_warps + WARPS_PER_CTA - 1) / WARPS_PER_CTA;
-    dim3 block_dim(WARP_SIZE, WARPS_PER_CTA);
-    LAUNCH_DSV3_FUSED_GROUPED_TOPK(T, 256, 8);
-  } else {
-    DeepSeekV3GroupedTopkCudaKernel<T>(static_cast<const T*>(gating_output), static_cast<const float*>(e_bias),
-                                       routed_scaling_factor, static_cast<float*>(topk_weights),
-                                       static_cast<int32_t*>(topk_ids), tokens_num, num_experts, topk, num_expert_group,
-                                       topk_group, stream);
-  }
-}
-
-#define INVOKE_DEEPSEEK_V3_GROUPED_TOPK(T)                                                                      \
-  template void InvokeDeepSeekV3GroupedTopk<T>(void* gating_output, void* e_bias, float routed_scaling_factor,  \
-                                               void* topk_weights_ptr, void* topk_ids_ptr, int tokens_num,      \
-                                               int num_experts, int topk, int num_expert_group, int topk_group, \
-                                               float score_threshold, cudaStream_t stream)
-
-INVOKE_DEEPSEEK_V3_GROUPED_TOPK(float);
-INVOKE_DEEPSEEK_V3_GROUPED_TOPK(half);
-INVOKE_DEEPSEEK_V3_GROUPED_TOPK(__nv_bfloat16);
-#undef INVOKE_DEEPSEEK_V3_GROUPED_TOPK
 
 // Basic softmax + topk kernel for simple cases without grouping
 template <typename T>
