@@ -161,6 +161,10 @@ Status DeepSeekV3ConfigParser::ParseQuantConfig(const nlohmann::json &config_jso
       ParseGPTQQuantConfig(quantization_config, deepseek_v3_config->is_moe, deepseek_v3_config->quant_config);
     } else if (quant_method == "fp8") {
       ParseFP8QuantConfig(quantization_config, deepseek_v3_config->is_moe, deepseek_v3_config->quant_config);
+    } else if (quant_method == "compressed-tensors") {
+      ParseCompressedTensorsQuantConfig(quantization_config, deepseek_v3_config->is_moe,
+                                        deepseek_v3_config->quant_config, deepseek_v3_config->sub_quant_configs);
+      deepseek_v3_config->is_compressed_tensors = true;
     } else if (quant_method == "mixed") {
       auto configs = quantization_config["configs"];
       for (auto it = configs.begin(); it != configs.end(); ++it) {

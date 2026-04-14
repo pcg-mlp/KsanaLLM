@@ -155,11 +155,18 @@ struct DeepSeekV3Config : public BaseModelConfig {
   bool load_bias = true;     // Check if load all weights bias.
   int cla_share_factor = 0;  // Determines the number of layers that share k and v.
   bool use_qk_norm = false;  // Check if normlize the attention out q and k.
+  bool is_compressed_tensors = false;  // compressed-tensors quant format (weight already transposed)
 
   std::vector<std::pair<std::regex, std::string>> w4a8_patterns_ = {
+      // compressed-tensors format: weight_packed → qweight, weight_scale → scales
+      // These MUST come before the generic .weight pattern to avoid mismatching
+      std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight_packed)"),
+                     std::string("model.layers.$1.mlp.experts.$2.$3.qweight")),
+      std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight_scale$)"),
+                     std::string("model.layers.$1.mlp.experts.$2.$3.scales")),
       std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight_scale_inv)"),
                      std::string("model.layers.$1.mlp.experts.$2.$3.scales")),
-      std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight)"),
+      std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight$)"),
                      std::string("model.layers.$1.mlp.experts.$2.$3.qweight")),
   };
 };

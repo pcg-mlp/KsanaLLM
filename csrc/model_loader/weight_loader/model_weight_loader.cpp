@@ -72,8 +72,31 @@ Status ModelWeightLoader::LoadWeight(std::shared_ptr<BaseModelConfig>& model_con
 
     // The current implementation can only process serially per card.
     std::unordered_map<std::string, Tensor> model_weights = *host_model_weights;
+
+    // Strip VLM prefix "language_model." from weight names if detected.
+    // Must happen before GetCustomWeightMap, whose regex_search would partially match prefixed names.
+    {
+      std::vector<std::string> keys_to_rename;
+      const std::string vlm_prefix = "language_model.";
+      for (const auto& [key, _] : model_weights) {
+        if (key.substr(0, vlm_prefix.size()) == vlm_prefix) {
+          keys_to_rename.push_back(key);
+        }
+      }
+      if (!keys_to_rename.empty()) {
+        KLLM_LOG_INFO << fmt::format("Stripping VLM prefix 'language_model.' from {} weights", keys_to_rename.size());
+        for (const auto& old_key : keys_to_rename) {
+          std::string new_key = old_key.substr(vlm_prefix.size());
+          auto node = model_weights.extract(old_key);
+          node.key() = std::move(new_key);
+          model_weights.insert(std::move(node));
+        }
+      }
+    }
+
     model_weight_loader->GetCustomWeightMap(model_config->model_dir, model_type, model_weights,
                                             model_config->model_format);
+
     model_weights.insert(left_host_weights.begin(), left_host_weights.end());
     left_host_weights.clear();
     model_weight_loader->ProcessModelWeights(model_weights, device_id, dev_weight->weights_map_, left_host_weights);

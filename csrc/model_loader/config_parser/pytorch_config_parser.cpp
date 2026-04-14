@@ -54,6 +54,16 @@ Status PytorchConfigParser::GetJsonConfig(const std::string& model_dir, nlohmann
     }
   }
 
+  // Kimi-K2.5 is a multimodal model whose LLM backbone is kimi_k2 (DeepSeek V3 variant).
+  // Extract text_config which contains the actual LLM parameters.
+  if (model_type == "kimi_k25") {
+    KLLM_LOG_INFO << fmt::format("Reset model_type: {} to kimi_k2", model_type);
+    if (config_json.contains("text_config")) {
+      config_json = config_json["text_config"];
+    }
+    model_type = config_json.value("model_type", "kimi_k2");
+  }
+
   if (model_type != "arc_hunyuan_video" && model_type.find("hunyuan") != std::string::npos) {
     int num_experts = config_json.value("num_experts", 1);
     if (config_json.value("use_mixed_mlp_moe", false)) {

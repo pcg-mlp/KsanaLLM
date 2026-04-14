@@ -34,7 +34,7 @@ DeepSeekV3WeightLoader::DeepSeekV3WeightLoader(std::shared_ptr<BaseModelConfig> 
 DeepSeekV3WeightLoader::~DeepSeekV3WeightLoader() {}
 
 Status DeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& weight_names) {
-  const std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq"};
+  const std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq", "vision_tower.", "mm_projector."};
 
   const int lower_layer_idx = pipeline_config_.lower_layer_idx;
   const int upper_layer_idx = pipeline_config_.upper_layer_idx;
@@ -514,8 +514,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
         size_t split_size =
             runtime_config_.enable_o_proj_out_of_dp ? deepseek_v3_config->tensor_para_size : attn_tp_size;
         Tensor dev_tensor;
+        bool is_this_weight_quant = deepseek_v3_config->is_quant && !deepseek_v3_config->is_compressed_tensors;
         weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, split_size,
-                                         deepseek_v3_config->is_quant);
+                                         is_this_weight_quant);
 
         device_model_weights[file_weight_name] = dev_tensor;
         continue;
@@ -533,12 +534,15 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       Tensor dev_tensor;
       size_t mlp_tensor_para_size =
           runtime_config_.enable_full_shared_expert ? 1 : context_->global->GetTensorParallelSize();
+      // For compressed-tensors (moe-int4), dense/shared_expert weights are NOT quantized (bf16/fp16).
+      // Use actual weight dtype to determine if transpose is needed, not global is_quant.
+      bool is_this_weight_quant = deepseek_v3_config->is_quant && !deepseek_v3_config->is_compressed_tensors;
       weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, mlp_tensor_para_size,
-                                  !deepseek_v3_config->is_quant);
+                                  !is_this_weight_quant);
       if (deepseek_v3_config->use_mla && deepseek_v3_config->type != "deepseek_v2") {
         // deepseek v3 need to combine gate & up proj
         weight_impl_->ProcessGateUpProjWeight(file_weight_name, dev_tensor, device_model_weights, dev_rank,
-                                              deepseek_v3_config->is_quant);
+                                              is_this_weight_quant);
       } else {
         device_model_weights[file_weight_name] = dev_tensor;
       }
@@ -556,8 +560,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       Tensor dev_tensor;
       size_t mlp_tensor_para_size =
           runtime_config_.enable_full_shared_expert ? 1 : context_->global->GetTensorParallelSize();
+      bool is_this_weight_quant = deepseek_v3_config->is_quant && !deepseek_v3_config->is_compressed_tensors;
       weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config,
-                                       mlp_tensor_para_size, deepseek_v3_config->is_quant);
+                                       mlp_tensor_para_size, is_this_weight_quant);
       device_model_weights[file_weight_name] = dev_tensor;
       continue;
     }

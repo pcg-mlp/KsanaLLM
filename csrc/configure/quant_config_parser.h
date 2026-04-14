@@ -23,6 +23,12 @@ void ParseFP8QuantConfig(const nlohmann::json &config_json, bool is_moe, QuantCo
 // Parse W4A8_AWQ quantization configuration
 void ParseModelOptQuantConfig(const nlohmann::json &config_json, bool is_moe, QuantConfig &quant_config);
 
+// Parse compressed-tensors quantization configuration
+// Extracts GPTQ-equivalent parameters from config_groups and handles MoE ignore list.
+// Populates quant_config and sub_quant_configs for MoE INT4 pattern.
+void ParseCompressedTensorsQuantConfig(const nlohmann::json &quantization_config, bool is_moe,
+                                       QuantConfig &quant_config, std::vector<QuantConfig> &sub_quant_configs);
+
 // Parse and convert mixed precision quantization configuration from hf_quant_config.json
 nlohmann::json ParseAndConvertQuantConfig(const nlohmann::json &hf_quant_config);
 

@@ -60,7 +60,7 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
   builder_map_[{TYPE_UINT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
       &MoeLayerFactory::BuildLayer<MoeLayer>;
 
-  // for deepseek w4afp8
+  // for deepseek w4afp8 (and compressed-tensors which uses TYPE_INT8 to route here)
   builder_map_[{TYPE_INT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND}] =
       &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
   builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND}] =
@@ -183,6 +183,10 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
         runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::TensorTriton) {
       return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND);
     }
+    // TYPE_INT8 routes to CUTLASS or Triton (via GroupTriton/TensorTriton env override).
+    // compressed-tensors sets TYPE_INT8 because its weights are pre-transposed ([N,K] layout).
+    // Note: w4afp8_moe_backend auto-detection may override this to GroupTriton for compressed-tensors,
+    // in which case the above Triton branch is taken instead.
     if (weight_type == TYPE_INT8) {
       return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND);
     }

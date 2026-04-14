@@ -22,6 +22,7 @@ if(WITH_STANDALONE_TEST)
   message(STATUS "configure_test_SRCS: ${configure_test_SRCS}")
   
   cpp_test(schedule_config_parser_test SRCS ${configure_test_SRCS} DEPS configure)
+  cpp_test(quant_config_parser_test SRCS ${PROJECT_SOURCE_DIR}/csrc/configure/quant_config_parser_test.cpp DEPS configure models runtime executor LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
   
   # cpp_test(environment_test SRCS ${PROJECT_SOURCE_DIR}/csrc/configure/environment_test.cpp DEPS configure)
   # Other tests can be added here with their specific dependencies

@@ -63,6 +63,10 @@ bool DeepSeekV3Config::IsGptqContain(const std::string& weight_name) {
   if (GetGptqQuantConfig().input_scale) {
     gptq_weights_suffix.push_back("input_scale");
   }
+  // compressed-tensors format suffixes
+  gptq_weights_suffix.push_back("weight_packed");
+  gptq_weights_suffix.push_back("weight_scale");
+  gptq_weights_suffix.push_back("weight_shape");
   for (std::string& gptq_weight_suffix : gptq_weights_suffix) {
     if (weight_name.find(gptq_weight_suffix) != std::string::npos) {
       return true;

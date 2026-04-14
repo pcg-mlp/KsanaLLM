@@ -60,6 +60,44 @@ void ParseModelOptQuantConfig(const nlohmann::json &config_json, bool is_moe, Qu
   }
 }
 
+void ParseCompressedTensorsQuantConfig(const nlohmann::json &quantization_config, bool is_moe,
+                                       QuantConfig &quant_config, std::vector<QuantConfig> &sub_quant_configs) {
+  KLLM_LOG_INFO << "Parsing compressed-tensors quantization config";
+
+  if (!quantization_config.contains("config_groups")) {
+    KLLM_THROW("compressed-tensors config: missing config_groups");
+  }
+
+  // Find the first config group with int weight quantization
+  bool found = false;
+  for (auto &[group_name, group_config] : quantization_config["config_groups"].items()) {
+    if (group_config.contains("weights") && !group_config["weights"].is_null()) {
+      auto &weights = group_config["weights"];
+      quant_config.method = QUANT_GPTQ;
+      quant_config.bits = weights.value("num_bits", 4);
+      quant_config.group_size = weights.value("group_size", 32);
+      quant_config.is_compressed_tensors = true;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    KLLM_THROW("compressed-tensors config: no valid weight quantization config_group found");
+  }
+  KLLM_LOG_INFO << fmt::format("compressed-tensors: bits={}, group_size={}", quant_config.bits,
+                               quant_config.group_size);
+
+  // Handle MoE ignore list: only experts are quantized
+  if (quantization_config.contains("ignore") && quantization_config["ignore"].is_array()) {
+    QuantConfig expert_quant = quant_config;
+    expert_quant.pattern_layers = {".mlp.experts."};
+    sub_quant_configs.push_back(expert_quant);
+    // Non-expert layers are not quantized, keep bits/group_size for MoE layer config
+    quant_config.method = QUANT_NONE;
+    quant_config.enable_moe_int4 = true;
+  }
+}
+
 nlohmann::json ParseAndConvertQuantConfig(const nlohmann::json &hf_quant_config) {
   // 获取顶层quant_algo
   std::string top_level_quant_algo = hf_quant_config["quantization"].value("quant_algo", "");

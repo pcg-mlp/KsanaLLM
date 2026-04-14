@@ -35,6 +35,7 @@ static const std::unordered_map<std::string, ModelArchitecture> model_type_to_ar
     {"deepseek_v32", ModelArchitecture::ARCH_DEEPSEEK},
     {"glm_moe_dsa", ModelArchitecture::ARCH_DEEPSEEK},
     {"kimi_k2", ModelArchitecture::ARCH_DEEPSEEK},
+    {"kimi_k25", ModelArchitecture::ARCH_DEEPSEEK},
     {"internlm2", ModelArchitecture::ARCH_INTERNLM2},
     {"internlmxcomposer2", ModelArchitecture::ARCH_INTERNLMXCOMPOSER2},
     {"arc_hunyuan_video", ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO},

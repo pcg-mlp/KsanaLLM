@@ -606,8 +606,9 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
   size_t head_num_tp = DivRoundUp(head_num, attn_tp_size);
 
   for (const auto& [host_weight_name, host_weight_tensor] : host_gptq_weights) {
-    // Skip qzeros and g_idx
-    if (host_weight_name.find(".qzeros") != std::string::npos || host_weight_name.find(".g_idx") != std::string::npos) {
+    // Skip qzeros, g_idx, and weight_shape (compressed-tensors metadata)
+    if (host_weight_name.find(".qzeros") != std::string::npos || host_weight_name.find(".g_idx") != std::string::npos ||
+        host_weight_name.find(".weight_shape") != std::string::npos) {
       continue;
     }
     KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, processing weight: {}, dtype: {}, shape: {}", dev_rank,
@@ -687,7 +688,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
       MemcpyAsync(dev_tensor.GetPtr<void>(), host_weight_tensor.template GetPtr<void>(),
                   host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
       StreamSynchronize(context_->device->GetMemoryManageStream());
-      if (!deepseek_v3_config->GetGptqQuantConfig().input_scale) {
+      if (!deepseek_v3_config->GetGptqQuantConfig().input_scale && !deepseek_v3_config->is_compressed_tensors) {
         PermuteWeight(dev_tensor, {1, 0}, dev_rank);
       }
       if (host_weight_name.find(".up_proj.") != std::string::npos ||

@@ -164,7 +164,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
         runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
         KLLM_LOG_INFO << "Detected w4afp8 model, setting W4AFP8_MOE_BACKEND == Default";
       } else {
-        // 没有input scale说明是moe-int4模型
+        // 没有input scale说明是moe-int4模型 (GPTQ or compressed-tensors)
         runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::GroupTriton;
         KLLM_LOG_INFO << "Detected moe-int4 model, setting W4AFP8_MOE_BACKEND == GroupTriton";
       }

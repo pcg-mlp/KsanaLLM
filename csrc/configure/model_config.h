@@ -165,6 +165,13 @@ struct QuantConfig {
   //       "ue8m0" (uint8 exponential, powers-of-2 scales, e.g., DeepSeek-V3.2)
   std::string scale_fmt{"none"};
 
+  // Whether this is a compressed-tensors quantized model.
+  // compressed-tensors INT4 weights are stored pre-transposed ([N, K] layout, i.e. output-major),
+  // unlike GPTQ which stores weights in [K, N] layout (input-major).
+  // When true, MoE layer must use CUTLASS backend which supports pre-transposed weights,
+  // rather than Triton backend which expects standard [K, N] layout.
+  bool is_compressed_tensors = false;
+
   // Adaptation layers
   std::vector<std::string> pattern_layers;
 

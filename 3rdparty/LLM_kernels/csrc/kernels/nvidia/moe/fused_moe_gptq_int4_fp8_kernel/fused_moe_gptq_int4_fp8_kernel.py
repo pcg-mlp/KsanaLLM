@@ -253,7 +253,7 @@ def args_config():
 
     parser.add_argument('--compute_type', type=str, required=True, choices=["FP16", "BF16"])
 
-    parser.add_argument('--group_size', type=int, required=True, choices=[64, 128])
+    parser.add_argument('--group_size', type=int, required=True, choices=[32, 64, 128])
 
     parser.add_argument('--m', type=int, required=True)
     parser.add_argument('--k', type=int, required=True)

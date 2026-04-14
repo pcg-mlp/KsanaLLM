@@ -109,6 +109,9 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
           model_config.sub_quant_configs[0].pattern_layers[0] == ".mlp.experts.") {
         model_config.quant_config.enable_moe_int4 = true;
       }
+    } else if (quant_method == "compressed-tensors") {
+      ParseCompressedTensorsQuantConfig(quantization_config, model_config.is_moe, model_config.quant_config,
+                                        model_config.sub_quant_configs);
     } else {
       KLLM_THROW(fmt::format("Not support quant_method {}.", quant_method));
     }
@@ -441,6 +444,17 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
 
     model_config.weight_data_type = GetModelDataType(config_json, model_config);
     model_config.type = config_json.at("model_type");
+
+    // Kimi-K2.5: extract text_config and use inner model_type "kimi_k2"
+    if (model_config.type == "kimi_k25") {
+      KLLM_LOG_INFO << "Kimi-K2.5 detected, extracting text_config";
+      if (config_json.contains("text_config")) {
+        config_json = config_json["text_config"];
+      }
+      model_config.type = config_json.value("model_type", "kimi_k2");
+      model_config.weight_data_type = GetModelDataType(config_json, model_config);
+    }
+
     auto architectures = config_json.at("architectures");
 
     if (model_config.type == "qwen2_5_vl") {

@@ -65,7 +65,7 @@ void UpdateMoeWna16BlockConfig(std::unordered_map<std::string, int>& config, boo
   if (!use_moe_wna16_cuda) {
     if (use_fp8_compute) {
       config["block_size_n"] = 128;
-      config["block_size_k"] = 128;
+      config["block_size_k"] = std::min(128, group_size);  // block_size_k must <= group_size for correct scale indexing
     } else {
       // triton moe wna16 kernel
       if (num_valid_tokens / real_top_k == 1) {
@@ -114,6 +114,12 @@ void UpdateMoeWna16BlockConfig(std::unordered_map<std::string, int>& config, boo
       // The kernel performance got much better with block_size_n=1024
       // when num_blocks is large, even when N is small.
       block_size_n = 1024;
+    }
+    // The kernel requires BLOCK_SIZE_K / group_size to be one of [1, 2, 4, 8]
+    // so clamp block_size_k to group_size * 8 at most.
+    int max_block_size_k = group_size * 8;
+    if (block_size_k > max_block_size_k) {
+      block_size_k = max_block_size_k;
     }
 
     config["block_size_n"] = block_size_n;

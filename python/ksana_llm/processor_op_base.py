@@ -165,5 +165,8 @@ class TokenizerProcessorOpBase:
                 return ARCHunyuanVideoTokenizer.from_pretrained(model_path)
 
         if os.path.exists(model_path + "/preprocessor_config.json"):
-            return AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+            try:
+                return AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+            except (ImportError, ValueError, OSError, KeyError) as e:
+                print(f"AutoProcessor failed ({e}), falling back to AutoTokenizer")
         return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
