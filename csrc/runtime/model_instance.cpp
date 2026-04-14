@@ -29,6 +29,7 @@
 #include "models/llama4/llama4_model.h"
 #include "models/mixtral/mixtral_model.h"
 #include "models/qwen/qwen_model.h"
+#include "models/qwen/qwen_embedding_model.h"
 #include "models/qwen2_moe/qwen2_moe_model.h"
 #include "models/qwen3_moe/qwen3_moe_model.h"
 
@@ -61,7 +62,12 @@ void ModelInstance::Load() {
   } else if (unified_model_type.find("qwen3") != std::string::npos) {
     type = "qwen3";
     model_config_.enable_qk_pre_norm_before_rotary_pos = true;
-    CreateModelInstance<QwenModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_);
+    if (model_config_.is_embedding_model) {
+      CreateModelInstance<QwenEmbeddingModel>(model_config_, runtime_config_, context_, model_instance_,
+                                              weight_instance_);
+    } else {
+      CreateModelInstance<QwenModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_);
+    }
   } else if (unified_model_type.find("qwen2_moe") != std::string::npos) {
     type = "qwen2_moe";
     CreateModelInstance<Qwen2MoeModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_);

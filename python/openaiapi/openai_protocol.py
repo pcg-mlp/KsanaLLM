@@ -633,22 +633,113 @@ class CompletionStreamResponse(BaseModel):
     usage: Optional[UsageInfo] = Field(default=None)
 
 
+class MultimodalEmbeddingInput(BaseModel):
+    """多模态 Embedding 输入（支持 text + image）"""
+    text: Optional[str] = None
+    image: Optional[str] = None  # image URL or base64
+
+
+# Embedding 输入类型：支持多种格式
+EmbeddingInput = Union[
+    str,                              # 单个字符串
+    List[str],                        # 字符串列表
+    List[int],                        # Token ID 列表
+    List[List[int]],                  # 批量 Token ID 列表
+    List[MultimodalEmbeddingInput],   # 多模态输入列表
+]
+
+
 class EmbeddingRequest(OpenAIRequestModel):
+    """OpenAI Embedding API 请求模型
+    
+    Ref: https://platform.openai.com/docs/api-reference/embeddings/create
+    """
     model: Optional[str] = None
-    input: Union[List[int], List[List[int]], str, List[str]]
+    input: EmbeddingInput
     encoding_format: Literal["float", "base64"] = "float"
-    dimensions: Optional[int] = None
+    dimensions: Optional[int] = Field(
+        default=None,
+        description="输出向量维度，若小于模型输出维度则截断"
+    )
     user: Optional[str] = None
-    truncate_prompt_tokens: Optional[Annotated[int, Field(ge=-1)]] = None
+    truncate_prompt_tokens: Optional[Annotated[int, Field(ge=1)]] = Field(
+        default=None,
+        description="截断输入到指定 token 数"
+    )
+    
+    # KsanaLLM 扩展参数
+    priority: Optional[int] = Field(default=None, description="请求优先级")
+    
+    @model_validator(mode="before")
+    @classmethod
+    def validate_input(cls, data):
+        """验证输入参数"""
+        input_data = data.get("input")
+        
+        if input_data is None:
+            raise ValueError("Input cannot be empty")
+        
+        # 验证字符串输入
+        if isinstance(input_data, str):
+            if not input_data.strip():
+                raise ValueError("Input cannot be empty or whitespace only")
+            return data
+        
+        # 验证列表输入
+        if isinstance(input_data, list):
+            if len(input_data) == 0:
+                raise ValueError("Input list cannot be empty")
+            
+            first_item = input_data[0]
+            
+            # 字符串列表
+            if isinstance(first_item, str):
+                for i, item in enumerate(input_data):
+                    if not isinstance(item, str):
+                        raise ValueError(f"All items in input list must be strings, got {type(item)} at index {i}")
+                    if not item.strip():
+                        raise ValueError(f"Input at index {i} cannot be empty or whitespace only")
+            
+            # Token ID 列表
+            elif isinstance(first_item, int):
+                for i, item in enumerate(input_data):
+                    if not isinstance(item, int):
+                        raise ValueError(f"All items in input list must be integers, got {type(item)} at index {i}")
+                    if item < 0:
+                        raise ValueError(f"Token ID at index {i} must be non-negative")
+            
+            # 嵌套 Token ID 列表
+            elif isinstance(first_item, list):
+                for i, item in enumerate(input_data):
+                    if not isinstance(item, list):
+                        raise ValueError(f"All items in nested input list must be lists, got {type(item)} at index {i}")
+                    for j, token in enumerate(item):
+                        if not isinstance(token, int):
+                            raise ValueError(f"Token at [{i}][{j}] must be an integer")
+                        if token < 0:
+                            raise ValueError(f"Token ID at [{i}][{j}] must be non-negative")
+            
+            # 多模态输入（dict 格式）
+            elif isinstance(first_item, dict):
+                for i, item in enumerate(input_data):
+                    if not isinstance(item, dict):
+                        raise ValueError(f"All items in multimodal input list must be dicts, got {type(item)} at index {i}")
+                    # 验证至少有 text 或 image
+                    if not item.get("text") and not item.get("image"):
+                        raise ValueError(f"Multimodal input at index {i} must have at least 'text' or 'image'")
+        
+        return data
 
 
 class EmbeddingResponseData(BaseModel):
+    """单个 Embedding 数据"""
     index: int
     object: str = "embedding"
-    embedding: Union[List[float], str]
+    embedding: Union[List[float], str]  # float 列表或 base64 字符串
 
 
 class EmbeddingResponse(BaseModel):
+    """Embedding API 响应模型"""
     id: str = Field(default_factory=lambda: f"embd-{random_uuid()}")
     object: str = "list"
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -685,4 +776,4 @@ class DetokenizeResponse(BaseModel):
     prompt: str
 
 
-AnyResponseFormat = ResponseFormat
+

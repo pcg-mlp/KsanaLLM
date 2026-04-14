@@ -149,7 +149,7 @@ Status BaseModelWeightLoader::InitRegexPatterns(const std::string& model_path, c
       KLLM_LOG_ERROR << fmt::format("Load weight map json: {} error.", weight_path) << std::endl;
       return Status(RetCode::RET_INVALID_ARGUMENT, fmt::format("Load weight map json: {} error.", weight_path));
     }
-    const nlohmann::json& weight_map_json = nlohmann::json::parse(file);
+    const nlohmann::ordered_json& weight_map_json = nlohmann::ordered_json::parse(file);
     file.close();
 
     patterns_.clear();

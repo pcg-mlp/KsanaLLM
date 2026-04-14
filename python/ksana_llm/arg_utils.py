@@ -2,13 +2,16 @@
 #
 # ==============================================================================
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 import yaml
 from transformers import AutoConfig
 
-from utilize.logger import update_log_config_from_yaml
+from utilize.logger import update_log_config_from_yaml, get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -37,6 +40,9 @@ class EngineArgs:
     encoder_gpu: Optional[str] = None
     llm_gpu: Optional[str] = None
     encoder_base_port: Optional[int] = None
+    # Embedding model parameters
+    hidden_size: Optional[int] = None  # Model hidden size (embedding dimension)
+    pooling_type: Optional[str] = None  # Pooling strategy: "cls", "last", or None (auto-detect)
     # OpenAI Adapter related parameters
     tool_call_parser: Optional[str] = None
     reasoning_parser: Optional[str] = None
@@ -146,6 +152,37 @@ class EngineArgs:
         model_type, vit_model_type = determine_model_and_vit_model_type(model_type, model_config)
         multimodal_vit_model_type = vit_model_type
 
+        # Extract hidden_size for embedding models
+        hidden_size = model_config.get("hidden_size", None)
+
+        # Auto-detect pooling type from sentence-transformers 1_Pooling/config.json.
+        # NOTE: C++ model_config_parser.cpp also parses this file with the same
+        # detection order (LAST → CLS → MEAN). Keep both implementations in sync.
+        def detect_pooling_type(model_dir: str) -> Optional[str]:
+            """从模型目录的 1_Pooling/config.json 检测 pooling 策略。
+            检测顺序: LAST → CLS → MEAN
+            返回 "last" / "cls" / "mean"，未检测到则返回 None。
+            """
+            pooling_config_path = os.path.join(model_dir, "1_Pooling", "config.json")
+            if not os.path.isfile(pooling_config_path):
+                return None
+            try:
+                with open(pooling_config_path, "r") as f:
+                    pooling_config = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to parse pooling config %s: %s", pooling_config_path, e)
+                return None
+
+            if pooling_config.get("pooling_mode_lasttoken", False):
+                return "last"
+            elif pooling_config.get("pooling_mode_cls_token", False):
+                return "cls"
+            elif pooling_config.get("pooling_mode_mean_tokens", False):
+                return "mean"
+            return None
+
+        pooling_type = detect_pooling_type(model_dir)
+
         # Initialize EngineArgs with default values from the config file
         return cls(
             config_file=config_file,
@@ -165,6 +202,8 @@ class EngineArgs:
             encoder_gpu=encoder_gpu,
             llm_gpu=llm_gpu,
             encoder_base_port=encoder_base_port,
+            hidden_size=hidden_size,
+            pooling_type=pooling_type,
         )
 
     @classmethod

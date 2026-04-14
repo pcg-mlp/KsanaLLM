@@ -22,6 +22,9 @@ struct BaseModelConfig {
 
   // The model architecture, such as hunyuan/llama/qwen, etc.
   ModelArchitecture model_arch;
+
+  // Determines if the model is an embedding model (no lm_head).
+  bool is_embedding_model = false;
 };
 
 }  // namespace ksana_llm

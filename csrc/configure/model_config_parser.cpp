@@ -549,6 +549,54 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
     ParseModelQuantConfig(config_json, model_config, weight_quant_method_, gptq_backend_);
 
     UpdateEndIdFromGeneration(model_dir, model_config);
+
+    // Detect embedding models by checking for Sentence Transformer pooling config.
+    // Qwen3-Embedding and similar models include a 1_Pooling/ directory.
+    const std::string pooling_config_path = abs_model_dir_path.string() + "/1_Pooling/config.json";
+    if (!model_config.is_embedding_model) {
+      if (std::filesystem::exists(pooling_config_path)) {
+        model_config.is_embedding_model = true;
+        KLLM_LOG_INFO << "Detected embedding model (found 1_Pooling/config.json)";
+      }
+    }
+
+    // Parse pooling type and normalize config for embedding models.
+    if (model_config.is_embedding_model) {
+      nlohmann::json pooling_json = ReadJsonFromFile(pooling_config_path);
+      if (!pooling_json.empty()) {
+        // Check order: LAST → CLS → MEAN (consistent with Python arg_utils.py).
+        if (pooling_json.value("pooling_mode_lasttoken", false)) {
+          model_config.pooling_type = PoolingType::LAST;
+          KLLM_LOG_INFO << "Embedding pooling type: LAST (from 1_Pooling/config.json)";
+        } else if (pooling_json.value("pooling_mode_cls_token", false)) {
+          model_config.pooling_type = PoolingType::CLS;
+          KLLM_LOG_INFO << "Embedding pooling type: CLS (from 1_Pooling/config.json)";
+        } else if (pooling_json.value("pooling_mode_mean_tokens", false)) {
+          model_config.pooling_type = PoolingType::MEAN;
+          KLLM_LOG_INFO << "Embedding pooling type: MEAN (from 1_Pooling/config.json)";
+        } else {
+          KLLM_LOG_WARNING << "No recognized pooling mode in 1_Pooling/config.json, defaulting to LAST";
+          model_config.pooling_type = PoolingType::LAST;
+        }
+      }
+
+      // Detect normalize config from modules.json (sentence-transformers standard).
+      // If modules.json contains a "sentence_transformers.models.Normalize" entry, enable normalize.
+      // If modules.json is missing, keep the default (normalize_embedding = true).
+      std::string modules_json_path = abs_model_dir_path.string() + "/modules.json";
+      nlohmann::json modules_json = ReadJsonFromFile(modules_json_path);
+      if (!modules_json.empty() && modules_json.is_array()) {
+        bool found_normalize = false;
+        for (const auto& module : modules_json) {
+          if (module.value("type", "") == "sentence_transformers.models.Normalize") {
+            found_normalize = true;
+            break;
+          }
+        }
+        model_config.normalize_embedding = found_normalize;
+      }
+      KLLM_LOG_INFO << "Embedding normalize: " << (model_config.normalize_embedding ? "true" : "false");
+    }
   }
 
   model_config.k_scales = std::vector<float>(model_config.num_layer + model_config.num_nextn_predict_layers,

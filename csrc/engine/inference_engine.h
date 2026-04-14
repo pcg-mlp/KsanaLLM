@@ -38,7 +38,7 @@ class InferenceEngine {
   Status Stop();
 
  private:
-  // Do warmup run
+  // Do warmup run.
   Status DoWarmupRun();
 
  private:

@@ -128,6 +128,11 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
     base_model_dir = model_dir_override;
     tokenizer_dir = model_dir_override;
   }
+
+  // Read is_embedding_model from yaml before model config parsing.
+  model_config_.is_embedding_model =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "model_spec.base_model.is_embedding_model", false);
+
   STATUS_CHECK_RETURN(ParseModelAndScheduleConfig(yaml_reader, base_model_dir, tokenizer_dir, model_config_filename));
 
   return Status();

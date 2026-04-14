@@ -39,4 +39,5 @@ add_subdirectory(moe)
 # index
 add_subdirectory(weight_scale)
 add_subdirectory(logits_topk)
+add_subdirectory(pooling)
 

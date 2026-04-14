@@ -417,36 +417,53 @@ Status InferenceEngine::DoWarmupRun() {
     KLLM_LOG_DEBUG << "warmup is disabled";
     return Status();
   }
+
   ModelConfig model_config;
   Status status = env_->GetModelConfig(model_config);
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "No model config found for warmup run. " + status.ToString());
   }
+  const bool is_embedding = model_config.is_embedding_model;
+
   RuntimeConfig runtime_config;
   env_->GetRuntimeConfig(runtime_config);
   int max_warmup_input_length = std::min(static_cast<int>(runtime_config.max_seq_len), 2048);
   if (std::getenv("MAX_WARMUP_INPUT_LENGTH") != nullptr) {
     max_warmup_input_length = std::stoi(std::getenv("MAX_WARMUP_INPUT_LENGTH"));
   }
-  std::vector<int> warmup_input_lengths;
+
   const int warmup_input_length_step = 64;
-  for (int i = warmup_input_length_step; i < max_warmup_input_length; i += warmup_input_length_step) {
+  std::vector<int> warmup_input_lengths;
+  // Use <= to include the boundary length, ensuring warmup covers the full max input length.
+  for (int i = warmup_input_length_step; i <= max_warmup_input_length; i += warmup_input_length_step) {
     warmup_input_lengths.push_back(i);
   }
 
   pybind11::gil_scoped_release release;
   KLLM_LOG_INFO << "Start to do warmup run";
+
   for (int input_length : warmup_input_lengths) {
     auto warmup_run_input = std::make_shared<KsanaPythonInput>();
-    // Prepare the warm up input.
+
+    // Fill dummy tokens.
     std::vector<int> input_tokens(input_length, 0);
     for (int i = 0; i < input_length; ++i) {
       input_tokens[i] = i % 100;  // Fill with some dummy tokens.
     }
     warmup_run_input->input_tokens = input_tokens;
-    // Warm up with one context and one decoding.
-    warmup_run_input->sampling_config.max_new_tokens = 2;
     warmup_run_input->sampling_config.ignore_eos = true;
+
+    if (is_embedding) {
+      // Embedding: only one prefill forward, no decode step.
+      warmup_run_input->sampling_config.max_new_tokens = 1;
+      // Set request_target with "layernorm" to trigger the embedding LmHead path.
+      TargetDescribe target_desc;
+      target_desc.token_reduce_mode = TokenReduceMode::GATHER_ALL;
+      warmup_run_input->request_target["layernorm"] = target_desc;
+    } else {
+      // LLM: one context + one decode.
+      warmup_run_input->sampling_config.max_new_tokens = 2;
+    }
 
     auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
     auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
@@ -457,14 +474,22 @@ Status InferenceEngine::DoWarmupRun() {
     if (connector_config.group_role == GroupRole::PREFILL) {
       req->kv_comm_request_id = -1;
     }
+
     req->waiter = std::make_shared<Waiter>(1);
     request_queue_.Write({Status(), req});
-
-    // Wait the warm up.
     req->waiter->Wait();
-    for (const auto &[output, req_logprobs, total_score] : req->output_group) {
-      KLLM_CHECK_WITH_INFO(req->input_tokens.size() < output.size(),
-                           "Ksana warmup run generate empty output tokens. Warmup inference run failed");
+
+    // Verification.
+    if (is_embedding) {
+      if (req->response.find("layernorm") == req->response.end()) {
+        KLLM_LOG_WARNING << "Embedding warmup (len=" << input_length
+                         << ") did not produce 'layernorm' response, skipping verification";
+      }
+    } else {
+      for (const auto& [output, req_logprobs, total_score] : req->output_group) {
+        KLLM_CHECK_WITH_INFO(req->input_tokens.size() < output.size(),
+                             "Warmup run generated empty output tokens. Inference run failed");
+      }
     }
   }
 
@@ -504,7 +529,7 @@ Status InferenceEngine::Start() {
     KLLM_LOG_INFO << "All Nodes are ready, ready to server";
   }
 #ifndef ENABLE_ACL
-  // Start warmup run
+  // Start warmup run (auto-detects embedding vs LLM mode).
   if (!context_->global->IsDistributedWorker()) {
     DoWarmupRun();
   }

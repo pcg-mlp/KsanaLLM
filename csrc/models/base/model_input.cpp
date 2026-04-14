@@ -31,7 +31,10 @@ constexpr int kDeepGemmMaxQSeqLen = 2;
 
 ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                        std::shared_ptr<Context> context)
-    : model_config_(model_config), runtime_config_(runtime_config), rank_(rank), context_(context) {
+    : model_config_(model_config),
+      runtime_config_(runtime_config),
+      rank_(rank),
+      context_(context) {
   auto env = Singleton<Environment>::GetInstance();
   env->GetConnectorConfigs(connector_config_);
   PipelineConfig pipeline_config;
@@ -1330,6 +1333,7 @@ void ModelInput::PreparePrefill() {
   }
 
   PROFILE_EVENT_SCOPE(PreparePrefill, "PreparePrefill", rank_);
+
   if (model_config_.use_dsa) {
     PrepareFlashMla(flash_input);
   }

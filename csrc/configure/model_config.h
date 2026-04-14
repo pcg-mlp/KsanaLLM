@@ -127,6 +127,21 @@ enum class DistributedCommunicationType {
   ALLTOALL = 2,  // all to all
 };
 
+// Pooling type for embedding models.
+enum class PoolingType {
+  LAST = 0,   // Extract last token hidden state (Qwen3-Embedding, GTE-Qwen, etc.)
+  CLS = 1,    // Extract first token (CLS) hidden state (BERT, BGE, etc.)
+  MEAN = 2,   // Average all token hidden states (E5, Jina, etc.)
+};
+
+inline std::string GetPoolingTypeString(PoolingType pooling_type) {
+  static const std::unordered_map<PoolingType, std::string> pooling_type_map{
+      {PoolingType::LAST, "last"},
+      {PoolingType::CLS, "cls"},
+      {PoolingType::MEAN, "mean"}};
+  return pooling_type_map.count(pooling_type) ? pooling_type_map.at(pooling_type) : "Unknown";
+}
+
 // The Quant informations.
 struct QuantConfig {
   // The quant method
@@ -284,6 +299,15 @@ struct ModelConfig {
 
   // Determines if the model is a visual llm model.
   bool is_visual = false;
+
+  // Determines if the model is an embedding model.
+  bool is_embedding_model = false;
+
+  // Pooling type for embedding models (LAST, CLS, MEAN).
+  PoolingType pooling_type = PoolingType::LAST;
+
+  // Whether to apply L2 normalization to embedding output.
+  bool normalize_embedding = true;
 
   // Determines if the model is a quant model.
   bool is_quant;

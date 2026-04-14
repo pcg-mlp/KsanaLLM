@@ -109,6 +109,13 @@ void WeightInstance::Load() {
   Status status =
       model_config_parser.ParseModelConfig(model_config_.path, runtime_config_.parallel_basic_config, model_config);
 
+  // Pass is_embedding_model from runtime ModelConfig to the weight loader's BaseModelConfig.
+  // TODO(long-term): Consider passing is_embedding_model through ParseModelConfig parameters
+  // instead of post-hoc assignment, to avoid this "patch-style" parameter passing.
+  if (status.OK() && model_config) {
+    model_config->is_embedding_model = model_config_.is_embedding_model;
+  }
+
   if (status.OK() && use_old_loader && model_config->model_arch == ModelArchitecture::ARCH_DEEPSEEK) {
     KLLM_LOG_WARNING << "DeepSeek is disabled for old model loader now. Ignore env variable `ENABLE_OLD_LOADER`";
     use_old_loader = false;

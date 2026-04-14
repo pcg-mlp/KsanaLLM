@@ -14,5 +14,10 @@
     "model.language_model.norm.weight": "model.norm.weight",
     "model.layers.(\\d+).self_attn.k_norm.weight": "model.layers.$1.self_attn.key_layernorm.weight",
     "model.layers.(\\d+).self_attn.q_norm.weight": "model.layers.$1.self_attn.query_layernorm.weight",
-    "model.visual\\..*": "deprecated"
+    "model.visual\\..*": "deprecated",
+    "^layers\\.(\\d+)\\.self_attn\\.k_norm\\.weight": "model.layers.$1.self_attn.key_layernorm.weight",
+    "^layers\\.(\\d+)\\.self_attn\\.q_norm\\.weight": "model.layers.$1.self_attn.query_layernorm.weight",
+    "^layers\\.(\\d+)\\.(?!self_attn\\.[kq]_norm\\.weight)(.+)": "model.layers.$1.$2",
+    "^embed_tokens\\.(.+)": "model.embed_tokens.$1",
+    "^norm\\.(.+)": "model.norm.$1"
 }

@@ -6,6 +6,7 @@ OpenAI请求/响应转换器 - 统一处理各种API的格式转换
 From OpenAI Request to KsanaLLM Request
 """
 
+import base64
 import time
 from typing import Dict, List, Optional, Union, Any, Callable, Type
 from dataclasses import dataclass
@@ -20,9 +21,17 @@ from openaiapi.openai_protocol import (
     CompletionStreamResponse, CompletionResponseStreamChoice,
     ChatCompletionToolsParam, ChatCompletionNamedToolChoiceParam,
     EmbeddingResponse, EmbeddingResponseData,
+    MultimodalEmbeddingInput,
     UsageInfo,
     ChoiceLogprobs, ChatCompletionTokenLogprob, TopLogprob
 )
+import numpy as np
+
+
+def encode_embedding_to_base64(embedding) -> str:
+    """将 embedding 向量编码为 base64 字符串（little-endian float32）"""
+    arr = np.asarray(embedding, dtype=np.float32)
+    return base64.b64encode(arr.tobytes()).decode('utf-8')
 
 from utilize.logger import get_logger
 
@@ -357,22 +366,70 @@ class RequestConverter:
         request: EmbeddingRequest,
         ksana_request: Dict[str, Any]
     ):
-        if isinstance(request.input, str):
-            ksana_request["input"] = request.input
-        elif isinstance(request.input, list):
-            # str list
-            if request.input and isinstance(request.input[0], str):
-                ksana_request["input"] = request.input
-            # Token list
-            elif request.input and isinstance(request.input[0], int):
-                ksana_request["input_tokens"] = request.input
-            else:
-                ksana_request["input_tokens"] = request.input
+        """处理 Embedding 请求的输入
         
+        支持的输入格式：
+        - 单个字符串
+        - 字符串列表
+        - Token ID 列表
+        - 嵌套 Token ID 列表
+        - 多模态输入列表（text + image）
+        """
+        input_data = request.input
+        
+        if isinstance(input_data, str):
+            # 单个字符串
+            ksana_request["input"] = input_data
+        elif isinstance(input_data, list):
+            if len(input_data) == 0:
+                ksana_request["input"] = []
+            else:
+                first_item = input_data[0]
+                
+                if isinstance(first_item, str):
+                    # 字符串列表
+                    ksana_request["input"] = input_data
+                elif isinstance(first_item, int):
+                    # Token ID 列表（单个）
+                    ksana_request["input_tokens"] = input_data
+                elif isinstance(first_item, list):
+                    # 嵌套 Token ID 列表
+                    ksana_request["input_tokens_batch"] = input_data
+                elif isinstance(first_item, dict):
+                    # 多模态输入（dict 格式：{text, image}）
+                    texts = []
+                    images = []
+                    for item in input_data:
+                        texts.append(item.get("text", ""))
+                        images.append(item.get("image"))
+                    ksana_request["input"] = texts
+                    ksana_request["image_data"] = images
+                elif isinstance(first_item, MultimodalEmbeddingInput):
+                    # 多模态输入（Pydantic 对象格式）
+                    texts = []
+                    images = []
+                    for item in input_data:
+                        texts.append(item.text or "")
+                        images.append(item.image)
+                    ksana_request["input"] = texts
+                    ksana_request["image_data"] = images
+                else:
+                    raise TypeError(
+                        f"Unsupported input item type: {type(first_item)}. "
+                        "Expected str, int, list, dict, or MultimodalEmbeddingInput."
+                    )
+        
+        # 处理 encoding_format
         if hasattr(request, 'encoding_format'):
             ksana_request["encoding_format"] = request.encoding_format
+        
+        # 处理 dimensions
         if hasattr(request, 'dimensions') and request.dimensions:
             ksana_request["dimensions"] = request.dimensions
+        
+        # 处理 truncate_prompt_tokens
+        if hasattr(request, 'truncate_prompt_tokens') and request.truncate_prompt_tokens:
+            ksana_request["truncate_prompt_tokens"] = request.truncate_prompt_tokens
     
     def _handle_stop_conditions(
         self,
@@ -935,21 +992,28 @@ class RequestConverter:
         request_id: str,
         model_name: str,
         embeddings: List[List[float]],
-        input_texts: List[str],
-        encoding_format: str = "float"
+        input_texts: Optional[List[str]] = None,
+        encoding_format: str = "float",
+        prompt_tokens: Optional[int] = None
     ) -> EmbeddingResponse:
-        """格式化Embedding响应"""
+        """格式化 Embedding 响应
+        
+        Args:
+            request_id: 请求 ID
+            model_name: 模型名称
+            embeddings: embedding 向量列表
+            input_texts: 输入文本列表（用于计算 token 数，可选）
+            encoding_format: 编码格式（float 或 base64）
+            prompt_tokens: 预计算的 prompt token 数（如果提供则优先使用）
+        """
         
         try:
             data = []
             total_tokens = 0
             
-            for i, (embedding, text) in enumerate(zip(embeddings, input_texts)):
+            for i, embedding in enumerate(embeddings):
                 if encoding_format == "base64":
-                    import base64
-                    import struct
-                    float_bytes = b''.join(struct.pack('f', f) for f in embedding)
-                    embedding_data = base64.b64encode(float_bytes).decode('utf-8')
+                    embedding_data = encode_embedding_to_base64(embedding)
                 else:
                     embedding_data = embedding
                 
@@ -958,8 +1022,13 @@ class RequestConverter:
                     object="embedding",
                     embedding=embedding_data
                 ))
-                
-                total_tokens += self._count_tokens_accurate(text)
+            
+            # 计算 token 数
+            if prompt_tokens is not None:
+                total_tokens = prompt_tokens
+            elif input_texts:
+                for text in input_texts:
+                    total_tokens += self._count_tokens_accurate(text)
             
             usage = UsageInfo(
                 prompt_tokens=total_tokens,

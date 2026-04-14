@@ -20,6 +20,13 @@ ModelSampler::ModelSampler(std::shared_ptr<Environment> env, std::shared_ptr<Con
 
   vocab_size_ = env_->GetVocabSize();
   bitmask_stride_ = (vocab_size_ + kBitsPerInt - 1) / kBitsPerInt;
+
+  // Cache the model-level embedding flag once at construction.
+  // This replaces per-request is_embedding_request checks and per-call request_target traversals.
+  ModelConfig model_config;
+  if (env_->GetModelConfig(model_config).OK()) {
+    is_embedding_model_ = model_config.is_embedding_model;
+  }
 }
 
 void ModelSampler::BuildSamplingRequest(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
@@ -110,6 +117,26 @@ Status ModelSampler::Sampling(std::shared_ptr<NewModelOutput> model_output,
                               std::shared_ptr<SamplingOutput> sampling_output) {
   sampling_output->schedule_id = model_output->schedule_output->schedule_id;
   sampling_output->schedule_output = model_output->schedule_output;
+
+  // Embedding models skip sampling — results are already in response["layernorm"].
+  // Build minimal sampling_reqs so SerializeSamplingOutput can transfer them back.
+  if (is_embedding_model_) {
+    for (auto& req : model_output->schedule_output->executor_running_reqs) {
+      // Dummy token for embedding requests — sampling is skipped, but downstream
+      // SerializeSamplingOutput expects non-empty sampling_result_tokens.
+      // Token 0 is a harmless placeholder; it is never exposed to the user.
+      // Dummy token for embedding requests — sampling is skipped, but downstream
+      // SerializeSamplingOutput expects non-empty sampling_result_tokens.
+      // Token 0 is a harmless placeholder; it is never exposed to the user.
+      req->sampling_result_tokens = {0};
+      SamplingRequest sampling_req;
+      sampling_req.req_id = req->req_id;
+      sampling_req.response = &(req->response);
+      sampling_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>();
+      sampling_output->sampling_reqs.push_back(sampling_req);
+    }
+    return Status();
+  }
 
   BuildSamplingRequest(model_output->schedule_output->executor_running_reqs, sampling_output->sampling_reqs,
                        model_output->run_mode == RunMode::kMain);

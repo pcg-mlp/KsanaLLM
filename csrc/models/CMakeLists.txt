@@ -33,7 +33,8 @@ set(kernels_ascend_LIBS "")
 
 if(WITH_CUDA)
   list(APPEND kernels_nvidia_LIBS llm_kernels_nvidia_kernel_asymmetric_gemm
-                                  llm_kernels_nvidia_kernel_gemm_finegrained_mixed_dtype_gemm)
+                                  llm_kernels_nvidia_kernel_gemm_finegrained_mixed_dtype_gemm
+                                  llm_kernels_nvidia_kernel_pooling)
 endif()
 
 add_library(models STATIC ${models_SRCS})
@@ -61,6 +62,7 @@ if(WITH_STANDALONE_TEST)
   # cpp_test(simple_decoder_layer_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/common/simple_decoder_layer_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   if(WITH_CUDA)
     cpp_test(qwen_deepstack_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/qwen/qwen_deepstack_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+    cpp_test(qwen_embedding_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/qwen/qwen_embedding_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     cpp_test(hunyuan_turbo_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/hunyuan_turbo/hunyuan_turbo_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     cpp_test(chatglm_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/chatglm/chatglm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     if(DEFINED SM AND "${SM}" STREQUAL "90a")

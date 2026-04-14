@@ -332,9 +332,11 @@ Status QwenWeightLoader::PostProcessModelWeights(std::unordered_map<std::string,
     registry["mlp_down_proj"].Run<Status>(dev_weights_map, down_proj_name, dev_rank);
   }
 
-  // 3. lm_head weights
-  const std::string lm_head_name = "lm_head.";
-  registry["lm_head"].Run<Status>(dev_weights_map, lm_head_name, dev_rank);
+  // 3. lm_head weights (skip for embedding models which have no lm_head)
+  if (!model_config_->is_embedding_model) {
+    const std::string lm_head_name = "lm_head.";
+    registry["lm_head"].Run<Status>(dev_weights_map, lm_head_name, dev_rank);
+  }
 
   return Status();
 }

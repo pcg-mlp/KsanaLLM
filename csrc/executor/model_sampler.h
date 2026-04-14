@@ -38,6 +38,11 @@ class ModelSampler {
   // vocab size for bitmask generation
   size_t vocab_size_ = 0;
   size_t bitmask_stride_ = 0;
+
+  // Model-level flag: when true, skip the entire sampling pipeline (ArgMax, token generation).
+  // Embedding models produce normalized hidden states (not logits), so sampling is meaningless.
+  // Initialized once at construction from ModelConfig::is_embedding_model — no per-request overhead.
+  bool is_embedding_model_ = false;
 };
 
 }  // namespace ksana_llm
