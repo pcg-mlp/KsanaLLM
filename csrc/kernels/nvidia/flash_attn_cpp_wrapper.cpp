@@ -401,7 +401,14 @@ std::vector<at::Tensor> InvokeMhaVarlenFwd(MhaVarlenFwdParams &params) {
         if (!HasFA3()) {
           KLLM_THROW("FlashAttention 3 is not available but is forced by configuration.");
         }
-        return CallFA3Varlen(params);
+        // FA3 varlen does not support block_table (paged KV cache). When blocked multi-token
+        // forwarding is enabled, fall through to a backend that supports block_table.
+        if (!need_blocked) {
+          return CallFA3Varlen(params);
+        }
+        KLLM_LOG_WARNING << "FA3 forced but block_table required (blocked multi-token forwarding), "
+                         << "falling back to auto selection.";
+        break;
       }
       case AttnBackendConfig::FlashAttnImplChoice::VLLM_V26: {
         if (!HasVllmV26()) {
@@ -452,6 +459,7 @@ void InvokeMhaFwdKvcCache(MhaFwdKVCacheParams &params) {
   auto choice = GetFlashAttnImplChoice();
   // User-forced selection (non-auto)
   if (choice != AttnBackendConfig::FlashAttnImplChoice::AUTO) {
+    const bool need_blocked_kvcache = params.block_table.has_value();
     switch (choice) {
       case AttnBackendConfig::FlashAttnImplChoice::FA3: {
         if (!HasFA3()) {
@@ -460,8 +468,15 @@ void InvokeMhaFwdKvcCache(MhaFwdKVCacheParams &params) {
         if (params.alibi_slopes.has_value()) {
           KLLM_THROW("Flash Attention 3 does not support alibi_slopes.");
         }
-        CallFA3Kvcache(params);
-        return;
+        // FA3 kvcache with block_table requires specific Q shape (3D) and max_seqlen_q that
+        // the current blocked multi-token forwarding path does not provide. Fall back to a
+        // compatible backend when block_table is present.
+        if (!need_blocked_kvcache) {
+          CallFA3Kvcache(params);
+          return;
+        }
+        KLLM_LOG_WARNING << "FA3 forced but block_table is present in kvcache path; using compatible backend.";
+        break;
       }
       case AttnBackendConfig::FlashAttnImplChoice::VLLM_V26: {
         if (!HasVllmV26()) {
@@ -529,3 +544,4 @@ void InvokeMhaFwdKvcCache(MhaFwdKVCacheParams &params) {
 
 }  // namespace ksana_llm
 #endif
+

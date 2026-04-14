@@ -187,4 +187,68 @@ inline void PrepareLlama4Attributes(const nlohmann::json &config_json, ModelConf
   model_config.moe_config.scoring_func = "sigmoid";
   model_config.moe_config.apply_weight = true;
 }
+
+inline void PrepareGlm4MoeAttributes(const nlohmann::json &config_json, ModelConfig &model_config) {
+  // First, prepare common model attributes
+  PrepareCommonModelAttributes(config_json, model_config);
+
+  // GLM4-MoE uses partial rotary embedding: only a fraction of head_dim gets RoPE
+  // PrepareCommonModelAttributes sets rotary_embedding = size_per_head, but we need
+  // rotary_embedding = size_per_head * partial_rotary_factor (default 0.5)
+  float partial_rotary_factor = config_json.value("partial_rotary_factor", 0.5f);
+  model_config.rotary_embedding = static_cast<uint32_t>(model_config.size_per_head * partial_rotary_factor);
+
+  // GLM4-MoE is always a MoE model
+  model_config.is_moe = true;
+
+  // Parse MoE config from GLM4-MoE config.json
+  model_config.moe_config.num_experts = config_json.value("n_routed_experts", 160);
+  model_config.moe_config.experts_topk = config_json.value("num_experts_per_tok", 8);
+  model_config.moe_config.moe_inter_size = config_json.value("moe_intermediate_size", model_config.inter_size);
+  model_config.moe_config.first_k_dense_replace = config_json.value("first_k_dense_replace", 3);
+
+  // For moe group topk config
+  model_config.moe_config.num_expert_group = config_json.value("n_group", 1);
+  model_config.moe_config.expert_groups_topk = config_json.value("topk_group", 1);
+
+  // GLM4-MoE uses Sigmoid activation for router
+  model_config.moe_config.scoring_func = "sigmoid";
+
+  // GLM4-MoE uses noaux_tc topk_method (same as DeepSeek V3)
+  // When use_vllm_moe=true, the topk is computed by InvokeGroupedTopk which
+  // doesn't depend on topk_method string, so we can keep the original value
+  model_config.moe_config.topk_method = config_json.value("topk_method", "fast");
+  model_config.moe_config.norm_topk_prob = config_json.value("norm_topk_prob", true);
+  model_config.moe_config.routed_scaling_factor = config_json.value("routed_scaling_factor", 2.5f);
+
+  // GLM4-MoE always uses e_score_correction_bias
+  model_config.moe_config.use_e_score_correction_bias = true;
+  model_config.moe_config.use_vllm_moe = true;
+
+  // Shared experts config
+  model_config.moe_config.num_shared_experts = config_json.value("n_shared_experts", 1);
+  if (model_config.moe_config.num_shared_experts > 0) {
+    model_config.has_shared_experts = true;
+    // Use moe_inter_size to match the model weights
+    model_config.moe_config.shared_expert_inter_size =
+        model_config.moe_config.num_shared_experts * model_config.moe_config.moe_inter_size;
+  }
+  model_config.use_qk_norm = false;                          // GLM4-MoE does not need post-RoPE QK Norm
+  model_config.enable_qk_pre_norm_before_rotary_pos = true;  // Use pre-RoPE QK Norm
+  // // GLM4-MoE specific features
+  // model_config.use_qk_norm = config_json.value("use_qk_norm", true);
+  model_config.enable_add_qkv_bias = config_json.value("attention_bias", true);
+  model_config.load_bias = true;  // GLM4-MoE has bias on QKV projections
+
+  model_config.moe_config.apply_weight = false;
+
+  KLLM_LOG_INFO << fmt::format(
+      "GLM4-MoE config: num_experts={}, experts_topk={}, moe_inter_size={}, first_k_dense_replace={}, "
+      "has_shared_experts={}, num_shared_experts={}, norm_topk_prob={}, routed_scaling_factor={}, "
+      "use_qk_norm={}, enable_add_qkv_bias={}",
+      model_config.moe_config.num_experts, model_config.moe_config.experts_topk, model_config.moe_config.moe_inter_size,
+      model_config.moe_config.first_k_dense_replace, model_config.has_shared_experts,
+      model_config.moe_config.num_shared_experts, model_config.moe_config.norm_topk_prob,
+      model_config.moe_config.routed_scaling_factor, model_config.use_qk_norm, model_config.enable_add_qkv_bias);
+}
 }  // namespace ksana_llm

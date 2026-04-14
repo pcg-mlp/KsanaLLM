@@ -43,6 +43,8 @@ enum class ModelArchitecture {
   ARCH_HUNYUAN_LARGE,
   // Hunyuan Turbo
   ARCH_HUNYUAN_TURBO,
+  // GLM4-MoE
+  ARCH_GLM4_MOE,
   // unknown
   ARCH_UNKNOWN,
 };

@@ -73,6 +73,7 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
 
   if (model_config.is_quant) {
     std::string quant_method = quantization_config.at("quant_method");
+
     if (quant_method == "gptq" || quant_method == "rtn") {
       ParseGPTQQuantConfig(quantization_config, model_config.is_moe, model_config.quant_config);
     } else if (quant_method == "awq") {
@@ -104,7 +105,9 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
           model_config.sub_quant_configs.push_back(quant_config);
         }
       }
-      if (model_config.sub_quant_configs.size() == 1 && model_config.sub_quant_configs[0].method == QUANT_GPTQ &&
+      if (model_config.sub_quant_configs.size() == 1 &&
+          (model_config.sub_quant_configs[0].method == QUANT_GPTQ ||
+           model_config.sub_quant_configs[0].method == QUANT_W4A8_AWQ) &&
           model_config.sub_quant_configs[0].pattern_layers.size() == 1 &&
           model_config.sub_quant_configs[0].pattern_layers[0] == ".mlp.experts.") {
         model_config.quant_config.enable_moe_int4 = true;
@@ -517,6 +520,8 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
                model_config.type == "deepseek_v2" || model_config.type == "kimi_k2" ||
                model_config.type == "glm_moe_dsa") {
       PrepareDeepSeekV3Attributes(config_json, model_config);
+    } else if (model_config.type == "glm4_moe") {
+      PrepareGlm4MoeAttributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {
       PrepareBgeRerankerMinicpmAttributes(config_json, model_config);
     } else if (model_config.type == "qwen3_vl") {

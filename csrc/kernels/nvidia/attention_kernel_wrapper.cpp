@@ -556,11 +556,15 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
 
   if (enable_blocked_multi_token_forwarding_kv || use_flashinfer_for_decode) {
     // FlashInfer uses the same kv_layout as FlashAttention.
-    constexpr size_t kReqQLen = 1;
+    // Calculate q_seq_len dynamically to support multi-token decode (e.g., MTP verification phase)
+    const size_t q_seq_len = (batch > 0) ? total_tokens / batch : 1;
+    KLLM_CHECK_WITH_INFO(total_tokens == q_seq_len * batch,
+                         "Page attention requires uniform q_seq_len across batch, got total_tokens=" +
+                             std::to_string(total_tokens) + ", batch=" + std::to_string(batch));
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
         value_cache_ptrs, reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
-        block_size, batch, kReqQLen, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
+        block_size, batch, q_seq_len, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
   } else {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
@@ -591,6 +595,8 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                   KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
       KLLM_THROW("FlashAttention not support fp8 kv cache");
     }
+    // Calculate q_seq_len dynamically to support multi-token decode (e.g., MTP verification phase)
+    const size_t q_seq_len = (batch > 0) ? total_tokens / batch : 1;
     // kv_cache[num_blocks, 2, block_size, num_kv_heads, head_size]
     torch::Tensor k_cache_tensor =
         torch::from_blob(k_cache_ptr, {kv_cache_block_num, block_size, num_kv_heads, head_size}, cache_options);
@@ -601,8 +607,9 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
         torch::from_blob(block_table_ptr, {batch, max_blocks_per_seq}, int32_options);
     c10::optional<const at::Tensor> seqlens_k_tensor =
         c10::optional<const at::Tensor>(torch::from_blob(context_lens_ptr, {batch}, int32_options));
-    q_tensor = q_tensor.reshape({batch, 1, num_heads, head_size});
-    c10::optional<at::Tensor> out_tensor = torch::from_blob(output_ptr, {batch, 1, num_heads, head_size}, options);
+    q_tensor = q_tensor.reshape({batch, static_cast<int64_t>(q_seq_len), num_heads, head_size});
+    c10::optional<at::Tensor> out_tensor =
+        torch::from_blob(output_ptr, {batch, static_cast<int64_t>(q_seq_len), num_heads, head_size}, options);
     float softmax_scale = 1.0 / sqrt(head_size);
     c10::optional<at::Tensor> null_tensor = c10::nullopt;
     c10::optional<const at::Tensor> const_null_tensor = c10::nullopt;
@@ -613,21 +620,23 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
 
     //  Not support flash-attn < 2.6.0 && != 2.5.6
     // Use unified wrapper InvokeMhaFwdKvcCache instead of version-specific macros
-    c10::optional<at::Tensor> seqlen_q_tensor = c10::optional<at::Tensor>(torch::arange(
-        0, batch + 1, torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>())));
+    // seqlen_q_tensor is cumulative sum for ragged batch: [0, q_seq_len, 2*q_seq_len, ..., batch*q_seq_len]
+    c10::optional<at::Tensor> seqlen_q_tensor = c10::optional<at::Tensor>(
+        torch::arange(0, (batch + 1) * q_seq_len, q_seq_len,
+                      torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>())));
     c10::optional<at::Tensor> seqlens_k_tensor2 = c10::optional<at::Tensor>(
         torch::from_blob(context_lens_ptr, {batch},
                          torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>())));
 
     ksana_llm::MhaFwdKVCacheParams fa_params;
-    fa_params.q = q_tensor;              // [batch, 1, num_heads, head_size]
+    fa_params.q = q_tensor;              // [batch, q_seq_len, num_heads, head_size]
     fa_params.k_cache = k_cache_tensor;  // [num_blocks, block_size, num_kv_heads, head_size]
     fa_params.v_cache = v_cache_tensor;
     fa_params.seqlen_q = seqlen_q_tensor;        // cu_seqlens_q: [batch+1]
     fa_params.seqlens_k = seqlens_k_tensor2;     // [batch]
     fa_params.block_table = block_table_tensor;  // [batch, max_blocks_per_seq]
     fa_params.alibi_slopes = alibi_slopes_tensor;
-    fa_params.out = out_tensor;  // [batch, 1, num_heads, head_size]
+    fa_params.out = out_tensor;  // [batch, q_seq_len, num_heads, head_size]
     fa_params.softmax_scale = softmax_scale;
     fa_params.is_causal = true;
     fa_params.window_size_left = -1;

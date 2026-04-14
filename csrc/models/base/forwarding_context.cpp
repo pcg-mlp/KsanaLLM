@@ -272,7 +272,8 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward
       model_input_->dp_multi_token_request_max_tokens,
       model_input_->dp_single_token_request_num,
       model_input_->dp_single_token_request_max_tokens,
-      model_input_->dp_total_prefix_len};
+      model_input_->dp_total_prefix_len,
+      model_input_->dp_decode_tokens};  // total decode token count (may differ from single_token_request_num in MTP)
 #ifdef ENABLE_ACL
   attn_ctx_.forward_shape.shape = {
       std::max(model_input_->multi_token_request_num, model_input_->single_token_request_num),

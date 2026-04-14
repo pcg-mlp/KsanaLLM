@@ -20,6 +20,7 @@
 #include "models/bge_reranker_minicpm/bge_reranker_minicpm_model.h"
 #include "models/chatglm/chatglm_model.h"
 #include "models/deepseek_v3/deepseek_v3_model.h"
+#include "models/glm4_moe/glm4_moe_model.h"
 #include "models/gpt/gpt_model.h"
 #include "models/hunyuan_large/hunyuan_large_model.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_model.h"
@@ -107,6 +108,11 @@ void ModelInstance::Load() {
   } else if (unified_model_type.find("mixtral") != std::string::npos) {
     type = "mixtral";
     CreateModelInstance<MixtralModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_);
+  } else if (unified_model_type.find("glm4_moe") != std::string::npos) {
+    type = "glm4_moe";
+    model_config_.enable_qk_pre_norm_before_rotary_pos = true;
+    model_config_.use_qk_norm = false;  // Disable post-RoPE QK Norm since we use pre-RoPE
+    CreateModelInstance<Glm4MoeModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_);
   } else if (unified_model_type.find("deepseek") != std::string::npos ||
              unified_model_type.find("kimi_k2") != std::string::npos ||
              unified_model_type.find("glm_moe_dsa") != std::string::npos) {

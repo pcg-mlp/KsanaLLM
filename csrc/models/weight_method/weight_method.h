@@ -15,6 +15,7 @@
 #include "models/weight_method/common_method.h"
 #include "models/weight_method/fp8_e4m3_method.h"
 #include "models/weight_method/gptq_method.h"
+#include "models/weight_method/rtn_method.h"
 #include "models/weight_method/w4a8_awq_method.h"
 
 namespace ksana_llm {
@@ -65,6 +66,7 @@ class WeightMethod {
   std::shared_ptr<AwqMethod> GetAwqMethod() const { return awq_method_; }
   std::shared_ptr<W4A8AWQMethod> GetW4A8AWQMethod() const { return w4a8_awq_method_; }
   std::shared_ptr<GptqMethod> GetGptqMethod() const { return gptq_method_; }
+  std::shared_ptr<RtnMethod> GetRtnMethod() const { return rtn_method_; }
   std::shared_ptr<Fp8E4m3Method> GetFp8E4m3Method() const { return fp8_e4m3_method_; }
   RegistryType& GetRegistry() { return registry_; }
 
@@ -77,6 +79,7 @@ class WeightMethod {
   std::shared_ptr<AwqMethod> awq_method_;
   std::shared_ptr<W4A8AWQMethod> w4a8_awq_method_;
   std::shared_ptr<GptqMethod> gptq_method_;
+  std::shared_ptr<RtnMethod> rtn_method_;
   std::shared_ptr<Fp8E4m3Method> fp8_e4m3_method_;
 };
 

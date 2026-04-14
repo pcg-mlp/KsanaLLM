@@ -89,46 +89,61 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   size_t expert_num_per_node =
       model_config_.moe_config.num_experts / (runtime_config_.parallel_basic_config.expert_parallel_size *
                                               runtime_config_.parallel_basic_config.expert_world_size);
-  // 专家数量检查
+  // Expert count check
   size_t up_gate_experts_num = base_weight->GetModelWeights(weight_names[0]).shape[0];
   size_t down_experts_num = base_weight->GetModelWeights(weight_names[1]).shape[0];
   KLLM_CHECK_WITH_INFO(up_gate_experts_num == down_experts_num,
                        fmt::format("up_gate experts {} != down_experts {}", up_gate_experts_num, down_experts_num));
-  // 解析enable_moe_int4
+  // Parse enable_moe_int4
   bool enable_moe_int4 = false;
   if (model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) {
     enable_moe_int4 = true;
-  } else if (model_config_.quant_config.method != QUANT_GPTQ && model_config_.sub_quant_configs.size() > 0 &&
-             model_config_.sub_quant_configs[0].method == QUANT_GPTQ) {
-    for (std::string& pattern_layer : model_config_.sub_quant_configs[0].pattern_layers) {
-      if (weight_names[0].find(pattern_layer) != std::string::npos) {
-        enable_moe_int4 = true;
-        break;
-      }
-    }
-    for (std::string& ignored_layer : model_config_.sub_quant_configs[0].ignored_layers) {
-      if (weight_names[0].find(ignored_layer) != std::string::npos) {
-        enable_moe_int4 = false;
-        break;
+  } else if (model_config_.quant_config.method != QUANT_GPTQ && model_config_.sub_quant_configs.size() > 0) {
+    // Check for mixed quantization with W4A8_AWQ or GPTQ for experts
+    for (const auto& sub_config : model_config_.sub_quant_configs) {
+      if (sub_config.method == QUANT_W4A8_AWQ || sub_config.method == QUANT_GPTQ) {
+        for (const std::string& pattern_layer : sub_config.pattern_layers) {
+          if (weight_names[0].find(pattern_layer) != std::string::npos) {
+            enable_moe_int4 = true;
+            break;
+          }
+        }
+        if (enable_moe_int4) {
+          for (const std::string& ignored_layer : sub_config.ignored_layers) {
+            if (weight_names[0].find(ignored_layer) != std::string::npos) {
+              enable_moe_int4 = false;
+              break;
+            }
+          }
+        }
+        break;  // Found the relevant sub_config
       }
     }
   }
-  // moe层size检查
+  // MoE layer size check
   size_t up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2];
   size_t down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
   if (enable_moe_int4) {
-    if (use_vllm_moe) {
+    if (weight_type == TYPE_INT8 || weight_type == TYPE_UINT8) {
+      // INT8/UINT8 storage (W4A8/DeepSeek): 2 x 4-bit values per byte
+      up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2] * 2;
+      down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
+    } else if (use_vllm_moe) {
+      // vLLM path: int32 packed
       up_gate_hidden_size = up_gate_hidden_size / 4 * (32 / model_config_.quant_config.bits);
-    } else {  // marlin gptq
-      up_gate_hidden_size =
-          base_weight->GetModelWeights(weight_names[0]).shape[1] / (sizeof(int) / model_config_.quant_config.bits) * 16;
-      down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[2] / model_config_.quant_config.bits * 2;
+    } else {
+      // Marlin GPTQ path
+      up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[1] /
+                            (sizeof(int) / model_config_.quant_config.bits) * 16;
+      down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[2] /
+                         model_config_.quant_config.bits * 2;
     }
   }
   KLLM_CHECK_WITH_INFO(
       up_gate_hidden_size == down_hidden_size,
-      fmt::format("up_gate_experts hidden_size != down_experts hidden_size {}", up_gate_hidden_size, down_hidden_size));
-  // moe层权重类型检查
+      fmt::format("up_gate_experts hidden_size {} != down_experts hidden_size {}",
+                  up_gate_hidden_size, down_hidden_size));
+  // MoE layer weight type check
   weight_type = base_weight->GetModelWeights(weight_names[0]).dtype;
   DataType down_weight_type = base_weight->GetModelWeights(weight_names[1]).dtype;
   KLLM_CHECK_WITH_INFO(down_weight_type == weight_type,
@@ -151,10 +166,13 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);              // routed_scaling_factor
   moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
   moe_matmul_param.push_back(runtime_config_.enable_full_shared_expert);             // dp = ep
+  // Set fp8_weight_dtype: distinguish between blockwise FP8 and per-tensor FP8
   if (!enable_moe_int4 && model_config_.quant_config.is_fp8_blockwise) {
-    moe_matmul_param.push_back(DataType::TYPE_BLOCK_FP8_E4M3);  // fp8_weight_dtype
+    moe_matmul_param.push_back(DataType::TYPE_BLOCK_FP8_E4M3);  // fp8_weight_dtype: blockwise FP8
+  } else if (!enable_moe_int4 && weight_type == TYPE_FP8_E4M3) {
+    moe_matmul_param.push_back(DataType::TYPE_FP8_E4M3);  // fp8_weight_dtype: per-tensor FP8
   } else {
-    moe_matmul_param.push_back(DataType::TYPE_INVALID);  // fp8_weight_dtype
+    moe_matmul_param.push_back(DataType::TYPE_INVALID);  // fp8_weight_dtype: not FP8
   }
   if (enable_moe_int4) {
     if (weight_type == TYPE_UINT8) {
@@ -164,20 +182,28 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
     } else {
       moe_matmul_param.push_back(TYPE_I4_GROUP);  // int_weight_dtype
     }
-    moe_matmul_param.push_back(static_cast<int>(model_config_.quant_config.group_size));  // group_size
+    // For mixed quantization (FP8 default + W4A8_AWQ/GPTQ for experts), get group_size from sub_quant_config
+    size_t group_size = model_config_.quant_config.group_size;
+    for (const auto& sub_config : model_config_.sub_quant_configs) {
+      if (sub_config.method == QUANT_W4A8_AWQ || sub_config.method == QUANT_GPTQ) {
+        group_size = sub_config.group_size;
+        break;
+      }
+    }
+    moe_matmul_param.push_back(static_cast<int>(group_size));  // group_size
   } else {
     moe_matmul_param.push_back(DataType::TYPE_INVALID);  // int_weight_dtype
     moe_matmul_param.push_back(0);                       // group_size
   }
   moe_matmul_param.push_back(model_config_.moe_config.apply_weight);
 
-  // fp8 moe创建
+  // FP8 MoE layer creation
   if (weight_type == TYPE_FP8_E4M3) {
     QuantMode quant_mode = model_config_.quant_config.is_fp8_blockwise ? MOE_QUANT_BLOCK_FP8_E4M3 : MOE_QUANT_FP8_E4M3;
     MoeComputeBackend backend = model_config_.quant_config.is_fp8_blockwise ? TRITON_MOE_BACKEND : DEFAULT_MOE_BACKEND;
     return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, quant_mode, backend);
   }
-  // int4 moe创建
+  // INT4 MoE layer creation
   if (enable_moe_int4) {
     if (weight_type == TYPE_UINT8 || runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::GroupTriton ||
         runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::TensorTriton) {
@@ -194,7 +220,7 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
       return CreateLayer(TYPE_I4_GROUP, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND);
     }
   }
-  // 默认moe创建
+  // Default MoE layer creation
   return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_NONE, DEFAULT_MOE_BACKEND);
 }
 
@@ -224,3 +250,4 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::CreateLayer(DataType weight_type, Da
 }
 
 }  // namespace ksana_llm
+

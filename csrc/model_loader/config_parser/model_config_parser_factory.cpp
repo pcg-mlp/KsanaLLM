@@ -11,6 +11,7 @@
 #include "models/chatglm/chatglm_config_parser.h"
 #include "models/deepseek_v3/deepseek_v3_config_parser.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_config_parser.h"
+#include "models/glm4_moe/glm4_moe_config_parser.h"
 #include "models/llama/llama_model_config_parser.h"
 #include "models/mixtral/mixtral_config_parser.h"
 #include "models/qwen/qwen_config_parser.h"
@@ -61,6 +62,10 @@ Status ModelConfigParserFactory::CreateModelConfigParser(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_HUNYUAN_TURBO: {
       model_config_parser = std::make_shared<HunyuanTurboConfigParser>();
+      break;
+    }
+    case ModelArchitecture::ARCH_GLM4_MOE: {
+      model_config_parser = std::make_shared<Glm4MoeConfigParser>();
       break;
     }
     case ModelArchitecture::ARCH_MINICPM: {

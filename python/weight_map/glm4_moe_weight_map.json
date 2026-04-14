@@ -1,0 +1,12 @@
+{
+    "model.layers.(\\d+).self_attn.k_norm.weight": "model.layers.$1.self_attn.key_layernorm.weight",
+    "model.layers.(\\d+).self_attn.q_norm.weight": "model.layers.$1.self_attn.query_layernorm.weight",
+
+    "model.layers.(\\d+).mlp.shared_experts\\.(.+)\\.weight_scale_inv": "model.layers.$1.mlp.shared_expert.$2.weight_scale",
+    "model.layers.(\\d+).mlp.shared_experts\\.(.+)\\.input_scale_inv": "model.layers.$1.mlp.shared_expert.$2.input_scale",
+    "model.layers.(\\d+).mlp.shared_experts\\.(.+)\\.weight_scale$": "model.layers.$1.mlp.shared_expert.$2.weight_scale",
+    "model.layers.(\\d+).mlp.shared_experts\\.(.+)\\.weight$": "model.layers.$1.mlp.shared_expert.$2.weight",
+
+    "model.layers.(\\d+)\\.(.+)\\.weight_scale_inv": "model.layers.$1.$2.weight_scale",
+    "model.layers.(\\d+)\\.(.+)\\.input_scale_inv": "model.layers.$1.$2.input_scale"
+}

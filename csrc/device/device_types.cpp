@@ -101,6 +101,14 @@ DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
     case torch::kUInt8:
       data_type = TYPE_UINT8;
       break;
+#ifdef ENABLE_FP8_TORCH
+    case torch::kFloat8_e4m3fn:
+      data_type = TYPE_FP8_E4M3;
+      break;
+    case torch::kFloat8_e5m2:
+      data_type = TYPE_FP8_E5M2;
+      break;
+#endif
     default:
       KLLM_THROW(
           fmt::format("Unsupported torch::ScalarType: {} in GetDataTypeFromTorchType", static_cast<int>(torch_type)));

@@ -55,12 +55,26 @@ class Fp8E4m3Method {
   // Check if weight is FP8 serialized checkpoint (static quantization)
   bool IsCheckpointFp8Serialized() const { return is_checkpoint_fp8_serialized_; }
 
+  // Check if using block-wise FP8 quantization (per-block weight_scale, dynamic activation)
+  bool IsFp8Blockwise() const { return is_fp8_blockwise_; }
+
+  // Common load logic for all projection types: dispatches .weight_scale, .input_scale, .weight/.bias
+  Status LoadProjTensor(std::unordered_map<std::string, Tensor>& device_model_weights,
+                        const std::string& weight_name, const Tensor& weight_tensor, int dev_rank,
+                        bool is_row_parallel);
+
   Status LoadWeightWithTPSplit(std::unordered_map<std::string, Tensor>& device_model_weights,
                                const std::string& weight_name, const Tensor& weight_tensor, int dev_rank,
                                bool is_row_parallel);
 
   Status LoadScaleTensor(std::unordered_map<std::string, Tensor>& device_model_weights, const std::string& weight_name,
                          const Tensor& weight_tensor, int dev_rank);
+
+  // Load weight scale and split it across TP ranks to match the local weight's block layout.
+  // For TP=1 or non-splittable shapes, falls back to full copy.
+  Status LoadWeightScaleWithTPSplit(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                    const std::string& weight_name, const Tensor& weight_tensor, int dev_rank,
+                                    bool is_row_parallel);
 
   // Process projection weights for FP8 quantization.
   Status ProcessProjWeight(std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -70,6 +84,7 @@ class Fp8E4m3Method {
   int tp_;
   bool is_checkpoint_fp8_serialized_;
   bool is_activation_scheme_static_;
+  bool is_fp8_blockwise_;
 };
 
 }  // namespace ksana_llm

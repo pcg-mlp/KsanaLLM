@@ -157,7 +157,9 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       // 主量化类型是GPTQ说明是纯int4模型
       runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
       KLLM_LOG_INFO << "Detected pure int4 model, setting W4AFP8_MOE_BACKEND == Default";
-    } else if (!model_config.sub_quant_configs.empty() && model_config.sub_quant_configs[0].method == QUANT_GPTQ) {
+    } else if (!model_config.sub_quant_configs.empty() &&
+               (model_config.sub_quant_configs[0].method == QUANT_GPTQ ||
+                model_config.sub_quant_configs[0].method == QUANT_W4A8_AWQ)) {
       // 混合量化类型
       if (model_config.sub_quant_configs[0].input_scale) {
         // 有input scale说明是w4af8模型
@@ -404,6 +406,17 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     KLLM_LOG_INFO
         << "Automatically activate Flash MLA for MLA models, setting enable_blocked_multi_token_forwarding_kv to true.";
+  }
+  // For any model with MTP enabled, blocked multi-token forwarding KV is required to correctly
+  // handle multi-token decode (speculative decoding verification phase). Without this, the standard
+  // flash attention path uses seqlen_q == seqlen_k which ignores KV cache for multi-token decode.
+  // NOTE: runtime_config_.mtp_step_num is not yet assigned at this point (it's copied from
+  // batch_scheduler_config_ later in InitializeRuntimeConfig), so we must use batch_scheduler_config_ here.
+  if (batch_scheduler_config_.mtp_step_num > 0 &&
+      !runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+    runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
+    KLLM_LOG_INFO << "Automatically enable blocked multi-token forwarding KV for MTP models (mtp_step_num="
+                  << batch_scheduler_config_.mtp_step_num << ").";
   }
   runtime_config_.attn_backend_config.kv_cache_dtype_str = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.quantization_config.kv_cache.dtype", "auto");

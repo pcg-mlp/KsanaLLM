@@ -34,13 +34,15 @@ size_t GetDecodeTokenNumThreshold() {
   static size_t decode_token_num_threshold = 0;
   if (decode_token_num_threshold == 0) {
     const auto env = Singleton<Environment>::GetInstance();
+    RuntimeConfig runtime_config;
     ModelConfig model_config;
-    if (env->GetModelConfig(model_config).OK() && model_config.use_mla) {
-      RuntimeConfig runtime_config;
-      KLLM_CHECK_WITH_INFO(env->GetRuntimeConfig(runtime_config).OK(), "Failed to get the runtime config!");
-      // For DeepSeek, the threshold is set to the number of MTP layers plus one,
-      // corresponding to the number of tokens during the validation phase.
-      // In the future, prefix caching and speculative decoding may also need to be considered
+    if (env->GetRuntimeConfig(runtime_config).OK() && runtime_config.mtp_step_num > 0 &&
+        runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+      env->GetModelConfig(model_config);
+      // For models with MTP enabled and blocked multi-token forwarding KV (e.g., DeepSeek V3, GLM4-MoE),
+      // the threshold is set to mtp_step_num + 1, corresponding to the number of tokens during the
+      // validation phase. This allows multi-token decode to use the kPage path instead of falling
+      // back to the kFlash prefill path.
       decode_token_num_threshold = runtime_config.mtp_step_num + model_config.ptp_step_num + 1;
     } else {
       // Set to one by default

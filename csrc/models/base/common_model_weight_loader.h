@@ -79,6 +79,9 @@ class CommonModelWeightLoader {
   // 获取context指针
   std::shared_ptr<Context> GetContext() const { return context_; }
 
+  // Get model_config pointer
+  std::shared_ptr<BaseModelConfig> GetModelConfig() const { return model_config_; }
+
   // 张量拼接方法，支持两种拼接维度：
   // - 沿第0维拼接多个张量（要求第1维大小相同）
   // - 沿第1维拼接多个张量（要求第0维大小相同）

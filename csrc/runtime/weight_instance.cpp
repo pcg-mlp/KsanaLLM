@@ -16,6 +16,7 @@
 #include "utils/status.h"
 
 #include "models/baichuan/baichuan_weight.h"
+#include "models/glm4_moe/glm4_moe_weight.h"
 #include "models/gpt/gpt_weight.h"
 #include "models/hunyuan_large/hunyuan_large_weight.h"
 #include "models/llama/llama_weight.h"
@@ -80,6 +81,9 @@ void WeightInstance::CreateWeightInstances() {
     CreateWeightInstance<Qwen3MoeWeight>(unified_model_type, model_config_, runtime_config_, context_, weight_);
   } else if (unified_model_type.find("qwen2_moe") != std::string::npos) {
     CreateWeightInstance<Qwen2MoeWeight>(unified_model_type, model_config_, runtime_config_, context_, weight_);
+  } else if (unified_model_type.find("glm4_moe") != std::string::npos) {
+    // GLM4-MoE uses custom weight class to handle dense+MoE hybrid architecture
+    CreateWeightInstance<Glm4MoeWeight>(unified_model_type, model_config_, runtime_config_, context_, weight_);
   } else if (unified_model_type.find("baichuan") != std::string::npos) {
     CreateWeightInstance<BaichuanWeight>(unified_model_type, model_config_, runtime_config_, context_, weight_);
   } else if (unified_model_type.find("gpt") != std::string::npos ||
@@ -376,6 +380,8 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
     case ModelArchitecture::ARCH_QWEN3_MOE:
       [[fallthrough]];
     case ModelArchitecture::ARCH_MIXTRAL:
+      [[fallthrough]];
+    case ModelArchitecture::ARCH_GLM4_MOE:
       [[fallthrough]];
     case ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO:
       return true;

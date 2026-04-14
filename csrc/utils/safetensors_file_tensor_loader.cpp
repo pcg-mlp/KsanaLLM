@@ -36,8 +36,13 @@ SafeTensorsLoader::~SafeTensorsLoader() {
 DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensors_dtype) {
   const std::map<std::string, DataType> type_map = {{"F16", TYPE_FP16},         {"F32", TYPE_FP32},
                                                     {"BF16", TYPE_BF16},        {"I32", TYPE_INT32},
-                                                    {"F8_E4M3", TYPE_FP8_E4M3}, {"UI8", TYPE_UINT8}};
-  return type_map.at(safetensors_dtype);
+                                                    {"I8", TYPE_INT8},          {"UI8", TYPE_UINT8},
+                                                    {"F8_E4M3", TYPE_FP8_E4M3}};
+  auto it = type_map.find(safetensors_dtype);
+  if (it == type_map.end()) {
+    KLLM_THROW(fmt::format("Unsupported safetensors dtype: {}", safetensors_dtype));
+  }
+  return it->second;
 }
 
 // Function to load the SafeTensors binary file

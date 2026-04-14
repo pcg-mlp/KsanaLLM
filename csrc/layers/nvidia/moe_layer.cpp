@@ -267,8 +267,14 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
       w1_scale = input_tensors[2].weight_scales->GetPtr<void>();
       w2_scale = input_tensors[3].weight_scales->GetPtr<void>();
     } else if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
-      w1_scale = input_tensors[2].scales->GetPtr<void>();
-      w2_scale = input_tensors[3].scales->GetPtr<void>();
+      // W4A8AWQ method binds scales to weight_scales, fallback to legacy scales if weight_scales is null
+      if (input_tensors[2].weight_scales != nullptr) {
+        w1_scale = input_tensors[2].weight_scales->GetPtr<void>();
+        w2_scale = input_tensors[3].weight_scales->GetPtr<void>();
+      } else if (input_tensors[2].scales != nullptr) {
+        w1_scale = input_tensors[2].scales->GetPtr<void>();
+        w2_scale = input_tensors[3].scales->GetPtr<void>();
+      }
     }
     void* w1_input_scale = input_tensors[2].input_scales ? input_tensors[2].input_scales->GetPtr<void>() : nullptr;
     void* w2_input_scale = input_tensors[3].input_scales ? input_tensors[3].input_scales->GetPtr<void>() : nullptr;

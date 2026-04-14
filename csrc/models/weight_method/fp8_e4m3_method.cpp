@@ -20,7 +20,8 @@ Fp8E4m3Method::Fp8E4m3Method(std::shared_ptr<CommonModelWeightLoader> common_wei
     : common_weight_loader_(common_weight_loader),
       tp_(tp),
       is_checkpoint_fp8_serialized_(quant_config.is_checkpoint_fp8_serialized),
-      is_activation_scheme_static_(quant_config.is_activation_scheme_static) {}
+      is_activation_scheme_static_(quant_config.is_activation_scheme_static),
+      is_fp8_blockwise_(quant_config.is_fp8_blockwise) {}
 
 Status Fp8E4m3Method::LoadWeightWithTPSplit(std::unordered_map<std::string, Tensor>& device_model_weights,
                                             const std::string& weight_name, const Tensor& weight_tensor, int dev_rank,
@@ -36,43 +37,61 @@ Status Fp8E4m3Method::LoadScaleTensor(std::unordered_map<std::string, Tensor>& d
   return Status();
 }
 
-Status Fp8E4m3Method::load_attn_q_k_v_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
-                                           const std::string& weight_name, const Tensor& weight_tensor, int dev_rank) {
-  if (CheckWeightNameEndMatched(weight_name, {".weight_scale", ".input_scale"})) {
+Status Fp8E4m3Method::LoadWeightScaleWithTPSplit(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                                  const std::string& weight_name, const Tensor& weight_tensor,
+                                                  int dev_rank, bool is_row_parallel) {
+  // Split weight_scale across TP ranks so each rank's scale matches its local (TP-split) weight block layout.
+
+  // TP=1: no split needed, just copy to device
+  if (tp_ <= 1) {
+    return LoadScaleTensor(device_model_weights, weight_name, weight_tensor, dev_rank);
+  }
+
+  size_t split_dim = is_row_parallel ? 0 : (weight_tensor.shape.size() > 1 ? 1 : 0);
+  size_t dim_size = weight_tensor.shape[split_dim];
+
+  // Evenly divisible: standard TP split
+  if (dim_size % tp_ == 0) {
+    TensorParallelMode tp_mode = is_row_parallel ? TensorParallelMode::RowPara : TensorParallelMode::ColPara;
+    device_model_weights[weight_name] =
+        common_weight_loader_->TensorParallelSplit(weight_tensor, dev_rank, tp_, tp_mode);
+    return Status();
+  }
+
+  // Fallback: per-tensor scalar scale or 1D scale that cannot be split
+  return LoadScaleTensor(device_model_weights, weight_name, weight_tensor, dev_rank);
+}
+
+Status Fp8E4m3Method::LoadProjTensor(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                     const std::string& weight_name, const Tensor& weight_tensor, int dev_rank,
+                                     bool is_row_parallel) {
+  if (CheckWeightNameEndMatched(weight_name, {".weight_scale"})) {
+    return LoadWeightScaleWithTPSplit(device_model_weights, weight_name, weight_tensor, dev_rank, is_row_parallel);
+  } else if (CheckWeightNameEndMatched(weight_name, {".input_scale"})) {
     return LoadScaleTensor(device_model_weights, weight_name, weight_tensor, dev_rank);
   } else if (CheckWeightNameEndMatched(weight_name, {".weight", ".bias"})) {
-    return LoadWeightWithTPSplit(device_model_weights, weight_name, weight_tensor, dev_rank, true);
+    return LoadWeightWithTPSplit(device_model_weights, weight_name, weight_tensor, dev_rank, is_row_parallel);
   }
   return Status();
 }
+
+Status Fp8E4m3Method::load_attn_q_k_v_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                           const std::string& weight_name, const Tensor& weight_tensor, int dev_rank) {
+  return LoadProjTensor(device_model_weights, weight_name, weight_tensor, dev_rank, /*is_row_parallel=*/true);
+}
 Status Fp8E4m3Method::load_attn_o_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                        const std::string& weight_name, const Tensor& weight_tensor, int dev_rank) {
-  if (CheckWeightNameEndMatched(weight_name, {".weight_scale", ".input_scale"})) {
-    return LoadScaleTensor(device_model_weights, weight_name, weight_tensor, dev_rank);
-  } else if (CheckWeightNameEndMatched(weight_name, {".weight"})) {
-    return LoadWeightWithTPSplit(device_model_weights, weight_name, weight_tensor, dev_rank, false);
-  }
-  return Status();
+  return LoadProjTensor(device_model_weights, weight_name, weight_tensor, dev_rank, /*is_row_parallel=*/false);
 }
 
 Status Fp8E4m3Method::load_mlp_gate_up_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                             const std::string& weight_name, const Tensor& weight_tensor, int dev_rank) {
-  if (CheckWeightNameEndMatched(weight_name, {".weight_scale", ".input_scale"})) {
-    return LoadScaleTensor(device_model_weights, weight_name, weight_tensor, dev_rank);
-  } else if (CheckWeightNameEndMatched(weight_name, {".weight"})) {
-    return LoadWeightWithTPSplit(device_model_weights, weight_name, weight_tensor, dev_rank, true);
-  }
-  return Status();
+  return LoadProjTensor(device_model_weights, weight_name, weight_tensor, dev_rank, /*is_row_parallel=*/true);
 }
 
 Status Fp8E4m3Method::load_mlp_down_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                          const std::string& weight_name, const Tensor& weight_tensor, int dev_rank) {
-  if (CheckWeightNameEndMatched(weight_name, {".weight_scale", ".input_scale"})) {
-    return LoadScaleTensor(device_model_weights, weight_name, weight_tensor, dev_rank);
-  } else if (CheckWeightNameEndMatched(weight_name, {".weight"})) {
-    return LoadWeightWithTPSplit(device_model_weights, weight_name, weight_tensor, dev_rank, false);
-  }
-  return Status();
+  return LoadProjTensor(device_model_weights, weight_name, weight_tensor, dev_rank, /*is_row_parallel=*/false);
 }
 
 Status Fp8E4m3Method::ConvertWeightToFp8(std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -137,10 +156,13 @@ Status Fp8E4m3Method::ProcessProjWeight(std::unordered_map<std::string, Tensor>&
     } else {
       return Status(RET_MODEL_QUANT_FAILED, "weight_scale not found: " + weight_scale_name);
     }
-    // Static FP8: bind input scale
+    // Bind input scale if present.
+    // Static FP8 (per-tensor): activation_scheme=static, input_scale must exist in checkpoint.
+    // Block FP8: activation_scheme=dynamic, input_scale is computed at runtime, so it is
+    // absent from checkpoint and missing input_scale is expected (not an error).
     if (device_model_weights.find(input_scale_name) != device_model_weights.end()) {
       device_model_weights[weight_name].input_scales = &device_model_weights[input_scale_name];
-    } else {
+    } else if (is_activation_scheme_static_) {
       return Status(RET_MODEL_QUANT_FAILED, "input_scale not found: " + input_scale_name);
     }
   } else {
@@ -171,35 +193,50 @@ Status Fp8E4m3Method::process_attn_qkv_proj(std::unordered_map<std::string, Tens
     if (device_model_weights.find(q_weight_scale_name) != device_model_weights.end() &&
         device_model_weights.find(k_weight_scale_name) != device_model_weights.end() &&
         device_model_weights.find(v_weight_scale_name) != device_model_weights.end()) {
-      Tensor qkv_scale(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1});
-      device_model_weights[qkv_weight_scale_name] = qkv_scale;
-
-      // Get max scale using torch
       torch::Tensor q_scale =
           common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[q_weight_scale_name]);
       torch::Tensor k_scale =
           common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[k_weight_scale_name]);
       torch::Tensor v_scale =
           common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[v_weight_scale_name]);
-      torch::Tensor qkv_scale_tensor =
-          common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[qkv_weight_scale_name]);
-      torch::max_out(qkv_scale_tensor, q_scale, k_scale);
-      torch::max_out(qkv_scale_tensor, qkv_scale_tensor, v_scale);
 
-      Tensor& q_weight = device_model_weights[q_proj_name + "weight"];
-      Tensor& k_weight = device_model_weights[k_proj_name + "weight"];
-      Tensor& v_weight = device_model_weights[v_proj_name + "weight"];
+      // Block FP8: 2D scale, concatenate instead of max+rescale
+      if (IsFp8Blockwise()) {
+        torch::Tensor qkv_scale_tensor = torch::cat({q_scale.flatten(), k_scale.flatten(), v_scale.flatten()}, 0);
 
-      // Rescale q/k/v_proj weights
-      RescaleFp8E4m3(q_weight.GetPtr<void>(), q_weight.GetPtr<void>(), q_weight.GetElementNumber(),
-                     q_scale.data_ptr<float>(), qkv_scale_tensor.data_ptr<float>(),
-                     common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
-      RescaleFp8E4m3(k_weight.GetPtr<void>(), k_weight.GetPtr<void>(), k_weight.GetElementNumber(),
-                     k_scale.data_ptr<float>(), qkv_scale_tensor.data_ptr<float>(),
-                     common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
-      RescaleFp8E4m3(v_weight.GetPtr<void>(), v_weight.GetPtr<void>(), v_weight.GetElementNumber(),
-                     v_scale.data_ptr<float>(), qkv_scale_tensor.data_ptr<float>(),
-                     common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+        std::vector<size_t> qkv_scale_shape = {static_cast<size_t>(qkv_scale_tensor.numel())};
+        Tensor qkv_scale(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, qkv_scale_shape);
+        device_model_weights[qkv_weight_scale_name] = qkv_scale;
+
+        torch::Tensor qkv_scale_device =
+            common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[qkv_weight_scale_name]);
+        qkv_scale_tensor = qkv_scale_tensor.to(qkv_scale_device.device()).contiguous();
+        qkv_scale_device.copy_(qkv_scale_tensor);
+      } else {
+        // Per-tensor FP8: use max scale and rescale weights
+        Tensor qkv_scale(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1});
+        device_model_weights[qkv_weight_scale_name] = qkv_scale;
+
+        torch::Tensor qkv_scale_tensor =
+            common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[qkv_weight_scale_name]);
+        torch::max_out(qkv_scale_tensor, q_scale, k_scale);
+        torch::max_out(qkv_scale_tensor, qkv_scale_tensor, v_scale);
+
+        Tensor& q_weight = device_model_weights[q_proj_name + "weight"];
+        Tensor& k_weight = device_model_weights[k_proj_name + "weight"];
+        Tensor& v_weight = device_model_weights[v_proj_name + "weight"];
+
+        // Rescale q/k/v_proj weights
+        RescaleFp8E4m3(q_weight.GetPtr<void>(), q_weight.GetPtr<void>(), q_weight.GetElementNumber(),
+                       q_scale.data_ptr<float>(), qkv_scale_tensor.data_ptr<float>(),
+                       common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+        RescaleFp8E4m3(k_weight.GetPtr<void>(), k_weight.GetPtr<void>(), k_weight.GetElementNumber(),
+                       k_scale.data_ptr<float>(), qkv_scale_tensor.data_ptr<float>(),
+                       common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+        RescaleFp8E4m3(v_weight.GetPtr<void>(), v_weight.GetPtr<void>(), v_weight.GetElementNumber(),
+                       v_scale.data_ptr<float>(), qkv_scale_tensor.data_ptr<float>(),
+                       common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+      }
 
       // Merge q/k/v_proj weight
       common_weight_loader_->AutoMergeWeight({q_proj_name + "weight", k_proj_name + "weight", v_proj_name + "weight"},
@@ -210,6 +247,7 @@ Status Fp8E4m3Method::process_attn_qkv_proj(std::unordered_map<std::string, Tens
       device_model_weights.erase(k_weight_scale_name);
       device_model_weights.erase(v_weight_scale_name);
     }
+
     // Use max of q/k/v_proj input scales as the merged scale
     if (device_model_weights.find(q_input_scale_name) != device_model_weights.end() &&
         device_model_weights.find(k_input_scale_name) != device_model_weights.end() &&
@@ -267,31 +305,54 @@ Status Fp8E4m3Method::process_mlp_gate_up_proj(std::unordered_map<std::string, T
     if (device_model_weights.find(gate_weight_scale_name) != device_model_weights.end() &&
         device_model_weights.find(up_weight_scale_name) != device_model_weights.end() &&
         device_model_weights.find(gate_up_weight_scale_name) == device_model_weights.end()) {
-      Tensor gate_up_weight_scale(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1});
-      device_model_weights[gate_up_weight_scale_name] = gate_up_weight_scale;
-
       torch::Tensor gate_weight_scale =
           common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[gate_weight_scale_name]);
       torch::Tensor up_weight_scale =
           common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[up_weight_scale_name]);
-      torch::Tensor gate_up_weight_scale_tensor =
-          common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[gate_up_weight_scale_name]);
-      torch::max_out(gate_up_weight_scale_tensor, gate_weight_scale, up_weight_scale);
 
-      Tensor& gate_weight = device_model_weights[gate_proj_name + "weight"];
-      Tensor& up_weight = device_model_weights[up_proj_name + "weight"];
+      // Block FP8: 2D scale, concatenate instead of max+rescale
+      if (IsFp8Blockwise()) {
+        torch::Tensor gate_up_scale_tensor = torch::cat({gate_weight_scale, up_weight_scale}, /*dim=*/0);
 
-      // Rescale gate/up weights
-      RescaleFp8E4m3(gate_weight.GetPtr<void>(), gate_weight.GetPtr<void>(), gate_weight.GetElementNumber(),
-                     gate_weight_scale.data_ptr<float>(), gate_up_weight_scale_tensor.data_ptr<float>(),
-                     common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
-      RescaleFp8E4m3(up_weight.GetPtr<void>(), up_weight.GetPtr<void>(), up_weight.GetElementNumber(),
-                     up_weight_scale.data_ptr<float>(), gate_up_weight_scale_tensor.data_ptr<float>(),
-                     common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+        std::vector<size_t> gate_up_scale_shape;
+        for (auto s : gate_up_scale_tensor.sizes()) {
+          gate_up_scale_shape.push_back(static_cast<size_t>(s));
+        }
 
-      // Merge gate/up weights
-      common_weight_loader_->AutoMergeWeight({gate_proj_name + "weight", up_proj_name + "weight"},
-                                             gate_up_proj_name + "weight", device_model_weights, dev_rank);
+        Tensor gate_up_weight_scale(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, gate_up_scale_shape);
+        device_model_weights[gate_up_weight_scale_name] = gate_up_weight_scale;
+
+        torch::Tensor gate_up_weight_scale_device =
+            common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[gate_up_weight_scale_name]);
+        gate_up_weight_scale_device.copy_(gate_up_scale_tensor);
+
+        // For Block FP8, we don't rescale weights - each block has its own scale
+        common_weight_loader_->AutoMergeWeight({gate_proj_name + "weight", up_proj_name + "weight"},
+                                               gate_up_proj_name + "weight", device_model_weights, dev_rank);
+      } else {
+        // Per-tensor FP8: use max scale and rescale weights
+        Tensor gate_up_weight_scale(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1});
+        device_model_weights[gate_up_weight_scale_name] = gate_up_weight_scale;
+
+        torch::Tensor gate_up_weight_scale_tensor =
+            common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[gate_up_weight_scale_name]);
+        torch::max_out(gate_up_weight_scale_tensor, gate_weight_scale, up_weight_scale);
+
+        Tensor& gate_weight = device_model_weights[gate_proj_name + "weight"];
+        Tensor& up_weight = device_model_weights[up_proj_name + "weight"];
+
+        // Rescale gate/up weights
+        RescaleFp8E4m3(gate_weight.GetPtr<void>(), gate_weight.GetPtr<void>(), gate_weight.GetElementNumber(),
+                       gate_weight_scale.data_ptr<float>(), gate_up_weight_scale_tensor.data_ptr<float>(),
+                       common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+        RescaleFp8E4m3(up_weight.GetPtr<void>(), up_weight.GetPtr<void>(), up_weight.GetElementNumber(),
+                       up_weight_scale.data_ptr<float>(), gate_up_weight_scale_tensor.data_ptr<float>(),
+                       common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
+
+        // Merge gate/up weights
+        common_weight_loader_->AutoMergeWeight({gate_proj_name + "weight", up_proj_name + "weight"},
+                                               gate_up_proj_name + "weight", device_model_weights, dev_rank);
+      }
 
       device_model_weights.erase(gate_weight_scale_name);
       device_model_weights.erase(up_weight_scale_name);

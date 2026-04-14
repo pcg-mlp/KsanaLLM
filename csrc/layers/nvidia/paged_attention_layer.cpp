@@ -95,8 +95,13 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
   int layer_block_num = input_tensors[7].shape[5];
   int max_tokens = input_tensors[7].shape[4];
   int batch_size = input_tensors[7].shape[3];
-  int total_tokens = batch_size;
-  size_t context_tokens = query.shape[0] - batch_size;
+  // Read the real total decode tokens from forward_shape[12] (dp_decode_tokens).
+  // For multi-token decode (e.g., MTP validation), total_tokens > batch_size.
+  // Falls back to batch_size for backward compatibility when shape[12] is not present.
+  int total_tokens = (input_tensors[7].shape.size() > 12 && input_tensors[7].shape[12] > 0)
+                         ? static_cast<int>(input_tensors[7].shape[12])
+                         : batch_size;
+  size_t context_tokens = query.shape[0] - total_tokens;
 
   void** const k_list_base = kv_list.GetPtr<void*>();
   void** const k_list = k_list_base + static_cast<size_t>(this->layer_index_ * layer_block_num * 2);

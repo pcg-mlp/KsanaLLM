@@ -16,6 +16,7 @@
 #include "models/chatglm/chatglm_model_weight_loader.h"
 #include "models/deepseek_v3/deepseek_v3_weight_loader.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_weight_loader.h"
+#include "models/glm4_moe/glm4_moe_weight_loader.h"
 #include "models/llama/llama_model_weight_loader.h"
 #include "models/mixtral/mixtral_weight_loader.h"
 #include "models/qwen/qwen_weight_loader.h"
@@ -72,6 +73,10 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_HUNYUAN_TURBO: {
       model_weight_loader = std::make_shared<HunyuanTurboWeightLoader>(model_config, env, context);
+      break;
+    }
+    case ModelArchitecture::ARCH_GLM4_MOE: {
+      model_weight_loader = std::make_shared<Glm4MoeWeightLoader>(model_config, env, context);
       break;
     }
     case ModelArchitecture::ARCH_MINICPM: {
