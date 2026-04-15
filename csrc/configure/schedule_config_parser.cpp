@@ -1081,6 +1081,13 @@ void ScheduleConfigParser::InitGlobalCacheConnectorConfig(YamlReader &yaml_reade
       yaml_reader.GetRootNode(), "setting.global_cache_connector.global_segment_size", 16 * 1024 * 1024);
   global_cache_connector_config_.local_buffer_size = yaml_reader.GetScalar<size_t>(
       yaml_reader.GetRootNode(), "setting.global_cache_connector.local_buffer_size", 16 * 1024 * 1024);
+
+  // 从已解析的 batch_scheduler / block_manager 配置中填充，用于 connector 提前初始化 staging pool。
+  // block_byte_size 依赖模型配置计算，在 engine/executor 创建 connector 时再填充。
+  global_cache_connector_config_.max_step_tokens = batch_scheduler_config_.max_step_token_num;
+  global_cache_connector_config_.block_token_num =
+      static_cast<int>(block_manager_config_.device_allocator_config.block_token_num);
+
   KLLM_LOG_INFO << "Global cache connector config parsed: " << global_cache_connector_config_.ToString();
 }
 

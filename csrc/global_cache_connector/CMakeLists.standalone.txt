@@ -15,7 +15,7 @@
 #   cp CMakeLists.standalone.txt CMakeLists_bak.txt
 #   # cmake ../csrc/global_cache_connector/
 #
-#   # 启用真实 Mooncake Store 后端
+#   # 启用真实 Mooncake Store 后端 (编译独立的 libmooncake_connector.so 插件)
 #   cmake ../csrc/global_cache_connector/ \
 #     -DUSE_MOONCAKE_REAL_STORE=ON \
 #     -DMOONCAKE_SOURCE_ROOT=/data/mcinstall/Mooncake
@@ -23,7 +23,8 @@
 #   make -j$(nproc)
 #
 # 产物:
-#   libglobal_cache_connector.so   — 共享库
+#   libglobal_cache_connector.so   — 基础共享库 (factory + mock)
+#   libmooncake_connector.so       — 插件库 (仅 USE_MOONCAKE_REAL_STORE=ON)
 #   test_connector                 — 功能测试
 #   bench_connector                — 性能基准测试
 
@@ -92,17 +93,17 @@ endif()
 # ---------- mooncake-mock-store 子项目 ----------
 add_subdirectory(${MOCK_STORE_DIR} ${CMAKE_BINARY_DIR}/mooncake-mock-store)
 
-# ---------- 源文件 ----------
-set(CONNECTOR_SOURCES
+# ========== 基础库: libglobal_cache_connector.so ==========
+# 包含 factory + mock connector，不依赖 Mooncake。
+# MooncakeConnector 通过 dlopen 按需加载。
+set(CONNECTOR_BASE_SOURCES
     ${CONNECTOR_SRC_DIR}/global_cache_connector_factory.cpp
     ${CONNECTOR_SRC_DIR}/mooncake_mock_connector.cpp
-    ${CONNECTOR_SRC_DIR}/mooncake_connector.cpp
     ${CSRC_DIR}/utils/logger.cpp
     ${CSRC_DIR}/utils/status.cpp
 )
 
-# ---------- 共享库 ----------
-add_library(global_cache_connector SHARED ${CONNECTOR_SOURCES})
+add_library(global_cache_connector SHARED ${CONNECTOR_BASE_SOURCES})
 
 target_include_directories(global_cache_connector
     PUBLIC
@@ -113,7 +114,7 @@ target_include_directories(global_cache_connector
 )
 
 target_link_libraries(global_cache_connector
-    PUBLIC mooncake_store Threads::Threads loguru
+    PUBLIC mooncake_store Threads::Threads loguru dl
 )
 
 if(CUDAToolkit_FOUND)
@@ -126,25 +127,38 @@ else()
     message(WARNING "CUDA not found. cudaMemcpy calls will fail at runtime.")
 endif()
 
-# ---------- 真实 Mooncake Store ----------
+# ========== Mooncake 依赖 (版本检查 + 自动拉取) ==========
 if(USE_MOONCAKE_REAL_STORE)
-    message(STATUS "Mooncake real store backend enabled")
+    include(${PROJECT_ROOT}/cmake/external/mooncake.cmake)
+endif()
 
-    if(NOT DEFINED MOONCAKE_SOURCE_ROOT)
-        message(FATAL_ERROR "MOONCAKE_SOURCE_ROOT must be set when USE_MOONCAKE_REAL_STORE=ON")
-    endif()
-    if(NOT DEFINED MOONCAKE_BUILD_ROOT)
-        set(MOONCAKE_BUILD_ROOT "${MOONCAKE_SOURCE_ROOT}/build")
-    endif()
+# ========== 插件库: libmooncake_connector.so ==========
+# 仅在 USE_MOONCAKE_REAL_STORE=ON 时编译，包含真实 Mooncake 后端。
+# 运行时由 factory 通过 dlopen 加载。
+# MOONCAKE_SOURCE_ROOT / MOONCAKE_BUILD_ROOT 由 mooncake.cmake 设置。
 
-    target_compile_definitions(global_cache_connector PRIVATE
+if(USE_MOONCAKE_REAL_STORE)
+    message(STATUS "Mooncake real store backend enabled — building libmooncake_connector.so")
+
+    add_library(mooncake_connector SHARED
+        ${CONNECTOR_SRC_DIR}/mooncake_connector.cpp
+        ${CSRC_DIR}/utils/logger.cpp
+        ${CSRC_DIR}/utils/status.cpp
+    )
+
+    set_target_properties(mooncake_connector PROPERTIES CXX_STANDARD 20)
+
+    target_compile_definitions(mooncake_connector PRIVATE
         ENABLE_MOONCAKE_REAL_STORE GLOG_USE_GLOG_EXPORT YLT_ENABLE_IBV
         CONFIG_ERDMA USE_HTTP WITH_METRICS
     )
-    set_target_properties(global_cache_connector PROPERTIES CXX_STANDARD 20)
-    target_compile_options(global_cache_connector PRIVATE -fcoroutines)
+    target_compile_options(mooncake_connector PRIVATE -fcoroutines)
 
-    target_include_directories(global_cache_connector PUBLIC
+    target_include_directories(mooncake_connector PRIVATE
+        ${CSRC_DIR}
+        ${MOCK_STORE_DIR}/include
+        ${LOGURU_INSTALL_DIR}
+        ${fmt_SOURCE_DIR}/include
         ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include
         ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include/cachelib_memory_allocator/include
         ${MOONCAKE_SOURCE_ROOT}/mooncake-store/include/cachelib_memory_allocator/fake_include
@@ -153,21 +167,33 @@ if(USE_MOONCAKE_REAL_STORE)
         ${MOONCAKE_SOURCE_ROOT}/mooncake-common/include
     )
 
-    target_link_libraries(global_cache_connector PRIVATE
+    target_link_libraries(mooncake_connector PRIVATE
+        loguru
         ${MOONCAKE_BUILD_ROOT}/mooncake-store/src/libmooncake_store.a
         ${MOONCAKE_BUILD_ROOT}/mooncake-store/src/cachelib_memory_allocator/libcachelib_memory_allocator.a
         ${MOONCAKE_BUILD_ROOT}/mooncake-transfer-engine/src/libtransfer_engine.a
         ${MOONCAKE_BUILD_ROOT}/mooncake-common/src/libmooncake_common.a
         ${MOONCAKE_BUILD_ROOT}/mooncake-transfer-engine/src/common/base/libbase.a
+        ${MOONCAKE_BUILD_ROOT}/mooncake-asio/libasio.so
         ibverbs glog numa pthread curl jsoncpp
-        /lib64/libssl3.so /lib64/libcrypto.so.3
     )
+
+    if(CUDAToolkit_FOUND)
+        target_link_libraries(mooncake_connector PRIVATE CUDA::cudart)
+    elseif(CUDA_FOUND)
+        target_link_libraries(mooncake_connector PRIVATE ${CUDA_LIBRARIES})
+    endif()
 else()
     message(STATUS "Mooncake real store backend disabled (using mock only)")
 endif()
 
 # ---------- 安装 ----------
-install(TARGETS global_cache_connector mooncake_store loguru
+set(INSTALL_TARGETS global_cache_connector mooncake_store loguru)
+if(USE_MOONCAKE_REAL_STORE)
+    list(APPEND INSTALL_TARGETS mooncake_connector)
+endif()
+
+install(TARGETS ${INSTALL_TARGETS}
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 
@@ -197,4 +223,21 @@ if(BUILD_TESTS)
 
     add_executable(bench_connector ${CONNECTOR_SRC_DIR}/bench_connector.cpp)
     target_link_libraries(bench_connector PRIVATE global_cache_connector)
+endif()
+
+# ---------- RDMA bench 工具 (需要 yaml-cpp) ----------
+find_package(yaml-cpp QUIET)
+if(yaml-cpp_FOUND)
+    add_executable(global_cache_bench ${CONNECTOR_SRC_DIR}/global_cache_bench_test.cpp)
+    target_link_libraries(global_cache_bench PRIVATE global_cache_connector yaml-cpp)
+    if(CUDAToolkit_FOUND)
+        target_link_libraries(global_cache_bench PRIVATE CUDA::cudart)
+    elseif(CUDA_FOUND)
+        target_link_libraries(global_cache_bench PRIVATE ${CUDA_LIBRARIES})
+    endif()
+    if(USE_MOONCAKE_REAL_STORE)
+        target_compile_definitions(global_cache_bench PRIVATE ENABLE_MOONCAKE_REAL_STORE)
+    endif()
+else()
+    message(STATUS "yaml-cpp not found, skipping global_cache_bench")
 endif()

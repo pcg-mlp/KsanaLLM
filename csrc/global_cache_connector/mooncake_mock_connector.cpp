@@ -94,7 +94,7 @@ Status MooncakeMockConnector::QueryAndFetch(const std::vector<int>& token_ids, s
       }
 
       size_t prefix_len = std::min(static_cast<size_t>(bi + 1) * block_size, static_cast<size_t>(total_tokens));
-      size_t prefix_hash = HashTokenPrefix(token_ids.data(), prefix_len);
+      std::string prefix_hash = HashTokenPrefix(token_ids.data(), prefix_len);
       std::string key = MakeBlockKey(prefix_hash, tp_rank, layer_index, bi);
 
       if (!store_->is_exist(key.c_str())) {
@@ -214,7 +214,7 @@ Status MooncakeMockConnector::PutGlobalCacheBlocks(const std::vector<int>& token
       // 允许不满一个 block 的尾部参与存储，以支持全命中直接进入 decode
       size_t prefix_len = std::min(static_cast<size_t>(bi + 1) * block_size, static_cast<size_t>(total_tokens));
 
-      size_t prefix_hash = HashTokenPrefix(token_ids.data(), prefix_len);
+      std::string prefix_hash = HashTokenPrefix(token_ids.data(), prefix_len);
       std::string key = MakeBlockKey(prefix_hash, tp_rank, layer_index, bi);
 
       if (store_->is_exist(key.c_str())) {
@@ -252,7 +252,7 @@ Status MooncakeMockConnector::PutFirstTokens(const std::vector<int>& token_ids, 
     return Status();
   }
 
-  size_t prefix_hash = HashTokenPrefix(token_ids.data(), token_ids.size());
+  std::string prefix_hash = HashTokenPrefix(token_ids.data(), token_ids.size());
   std::string key = MakeFirstTokenKey(prefix_hash);
 
   if (store_->is_exist(key.c_str())) {
@@ -283,7 +283,7 @@ Status MooncakeMockConnector::QueryFirstTokens(const std::vector<int>& token_ids
     return Status();
   }
 
-  size_t prefix_hash = HashTokenPrefix(token_ids.data(), token_ids.size());
+  std::string prefix_hash = HashTokenPrefix(token_ids.data(), token_ids.size());
   std::string key = MakeFirstTokenKey(prefix_hash);
 
   // 通过 get_size 获取实际存储大小，避免 get_into 因 buffer 不足返回 -1
@@ -336,24 +336,6 @@ Status MooncakeMockConnector::Shutdown() {
   initialized_ = false;
   KLLM_LOG_INFO << "done";
   return Status();
-}
-
-std::string MooncakeMockConnector::MakeBlockKey(size_t prefix_hash, int tp_rank, int layer_index, int block_idx) const {
-  return "kv_" + std::to_string(prefix_hash) + "_tp" + std::to_string(tp_rank) + "_l" + std::to_string(layer_index) +
-         "_b" + std::to_string(block_idx);
-}
-
-std::string MooncakeMockConnector::MakeFirstTokenKey(size_t prefix_hash) const {
-  return "ft_" + std::to_string(prefix_hash);
-}
-
-size_t MooncakeMockConnector::HashTokenPrefix(const int* data, size_t len) {
-  size_t hash_code = 0;
-  std::hash<int> hasher;
-  for (size_t i = 0; i < len; ++i) {
-    hash_code ^= hasher(data[i]) + 0x9e3779b9 + (hash_code << 6) + (hash_code >> 2);
-  }
-  return hash_code;
 }
 
 }  // namespace ksana_llm

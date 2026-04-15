@@ -7,6 +7,7 @@
 #include <string>
 
 #include "global_cache_connector/global_cache_connector_interface.h"
+#include "global_cache_connector/global_cache_key_utils.h"
 #include "mooncake/store.h"
 
 namespace ksana_llm {
@@ -44,11 +45,6 @@ class MooncakeMockConnector : public GlobalCacheConnectorInterface {
   Status Shutdown() override;
 
  private:
-  std::string MakeBlockKey(size_t prefix_hash, int tp_rank, int layer_index, int block_idx) const;
-  // 生成首 token 缓存的 key，格式: "ft_{全序列哈希}"
-  std::string MakeFirstTokenKey(size_t prefix_hash) const;
-  static size_t HashTokenPrefix(const int* data, size_t len);
-
   std::unique_ptr<mooncake::MockStore> store_;
   bool initialized_ = false;
 };

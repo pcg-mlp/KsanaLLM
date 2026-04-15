@@ -15,8 +15,9 @@
 #include <vector>
 
 #include "global_cache_connector/global_cache_connector_factory.h"
-#include "global_cache_connector/mooncake_connector.h"
+#include "global_cache_connector/global_cache_key_utils.h"
 #include "global_cache_connector/mooncake_mock_connector.h"
+#include "global_cache_connector/staging_buffer_pool.h"
 
 namespace ksana_llm {
 
@@ -376,8 +377,8 @@ TEST_F(MockConnectorTest, PutOddBlockRangesReturnsError) {
   // block_ranges 大小为奇数，应返回错误
   std::vector<int> odd_ranges = {0, 3, 5};
 
-  Status s = connector_->PutGlobalCacheBlocks(
-      ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, odd_ranges, ptrs);
+  Status s = connector_->PutGlobalCacheBlocks(ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
+                                              odd_ranges, ptrs);
   EXPECT_FALSE(s.OK());
 }
 
@@ -416,23 +417,23 @@ TEST_F(MockConnectorTest, MultiLayerPutAndQuery) {
   buf1.Upload(data1.data());
 
   std::vector<int> ranges = {0, 3};
-  ASSERT_TRUE(connector_
-                  ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayer0, kBlockSize, kBlockByteSize, ranges,
-                                         {buf0.ptr()})
-                  .OK());
-  ASSERT_TRUE(connector_
-                  ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayer1, kBlockSize, kBlockByteSize, ranges,
-                                         {buf1.ptr()})
-                  .OK());
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayer0, kBlockSize, kBlockByteSize, ranges, {buf0.ptr()})
+          .OK());
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayer1, kBlockSize, kBlockByteSize, ranges, {buf1.ptr()})
+          .OK());
 
   // 清空并 Query layer0
   buf0.Clear();
   buf1.Clear();
   std::vector<int> matched;
-  ASSERT_TRUE(connector_
-                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayer0, kBlockSize, kBlockByteSize, {buf0.ptr()},
-                                  matched)
-                  .OK());
+  ASSERT_TRUE(
+      connector_
+          ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayer0, kBlockSize, kBlockByteSize, {buf0.ptr()}, matched)
+          .OK());
   EXPECT_FALSE(matched.empty());
   std::vector<uint8_t> readback(kBlockByteSize);
   buf0.Download(readback.data());
@@ -440,10 +441,10 @@ TEST_F(MockConnectorTest, MultiLayerPutAndQuery) {
 
   // Query layer1
   matched.clear();
-  ASSERT_TRUE(connector_
-                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayer1, kBlockSize, kBlockByteSize, {buf1.ptr()},
-                                  matched)
-                  .OK());
+  ASSERT_TRUE(
+      connector_
+          ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayer1, kBlockSize, kBlockByteSize, {buf1.ptr()}, matched)
+          .OK());
   EXPECT_FALSE(matched.empty());
   buf1.Download(readback.data());
   EXPECT_EQ(readback, data1);
@@ -484,21 +485,24 @@ TEST_F(MockConnectorTest, PartialBlockMissProducesNonContiguousRanges) {
 
   // 只 Put block 0
   std::vector<int> range0 = {0, kBlockSize - 1};
-  ASSERT_TRUE(connector_->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
-                                                range0, {gpu_ptrs[0]})
+  ASSERT_TRUE(connector_
+                  ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, range0,
+                                         {gpu_ptrs[0]})
                   .OK());
 
   // 只 Put block 2
   std::vector<int> range2 = {2 * kBlockSize, 3 * kBlockSize - 1};
-  ASSERT_TRUE(connector_->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
-                                                range2, {gpu_ptrs[2]})
+  ASSERT_TRUE(connector_
+                  ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, range2,
+                                         {gpu_ptrs[2]})
                   .OK());
 
   // 清空 GPU 并 Query 全部
   for (auto& buf : gpu_blocks) buf->Clear();
   std::vector<int> matched_ranges;
-  ASSERT_TRUE(connector_->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
-                                         gpu_ptrs, matched_ranges)
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, gpu_ptrs,
+                                  matched_ranges)
                   .OK());
 
   // 应该有 2 个不连续的区间（block 0 和 block 2）
@@ -537,9 +541,10 @@ TEST_F(MockConnectorTest, RetryUntilFullHitWithImmediateHit) {
   std::vector<void*> ptrs = {buf.ptr()};
   std::vector<int> ranges = {0, 3};
 
-  ASSERT_TRUE(connector_->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
-                                                ranges, ptrs)
-                  .OK());
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, ptrs)
+          .OK());
 
   buf.Clear();
   std::vector<int> matched_ranges;
@@ -567,27 +572,138 @@ TEST_F(MockConnectorTest, RetryUntilFullHitTimesOut) {
   EXPECT_GE(elapsed.count(), 40) << "should have waited at least ~50ms";
 }
 
-// ==================== MooncakeConnector (stub) 测试 ====================
+// ==================== KeyUtils 测试 ====================
 
-TEST(StubConnectorTest, AllMethodsReturnError) {
-  MooncakeConnector connector;
-  GlobalCacheConnectorConfig config;
-  config.backend_type = "mooncake";
-  EXPECT_FALSE(connector.Initialize(config).OK());
+TEST(KeyUtilsTest, HashTokenPrefixReturns16HexChars) {
+  std::vector<int> tokens = {1, 2, 3, 4};
+  std::string hash = HashTokenPrefix(tokens.data(), tokens.size());
+  EXPECT_EQ(hash.size(), 16u);
+  for (char c : hash) {
+    EXPECT_TRUE((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) << "non-hex char: " << c;
+  }
+}
 
-  std::vector<int> ids = {1, 2};
-  std::vector<void*> ptrs = {nullptr};
-  std::vector<int> ranges;
-  EXPECT_FALSE(connector.QueryAndFetch(ids, 0, 1, 0, 0, 4, 1024, ptrs, ranges).OK());
-  EXPECT_FALSE(connector.PutGlobalCacheBlocks(ids, 1, 0, 0, 4, 1024, {0, 1}, ptrs).OK());
-  EXPECT_FALSE(connector.PutFirstTokens(ids, {42}).OK());
+TEST(KeyUtilsTest, HashTokenPrefixDeterministic) {
+  std::vector<int> tokens = {10, 20, 30};
+  std::string h1 = HashTokenPrefix(tokens.data(), tokens.size());
+  std::string h2 = HashTokenPrefix(tokens.data(), tokens.size());
+  EXPECT_EQ(h1, h2);
+}
 
-  std::vector<int> tokens;
-  bool found = true;
-  EXPECT_FALSE(connector.QueryFirstTokens(ids, tokens, found).OK());
-  EXPECT_FALSE(found);
+TEST(KeyUtilsTest, HashTokenPrefixDifferentInputsDiffer) {
+  std::vector<int> a = {1, 2, 3};
+  std::vector<int> b = {1, 2, 4};
+  EXPECT_NE(HashTokenPrefix(a.data(), a.size()), HashTokenPrefix(b.data(), b.size()));
+}
 
-  EXPECT_TRUE(connector.Shutdown().OK());
+TEST(KeyUtilsTest, HashTokenPrefixDifferentLengthsDiffer) {
+  std::vector<int> short_v = {1, 2};
+  std::vector<int> long_v = {1, 2, 3};
+  EXPECT_NE(HashTokenPrefix(short_v.data(), short_v.size()), HashTokenPrefix(long_v.data(), long_v.size()));
+}
+
+TEST(KeyUtilsTest, HashTokenPrefixSingleElement) {
+  int token = 42;
+  std::string hash = HashTokenPrefix(&token, 1);
+  EXPECT_EQ(hash.size(), 16u);
+}
+
+TEST(KeyUtilsTest, MakeBlockKeyFormat) {
+  std::string key = MakeBlockKey("abcdef0123456789", 2, 5, 10);
+  EXPECT_EQ(key, "kv_abcdef0123456789_tp2_l5_b10");
+}
+
+TEST(KeyUtilsTest, MakeFirstTokenKeyFormat) {
+  std::string key = MakeFirstTokenKey("abcdef0123456789");
+  EXPECT_EQ(key, "ft_abcdef0123456789");
+}
+
+// ==================== StagingBufferPool 测试 ====================
+
+TEST(StagingBufferPoolTest, ConstructorAllocatesBlocks) {
+  StagingBufferPool pool(3, 1024);
+  EXPECT_EQ(pool.BlockCount(), 3u);
+  EXPECT_NE(pool.BasePtr(), nullptr);
+  EXPECT_EQ(pool.TotalBytes(), 3u * 1024u);
+}
+
+TEST(StagingBufferPoolTest, GetAndPutRoundTrip) {
+  StagingBufferPool pool(2, 512);
+  auto* block = pool.Get();
+  ASSERT_NE(block, nullptr);
+  EXPECT_NE(block->ptr, nullptr);
+  EXPECT_EQ(block->capacity, 512u);
+
+  // 写入 pinned memory 并读回
+  memset(block->ptr, 0xAB, 512);
+  uint8_t readback = 0;
+  memcpy(&readback, block->ptr, 1);
+  EXPECT_EQ(readback, 0xAB);
+
+  pool.Put(block);
+}
+
+TEST(StagingBufferPoolTest, GetPutGetReuse) {
+  StagingBufferPool pool(1, 256);
+  auto* b1 = pool.Get();
+  ASSERT_NE(b1, nullptr);
+
+  // Put 回去后应能再次 Get
+  pool.Put(b1);
+  auto* b2 = pool.Get();
+  ASSERT_NE(b2, nullptr);
+  pool.Put(b2);
+}
+
+TEST(StagingBufferPoolTest, ContiguousMemoryLayout) {
+  StagingBufferPool pool(4, 128);
+  // All blocks should be contiguous slices of the base allocation.
+  auto* b0 = pool.TryGet();
+  auto* b1 = pool.TryGet();
+  auto* b2 = pool.TryGet();
+  auto* b3 = pool.TryGet();
+  ASSERT_NE(b0, nullptr);
+  ASSERT_NE(b1, nullptr);
+  ASSERT_NE(b2, nullptr);
+  ASSERT_NE(b3, nullptr);
+
+  // Each ptr should be within [BasePtr, BasePtr + TotalBytes)
+  auto* base = static_cast<char*>(pool.BasePtr());
+  for (auto* blk : {b0, b1, b2, b3}) {
+    EXPECT_NE(blk->ptr, nullptr);
+    EXPECT_EQ(blk->capacity, 128u);
+    auto offset = static_cast<char*>(blk->ptr) - base;
+    EXPECT_GE(offset, 0);
+    EXPECT_LT(static_cast<size_t>(offset), pool.TotalBytes());
+    EXPECT_EQ(offset % 128, 0);
+  }
+
+  pool.Put(b0);
+  pool.Put(b1);
+  pool.Put(b2);
+  pool.Put(b3);
+}
+
+TEST(StagingBufferPoolTest, CudaMemcpyWithPinnedMemory) {
+  StagingBufferPool pool(1, 1024);
+  auto* block = pool.Get();
+  ASSERT_NE(block, nullptr);
+
+  // Host→Device→Host round-trip 验证 pinned memory 可用于 CUDA 传输
+  std::vector<uint8_t> src(1024, 0xCD);
+  memcpy(block->ptr, src.data(), 1024);
+
+  void* d_ptr = nullptr;
+  cudaMalloc(&d_ptr, 1024);
+  ASSERT_NE(d_ptr, nullptr);
+  cudaMemcpy(d_ptr, block->ptr, 1024, cudaMemcpyHostToDevice);
+
+  std::vector<uint8_t> dst(1024, 0);
+  cudaMemcpy(dst.data(), d_ptr, 1024, cudaMemcpyDeviceToHost);
+  cudaFree(d_ptr);
+
+  EXPECT_EQ(src, dst);
+  pool.Put(block);
 }
 
 }  // namespace ksana_llm

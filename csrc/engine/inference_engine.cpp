@@ -282,6 +282,7 @@ Status InferenceEngine::Initialize() {
   Status global_cache_status = env_->GetGlobalCacheConnectorConfig(global_cache_config);
   if (global_cache_status.OK()) {
     global_cache_config.device_count = context_->global->GetAttentionTensorParallelSize();
+    global_cache_config.block_byte_size = runtime_config.attn_backend_config.block_size;
 
     global_cache_connector_ = GlobalCacheConnectorFactory::CreateConnector(global_cache_config);
     if (global_cache_connector_) {

@@ -182,6 +182,60 @@ cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 cmake -DSM=86 -DWITH_TESTING=ON -DWITH_INTERNAL_LIBRARIES=ON .. && make -j32
 ```
 
+#### 3.4 Enable Global Cache Connector (Mooncake Store Backend)
+
+Global Cache Connector enables RDMA-based global KV cache access using [Mooncake Store](https://github.com/kvcache-ai/Mooncake) as the storage backend.
+
+**Prerequisites: Build Mooncake v0.3.9**
+
+```bash
+git clone https://github.com/kvcache-ai/Mooncake.git
+cd Mooncake
+git checkout v0.3.9
+
+mkdir build && cd build
+cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+    -DBUILD_TESTING=OFF -DENABLE_TESTS=OFF
+make -j$(nproc)
+```
+
+**Build KsanaLLM with Mooncake real store enabled**
+
+```bash
+cd ${GIT_PROJECT_REPO_ROOT}/build
+
+cmake -DSM=90a -DCMAKE_BUILD_TYPE=Release \
+    -DUSE_MOONCAKE_REAL_STORE=ON \
+    -DMOONCAKE_SOURCE_ROOT=/path/to/Mooncake \
+    .. && make -j$(nproc)
+```
+
+| CMake Variable | Required | Description |
+|---|---|---|
+| `USE_MOONCAKE_REAL_STORE` | Yes | Set `ON` to enable the real Mooncake Store backend (default `OFF`, uses mock backend) |
+| `MOONCAKE_SOURCE_ROOT` | Yes | Path to Mooncake source root (for headers). Must be checked out at tag `v0.3.9` — CMake verifies the git tag and will error on mismatch |
+| `MOONCAKE_BUILD_ROOT` | No | Path to Mooncake build directory (for libraries). Defaults to `${MOONCAKE_SOURCE_ROOT}/build` |
+
+**Standalone build (without full KsanaLLM)**
+
+To build `libglobal_cache_connector.so` independently:
+
+```bash
+mkdir build && cd build
+
+# Mock backend only
+cmake ../csrc/global_cache_connector/ \
+    -DCMAKE_TOOLCHAIN_FILE= \
+    -DSTANDALONE_BUILD=ON
+make -j$(nproc)
+
+# With real Mooncake Store backend
+cmake ../csrc/global_cache_connector/ \
+    -DUSE_MOONCAKE_REAL_STORE=ON \
+    -DMOONCAKE_SOURCE_ROOT=/path/to/Mooncake
+make -j$(nproc)
+```
+
 ### 4. Run
 
 #### 4.1 Single

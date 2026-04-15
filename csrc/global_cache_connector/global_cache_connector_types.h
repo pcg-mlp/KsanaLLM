@@ -53,6 +53,14 @@ struct GlobalCacheConnectorConfig {
   // 本地 buffer 大小 (bytes)
   size_t local_buffer_size = 16 * 1024 * 1024;
 
+  // batch scheduler 最大 step tokens，用于确定 staging pool 大小
+  size_t max_step_tokens = 0;
+
+  // block 配置，用于在 Initialize() 阶段提前初始化 staging pool（避免首次请求延迟）。
+  // 若 block_byte_size > 0，Initialize() 会立即分配 staging buffer；否则回退到首次请求时延迟初始化。
+  int block_token_num = 0;
+  size_t block_byte_size = 0;
+
   bool IsDecodeRole() const { return role == "decode"; }
   bool IsPrefillRole() const { return role == "prefill"; }
   bool IsStandalone() const { return role.empty(); }
@@ -72,6 +80,9 @@ struct GlobalCacheConnectorConfig {
     result += "  master_server_addr: " + master_server_addr + "\n";
     result += "  global_segment_size: " + std::to_string(global_segment_size) + "\n";
     result += "  local_buffer_size: " + std::to_string(local_buffer_size) + "\n";
+    result += "  max_step_tokens: " + std::to_string(max_step_tokens) + "\n";
+    result += "  block_token_num: " + std::to_string(block_token_num) + "\n";
+    result += "  block_byte_size: " + std::to_string(block_byte_size) + "\n";
     result += "}";
     return result;
   }

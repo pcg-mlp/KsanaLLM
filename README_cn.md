@@ -173,6 +173,60 @@ cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 cmake -DSM=86 -DWITH_TESTING=ON -DWITH_INTERNAL_LIBRARIES=ON .. && make -j32
 ```
 
+#### 3.4 启用 Global Cache Connector（Mooncake Store 后端）
+
+Global Cache Connector 使用 [Mooncake Store](https://github.com/kvcache-ai/Mooncake) 作为存储后端，基于 RDMA 实现 KV cache 全局存取。
+
+**前置依赖：编译 Mooncake v0.3.9**
+
+```bash
+git clone https://github.com/kvcache-ai/Mooncake.git
+cd Mooncake
+git checkout v0.3.9
+
+mkdir build && cd build
+cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+    -DBUILD_TESTING=OFF -DENABLE_TESTS=OFF
+make -j$(nproc)
+```
+
+**启用 Mooncake 真实后端编译 KsanaLLM**
+
+```bash
+cd ${GIT_PROJECT_REPO_ROOT}/build
+
+cmake -DSM=90a -DCMAKE_BUILD_TYPE=Release \
+    -DUSE_MOONCAKE_REAL_STORE=ON \
+    -DMOONCAKE_SOURCE_ROOT=/path/to/Mooncake \
+    .. && make -j$(nproc)
+```
+
+| CMake 变量 | 是否必须 | 说明 |
+|---|---|---|
+| `USE_MOONCAKE_REAL_STORE` | 是 | 设为 `ON` 启用真实 Mooncake Store 后端（默认 `OFF`，使用 mock 后端） |
+| `MOONCAKE_SOURCE_ROOT` | 是 | Mooncake 源码根目录（用于定位头文件）。必须处于 `v0.3.9` tag，CMake 会校验 git tag，版本不匹配会报错 |
+| `MOONCAKE_BUILD_ROOT` | 否 | Mooncake 编译产物目录（用于定位库文件），默认为 `${MOONCAKE_SOURCE_ROOT}/build` |
+
+**独立编译（不依赖 KsanaLLM 整体构建）**
+
+单独编译 `libglobal_cache_connector.so`：
+
+```bash
+mkdir build && cd build
+
+# 仅 mock 后端
+cmake ../csrc/global_cache_connector/ \
+    -DCMAKE_TOOLCHAIN_FILE= \
+    -DSTANDALONE_BUILD=ON
+make -j$(nproc)
+
+# 启用真实 Mooncake Store 后端
+cmake ../csrc/global_cache_connector/ \
+    -DUSE_MOONCAKE_REAL_STORE=ON \
+    -DMOONCAKE_SOURCE_ROOT=/path/to/Mooncake
+make -j$(nproc)
+```
+
 ### 4. 执行
 
 #### 4.1 单机执行
