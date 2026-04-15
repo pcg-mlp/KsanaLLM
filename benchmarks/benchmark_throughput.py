@@ -403,6 +403,12 @@ def args_config():
                         help="Clear all the prefix cache blocks. This feature is specific"
                              " to the KsanaLLM engine and only takes effect when compiled"
                              " with -DCLEAR_CACHE=ON.")
+    parser.add_argument('--ptp_token_num',
+                        type=int,
+                        default=None,
+                        help="Per-request PTP (Parallel Token Prediction) draft token number. "
+                             "None means unset (use global ptp_step_num from model config), "
+                             "0 means disable PTP, >0 means use specified number.")
     parser.add_argument('--random_input_len',
                         type=int,
                         default=0,
@@ -427,6 +433,12 @@ def args_config():
                         type=str,
                         default="comparison_results.txt",
                         help='Output file path for diff results.')
+    parser.add_argument('--show_tokens',
+                        type=str,
+                        default=None,
+                        choices=['all', 'input', 'output'],
+                        help='Show token ids: "all" for both input and output, '
+                             '"input" for input only, "output" for output only.')
     args = parser.parse_args()
     if "," in args.host:
         args.host = args.host.split(",")
@@ -559,6 +571,8 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "use_chat_template": args.chat_template,
             "cache_stat": args.cache_stat,
         }
+        if args.ptp_token_num is not None:
+            data["sampling_config"]["ptp_token_num"] = args.ptp_token_num
         if input_tokens:
             data["input_tokens"] = input_tokens
         else:
@@ -634,6 +648,8 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "ignore_eos": args.ignore_eos,
             "structured_output_regex": args.structured_output_regex,
         }
+        if args.ptp_token_num is not None:
+            data["ptp_token_num"] = args.ptp_token_num
     elif args.backend == "triton-grpc":
         data = {
             "input_ids": tokenizer.encode(prompt,  add_special_tokens=True) if tokenizer else [],
@@ -673,6 +689,8 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
         # Enable usage in stream mode
         if args.stream:
             data["stream_options"] = {"include_usage": True}
+        if args.ptp_token_num is not None:
+            data["ptp_token_num"] = args.ptp_token_num
     return prompt, orjson.dumps(data)
 
 
@@ -950,15 +968,11 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
     input_token_num = len(output.get("input_token_ids", ""))
     out_tokens = None
     in_tokens = None
-    show_tokens = False
     cache_stat = None
 
     server_map_idx = "delta" if args.stream else "message"
     if args.backend == "ksana":
         output_text = output.get("texts", [""])[0].strip()
-        if show_tokens:
-            out_tokens = output.get("output_token_ids", [""])[0]
-            in_tokens = output.get("input_token_ids", "")
         if args.cache_stat:
             cache_stat = output.get("cache_stat", "")
     elif args.backend == "trt-llm":
@@ -1020,8 +1034,11 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         "req_id : {} input_token_num={}, output_token_num={}, output_text_len={}, output_text=\n{}"
         .format(req_id, input_token_num, output_token_num, output_len,
                 output_text))
-    if show_tokens:
-        print(f"input_tokens: {in_tokens}, output_tokens: {out_tokens}")
+    if args.show_tokens:
+        if args.show_tokens in ('all', 'input'):
+            print(f"input_tokens: {output.get('input_token_ids', '')}")
+        if args.show_tokens in ('all', 'output'):
+            print(f"output_tokens: {output.get('output_token_ids', [''])[0]}")
     if cache_stat is not None:
         from cache_stat_visualizer import calculate_cache_stats
         stats = calculate_cache_stats(cache_stat, input_token_num)

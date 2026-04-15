@@ -181,6 +181,9 @@ static Status SerializeSamplingConfig(const SamplingConfig& sampling_config, voi
   // enable_thinking
   SerializePod<bool>(sampling_config.enable_thinking, ptr, offset);
 
+  // ptp_token_num
+  SerializePod<int>(sampling_config.ptp_token_num, ptr, offset);
+
   return Status();
 }
 
@@ -249,6 +252,9 @@ static Status DeserializeSamplingConfig(SamplingConfig& sampling_config, const v
   // enable_thinking
   sampling_config.enable_thinking = DeserializePod<bool>(ptr, offset);
 
+  // ptp_token_num
+  sampling_config.ptp_token_num = DeserializePod<int>(ptr, offset);
+
   return Status();
 }
 
@@ -299,6 +305,7 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     // draft_tokens
     SerializeVector<int>(req->draft_tokens.mtp, ptr, offset);
     SerializeVector<int>(req->draft_tokens.spec, ptr, offset);
+    SerializeVector<int>(req->draft_tokens.ptp, ptr, offset);
 
     // accepted_hidden_states, not supported.
 
@@ -436,6 +443,7 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     // draft_tokens
     DeserializeVector<int>(req->draft_tokens.mtp, ptr, offset);
     DeserializeVector<int>(req->draft_tokens.spec, ptr, offset);
+    DeserializeVector<int>(req->draft_tokens.ptp, ptr, offset);
 
     // accepted_hidden_states, not supported.
 

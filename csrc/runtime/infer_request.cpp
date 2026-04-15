@@ -339,8 +339,9 @@ void InferRequest::LaunchPlanningTask() {
     // Append draft tokens at the last step of prefill
     if (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset ==
         prefilling_tokens_.size()) {
-      const size_t draft_token_num = draft_tokens.spec.size();
-      forwarding_tokens.insert(forwarding_tokens.end(), draft_tokens.spec.begin(), draft_tokens.spec.end());
+      const std::vector<int> &all_draft_tokens = draft_tokens.GetDraftTokens();
+      const size_t draft_token_num = all_draft_tokens.size();
+      forwarding_tokens.insert(forwarding_tokens.end(), all_draft_tokens.begin(), all_draft_tokens.end());
       inflight_task_.workload.draft_token_num = draft_token_num;
       inflight_task_.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
     }

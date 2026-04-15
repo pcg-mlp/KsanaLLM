@@ -252,6 +252,11 @@ class RequestConverter:
 
         if hasattr(request, 'enable_structured_output') and request.enable_structured_output:
             config["enable_structured_output"] = request.enable_structured_output
+
+        ptp_token_num = getattr(request, 'ptp_token_num', None)
+        if ptp_token_num is not None:
+            config["ptp_token_num"] = ptp_token_num
+
         return config
 
     def _get_guided_json_from_tool(
@@ -508,6 +513,7 @@ class RequestConverter:
             'top_k': ('sampling_config', 'top_k'),
             'top_p': ('sampling_config', 'top_p'),
             'temperature': ('sampling_config', 'temperature'),
+            'ptp_token_num': ('sampling_config', 'ptp_token_num'),
         }
         
         # 处理额外字段

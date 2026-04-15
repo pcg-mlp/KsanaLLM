@@ -43,7 +43,8 @@ size_t GetDecodeTokenNumThreshold() {
       // the threshold is set to mtp_step_num + 1, corresponding to the number of tokens during the
       // validation phase. This allows multi-token decode to use the kPage path instead of falling
       // back to the kFlash prefill path.
-      decode_token_num_threshold = runtime_config.mtp_step_num + model_config.ptp_step_num + 1;
+      // PTP in steady state needs 2*ptp_step_num (verify + placeholder) + 1 (generated) tokens.
+      decode_token_num_threshold = runtime_config.mtp_step_num + 2 * model_config.ptp_step_num + 1;
     } else {
       // Set to one by default
       decode_token_num_threshold = 1;

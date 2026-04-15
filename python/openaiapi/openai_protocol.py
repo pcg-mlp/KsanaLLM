@@ -77,6 +77,7 @@ class OpenAIRequestModel(OpenAIBaseModel):
     model_type: Optional[str] = None
     use_chat_template: Optional[bool] = None
     do_sample: Optional[bool] = None
+    ptp_token_num: Optional[int] = Field(default=None, ge=0)
 
 
 class ErrorResponse(BaseModel):

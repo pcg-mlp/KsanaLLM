@@ -67,6 +67,10 @@ struct SamplingConfig {
   // The current flag is used for controlling structured output.
   bool enable_thinking = true;
 
+  // Per-request PTP draft token number.
+  // -1 means unset (use global ptp_step_num), 0 means disable PTP, >0 means use specified number.
+  int ptp_token_num = -1;
+
   // Check and adjust sampling config arguments.
   Status VerifyArgs();
 };

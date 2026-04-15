@@ -298,6 +298,10 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     batch_scheduler_config_.ptp_step_num = 0;
     KLLM_LOG_WARNING << "MTP and PTP cannot be enabled simultaneously, ptp_step_num will be set to 0.";
   }
+  if (batch_scheduler_config_.enable_speculative_decoding && batch_scheduler_config_.ptp_step_num > 0) {
+    batch_scheduler_config_.ptp_step_num = 0;
+    KLLM_LOG_WARNING << "Speculative decoding and PTP cannot be enabled simultaneously, ptp_step_num will be set to 0.";
+  }
   KLLM_LOG_INFO << "mtp_step_num: " << batch_scheduler_config_.mtp_step_num
                 << ", model MTP layer: " << model_config.num_nextn_predict_layers;
 
@@ -324,9 +328,10 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
 
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
-  // When MTP is enabled, each request requires calculating 2 tokens while decoding.
+  // When MTP/PTP is enabled, each request requires calculating more tokens while decoding.
+  // PTP in steady state has ptp_step_num verify tokens + ptp_step_num placeholder tokens + 1 generated token.
   batch_scheduler_config_.max_decode_tokens_per_req =
-      batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num + 1;
+      batch_scheduler_config_.mtp_step_num + 2 * batch_scheduler_config_.ptp_step_num + 1;
 
   if (std::getenv("ENABLE_O_PROJ_OUT_OF_DP") != nullptr) {
     KLLM_CHECK_WITH_INFO(runtime_config_.parallel_basic_config.attn_tensor_parallel_size == 1,

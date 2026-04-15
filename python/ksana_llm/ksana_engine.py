@@ -259,6 +259,8 @@ class KsanaLLMEngine:
                                              "stop_strings", []),
             enable_thinking=_get_sampling_value(sampling_config,
                                                 "enable_thinking", True),
+            ptp_token_num=_get_sampling_value(sampling_config,
+                                              "ptp_token_num", -1),
             stop_token_ids=stop_token_ids,
             ignore_eos=ignore_eos
         )
@@ -361,6 +363,9 @@ class KsanaLLMEngine:
         )
         sampling_config.enable_thinking = _get_generation_value(
             generation_config, "enable_thinking", True
+        )
+        sampling_config.ptp_token_num = _get_generation_value(
+            generation_config, "ptp_token_num", -1
         )
 
         def _check_do_sample_params():

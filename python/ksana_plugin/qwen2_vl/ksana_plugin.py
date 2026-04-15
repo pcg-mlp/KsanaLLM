@@ -68,7 +68,7 @@ class KsanaPlugin:
 
             self.config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
             self.processor = AutoProcessor.from_pretrained(self.model_path)
-            self.precision = self.config.dtype
+            self.precision = getattr(self.config, 'torch_dtype', torch.bfloat16)
 
             self.init_encoder()
 
@@ -109,7 +109,7 @@ class KsanaPlugin:
                     dtype=self.precision)
         visual = visual.to(dtype=self.precision)
         visual.load_state_dict(load_state_dict_from_safetensors(self.model_path))
-        visual = visual.to(device=self.device)
+        visual = visual.to(device=self.device).eval()
         self.mm_encoder = visual
 
     def _init_remote_encoder(self):

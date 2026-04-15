@@ -147,7 +147,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("stop_strings", &ksana_llm::SamplingConfig::stop_strings)
       .def_readwrite("enable_structured_output", &ksana_llm::SamplingConfig::enable_structured_output)
       .def_readwrite("json_schema", &ksana_llm::SamplingConfig::json_schema)
-      .def_readwrite("enable_thinking", &ksana_llm::SamplingConfig::enable_thinking);
+      .def_readwrite("enable_thinking", &ksana_llm::SamplingConfig::enable_thinking)
+      .def_readwrite("ptp_token_num", &ksana_llm::SamplingConfig::ptp_token_num);
 
   // Export `EmbeddingSlice` to python.
   pybind11::class_<ksana_llm::EmbeddingSlice, std::shared_ptr<ksana_llm::EmbeddingSlice>>(m, "EmbeddingSlice")
