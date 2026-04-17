@@ -44,9 +44,6 @@ message(STATUS "Configuring version_info.h at CMAKE_CURRENT_SOURCE_DIR ${CMAKE_C
 
 include_directories(${CMAKE_BINARY_DIR}/include)
 
-# 查找 libcurl
-find_package(CURL REQUIRED)
-
 add_library(periphery STATIC ${periphery_SRCS})
 target_link_libraries(periphery PUBLIC -lpthread utils CURL::libcurl)
 

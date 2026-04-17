@@ -47,7 +47,7 @@ target_include_directories(connector
         ${CPPZMQ_INCLUDE_DIR}
 )
 
-target_link_libraries(connector PRIVATE utils cppzmq libzmq device TBB::tbb ${CURL_LIBRARIES})
+target_link_libraries(connector PRIVATE utils cppzmq libzmq device TBB::tbb CURL::libcurl)
 
 if(WITH_CUDA)
     target_link_libraries(connector PRIVATE ${NCCL_LIBRARIES})
@@ -67,7 +67,7 @@ endif()
 #     )
 #     target_compile_options(connector_test PRIVATE -fno-access-control -g -O0)
 # 
-#     target_link_libraries(connector_test PRIVATE connector gtest runtime gtest_main gmock ${CURL_LIBRARIES} TBB::tbb)
+#     target_link_libraries(connector_test PRIVATE connector gtest runtime gtest_main gmock CURL::libcurl TBB::tbb)
 # 
 #     if(WITH_CUDA)
 #         target_link_libraries(connector_test PRIVATE cuda )

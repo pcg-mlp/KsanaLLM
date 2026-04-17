@@ -203,6 +203,128 @@ TEST_F(RouterClientTest, TestRegisterNodeError) {
   EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
 }
 
+TEST_F(RouterClientTest, TestRegisterNodeEmptyResponse) {
+  class EmptyResponseMockRouterClient : public MockRouterClient {
+   public:
+    explicit EmptyResponseMockRouterClient(const std::string& endpoint) : MockRouterClient(endpoint) {}
+
+    std::string MakeHttpRequest(const std::string& path, const std::string& method, const nlohmann::json& json_data,
+                                int64_t* http_code_out = nullptr) override {
+      last_path_ = path;
+      last_method_ = method;
+      last_json_data_ = json_data;
+      if (http_code_out) {
+        *http_code_out = 200;
+      }
+      return "";
+    }
+  };
+
+  EmptyResponseMockRouterClient router_client("http://127.0.0.1:9080");
+  KVNodeInfo node_info;
+  node_info.cluster_name = "default_cluster";
+
+  Status status = router_client.RegisterNode(node_info);
+  EXPECT_FALSE(status.OK());
+  EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
+  EXPECT_EQ(router_client.GetLastPath(), "/RegisterNode");
+  EXPECT_EQ(router_client.GetLastMethod(), "POST");
+}
+
+TEST_F(RouterClientTest, TestRegisterNodeHttpError) {
+  class HttpErrorMockRouterClient : public MockRouterClient {
+   public:
+    explicit HttpErrorMockRouterClient(const std::string& endpoint) : MockRouterClient(endpoint) {}
+
+    std::string MakeHttpRequest(const std::string& path, const std::string& method, const nlohmann::json& json_data,
+                                int64_t* http_code_out = nullptr) override {
+      last_path_ = path;
+      last_method_ = method;
+      last_json_data_ = json_data;
+      if (http_code_out) {
+        *http_code_out = 503;
+      }
+      return R"({"detail":"service unavailable for registration"})";
+    }
+  };
+
+  HttpErrorMockRouterClient router_client("http://127.0.0.1:9080");
+  KVNodeInfo node_info;
+  node_info.cluster_name = "default_cluster";
+
+  Status status = router_client.RegisterNode(node_info);
+  EXPECT_FALSE(status.OK());
+  EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
+  EXPECT_NE(status.GetMessage().find("RegisterNode failed with HTTP 503"), std::string::npos);
+}
+
+TEST_F(RouterClientTest, TestRegisterNodeJsonParseError) {
+  class ParseErrorMockRouterClient : public MockRouterClient {
+   public:
+    explicit ParseErrorMockRouterClient(const std::string& endpoint) : MockRouterClient(endpoint) {}
+
+    std::string MakeHttpRequest(const std::string& path, const std::string& method, const nlohmann::json& json_data,
+                                int64_t* http_code_out = nullptr) override {
+      last_path_ = path;
+      last_method_ = method;
+      last_json_data_ = json_data;
+      if (http_code_out) {
+        *http_code_out = 200;
+      }
+      return "this is not valid json {{{";
+    }
+  };
+
+  ParseErrorMockRouterClient router_client("http://127.0.0.1:9080");
+  KVNodeInfo node_info;
+  node_info.cluster_name = "default_cluster";
+
+  Status status = router_client.RegisterNode(node_info);
+  EXPECT_FALSE(status.OK());
+  EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
+  EXPECT_NE(status.GetMessage().find("Failed to parse JSON response"), std::string::npos);
+}
+
+TEST_F(RouterClientTest, TestCheckConnectivityEmptyResponse) {
+  class EmptyHealthMockRouterClient : public MockRouterClient {
+   public:
+    explicit EmptyHealthMockRouterClient(const std::string& endpoint) : MockRouterClient(endpoint) {}
+
+    std::string MakeHttpRequest(const std::string& path, const std::string& method, const nlohmann::json& json_data,
+                                int64_t* http_code_out = nullptr) override {
+      last_path_ = path;
+      last_method_ = method;
+      last_json_data_ = json_data;
+      return "";
+    }
+  };
+
+  EmptyHealthMockRouterClient router_client("http://127.0.0.1:9080");
+  Status status = router_client.CheckConnectivity();
+  EXPECT_FALSE(status.OK());
+  EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
+  EXPECT_EQ(router_client.GetLastPath(), "/health");
+  EXPECT_EQ(router_client.GetLastMethod(), "GET");
+}
+
+TEST_F(RouterClientTest, TestCheckConnectivityException) {
+  class ErrorHealthMockRouterClient : public MockRouterClient {
+   public:
+    explicit ErrorHealthMockRouterClient(const std::string& endpoint) : MockRouterClient(endpoint) {}
+
+    std::string MakeHttpRequest(const std::string& path, const std::string& method, const nlohmann::json& json_data,
+                                int64_t* http_code_out = nullptr) override {
+      throw std::runtime_error("health request failed");
+    }
+  };
+
+  ErrorHealthMockRouterClient router_client("http://127.0.0.1:9080");
+  Status status = router_client.CheckConnectivity();
+  EXPECT_FALSE(status.OK());
+  EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
+  EXPECT_NE(status.GetMessage().find("Failed to check connectivity"), std::string::npos);
+}
+
 // Test case for prefill node heartbeat (Prefill节点)
 TEST_F(RouterClientTest, TestSendHeartbeatPrefill) {
   // Create a mock router_client that simulates a producer node heartbeat response
@@ -855,18 +977,17 @@ TEST_F(RouterClientTest, TestWriteCallbackFunctionality) {
   // Test with empty data
   result = TestWriteCallback(const_cast<char*>(""), 1, 0, &response_buffer);
   EXPECT_EQ(result, 0);
-  EXPECT_EQ(response_buffer, "Hello, World! More data");  // Should remain unchanged
+  EXPECT_EQ(response_buffer, "Hello, World! More data");
 
   // Test with size * nmemb calculation
   const char* chunk_data = "ABCD";
-  result = TestWriteCallback(const_cast<char*>(chunk_data), 2, 2, &response_buffer);  // 2*2 = 4 bytes
+  result = TestWriteCallback(const_cast<char*>(chunk_data), 2, 2, &response_buffer);
   EXPECT_EQ(result, 4);
   EXPECT_EQ(response_buffer, "Hello, World! More dataABCD");
 }
 
 // Test WriteCallback error handling (simulating bad_alloc exception)
 TEST_F(RouterClientTest, TestWriteCallbackErrorHandling) {
-  // Create a templated version of the callback to test error handling
   auto TestWriteCallbackTemplate = [](void* contents, size_t size, size_t nmemb, auto* s) -> size_t {
     size_t newLength = size * nmemb;
     try {
@@ -877,7 +998,6 @@ TEST_F(RouterClientTest, TestWriteCallbackErrorHandling) {
     }
   };
 
-  // Create a class that simulates a string that throws bad_alloc on append
   class BadAllocString {
    public:
     void append(const char*, size_t) { throw std::bad_alloc(); }
@@ -886,11 +1006,9 @@ TEST_F(RouterClientTest, TestWriteCallbackErrorHandling) {
   BadAllocString bad_string;
   const char* test_data = "test";
 
-  // TestWriteCallback should return 0 when bad_alloc is thrown
   size_t result = TestWriteCallbackTemplate(const_cast<char*>(test_data), 1, strlen(test_data), &bad_string);
   EXPECT_EQ(result, 0);
 
-  // Also test with a normal string to verify the template works correctly
   std::string normal_string;
   result = TestWriteCallbackTemplate(const_cast<char*>(test_data), 1, strlen(test_data), &normal_string);
   EXPECT_EQ(result, strlen(test_data));
@@ -923,19 +1041,16 @@ class FastTimeoutHTTPRouterClientTest : public HTTPRouterClient {
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
-      // Set up headers
       struct curl_slist* headers = NULL;
       headers = curl_slist_append(headers, "Accept: application/json");
       headers = curl_slist_append(headers, "Content-Type: application/json");
       curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-      // Set very short timeout for fast failure
-      curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L);           // 1 second total timeout
-      curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 60L);   // 1 second connect timeout
-      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 60L);  // Minimum bytes per second
-      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);   // Abort if too slow for 1 second
+      curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L);
+      curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 60L);
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 60L);
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
 
-      // Set custom request method if not GET
       if (method != "GET") {
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
         std::string post_data = json_data.dump();
@@ -943,23 +1058,20 @@ class FastTimeoutHTTPRouterClientTest : public HTTPRouterClient {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data.c_str());
       }
 
-      // Perform the request
       CURLcode res = curl_easy_perform(curl);
 
-      // Clean up
       curl_slist_free_all(headers);
       curl_easy_cleanup(curl);
 
       if (res != CURLE_OK) {
         KLLM_LOG_WARNING << "HTTP request failed: " << curl_easy_strerror(res);
-        return "{}";  // Return empty JSON on failure
+        return "{}";
       }
     }
     return response;
   }
 
  private:
-  // Use the same WriteCallback as the parent class
   static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
     size_t total_size = size * nmemb;
     userp->append(static_cast<char*>(contents), total_size);

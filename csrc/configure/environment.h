@@ -63,13 +63,16 @@ struct EndpointConfig {
 
 // The config of profiler.
 struct ProfilerConfig {
-  // The stat interval, in second.
   std::string metrics_export_url;
-  uint64_t export_interval_millis;
-  uint64_t export_timeout_millis;
+  uint64_t export_interval_millis = 60000;
+  uint64_t export_timeout_millis = 1000;
 
-  // Opentelemetry Resource attributes.
+  // Opentelemetry Resource attributes (from YAML config).
   std::unordered_map<std::string, std::string> resource_attributes;
+
+  // Process identity (set by caller, not from YAML).
+  std::string process_role;  // "engine" or "executor"
+  int executor_id = -1;
 };
 
 class Environment {

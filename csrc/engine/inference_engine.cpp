@@ -156,7 +156,8 @@ Status InferenceEngine::Initialize() {
 
   ProfilerConfig profiler_config;
   STATUS_CHECK_RETURN(env_->GetProfilerConfig(profiler_config));
-  Singleton<Profiler>::GetInstance()->InitMetrics(profiler_config);
+  profiler_config.process_role = "engine";
+  InitProcessProfiler(profiler_config);
 
   // Create batch scheduler.
   BatchSchedulerConfig batch_scheduler_config;
@@ -487,7 +488,7 @@ Status InferenceEngine::DoWarmupRun() {
                          << ") did not produce 'layernorm' response, skipping verification";
       }
     } else {
-      for (const auto& [output, req_logprobs, total_score] : req->output_group) {
+      for (const auto &[output, req_logprobs, total_score] : req->output_group) {
         KLLM_CHECK_WITH_INFO(req->input_tokens.size() < output.size(),
                              "Warmup run generated empty output tokens. Inference run failed");
       }
@@ -582,7 +583,7 @@ Status InferenceEngine::Stop() {
   }
 
   KLLM_LOG_INFO << "Destroy Profiler";
-  Singleton<Profiler>::DeleteInstance();
+  DestroyProcessProfiler();
 
   KLLM_LOG_INFO << "The Inference Engine has stopped.";
   return Status();

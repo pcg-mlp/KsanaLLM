@@ -18,7 +18,6 @@
 
 #include "configure/environment.h"
 #include "profiler/timer.h"
-#include "utils/singleton.h"
 
 #include "opentelemetry/context/propagation/global_propagator.h"
 #include "opentelemetry/context/propagation/text_map_propagator.h"
@@ -28,6 +27,7 @@
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_factory.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_options.h"
 #include "opentelemetry/ext/http/client/http_client.h"
+#include "opentelemetry/metrics/meter_provider.h"
 #include "opentelemetry/metrics/provider.h"
 #include "opentelemetry/nostd/shared_ptr.h"
 #include "opentelemetry/sdk/common/attribute_utils.h"
@@ -49,10 +49,9 @@ class NullBuffer : public std::streambuf {
 };
 
 // Use to collect profile data from different modules, must be thread-safe.
+// Each Profiler instance owns its own MeterProvider pipeline (no global OTel state dependency).
 class Profiler {
  public:
-  // Constructor must be public because Singleton uses std::make_shared internally.
-  // Do NOT construct directly outside of Singleton<Profiler>::GetInstance().
   Profiler();
   ~Profiler();
 
@@ -66,8 +65,6 @@ class Profiler {
   void ReportCounter(const std::string& name, int64_t value);
 
  private:
-  // Members
-
   std::string metrics_export_url_;
   bool is_initialized_ = false;
   uint64_t export_interval_millis_ = 60000;
@@ -75,10 +72,19 @@ class Profiler {
   opentelemetry::sdk::common::AttributeMap resource_attributes_;
   std::unordered_map<std::string, std::string> data_attributes_;
   opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes_view_;
+
+  // Local MeterProvider — each Profiler owns its own export pipeline, no global Provider dependency.
+  opentelemetry::v1::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> provider_;
   opentelemetry::v1::nostd::shared_ptr<opentelemetry::v1::metrics::Meter> meter_;
 
   // PIMPL to avoid exposing TBB in public headers
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+// Process-local profiler registry (replaces Singleton<Profiler> for multi-process support).
+void InitProcessProfiler(const ProfilerConfig& config);
+void DestroyProcessProfiler();
+Profiler* GetProcessProfiler();
+
 }  // namespace ksana_llm

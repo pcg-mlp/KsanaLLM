@@ -1,16 +1,16 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-
+#include <unistd.h>
 #include <chrono>
 #include <memory>
 #include <thread>
 #include <vector>
 
-#include "profiler/profiler.h"
-#include "utils/singleton.h"
-#include "utils/string_utils.h"
+
 #include "oneapi/tbb/concurrent_hash_map.h"
+#include "profiler/profiler.h"
+#include "utils/string_utils.h"
 
 namespace ksana_llm {
 NullBuffer null_buffer;
@@ -21,27 +21,28 @@ struct Profiler::Impl {
   std::mutex metrics_mutex;
   std::mutex counters_mutex;
   tbb::concurrent_hash_map<std::string,
-      opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Histogram<double>>> metrics;
+                           opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Histogram<double>>>
+      metrics;
   tbb::concurrent_hash_map<std::string,
-      opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Counter<uint64_t>>> counters;
+                           opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Counter<uint64_t>>>
+      counters;
 };
 
 Profiler::Profiler()
-    : resource_attributes_(), data_attributes_(), attributes_view_(data_attributes_),
-    meter_(nullptr), impl_(std::make_unique<Impl>()) {}
+    : resource_attributes_(),
+      data_attributes_(),
+      attributes_view_(data_attributes_),
+      meter_(nullptr),
+      impl_(std::make_unique<Impl>()) {}
 
-// Destructor is defined inline in header; Impl will be destroyed automatically
 Profiler::~Profiler() {
-  if (is_initialized_) {
-    // Reset global MeterProvider
-    std::shared_ptr<opentelemetry::metrics::MeterProvider> none;
-    opentelemetry::metrics::Provider::SetMeterProvider(none);
-  }
   if (impl_) {
-    // Explicitly clear concurrent maps before destroying Impl
     impl_->metrics.clear();
     impl_->counters.clear();
   }
+  meter_ = nullptr;
+  // Releasing provider_ triggers PeriodicReader shutdown + final flush.
+  provider_ = nullptr;
   is_initialized_ = false;
 }
 
@@ -52,6 +53,20 @@ void Profiler::InitMetrics(const ProfilerConfig& profiler_config) {
     resource_attributes_[kv.first] = kv.second;
     data_attributes_[kv.first] = kv.second;
   }
+
+  // Inject process identity so OTLP Collector treats each process as a distinct resource.
+  if (!profiler_config.process_role.empty()) {
+    resource_attributes_["process.role"] = profiler_config.process_role;
+    data_attributes_["process.role"] = profiler_config.process_role;
+  }
+  if (profiler_config.executor_id >= 0) {
+    auto id_str = std::to_string(profiler_config.executor_id);
+    resource_attributes_["executor.id"] = id_str;
+    data_attributes_["executor.id"] = id_str;
+  }
+  auto pid_str = std::to_string(getpid());
+  resource_attributes_["process.pid"] = pid_str;
+  data_attributes_["process.pid"] = pid_str;
 
   attributes_view_ =
       opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>>(data_attributes_);
@@ -68,11 +83,9 @@ void Profiler::InitMetrics(const ProfilerConfig& profiler_config) {
   } else if (metrics_export_url_ == "debug" || metrics_export_url_ == "DEBUG") {
     exporter = opentelemetry::exporter::metrics::OStreamMetricExporterFactory::Create(std::cout);
   } else {
-    // By default, data is export to the black hole file
     exporter = opentelemetry::exporter::metrics::OStreamMetricExporterFactory::Create(null_stream);
   }
 
-  // Initialize and set the global MeterProvider
   opentelemetry::sdk::metrics::PeriodicExportingMetricReaderOptions reader_options;
   reader_options.export_interval_millis = std::chrono::milliseconds(export_interval_millis_);
   reader_options.export_timeout_millis = std::chrono::milliseconds(export_timeout_millis_);
@@ -83,19 +96,20 @@ void Profiler::InitMetrics(const ProfilerConfig& profiler_config) {
       opentelemetry::sdk::metrics::ViewRegistryFactory::Create(),
       opentelemetry::sdk::resource::Resource::Create(resource_attributes_));
   context->AddMetricReader(std::move(reader));
-  auto u_provider = opentelemetry::sdk::metrics::MeterProviderFactory::Create(std::move(context));
-  std::shared_ptr<opentelemetry::metrics::MeterProvider> provider(std::move(u_provider));
-  opentelemetry::metrics::Provider::SetMeterProvider(provider);
-  // provider = opentelemetry::metrics::Provider::GetMeterProvider();
-  meter_ = opentelemetry::metrics::Provider::GetMeterProvider()->GetMeter("ksana_inference_metrics", SCOPE_VERSION);
+
+  // Own the MeterProvider locally — no global Provider::SetMeterProvider().
+  provider_ = std::shared_ptr<opentelemetry::metrics::MeterProvider>(
+      opentelemetry::sdk::metrics::MeterProviderFactory::Create(std::move(context)));
+  meter_ = provider_->GetMeter("ksana_inference_metrics", SCOPE_VERSION);
   is_initialized_ = true;
 }
 
 void Profiler::ReportMetric(const std::string& name, double value) {
-    if (!is_initialized_) return;
+  if (!is_initialized_) return;
 
-  using MetricsMap = tbb::concurrent_hash_map<std::string,
-    opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Histogram<double>>>;
+  using MetricsMap =
+      tbb::concurrent_hash_map<std::string,
+                               opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Histogram<double>>>;
 
   MetricsMap::accessor acc;
   bool inserted = impl_->metrics.insert(acc, name);
@@ -103,7 +117,7 @@ void Profiler::ReportMetric(const std::string& name, double value) {
   if (inserted || !acc->second) {
     std::lock_guard<std::mutex> lock(impl_->metrics_mutex);
     if (!acc->second) {  // double check
-        acc->second = std::move(meter_->CreateDoubleHistogram(opentelemetry::nostd::string_view(name)));
+      acc->second = std::move(meter_->CreateDoubleHistogram(opentelemetry::nostd::string_view(name)));
     }
   }
 
@@ -111,10 +125,11 @@ void Profiler::ReportMetric(const std::string& name, double value) {
 }
 
 void Profiler::ReportCounter(const std::string& name, int64_t value) {
-    if (!is_initialized_) return;
+  if (!is_initialized_) return;
 
-  using CountersMap = tbb::concurrent_hash_map<std::string,
-    opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Counter<uint64_t>>>;
+  using CountersMap =
+      tbb::concurrent_hash_map<std::string,
+                               opentelemetry::v1::nostd::unique_ptr<opentelemetry::v1::metrics::Counter<uint64_t>>>;
 
   CountersMap::accessor acc;
   bool inserted = impl_->counters.insert(acc, name);
@@ -128,5 +143,21 @@ void Profiler::ReportCounter(const std::string& name, int64_t value) {
 
   acc->second->Add(value, attributes_view_, opentelemetry::context::Context{});
 }
+
+namespace {
+std::unique_ptr<Profiler> g_process_profiler;
+std::once_flag g_profiler_init_flag;
+}  // namespace
+
+void InitProcessProfiler(const ProfilerConfig& config) {
+  std::call_once(g_profiler_init_flag, [&config]() {
+    g_process_profiler = std::make_unique<Profiler>();
+    g_process_profiler->InitMetrics(config);
+  });
+}
+
+void DestroyProcessProfiler() { g_process_profiler.reset(); }
+
+Profiler* GetProcessProfiler() { return g_process_profiler.get(); }
 
 }  // namespace ksana_llm

@@ -13,6 +13,7 @@
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
 #include "global_cache_connector/global_cache_connector_factory.h"
+#include "profiler/profiler.h"
 #include "runtime/draft_generator/asr_custom_generator.h"
 #include "runtime/draft_generator/ptp_generator.h"
 #include "runtime/draft_generator/trie_generator.h"
@@ -73,6 +74,7 @@ void InferenceExecutor::Start() {
 }
 
 void InferenceExecutor::Stop() {
+  DestroyProcessProfiler();
   std::lock_guard<std::mutex> lock(mutex_);
   terminated_.store(true);
   cond_.notify_all();
@@ -272,6 +274,14 @@ Status InferenceExecutor::Initialize() {
 
       KLLM_LOG_INFO << "GlobalCacheConnector and GlobalCachePutWorker created in executor for device " << device_id;
     }
+  }
+
+  // Initialize per-process profiler for this executor.
+  ProfilerConfig profiler_config;
+  if (env_->GetProfilerConfig(profiler_config).OK()) {
+    profiler_config.process_role = "executor";
+    profiler_config.executor_id = executor_id_;
+    InitProcessProfiler(profiler_config);
   }
 
   KLLM_LOG_INFO << "InferenceExecutor::Initialize finished.";
