@@ -5,12 +5,14 @@ file(GLOB_RECURSE FLASH_MLA_SRCS *.cu)
 list(FILTER FLASH_MLA_SRCS EXCLUDE REGEX ".*test.cu")
 
 if(ENABLE_FLASH_MLA STREQUAL "TRUE")
-  set(CUDA_FLASH_MLA_FLAGS "-gencode arch=compute_90a,code=sm_90a -DENABLE_FLASH_MLA")
+  set(CUDA_FLASH_MLA_FLAGS "-DENABLE_FLASH_MLA")
   add_definitions(-DENABLE_FLASH_MLA)
-  message(STATUS "Flash MLA enabled for SM90+ GPUs")
+  message(STATUS "Flash MLA enabled for SM90a GPUs")
 else()
-  set(CUDA_FLASH_MLA_FLAGS "-gencode arch=compute_86,code=sm_86")
-  message(STATUS "Flash MLA disabled for SM${SM} GPUs (requires SM90+)")
+  # When flash_mla is not enabled, we still need to create the library target
+  # but compile with a compatible SM arch to avoid errors
+  set(CUDA_FLASH_MLA_FLAGS "")
+  message(STATUS "Flash MLA disabled (requires SM90a)")
 endif()
 
 # Create flash_mla library
@@ -18,6 +20,11 @@ add_library(llm_kernels_nvidia_kernel_flash_mla STATIC ${FLASH_MLA_SRCS})
 set_property(TARGET llm_kernels_nvidia_kernel_flash_mla PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_flash_mla PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(llm_kernels_nvidia_kernel_flash_mla PROPERTIES LINKER_LANGUAGE CUDA)
+
+# Override CUDA_ARCHITECTURES for this target to avoid compiling with all global SMs
+if(ENABLE_FLASH_MLA STREQUAL "TRUE")
+  set_target_properties(llm_kernels_nvidia_kernel_flash_mla PROPERTIES CUDA_ARCHITECTURES "90a")
+endif()
 
 # Define custom CUDA flags
 set(CUSTOM_CUDA_FLAGS

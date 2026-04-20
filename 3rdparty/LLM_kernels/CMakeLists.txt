@@ -148,7 +148,37 @@ if(NOT _PYTHON_SUCCESS MATCHES 0)
 endif()
 
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_DIR})
+
+# Save our CMAKE_CUDA_ARCHITECTURES before find_package(Torch) — Torch may overwrite it
+set(_SAVED_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+set(_SAVED_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+set(_SAVED_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
+set(_SAVED_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
+
 find_package(Torch REQUIRED)
+
+# Restore CMAKE_CUDA_ARCHITECTURES to our own setting (Torch may have overwritten it)
+set(CMAKE_CUDA_ARCHITECTURES "${_SAVED_CUDA_ARCHITECTURES}")
+message(STATUS "Restored CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+
+# Restore CMAKE_CUDA_FLAGS (remove any -gencode Torch injected)
+set(CMAKE_CUDA_FLAGS "${_SAVED_CUDA_FLAGS}")
+set(CMAKE_CUDA_FLAGS_RELEASE "${_SAVED_CUDA_FLAGS_RELEASE}")
+set(CMAKE_CUDA_FLAGS_DEBUG "${_SAVED_CUDA_FLAGS_DEBUG}")
+message(STATUS "Restored CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
+
+# Clean torch_cuda INTERFACE_COMPILE_OPTIONS to prevent -gencode propagation
+foreach(_torch_tgt torch_cuda torch_cuda_cu torch_cuda_cpp)
+  if(TARGET ${_torch_tgt})
+    get_target_property(_opts ${_torch_tgt} INTERFACE_COMPILE_OPTIONS)
+    if(_opts)
+      list(FILTER _opts EXCLUDE REGEX "-gencode")
+      set_target_properties(${_torch_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_opts}")
+    endif()
+  endif()
+endforeach()
+message(STATUS "Cleaned -gencode flags from Torch CUDA targets")
+
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; from distutils import sysconfig;print(sysconfig.get_python_inc());"
   RESULT_VARIABLE _PYTHON_SUCCESS
   OUTPUT_VARIABLE PY_INCLUDE_DIR)

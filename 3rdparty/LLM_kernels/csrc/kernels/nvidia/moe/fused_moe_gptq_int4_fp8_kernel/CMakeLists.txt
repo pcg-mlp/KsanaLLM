@@ -1,6 +1,6 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-if (SM STREQUAL "90" OR SM STREQUAL "90a")
+if (HAS_SM90 OR HAS_SM90A)
   add_definitions(-DENABLE_FUSED_MOE_GPTQ_INT4_FP8=ON)
 
   file(GLOB_RECURSE FUSED_MOE_GPTQ_INT4_FP8_ALL_FILES

@@ -16,6 +16,37 @@ if(NOT DEFINED SM)
   execute_process(COMMAND python ${PROJECT_SOURCE_DIR}/tools/get_nvidia_gpu_properties.py OUTPUT_VARIABLE SM OUTPUT_STRIP_TRAILING_WHITESPACE)
 endif()
 
+# Parse SM into a list for multi-SM support (e.g. -DSM=80,86,89,90,90a)
+if(NOT DEFINED SM OR SM STREQUAL "")
+  set(SM_LIST "${SM_SETS}")
+elseif("${SM}" MATCHES ",")
+  string(REPLACE "," ";" SM_LIST "${SM}")
+else()
+  set(SM_LIST "${SM}")
+endif()
+
+# Create helper flags for each SM architecture
+set(HAS_SM80 FALSE)
+set(HAS_SM86 FALSE)
+set(HAS_SM89 FALSE)
+set(HAS_SM90 FALSE)
+set(HAS_SM90A FALSE)
+foreach(_sm IN LISTS SM_LIST)
+  if(_sm STREQUAL "80")
+    set(HAS_SM80 TRUE)
+  elseif(_sm STREQUAL "86")
+    set(HAS_SM86 TRUE)
+  elseif(_sm STREQUAL "89")
+    set(HAS_SM89 TRUE)
+  elseif(_sm STREQUAL "90")
+    set(HAS_SM90 TRUE)
+  elseif(_sm STREQUAL "90a")
+    set(HAS_SM90A TRUE)
+  endif()
+endforeach()
+message(STATUS "SM_LIST: ${SM_LIST}")
+message(STATUS "HAS_SM80=${HAS_SM80} HAS_SM86=${HAS_SM86} HAS_SM89=${HAS_SM89} HAS_SM90=${HAS_SM90} HAS_SM90A=${HAS_SM90A}")
+
 execute_process(COMMAND mkdir -p ${CMAKE_BINARY_DIR}/triton_kernel_files)
 
 # fetch 3rdparty
@@ -51,7 +82,7 @@ if(CUDA_PTX_VERBOSE_INFO)
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -v")
 endif()
 
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl -g")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall,-fno-plt -ldl -g")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
 
 set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall --generate-line-info -DCUDA_PTX_FP8_F2FP_ENABLED")
@@ -59,6 +90,8 @@ set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall --
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD} -DCUDA_PTX_FP8_F2FP_ENABLED")
+# Compress embedded GPU fatbinary to reduce .o / .so size for multi-SM builds
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xfatbin --compress-all")
 
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3 -DCUDA_PTX_FP8_F2FP_ENABLED")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
@@ -72,38 +105,15 @@ set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
 set(SM_SETS 80 86 89 90 90a)
 
-# check if custom define SM
-if(NOT DEFINED SM)
-  foreach(SM_NUM IN LISTS SM_SETS)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
-    message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
-    message(STATUS "CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS}")
-    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
-    list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-    list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
-  endforeach()
-elseif("${SM}" MATCHES ",")
-  # Multiple SM values
-  string(REPLACE "," ";" SM_LIST ${SM})
-
-  foreach(SM_NUM IN LISTS SM_LIST)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
-    message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
-    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
-    list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-    list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
-  endforeach()
-else()
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM},code=sm_${SM}")
-  list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM})
-  message(STATUS "Assign GPU architecture (sm=${SM})")
-  message(STATUS "CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS}")
-  string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM}")
-  list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-  list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
-endif()
+# Use SM_LIST (already parsed above) to set CUDA architectures
+# NOTE: We only set CMAKE_CUDA_ARCHITECTURES here (not CMAKE_CUDA_FLAGS -gencode).
+# This allows per-target CUDA_ARCHITECTURES overrides to work correctly for
+# SM-specific kernels (e.g., flash_mla only builds for 90a, blockwise_gemm for 90/90a).
+foreach(SM_NUM IN LISTS SM_LIST)
+  list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
+  message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
+endforeach()
+message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
 # setting cutlass v3.x
 add_library(cutlass_c3x INTERFACE)
@@ -149,8 +159,8 @@ target_compile_definitions(cutlass_c4x INTERFACE
     CUTLASS_PATCH_VERSION=${CUTLASS_C4X_PATCH_VERSION}
 )
 
-# enable flashmla on hopper arch
-if(DEFINED SM AND SM STREQUAL "90a")
+# enable flashmla on hopper arch (check SM_LIST for multi-SM support)
+if(HAS_SM90A)
   set(ENABLE_FLASH_MLA "TRUE")
 endif()
 message(STATUS "ENABLE_FLASH_MLA: ${ENABLE_FLASH_MLA}")

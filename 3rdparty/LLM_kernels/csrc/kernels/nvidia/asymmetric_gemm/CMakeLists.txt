@@ -171,9 +171,7 @@ foreach(target_name
   # into the binary anyway.
   
   # support sm90(COMPILE_HOPPER_TMA_GEMMS)
-  if("90" IN_LIST CMAKE_CUDA_ARCHITECTURES_ORIG
-     OR "90-real" IN_LIST CMAKE_CUDA_ARCHITECTURES_ORIG
-     OR "90-real" IN_LIST CMAKE_CUDA_ARCHITECTURES_NATIVE)
+  if(HAS_SM90 OR HAS_SM90A)
 
     message(STATUS "MANUALLY APPENDING FLAG TO COMPILE FOR SM_90a.")
     target_compile_options(

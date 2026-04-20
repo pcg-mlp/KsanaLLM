@@ -102,3 +102,18 @@ target_compile_definitions(llm_kernels_nvidia_kernel_others_trtllm_dev_cutlass_k
 target_compile_definitions(llm_kernels_nvidia_kernel_others_trtllm_dev_cutlass_kernels PUBLIC NDEBUG)
 target_compile_definitions(llm_kernels_nvidia_kernel_others_trtllm_dev_cutlass_kernels PUBLIC ENABLE_BF16)
 target_compile_definitions(llm_kernels_nvidia_kernel_others_trtllm_dev_cutlass_kernels PUBLIC ENABLE_FP4)
+
+# This target only supports SM89/90/90a - override CUDA_ARCHITECTURES
+set(_trtllm_cutlass_archs "")
+if(HAS_SM89)
+  list(APPEND _trtllm_cutlass_archs 89)
+endif()
+if(HAS_SM90)
+  list(APPEND _trtllm_cutlass_archs 90)
+endif()
+if(HAS_SM90A)
+  list(APPEND _trtllm_cutlass_archs 90a)
+endif()
+if(_trtllm_cutlass_archs)
+  set_target_properties(llm_kernels_nvidia_kernel_others_trtllm_dev_cutlass_kernels PROPERTIES CUDA_ARCHITECTURES "${_trtllm_cutlass_archs}")
+endif()

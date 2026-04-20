@@ -1,6 +1,6 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-if (SM STREQUAL "90" OR SM STREQUAL "90a")
+if (HAS_SM90 OR HAS_SM90A)
     add_definitions(-DENABLE_MACHETE=ON)
 endif()
 
@@ -99,6 +99,21 @@ list(FILTER MACHETE_SRCS EXCLUDE REGEX ".*test.cu")
 add_library(llm_kernels_nvidia_kernel_machete STATIC ${MACHETE_SRCS} ${MACHETE_INSTANTIATIONS})
 set_property(TARGET llm_kernels_nvidia_kernel_machete PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_machete PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+# machete only supports SM90/90a - override CUDA_ARCHITECTURES
+if(HAS_SM90 OR HAS_SM90A)
+  set(_machete_archs "")
+  if(HAS_SM90)
+    list(APPEND _machete_archs 90)
+  endif()
+  if(HAS_SM90A)
+    list(APPEND _machete_archs 90a)
+  endif()
+  set_target_properties(llm_kernels_nvidia_kernel_machete PROPERTIES CUDA_ARCHITECTURES "${_machete_archs}")
+else()
+  # If no SM90/90a, compile with a fallback arch to create an empty-ish library
+  set_target_properties(llm_kernels_nvidia_kernel_machete PROPERTIES CUDA_ARCHITECTURES "80")
+endif()
 target_link_libraries(llm_kernels_nvidia_kernel_machete PUBLIC fmt -lcuda -lcudart
     llm_kernels_nvidia_utils)
 target_link_libraries(llm_kernels_nvidia_kernel_machete PRIVATE cutlass_c3x)

@@ -30,6 +30,9 @@ add_library(global_cache_connector SHARED
 set_target_properties(global_cache_connector PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     SOVERSION 1
+    BUILD_RPATH "\$ORIGIN;\$ORIGIN/../lib"
+    INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib"
+    INSTALL_RPATH_USE_LINK_PATH OFF
 )
 
 target_include_directories(global_cache_connector

@@ -1,10 +1,10 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-if ((SM STREQUAL "90" OR SM STREQUAL "90a") AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
+if ((HAS_SM90 OR HAS_SM90A) AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
     set(ENABLE_DEEPGEMM 1)
 else()
     set(ENABLE_DEEPGEMM 0)
-    message(WARNING "SM != 90 or CUDA version < 12.8, set ENABLE_DEEPGEMM=0")
+    message(WARNING "SM does not include 90/90a or CUDA version < 12.8, set ENABLE_DEEPGEMM=0")
 endif()
 
 # set kernels target
@@ -18,5 +18,14 @@ target_link_libraries(llm_kernels_nvidia_kernel_gemm_deepgemm PUBLIC -lcublas -l
     llm_kernels_nvidia_utils)
 if (ENABLE_DEEPGEMM)
     target_link_libraries(llm_kernels_nvidia_kernel_gemm_deepgemm PUBLIC llm_kernels_nvidia_kernel_others_trtllm_dev_common)
+    # Only compile for SM90/90a
+    set(_deepgemm_archs "")
+    if(HAS_SM90)
+      list(APPEND _deepgemm_archs 90)
+    endif()
+    if(HAS_SM90A)
+      list(APPEND _deepgemm_archs 90a)
+    endif()
+    set_target_properties(llm_kernels_nvidia_kernel_gemm_deepgemm PROPERTIES CUDA_ARCHITECTURES "${_deepgemm_archs}")
 endif()
 target_link_libraries(llm_kernels_nvidia_kernel_gemm_deepgemm PRIVATE cutlass_c4x)

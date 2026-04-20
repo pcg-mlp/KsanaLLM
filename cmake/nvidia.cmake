@@ -6,11 +6,13 @@ if(CUDA_PTX_VERBOSE_INFO)
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -v")
 endif()
 
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl -g3")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall,-fno-plt -ldl -g3")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD} -DCUDA_PTX_FP8_F2FP_ENABLED")
+# Compress embedded GPU fatbinary to reduce .o / .so size for multi-SM builds
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xfatbin --compress-all")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3 -DCUDA_PTX_FP8_F2FP_ENABLED")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
@@ -21,37 +23,53 @@ set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
 set(SM_SETS 80 86 89 90 90a)
 
+# Parse SM into a list for multi-SM support (e.g. -DSM=80,86,89,90,90a)
+if(NOT DEFINED SM OR SM STREQUAL "")
+  # SM should already be defined from top-level CMakeLists.txt
+  set(SM_LIST ${SM_SETS})
+elseif("${SM}" MATCHES ",")
+  string(REPLACE "," ";" SM_LIST "${SM}")
+else()
+  set(SM_LIST "${SM}")
+endif()
+
+# Create helper flags for each SM architecture
+set(HAS_SM80 FALSE)
+set(HAS_SM86 FALSE)
+set(HAS_SM89 FALSE)
+set(HAS_SM90 FALSE)
+set(HAS_SM90A FALSE)
+foreach(_sm IN LISTS SM_LIST)
+  if(_sm STREQUAL "80")
+    set(HAS_SM80 TRUE)
+  elseif(_sm STREQUAL "86")
+    set(HAS_SM86 TRUE)
+  elseif(_sm STREQUAL "89")
+    set(HAS_SM89 TRUE)
+  elseif(_sm STREQUAL "90")
+    set(HAS_SM90 TRUE)
+  elseif(_sm STREQUAL "90a")
+    set(HAS_SM90A TRUE)
+  endif()
+endforeach()
+message(STATUS "SM_LIST: ${SM_LIST}")
+message(STATUS "HAS_SM80=${HAS_SM80} HAS_SM86=${HAS_SM86} HAS_SM89=${HAS_SM89} HAS_SM90=${HAS_SM90} HAS_SM90A=${HAS_SM90A}")
+
 # check if custom define SM
+# NOTE: We only set CMAKE_CUDA_ARCHITECTURES here (not CMAKE_CUDA_FLAGS -gencode).
+# This allows per-target CUDA_ARCHITECTURES overrides to work correctly for
+# SM-specific kernels.
 if(NOT DEFINED SM)
   foreach(SM_NUM IN LISTS SM_SETS)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
-
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
-    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
-    list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-    list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
-  endforeach()
-elseif("${SM}" MATCHES ",")
-  # Multiple SM values
-  string(REPLACE "," ";" SM_LIST ${SM})
-
-  foreach(SM_NUM IN LISTS SM_LIST)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
-
-    list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
-    message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
-    string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
-    list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-    list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
   endforeach()
 else()
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM},code=sm_${SM}")
-  list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM})
-  message(STATUS "Assign GPU architecture (sm=${SM})")
-  string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM}")
-  list(JOIN SUB_VER_NUM "." SM_ARCH_VER)
-  list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
+  # Use SM_LIST for both single and multi-SM
+  foreach(SM_NUM IN LISTS SM_LIST)
+    list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
+    message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
+  endforeach()
 endif()
 
 set(CUDA_INC_DIRS
@@ -73,18 +91,9 @@ endif()
 
 # DeepGEMM support - only for SM90/SM90a
 set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 0)
-set(_deepgemm_candidate_arches ${CMAKE_CUDA_ARCHITECTURES})
-if(DEFINED SM AND NOT SM STREQUAL "")
-  string(REPLACE "," ";" _sm_arch_list "${SM}")
-  list(APPEND _deepgemm_candidate_arches ${_sm_arch_list})
+if(HAS_SM90 OR HAS_SM90A)
+  set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 1)
 endif()
-
-foreach(ARCH IN LISTS _deepgemm_candidate_arches)
-  if(ARCH STREQUAL "90" OR ARCH STREQUAL "90a")
-    set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 1)
-    break()
-  endif()
-endforeach()
 
 if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
   message(STATUS "DeepGEMM support enabled (SM90/90a detected).")
@@ -94,7 +103,6 @@ endif()
 
 add_compile_definitions(ENABLE_DEEPSEEK_DEEPGEMM=${ENABLE_DEEPSEEK_DEEPGEMM_FLAG})
 set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG ${ENABLE_DEEPSEEK_DEEPGEMM_FLAG} CACHE INTERNAL "Toggle DeepSeek DeepGEMM kernels" FORCE)
-unset(_deepgemm_candidate_arches)
 
 find_package(Git QUIET)
 if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)

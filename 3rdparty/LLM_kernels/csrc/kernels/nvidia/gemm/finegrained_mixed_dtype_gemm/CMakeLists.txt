@@ -1,10 +1,10 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-if ((SM STREQUAL "89" OR SM STREQUAL "90" OR SM STREQUAL "90a") AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
+if ((HAS_SM89 OR HAS_SM90 OR HAS_SM90A) AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
     set(ENABLE_FINEGRAINED_MIXED_DTYPE_GEMM 1)
 else()
     set(ENABLE_FINEGRAINED_MIXED_DTYPE_GEMM 0)
-    message(WARNING "SM < 89 or CUDA version < 12.8, set ENABLE_FINEGRAINED_MIXED_DTYPE_GEMM=0")
+    message(WARNING "SM does not include 89/90/90a or CUDA version < 12.8, set ENABLE_FINEGRAINED_MIXED_DTYPE_GEMM=0")
 endif()
 
 # set kernels target
@@ -21,5 +21,17 @@ target_link_libraries(llm_kernels_nvidia_kernel_gemm_finegrained_mixed_dtype_gem
                       llm_kernels_nvidia_utils)
 if (ENABLE_FINEGRAINED_MIXED_DTYPE_GEMM)
     target_link_libraries(llm_kernels_nvidia_kernel_gemm_finegrained_mixed_dtype_gemm PUBLIC llm_kernels_nvidia_kernel_others_trtllm_dev_thop)
+    # Only compile for supported SM architectures (89, 90, 90a)
+    set(_finegrained_archs "")
+    if(HAS_SM89)
+      list(APPEND _finegrained_archs 89)
+    endif()
+    if(HAS_SM90)
+      list(APPEND _finegrained_archs 90)
+    endif()
+    if(HAS_SM90A)
+      list(APPEND _finegrained_archs 90a)
+    endif()
+    set_target_properties(llm_kernels_nvidia_kernel_gemm_finegrained_mixed_dtype_gemm PROPERTIES CUDA_ARCHITECTURES "${_finegrained_archs}")
 endif()
 target_link_libraries(llm_kernels_nvidia_kernel_gemm_finegrained_mixed_dtype_gemm PRIVATE cutlass_c4x)

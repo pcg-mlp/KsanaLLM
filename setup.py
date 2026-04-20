@@ -106,7 +106,7 @@ class BuildExt(build_ext_orig):
             # CUDA device specific options
             cmake_options.update({
                 "WITH_CUDA": "ON",
-                "SM": "80,86,89",  # Specify the supported GPU architectures
+                "SM": "80,86,89,90a",  # Specify the supported GPU architectures
             })
 
         # Dictionary to track the status (enabled/disabled) of each endpoint
@@ -166,7 +166,12 @@ class BuildExt(build_ext_orig):
         package_root_dir = extdir.parent / "ksana_llm"
 
         # List of target libraries to copy (unified list)
-        target_libs = ["libtorch_serving.so", "libloguru.so"]
+        target_libs = [
+            "libtorch_serving.so",
+            "libloguru.so",
+            "libglobal_cache_connector.so.1",
+            "libmooncake_store.so",
+        ]
 
         # Include endpoint libraries that are enabled
         for endpoint in implemented_endpoints:

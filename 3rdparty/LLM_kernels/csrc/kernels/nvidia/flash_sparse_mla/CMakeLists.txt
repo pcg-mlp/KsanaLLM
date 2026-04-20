@@ -5,10 +5,10 @@ file(GLOB_RECURSE FLASH_SPARSE_MLA_SRCS *.cu)
 list(FILTER FLASH_SPARSE_MLA_SRCS EXCLUDE REGEX ".*test.cu")
 
 if(ENABLE_FLASH_MLA STREQUAL "TRUE")
-  set(CUDA_FLASH_MLA_FLAGS "-gencode arch=compute_90a,code=sm_90a -DENABLE_FLASH_MLA")
+  set(CUDA_FLASH_MLA_FLAGS "-DENABLE_FLASH_MLA")
   add_definitions(-DENABLE_FLASH_MLA)
 else()
-  set(CUDA_FLASH_MLA_FLAGS "-gencode arch=compute_86,code=sm_86")
+  set(CUDA_FLASH_MLA_FLAGS "")
   list(FILTER FLASH_SPARSE_MLA_SRCS EXCLUDE REGEX ".*/flash_sparse_mla/kernels/.*")
 endif()
 
@@ -17,6 +17,11 @@ add_library(llm_kernels_nvidia_kernel_flash_sparse_mla STATIC ${DEEPSEEK_FLASH_M
 set_property(TARGET llm_kernels_nvidia_kernel_flash_sparse_mla PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_flash_sparse_mla PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(llm_kernels_nvidia_kernel_flash_sparse_mla PROPERTIES LINKER_LANGUAGE CUDA)
+
+# Override CUDA_ARCHITECTURES for this target to avoid compiling with all global SMs
+if(ENABLE_FLASH_MLA STREQUAL "TRUE")
+  set_target_properties(llm_kernels_nvidia_kernel_flash_sparse_mla PROPERTIES CUDA_ARCHITECTURES "90a")
+endif()
 
 # Define custom CUDA flags
 set(CUSTOM_CUDA_FLAGS

@@ -186,10 +186,22 @@ if(WITH_CUDA)
   if(NOT DEFINED SM)
     set(SM "90a")  # 默认使用90a
   endif()
-  # 检查是否为Hopper架构（SM90+），Flash Attention 3需要Hopper架构支持
-  string(SUBSTRING "${SM}" 0 1 SM_FIRST_CHAR)
-  if(SM_FIRST_CHAR STREQUAL "9")
-    message(STATUS "Hopper architecture (SM${SM}) detected, enabling Flash Attention 3...")
+  # 检查是否包含Hopper架构（SM90+），Flash Attention 3需要Hopper架构支持
+  # 支持多SM模式，如 -DSM=80,86,89,90,90a
+  set(_has_hopper FALSE)
+  if("${SM}" MATCHES ",")
+    string(REPLACE "," ";" _sm_check_list "${SM}")
+  else()
+    set(_sm_check_list "${SM}")
+  endif()
+  foreach(_sm_val IN LISTS _sm_check_list)
+    string(SUBSTRING "${_sm_val}" 0 1 _sm_first_char)
+    if(_sm_first_char STREQUAL "9")
+      set(_has_hopper TRUE)
+    endif()
+  endforeach()
+  if(_has_hopper)
+    message(STATUS "Hopper architecture detected in SM=${SM}, enabling Flash Attention 3...")
     include(FlashAttention3AutoBuild)
     check_flash_attn_3_available(FA3_AVAILABLE)
     if(NOT FA3_AVAILABLE)
@@ -209,11 +221,13 @@ include(LLM_kernels)
 include(base)
 
 # set compiler flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
+# -fno-plt: avoid PLT-relative relocations that overflow when .text > 2GB
+# in multi-SM builds (fatbinaries for 5 architectures make .so very large).
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf -fno-plt")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wall -O0 -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf -fno-plt")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -Wno-unknown-pragmas -Wno-pointer-arith -Wno-attributes -Wabi-tag")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -O0 -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
@@ -308,7 +322,45 @@ if(NOT _PYTHON_SUCCESS MATCHES 0)
 endif()
 
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_DIR})
+
+# Save our CMAKE_CUDA_ARCHITECTURES before find_package(Torch) — Torch may overwrite it
+set(_SAVED_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+set(_SAVED_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+set(_SAVED_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
+set(_SAVED_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
+
 find_package(Torch REQUIRED)
+
+# After find_package(Torch), PyTorch's TorchConfig.cmake / Caffe2 cuda.cmake may:
+#   1. Overwrite CMAKE_CUDA_ARCHITECTURES with Torch's own build-time architectures
+#   2. Inject -gencode flags into CMAKE_CUDA_FLAGS (global, affects ALL targets)
+#   3. Set INTERFACE_COMPILE_OPTIONS on torch_cuda target (propagated via target_link_libraries)
+# All three break per-target CUDA_ARCHITECTURES and may cause missing kernel images.
+
+# Restore CMAKE_CUDA_ARCHITECTURES to our own setting
+set(CMAKE_CUDA_ARCHITECTURES "${_SAVED_CUDA_ARCHITECTURES}")
+message(STATUS "Restored CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+
+# Restore CMAKE_CUDA_FLAGS (remove any -gencode Torch injected)
+set(CMAKE_CUDA_FLAGS "${_SAVED_CUDA_FLAGS}")
+set(CMAKE_CUDA_FLAGS_RELEASE "${_SAVED_CUDA_FLAGS_RELEASE}")
+set(CMAKE_CUDA_FLAGS_DEBUG "${_SAVED_CUDA_FLAGS_DEBUG}")
+message(STATUS "Restored CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
+
+# Clean torch_cuda INTERFACE_COMPILE_OPTIONS to prevent -gencode propagation
+# via target_link_libraries, which would override per-target CUDA_ARCHITECTURES
+# on SM-specific kernels (e.g., flash_sparse_mla=90a, blockwise_gemm=90/90a).
+foreach(_torch_tgt torch_cuda torch_cuda_cu torch_cuda_cpp)
+  if(TARGET ${_torch_tgt})
+    get_target_property(_opts ${_torch_tgt} INTERFACE_COMPILE_OPTIONS)
+    if(_opts)
+      list(FILTER _opts EXCLUDE REGEX "-gencode")
+      set_target_properties(${_torch_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_opts}")
+    endif()
+  endif()
+endforeach()
+message(STATUS "Cleaned -gencode flags from Torch CUDA targets")
+
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; from distutils import sysconfig;
 print(sysconfig.get_python_inc());"
   RESULT_VARIABLE _PYTHON_SUCCESS

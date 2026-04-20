@@ -1,10 +1,10 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-if ((SM STREQUAL "90" OR SM STREQUAL "90a") AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
+if ((HAS_SM90 OR HAS_SM90A) AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
     set(ENABLE_CUTLASSMOE 1)
 else()
     set(ENABLE_CUTLASSMOE 0)
-    message(WARNING "SM != 90 or CUDA version < 12.8, set ENABLE_CUTLASSMOE=0")
+    message(WARNING "SM does not include 90/90a or CUDA version < 12.8, set ENABLE_CUTLASSMOE=0")
 endif()
 
 # set kernels target
@@ -21,5 +21,14 @@ target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PUBLIC -lcublas 
                       llm_kernels_nvidia_utils)
 if (ENABLE_CUTLASSMOE)
     target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PUBLIC llm_kernels_nvidia_kernel_others_trtllm_dev_thop)
+    # Only compile for SM90/90a
+    set(_cutlass_moe_archs "")
+    if(HAS_SM90)
+      list(APPEND _cutlass_moe_archs 90)
+    endif()
+    if(HAS_SM90A)
+      list(APPEND _cutlass_moe_archs 90a)
+    endif()
+    set_target_properties(llm_kernels_nvidia_kernel_moe_cutlass_moe PROPERTIES CUDA_ARCHITECTURES "${_cutlass_moe_archs}")
 endif()
 target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PRIVATE cutlass_c4x)
