@@ -39,7 +39,7 @@ target_include_directories(global_cache_connector
 )
 
 target_link_libraries(global_cache_connector
-    PRIVATE loguru mooncake_store dl
+    PRIVATE loguru mooncake_store device dl
 )
 
 if(WITH_CUDA)
@@ -84,6 +84,7 @@ if(USE_MOONCAKE_REAL_STORE)
 
     target_link_libraries(mooncake_connector PRIVATE
         loguru
+        device
         ${MOONCAKE_BUILD_ROOT}/mooncake-store/src/libmooncake_store.a
         ${MOONCAKE_BUILD_ROOT}/mooncake-store/src/cachelib_memory_allocator/libcachelib_memory_allocator.a
         ${MOONCAKE_BUILD_ROOT}/mooncake-transfer-engine/src/libtransfer_engine.a

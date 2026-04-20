@@ -61,6 +61,7 @@ class MooncakeConnector : public GlobalCacheConnectorInterface {
   // Segment buffer registered with MountSegment for storage allocation
   void* segment_buffer_ = nullptr;
   size_t global_segment_size_ = 0;
+  size_t segment_mmap_size_ = 0;  // actual size passed to mmap, used by munmap
 
   // Local hostname:port used during Client::Create
   std::string local_hostname_;

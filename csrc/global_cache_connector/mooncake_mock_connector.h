@@ -44,6 +44,10 @@ class MooncakeMockConnector : public GlobalCacheConnectorInterface {
 
   Status Shutdown() override;
 
+ protected:
+  // 可在测试子类中重写，以模拟 Memcpy 异常。kind 对应 MemcpyKind 枚举值。
+  virtual void DoMemcpy(void* dst, const void* src, size_t count, int kind);
+
  private:
   std::unique_ptr<mooncake::MockStore> store_;
   bool initialized_ = false;

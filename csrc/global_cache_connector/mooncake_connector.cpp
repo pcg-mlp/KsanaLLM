@@ -5,14 +5,15 @@
 #include "global_cache_connector/mooncake_connector.h"
 
 #include <arpa/inet.h>
-#include <cuda_runtime.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -22,6 +23,15 @@
 #include <vector>
 
 #include "utils/logger.h"
+#include "device/device_utils.h"
+
+// MAP_HUGE_2MB is in <linux/mman.h> but not always in <sys/mman.h>.
+#ifndef MAP_HUGE_SHIFT
+#  define MAP_HUGE_SHIFT 26
+#endif
+#ifndef MAP_HUGE_2MB
+#  define MAP_HUGE_2MB (21 << MAP_HUGE_SHIFT)
+#endif
 
 namespace ksana_llm {
 
@@ -178,19 +188,65 @@ Status MooncakeConnector::Initialize(const GlobalCacheConnectorConfig& config) {
   if (global_segment_size_ == 0) {
     global_segment_size_ = 16 * 1024 * 1024;
   }
-  if (posix_memalign(&segment_buffer_, 4096, global_segment_size_) != 0) {
-    KLLM_LOG_ERROR << "MooncakeConnector::Initialize posix_memalign segment_buffer failed";
-    client_.reset();
-    return Status(RetCode::RET_RUNTIME_FAILED, "Failed to allocate segment buffer");
+  // Use mmap with MAP_HUGETLB to avoid kernel soft lockup.
+  // With 4KB pages a 200GB buffer has ~52M pages.  Both ibv_reg_mr (RDMA pin)
+  // and ibv_dereg_mr (RDMA unpin) iterate every page under a spinlock, causing
+  // "soft lockup – CPU stuck for 23s" on both startup and shutdown.
+  // 2MB huge pages reduce the count to ~100K — well within watchdog limits.
+  // Set MC_DISABLE_HUGETLB=1 to explicitly use regular pages.
+  constexpr size_t kHugePageSize2MB = 2 * 1024 * 1024;
+  const char* disable_hugetlb_env = std::getenv("MC_DISABLE_HUGETLB");
+  bool use_hugetlb = !(disable_hugetlb_env && disable_hugetlb_env[0] != '\0' && disable_hugetlb_env[0] != '0');
+
+  if (use_hugetlb) {
+    segment_mmap_size_ = (global_segment_size_ + kHugePageSize2MB - 1) & ~(kHugePageSize2MB - 1);
+    segment_buffer_ = mmap(nullptr, segment_mmap_size_, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_HUGE_2MB, -1, 0);
+    if (segment_buffer_ != MAP_FAILED) {
+      KLLM_LOG_INFO << "MooncakeConnector::Initialize segment_buffer allocated with MAP_HUGETLB 2MB"
+                    << ", size=" << segment_mmap_size_ << " (" << (segment_mmap_size_ / kHugePageSize2MB) << " pages)";
+    } else {
+      segment_buffer_ = nullptr;
+      segment_mmap_size_ = 0;
+      size_t needed_pages = (global_segment_size_ + kHugePageSize2MB - 1) / kHugePageSize2MB;
+      KLLM_LOG_ERROR << "MooncakeConnector::Initialize MAP_HUGETLB failed (errno=" << errno << "). "
+                     << "To fix, pre-allocate huge pages: "
+                     << "echo " << needed_pages
+                     << " > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages  "
+                     << "Or set MC_DISABLE_HUGETLB=1 to fall back to regular pages"
+                     << " (may cause soft lockup on large buffers).";
+      fprintf(stderr,
+              "\n[MooncakeConnector] ERROR: MAP_HUGETLB allocation failed.\n"
+              "  To fix, pre-allocate huge pages:\n"
+              "    echo %zu > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages\n"
+              "  Or set MC_DISABLE_HUGETLB=1 to use regular pages (may cause soft lockup on large buffers).\n\n",
+              needed_pages);
+      client_.reset();
+      return Status(RetCode::RET_RUNTIME_FAILED, "Failed to mmap segment buffer with MAP_HUGETLB");
+    }
+  } else {
+    segment_mmap_size_ = global_segment_size_;
+    segment_buffer_ = mmap(nullptr, segment_mmap_size_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (segment_buffer_ != MAP_FAILED) {
+      madvise(segment_buffer_, segment_mmap_size_, MADV_HUGEPAGE);
+      KLLM_LOG_INFO << "MooncakeConnector::Initialize segment_buffer allocated with regular mmap + MADV_HUGEPAGE"
+                    << " (MC_DISABLE_HUGETLB is set), size=" << segment_mmap_size_;
+    } else {
+      segment_buffer_ = nullptr;
+      segment_mmap_size_ = 0;
+      KLLM_LOG_ERROR << "MooncakeConnector::Initialize mmap segment_buffer failed, size=" << global_segment_size_;
+      client_.reset();
+      return Status(RetCode::RET_RUNTIME_FAILED, "Failed to mmap segment buffer");
+    }
   }
-  memset(segment_buffer_, 0, global_segment_size_);
 
   auto mount_result = client_->MountSegment(segment_buffer_, global_segment_size_);
   if (!mount_result.has_value()) {
     KLLM_LOG_ERROR << "MooncakeConnector::Initialize MountSegment failed"
                    << ", error=" << mount_result.error();
-    free(segment_buffer_);
+    munmap(segment_buffer_, segment_mmap_size_);
     segment_buffer_ = nullptr;
+    segment_mmap_size_ = 0;
     client_.reset();
     return Status(RetCode::RET_RUNTIME_FAILED, "MountSegment failed");
   }
@@ -288,7 +344,7 @@ Status MooncakeConnector::QueryAndFetch(const std::vector<int>& token_ids, size_
       hits.push_back({pending_keys[i], pending_block_indices[i], blk});
     }
 
-    // Phase 4: BatchGet + cudaMemcpy H2D + release staging buffers
+    // Phase 4: BatchGet + Memcpy H2D + release staging buffers
     int hit_count = 0;
     if (!hits.empty()) {
       std::vector<std::string> hit_keys;
@@ -309,13 +365,13 @@ Status MooncakeConnector::QueryAndFetch(const std::vector<int>& token_ids, size_
           int64_t checksum = ComputeInt8Checksum(hits[i].staging->ptr, block_byte_size);
           KLLM_LOG_DEBUG << "QueryAndFetch block=" << hits[i].block_idx << " checksum=" << checksum;
 #endif
-          cudaError_t err =
-              cudaMemcpy(block_ptrs[hits[i].block_idx], hits[i].staging->ptr, block_byte_size, cudaMemcpyHostToDevice);
-          if (err == cudaSuccess) {
+          try {
+            Memcpy(block_ptrs[hits[i].block_idx], hits[i].staging->ptr, block_byte_size, MEMCPY_HOST_TO_DEVICE);
             block_fetched[hits[i].block_idx] = true;
             ++hit_count;
-          } else {
-            KLLM_LOG_WARNING << "QueryAndFetch: cudaMemcpy H2D failed for block=" << hits[i].block_idx;
+          } catch (const std::exception& e) {
+            KLLM_LOG_WARNING << "QueryAndFetch: Memcpy H2D failed for block=" << hits[i].block_idx
+                             << ", error=" << e.what();
           }
         } else {
           KLLM_LOG_WARNING << "QueryAndFetch: BatchGet failed for block=" << hits[i].block_idx
@@ -432,7 +488,7 @@ Status MooncakeConnector::PutGlobalCacheBlocks(const std::vector<int>& token_ids
     return Status();
   }
 
-  // Phase 3: Acquire staging buffers and cudaMemcpy D2H (process in batches if pool < need_put)
+  // Phase 3: Acquire staging buffers and Memcpy D2H (process in batches if pool < need_put)
   int put_count = 0;
   int fail_count = 0;
   size_t offset = 0;
@@ -447,9 +503,11 @@ Status MooncakeConnector::PutGlobalCacheBlocks(const std::vector<int>& token_ids
       if (!blk) break;
 
       const auto& info = need_put[offset];
-      cudaError_t err = cudaMemcpy(blk->ptr, block_ptrs[info.ptr_idx], block_byte_size, cudaMemcpyDeviceToHost);
-      if (err != cudaSuccess) {
-        KLLM_LOG_WARNING << "PutGlobalCacheBlocks: cudaMemcpy D2H failed for block=" << info.block_idx;
+      try {
+        Memcpy(blk->ptr, block_ptrs[info.ptr_idx], block_byte_size, MEMCPY_DEVICE_TO_HOST);
+      } catch (const std::exception& e) {
+        KLLM_LOG_WARNING << "PutGlobalCacheBlocks: Memcpy D2H failed for block=" << info.block_idx
+                         << ", error=" << e.what();
         staging_pool_->Put(blk);
         ++fail_count;
         continue;
@@ -647,8 +705,9 @@ Status MooncakeConnector::Shutdown() {
   }
 
   if (segment_buffer_) {
-    free(segment_buffer_);
+    munmap(segment_buffer_, segment_mmap_size_);
     segment_buffer_ = nullptr;
+    segment_mmap_size_ = 0;
     global_segment_size_ = 0;
   }
 

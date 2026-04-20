@@ -4,7 +4,6 @@
 
 #include "global_cache_connector/mooncake_mock_connector.h"
 
-#include <cuda_runtime.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -15,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "device/device_utils.h"
 #include "utils/logger.h"
 
 namespace ksana_llm {
@@ -111,9 +111,10 @@ Status MooncakeMockConnector::QueryAndFetch(const std::vector<int>& token_ids, s
         continue;
       }
 
-      cudaError_t err = cudaMemcpy(block_ptrs[bi], cpu_buffer.data(), block_byte_size, cudaMemcpyHostToDevice);
-      if (err != cudaSuccess) {
-        KLLM_LOG_WARNING << "block=" << bi << " key=" << key << " cudaMemcpy H2D failed: " << cudaGetErrorString(err);
+      try {
+        DoMemcpy(block_ptrs[bi], cpu_buffer.data(), block_byte_size, MEMCPY_HOST_TO_DEVICE);
+      } catch (const std::exception& e) {
+        KLLM_LOG_WARNING << "block=" << bi << " key=" << key << " Memcpy H2D failed: " << e.what();
         ++miss_count;
         continue;
       }
@@ -224,9 +225,10 @@ Status MooncakeMockConnector::PutGlobalCacheBlocks(const std::vector<int>& token
         continue;
       }
 
-      cudaError_t err = cudaMemcpy(cpu_buffer.data(), block_ptrs[ptr_idx], block_byte_size, cudaMemcpyDeviceToHost);
-      if (err != cudaSuccess) {
-        KLLM_LOG_WARNING << "block=" << bi << " key=" << key << " cudaMemcpy D2H failed: " << cudaGetErrorString(err);
+      try {
+        DoMemcpy(cpu_buffer.data(), block_ptrs[ptr_idx], block_byte_size, MEMCPY_DEVICE_TO_HOST);
+      } catch (const std::exception& e) {
+        KLLM_LOG_WARNING << "block=" << bi << " key=" << key << " Memcpy D2H failed: " << e.what();
         ++ptr_idx;
         continue;
       }
@@ -319,6 +321,10 @@ Status MooncakeMockConnector::QueryFirstTokens(const std::vector<int>& token_ids
   KLLM_LOG_DEBUG << "key=" << key << " hit, token_count=" << tokens.size()
                  << ", first_token=" << (tokens.empty() ? -1 : tokens[0]) << ", input_token_count=" << token_ids.size();
   return Status();
+}
+
+void MooncakeMockConnector::DoMemcpy(void* dst, const void* src, size_t count, int kind) {
+  Memcpy(dst, src, count, static_cast<MemcpyKind>(kind));
 }
 
 Status MooncakeMockConnector::Shutdown() {

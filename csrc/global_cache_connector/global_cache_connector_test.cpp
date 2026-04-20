@@ -572,6 +572,88 @@ TEST_F(MockConnectorTest, RetryUntilFullHitTimesOut) {
   EXPECT_GE(elapsed.count(), 40) << "should have waited at least ~50ms";
 }
 
+// ==================== Memcpy 异常分支覆盖测试 ====================
+
+// 测试用子类：DoMemcpy 总是抛异常，覆盖 catch 分支
+class ThrowingMockConnector : public MooncakeMockConnector {
+ protected:
+  void DoMemcpy(void* /*dst*/, const void* /*src*/, size_t /*count*/, int /*kind*/) override {
+    throw std::runtime_error("injected Memcpy failure for testing");
+  }
+};
+
+class ThrowingConnectorTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    connector_ = std::make_unique<ThrowingMockConnector>();
+    GlobalCacheConnectorConfig config;
+    config.backend_type = "mooncake-mock";
+    config.service_endpoint = tmpdir_.path();
+    ASSERT_TRUE(connector_->Initialize(config).OK());
+  }
+
+  void TearDown() override {
+    if (connector_) connector_->Shutdown();
+  }
+
+  TempDir tmpdir_;
+  std::unique_ptr<ThrowingMockConnector> connector_;
+
+  static constexpr int kBlockSize = 4;
+  static constexpr size_t kBlockByteSize = 1024;
+  static constexpr int kTpSize = 1;
+  static constexpr int kTpRank = 0;
+  static constexpr int kLayerIndex = 0;
+};
+
+// DoMemcpy 抛异常 → PutGlobalCacheBlocks 的 D2H catch 分支（mooncake_mock_connector.cpp:228-234）
+TEST_F(ThrowingConnectorTest, PutWithMemcpyFailureSkipsBlock) {
+  std::vector<int> token_ids = {10, 20, 30, 40};
+  // 指针值不重要，DoMemcpy 会在调用前抛异常
+  void* dummy_ptr = reinterpret_cast<void*>(0x1000);
+  std::vector<void*> ptrs = {dummy_ptr};
+  std::vector<int> block_ranges = {0, static_cast<int>(token_ids.size()) - 1};
+
+  // 不应崩溃，D2H 失败的 block 被跳过
+  Status status = connector_->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
+                                                   block_ranges, ptrs);
+  EXPECT_TRUE(status.OK());
+}
+
+// DoMemcpy 抛异常 → QueryAndFetch 的 H2D catch 分支（mooncake_mock_connector.cpp:116-120）
+// 需要先用正常 connector 写入数据，再用 ThrowingMockConnector 查询
+TEST_F(ThrowingConnectorTest, QueryWithMemcpyFailureSkipsBlock) {
+  // 使用正常的 MooncakeMockConnector 写入数据
+  auto normal_connector = std::make_unique<MooncakeMockConnector>();
+  GlobalCacheConnectorConfig config;
+  config.backend_type = "mooncake-mock";
+  config.service_endpoint = tmpdir_.path();
+  ASSERT_TRUE(normal_connector->Initialize(config).OK());
+
+  std::vector<int> token_ids = {10, 20, 30, 40};
+  GpuBuffer buf(kBlockByteSize);
+  std::vector<uint8_t> data(kBlockByteSize, 0xCC);
+  buf.Upload(data.data());
+  std::vector<void*> put_ptrs = {buf.ptr()};
+  std::vector<int> block_ranges = {0, static_cast<int>(token_ids.size()) - 1};
+
+  ASSERT_TRUE(normal_connector
+                  ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
+                                         block_ranges, put_ptrs)
+                  .OK());
+  normal_connector->Shutdown();
+
+  // 用 ThrowingMockConnector 查询，H2D 会抛异常，不应崩溃
+  void* dummy_ptr = reinterpret_cast<void*>(0x1000);
+  std::vector<void*> query_ptrs = {dummy_ptr};
+  std::vector<int> matched_ranges;
+  Status status = connector_->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize,
+                                            query_ptrs, matched_ranges);
+  EXPECT_TRUE(status.OK());
+  // H2D 失败，block 未被标记为 fetched
+  EXPECT_TRUE(matched_ranges.empty()) << "block should not be marked as fetched after Memcpy H2D failure";
+}
+
 // ==================== KeyUtils 测试 ====================
 
 TEST(KeyUtilsTest, HashTokenPrefixReturns16HexChars) {
