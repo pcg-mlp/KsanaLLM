@@ -223,6 +223,7 @@ class DeepSeekV32ToolParser(ToolParser):
         """
         logger.debug(f"previous_text: {previous_text}")
         logger.debug(f"delta_text: {delta_text}")
+        delta_text = delta_text.replace(self.eos_token, "")
         self._buffer += delta_text
         current_text = self._buffer
 
@@ -244,7 +245,7 @@ class DeepSeekV32ToolParser(ToolParser):
 
         if not has_tool_call and not potentially_dsml and not ends_with_prefix:
             self._buffer = ""
-            for e_token in [self.eot_token, self.invoke_end_token, self.eos_token]:
+            for e_token in [self.eot_token, self.invoke_end_token]:
                 if e_token in delta_text:
                     delta_text = delta_text.replace(e_token, "")
             return DeltaMessage(content=delta_text)
