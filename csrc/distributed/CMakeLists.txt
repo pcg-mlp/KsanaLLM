@@ -21,7 +21,9 @@ if(WITH_CUDA)
   message(STATUS "nccl_data_channel_test_SRCS: ${nccl_data_channel_test_SRCS}")
   # cpp_test(distributed_nccl_data_channel_test SRCS ${nccl_data_channel_test_SRCS} DEPS utils runtime LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt)
   # 添加 deepep 子目录
-  add_subdirectory(expert_parallel/deepep)
+  if(WITH_DEEPEP)
+    add_subdirectory(expert_parallel/deepep)
+  endif()
 endif()
 
 # 排除deepep目录的源文件，因为它们在独立的deepep库中编译

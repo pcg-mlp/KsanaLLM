@@ -4,6 +4,11 @@
 
 # DeepEP (Deep Expert Parallel) 模块
 
+if(NOT WITH_DEEPEP)
+  message(STATUS "Skipping deepep module (WITH_DEEPEP=OFF)")
+  return()
+endif()
+
 if(WITH_CUDA)
   # 查找 CUDA Toolkit（需要 cudaStream_t 等类型定义）
   find_package(CUDAToolkit REQUIRED)
