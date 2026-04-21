@@ -256,7 +256,7 @@ class InferRequest {
   std::vector<OutputTuple> &beam_search_group;
 
   // context decode or decode stage.
-  InferStage infer_stage;
+  InferStage infer_stage = InferStage::kContext;
 
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
@@ -319,6 +319,15 @@ class InferRequest {
 
   bool HasInflightTask() const { return !inflight_task_.IsEmpty(); }
   bool HasPlanningTask() const { return !planning_task_.IsEmpty(); }
+
+  // Returns true if the inflight task is a split-fuse prefill step that does NOT cover all remaining
+  // prefilling tokens (i.e., there are more prefill chunks to come).
+  bool IsSplitPrefillStep() const {
+    return inflight_task_.workload.prefill_token_num > 0 &&
+           (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset <
+            prefilling_tokens_.size());
+  }
+
   void SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num);
 
   void SetRemainingWorkload(const ScheduleTaskWorkload &workload);

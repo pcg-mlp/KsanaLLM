@@ -175,7 +175,7 @@ class ExecutorInferRequest {
   std::vector<OutputTuple> beam_search_group;
 
   // context decode or decode stage.
-  InferStage infer_stage;
+  InferStage infer_stage = InferStage::kContext;
 
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
@@ -236,7 +236,7 @@ class InferRequestPatch {
   size_t kv_cache_blocks_offset = 0;
 
   // context decode or decode stage.
-  InferStage infer_stage;
+  InferStage infer_stage = InferStage::kContext;
 
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;

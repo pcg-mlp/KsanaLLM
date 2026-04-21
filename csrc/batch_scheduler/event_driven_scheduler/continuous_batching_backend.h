@@ -34,8 +34,6 @@ class ContinuousBatchingBackend : public ScheduleBackendInterface {
   void ProcessSwappedQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
                            std::vector<ScheduleBackendEvent>& events,
                            std::unordered_set<uint64_t>& emitted_event_keys);
-  void  EstimateRequestPlanningWorkload(const std::shared_ptr<InferRequest> &req);
-
  private:
   std::atomic<bool> stopped_{false};
 };

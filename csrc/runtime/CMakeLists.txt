@@ -40,3 +40,4 @@ cpp_test(schedule_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/schedule_o
 
 cpp_test(sampling_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/sampling_output_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
+cpp_test(infer_request_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/infer_request_test.cpp DEPS ${MODELS_TEST_DEPS} ipc LIBS ${MODELS_TEST_LIBS})

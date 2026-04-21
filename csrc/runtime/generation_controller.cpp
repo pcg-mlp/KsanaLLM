@@ -102,6 +102,13 @@ void GenerationController::RemoveGenerator(int64_t req_id, std::vector<std::shar
 void GenerationController::UpdateGenerationState(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs) {
   UpdateStructuredGeneratorState(reqs);
 
+  // Clear stale draft_tokens left over from split-fuse intermediate prefill steps.
+  for (auto& req : reqs) {
+    if (req->forwarding_tokens_draft_num == 0) {
+      req->draft_tokens.clear();
+    }
+  }
+
   // Filter draft tokens from both structured generation and PTP
   if (draft_generator_controller_) {
     draft_generator_controller_->FilterDraftTokens(reqs);

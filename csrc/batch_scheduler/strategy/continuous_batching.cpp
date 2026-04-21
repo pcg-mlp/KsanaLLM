@@ -10,6 +10,7 @@
 
 #include "base_strategy.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
+#include "batch_scheduler/planning_workload_estimator.h"
 #include "batch_scheduler/state/scheduler_tick_tok.h"
 #include "cache_manager/prefix_cache_manager.h"
 #include "profiler/reporter.h"
@@ -318,19 +319,6 @@ void ContinuousBatchingStrategy::RemoveRequestFromBatchState(const std::shared_p
   // TODO(robertyuan): request maybe moved to another batch state.
 }
 
-void ContinuousBatchingStrategy::EstimateRequestPlanningWorkload(const std::shared_ptr<InferRequest> &req) {
-  if (req->HasInflightTask()) {
-    // Estimate task generation result
-    // TODO(robertyuan): replace with GenerationResultEstimator
-    if (req->GetInflightTask().workload.sampling_token_num > 0) {
-      size_t max_draft_token_num = batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num;
-      req->SetInflightTaskGenResultEstimation(kStepGenerateTokenNum, max_draft_token_num);
-    }
-  }
-
-  req->SetPlanningWorkload(req->GetRemainingWorkload());
-}
-
 void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req, Status ret_status, bool terminate) {
   KLLM_LOG_SCHEDULER << "ResetRequest " << req->ScheduleStateToStr() << ", ret_status:" << ret_status.ToString()
                      << ", terminate:" << terminate;
@@ -434,7 +422,6 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     if (req->IsStopped()) {
       continue;
     }
-    req->infer_stage = InferStage::kDecode;
     req->UpdateAfterInflightTaskFinished();
     req->ResetInflightTask();
     // clear flexible cache copy tasks after context stage is finished
@@ -556,7 +543,7 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
 
   // Estimate inflight task result and update planning workloads
   for (auto &req : batch_state_->decoding_queue) {
-    EstimateRequestPlanningWorkload(req);
+    EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
   }
 
   // Check decoding queue to determine whether it exceeds the max_step_token_num.
@@ -685,7 +672,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
-    EstimateRequestPlanningWorkload(req);
+    EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
 
     // Check timeout, no finished req in waiting queue.
     if (CheckRequestTimeout(req)) {
@@ -770,14 +757,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       assert(!planning_workload.IsEmpty());
     }
 
-    req_step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, seq_token_num);
+    // add extra token for MTP sub model if needed
+    req_step_block_num =
+        cache_manager_->GetRequestStepBlockNumber(req->req_id, seq_token_num + runtime_config_.mtp_step_num);
     KLLM_LOG_SCHEDULER << "req_step_token_num:" << req_step_token_num << ", req_step_block_num:" << req_step_block_num
                        << ", seq_token_num:" << seq_token_num;
-
-    if (is_last_prefill_step) {
-      // add extra token for MTP sub model if needed
-      req_step_block_num += (runtime_config_.mtp_step_num + req->block_token_num - 1) / req->block_token_num;
-    }
 
     const size_t launch_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.launch_block_threshold);
 

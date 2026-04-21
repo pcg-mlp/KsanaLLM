@@ -256,44 +256,36 @@ void InferRequest::SetPlanningTask() {
 }
 
 void InferRequest::UpdateAfterInflightTaskFinished() {
-  output_mutex.lock();
+  // If task is prefill task and not the last step, drop draft_tokens.
+  // generated_tokens should be empty.
+  if (IsSplitPrefillStep()) {
+    generated_tokens.clear();
+    draft_tokens.clear();
+  } else {
+    infer_stage = InferStage::kDecode;
 
-  if (inflight_task_.workload.draft_token_num > 0) {
-    // replace draft tokens with accepted tokens.
-    forwarding_tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num + accepted_tokens.size());
-    output_tokens.insert(output_tokens.end(), forwarding_tokens.end() - accepted_tokens.size(),
-                         forwarding_tokens.end());
-    // forwarding_tokens.insert(forwarding_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
-    // output_tokens.insert(output_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
-    accepted_tokens.clear();
+    output_mutex.lock();
+    if (inflight_task_.workload.draft_token_num > 0) {
+      // replace draft tokens with accepted tokens.
+      forwarding_tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num + accepted_tokens.size());
+      output_tokens.insert(output_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
+      accepted_tokens.clear();
+    }
+
+    // append new tokens to output_tokens
+    output_tokens.insert(output_tokens.end(), generated_tokens.begin(), generated_tokens.end());
+    // GenerationController makes sure eos only appears at the end of accepted_tokens + generated_tokens
+    if (std::find(sampling_config.stop_token_ids.begin(), sampling_config.stop_token_ids.end(), output_tokens.back()) !=
+        sampling_config.stop_token_ids.end()) {
+      KLLM_LOG_DEBUG << "req " << req_id << " finished. output_tokens.size=" << output_tokens.size()
+                     << ", eos token=" << output_tokens.back();
+      is_eos_generated_ = true;
+    }
+    output_mutex.unlock();
   }
   // current token has kv_cache
   kv_cached_token_num = forwarding_tokens.size();
 
-  if (generated_tokens.size() > 0) {
-    // append new tokens to output_tokens
-    output_tokens.insert(output_tokens.end(), generated_tokens.begin(), generated_tokens.end());
-  }
-  // GenerationController makes sure eos only appears at the end of accepted_tokens + generated_tokens
-  if (std::find(sampling_config.stop_token_ids.begin(), sampling_config.stop_token_ids.end(), output_tokens.back()) !=
-      sampling_config.stop_token_ids.end()) {
-    KLLM_LOG_DEBUG << "req " << req_id << " finished. output_tokens.size=" << output_tokens.size()
-                   << ", eos token=" << output_tokens.back();
-    is_eos_generated_ = true;
-  }
-  output_mutex.unlock();
-
-  // If task is prefill task and not the last step, drop draft_tokens.
-  // generated_tokens should be empty.
-  if (inflight_task_.workload.prefill_token_num > 0 &&
-      (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset <
-       prefilling_tokens_.size())) {
-    if (!generated_tokens.empty()) {
-      KLLM_LOG_SCHEDULER << ScheduleStateToStr();
-      generated_tokens.clear();
-    }
-    draft_tokens.clear();
-  }
   // generated token and draft token are new workload to be processed
   remaining_workload_.generated_token_num = generated_tokens.size();
   remaining_workload_.draft_token_num = draft_tokens.size();
@@ -337,8 +329,7 @@ void InferRequest::LaunchPlanningTask() {
     }
 
     // Append draft tokens at the last step of prefill
-    if (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset ==
-        prefilling_tokens_.size()) {
+    if (!IsSplitPrefillStep()) {
       const std::vector<int> &all_draft_tokens = draft_tokens.GetDraftTokens();
       const size_t draft_token_num = all_draft_tokens.size();
       forwarding_tokens.insert(forwarding_tokens.end(), all_draft_tokens.begin(), all_draft_tokens.end());

@@ -2,14 +2,11 @@
 
 ==============================================================================*/
 
-#include "runtime/generation_controller.h"
 #include <gtest/gtest.h>
-#include <fstream>
-#include <iostream>
 #include <memory>
-#include <sstream>
 #include <vector>
 
+#include "runtime/generation_controller.h"
 #include "runtime/structured_generation/reasoning_structured_generator.h"
 
 namespace ksana_llm {
@@ -36,7 +33,7 @@ class MockStructuredGenerator : public StructuredGeneratorInterface {
   bool FillNextTokenBitmask(void* next_token_bitmask) override { return true; }
 
   void Rollback(int rollback_token_num) override {
-    KLLM_CHECK(rollback_token_num < expecting_idx_);
+    KLLM_CHECK(static_cast<size_t>(rollback_token_num) < expecting_idx_);
     expecting_idx_ -= rollback_token_num;
   }
 
@@ -160,6 +157,7 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   // generated_tokens[0] is 3;
   exec_req->sampling_result_tokens = {2, 3};
   exec_req->draft_tokens.mtp = {2};
+  exec_req->forwarding_tokens_draft_num = 1;
   generation_controller_->UpdateGenerationState(reqs);
   EXPECT_EQ(exec_req->accepted_tokens.size(), 1);
   EXPECT_EQ(exec_req->accepted_tokens[0], 2);
@@ -170,6 +168,7 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   // computing for draft token 4 is wasted.
   exec_req->sampling_result_tokens = {4, 7, 8};
   exec_req->draft_tokens.mtp = {4, 5};
+  exec_req->forwarding_tokens_draft_num = 2;
   generation_controller_->UpdateGenerationState(reqs);
   EXPECT_EQ(exec_req->accepted_tokens.size(), 0);
   EXPECT_EQ(exec_req->generated_tokens[0], 4);
@@ -178,6 +177,7 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   // 6,7 are accepted by structure generator, generated_tokens[0] is 7;
   exec_req->sampling_result_tokens = {5, 6, 7};
   exec_req->draft_tokens.mtp = {5, 6};
+  exec_req->forwarding_tokens_draft_num = 2;
   generation_controller_->UpdateGenerationState(reqs);
   EXPECT_EQ(exec_req->accepted_tokens.size(), 2);
   EXPECT_EQ(exec_req->accepted_tokens[0], 5);
@@ -323,6 +323,41 @@ TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorFindJumpForwardToke
   // 推理阶段结束后，FindJumpForwardTokens 会传递给内部生成器
   // MockStructuredGenerator 的实现返回 false
   EXPECT_FALSE(reasoner_generator->FindJumpForwardTokens(jump_tokens));
+}
+
+// Test: Clear stale draft_tokens when forwarding_tokens_draft_num == 0
+TEST_F(GenerationControllerTest, ClearStaleDraftTokensWhenNoDraftForwarded) {
+  auto exec_req = CreateMockExecutorInferRequest(1);
+  std::vector<std::shared_ptr<ExecutorInferRequest>> reqs = {exec_req};
+
+  // Simulate a split-fuse intermediate prefill step: draft_tokens are non-empty
+  // but forwarding_tokens_draft_num is 0 (no draft tokens were actually forwarded).
+  exec_req->draft_tokens.mtp = {10, 11};
+  exec_req->forwarding_tokens_draft_num = 0;
+  exec_req->sampling_result_tokens = {1};
+
+  generation_controller_->UpdateGenerationState(reqs);
+
+  // draft_tokens should be cleared because forwarding_tokens_draft_num == 0
+  EXPECT_EQ(exec_req->draft_tokens.size(), 0);
+}
+
+// Test: Keep draft_tokens when forwarding_tokens_draft_num > 0
+TEST_F(GenerationControllerTest, KeepDraftTokensWhenDraftForwarded) {
+  auto exec_req = CreateMockExecutorInferRequest(1);
+  std::vector<std::shared_ptr<ExecutorInferRequest>> reqs = {exec_req};
+
+  // Normal decode step with draft tokens actually forwarded.
+  exec_req->draft_tokens.mtp = {1};
+  exec_req->forwarding_tokens_draft_num = 1;
+  exec_req->sampling_result_tokens = {1, 2};
+
+  generation_controller_->UpdateGenerationState(reqs);
+
+  // draft_tokens should NOT be cleared because forwarding_tokens_draft_num > 0
+  EXPECT_EQ(exec_req->draft_tokens.size(), 1);
+  EXPECT_EQ(exec_req->generated_tokens[0], 2);
+  EXPECT_EQ(exec_req->accepted_tokens[0], 1);
 }
 
 }  // namespace ksana_llm

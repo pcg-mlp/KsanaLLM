@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "batch_scheduler/planning_workload_estimator.h"
 #include "configure/schedule_config_parser.h"
 #include "runtime/schedule_output.h"
 #include "utils/ret_code.h"
@@ -119,7 +120,6 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
 
       // For non-stopped requests, inflight task must exist here; otherwise the state machine is broken.
       KLLM_CHECK(req->HasInflightTask());
-      req->infer_stage = InferStage::kDecode;
       req->UpdateAfterInflightTaskFinished();
       req->ResetInflightTask();
       req->flexible_cached_copy_tasks.clear();
@@ -196,7 +196,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
         continue;
       }
 
-      EstimateRequestPlanningWorkload(req);
+      EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
 
       has_candidate = true;
       if (decoding_recompute_candidate == nullptr) {
@@ -306,7 +306,7 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         continue;
       }
 
-      EstimateRequestPlanningWorkload(req);
+      EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
       has_candidate = true;
 
       bool is_first_prefill_step = true;
@@ -349,10 +349,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         continue;
       }
 
-      req_step_block_num = cache_manager->GetRequestStepBlockNumber(req->req_id, seq_token_num);
-      if (is_last_prefill_step) {
-        req_step_block_num += (batch_scheduler_config_.mtp_step_num + req->block_token_num - 1) / req->block_token_num;
-      }
+      // add extra token for MTP sub model if needed
+      req_step_block_num =
+          cache_manager->GetRequestStepBlockNumber(req->req_id, seq_token_num + batch_scheduler_config_.mtp_step_num);
 
       const size_t launch_block_threshold =
           static_cast<size_t>(std::ceil(dp_batch.running_reqs.size() * batch_scheduler_config_.launch_block_threshold));
@@ -486,23 +485,6 @@ void ContinuousBatchingBackend::ProcessSwappedQueue(const ScheduleContext& conte
       }
     }
   }
-}
-
-void ContinuousBatchingBackend::EstimateRequestPlanningWorkload(const std::shared_ptr<InferRequest>& req) {
-  if (req->HasInflightTask()) {
-    auto inflight_task = req->GetInflightTask();
-    if (inflight_task.workload.prefill_token_num > 0 &&
-        ((inflight_task.workload.prefill_token_num + inflight_task.workload.prefill_start_offset) <
-         req->GetPrefillingTokens().size())) {
-      req->SetInflightTaskGenResultEstimation(0, 0);
-    } else {
-      // Estimate task generation result
-      size_t max_draft_token_num = batch_scheduler_config_.mtp_step_num;
-      req->SetInflightTaskGenResultEstimation(kStepGenerateTokenNum, max_draft_token_num);
-    }
-  }
-
-  req->SetPlanningWorkload(req->GetRemainingWorkload());
 }
 
 }  // namespace ksana_llm
