@@ -180,7 +180,16 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
         block_size, layer_index, flexible_len, num_kv_heads, head_size, stride_size, stream));
   }
 
-  if (use_cache && !enable_blocked_multi_token_forwarding_kv) {
+  // Skip reverse cache copy when FA3 FP8 path will be used, because that path does its own
+  // FP8-native copy (InvokeFP8WithPrefixReverseCacheCopy) and would overwrite the result anyway.
+  const bool skip_reverse_cache_copy_for_fa3_fp8 = [&]() {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      return IsUsingFA3() && !alibi_slopes.has_value();
+    }
+    return false;
+  }();
+
+  if (use_cache && !enable_blocked_multi_token_forwarding_kv && !skip_reverse_cache_copy_for_fa3_fp8) {
     InvokeReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
         v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
