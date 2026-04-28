@@ -39,4 +39,13 @@ if (SM STREQUAL "90" OR SM STREQUAL "90a")
     file(GLOB_RECURSE DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS deepseek_deepgemm_wrapper_test.cpp)
     cc_test(deepseek_deepgemm_wrapper_test SRCS ${DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS} DEPS
         llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+
+    set(FUSED_BATCHED_MOE_TEST_SRCS fused_batched_moe_test.cpp)
+    cc_test(fused_batched_moe_test SRCS ${FUSED_BATCHED_MOE_TEST_SRCS} DEPS
+        llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+
+    set(LOW_LATENCY_ADAPTER_TEST_SRCS low_latency_adapter_test.cpp)
+    cc_test(low_latency_adapter_test SRCS ${LOW_LATENCY_ADAPTER_TEST_SRCS} DEPS
+        llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton llm_kernels_nvidia_kernel_moe_cutlass_moe
+        LINKS ${TORCH_LIBRARIES})
 endif()

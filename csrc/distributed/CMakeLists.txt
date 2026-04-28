@@ -94,5 +94,43 @@ message(STATUS "raw_socket_test_SRCS: ${raw_socket_test_SRCS}")
 # cpp_test(distributed_raw_socket_test SRCS ${raw_socket_test_SRCS} DEPS utils runtime LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
 
 
-cpp_test(control_channel_test SRCS ${PROJECT_SOURCE_DIR}/csrc/distributed/control_channel_test.cpp  DEPS utils runtime distributed executor LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY}) 
+cpp_test(control_channel_test SRCS ${PROJECT_SOURCE_DIR}/csrc/distributed/control_channel_test.cpp  DEPS utils runtime distributed executor LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+
+if(WITH_CUDA AND TARGET deepep AND WITH_TESTING)
+  # DeepEP wrapper 单元测试 - 最小编译单元，不使用 cpp_test 宏以避免引入 ksana_llm_libs 等不必要依赖
+  # 注意：不链接 distributed 库（会拉入 GlobalContext、HiddenUnitBufferHelper 等大量传递依赖），
+  # 仅链接 deepep_related_objs 对象库（包含 deepep_wrapper.cpp 等必要编译单元）
+  add_executable(deepep_wrapper_test
+    ${PROJECT_SOURCE_DIR}/csrc/distributed/expert_parallel/deepep_wrapper_test.cpp
+  )
+
+  # 仅链接测试所需的最小依赖集
+  # 注意：使用 --allow-multiple-definitions 因为 deepep_wrapper_test.cpp 通过
+  # deepep_wrapper.h → deep_ep.h → deepep_headers.h 间接包含了 DeepEP 的 config.hpp/event.hpp，
+  # 这些头文件中有非 inline 函数定义（get_low_latency_rdma_size_hint, create_event, stream_wait），
+  # 与 deepep_related_objs unity build 中的相同符号冲突。两者来自完全相同的头文件，安全合并。
+  target_link_libraries(deepep_wrapper_test PRIVATE
+    -Wl,--whole-archive
+    deepep_related_objs
+    utils
+    -Wl,--no-whole-archive
+    -Wl,-z,muldefs
+    deepep
+    gtest -pthread
+    ${TORCH_LIBRARIES}
+    ${NCCL_LIBRARIES}
+    -lcudart
+  )
+
+  target_include_directories(deepep_wrapper_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/csrc
+  )
+
+  add_dependencies(deepep_wrapper_test deepep_related_objs utils deepep gtest)
+
+  add_test(NAME deepep_wrapper_test
+    COMMAND deepep_wrapper_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+endif()
 

@@ -21,7 +21,8 @@ TensorBuffer* BufferManager::CreateBufferTensor(const std::string& name, const s
   TensorBuffer* buffer_ptr = buffer.get();
   buffer_tensor_heap_.push_back(std::move(buffer));
 
-  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Create Buffer[{}]: {}MB", rank_, name, tensor.GetTotalBytes() / 1024 / 1024);
+  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Create Buffer[{}]: {:p} {}MB", rank_, name, tensor.GetPtr<void>(),
+                                tensor.GetTotalBytes() / 1024 / 1024);
   return buffer_ptr;
 }
 

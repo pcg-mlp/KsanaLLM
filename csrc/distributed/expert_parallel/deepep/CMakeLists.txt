@@ -43,7 +43,8 @@ if(WITH_CUDA)
   message(STATUS "NVSHMEM library: ${NVSHMEM_LIBRARY}")
 
   # DeepEP 预编译库路径配置
-  set(DEEPEP_BASE_PATH "/usr/local/deepep/")
+  # TODO(zehao): 等待合入后，再切换路径为 /usr/local/deepep
+  set(DEEPEP_BASE_PATH "/usr/local/deepep_temp/")
   set(DEEPEP_LIB_PATH "${DEEPEP_BASE_PATH}/deep_ep_cpp.cpython-310-x86_64-linux-gnu.so")
   # DeepEP头文件路径：包含csrc/和csrc/kernels/目录
   # 这样可以直接 #include "config.hpp" 和 #include "kernels/configs.cuh"

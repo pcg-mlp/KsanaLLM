@@ -4,6 +4,7 @@
 #include "layers/cutlass_moe_layer.h"
 
 #include "configure/environment.h"
+#include "csrc/kernels/nvidia/moe/cutlass_moe/low_latency_adapter.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
 #include "kernels/nvidia/kernel_wrapper.h"
 #include "layers/grouped_topk_layer.h"
@@ -94,14 +95,19 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   }
 
   // 计算全局ep_size和ep_rank
-  size_t global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
-                                    runtime_config.parallel_basic_config.expert_world_size;
-  size_t global_expert_para_rank_ =
+  global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
+                             runtime_config.parallel_basic_config.expert_world_size;
+  global_expert_para_rank_ =
       context_->global->GetExpertParallelExpertNodeRank() * runtime_config.parallel_basic_config.expert_parallel_size +
       rank_;
 
-  // 多机 + DP + EP 才使用deepep
-  using_deepep_ = runtime_config.parallel_basic_config.expert_world_size > 1;
+  // 从 runtime_config 获取 MoE all-to-all 通信模式
+  using_deepep_ = (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL ||
+                   runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY);
+  use_low_latency_mode_ = (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY);
+  if (use_low_latency_mode_) {
+    low_latency_max_tokens_ = runtime_config.deepep_low_latency_max_tokens;
+  }
 
   // 初始化 GroupedTopkLayer
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
@@ -118,8 +124,10 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
 
   // 创建cutlass moe算子
+  // DeepEP LowLatency模式下，启用alltoall：finalizeMoeRouting不需要将无效token填零
   cutlass_moe_wrapper_ = std::make_shared<llm_kernels::nvidia::CutlassMoeWrapper>(
-      1, 0, global_expert_para_size_, global_expert_para_rank_, 1, 0, expert_topk_);
+      1, 0, global_expert_para_size_, global_expert_para_rank_, 1, 0, expert_topk_,
+      /*enable_alltoall=*/use_low_latency_mode_);
   cutlass_moe_wrapper_->Init<T>();
 
   // EPLB data dump is off by default; when enabled, use the path from runtime_config
@@ -147,13 +155,44 @@ void CutlassMoeLayer::SetExpertParallelManager(std::shared_ptr<ExpertParallelMan
 size_t CutlassMoeLayer::GetWorkspaceSize() {
   topk_weights_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(float), 256);
   topk_ids_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(int32_t), 256);
-  kernel_workspace_size = RoundUp(
-      cutlass_moe_wrapper_->GetWorkspaceSize(std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_token_num_), expert_topk_,
-                                             expert_num_per_node_, expert_hidden_size_, expert_inter_size_),
-      256);
-  max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + kernel_workspace_size;
 
-  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for CutlassMoeLayer", rank_, max_ws_bytes_);
+  // LowLatency模式需要额外的adapted空间和recv_expert_count空间
+  if (use_low_latency_mode_) {
+    // LowLatency模式下，Dispatch后的shape为 [local_num_experts, num_ranks * max_token_num, hidden_size]
+    size_t max_dispatch_token_num = expert_num_per_node_ * global_expert_para_size_ * low_latency_max_tokens_;
+
+    // kernel workspace 需要按照 LL 模式的 max_dispatch_token_num 和 topk=1 来计算
+    // chunk 大小取 min(CHUNK_SIZE, max_dispatch_token_num)
+    kernel_workspace_size =
+        RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_dispatch_token_num),
+                                                       1,  // LL模式下 effective_topk = 1
+                                                       expert_num_per_node_, expert_hidden_size_, expert_inter_size_),
+                256);
+
+    // adapted_topk_weights/ids: [max_dispatch_token_num, topk=1]
+    adapted_topk_weights_size_ = RoundUp(max_dispatch_token_num * sizeof(float), 256);
+    adapted_topk_ids_size_ = RoundUp(max_dispatch_token_num * sizeof(int32_t), 256);
+    recv_expert_count_size_ = RoundUp(expert_num_per_node_ * sizeof(int32_t), 256);
+
+    max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + adapted_topk_weights_size_ + adapted_topk_ids_size_ +
+                    recv_expert_count_size_ + kernel_workspace_size;
+
+    KLLM_LOG_DEBUG << fmt::format(
+        "Rank[{}] LowLatency workspace: max_dispatch_token_num={} "
+        "(local_experts={} * num_ranks={} * max_tokens={}), "
+        "topk_weights={}, topk_ids={}, adapted_weights={}, adapted_ids={}, recv_count={}, kernel={}, total={}",
+        rank_, max_dispatch_token_num, expert_num_per_node_, global_expert_para_size_, low_latency_max_tokens_,
+        topk_weights_ptr_size, topk_ids_ptr_size, adapted_topk_weights_size_, adapted_topk_ids_size_,
+        recv_expert_count_size_, kernel_workspace_size, max_ws_bytes_);
+  } else {
+    kernel_workspace_size = RoundUp(
+        cutlass_moe_wrapper_->GetWorkspaceSize(std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_token_num_), expert_topk_,
+                                               expert_num_per_node_, expert_hidden_size_, expert_inter_size_),
+        256);
+    max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + kernel_workspace_size;
+    KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for CutlassMoeLayer", rank_, max_ws_bytes_);
+  }
+
   return max_ws_bytes_;
 }
 
@@ -245,7 +284,23 @@ Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
     set_workspace_buffer_info_ = false;
     topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
     topk_ids_ptr_ = topk_weights_ptr_ + topk_weights_ptr_size;
-    kernel_workspace_ptr_ = topk_ids_ptr_ + topk_ids_ptr_size;
+
+    if (use_low_latency_mode_) {
+      adapted_topk_weights_ptr_ = topk_ids_ptr_ + topk_ids_ptr_size;
+      adapted_topk_ids_ptr_ = adapted_topk_weights_ptr_ + adapted_topk_weights_size_;
+      recv_expert_count_ptr_ = adapted_topk_ids_ptr_ + adapted_topk_ids_size_;
+      kernel_workspace_ptr_ = recv_expert_count_ptr_ + recv_expert_count_size_;
+
+      KLLM_LOG_DEBUG << fmt::format(
+          "Rank[{}] LowLatency workspace layout: topk_weights@{}, topk_ids@{}, "
+          "adapted_weights@{}, adapted_ids@{}, recv_count@{}, kernel@{}",
+          rank_, topk_weights_ptr_, topk_ids_ptr_, adapted_topk_weights_ptr_, adapted_topk_ids_ptr_,
+          recv_expert_count_ptr_, kernel_workspace_ptr_);
+    } else {
+      // Normal模式：原始topk -> kernel workspace
+      kernel_workspace_ptr_ = topk_ids_ptr_ + topk_ids_ptr_size;
+    }
+
     cutlass_moe_wrapper_->SetWorkspacePtr(kernel_workspace_ptr_);
   }
 
@@ -274,14 +329,57 @@ Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
 
   if (using_deepep_) {
     // LCOV_EXCL_START
-    const size_t dispatch_num_tokens = output_tensors[1].shape[0];
-    if (dispatch_num_tokens > 0) {
-      expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
-                                                 dispatch_num_tokens * expert_topk_,
-                                                 context_->device->GetPrimaryComputeStream().Get());
-      AutoInvoke(output_tensors[1], output_tensors[1], dispatch_num_tokens);
+    // LowLatency模式下，Dispatch输出的shape是3D: [num_experts_per_node, num_max_dispatch_tokens, hidden_size]
+    // Normal模式下，Dispatch输出的shape是2D: [recv_num_tokens, hidden_size]
+    size_t dispatch_num_tokens;
+    if (use_low_latency_mode_) {
+      // LL模式：shape[1]是 num_max_dispatch_tokens (deepep_wrapper 中设置)
+      dispatch_num_tokens = output_tensors[1].shape[1];
+    } else {
+      // Normal模式：shape[0]是recv_num_tokens
+      dispatch_num_tokens = output_tensors[1].shape[0];
     }
+
+    if (dispatch_num_tokens > 0) {
+      if (use_low_latency_mode_) {
+        // LowLatency 模式：使用 recv_expert_count 生成适配的 topk_ids 和 topk_weights
+        // 展平后的总 token 数 = local_num_experts * dispatch_num_tokens
+        // dispatch_num_tokens 来自 deepep_wrapper 设置的 output_tensors[1].shape[1] = num_max_dispatch_tokens_
+        const size_t flat_token_num = expert_num_per_node_ * dispatch_num_tokens;
+        KLLM_LOG_DEBUG << fmt::format(
+            "Rank[{}] LowLatency mode: dispatch_num_tokens(per_expert)={}, flat_token_num={}, "
+            "expert_num_per_node={}, calling AdaptLowLatencyDispatchOutput",
+            rank_, dispatch_num_tokens, flat_token_num, expert_num_per_node_);
+
+        // 调用适配函数，将 recv_expert_count 转换为 FusedMoe 需要的格式
+        // tokens_per_expert = dispatch_num_tokens (即 output_tensors[1].shape[1])
+        // kernel 的 total_positions = local_num_experts * tokens_per_expert = flat_token_num
+        // 超出实际 recv_expert_count 的位置会被标记为 invalid (slot_id = -1)
+        AdaptLowLatencyDispatchOutput(static_cast<const int*>(recv_expert_count_ptr_), expert_num_per_node_,
+                                      dispatch_num_tokens, context_->device->GetPrimaryComputeStream());
+
+        // 将3D shape [num_experts_per_node, dispatch_num_tokens, hidden_size] 展平为2D [flat_token_num, hidden_size]
+        // 这样 ProcessChunks 中 input_tensor.shape[1] 才能正确取到 hidden_size
+        output_tensors[1].shape = {flat_token_num, expert_hidden_size_};
+        AutoInvoke(output_tensors[1], output_tensors[1], flat_token_num);
+      } else {
+        // Normal 模式：使用原始的 topk_ids
+        expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
+                                                   dispatch_num_tokens * expert_topk_,
+                                                   context_->device->GetPrimaryComputeStream().Get());
+        AutoInvoke(output_tensors[1], output_tensors[1], dispatch_num_tokens);
+      }
+    }
+
     // Combine is an in-place operation
+    // 在LL模式下，需要恢复3D shape传给Combine，因为DeepEP的low_latency_combine要求x.dim()==3
+    // dispatch_num_tokens = output_tensors[1].shape[1] 即每个expert的 num_max_dispatch_tokens
+    if (use_low_latency_mode_) {
+      output_tensors[1].shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
+      KLLM_LOG_DEBUG << fmt::format("Rank[{}] CutlassMoeLayer: LL mode Combine input shape: [{}, {}, {}]", rank_,
+                                    expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_);
+    }
+
     Combine({output_tensors[1]}, output_tensors);
     // LCOV_EXCL_STOP
   } else {
@@ -299,6 +397,12 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
                                              const size_t total_tokens, const KTensor& fc1_expert_weights_ktensor,
                                              const KTensor& fc2_expert_weights_ktensor,
                                              const std::vector<KTensor>& quant_scales_ktensors) {
+  // 在 LowLatency 模式下，使用适配后的 topk_ids 和 topk_weights
+  void* topk_weights_to_use = use_low_latency_mode_ ? adapted_topk_weights_ptr_ : topk_weights_ptr_;
+  void* topk_ids_to_use = use_low_latency_mode_ ? adapted_topk_ids_ptr_ : topk_ids_ptr_;
+
+  // LowLatency 模式下 topk=1，Normal 模式下 topk=expert_topk_
+  const size_t effective_topk = use_low_latency_mode_ ? 1 : expert_topk_;
   for (size_t chunk_token = 0; chunk_token < total_tokens; chunk_token += TRTLLM_CUTLASS_MOE_CHUNK_SIZE) {
     size_t start_token = chunk_token;
     size_t end_token = std::min(chunk_token + TRTLLM_CUTLASS_MOE_CHUNK_SIZE, total_tokens);
@@ -312,16 +416,19 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
     KTensor input_ktensor = TensorToKTensor(chunk_input);
     KTensor output_ktensor = TensorToKTensor(chunk_output);
 
-    Tensor chunk_topk_weights(input_tensor.location, TYPE_FP32, {solve_token, expert_topk_},
-                              topk_weights_ptr_ + start_token * expert_topk_ * sizeof(float));
-    Tensor chunk_topk_ids(input_tensor.location, TYPE_INT32, {solve_token, expert_topk_},
-                          topk_ids_ptr_ + start_token * expert_topk_ * sizeof(int32_t));
+    Tensor chunk_topk_weights(input_tensor.location, TYPE_FP32, {solve_token, effective_topk},
+                              topk_weights_to_use + start_token * effective_topk * sizeof(float));
+    Tensor chunk_topk_ids(input_tensor.location, TYPE_INT32, {solve_token, effective_topk},
+                          topk_ids_to_use + start_token * effective_topk * sizeof(int32_t));
     KTensor token_selected_experts_ktensor = TensorToKTensor(chunk_topk_ids);
     KTensor token_final_scales_ktensor = TensorToKTensor(chunk_topk_weights);
 
+    // TODO(zezhao): GetBestTactic(solve_token) 用于获取最优tactic，LowLatency模式下由于空桶存在，因此传入的该值过大，
+    // 在较低有效 token 数时性能会下降
+    size_t valid_tokens = use_low_latency_mode_ ? low_latency_max_tokens_ : solve_token;
     cutlass_moe_wrapper_->Forward(output_ktensor, input_ktensor, token_selected_experts_ktensor,
                                   token_final_scales_ktensor, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
-                                  quant_scales_ktensors, GetBestTactic(solve_token),
+                                  quant_scales_ktensors, GetBestTactic(valid_tokens),
                                   context_->device->GetPrimaryComputeStream().Get());
   }
   return Status();
@@ -376,14 +483,23 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tens
     // 调用 Dispatch 分发
     // 分发结果将被存储到 common_mlp_tensor, topk_ids, topk_weights 中
     std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor>& deepep_output_tensors = output_tensors;
+    std::vector<Tensor> deepep_output_tensors = output_tensors;
     KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
                                   deepep_input_tensors[1].shape[0]);
+
+    if (use_low_latency_mode_) {
+      deepep_output_tensors.emplace_back(input_tensors[1].location, TYPE_INT32,
+                                         std::vector<size_t>{expert_num_per_node_}, recv_expert_count_ptr_);
+    }
+
     Dispatch(deepep_input_tensors, deepep_output_tensors);
-    KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch output shape {} {}", deepep_output_tensors[0].shape[0],
-                                  deepep_output_tensors[1].shape[0]);
-    topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
-    topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+
+    // Dispatch后，同步更新output_tensors对应的shape（从deepep_output_tensors同步回来）
+    if (!use_low_latency_mode_) {
+      topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+      topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    }
+    output_tensors[1].shape = deepep_output_tensors[1].shape;
     // LCOV_EXCL_STOP
   }
   return Status();
@@ -402,6 +518,27 @@ Status CutlassMoeLayer::DumpEplbData(Tensor& topk_ids) {
       fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
+}
+
+void CutlassMoeLayer::AdaptLowLatencyDispatchOutput(const int* recv_expert_count, int num_experts_per_node,
+                                                    int max_tokens_per_expert, Stream& stream) {
+  // 计算总的 token 数量
+  const int total_tokens = num_experts_per_node * max_tokens_per_expert;
+
+  // 计算全局的 num_slots (所有 EP rank 的专家总数)
+  const int num_slots = expert_num_per_node_ * global_expert_para_size_;
+
+  KLLM_LOG_DEBUG << fmt::format(
+      "Rank[{}] AdaptLowLatencyDispatchOutput: num_experts={}, max_tokens_per_expert={}, "
+      "total_tokens={}, ep_rank={}, num_slots={}",
+      rank_, num_experts_per_node, max_tokens_per_expert, total_tokens, global_expert_para_rank_, num_slots);
+
+  // 调用 kernel 生成 adapted topk_ids 和 topk_weights
+  llm_kernels::nvidia::InvokeAdaptLowLatencyDispatch(
+      recv_expert_count, static_cast<int32_t*>(adapted_topk_ids_ptr_), static_cast<float*>(adapted_topk_weights_ptr_),
+      num_experts_per_node, max_tokens_per_expert, global_expert_para_rank_, num_slots, stream.Get());
+
+  KLLM_LOG_DEBUG << fmt::format("Rank[{}] AdaptLowLatencyDispatchOutput completed", rank_);
 }
 
 }  // namespace ksana_llm

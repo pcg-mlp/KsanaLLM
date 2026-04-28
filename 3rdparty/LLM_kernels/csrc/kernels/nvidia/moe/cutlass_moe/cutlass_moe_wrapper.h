@@ -31,7 +31,7 @@ using namespace llm_kernels::nvidia::tensorrt_llm::dev;
 class CutlassMoeWrapper {
  public:
   CutlassMoeWrapper(size_t tp_size, size_t tp_rank, size_t ep_size, size_t ep_rank, size_t cluster_size,
-                    size_t cluster_rank, size_t top_k);
+                    size_t cluster_rank, size_t top_k, bool enable_alltoall = false);
 
   ~CutlassMoeWrapper();
 

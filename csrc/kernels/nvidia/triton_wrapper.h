@@ -81,6 +81,35 @@ class TritonWrapper {
                                        int group_size, bool quant_a_per_tensor,
                                        std::unordered_map<std::string, int> config, cudaStream_t stream);
 
+  /**
+   * @brief 执行融合的批量MoE内核计算
+   *
+   * @tparam T 模板类型参数
+   * @param a 输入激活值 [E, max_num_tokens, K]
+   * @param b 权重数据 [E, K, N]
+   * @param c 输出结果 [E, max_num_tokens, N]
+   * @param expert_num_tokens 每个专家的token数量 [E]
+   * @param a_scale 激活值缩放因子
+   * @param b_scale 权重缩放因子
+   * @param max_num_tokens 最大token数量
+   * @param n 输出维度
+   * @param k 输入维度
+   * @param num_experts 专家数量
+   * @param top_k 顶部k个专家
+   * @param use_fp8_w8a8 是否使用FP8 W8A8量化
+   * @param use_int8_w8a16 是否使用INT8 W8A16量化
+   * @param per_act_token_quant 是否使用per-token量化
+   * @param config 内核配置参数
+   * @param stream CUDA流
+   */
+  template <typename T>
+  void InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void* expert_num_tokens, void* a_scale, void* b_scale,
+                                   void* b_zp, int max_num_tokens, int n, int k, int num_experts, int a_stride0,
+                                   int a_stride1, int a_stride2, int b_stride0, int b_stride1, int b_stride2,
+                                   int c_stride0, int c_stride1, int c_stride2, int block_shape0, int block_shape1,
+                                   int top_k, bool use_fp8_w8a8, bool use_int8_w8a16, bool per_act_token_quant,
+                                   std::unordered_map<std::string, int> config, cudaStream_t stream);
+
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,
                                                  const std::unordered_map<std::string, std::string>& map);

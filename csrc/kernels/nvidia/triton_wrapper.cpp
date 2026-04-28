@@ -68,6 +68,9 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["fused_moe_gptq_int4_fp8_kernel"] = {"BLOCK_SIZE_M", "BLOCK_SIZE_N",      "BLOCK_SIZE_K",
                                                        "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
                                                        "compute_type", "group_size",        "quant_a_per_tensor"};
+  kernel_key_map_["fused_batched_moe_kernel"] = {"group_n",      "group_k",       "BLOCK_SIZE_M", "BLOCK_SIZE_N",
+                                                 "BLOCK_SIZE_K", "GROUP_SIZE_M",  "top_k",        "compute_type",
+                                                 "use_fp8_w8a8", "use_int8_w8a16"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -342,5 +345,86 @@ INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(float);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(half);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(__nv_bfloat16);
 #undef INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void* expert_num_tokens, void* a_scale,
+                                                void* b_scale, void* b_zp, int max_num_tokens, int n, int k,
+                                                int num_experts, int a_stride0, int a_stride1, int a_stride2,
+                                                int b_stride0, int b_stride1, int b_stride2, int c_stride0,
+                                                int c_stride1, int c_stride2, int block_shape0, int block_shape1,
+                                                int top_k, bool use_fp8_w8a8, bool use_int8_w8a16,
+                                                bool per_act_token_quant, std::unordered_map<std::string, int> config,
+                                                cudaStream_t stream) {
+  std::string kernel_name = "fused_batched_moe_kernel";
+
+  // Compute strides for scale tensors
+  int a_scale_stride0 = 0, a_scale_stride1 = 0, a_scale_stride2 = 0;
+  int b_scale_stride0 = 0, b_scale_stride1 = 0, b_scale_stride2 = 0;
+
+  KLLM_LOG_DEBUG << fmt::format("Triton Kernel args ptrs: a={:p}, b={:p}, c={:p}, expert_num_tokens={:p}", a, b, c,
+                                expert_num_tokens);
+  KLLM_LOG_DEBUG << fmt::format("Triton Kernel args int: max_num_tokens={}, k={}, n={}", max_num_tokens, k, n);
+  KLLM_LOG_DEBUG << fmt::format("Triton Kernel scales ptrs: as={:p}, bs={:p}, bzp={:p}", a_scale, b_scale, b_zp);
+  KLLM_LOG_DEBUG << fmt::format("Triton Kernel strides: a=({},{},{}), b=({},{},{}), c=({},{},{})", a_stride0, a_stride1,
+                                a_stride2, b_stride0, b_stride1, b_stride2, c_stride0, c_stride1, c_stride2);
+  KLLM_LOG_DEBUG << fmt::format("Triton Kernel scale strides: as=({},{},{}), bs=({},{},{})", a_scale_stride0,
+                                a_scale_stride1, a_scale_stride2, b_scale_stride0, b_scale_stride1, b_scale_stride2);
+
+  // TODO(zezhao): 折叠不必要的多余参数，释放寄存器
+  void* args[] = {
+      &a,                  // param_0: a_ptr
+      &b,                  // param_1: b_ptr
+      &c,                  // param_2: c_ptr
+      &expert_num_tokens,  // param_3: expert_num_tokens
+      &max_num_tokens,     // param_4: max_num_tokens (u32)
+      &k,                  // param_5: K (u32)
+      &n,                  // param_6: N (u32)
+      &a_scale,            // param_7: a_scale_ptr
+      &b_scale,            // param_8: b_scale_ptr
+      &b_zp,               // param_9: b_zp_ptr
+      &a_stride0,          // param_10: stride_ae (u64)
+      &a_stride1,          // param_11: stride_am (u64)
+      &a_stride2,          // param_12: stride_ak (u64)
+      &b_stride0,          // param_13: stride_be (u64)
+      &b_stride2,          // param_14: stride_bk (u64)
+      &b_stride1,          // param_15: stride_bn (u64)
+      &c_stride0,          // param_16: stride_ce (u64)
+      &c_stride1,          // param_17: stride_cm (u64)
+      &c_stride2,          // param_18: stride_cn (u64)
+      &a_scale_stride0,    // param_19: stride_ase (u64)
+      &a_scale_stride1,    // param_20: stride_asm (u64)
+      &a_scale_stride2,    // param_21: stride_ask (u64)
+      &b_scale_stride0,    // param_22: stride_bse (u64)
+      &b_scale_stride1,    // param_23: stride_bsk (u64)
+      &b_scale_stride2,    // param_24: stride_bsn (u64)
+  };
+
+  std::unordered_map<std::string, std::string> map = {{"group_n", ConvertToString(block_shape0)},
+                                                      {"group_k", ConvertToString(block_shape1)},
+                                                      {"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
+                                                      {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},
+                                                      {"BLOCK_SIZE_K", ConvertToString(config["block_size_k"])},
+                                                      {"GROUP_SIZE_M", ConvertToString(config["group_size_m"])},
+                                                      {"top_k", ConvertToString(top_k)},
+                                                      {"compute_type", GetComputeType<T>()},
+                                                      {"use_fp8_w8a8", ConvertToString(use_fp8_w8a8)},
+                                                      {"use_int8_w8a16", ConvertToString(use_int8_w8a16)}};
+
+  size_t grid_x = num_experts;
+  size_t grid_y = CeilDiv(max_num_tokens, config.at("block_size_m")) * CeilDiv(n, config.at("block_size_n"));
+  InvokeTritonKernel(kernel_name, args, map, grid_x, grid_y, 1, stream);
+}
+
+#define INVOKE_FUSED_BATCHED_MOE_KERNEL(T)                                                                           \
+  template void TritonWrapper::InvokeFusedBatchedMoeKernel<T>(                                                       \
+      void* a, void* b, void* c, void* expert_num_tokens, void* a_scale, void* b_scale, void* b_zp,                  \
+      int max_num_tokens, int n, int k, int num_experts, int a_stride0, int a_stride1, int a_stride2, int b_stride0, \
+      int b_stride1, int b_stride2, int c_stride0, int c_stride1, int c_stride2, int block_shape0, int block_shape1, \
+      int top_k, bool use_fp8_w8a8, bool use_int8_w8a16, bool per_act_token_quant,                                   \
+      std::unordered_map<std::string, int> config, cudaStream_t stream)
+INVOKE_FUSED_BATCHED_MOE_KERNEL(float);
+INVOKE_FUSED_BATCHED_MOE_KERNEL(half);
+INVOKE_FUSED_BATCHED_MOE_KERNEL(__nv_bfloat16);
+#undef INVOKE_FUSED_BATCHED_MOE_KERNEL
 
 }  // namespace ksana_llm

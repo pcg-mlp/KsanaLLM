@@ -45,7 +45,29 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   const size_t max_dim = std::max({qkv_head_num * size_per_head, hidden_units, inter_size_per_tp * 2});
   // 2 is for concatenate of embedding_norm and hidden norm in mtp
   const size_t mtp_concat_hidden_size = (enable_mtp && context->global->IsSamplingNode()) ? hidden_units * 2 : 0;
-  size_t shared_buffer_unit_size = std::max({inter_size_per_tp, hidden_units, mtp_concat_hidden_size});
+  size_t all_to_all_hidden_size = 0;
+  if (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
+    // Use deepep_low_latency_max_tokens to limit buffer sizing instead of max_step_token_num.
+    // shared_buffer = max_token_num * shared_buffer_unit_size, so we scale all_to_all_hidden_size
+    // so that: max_token_num * all_to_all_hidden_size >=
+    //   local_num_experts * expert_world_size * ll_tokens * max(hidden, inter*2)
+    size_t ll_tokens = runtime_config.deepep_low_latency_max_tokens > 0
+                           ? runtime_config.deepep_low_latency_max_tokens
+                           : runtime_config.max_step_token_num;
+    ExpertParallelConfig expert_parallel_config;
+    env->GetExpertParallelConfig(expert_parallel_config);
+    size_t local_num_experts = expert_parallel_config.local_num_experts;
+    size_t expert_world_size = runtime_config.parallel_basic_config.expert_world_size;
+    all_to_all_hidden_size =
+        (local_num_experts * expert_world_size * ll_tokens * std::max(hidden_units, inter_size_per_tp * 2) +
+         max_token_num - 1) /
+        max_token_num;
+  } else if (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL) {
+    all_to_all_hidden_size =
+        runtime_config.parallel_basic_config.expert_world_size * std::max(hidden_units, inter_size_per_tp * 2);
+  }
+  size_t shared_buffer_unit_size =
+      std::max({inter_size_per_tp, hidden_units, mtp_concat_hidden_size, all_to_all_hidden_size});
 
   size_t mla_hidden_buffer_size = 0;
   if (model_config.use_mla) {
@@ -81,10 +103,14 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
         vocab_size_pad, max_dim, mla_flash_attn_size, mla_max_dim, mla_hidden_buffer_size);
   }
 
-  const size_t hidden_buffer_size =
+  size_t hidden_buffer_size =
       std::max(std::max(max_logits_tokens * vocab_size_pad, max_token_num * max_dim), mla_hidden_buffer_size);
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
   const size_t shared_buffer_size = max_token_num * shared_buffer_unit_size;
+  if (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL ||
+      runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
+    hidden_buffer_size = std::max(hidden_buffer_size, shared_buffer_size);
+  }
   KLLM_LOG_INFO << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
                 << ", max_token_num=" << max_token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
                 << ", inter_size_per_tp=" << inter_size_per_tp << ", hidden_buffer_size=" << hidden_buffer_size

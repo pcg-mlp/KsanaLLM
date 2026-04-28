@@ -925,6 +925,12 @@ TEST_F(EnvironmentTest, RuntimeConfig) {
   ksana_llm::BatchSchedulerConfig batch_config;
   auto status = env_.GetBatchSchedulerConfig(batch_config);
   EXPECT_TRUE(status.OK());
+
+  // 默认YAML的expert_world_size=1, moe_all_to_all_mode=auto → DISABLED
+  EXPECT_EQ(env_.schedule_config_parser_.runtime_config_.moe_all_to_all_mode, MoeAllToAllMode::DISABLED);
+
+  // 验证deepep_low_latency_max_tokens的yaml默认值
+  EXPECT_EQ(env_.schedule_config_parser_.runtime_config_.deepep_low_latency_max_tokens, 256);
 }
 
 // 测试Expert-Parallel配置读取
@@ -1220,6 +1226,9 @@ TEST_F(EnvironmentTest, CustomChunkTransferConfig) {
       file << "  global:\n";
       file << "    tensor_para_size: 1\n";
       file << "    pipeline_para_size: 1\n";
+      file << "    expert_world_size: 2\n";  // 用于测试MOE all-to-all模式
+      file << "    moe_all_to_all_mode: deepep_low_latency\n";
+      file << "    deepep_low_latency_max_tokens: 1024\n";
       file << "  batch_scheduler:\n";
       file << "    max_waiting_queue_len: 100\n";
       file << "    max_token_len: 4096\n";
@@ -1266,8 +1275,13 @@ TEST_F(EnvironmentTest, CustomChunkTransferConfig) {
   std::string yaml_path = create_chunk_config_yaml();
   ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
 
+  // 通过yaml配置测试expert_world_size>1时的MOE all-to-all模式
   Environment test_env;
   ASSERT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+  // 验证expert_world_size=2时, moe_all_to_all_mode=deepep_low_latency → DEEPEP_LOW_LATENCY
+  EXPECT_EQ(test_env.schedule_config_parser_.runtime_config_.moe_all_to_all_mode, MoeAllToAllMode::DEEPEP_LOW_LATENCY);
+  EXPECT_EQ(test_env.schedule_config_parser_.runtime_config_.deepep_low_latency_max_tokens, 1024);
 
   // 测试自定义的chunk大小
   size_t chunk_size = test_env.GetTransferLayerChunkSize();

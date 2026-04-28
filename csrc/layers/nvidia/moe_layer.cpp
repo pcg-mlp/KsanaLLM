@@ -95,11 +95,13 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
       context_->global->GetExpertParallelExpertNodeRank() * runtime_config.parallel_basic_config.expert_parallel_size +
       rank_;
 
-  // 多机 + DP + EP 才使用deepep
-  // TODO(jinxcwu) 后续需要修改到更高层的配置中，例如context
-  using_deepep_ = runtime_config.parallel_basic_config.expert_world_size > 1 &&
-                  runtime_config.parallel_basic_config.attn_data_parallel_size > 1 &&
-                  runtime_config.parallel_basic_config.expert_parallel_size > 1;
+  // 从 runtime_config 获取 MoE all-to-all 通信模式
+  using_deepep_ = (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL ||
+                   runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY);
+  low_latency_mode_ = (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY);
+  if (low_latency_mode_) {
+    low_latency_max_tokens_ = runtime_config.deepep_low_latency_max_tokens;
+  }
 
   // Initialize GroupedTopkLayer
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
@@ -151,37 +153,78 @@ size_t MoeLayer::GetWorkspaceSizeT() {
     size_t m = std::min(VLLM_FUSED_MOE_CHUNK_SIZE, max_token_num_);
     topk_weights_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(float));
     topk_ids_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(int64_t));
-    max_fused_id_buffer_size = 2 * m * expert_topk_ * sizeof(int32_t);
-    intermediate_cache1_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * 2 * sizeof(T));
-    // When T is __nv_fp8e4m3, we fuse silu_mul into group quant,
-    // and intermediate_cache2 is not needed
-    bool fuse_silu_mul =
-        (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3 && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3);
-    intermediate_cache2_size = fuse_silu_mul ? 0 : AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(T));
-    intermediate_cache3_size = AlignAddress(m * expert_topk_ * expert_hidden_size_ * sizeof(T));
-    intermediate_cache1_and_cache3_size = std::max(intermediate_cache1_size, intermediate_cache3_size);  // 共享
-    if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-      if (using_deepep_) {
-        // 提前传输fp8量化后的数据，空间大小按照max_token_num_计算
-        // TODO(zakwang): 优化空间使用，复用已有的空间
-        m = std::max(m, max_token_num_);
-        KLLM_LOG_INFO << fmt::format("using_deepep_, m = {}", m);
-      }
-      a1_q_size = AlignAddress(m * expert_hidden_size_ * sizeof(char));
-      a2_q_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(char));
-      a1_scale_size = AlignAddress(m * expert_hidden_size_ / 128 * sizeof(float));
-      a2_scale_size = AlignAddress(m * expert_topk_ * expert_inter_size_ / 128 * sizeof(float));
-      a1_and_a2_q_size = std::max(a1_q_size, a2_q_size);              // 共享
-      a1_and_a2_scale_size = std::max(a1_scale_size, a2_scale_size);  // 共享
-      if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
-        // TODO(jinxcwu) too large
-        dequant_workspace_size =
-            AlignAddress(expert_num_per_node_ * expert_hidden_size_ * expert_inter_size_ * 2 * sizeof(char));
-      }
+
+    // 当使用DeepEP且为FP8时，调整m值
+    if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3 && using_deepep_) {
+      // 提前传输fp8量化后的数据，空间大小按照max_token_num_计算
+      // TODO(zakwang): 优化空间使用，复用已有的空间
+      m = std::max(m, max_token_num_);
+      KLLM_LOG_INFO << fmt::format("using_deepep_, m = {}", m);
     }
-    max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + max_fused_id_buffer_size +
-                    intermediate_cache1_and_cache3_size + intermediate_cache2_size + a1_and_a2_q_size +
-                    a1_and_a2_scale_size + dequant_workspace_size;
+
+    if (low_latency_mode_) {
+      // LL模式：不需要fused_id_buffer和intermediate_cache，但需要LL特定的输出buffer
+      size_t max_tokens_per_rank = low_latency_max_tokens_;
+
+      // LL dispatch输出buffer大小
+      // packed_recv_x: [expert_num_per_node_, global_expert_para_size_, max_tokens_per_rank, hidden_size]
+      ll_output_size = AlignAddress(expert_num_per_node_ * global_expert_para_size_ * max_tokens_per_rank *
+                                    expert_hidden_size_ * sizeof(T));
+
+      // expert_num_tokens: [expert_num_per_node_] (int32)
+      expert_num_tokens_size = AlignAddress(expert_num_per_node_ * sizeof(int32_t));
+
+      // InvokeFusedBatchedMoe中间缓冲区
+      // intermediate_output: [expert_num_per_node_, max_tokens_per_rank, inter_size * 2]
+      batched_intermediate_output_size =
+          AlignAddress(expert_num_per_node_ * max_tokens_per_rank * expert_inter_size_ * 2 * sizeof(T));
+      // silu_output: [expert_num_per_node_, max_tokens_per_rank, inter_size]
+      batched_silu_output_size =
+          AlignAddress(expert_num_per_node_ * max_tokens_per_rank * expert_inter_size_ * sizeof(T));
+
+      if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+        a1_q_size = AlignAddress(m * expert_hidden_size_ * sizeof(char));
+        a1_scale_size = AlignAddress(m * expert_hidden_size_ / 128 * sizeof(float));
+      }
+
+      max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + ll_output_size + expert_num_tokens_size +
+                      batched_intermediate_output_size + batched_silu_output_size + a1_q_size + a1_scale_size;
+
+      KLLM_LOG_DEBUG << fmt::format(
+          "Rank[{}] LL mode workspace: topk_weights={} topk_ids={} ll_output={} "
+          "expert_num_tokens={} batched_intermediate={} batched_silu={} a1_q={} a1_scale={} total={}",
+          rank_, topk_weights_ptr_size, topk_ids_ptr_size, ll_output_size, expert_num_tokens_size,
+          batched_intermediate_output_size, batched_silu_output_size, a1_q_size, a1_scale_size, max_ws_bytes_);
+    } else {
+      // Normal模式：需要fused_id_buffer和intermediate_cache
+      max_fused_id_buffer_size = 2 * m * expert_topk_ * sizeof(int32_t);
+      intermediate_cache1_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * 2 * sizeof(T));
+      // When T is __nv_fp8e4m3, we fuse silu_mul into group quant,
+      // and intermediate_cache2 is not needed
+      bool fuse_silu_mul =
+          (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3 && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3);
+      intermediate_cache2_size = fuse_silu_mul ? 0 : AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(T));
+      intermediate_cache3_size = AlignAddress(m * expert_topk_ * expert_hidden_size_ * sizeof(T));
+      intermediate_cache1_and_cache3_size = std::max(intermediate_cache1_size, intermediate_cache3_size);  // 共享
+
+      if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+        a1_q_size = AlignAddress(m * expert_hidden_size_ * sizeof(char));
+        a2_q_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(char));
+        a1_scale_size = AlignAddress(m * expert_hidden_size_ / 128 * sizeof(float));
+        a2_scale_size = AlignAddress(m * expert_topk_ * expert_inter_size_ / 128 * sizeof(float));
+        a1_and_a2_q_size = std::max(a1_q_size, a2_q_size);              // 共享
+        a1_and_a2_scale_size = std::max(a1_scale_size, a2_scale_size);  // 共享
+        if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
+          // TODO(jinxcwu) too large
+          dequant_workspace_size =
+              AlignAddress(expert_num_per_node_ * expert_hidden_size_ * expert_inter_size_ * 2 * sizeof(char));
+        }
+      }
+
+      max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + max_fused_id_buffer_size +
+                      intermediate_cache1_and_cache3_size + intermediate_cache2_size + a1_and_a2_q_size +
+                      a1_and_a2_scale_size + dequant_workspace_size;
+    }
   }
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MoeLayer", rank_, max_ws_bytes_);
   return max_ws_bytes_;
@@ -244,19 +287,37 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     if (use_vllm_moe_) {
       topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
       topk_ids_ptr_ = topk_weights_ptr_ + topk_weights_ptr_size;
-      fused_id_buffer_ = topk_ids_ptr_ + topk_ids_ptr_size;
-      intermediate_cache1_ = fused_id_buffer_ + max_fused_id_buffer_size;
-      intermediate_cache2_ = intermediate_cache1_ + intermediate_cache1_and_cache3_size;
-      intermediate_cache3_ = intermediate_cache1_;  // 共享
-      if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-        a1_q_ = intermediate_cache2_ + intermediate_cache2_size;
-        a2_q_ = a1_q_;  // 共享
-        a1_scale_ = a1_q_ + a1_and_a2_q_size;
-        a2_scale_ = a1_scale_;  // 共享
-        if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
-          dequant_workspace_ = a1_scale_ + a1_and_a2_scale_size;
+
+      if (low_latency_mode_) {
+        // LCOV_EXCL_START
+        // LL模式：分配ll_output、expert_num_tokens和batched moe中间缓冲区
+        ll_output_ = topk_ids_ptr_ + topk_ids_ptr_size;
+        expert_num_tokens_ = ll_output_ + ll_output_size;
+        batched_intermediate_output_ = expert_num_tokens_ + expert_num_tokens_size;
+        batched_silu_output_ = batched_intermediate_output_ + batched_intermediate_output_size;
+
+        if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+          // LL模式只需要a1的量化
+          a1_q_ = batched_silu_output_ + batched_silu_output_size;
+          a1_scale_ = a1_q_ + a1_q_size;
+        }
+      } else {
+        // Normal模式：分配fused_id_buffer和intermediate_cache
+        fused_id_buffer_ = topk_ids_ptr_ + topk_ids_ptr_size;
+        intermediate_cache1_ = fused_id_buffer_ + max_fused_id_buffer_size;
+        intermediate_cache2_ = intermediate_cache1_ + intermediate_cache1_and_cache3_size;
+        intermediate_cache3_ = intermediate_cache1_;  // 共享
+        if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+          a1_q_ = intermediate_cache2_ + intermediate_cache2_size;
+          a2_q_ = a1_q_;  // 共享
+          a1_scale_ = a1_q_ + a1_and_a2_q_size;
+          a2_scale_ = a1_scale_;  // 共享
+          if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
+            dequant_workspace_ = a1_scale_ + a1_and_a2_scale_size;
+          }
         }
       }
+        // LCOV_EXCL_STOP
     }
   }
 
@@ -293,46 +354,77 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     // 使用 GroupedTopkLayer 计算 topk
     ExecuteGroupedTopk<T>(input_tensors, output_tensors);
 
+    // LCOV_EXCL_START
     auto AutoInvoke = [&](auto template_param, void* hidden_states_ptr, void* output_hidden_states_ptr,
                           int num_tokens) {
-      InvokeFusedMoe<T, template_param>(hidden_states_ptr,                // hidden_states
-                                        input_tensors[2].GetPtr<void>(),  // w1
-                                        input_tensors[3].GetPtr<void>(),  // w2
-                                        expert_topk_,                     // topk
-                                        weight_dtype_,                    // weight_dtype
-                                        compute_dtype_,                   // compute_dtype
-                                        false,                            // is_marlin
-                                        false,                            // use_triton
-                                        w1_scale,                         // w1_scale
-                                        w2_scale,                         // w2_scale
-                                        nullptr,                          // w1_zp
-                                        nullptr,                          // w2_zp
-                                        a1_q_,                            // a1_q
-                                        a2_q_,                            // a2_q
-                                        w1_input_scale,                   // w1_input_scale
-                                        w2_input_scale,                   // w2_input_scale
-                                        a1_scale_,                        // a1_scale
-                                        a2_scale_,                        // a2_scale
-                                        w1_input_alpha,                   // w1_input_alpha
-                                        w2_input_alpha,                   // w2_input_alpha
-                                        block_shape_,                     // block_shape
-                                        topk_weights_ptr_,                // topk_weights_ptr
-                                        topk_ids_ptr_,                    // topk_ids_ptr
-                                        routed_scaling_factor_,           // routed_scaling_factor
-                                        output_hidden_states_ptr,         // output_hidden_states
-                                        intermediate_cache1_,             // intermediate_cache1
-                                        intermediate_cache2_,             // intermediate_cache2
-                                        intermediate_cache3_,             // intermediate_cache3
-                                        fused_id_buffer_,                 // buffer_of_ids_in_kernel
-                                        num_tokens,                       // num_tokens
-                                        expert_num_per_node_,             // num_experts_per_node
-                                        expert_hidden_size_,              // hidden_size
-                                        expert_inter_size_,               // inter_size
-                                        global_expert_para_size_,         // expert_para_size * expert_world_size
-                                        dequant_workspace_,               // dequant_workspace
-                                        w4afp8_moe_backend_,              // w4afp8_moe_backend
-                                        rank_,                            // rank
-                                        context_->device->GetPrimaryComputeStream().Get());  // stream
+      // 当启用 low_latency 模式时，使用 InvokeFusedBatchedMoe
+      if (low_latency_mode_) {
+        // low_latency 模式下，数据已经按 expert 组织，使用 batched kernel
+        // 输入格式: [num_experts, max_num_tokens, hidden_size]
+        // 注意：在 low_latency 模式下，hidden_states_ptr 可能是 a1_q_（FP8量化后的数据）
+        void* input_scale = (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) ? a1_scale_ : nullptr;
+        InvokeFusedBatchedMoe<T>(
+            output_hidden_states_ptr,                         // output
+            hidden_states_ptr,                                // input (batched by expert)
+            input_tensors[2].GetPtr<void>(),                  // weight1
+            input_tensors[3].GetPtr<void>(),                  // weight2
+            input_scale,                                      // input_scale
+            w1_scale,                                         // weight1_scale
+            w2_scale,                                         // weight2_scale
+            expert_num_per_node_,                             // num_experts
+            expert_num_tokens_,                               // expert_num_tokens (每个expert的实际token数)
+            num_tokens,                                       // max_num_tokens
+            expert_hidden_size_,                              // k (hidden_size)
+            expert_inter_size_,                               // n (inter_size)
+            static_cast<int>(expert_topk_),                   // topk
+            compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3,  // use_fp8
+            false,                                            // use_int8_w8a8
+            weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2,  // use_int4
+            block_shape_[1],                                                                    // group_size
+            batched_intermediate_output_,                        // intermediate_output buffer
+            batched_silu_output_,                                // silu_output buffer
+            context_->device->GetPrimaryComputeStream().Get());  // stream
+      } else {
+        // 标准模式：使用原有的 InvokeFusedMoe
+        InvokeFusedMoe<T, template_param>(hidden_states_ptr,                // hidden_states
+                                          input_tensors[2].GetPtr<void>(),  // w1
+                                          input_tensors[3].GetPtr<void>(),  // w2
+                                          expert_topk_,                     // topk
+                                          weight_dtype_,                    // weight_dtype
+                                          compute_dtype_,                   // compute_dtype
+                                          false,                            // is_marlin
+                                          false,                            // use_triton
+                                          w1_scale,                         // w1_scale
+                                          w2_scale,                         // w2_scale
+                                          nullptr,                          // w1_zp
+                                          nullptr,                          // w2_zp
+                                          a1_q_,                            // a1_q
+                                          a2_q_,                            // a2_q
+                                          w1_input_scale,                   // w1_input_scale
+                                          w2_input_scale,                   // w2_input_scale
+                                          a1_scale_,                        // a1_scale
+                                          a2_scale_,                        // a2_scale
+                                          w1_input_alpha,                   // w1_input_alpha
+                                          w2_input_alpha,                   // w2_input_alpha
+                                          block_shape_,                     // block_shape
+                                          topk_weights_ptr_,                // topk_weights_ptr
+                                          topk_ids_ptr_,                    // topk_ids_ptr
+                                          routed_scaling_factor_,           // routed_scaling_factor
+                                          output_hidden_states_ptr,         // output_hidden_states
+                                          intermediate_cache1_,             // intermediate_cache1
+                                          intermediate_cache2_,             // intermediate_cache2
+                                          intermediate_cache3_,             // intermediate_cache3
+                                          fused_id_buffer_,                 // buffer_of_ids_in_kernel
+                                          num_tokens,                       // num_tokens
+                                          expert_num_per_node_,             // num_experts_per_node
+                                          expert_hidden_size_,              // hidden_size
+                                          expert_inter_size_,               // inter_size
+                                          global_expert_para_size_,         // expert_para_size * expert_world_size
+                                          dequant_workspace_,               // dequant_workspace
+                                          w4afp8_moe_backend_,              // w4afp8_moe_backend
+                                          rank_,                            // rank
+                                          context_->device->GetPrimaryComputeStream().Get());  // stream
+      }
     };
 
     if (global_expert_para_size_ == 1) {  // 单卡情况
@@ -342,18 +434,35 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
                                           context_->device->GetPrimaryComputeStream().Get());
       AutoInvoke(std::true_type{}, input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), num_tokens);
     } else {  // EP使用deepep
-      const size_t dispatch_num_tokens = output_tensors[1].shape[0];
+      // LL模式下，output_tensors[1]的shape是3D: [num_experts_per_node, max_tokens_per_rank, hidden_size]
+      // Normal模式下，output_tensors[1]的shape是2D: [recv_num_tokens, hidden_size]
+      size_t dispatch_num_tokens;
+      if (low_latency_mode_) {
+        // LL模式：使用shape[1]作为max_tokens_per_rank
+        dispatch_num_tokens = output_tensors[1].shape[1];
+      } else {
+        // Normal模式：使用shape[0]作为recv_num_tokens
+        dispatch_num_tokens = output_tensors[1].shape[0];
+      }
+      KLLM_LOG_DEBUG << fmt::format("Rank[{}] MoeLayer: dispatch_num_tokens={}", rank_, dispatch_num_tokens);
       if (dispatch_num_tokens > 0) {
         void* hidden_states_ptr = output_tensors[1].GetPtr<void>();
         if (using_deepep_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
           // 使用fp8的a1_q，hidden_states设置为nullptr
           hidden_states_ptr = nullptr;
         }
+
         AutoInvoke(std::true_type{}, hidden_states_ptr, output_tensors[1].GetPtr<void>(), dispatch_num_tokens);
       }
 
       // Combine is an in-place operation
+      // 注意：在LL模式下，output_tensors[1]仍然保持3D shape传给Combine
+      if (low_latency_mode_) {
+        output_tensors[1].shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
+      }
+
       Combine({output_tensors[1]}, output_tensors);
+      // LCOV_EXCL_STOP
     }
   } else {
     // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
@@ -430,10 +539,11 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
   }
 
   if (using_deepep_) {
+    // LCOV_EXCL_START
     // 调用 Dispatch 分发
     // 分发结果将被存储到 common_mlp_tensor, topk_ids, topk_weights 中
     std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor>& deepep_output_tensors = output_tensors;
+    std::vector<Tensor> deepep_output_tensors = output_tensors;
     // 在 InvokeFusedMoe 前进行首次量化（当数据类型为 TYPE_BLOCK_FP8_E4M3 时）
     bool use_scales = output_tensors.size() > kWorkspaceTensorIndex;
     if (use_scales) {
@@ -447,13 +557,20 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
       deepep_input_tensors.push_back(a1_scale_tensor);
       deepep_input_tensors.push_back(workspace_tensor);
     }
-    KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
-                                  deepep_input_tensors[1].shape[0]);
+
+    if (low_latency_mode_) {
+      deepep_output_tensors.emplace_back(input_tensors[1].location, TYPE_INT32,
+                                         std::vector<size_t>{expert_num_per_node_}, expert_num_tokens_);
+    }
+
     Dispatch(deepep_input_tensors, deepep_output_tensors);
-    KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch output shape {} {}", deepep_output_tensors[0].shape[0],
-                                  deepep_output_tensors[1].shape[0]);
-    topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
-    topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+
+    if (!low_latency_mode_) {
+      topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+      topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+    }
+    output_tensors[1].shape = deepep_output_tensors[1].shape;
+    // LCOV_EXCL_STOP
   }
   return Status();
 }

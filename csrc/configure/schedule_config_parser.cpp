@@ -477,6 +477,67 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   runtime_config_.moe_topk_score_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.global.moe_topk_score_threshold", 0.0f);
 
+  // Determine MOE all-to-all mode from yaml config.
+  {
+    std::string mode_str =
+        yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.global.moe_all_to_all_mode", "auto");
+
+    // Resolve mode string to enum.
+    if (mode_str == "deepep_low_latency") {
+      runtime_config_.moe_all_to_all_mode = MoeAllToAllMode::DEEPEP_LOW_LATENCY;
+    } else if (mode_str == "deepep_normal") {
+      runtime_config_.moe_all_to_all_mode = MoeAllToAllMode::DEEPEP_NORMAL;
+    } else if (mode_str == "auto") {
+      // Auto: enable DeepEP Normal when expert_world_size > 1, otherwise disabled.
+      if (runtime_config_.parallel_basic_config.expert_world_size > 1) {
+        runtime_config_.moe_all_to_all_mode = MoeAllToAllMode::DEEPEP_NORMAL;
+      } else {
+        runtime_config_.moe_all_to_all_mode = MoeAllToAllMode::DISABLED;
+      }
+    } else {
+      KLLM_LOG_ERROR << "Unknown moe_all_to_all_mode: " << mode_str
+                     << ", valid values: auto, deepep_normal, deepep_low_latency.";
+      KLLM_THROW(fmt::format("Unknown moe_all_to_all_mode: {}", mode_str));
+    }
+  }
+  KLLM_LOG_INFO << "MOE all-to-all mode: "
+                << (runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DISABLED             ? "DISABLED"
+                    : runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL      ? "DEEPEP_NORMAL"
+                    : runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY ? "DEEPEP_LOW_LATENCY"
+                                                                                                 : "UNKNOWN");
+
+  // DeepEP (Normal / LowLatency) requires TP == DP and enable_full_shared_expert.
+  if (runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL ||
+      runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
+    KLLM_CHECK_WITH_INFO(
+        runtime_config_.parallel_basic_config.attn_data_parallel_size ==
+            runtime_config_.parallel_basic_config.tensor_parallel_size,
+        fmt::format("DeepEP requires tensor_parallel_size == attn_data_parallel_size, but got tp={}, dp={}",
+                    runtime_config_.parallel_basic_config.tensor_parallel_size,
+                    runtime_config_.parallel_basic_config.attn_data_parallel_size));
+    KLLM_CHECK_WITH_INFO(
+        runtime_config_.enable_full_shared_expert,
+        "DeepEP requires enable_full_shared_expert to be true, please set it in the config yaml.");
+  }
+
+  // Read deepep_low_latency_max_tokens from yaml config.
+  runtime_config_.deepep_low_latency_max_tokens = yaml_reader.GetScalar<size_t>(
+      yaml_reader.GetRootNode(), "setting.global.deepep_low_latency_max_tokens", 256);
+
+  // When DeepEP low_latency is enabled, cap deepep_low_latency_max_tokens
+  // to max_batch_size / dp. max_batch_size is the global total across all DPs,
+  // so each DP's dispatch buffer only needs to handle its fair share.
+  if (runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
+    size_t per_dp_batch = batch_scheduler_config_.max_batch_size /
+                          runtime_config_.parallel_basic_config.attn_data_parallel_size;
+    runtime_config_.deepep_low_latency_max_tokens =
+        std::min(runtime_config_.deepep_low_latency_max_tokens, per_dp_batch);
+    KLLM_LOG_INFO << fmt::format(
+        "DeepEP low_latency: deepep_low_latency_max_tokens capped to {} (max_batch_size={}, dp={})",
+        runtime_config_.deepep_low_latency_max_tokens, batch_scheduler_config_.max_batch_size,
+        runtime_config_.parallel_basic_config.attn_data_parallel_size);
+  }
+
   InitConnectorConfig(yaml_reader);
   InitGlobalCacheConnectorConfig(yaml_reader);
   // TODO(zhongzhicao): Support PD + prefix cache + split fuse.

@@ -333,6 +333,13 @@ struct ParallelismBasicConfig {
 
 enum W4AFP8_MOE_BACKEND { Default = 0, GroupTriton = 1, TensorTriton = 2 };
 
+// The communication mode for MoE all-to-all dispatch/combine.
+enum class MoeAllToAllMode {
+  DISABLED = 0,           // All-to-all disabled (default, use AllReduce-based communication)
+  DEEPEP_NORMAL = 1,      // Use DeepEP normal-latency communication
+  DEEPEP_LOW_LATENCY = 2  // Use DeepEP low-latency communication
+};
+
 // Config info used during runtime
 // Some configs are determined by ModelConfig and BatchSchedulerConfig
 struct RuntimeConfig {
@@ -384,6 +391,15 @@ struct RuntimeConfig {
 
   // MOE topk score threshold, tokens with score below this threshold will be filtered
   float moe_topk_score_threshold = 0.0f;
+
+  // Communication mode for MoE all-to-all dispatch/combine
+  MoeAllToAllMode moe_all_to_all_mode = MoeAllToAllMode::DISABLED;
+
+  // Maximum token number used for DeepEP low-latency buffer sizing.
+  // When > 0, this replaces max_step_token_num as the buffer coefficient in LowLatency mode.
+  // Configured via setting.global.deepep_low_latency_max_tokens in YAML config file.
+  // Default: 256. When set to 0, falls back to max_step_token_num.
+  size_t deepep_low_latency_max_tokens = 256;
 
   bool is_profile_mode = false;  // Only used for profiling performance
 };

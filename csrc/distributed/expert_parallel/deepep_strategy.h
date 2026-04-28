@@ -16,7 +16,8 @@ class DeepEPWrapper;
 
 class DeepEPStrategy : public ExpertParallelStrategy {
  public:
-  DeepEPStrategy(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts);
+  DeepEPStrategy(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts,
+                 int max_token_num, bool low_latency);
   ~DeepEPStrategy() override = default;
 
   // Get communicator config from this executor

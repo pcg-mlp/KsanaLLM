@@ -80,6 +80,13 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
                     size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
                     int rank, cudaStream_t stream);
 
+template <typename T>
+void InvokeFusedBatchedMoe(void* output, const void* input, const void* weight1, const void* weight2,
+                           const void* input_scale, const void* weight1_scale, const void* weight2_scale,
+                           int num_experts, const void* expert_num_tokens, int max_num_tokens, int hidden_size,
+                           int inter_size, int topk, bool use_fp8, bool use_int8_w8a8, bool use_int4, int group_size,
+                           void* intermediate_output, void* silu_output, cudaStream_t stream);
+
 size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int hidden_size, int num_experts, int topk,
                                             size_t data_type_size);
 
@@ -92,5 +99,10 @@ void FusedMarlinMoe(half* output, const half* input, const float* gating_output,
 
 // Fill GPU memory with random integers in range [start_int, end_int)
 void FillRandomInts(int* device_ptr, int size, int start_int, int end_int, int rank, cudaStream_t stream);
+
+// Adapter kernel for LowLatency mode: transform dispatch output to FusedMoe input format
+void InvokeAdaptLowLatencyDispatch(const int* recv_expert_count, int* adapted_topk_ids, float* adapted_topk_weights,
+                                   int num_experts_per_node, int max_tokens_per_expert, int ep_rank, int num_slots,
+                                   cudaStream_t stream);
 
 }  // namespace ksana_llm

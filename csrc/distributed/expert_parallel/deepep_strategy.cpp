@@ -7,10 +7,11 @@
 
 namespace ksana_llm {
 
-DeepEPStrategy::DeepEPStrategy(int rank, int num_ranks, int world_size, int node_rank, int hidden_size,
-                               int num_experts) {
+DeepEPStrategy::DeepEPStrategy(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts,
+                               int max_token_num, bool low_latency_mode) {
   // Only create DeepEPWrapper, don't call Initialize
-  deepep_wrapper_ = std::make_shared<DeepEPWrapper>(rank, num_ranks, world_size, node_rank, hidden_size, num_experts);
+  deepep_wrapper_ = std::make_shared<DeepEPWrapper>(rank, num_ranks, world_size, node_rank, hidden_size, num_experts,
+                                                    low_latency_mode, max_token_num);
 }
 
 EPCommunicationConfig DeepEPStrategy::GetCommunicationConfig() const {

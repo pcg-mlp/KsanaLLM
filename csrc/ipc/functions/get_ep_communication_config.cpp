@@ -89,10 +89,25 @@ Status GetEPCommunicationConfigCallable::Call(const IpcRequest* request, IpcResp
   }
   size_t num_experts = model_config.moe_config.num_experts;
 
+  // Get runtime config from environment
+  RuntimeConfig runtime_config;
+  Status runtime_config_status = env_->GetRuntimeConfig(runtime_config);
+  if (!runtime_config_status.OK()) {
+    KLLM_LOG_ERROR << "Failed to get RuntimeConfig: " << runtime_config_status.GetMessage();
+    return runtime_config_status;
+  }
+  // In LowLatency mode, use the dedicated deepep_low_latency_max_tokens if set,
+  // otherwise fall back to max_step_token_num.
+  bool is_low_latency = (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY);
+  size_t max_token_num = (is_low_latency && runtime_config.deepep_low_latency_max_tokens > 0)
+                             ? runtime_config.deepep_low_latency_max_tokens
+                             : runtime_config.max_step_token_num;
+
   // Create ExpertParallelManager
   Status create_status = expert_parallel_manager->Create(
       rank, static_cast<int>(expert_para_size * expert_world_size), static_cast<int>(expert_world_size),
-      static_cast<int>(expert_node_rank), static_cast<int>(model_config.hidden_units), static_cast<int>(num_experts));
+      static_cast<int>(expert_node_rank), static_cast<int>(model_config.hidden_units), static_cast<int>(num_experts),
+      static_cast<int>(max_token_num), is_low_latency);
   if (!create_status.OK()) {
     KLLM_LOG_ERROR << "Failed to create ExpertParallelManager: " << create_status.GetMessage();
     return create_status;

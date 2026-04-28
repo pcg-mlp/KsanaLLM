@@ -154,6 +154,11 @@ Status InferenceEngine::Initialize() {
   STATUS_CHECK_RETURN(model_driver_->InitCustomCommunication());
   STATUS_CHECK_RETURN(model_driver_->InitMulticastCommunication());
 
+  // Synchronize EP communicator config.
+  if (!context_->global->IsExpertParallelStandalone()) {
+    STATUS_CHECK_RETURN(model_driver_->SynchronizeEPCommunicationConfig(distributed_control_coordinator_));
+  }
+
   ProfilerConfig profiler_config;
   STATUS_CHECK_RETURN(env_->GetProfilerConfig(profiler_config));
   profiler_config.process_role = "engine";
@@ -405,11 +410,6 @@ Status InferenceEngine::Initialize() {
                   << ", think_end_token_id: " << vocab_info.think_end_token_id;
   }
   STATUS_CHECK_RETURN(model_driver_->CreateExecutorRuntime(vocab_info));
-
-  // Synchronize EP communicator config after executor runtime is created
-  if (!context_->global->IsExpertParallelStandalone()) {
-    STATUS_CHECK_RETURN(model_driver_->SynchronizeEPCommunicationConfig(distributed_control_coordinator_));
-  }
 
   return Status();
 }

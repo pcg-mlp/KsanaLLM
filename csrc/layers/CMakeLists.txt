@@ -21,6 +21,7 @@ set(layers_nvidia_LIBS "")
 
 if(WITH_CUDA)
   file(GLOB_RECURSE layers_nvidia_SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/nvidia/*.cpp)
+  list(FILTER layers_nvidia_SRCS EXCLUDE REGEX ".*test.cpp")
   list(APPEND layers_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt)
 endif()
 

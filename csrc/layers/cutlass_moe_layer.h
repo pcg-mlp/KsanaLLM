@@ -84,6 +84,20 @@ class CutlassMoeLayer : public BaseLayer {
   void* kernel_workspace_ptr_;
   size_t kernel_workspace_size;
 
+  // LowLatency mode specific buffers
+  bool use_low_latency_mode_ = false;
+  size_t low_latency_max_tokens_ = 0;
+  void* adapted_topk_weights_ptr_ = nullptr;
+  void* adapted_topk_ids_ptr_ = nullptr;
+  void* recv_expert_count_ptr_ = nullptr;
+  size_t adapted_topk_weights_size_ = 0;
+  size_t adapted_topk_ids_size_ = 0;
+  size_t recv_expert_count_size_ = 0;
+
+  // Adapter function to transform LowLatency dispatch output to FusedMoe kernel input format
+  void AdaptLowLatencyDispatchOutput(const int* recv_expert_count, int num_experts_per_node, int tokens_per_expert,
+                                     Stream& stream);
+
   size_t global_expert_para_size_;
   size_t global_expert_para_rank_;
 

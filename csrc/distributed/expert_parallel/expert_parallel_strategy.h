@@ -80,10 +80,12 @@ class ExpertParallelStrategyFactory {
    * @param node_rank 当前节点的编号
    * @param hidden_size 隐藏层大小
    * @param num_experts 专家总数
+   * @param low_latency_mode 是否启用低延迟模式
    * @return std::shared_ptr<ExpertParallelStrategy> 策略实例
    */
   static std::shared_ptr<ExpertParallelStrategy> Create(StrategyType type, int rank, int num_ranks, int world_size,
-                                                        int node_rank, int hidden_size, int num_experts);
+                                                        int node_rank, int hidden_size, int num_experts,
+                                                        int max_token_num, bool low_latency);
 };
 
 }  // namespace ksana_llm

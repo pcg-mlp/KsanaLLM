@@ -17,14 +17,15 @@ namespace llm_kernels {
 namespace nvidia {
 
 CutlassMoeWrapper::CutlassMoeWrapper(size_t tp_size, size_t tp_rank, size_t ep_size, size_t ep_rank,
-                                     size_t cluster_size, size_t cluster_rank, size_t top_k)
+                                     size_t cluster_size, size_t cluster_rank, size_t top_k, bool enable_alltoall)
     : tp_size_(tp_size),
       tp_rank_(tp_rank),
       ep_size_(ep_size),
       ep_rank_(ep_rank),
       cluster_size_(cluster_size),
       cluster_rank_(cluster_rank),
-      top_k_(top_k) {}
+      top_k_(top_k),
+      enable_alltoall_(enable_alltoall) {}
 
 template <typename Atype>
 void CutlassMoeWrapper::Init() {

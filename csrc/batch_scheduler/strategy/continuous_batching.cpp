@@ -8,6 +8,8 @@
 #include <memory>
 #include <utility>
 
+#include "fmt/format.h"
+
 #include "base_strategy.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/planning_workload_estimator.h"
@@ -40,21 +42,21 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     }
   }
 
-  /* TODO(zezhao):
-   * 在多机 EP 场景下，每台机器都持有完整的 MLA、Embedding 以及 LmHead，多台机器间仅在 MOE 层进行数据共享
-   * 对于每台机器，MLA 部分的所有 DP 节点，每轮调度后会产出最多 max_step_token_num 的 token。
-   * 多台机器通过 DeepEP Dispatch 逻辑，完成 AllToAll 数据传输，则每台机器、每张卡上理论收到的最多 token 数为：
-   *    machine_nums * max_step_token_num
-   * 而 MOE 部分所使用的参与数据存储的几个空间 hidden_buffer_0, hidden_buffer_1, reduce_buffer, workspace 等，
-   * 均是按照 max_step_token_num 分配的显存空间。上述的 Dispatch 分发会导致计算越界。
-   * 因此这里暂时通过将 dp_max_step_token_num 缩放到 (1 / EP机器数) 的方法，规避越界问题。
-   * 后续将重新调整 MOE 部分的空间分配及使用方法，移除此处的缩放操作。
-   * 额外的，由于缩放操作存在，在开启双机 EP 时，将 max_step_token_num 配置为 64K，则程序本身仅能支持最大为 32K 的
-   * 请求，与 yaml 配置存在不符。
-   */
-  dp_max_step_token_num_ =
-      batch_scheduler_config_.max_step_token_num / runtime_config_.parallel_basic_config.expert_world_size;
+  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num;
   dp_max_batch_size_ = batch_scheduler_config_.max_batch_size;
+  per_dp_max_batch_size_ = dp_max_batch_size_;
+
+  // When DeepEP low_latency is enabled, limit each DP to max_batch_size / dp requests.
+  // dp_max_batch_size_ stays as the global limit (checked against the shared counter across all DPs).
+  // per_dp_max_batch_size_ is the per-DP local limit (checked against this DP's own request count).
+  if (runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
+    per_dp_max_batch_size_ = batch_scheduler_config_.max_batch_size /
+                             runtime_config_.parallel_basic_config.attn_data_parallel_size;
+    KLLM_LOG_INFO << fmt::format("DeepEP low_latency: per_dp_max_batch_size_ = {} (max_batch_size={}, dp={})",
+                                per_dp_max_batch_size_, batch_scheduler_config_.max_batch_size,
+                                runtime_config_.parallel_basic_config.attn_data_parallel_size);
+  }
+
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
   if (connector_config_.group_role == GroupRole::DECODE) {
     dp_max_decode_batch_size_ = dp_max_batch_size_;
@@ -390,7 +392,8 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     total_sampling_token_num = scheduler_shared_counter_->step_logits_num.Get();
 
     if (step_token_num + req_token_num > dp_max_step_token_num_ ||
-        total_sampling_token_num + req->sampling_token_num > dp_max_logits_num_ || req_num >= dp_max_batch_size_) {
+        total_sampling_token_num + req->sampling_token_num > dp_max_logits_num_ || req_num >= dp_max_batch_size_ ||
+        passed_reqs.size() >= per_dp_max_batch_size_) {
       scheduler_ticktok_->Unlock();
       ++it;
       continue;
@@ -630,6 +633,8 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   KLLM_CHECK(passed_reqs.size() == batch_state_->schedule_output->running_reqs.size());
 
   size_t step_batch_size = batch_state_->schedule_output->running_reqs.size() + batch_state_->transfer_queue.size();
+  // Per-DP local batch count, tracks this DP's own request count (not shared across DPs).
+  size_t per_dp_batch_size = step_batch_size;
   size_t step_logits_num = 0;
   for (const auto &req : batch_state_->schedule_output->running_reqs) {
     step_logits_num += req->GetPlanningSamplingTokenNum();
@@ -776,12 +781,14 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     // Get usable block number every time, the blocks matched by req are not reusable here.
     const size_t total_free_block_num = cache_manager_->GetRequestUsableBlockNumber(req->req_id);
     if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
+        per_dp_batch_size < per_dp_max_batch_size_ &&
         step_token_num + seq_token_num <= dp_max_step_token_num_ &&
         req_step_block_num + launch_block_threshold <= total_free_block_num) {
       // Assume we could succ, so that the AllocateRequestBlocks is not blocked.
       scheduler_shared_counter_->step_batch_size.Increase(1);
       scheduler_shared_counter_->step_token_num.Increase(seq_token_num);
       scheduler_shared_counter_->step_logits_num.Increase(req->sampling_token_num);
+      per_dp_batch_size++;
       scheduler_ticktok_->Unlock();
 
       Status status = cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);

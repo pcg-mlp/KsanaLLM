@@ -21,7 +21,8 @@ class Tensor;
 class DeepEPWrapper {
  public:
   // Constructor: initialize DeepEP buffer without sync
-  DeepEPWrapper(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts);
+  DeepEPWrapper(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts,
+                bool low_latency_mode, int max_token_num);
 
   ~DeepEPWrapper();
 
@@ -52,6 +53,11 @@ class DeepEPWrapper {
   void IntraNodeCombine();
 
   void InterNodeCombine();
+
+  // Low latency mode methods
+  void LowLatencyDispatch(const torch::Tensor& hidden_states, torch::Tensor& topk_idx);
+
+  void LowLatencyCombine(const torch::Tensor& hidden_states, torch::Tensor& topk_idx, torch::Tensor& topk_weights);
 #endif
 
  private:
@@ -69,6 +75,7 @@ class DeepEPWrapper {
   int num_sms_;
   int hidden_size_;
   int num_experts_;
+  bool low_latency_mode_ = false;
 
 #ifdef KSANA_WITH_DEEPEP
   // DeepEP buffer and config
@@ -109,6 +116,13 @@ class DeepEPWrapper {
   torch::Tensor recv_src_meta_;
   torch::Tensor send_rdma_head_;
   torch::Tensor send_nvl_head_;
+
+  // Low latency mode tensors
+  torch::Tensor low_latency_src_info_;
+  torch::Tensor low_latency_layout_range_;
+  torch::Tensor low_latency_packed_recv_count_;
+  // Total maximum dispatch tokens across all ranks (= max_token_num * num_ranks)
+  int num_max_dispatch_tokens_ = 0;
 
  public:
   int GetRecvNumTokens() const { return recv_num_tokens_; }

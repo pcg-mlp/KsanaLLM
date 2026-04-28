@@ -121,6 +121,11 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   size_t dp_max_decode_batch_size_;
   size_t dp_max_logits_num_;
 
+  // Per-DP batch size limit. When dp==tp and DeepEP low_latency is enabled,
+  // each DP group is limited to max_batch_size / dp requests.
+  // Initialized to dp_max_batch_size_ in the constructor.
+  size_t per_dp_max_batch_size_ = 0;
+
   // Current active dp group id, only ranks where (active_dp_group_id %
   // world_size
   // == rank % world_size) will be scheduled

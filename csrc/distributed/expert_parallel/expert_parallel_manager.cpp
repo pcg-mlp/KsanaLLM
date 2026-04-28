@@ -9,15 +9,16 @@ namespace ksana_llm {
 ExpertParallelManager::~ExpertParallelManager() = default;
 
 Status ExpertParallelManager::Create(int rank, int num_ranks, int world_size, int node_rank, int hidden_size,
-                                     int num_experts) {
+                                     int num_experts, int max_token_num, bool low_latency) {
   KLLM_LOG_DEBUG << fmt::format(
       "ExpertParallelManager::Create(rank={}, num_ranks={}, world_size={}, node_rank={}, hidden_size={}, "
-      "num_experts={})",
-      rank, num_ranks, world_size, node_rank, hidden_size, num_experts);
+      "num_experts={}, max_token_num={}, low_latency={})",
+      rank, num_ranks, world_size, node_rank, hidden_size, num_experts, max_token_num, low_latency);
 
   // Actually only DeepEP strategy is supported
   strategy_ = ExpertParallelStrategyFactory::Create(ExpertParallelStrategyFactory::StrategyType::DEEPEP, rank,
-                                                    num_ranks, world_size, node_rank, hidden_size, num_experts);
+                                                    num_ranks, world_size, node_rank, hidden_size, num_experts,
+                                                    max_token_num, low_latency);
   KLLM_LOG_DEBUG << "ExpertParallelManager strategy created successfully";
   return Status();
 }

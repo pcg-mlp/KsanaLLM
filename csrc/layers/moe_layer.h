@@ -135,6 +135,18 @@ class MoeLayer : public BaseLayer {
   size_t dequant_workspace_size;
   void* dequant_workspace_;
 
+  // Low Latency mode specific buffers
+  void* ll_output_ = nullptr;
+  size_t ll_output_size = 0;
+  void* expert_num_tokens_ = nullptr;
+  size_t expert_num_tokens_size = 0;
+
+  // InvokeFusedBatchedMoe intermediate buffers (for LL mode)
+  void* batched_intermediate_output_ = nullptr;  // [num_experts, max_num_tokens, n*2]
+  size_t batched_intermediate_output_size = 0;
+  void* batched_silu_output_ = nullptr;  // [num_experts, max_num_tokens, n]
+  size_t batched_silu_output_size = 0;
+
   // The vector of the best config index for every tokens number
   std::vector<size_t> config_map_;
   WorkspaceInfo workspace_info_;
@@ -145,6 +157,8 @@ class MoeLayer : public BaseLayer {
   std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
 
   bool using_deepep_;
+  bool low_latency_mode_ = false;
+  size_t low_latency_max_tokens_ = 0;
 
   // Used for Expert-Parallel load balancer.
   bool enable_load_eplb_config_ = false;

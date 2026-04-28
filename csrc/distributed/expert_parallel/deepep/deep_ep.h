@@ -76,13 +76,13 @@ struct Buffer {
   // After IPC/NVSHMEM synchronization, this flag will be true
   bool available = false;
 
-  // Barrier signals
-  int* barrier_signal_ptrs[NUM_MAX_NVL_PEERS] = {nullptr};
-  int** barrier_signal_ptrs_gpu = nullptr;
+  // Task fifo
+  int head = 0;
+  int* task_fifo_ptrs[NUM_MAX_NVL_PEERS] = {nullptr};
+  int** task_fifo_ptrs_gpu = nullptr;
 
   // Workspace
   void* workspace = nullptr;
-
   // Host-side MoE info
   volatile int* moe_recv_counter = nullptr;
   int* moe_recv_counter_mapped = nullptr;
@@ -95,9 +95,14 @@ struct Buffer {
   volatile int* moe_recv_rdma_counter = nullptr;
   int* moe_recv_rdma_counter_mapped = nullptr;
 
+  int num_cpu_timeout_secs = NUM_CPU_TIMEOUT_SECS;
+  uint64_t num_gpu_timeout_cycles = NUM_TIMEOUT_CYCLES;
+
+ private:
+  void move_fifo_slots(int num_slots = 1);
+
  public:
-  Buffer(int rank, int num_ranks, int64_t num_nvl_bytes, int64_t num_rdma_bytes, bool low_latency_mode,
-         at::cuda::CUDAStream comm_stream);
+  Buffer(int rank, int num_ranks, int64_t num_nvl_bytes, int64_t num_rdma_bytes, bool low_latency_mode);
 
   ~Buffer() noexcept(false);
 
@@ -114,6 +119,8 @@ struct Buffer {
   int get_local_device_id() const;
 
   std::string get_local_ipc_handle() const;
+
+  torch::Tensor get_local_buffer_tensor(torch::ScalarType dtype, int64_t offset, bool use_rdma_buffer) const;
 
   torch::Stream get_comm_stream() const;
 
@@ -173,18 +180,17 @@ struct Buffer {
 
   void clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts);
 
-  std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor, torch::Tensor, torch::Tensor,
+  std::tuple<int, std::optional<torch::Tensor>, torch::Tensor, torch::Tensor, torch::Tensor,
              std::optional<deep_ep::EventHandle>, std::optional<std::function<void()>>>
-  low_latency_dispatch(const torch::Tensor& x, const torch::Tensor& topk_idx,
-                       const std::optional<torch::Tensor>& cumulative_local_expert_recv_stats,
-                       int num_max_dispatch_tokens_per_rank, int num_experts, bool use_fp8, bool round_scale,
-                       bool use_ue8m0, bool async, bool return_recv_hook);
+  low_latency_dispatch(const torch::Tensor& x, const torch::Tensor& topk_idx, int num_max_dispatch_tokens_per_rank,
+                       int num_experts, bool use_fp8, const std::optional<torch::Tensor>& fp8_quant_scale, bool async,
+                       bool return_recv_hook, void* output);
 
-  std::tuple<torch::Tensor, std::optional<deep_ep::EventHandle>, std::optional<std::function<void()>>>
-  low_latency_combine(const torch::Tensor& x, const torch::Tensor& topk_idx, const torch::Tensor& topk_weights,
-                      const torch::Tensor& src_info, const torch::Tensor& layout_range,
-                      int num_max_dispatch_tokens_per_rank, int num_experts, bool zero_copy, bool async,
-                      bool return_recv_hook, const std::optional<torch::Tensor>& out = std::nullopt);
+  std::tuple<int, std::optional<deep_ep::EventHandle>, std::optional<std::function<void()>>> low_latency_combine(
+      const torch::Tensor& x, const torch::Tensor& topk_idx, const torch::Tensor& topk_weights,
+      const torch::Tensor& src_info, const torch::Tensor& layout_range, int num_max_dispatch_tokens_per_rank,
+      int num_experts, bool use_logfmt, bool zero_copy, bool async, bool return_recv_hook, void* output,
+      const std::optional<torch::Tensor>& out = std::nullopt);
 
   torch::Tensor get_next_low_latency_combine_buffer(int num_max_dispatch_tokens_per_rank, int hidden,
                                                     int num_experts) const;

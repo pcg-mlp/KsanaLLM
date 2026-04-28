@@ -43,6 +43,7 @@
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
+#include "csrc/utils/tensor.h"
 
 #include "kernels/argmax.h"
 #include "kernels/cast.h"
@@ -705,5 +706,100 @@ size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int 
 void FillRandomInts(int* device_ptr, int size, int start_int, int end_int, int rank, cudaStream_t stream) {
   llm_kernels::nvidia::FillRandomInts(device_ptr, size, start_int, end_int, rank, stream);
 }
+
+template <typename T>
+void InvokeFusedBatchedMoe(void* output, const void* input, const void* weight1, const void* weight2,
+                           const void* input_scale, const void* weight1_scale, const void* weight2_scale,
+                           int num_experts, const void* expert_num_tokens, int max_num_tokens, int hidden_size,
+                           int inter_size, int topk, bool use_fp8, bool use_int8_w8a8, bool use_int4, int group_size,
+                           void* intermediate_output, void* silu_output, cudaStream_t stream) {
+  // TODO(zezhao): 不必要的参数应折叠
+  // Configure kernel parameters
+  std::unordered_map<std::string, int> config;
+  config["block_size_m"] = 64;
+  config["block_size_n"] = 128;
+  config["block_size_k"] = 128;
+  config["group_size_m"] = 1;
+
+  // block_shape for quantization configuration
+  int block_shape0 = 128;  // group_n
+  int block_shape1 = 128;  // group_k
+
+  // ========== Stage 1: weight1 * input → intermediate_output ==========
+  // 使用预分配的 intermediate_output 缓冲区
+  // intermediate_output: [num_experts, max_num_tokens, inter_size * 2]
+  // 注意：weight1 的输出维度是 inter_size * 2（gate_proj 和 up_proj 合并）
+
+  // 计算 strides for first kernel (input * weight1)
+  // input: [num_experts, max_num_tokens, hidden_size]
+  int a1_stride0 = max_num_tokens * hidden_size;
+  int a1_stride1 = hidden_size;
+  int a1_stride2 = 1;
+
+  // weight1: [num_experts, inter_size * 2, hidden_size] (gate_proj + up_proj)
+  int b1_stride0 = (inter_size * 2) * hidden_size;
+  int b1_stride1 = hidden_size;
+  int b1_stride2 = 1;
+
+  // intermediate_output: [num_experts, max_num_tokens, inter_size * 2]
+  int c1_stride0 = max_num_tokens * (inter_size * 2);
+  int c1_stride1 = inter_size * 2;
+  int c1_stride2 = 1;
+
+  // First kernel call: input * weight1 → intermediate_output
+  // Matrix multiplication: input[E,M,hidden_size] @ weight1[E,inter_size*2,hidden_size]^T ->
+  // intermediate_output[E,M,inter_size*2]
+  Singleton<TritonWrapper>::GetInstance()->InvokeFusedBatchedMoeKernel<T>(
+      const_cast<void*>(input), const_cast<void*>(weight1), intermediate_output, const_cast<void*>(expert_num_tokens),
+      const_cast<void*>(input_scale), const_cast<void*>(weight1_scale), nullptr, max_num_tokens, inter_size * 2,
+      hidden_size, num_experts, a1_stride0, a1_stride1, a1_stride2, b1_stride0, b1_stride1, b1_stride2, c1_stride0,
+      c1_stride1, c1_stride2, block_shape0, block_shape1, topk, use_fp8, use_int8_w8a8, /*per_act_token_quant=*/false,
+      config, stream);
+
+  // ========== Stage 2: SiLU activation function ==========
+  // Apply SiLU activation to intermediate_output
+  const size_t elements_num = static_cast<size_t>(num_experts) * max_num_tokens * inter_size * 2;
+  llm_kernels::nvidia::InvokeSiluAndMul<T, false>(reinterpret_cast<const T*>(intermediate_output),
+                                                  reinterpret_cast<T*>(silu_output),
+                                                  nullptr,  // topk_ids not needed for batched mode
+                                                  elements_num, inter_size, stream);
+
+  // ========== Stage 3: weight2 * silu_output → output ==========
+  // Calculate strides for second kernel (silu_output * weight2)
+  // silu_output: [num_experts, max_num_tokens, inter_size]
+  int a2_stride0 = max_num_tokens * inter_size;
+  int a2_stride1 = inter_size;
+  int a2_stride2 = 1;
+
+  // weight2: [num_experts, hidden_size, inter_size]
+  int b2_stride0 = hidden_size * inter_size;
+  int b2_stride1 = inter_size;
+  int b2_stride2 = 1;
+
+  // output: [num_experts, max_num_tokens, hidden_size]
+  int c2_stride0 = max_num_tokens * hidden_size;
+  int c2_stride1 = hidden_size;
+  int c2_stride2 = 1;
+
+  // Second kernel call: silu_output * weight2 → output
+  // Matrix multiplication: silu_output[E,M,inter_size] @ weight2[E,hidden_size,inter_size]^T -> output[E,M,hidden_size]
+  Singleton<TritonWrapper>::GetInstance()->InvokeFusedBatchedMoeKernel<T>(
+      silu_output, const_cast<void*>(weight2), output, const_cast<void*>(expert_num_tokens),
+      nullptr,  // No input_scale for second stage
+      const_cast<void*>(weight2_scale), nullptr, max_num_tokens, hidden_size, inter_size, num_experts, a2_stride0,
+      a2_stride1, a2_stride2, b2_stride0, b2_stride1, b2_stride2, c2_stride0, c2_stride1, c2_stride2, block_shape0,
+      block_shape1, topk, use_fp8, use_int8_w8a8, /*per_act_token_quant=*/false, config, stream);
+}
+
+#define INVOKE_FUSED_BATCHED_MOE(T)                                                                                   \
+  template void InvokeFusedBatchedMoe<T>(                                                                             \
+      void* output, const void* input, const void* weight1, const void* weight2, const void* input_scale,             \
+      const void* weight1_scale, const void* weight2_scale, int num_experts, const void* expert_num_tokens,           \
+      int max_num_tokens, int hidden_size, int inter_size, int topk, bool use_fp8, bool use_int8_w8a8, bool use_int4, \
+      int group_size, void* intermediate_output, void* silu_output, cudaStream_t stream)
+INVOKE_FUSED_BATCHED_MOE(float);
+INVOKE_FUSED_BATCHED_MOE(half);
+INVOKE_FUSED_BATCHED_MOE(__nv_bfloat16);
+#undef INVOKE_FUSED_BATCHED_MOE
 
 }  // namespace ksana_llm

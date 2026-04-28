@@ -19,6 +19,16 @@ setting:
     enable_cuda_graph: false
     # 是否要在每个节点存储所有的 shared_expert
     enable_full_shared_expert: false
+    # MoE All-to-All 通信模式（仅当 expert_world_size > 1 时生效）
+    # 可选值：
+    #   auto                - 自动选择（默认）：expert_world_size > 1 时启用 DeepEP Normal 模式
+    #   deepep_normal       - DeepEP Normal 模式
+    #   deepep_low_latency  - DeepEP Low Latency 模式
+    # 注意：DeepEP 模式要求 tensor_para_size == attn_data_para_size 且 enable_full_shared_expert 为 true
+    moe_all_to_all_mode: "auto"
+    # DeepEP Low Latency 模式下的最大 token 数，用于缓冲区大小计算
+    # 默认 256，设为 0 时回退到 max_step_tokens
+    deepep_low_latency_max_tokens: 256
     # MOE topk score阈值，低于该阈值的token将被过滤，默认为0表示不过滤
     moe_topk_score_threshold: 0.0
     # PP并行（流水线并行）时通讯模式选择，默认值为default

@@ -221,6 +221,7 @@ Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<Inf
 
 inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
   return req->input_tokens.size() > batch_scheduler_config_.max_token_len ||
+         req->input_tokens.size() > batch_scheduler_config_.max_step_token_num ||
          req->logits_custom_length > std::min(req->input_tokens.size(), batch_scheduler_config_.max_batch_size);
 }
 

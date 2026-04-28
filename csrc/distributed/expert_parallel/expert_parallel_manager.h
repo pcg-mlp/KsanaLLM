@@ -31,9 +31,12 @@ class ExpertParallelManager {
    * @param node_rank 当前节点的编号
    * @param hidden_size 隐藏层大小
    * @param num_experts 专家总数
+   * @param max_token_num 最大 token 数量
+   * @param low_latency 是否启用低延迟模式
    * @return Status 创建状态
    */
-  Status Create(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts);
+  Status Create(int rank, int num_ranks, int world_size, int node_rank, int hidden_size, int num_experts,
+                int max_token_num, bool low_latency);
 
   /**
    * @brief 获取当前 executor 的通信配置
