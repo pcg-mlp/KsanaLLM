@@ -24,6 +24,7 @@ class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
   using ContinuousBatchingStrategy::ContinuousBatchingStrategy;
   using ContinuousBatchingStrategy::ProcessDecodeTransferQueue;
   using ContinuousBatchingStrategy::ProcessPrefillTransferQueue;
+  using ContinuousBatchingStrategy::ProcessWaitingQueue;
 
   void SetSplitFuseTokenNum(const size_t val) { batch_scheduler_config_.split_fuse_token_num = val; }
 
@@ -562,4 +563,36 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
 
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
+}
+
+// Test that empty request (input_tokens=[]) is rejected instead of crashing.
+TEST_F(ContinuousBatchingTest, EmptyRequestAbortTest) {
+  // Create an empty request with no input tokens.
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+  req->block_token_num = 16;
+
+  // Set empty input: input_tokens is empty, output_tokens is empty.
+  req->input_tokens = {};
+  req->output_tokens = {};
+  req->ResetPrefillingTokens();
+
+  // Verify the request has 0 tokens.
+  ASSERT_EQ(req->GetPlanningSequenceLen(), 0);
+
+  // Add the empty request to the waiting queue.
+  continuous_batching_strategy_->batch_state_->waiting_queue.push_back(req);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->waiting_queue.size(), 1);
+
+  // Process the waiting queue — should reject the empty request without crashing.
+  continuous_batching_strategy_->ProcessWaitingQueue();
+
+  // The empty request should be removed from waiting queue (aborted).
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->waiting_queue.size(), 0);
+
+  // The request should be marked as finished with error.
+  ASSERT_TRUE(req->finished);
 }

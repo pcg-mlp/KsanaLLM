@@ -709,6 +709,15 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     size_t req_step_block_num = 0;  // block number to be allocated in this step
     size_t shared_token_num = 0;
     size_t seq_token_num = req->GetPlanningSequenceLen();  // Trying to process remaining prefilling tokens
+
+    // Reject empty requests early to prevent size_t underflow in prefix cache logic.
+    if (seq_token_num == 0) {
+      KLLM_LOG_ERROR << "Empty request detected, req_id=" << req->req_id
+                     << ", seq_token_num=0, aborting request.";
+      StopRequest(req, Status(RET_INVALID_ARGUMENT, "Empty input tokens."), RequestState::kWaiting);
+      it = batch_state_->waiting_queue.erase(it);
+      continue;
+    }
     ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
     if (planning_workload.prefill_start_offset == 0) {
       // NOTE (winminkong): For input logits requests,
@@ -796,7 +805,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         step_not_kv_cached_token_num += seq_token_num - shared_token_num;
 
         // if full matched, skip decode and put it to the end of decode list.
-        if (shared_token_num == seq_token_num) {
+        if (shared_token_num == seq_token_num && seq_token_num >= kStepGenerateTokenNum) {
           KLLM_LOG_SCHEDULER << "Full matched, skip prefill, " << req->ScheduleStateToStr();
           REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
           // If shared_token_num is equal to forwarding size, means all tokens have valid kv cache

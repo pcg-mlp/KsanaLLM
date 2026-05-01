@@ -703,6 +703,18 @@ class KsanaOpenAIServing:
 
         # Multimodal request: let plugin handle messages directly
         if self._is_multimodal_request(messages):
+            # Check if model supports multimodal by verifying plugin is loaded
+            has_multimodal_plugin = (
+                hasattr(self.llm_server, 'model')
+                and hasattr(self.llm_server.model, '_ksana_plugin')
+                and self.llm_server.model._ksana_plugin._ksana_plugin is not None
+            )
+            if not has_multimodal_plugin:
+                raise ValueError(
+                    "Multimodal content (image_url/video_url/audio_url) is not supported "
+                    "by this model. Please use a multimodal model or remove multimodal content "
+                    "from the request."
+                )
             logger.debug("Detected multimodal request, skipping chat template processing")
             engine_prompt = {
                 "prompt_token_ids": [],
