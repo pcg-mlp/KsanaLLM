@@ -229,13 +229,38 @@ void GenerationController::FilterGeneratorDraftTokens(std::vector<std::shared_pt
     total_hit_num += hit_num;
     total_draft_num += draft_num;
   }
+
+  // Accumulate per-position stats across calls so the periodic INFO log reflects
+  // the entire report interval rather than a single batch.
+  static std::vector<std::pair<size_t, size_t>> accumulated_hit_count;
+  if (accumulated_hit_count.size() < hit_count.size()) {
+    accumulated_hit_count.resize(hit_count.size());
+  }
+  for (size_t i = 0; i < hit_count.size(); ++i) {
+    accumulated_hit_count[i].first += hit_count[i].first;
+    accumulated_hit_count[i].second += hit_count[i].second;
+  }
+
   // Log every 10 seconds
   constexpr size_t kReportIntervalMs = 10000;
   static IntervalLogger interval_logger(kReportIntervalMs);
   if (interval_logger.ShouldLog()) {
+    size_t agg_hit = 0, agg_draft = 0;
+    std::string per_index_str;
+    for (const auto& [hit_num, draft_num] : accumulated_hit_count) {
+      agg_hit += hit_num;
+      agg_draft += draft_num;
+      if (!per_index_str.empty()) per_index_str += ", ";
+      per_index_str += fmt::format("{:.1f}%", draft_num > 0 ? hit_num * 100.f / draft_num : 0.f);
+    }
     KLLM_LOG_INFO << fmt::format(
-        "Draft hit rate: {:.1f}%, Mean acceptance length: {:.2f}, Hit tokens: {}, Draft tokens: {}",
-        total_hit_num * 100.f / total_draft_num, 1 + total_hit_num * 1.f / reqs.size(), total_hit_num, total_draft_num);
+      "Draft hit rate: {:.1f}%, Hit tokens: {}, "
+      "Draft tokens: {}; Per draft token hit rate: [{}]",
+      agg_draft > 0 ? agg_hit * 100.f / agg_draft : 0.f,
+      agg_hit,
+      agg_draft,
+      per_index_str);
+    accumulated_hit_count.clear();
   }
   // Report
   REPORT_METRIC("spec_draft_hit_num", total_hit_num);
