@@ -38,7 +38,7 @@ int MockGetTypeSize(DataType dtype) {
 }
 
 /// 创建测试用的TransferTask
-std::shared_ptr<TransferTask> CreateTestTask(int req_id, int block_idx, int layer_idx, int hash_device_id,
+std::shared_ptr<TransferTask> CreateTestTask(int64_t req_id, int block_idx, int layer_idx, int hash_device_id,
                                              int tensor_size = 0,
                                              std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0),
                                              bool is_skipped_task = false,
@@ -89,7 +89,7 @@ class TaskManagerTest : public ::testing::Test {
   }
 
   // 辅助方法：创建TaskKey
-  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
+  TaskKey CreateTaskKey(int64_t req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
                         std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0),
                         bool is_skipped_task = false) {
     int decode_device_id = -1;
@@ -101,7 +101,7 @@ class TaskManagerTest : public ::testing::Test {
   }
 
   // 辅助方法：创建任务批次
-  std::vector<TaskKey> CreateTaskKeyBatch(int batch_size, int start_req_id = 0) {
+  std::vector<TaskKey> CreateTaskKeyBatch(int batch_size, int64_t start_req_id = 0) {
     std::vector<TaskKey> batch;
     for (int i = 0; i < batch_size; ++i) {
       batch.push_back(CreateTaskKey(start_req_id + i, i, 0, i % 4, 100 * (i + 1)));
@@ -207,6 +207,89 @@ TEST_F(TaskManagerBasicTest, TaskKeyShardIndex) {
 
   TaskKey key_max(7, 0, 0, 0);
   EXPECT_EQ(key_max.GetShardIndex(8), 7);
+}
+
+// Test GetShardIndex with large int64_t req_id values (> INT32_MAX)
+TEST_F(TaskManagerBasicTest, TaskKeyShardIndexLargeInt64) {
+  // Values exceeding INT32_MAX to verify int64_t support
+  int64_t large_id1 = 5000000000LL;  // > INT32_MAX (2147483647)
+  int64_t large_id2 = 5000000008LL;  // large_id1 + 8, same shard
+
+  TaskKey key1(large_id1, 1, 2, 3, 1024);
+  TaskKey key2(large_id2, 1, 2, 3, 1024);
+
+  // Both should map to same shard since difference is multiple of 8
+  EXPECT_EQ(key1.GetShardIndex(8), key2.GetShardIndex(8));
+
+  // Verify the shard index is within valid range
+  EXPECT_LT(key1.GetShardIndex(8), 8u);
+  EXPECT_LT(key2.GetShardIndex(8), 8u);
+
+  // Different large values should potentially map to different shards
+  TaskKey key3(large_id1 + 1, 1, 2, 3, 1024);
+  EXPECT_NE(key1.GetShardIndex(8), key3.GetShardIndex(8));
+}
+
+// Test TaskKey Hash with large int64_t values
+TEST_F(TaskManagerBasicTest, TaskKeyHashLargeInt64) {
+  TaskKey::Hash hasher;
+
+  // Values exceeding INT32_MAX
+  TaskKey key_large1(5000000000LL, 1, 2, 3, 1024);
+  TaskKey key_large2(5000000001LL, 1, 2, 3, 1024);
+  TaskKey key_large3(5000000000LL, 1, 2, 3, 1024);  // same as key_large1
+
+  // Same keys should produce same hash
+  EXPECT_EQ(hasher(key_large1), hasher(key_large3));
+
+  // Different req_ids should produce different hashes
+  EXPECT_NE(hasher(key_large1), hasher(key_large2));
+
+  // Hash should work in unordered_map with int64_t keys
+  std::unordered_map<TaskKey, int, TaskKey::Hash> map;
+  map[key_large1] = 1;
+  map[key_large2] = 2;
+  EXPECT_EQ(map[key_large1], 1);
+  EXPECT_EQ(map[key_large2], 2);
+  EXPECT_EQ(map[key_large3], 1);  // same as key_large1
+}
+
+// Test TaskKey equality with large int64_t values
+TEST_F(TaskManagerBasicTest, TaskKeyEqualityLargeInt64) {
+  int64_t large_id = 9999999999LL;
+
+  TaskKey key1(large_id, 1, 2, 3, 1024);
+  TaskKey key2(large_id, 1, 2, 3, 1024);
+  TaskKey key3(large_id + 1, 1, 2, 3, 1024);
+
+  EXPECT_TRUE(key1 == key2);
+  EXPECT_FALSE(key1 == key3);
+}
+
+// Test TaskKey serialization with large int64_t values
+TEST_F(TaskManagerBasicTest, TaskKeySerializationLargeInt64) {
+  int64_t large_id = 8000000000LL;
+  TaskKey original(large_id, 1, 2, 3, 1024, {456, 457}, true, 1, 0, 2, 1, 789);
+
+  std::vector<uint8_t> serialized = original.Serialize();
+  TaskKey deserialized = TaskKey::Deserialize(serialized);
+
+  EXPECT_EQ(original.req_id, deserialized.req_id);
+  EXPECT_EQ(deserialized.req_id, large_id);
+}
+
+// Test AddTask and GetTask with large int64_t req_id
+TEST_F(TaskManagerBasicTest, AddAndGetTaskLargeInt64) {
+  int64_t large_id = 6000000000LL;
+  TaskKey key = CreateTaskKey(large_id, 0, 0, 0, 100);
+  auto task = CreateTestTask(large_id, 0, 0, 0, 100);
+
+  task_manager_->AddTask(key, task);
+  EXPECT_EQ(task_manager_->GetTaskCount(), 1);
+
+  auto retrieved_task = task_manager_->GetTask(key);
+  EXPECT_NE(retrieved_task, nullptr);
+  EXPECT_EQ(retrieved_task->req_id, large_id);
 }
 
 TEST_F(TaskManagerBasicTest, TaskKeyEquality) {

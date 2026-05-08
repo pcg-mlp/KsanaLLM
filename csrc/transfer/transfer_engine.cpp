@@ -136,7 +136,7 @@ void TransferEngine::HandleLayerProgress() {
  * @param gpu_block_locations 每个设备的GPU内存块位置信息
  * @param kv_occupied_devices KV占用的设备列表
  */
-void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_block_num,
+void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int64_t request_id, size_t shared_block_num,
                                      std::vector<std::vector<GpuBlockLocation>>& gpu_block_locations,
                                      std::vector<int>& kv_occupied_devices) {
   if (group_role_ == GroupRole::PREFILL && request_id == -1) {
@@ -209,7 +209,7 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
  * @param request_id 请求ID
  * @return std::pair<int, int> 如果完成则返回first_tokens值，否则返回{-1, -1}
  */
-std::vector<int> TransferEngine::IsRecvDone(int request_id) {
+std::vector<int> TransferEngine::IsRecvDone(int64_t request_id) {
   if (request_id == -1) {
     // warmup请求
     KLLM_LOG_DEBUG << "Warmup request";
@@ -292,7 +292,7 @@ std::vector<int> TransferEngine::IsRecvDone(int request_id) {
  * @param request_id 请求ID
  * @return true 如果所有发送操作完成则返回true，否则返回false
  */
-bool TransferEngine::IsSendDone(int request_id) {
+bool TransferEngine::IsSendDone(int64_t request_id) {
   return IsRecvDone(request_id) != std::vector<int>(MAX_TRANSFER_TOKENS, -1);
 }
 
@@ -342,7 +342,7 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
   // 处理所有请求
   std::lock_guard<std::mutex> meta_lock(meta_map_mutex_);
   for (auto& meta_pair : meta_map_) {
-    const int request_id = meta_pair.first;
+    const int64_t request_id = meta_pair.first;
     KLLM_LOG_DEBUG << " Send Processing request id: " << request_id << " on device_idx: " << device_idx;
     std::shared_ptr<TransferMeta> meta = meta_pair.second;
 
@@ -467,7 +467,7 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
  *
  * @param reqs_tokens 请求ID和token对的向量
  */
-void TransferEngine::Send(std::vector<std::tuple<std::string, int, std::vector<int>>>& reqs_tokens) {
+void TransferEngine::Send(std::vector<std::tuple<std::string, int64_t, std::vector<int>>>& reqs_tokens) {
   if (group_role_ != GroupRole::PREFILL) {
     return;
   }
@@ -509,7 +509,7 @@ void TransferEngine::Send(std::vector<std::tuple<std::string, int, std::vector<i
  * @param device_num 设备数量
  * @param block_num 块数量
  */
-void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::shared_ptr<TransferMeta>& transfer_meta,
+void TransferEngine::CreateTransferTasksForDecodeNode(int64_t request_id, std::shared_ptr<TransferMeta>& transfer_meta,
                                                       size_t device_num, size_t block_num, size_t shared_block_num) {
   KLLM_LOG_DEBUG << "Creating transfer tasks for decode node, request_id: " << request_id
                  << ", device_num: " << device_num << ", block_num: " << block_num;

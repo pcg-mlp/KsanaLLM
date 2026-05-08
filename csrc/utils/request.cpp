@@ -58,11 +58,27 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
       timestamp_in_ms(ProfileTimer::GetCurrentTimeInMs()),
       req_ctx(req_ctx),
       draft_tokens(ksana_python_input->draft_tokens) {
-  for (auto& [output, req_logprobs, total_score] : output_group) {
-    output = ksana_python_input->input_tokens;
-    req_ids.push_back(id_generator_.Gen());
+  static constexpr size_t kMaxOutputGroup = (1u << IdGenerator::kSubIdBits) - 1;  // 255
+  if (output_group.size() > kMaxOutputGroup) {
+    KLLM_THROW(fmt::format("output_group size {} exceeds max {}", output_group.size(), kMaxOutputGroup));
   }
-  req_id = req_ids[0];
+
+  // Determine base_id: prefer header, otherwise auto-generate.
+  int64_t base_id = id_generator_.Gen();
+  if (req_ctx && req_ctx->count("request-id")) {
+    try {
+      base_id = std::stoll((*req_ctx)["request-id"]);
+    } catch (const std::exception& e) {
+      KLLM_LOG_WARNING << "Invalid request-id header '" << (*req_ctx)["request-id"]
+                       << "', falling back to auto-generated id: " << e.what();
+    }
+  }
+  req_id = base_id;
+  for (size_t i = 0; i < output_group.size(); ++i) {
+    auto& [output, req_logprobs, total_score] = output_group[i];
+    output = ksana_python_input->input_tokens;
+    req_ids.push_back(base_id | static_cast<int64_t>(i));
+  }
   if (const auto it = request_target.find("logits"); it != request_target.end()) {
     for (auto [l, r] : it->second.slice_pos) {
       logits_custom_length += (r - l + 1);
@@ -70,12 +86,8 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
     input_top_logprobs_num = it->second.input_top_logprobs_num;
   }
 
-  kv_comm_request_id = 0;
   kv_comm_group_key = "";
   if (req_ctx) {
-    if (req_ctx->count("kv-comm-request-id")) {
-      kv_comm_request_id = std::stoll((*req_ctx)["kv-comm-request-id"]);
-    }
     if (req_ctx->count("kv-comm-group-key")) {
       kv_comm_group_key = (*req_ctx)["kv-comm-group-key"];
     }

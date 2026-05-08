@@ -277,7 +277,7 @@ TEST_F(BalanceReqsTest, BalanceADPRequestsBasicTest) {
   CommonSetUp(dp_num);
 
   // 创建测试用的推理请求
-  auto CreateTestInferRequest = [&](int req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
+  auto CreateTestInferRequest = [&](int64_t req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
     std::shared_ptr<Request> req;
     int expect_output_tokens = 10;
     auto infer_req_group = env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, {{0, 42}});
@@ -329,7 +329,7 @@ TEST_F(BalanceReqsTest, BalanceADPRequestsTimeoutTest) {
   CommonSetUp(dp_num);
 
   // 创建测试用的推理请求
-  auto CreateTestInferRequest = [&](int req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
+  auto CreateTestInferRequest = [&](int64_t req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
     std::shared_ptr<Request> req;
     int expect_output_tokens = 10;
     auto infer_req_group = env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, {{0, 42}});

@@ -110,7 +110,7 @@ class ParallelTester {
       : schedule_processor_(schedule_processor), env_simulator_(env_simulator) {}
 
   struct RequestInfo {
-    int req_id;
+    int64_t req_id;
     int expect_output_token_num;
     int input_token_num;
     std::shared_ptr<Request> req;

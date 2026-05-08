@@ -117,7 +117,6 @@ std::shared_ptr<InferRequest> BuildInferRequest(std::shared_ptr<Request>& reques
   infer_req->forwarding_tokens_draft_num = 1;
   infer_req->generated_tokens = {501, 503};
   infer_req->attn_dp_group_id = 2;
-  infer_req->kv_comm_request_id = 1234;
   infer_req->kv_comm_group_key = "group_key";
   infer_req->forwarding_tokens = {601, 603, 605};
   infer_req->sampling_result_tokens = {701};
@@ -261,7 +260,6 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(exec_req->infer_stage, full_req->infer_stage);
   EXPECT_EQ(exec_req->step, full_req->step);
   EXPECT_EQ(exec_req->kv_cached_token_num, full_req->kv_cached_token_num);
-  EXPECT_EQ(exec_req->kv_comm_request_id, full_req->kv_comm_request_id);
   EXPECT_EQ(exec_req->kv_comm_group_key, full_req->kv_comm_group_key);
   EXPECT_EQ(exec_req->attn_dp_group_id, full_req->attn_dp_group_id);
   EXPECT_EQ(exec_req->sampling_token_num, full_req->sampling_token_num);

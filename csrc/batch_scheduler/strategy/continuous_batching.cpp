@@ -180,7 +180,6 @@ void ContinuousBatchingStrategy::SyncRecomputeRequest(std::shared_ptr<InferReque
   static size_t total_recomputed_token_num = 0;
   total_recomputed_token_num += req->output_tokens.size();
   KLLM_LOG_INFO << "SyncRecomputeRequest req id is: " << req->req_id
-                << " kv_comm_request_id: " << req->kv_comm_request_id
                 << ", intput_tokens.size()=" << req->input_tokens.size()
                 << ", output_tokens.size()=" << req->output_tokens.size()
                 << ", total_recomputed_token_num=" << total_recomputed_token_num;
@@ -208,7 +207,7 @@ void ContinuousBatchingStrategy::SyncRecomputeRequest(std::shared_ptr<InferReque
   batch_state_->schedule_output->recompute_req_ids[req->attn_dp_group_id].push_back(req->req_id);
 
   if (connector_config_.group_role != GroupRole::NONE) {
-    KLLM_LOG_INFO << "Request " << req->req_id << "  and kv_comm_request_id: " << req->kv_comm_request_id
+    KLLM_LOG_INFO << "Request " << req->req_id
                   << " is recomputed due to exceeding max_step_token_num or max_batch_size in decode group.";
     Status status(RET_PREDICTOR_DISCARD, "Disaggregation of prefill and decoding could not be recomputed.");
     ResetRequest(req, status, true);
@@ -837,7 +836,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         if (connector_config_.group_role == GroupRole::DECODE) {
           batch_state_->transfer_queue.emplace_back(req);
           it = batch_state_->waiting_queue.erase(it);
-          KLLM_LOG_SCHEDULER << "Decode put req to transfer queue, req id: " << req->kv_comm_request_id;
+          KLLM_LOG_SCHEDULER << "Decode put req to transfer queue, req id: " << req->req_id;
           continue;
         }
 
@@ -909,9 +908,9 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
   }
 
   if (connector_config_.group_role != GroupRole::NONE) {
-    // 对waiting_reqs排序，kv_comm_request_id小的在前
+    // 对waiting_reqs排序，req_id小的在前
     std::sort(waiting_reqs.begin(), waiting_reqs.end(),
-              [](const auto &a, const auto &b) { return a->kv_comm_request_id < b->kv_comm_request_id; });
+              [](const auto &a, const auto &b) { return a->req_id < b->req_id; });
   }
   batch_state_->MergeWaitingReqs(waiting_reqs);
   auto start_us = ProfileTimer::GetCurrentTimeInUs();

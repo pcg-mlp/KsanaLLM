@@ -138,7 +138,7 @@ class TransferEngine {
    * @param gpu_block_locations GPU内存块位置信息（使用block_id和offset）
    * @param kv_occupied_devices KV占用的设备列表
    */
-  void AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_block_num,
+  void AddTransferMeta(const std::string& kv_comm_group_key, int64_t request_id, size_t shared_block_num,
                        std::vector<std::vector<GpuBlockLocation>>& gpu_block_locations,
                        std::vector<int>& kv_occupied_devices);
 
@@ -147,14 +147,14 @@ class TransferEngine {
    * @param request_id 请求ID
    * @return bool 如果所有发送操作完成则返回true，否则返回false
    */
-  bool IsSendDone(int request_id);
+  bool IsSendDone(int64_t request_id);
 
   /**
    * @brief 检查指定请求的接收操作是否完成
    * @param request_id 请求ID
    * @return std::vector<int> 如果完成则返回first_tokens值，否则返回值全为-1的向量
    */
-  std::vector<int> IsRecvDone(int request_id);
+  std::vector<int> IsRecvDone(int64_t request_id);
 
   /**
    * @brief 在特定设备和层上发送传输任务
@@ -167,14 +167,14 @@ class TransferEngine {
    * @brief 发送多个请求的token传输任务
    * @param reqs_tokens 请求ID和token对的向量
    */
-  virtual void Send(std::vector<std::tuple<std::string, int, std::vector<int>>>& reqs_tokens);
+  virtual void Send(std::vector<std::tuple<std::string, int64_t, std::vector<int>>>& reqs_tokens);
 
   /**
    * @brief 获取指定请求的传输元数据
    * @param request_id 请求ID
    * @return std::shared_ptr<TransferMeta> 传输元数据的共享指针，如果不存在则返回nullptr
    */
-  std::shared_ptr<TransferMeta> GetTransferMeta(int request_id) {
+  std::shared_ptr<TransferMeta> GetTransferMeta(int64_t request_id) {
     std::lock_guard<std::mutex> lock(meta_map_mutex_);
     auto it = meta_map_.find(request_id);
     if (it != meta_map_.end()) {
@@ -188,7 +188,7 @@ class TransferEngine {
    * @param request_id 请求ID
    * @return bool 如果成功清理则返回true，如果元数据不存在则返回false
    */
-  bool CleanupTransferMeta(int request_id) {
+  bool CleanupTransferMeta(int64_t request_id) {
     std::lock_guard<std::mutex> lock(meta_map_mutex_);
     return meta_map_.erase(request_id) > 0;
   }
@@ -211,8 +211,8 @@ class TransferEngine {
    * @param block_num 块数量
    * @param shared_block_num 请求共享block数量
    */
-  void CreateTransferTasksForDecodeNode(int request_id, std::shared_ptr<TransferMeta>& transfer_meta, size_t device_num,
-                                        size_t block_num, size_t shared_block_num);
+  void CreateTransferTasksForDecodeNode(int64_t request_id, std::shared_ptr<TransferMeta>& transfer_meta,
+                                        size_t device_num, size_t block_num, size_t shared_block_num);
 
   PipelineConfig pipeline_config_;
 
@@ -225,7 +225,7 @@ class TransferEngine {
   std::mutex meta_map_mutex_;
 
   // 请求ID到传输元数据的映射
-  std::unordered_map<int, std::shared_ptr<TransferMeta>> meta_map_;
+  std::unordered_map<int64_t, std::shared_ptr<TransferMeta>> meta_map_;
 
   // 节点角色
   GroupRole group_role_ = GroupRole::DECODE;

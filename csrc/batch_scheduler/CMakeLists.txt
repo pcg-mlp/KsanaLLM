@@ -30,7 +30,7 @@ cpp_test(global_cache_fetcher_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_schedul
 cpp_test(global_cache_query_hook_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/global_cache_query_hook_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(planning_workload_estimator_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/planning_workload_estimator_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
+cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/strategy/continuous_batching_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 #cpp_test(batch_scheduler_balance_reqs_algo_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_balance_reqs_algo_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
-#cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/strategy/continuous_batching_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 #cpp_test(pp_multibatch_wb_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler//workload_balance/pp_multibatch_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 

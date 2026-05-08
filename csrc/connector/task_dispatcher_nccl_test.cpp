@@ -192,7 +192,7 @@ class TaskDispatcherTest : public ::testing::Test {
     task_dispatcher_ = std::make_unique<TaskDispatcher>(config_, task_manager_, mock_comm_manager_);
   }
 
-  std::shared_ptr<TransferTask> CreateMockTask(int req_id, int block_idx, int layer_idx, int device_idx,
+  std::shared_ptr<TransferTask> CreateMockTask(int64_t req_id, int block_idx, int layer_idx, int device_idx,
                                                int tensor_size = 0, const std::string& addr = "127.0.0.1:50051") {
     auto task = std::make_shared<TransferTask>();
     task->req_id = req_id;
@@ -223,7 +223,7 @@ class TaskDispatcherTest : public ::testing::Test {
     return task;
   }
 
-  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
+  TaskKey CreateTaskKey(int64_t req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
                         std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0),
                         bool is_skipped_task = false) {
     return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size, tokens, is_skipped_task);

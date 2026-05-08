@@ -38,7 +38,6 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
       aborted(request->aborted),
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
-      kv_comm_request_id(request->kv_comm_request_id),
       kv_comm_group_key(request->kv_comm_group_key),
       beam_search_group(request->beam_search_group),
       timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
@@ -189,8 +188,7 @@ void InferRequest::NotifyStep() {
 std::vector<int> InferRequest::GetKVOccupiedDevices() {
   std::vector<int> kv_occupied_devices;
   kv_occupied_devices = cache_manager->GetBlockAllocatorGroup()->GetBlockAllocatorDevices();
-  KLLM_LOG_DEBUG << "req_id: " << kv_comm_request_id << ", kv_occupied_devices: " << Vector2Str(kv_occupied_devices)
-                 << ".";
+  KLLM_LOG_DEBUG << "req_id: " << req_id << ", kv_occupied_devices: " << Vector2Str(kv_occupied_devices) << ".";
   return kv_occupied_devices;
 }
 
@@ -379,11 +377,11 @@ std::string InferRequest::ScheduleStateToStr() const {
   if (req_ctx) {
     auto it_ip = req_ctx->find("x-remote-ip");
     auto it_group = req_ctx->find("kv-comm-group-key");
-    auto it_reqid = req_ctx->find("kv-comm-request-id");
+    auto it_reqid = req_ctx->find("request-id");
     auto it_trace = req_ctx->find("traceparent");
     ss << ", x_remote_ip=" << (it_ip != req_ctx->end() ? it_ip->second : "-")
        << ", kv_comm_group_key=" << (it_group != req_ctx->end() ? it_group->second : "-")
-       << ", kv_comm_request_id=" << (it_reqid != req_ctx->end() ? it_reqid->second : "-")
+       << ", request_id=" << (it_reqid != req_ctx->end() ? it_reqid->second : "-")
        << ", traceparent=" << (it_trace != req_ctx->end() ? it_trace->second : "-");
   }
   ss << " }";

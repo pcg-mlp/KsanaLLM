@@ -54,7 +54,7 @@ TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   std::vector<std::shared_ptr<Request>> batch1_reqs{batch1_req_num};
   std::vector<std::shared_ptr<InferRequest>> infer_req_list, waiting_reqs;
   std::shared_ptr<Request> waiting_req;
-  int req_id = 0;
+  int64_t req_id = 0;
   infer_req_list =
       InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch0_req0, seeds, tp_num, kBlockNum);
   batch_states[0]->decoding_queue.push_back(infer_req_list[0]);

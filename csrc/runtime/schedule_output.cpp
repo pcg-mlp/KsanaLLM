@@ -342,9 +342,6 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     // attn_dp_group_id
     SerializePod<uint32_t>(req->attn_dp_group_id, ptr, offset);
 
-    // kv_comm_request_id
-    SerializePod<int64_t>(req->kv_comm_request_id, ptr, offset);
-
     // kv_comm_group_key
     SerializeString(req->kv_comm_group_key, ptr, offset);
 
@@ -481,9 +478,6 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
 
     // attn_dp_group_id
     req->attn_dp_group_id = DeserializePod<uint32_t>(ptr, offset);
-
-    // kv_comm_request_id
-    req->kv_comm_request_id = DeserializePod<int64_t>(ptr, offset);
 
     // kv_comm_group_key
     req->kv_comm_group_key = DeserializeString(ptr, offset);

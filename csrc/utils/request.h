@@ -191,7 +191,7 @@ class Request {
 
   ~Request() { KLLM_LOG_DEBUG << "Request " << req_id << " destroyed"; }
 
-  // The unique id of a request.(Deprecated)
+  // Request-level ID. Uses request-id header value when available, otherwise auto-generated.
   int64_t req_id;
 
   // TODO(zakwang): Replace req_id
@@ -287,9 +287,6 @@ class Request {
 
   // User-provided draft tokens
   std::vector<int> draft_tokens;
-
-  // This is a unique ID for the KV transformer group.
-  int64_t kv_comm_request_id;
 
   // This key for kv transformer group.
   std::string kv_comm_group_key;

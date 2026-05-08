@@ -454,7 +454,7 @@ class KsanaLLMEngine:
         header_fields = [
             "x-remote-ip",
             "kv-comm-group-key", 
-            "kv-comm-request-id",
+            "request-id",
             "traceparent",
         ]
         

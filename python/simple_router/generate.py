@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from name_service.name_service import NameServiceProvider, NameServiceRegistry
 
-from comm_id_allocator import allocate_comm_id
+from request_id import generate_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -88,19 +88,20 @@ async def forward_request(req: Request, endpoint_path: str):
     router_start_ns = time.time_ns()
     client = get_http_client()
 
-    # Allocate unique comm_id across uvicorn workers
+    # Allocate unique req_id across uvicorn workers via the unified module.
+    # The cross-process allocator is registered in main.py during lifespan.
     try:
-        comm_id_start_time = time.time_ns()
-        comm_id = allocate_comm_id()
-        comm_id_ms = (time.time_ns() - comm_id_start_time) // 1_000_000
+        req_id_start_time = time.time_ns()
+        req_id = generate_request_id()
+        req_id_ms = (time.time_ns() - req_id_start_time) // 1_000_000
     except Exception as exc:  # pylint: disable=broad-except
-        logger.error("Failed to allocate comm_id: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to allocate comm_id") from exc
+        logger.error("Failed to allocate req_id: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to allocate req_id") from exc
 
     # Use absolute timestamp for timing
     headers = {
         "kv-comm-group-key": f"{prefill_name}__{decode_name}",
-        "kv-comm-request-id": str(comm_id),
+        "request-id": str(req_id),
         "kv-comm-start-ns": str(router_start_ns),
     }
     
@@ -118,9 +119,9 @@ async def forward_request(req: Request, endpoint_path: str):
         request_kwargs["headers"]["content-type"] = req.headers["content-type"]
 
     logger.info(
-        "[ROUTER-1] comm_id=%s alloc_cost=%dms | Start routing | prefill=%s decode=%s",
-        comm_id,
-        comm_id_ms,
+        "[ROUTER-1] req_id=%s alloc_cost=%dms | Start routing | prefill=%s decode=%s",
+        req_id,
+        req_id_ms,
         prefill_url,
         decode_url,
     )
@@ -149,8 +150,8 @@ async def forward_request(req: Request, endpoint_path: str):
         raise
     elapsed_ms = (time.time_ns() - router_start_ns) // 1_000_000
     logger.info(
-        "[ROUTER-2] comm_id=%s | Got response headers | elapsed=%dms | prefill_status=%d decode_status=%d",
-        comm_id,
+        "[ROUTER-2] req_id=%s | Got response headers | elapsed=%dms | prefill_status=%d decode_status=%d",
+        req_id,
         elapsed_ms,
         prefill_resp.status_code,
         decode_resp.status_code,
@@ -183,8 +184,8 @@ async def forward_request(req: Request, endpoint_path: str):
         await decode_ctx.__aexit__(None, None, None)
         elapsed_ms = (time.time_ns() - router_start_ns) // 1_000_000
         logger.info(
-            "[ROUTER-3] comm_id=%s | Response complete (non-streaming) | elapsed=%dms | body_size=%d",
-            comm_id,
+            "[ROUTER-3] req_id=%s | Response complete (non-streaming) | elapsed=%dms | body_size=%d",
+            req_id,
             elapsed_ms,
             len(content),
         )
@@ -209,7 +210,7 @@ async def forward_request(req: Request, endpoint_path: str):
 
                 async for chunk in decode_resp.aiter_bytes():
                     yield chunk
-                logger.info("Communication %s completed, sending EOS", comm_id)
+                logger.info("Request %s completed, sending EOS", req_id)
                 yield EOS + DELIM
             finally:
                 if not prefill_closed:
@@ -223,7 +224,7 @@ async def forward_request(req: Request, endpoint_path: str):
             try:
                 async for chunk in decode_resp.aiter_bytes():
                     yield chunk
-                logger.info("Communication %s completed, sending EOS", comm_id)
+                logger.info("Request %s completed, sending EOS", req_id)
                 yield EOS + DELIM
             finally:
                 await decode_ctx.__aexit__(None, None, None)
@@ -232,8 +233,8 @@ async def forward_request(req: Request, endpoint_path: str):
     response_headers = dict(decode_resp.headers)
     elapsed_ms = (time.time_ns() - router_start_ns) // 1_000_000
     logger.info(
-        "[ROUTER-3] comm_id=%s | Starting stream response | elapsed=%dms",
-        comm_id,
+        "[ROUTER-3] req_id=%s | Starting stream response | elapsed=%dms",
+        req_id,
         elapsed_ms,
     )
     return StreamingResponse(stream_generator(), media_type="application/octet-stream", headers=response_headers)

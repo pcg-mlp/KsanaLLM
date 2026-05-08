@@ -486,7 +486,7 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
   sampling_output->target_logprobs.clear();
 
   // 收集需要通过transfer_engine发送token的请求
-  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_transfer_tokens;
+  std::vector<std::tuple<std::string, int64_t, std::vector<int>>> reqs_transfer_tokens;
 
   // update schedule state of every dp group.
   for (auto& result_it : sampling_output->sampling_result) {
@@ -512,7 +512,7 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
         }
         KLLM_LOG_DEBUG << "UpdateSamplingOutput: prepare to send tokens for req " << req->req_id
                        << ", send tokens: " << Vector2Str(send_tokens);
-        reqs_transfer_tokens.emplace_back(req->kv_comm_group_key, req->kv_comm_request_id, send_tokens);
+        reqs_transfer_tokens.emplace_back(req->kv_comm_group_key, req->req_id, send_tokens);
       }
     }
   }

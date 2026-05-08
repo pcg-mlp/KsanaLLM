@@ -19,6 +19,7 @@ from transformers import logging as hf_logging
 import ksana_llm
 from ksana_llm.arg_utils import EngineArgs
 from ksana_llm.exceptions import KsanaEngineError
+from request_id import generate_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ CONFIG = {
     "FIELDS_TO_EXTRACT": [
         "x-remote-ip",
         "kv-comm-group-key",
-        "kv-comm-request-id",
+        "request-id",
         "traceparent",
         'Content-Type'],
     "DEFAULT_LOG_LEVEL": "INFO",
@@ -117,12 +118,20 @@ class LLMService:
 
     @staticmethod
     def get_trace_context(request: Request) -> Dict[str, str]:
-        """获取请求的追踪上下文"""
-        return {
+        """获取请求的追踪上下文.
+
+        若上游（例如 simple_router）已下发 ``request-id`` header，则透传；否则
+        在此处生成一个与 C++ ``IdGenerator`` 同布局的 ID，注入回 ``req_ctx`` 后
+        再交给 C++。这样 Python 接入层与 C++ 引擎可以用同一个 ID 串联 access log。
+        """
+        req_ctx = {
             field: request.headers.get(field)
             for field in CONFIG["FIELDS_TO_EXTRACT"]
             if request.headers.get(field) is not None
         }
+        if "request-id" not in req_ctx:
+            req_ctx["request-id"] = str(generate_request_id())
+        return req_ctx
 
     async def format_streaming_output(self, ksana_python_output_iterator):
         """Perform streaming generation."""

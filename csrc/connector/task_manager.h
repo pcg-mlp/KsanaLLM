@@ -274,21 +274,21 @@ class TaskManager {
    * @param req_id Request ID
    * @return Shard index in the range [0, circular_bucket_num)
    */
-  size_t GetShardIndex(int req_id) const { return static_cast<size_t>(req_id) % circular_bucket_num_; }
+  size_t GetShardIndex(int64_t req_id) const { return static_cast<size_t>(req_id) % circular_bucket_num_; }
 
   /**
    * @brief Get shard for a request ID
    * @param req_id Request ID
    * @return Reference to the corresponding TaskShard
    */
-  TaskShard& GetShard(int req_id) { return *shards_[GetShardIndex(req_id)]; }
+  TaskShard& GetShard(int64_t req_id) { return *shards_[GetShardIndex(req_id)]; }
 
   /**
    * @brief Get shard for a request ID (const version)
    * @param req_id Request ID
    * @return Const reference to the corresponding TaskShard
    */
-  const TaskShard& GetShard(int req_id) const { return *shards_[GetShardIndex(req_id)]; }
+  const TaskShard& GetShard(int64_t req_id) const { return *shards_[GetShardIndex(req_id)]; }
 };
 
 }  // namespace ksana_llm

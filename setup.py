@@ -244,6 +244,7 @@ class BuildExt(build_ext_orig):
             "serving_server.py",
             "serving_generate_client.py",
             "serving_forward_client.py",
+            "request_id.py",
         ]
 
         # Copy each required Python file

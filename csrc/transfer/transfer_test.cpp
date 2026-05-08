@@ -122,7 +122,7 @@ TEST_F(TransferEngineTest, AddTransferMeta) {
   KLLM_LOG_INFO << "transfer_engine_ initialized";
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0, 1};
@@ -152,7 +152,7 @@ TEST_F(TransferEngineTest, AddTransferMetaInvalidRequestId) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据，使用无效的请求ID
-  int request_id = -1;
+  int64_t request_id = -1;
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0, 1};
@@ -179,7 +179,7 @@ TEST_F(TransferEngineTest, AddTransferMetaInvalidSharedTokenNum) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据，使用无效的shared_block_num
-  int request_id = -1;
+  int64_t request_id = -1;
   size_t shared_block_num = 5;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -207,7 +207,7 @@ TEST_F(TransferEngineTest, AddTransferMetaEmptyBlocks) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 1;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -238,7 +238,7 @@ TEST_F(TransferEngineTest, SendWithPrefillRole) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0, 1};
@@ -290,7 +290,7 @@ TEST_F(TransferEngineTest, SendWithPrefillAdpMoreRole) {
   transfer_engine_->SetSelfDeviceInfo(prefill_adp, total_device_num);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -343,7 +343,7 @@ TEST_F(TransferEngineTest, SendWithPrefillAdpLessRole) {
   transfer_engine_->SetSelfDeviceInfo(prefill_adp, total_device_num);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0, 1};
@@ -407,7 +407,7 @@ TEST_F(TransferEngineTest, SendWithPrefillRoleDeviceInfoNotFound) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 456;
+  int64_t request_id = 456;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -478,15 +478,15 @@ TEST_F(TransferEngineTest, SendTokens) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_tokens = {{"", 123, {456, 457}},
-                                                                             {"", 789, {101, 102}}};
+  std::vector<std::tuple<std::string, int64_t, std::vector<int>>> reqs_tokens = {{"", 123, {456, 457}},
+                                                                                 {"", 789, {101, 102}}};
 
   // 发送token
   transfer_engine_->Send(reqs_tokens);
 
   // 验证发送后可以检查发送状态
   // 创建测试数据并添加元数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -523,15 +523,15 @@ TEST_F(TransferEngineTest, SendTokensWithDecodeRole) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_tokens = {{"", 123, {456, 457}},
-                                                                             {"", 789, {101, 102}}};
+  std::vector<std::tuple<std::string, int64_t, std::vector<int>>> reqs_tokens = {{"", 123, {456, 457}},
+                                                                                 {"", 789, {101, 102}}};
 
   // 发送token
   transfer_engine_->Send(reqs_tokens);
 
   // 验证DECODE角色不会发送数据
   // 创建测试数据并添加元数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -554,13 +554,13 @@ TEST_F(TransferEngineTest, SendEmptyTokens) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建空的测试数据
-  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_tokens;
+  std::vector<std::tuple<std::string, int64_t, std::vector<int>>> reqs_tokens;
 
   // 发送token
   transfer_engine_->Send(reqs_tokens);
 
   // 验证空请求不会导致程序崩溃
-  std::vector<std::tuple<std::string, int, std::vector<int>>> non_empty_reqs_tokens = {{"", 123, {456, 457}}};
+  std::vector<std::tuple<std::string, int64_t, std::vector<int>>> non_empty_reqs_tokens = {{"", 123, {456, 457}}};
   transfer_engine_->Send(non_empty_reqs_tokens);
   ASSERT_FALSE(transfer_engine_->IsSendDone(123));
 }
@@ -571,7 +571,7 @@ TEST_F(TransferEngineTest, IsRecvDone) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   // 保证shared_block_num不大于块的数量
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
@@ -618,7 +618,7 @@ TEST_F(TransferEngineTest, IsSendDone) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   // 保证shared_block_num不大于块的数量
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
@@ -648,7 +648,7 @@ TEST_F(TransferEngineTest, CleanupTransferMeta) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 2;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0, 1};
@@ -701,7 +701,7 @@ TEST_F(TransferEngineTest, ChunkTransferConfiguration) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -727,7 +727,7 @@ TEST_F(TransferEngineTest, ChunkTransferSendLogic) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -768,7 +768,7 @@ TEST_F(TransferEngineTest, ChunkTransferReceiveTaskCount) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0, 1};
@@ -807,7 +807,7 @@ TEST_F(TransferEngineTest, ChunkTransferBoundaryCase_ChunkSizeEqualsLayerNum) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -838,7 +838,7 @@ TEST_F(TransferEngineTest, ChunkTransferBoundaryCase_ChunkSizeGreaterThanLayerNu
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -869,7 +869,7 @@ TEST_F(TransferEngineTest, ChunkTransferDefaultBehavior) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};
@@ -900,7 +900,7 @@ TEST_F(TransferEngineTest, ChunkTransferCreateTasksForDecodeNode) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  int request_id = 123;
+  int64_t request_id = 123;
   size_t shared_block_num = 0;
   std::vector<std::vector<GpuBlockLocation>> gpu_block_locations;
   std::vector<int> kv_occupied_devices = {0};

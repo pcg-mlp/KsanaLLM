@@ -177,7 +177,7 @@ class ForwardRequestBuilderForTest {
   }
   ~ForwardRequestBuilderForTest() { Destroy(); }
 
-  void CreateForwardRequest(int req_id, ForwardRequest& forward_req, const std::vector<int>& input_ids) {
+  void CreateForwardRequest(int64_t req_id, ForwardRequest& forward_req, const std::vector<int>& input_ids) {
     KLLM_CHECK_WITH_INFO(reqs_.find(req_id) == reqs_.end(), FormatStr("req_id: {} exists ", req_id));
 
     // fake KsanaPythonInput and req_ctx to create Request

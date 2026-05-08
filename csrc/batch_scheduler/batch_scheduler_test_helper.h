@@ -528,7 +528,7 @@ inline void GenerateFakeTokens(std::vector<int>& input_tokens, int output_token_
 }
 
 inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
-    int req_id, int input_token_num, int expected_output_token_num, std::shared_ptr<Request>& req,
+    int64_t req_id, int input_token_num, int expected_output_token_num, std::shared_ptr<Request>& req,
     const std::vector<std::pair<int, int>>& seeds, const size_t tp_num, const size_t block_num,
     std::shared_ptr<KsanaPythonInput>* python_input_out = nullptr) {
   KLLM_LOG_SCHEDULER << "Init req_id=" << req_id << ", input_token_num=" << input_token_num
@@ -641,8 +641,8 @@ class BatchSchedulerEnvironmentSimulator {
 
   int GetEndId() { return GetFakeEndId(); }
 
-  std::vector<std::shared_ptr<InferRequest>> InitRequest(int req_id, int input_token_num, int expected_output_token_num,
-                                                         std::shared_ptr<Request>& req,
+  std::vector<std::shared_ptr<InferRequest>> InitRequest(int64_t req_id, int input_token_num,
+                                                         int expected_output_token_num, std::shared_ptr<Request>& req,
                                                          const std::vector<std::pair<int, int>>& seeds) {
     std::vector<std::shared_ptr<InferRequest>> infer_req_list =
         InitFakeRequest(req_id, input_token_num, expected_output_token_num, req, seeds, tp_num_,
@@ -700,7 +700,7 @@ class BatchSchedulerEnvironmentSimulator {
     req_output_num_map_[req->req_id] = output_token_num;
   }
 
-  void SetRequestGenerationSeeds(int req_id, const std::vector<std::pair<int, int>>& seeds) {
+  void SetRequestGenerationSeeds(int64_t req_id, const std::vector<std::pair<int, int>>& seeds) {
     KLLM_CHECK_WITH_INFO(req_generation_seeds_.find(req_id) == req_generation_seeds_.end(),
                          FormatStr("SetRequestGenerationSeed: Req id %d is already set.", req_id));
     KLLM_CHECK_WITH_INFO(seeds.size() > 0,

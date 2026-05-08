@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "utils/tensor.h"
@@ -70,7 +71,7 @@ struct TransferTensor {
  * token信息、目标位置、完成状态和目标地址等。
  */
 struct TransferTask {
-  int req_id = 0;                                                      // 请求ID，用于唯一标识传输请求
+  int64_t req_id = 0;                                                  // 请求ID，用于唯一标识传输请求
   TransferTensor tensor;                                               // 传输的张量数据
   std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0);  // 包含gen_token和draft_token, 和tensor二选一传输
   void* dst_ptr = nullptr;                                             // 目标指针，指向接收数据的内存或显存地址

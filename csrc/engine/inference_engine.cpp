@@ -474,7 +474,8 @@ Status InferenceEngine::DoWarmupRun() {
     env_->GetConnectorConfigs(connector_config);
     // NOTE(winminkong): To prevent PD disaggregate waiting in a loop for the configuration to be transmitted.
     if (connector_config.group_role == GroupRole::PREFILL) {
-      req->kv_comm_request_id = -1;
+      req->req_id = -1;
+      req->req_ids[0] = -1;  // Sync sentinel to req_ids so InferRequest also sees -1
     }
 
     req->waiter = std::make_shared<Waiter>(1);

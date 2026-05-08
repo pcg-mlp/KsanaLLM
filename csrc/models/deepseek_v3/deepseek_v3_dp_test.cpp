@@ -116,7 +116,7 @@ class DeepSeekV3DPTest : public testing::Test {
     }
   }
 
-  ForwardRequest CreateContextForwardRequest(int req_id, int dp_group_id, std::vector<int> &input_ids,
+  ForwardRequest CreateContextForwardRequest(int64_t req_id, int dp_group_id, std::vector<int> &input_ids,
                                              std::vector<FlexibleCachedCopyTask> &flexible_cached_copy_tasks,
                                              EmbeddingSlice &embedding_slice) {
     ForwardRequest forward;

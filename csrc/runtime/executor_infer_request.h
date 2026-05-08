@@ -152,9 +152,6 @@ class ExecutorInferRequest {
   // data parallel id of this request.
   uint32_t attn_dp_group_id = 0;
 
-  // This is a unique ID for the KV transformer group.
-  int64_t kv_comm_request_id;
-
   // This key for kv transformer group.
   std::string kv_comm_group_key;
 

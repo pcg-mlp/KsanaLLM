@@ -23,10 +23,10 @@ void ContinuousBatchingStrategy::AddTransferMeta(std::vector<std::shared_ptr<Inf
     return;
   }
   for (auto& req : queue) {
-    KLLM_LOG_DEBUG << "try GetTransferMeta req id:" << req->kv_comm_request_id;
+    KLLM_LOG_DEBUG << "try GetTransferMeta req id:" << req->req_id;
 
     // 如果该请求尚未添加传输元数据，则添加
-    if (!transfer_engine_->GetTransferMeta(req->kv_comm_request_id)) {
+    if (!transfer_engine_->GetTransferMeta(req->req_id)) {
       // 构建GpuBlockLocation结构
       size_t device_count = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       std::vector<std::vector<GpuBlockLocation>> block_locations(device_count);
@@ -42,8 +42,8 @@ void ContinuousBatchingStrategy::AddTransferMeta(std::vector<std::shared_ptr<Inf
       std::vector<int> kv_occupied_devices = req->GetKVOccupiedDevices();
       // block_token_num只保留能整除kv_cached_token_num的部分，因为传输时以block为单位传输
       size_t shared_block_num = req->kv_cached_token_num / req->block_token_num;
-      transfer_engine_->AddTransferMeta(req->kv_comm_group_key, req->kv_comm_request_id, shared_block_num,
-                                        block_locations, kv_occupied_devices);
+      transfer_engine_->AddTransferMeta(req->kv_comm_group_key, req->req_id, shared_block_num, block_locations,
+                                        kv_occupied_devices);
     }
   }
 }
@@ -59,13 +59,13 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
   if (!transfer_engine_) {
     return;
   }
-  // 对transfer_queue排序，kv_comm_request_id小的在前
+  // 对transfer_queue排序，req_id小的在前
   std::sort(batch_state_->transfer_queue.begin(), batch_state_->transfer_queue.end(),
-            [](const auto& a, const auto& b) { return a->kv_comm_request_id < b->kv_comm_request_id; });
+            [](const auto& a, const auto& b) { return a->req_id < b->req_id; });
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
     auto req = *it;
     // 检查请求是否接收完成，如果完成则返回第一个token，否则返回-1
-    std::vector<int> recv_tokens = transfer_engine_->IsRecvDone(req->kv_comm_request_id);
+    std::vector<int> recv_tokens = transfer_engine_->IsRecvDone(req->req_id);
     if (recv_tokens != std::vector<int>(MAX_TRANSFER_TOKENS, -1)) {
       // 接收完成，更新请求状态
       KLLM_LOG_DEBUG << "Received recv_tokens: " << Vector2Str(recv_tokens);
@@ -92,10 +92,10 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       req->UpdateAfterInflightTaskFinished();
       req->ResetInflightTask();
 
-      KLLM_LOG_DEBUG << "Move transfer req to decoding queue, req id:" << req->kv_comm_request_id;
+      KLLM_LOG_DEBUG << "Move transfer req to decoding queue, req id:" << req->req_id;
       batch_state_->decoding_queue.push_back(req);
       it = batch_state_->transfer_queue.erase(it);
-      transfer_engine_->CleanupTransferMeta(req->kv_comm_request_id);
+      transfer_engine_->CleanupTransferMeta(req->req_id);
     } else {
       // 接收未完成，继续检查下一个请求
       ++it;
@@ -120,9 +120,9 @@ void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
     // TODO(zakwang): 检查是否有超时和abort，目前强制要求传输完成再释放req
     // 检查请求是否发送完成
     auto req = *it;
-    if (transfer_engine_->IsSendDone(req->kv_comm_request_id)) {
+    if (transfer_engine_->IsSendDone(req->req_id)) {
       // 发送完成，从传输队列中移除该请求
-      KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << req->kv_comm_request_id;
+      KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << req->req_id;
       const auto end_time = ProfileTimer::GetCurrentTimeInUs();
       const size_t output_token_num = req->output_tokens.size() - req->input_tokens.size();
       const uint64_t duration = end_time - req->timestamp_in_us;

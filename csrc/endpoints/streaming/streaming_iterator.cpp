@@ -11,7 +11,7 @@
 
 namespace ksana_llm {
 
-static std::unordered_map<int, std::shared_ptr<DyingRequest>> dying_requests;
+static std::unordered_map<int64_t, std::shared_ptr<DyingRequest>> dying_requests;
 static std::mutex dying_mutex;
 
 StreamingIterator::~StreamingIterator() {
@@ -23,7 +23,7 @@ StreamingIterator::~StreamingIterator() {
     dying_req->request = request_;
     dying_req->ksana_python_input = ksana_python_input_;
 
-    int req_id = request_->req_id;
+    int64_t req_id = request_->req_id;
 
     {
       std::lock_guard<std::mutex> guard(dying_mutex);

@@ -3,14 +3,15 @@
 ==============================================================================*/
 #pragma once
 
+#include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <memory>
 #include <sstream>
 #include <vector>
+#include "device/device_types.h"
 #include "profiler/timer.h"
 #include "transfer/transfer_types.h"
-#include "device/device_types.h"
 
 namespace ksana_llm {
 
@@ -23,7 +24,7 @@ namespace ksana_llm {
  */
 struct TaskKey {
   // Core identifiers
-  int req_id;                            ///< Request ID for grouping related tasks (primary sharding key)
+  int64_t req_id;                        ///< Request ID for grouping related tasks (primary sharding key)
   int block_idx;                         ///< Block index in the computation pipeline
   int layer_idx;                         ///< Layer index in the neural network
   int tensor_size;                       ///< Size of the tensor data in bytes
@@ -67,7 +68,7 @@ struct TaskKey {
         hash_device_id(0),
         start_time_us(0) {}
 
-  TaskKey(int req, int block, int layer, int hash_device_id, int tsize = 0,
+  TaskKey(int64_t req, int block, int layer, int hash_device_id, int tsize = 0,
           std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0), bool skipped = false,
           int decode_device_id = -1, int decode_device_offset = -1, int prefill_device_id = -1,
           int prefill_device_offset = -1, std::time_t timestamp_us = 0)
@@ -135,16 +136,18 @@ struct TaskKey {
   // Hash function for TaskKey (excludes token for consistent hashing)
   struct Hash {
     size_t operator()(const TaskKey& key) const {
-      uint64_t combined = (static_cast<uint64_t>(key.req_id) << 32) | ((key.tensor_size > 0 ? 1ULL : 0ULL) << 16) |
-                          (static_cast<uint64_t>(key.block_idx) << 8) | (static_cast<uint64_t>(key.layer_idx) << 4) |
-                          (static_cast<uint64_t>(key.hash_device_id));
-      return std::hash<uint64_t>()(combined);
+      size_t seed = std::hash<int64_t>()(key.req_id);
+      seed ^= std::hash<int>()(key.block_idx) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>()(key.layer_idx) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>()(key.tensor_size) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>()(key.hash_device_id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      return seed;
     }
   };
 
   // TBB compatible hash comparator
   struct HashCompare {
-    static size_t hash(const TaskKey& key) { return Hash {} (key); }
+    static size_t hash(const TaskKey& key) { return Hash{}(key); }
 
     static bool equal(const TaskKey& lhs, const TaskKey& rhs) { return lhs == rhs; }
   };

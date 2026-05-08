@@ -6,8 +6,18 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Optional, Sequence
+
+# When running from source (python/simple_router/main.py), the parent python/
+# directory is not automatically on sys.path, so ksana_llm cannot be found.
+# Insert it here, before any module-level imports that depend on ksana_llm.
+# When installed as a package (simple_router lives under ksana_llm/), this
+# path is already present and the insert is harmless.
+_PYTHON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+if _PYTHON_DIR not in sys.path:
+    sys.path.insert(0, _PYTHON_DIR)
 
 import config as config_module
 import uvicorn
@@ -18,6 +28,7 @@ from sqlalchemy.exc import OperationalError
 
 from comm_id_allocator import close_allocator, init_allocator
 from generate import init_name_service
+from request_id import set_request_id_allocator
 
 
 logger = logging.getLogger("simple_router.ksana_llm_simple_router")
@@ -69,7 +80,11 @@ async def lifespan(app: FastAPI):  # pragma: no cover - exercised at runtime
     _init_database()
     init_name_service()
 
-    # Initialize comm_id allocator from settings
+    # Initialize comm_id allocator from settings.
+    # For "shared_memory" (default): request_id.py already uses its own
+    # shared-memory counter — no override needed.
+    # For "redis": plug in the Redis allocator so generate_request_id()
+    # coordinates across multiple physical machines.
     settings = config_module.get_settings()
     init_allocator(
         allocator_type=settings.comm_id_allocator_type,
@@ -79,11 +94,18 @@ async def lifespan(app: FastAPI):  # pragma: no cover - exercised at runtime
         redis_db=settings.redis_db,
         redis_key=settings.comm_id_key,
     )
-    
+    if settings.comm_id_allocator_type == "redis":
+        from comm_id_allocator import allocate_comm_id
+        set_request_id_allocator(allocate_comm_id)
+        logger.info("request_id: using Redis allocator for cross-machine ID uniqueness")
+    else:
+        logger.info("request_id: using default shared-memory counter")
+
     logger.info("Prefill-decode router service started")
     yield
-    
+
     # Cleanup
+    set_request_id_allocator(None)
     await close_allocator()
     logger.info("Prefill-decode router service stopping")
 
@@ -137,6 +159,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         args.port,
         args.workers,
     )
+
+    # Request-id counter: the file is created once (with an initial seed) by the
+    # first worker that sees it missing. No per-worker reset — that would race
+    # across workers and desync the inode, causing duplicate req_ids. The file
+    # persists across service restarts, so the counter continues incrementing,
+    # which is harmless and easier to debug.
 
     uvicorn.run(
         "main:app",

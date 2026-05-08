@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -20,7 +21,7 @@ enum RequestEventPhase { Begin, End };
 
 struct BatchRequestSchedInfo {
   struct RequestSchedInfo {
-    int req_id;
+    int64_t req_id;
     size_t forwarding_token_num;
     size_t seq_len;
   };
