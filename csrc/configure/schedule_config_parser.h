@@ -352,6 +352,11 @@ struct RuntimeConfig {
   bool enable_full_shared_expert = false;
   bool separate_prefill_decode = false;
 
+  // True when this node is in PD-disagg DECODE role (no prefill computation on this node).
+  // 用于 forwarding buffer 缩减：decode-only 节点的单 step token 数远小于 max_step_token_num，
+  // 把多余的 buffer 让给 KV cache 块以提高并发。
+  bool is_decode_only = false;
+
   bool enable_prefix_caching = false;  // Whether enable prefix caching.
   bool enable_flexible_caching = false;
 

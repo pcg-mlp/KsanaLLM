@@ -8,6 +8,36 @@
 
 namespace ksana_llm {
 
+size_t ComputeDecodeOnlyStepTokenNum(size_t max_batch_size, size_t max_decode_tokens_per_req,
+                                     size_t attn_data_parallel_size) {
+  // max_decode_tokens_per_req 已综合 MTP / PTP / generated token，公式与 schedule_config_parser:
+  //   max_decode_tokens_per_req = mtp_step_num + 2 * ptp_step_num + 1
+  // 一致；至少 1（保护配置异常时 buffer 不为 0）
+  const size_t effective = max_decode_tokens_per_req > 0 ? max_decode_tokens_per_req : 1;
+  return max_batch_size * effective * attn_data_parallel_size;
+}
+
+size_t SelectEffectiveStepTokenNum(const RuntimeConfig& runtime_config,
+                                   const BatchSchedulerConfig& batch_scheduler_config) {
+  if (runtime_config.is_decode_only) {
+    return ComputeDecodeOnlyStepTokenNum(runtime_config.max_batch_size,
+                                         batch_scheduler_config.max_decode_tokens_per_req,
+                                         runtime_config.parallel_basic_config.attn_data_parallel_size);
+  }
+  return runtime_config.max_step_token_num;
+}
+
+std::string FormatDecodeOnlyShrinkLog(const RuntimeConfig& runtime_config,
+                                      const BatchSchedulerConfig& batch_scheduler_config,
+                                      size_t effective_token_num) {
+  return fmt::format(
+      "ForwardingBuffers::Init decode-only: shrink token_num {} -> {} "
+      "(max_batch_size={}, max_decode_tokens_per_req={} [mtp={}, ptp={}], attn_dp={})",
+      runtime_config.max_step_token_num, effective_token_num, runtime_config.max_batch_size,
+      batch_scheduler_config.max_decode_tokens_per_req, batch_scheduler_config.mtp_step_num,
+      batch_scheduler_config.ptp_step_num, runtime_config.parallel_basic_config.attn_data_parallel_size);
+}
+
 void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, const size_t batch_size,
                                               const size_t max_token_num, const DataType& weight_type) {
   auto env = Singleton<Environment>::GetInstance();
@@ -158,7 +188,15 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
   this->model_config = model_config;
   this->runtime_config = runtime_config;
   const DataType weight_type = model_config.weight_data_type;
-  CalculateBuffersShape(context, runtime_config.max_batch_size, runtime_config.max_step_token_num, weight_type);
+  // LCOV_EXCL_START - Singleton fetch requires full Environment init, covered by integration.
+  BatchSchedulerConfig batch_scheduler_config;
+  Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
+  // LCOV_EXCL_STOP
+  const size_t effective_token_num = SelectEffectiveStepTokenNum(runtime_config, batch_scheduler_config);
+  if (runtime_config.is_decode_only) {
+    KLLM_LOG_INFO << FormatDecodeOnlyShrinkLog(runtime_config, batch_scheduler_config, effective_token_num);
+  }
+  CalculateBuffersShape(context, runtime_config.max_batch_size, effective_token_num, weight_type);
 
   Stream* const stream = &(context->device->GetMemoryManageStream());
 

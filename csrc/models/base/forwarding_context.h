@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "models/base/layer_creation_context.h"
@@ -15,6 +16,26 @@
 #include "profiler/sched_event_tracer.h"
 
 namespace ksana_llm {
+
+// 计算 decode-only 节点的 forwarding buffer 所需 token 数。
+// decode-only 节点不做 prefill，单 step 产出的 token 数上界为
+//   max_batch_size * max_decode_tokens_per_req * attn_data_parallel_size
+// 其中 max_decode_tokens_per_req = mtp_step_num + 2 * ptp_step_num + 1（与 schedule_config_parser 一致），
+// 已涵盖 MTP / PTP / generated token。
+// 该值通常远小于 max_step_token_num（按 prefill chunk 分配），省下的显存可用于 KV block。
+size_t ComputeDecodeOnlyStepTokenNum(size_t max_batch_size, size_t max_decode_tokens_per_req,
+                                     size_t attn_data_parallel_size);
+
+// 从 RuntimeConfig + BatchSchedulerConfig 中选择 forwarding buffer 生效的 token_num。
+// - is_decode_only == true: 使用 ComputeDecodeOnlyStepTokenNum 的缩减值（参考 max_decode_tokens_per_req）
+// - 其他情况: 使用 max_step_token_num（保持原行为）
+size_t SelectEffectiveStepTokenNum(const RuntimeConfig& runtime_config,
+                                   const BatchSchedulerConfig& batch_scheduler_config);
+
+// 构造 decode-only buffer 缩减的日志文本，方便 ForwardingBuffers::Init 打印 & 单测校验。
+std::string FormatDecodeOnlyShrinkLog(const RuntimeConfig& runtime_config,
+                                      const BatchSchedulerConfig& batch_scheduler_config,
+                                      size_t effective_token_num);
 
 struct ForwardingBuffers {
   //  NOTE(karlluo): The following 4 buffers(3 different kinds) are used as temporary buffers during the whole model

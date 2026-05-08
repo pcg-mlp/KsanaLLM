@@ -788,6 +788,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
 
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);
+  runtime_config_.is_decode_only = (connector_config_.group_role == GroupRole::DECODE);
   runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
 

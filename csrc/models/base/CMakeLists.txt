@@ -36,6 +36,7 @@ if(WITH_STANDALONE_TEST)
   cpp_test(model_input_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/base/model_input_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   # cpp_test(model_base_utils_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/base/utils_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   cpp_test(common_model_weight_loader_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/base/common_model_weight_loader_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  cpp_test(forwarding_context_decode_only_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/base/forwarding_context_decode_only_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
 endif()
 
