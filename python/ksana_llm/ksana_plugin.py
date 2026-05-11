@@ -15,6 +15,7 @@ import torch
 import libtorch_serving
 
 from utilize.logger import get_logger
+from utilize.resource_manager import ResourceManager
 from ksana_encoder.multimodal_cache import MultimodalCache
 
 logger = get_logger(__name__)
@@ -149,7 +150,10 @@ class KsanaPlugin(object):
             and not force_disable
         )
         if self._supports_decoupled:
-            # Encoder I/O pool size is 2x to avoid blocking (threads only wait on network).
+            # Encoder I/O pool sized at 2x the preprocess pool. Threads here only wait on
+            # network I/O, so idle cost is negligible. The 2x ratio assumes encoder round-trip
+            # is at most ~2x the CPU preprocess time (Little's Law); if encoder latency is much
+            # higher, this pool can become the bottleneck and a larger multiplier may be needed.
             self._encoder_pool = futures.ThreadPoolExecutor(config.num_threads_per_encoder * 2)
             logger.info("Decoupled preprocessing enabled: preprocess threads will be released "
                         "before encoder I/O")
@@ -251,12 +255,8 @@ class KsanaPlugin(object):
             logger.error(f"Plugin encode failed: {e}")
             return None
 
-    def _preprocess_decoupled(self, ksana_python_input, **kwargs):
+    def _preprocess_decoupled(self, **kwargs):
         """Decoupled preprocessing: phase1 (thread pool) → encode (encoder pool) → phase2 (inline)."""
-        kwargs.update({
-            "ksana_python_input": ksana_python_input,
-        })
-
         # Phase 1: CPU preprocessing in thread pool.
         submit_time = time.time()
         router_id_for_phase1 = self.preprocess_router.get_next()
@@ -283,25 +283,45 @@ class KsanaPlugin(object):
         except Exception as e:  # pylint: disable=broad-except
             logger.error(f"Plugin preprocess_after_encode failed: {e}")
 
+    @staticmethod
+    def _needs_plugin_preprocess(kwargs) -> bool:
+        """Skip plugin scheduling for plain-text requests (no messages / prompt)."""
+        return kwargs.get("messages") is not None or kwargs.get("prompt") is not None
+
+    def _preprocess_coupled(self, **kwargs):
+        """Coupled preprocessing: submit the full preprocess as a single task to the thread pool."""
+        submit_time = time.time()
+        future = self._thread_pool.submit(
+            self._preprocess, submit_time,
+            self.preprocess_router.get_next(), **kwargs)
+        return future.result()
+
+    def _preprocess_dispatch(self, ksana_python_input, **kwargs):
+        """Dispatches to the decoupled or coupled preprocessing path."""
+        kwargs["ksana_python_input"] = ksana_python_input
+        if self._supports_decoupled:
+            return self._preprocess_decoupled(**kwargs)
+        return self._preprocess_coupled(**kwargs)
+
     def preprocess(self,
                    ksana_python_input: libtorch_serving.KsanaPythonInput,
                    **kwargs):
+        """Plugin preprocess entry point.
+
+        Normalizes remote URL / base64 resources in ``messages`` to local
+        temp files (auto-cleaned after the request), then dispatches to the
+        appropriate preprocessing path.
         """
-        Invokes the preprocess method of the loaded plugin, if available.
-        Automatically uses decoupled path when the plugin supports it.
-        """
-        if self._ksana_plugin is None:
+        # Skip when no plugin loaded, or when request is plain-text.
+        if self._ksana_plugin is None or not KsanaPlugin._needs_plugin_preprocess(kwargs):
             return
 
-        if self._supports_decoupled:
-            return self._preprocess_decoupled(ksana_python_input, **kwargs)
+        with ResourceManager() as rm:
+            messages = kwargs.get("messages")
+            if messages is not None:
+                kwargs["messages"] = rm.resolve(messages)
 
-        kwargs.update({
-            "ksana_python_input": ksana_python_input,
-        })
-        submit_time = time.time()
-        future = self._thread_pool.submit(self._preprocess, submit_time, self.preprocess_router.get_next(), **kwargs)
-        return future.result()
+            return self._preprocess_dispatch(ksana_python_input, **kwargs)
 
     def _postprocess(self, router_id, **kwargs):
         """

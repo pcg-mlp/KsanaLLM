@@ -28,6 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from openaiapi.request_converter import RequestConverter
 from openaiapi.encoding_dsv32 import encode_messages
 from openaiapi.tool_parsers import ToolParser
+from openaiapi.utils import is_multimodal_messages
 
 from openaiapi.openai_protocol import (
     ErrorResponse, UsageInfo, 
@@ -354,41 +355,7 @@ class KsanaOpenAIServing:
         if not model_name or model_name == self.config.default_model_name:
             return self._model_info["id"]
         return model_name
-    
-    _MULTIMODAL_TYPES = {"image_url", "video_url", "audio_url"}
 
-    def _is_multimodal_request(self, messages: list) -> bool:
-        """Return True if any message contains multimodal content parts.
-
-        Note: content may be a pydantic ValidatorIterator after v2 parsing,
-        so iteration is guarded with try/except.
-        """
-        if not messages:
-            return False
-
-        for message in messages:
-            if isinstance(message, dict):
-                content = message.get("content")
-            else:
-                content = getattr(message, "content", None)
-
-            if content is None or isinstance(content, str):
-                continue
-
-            try:
-                for part in content:
-                    if isinstance(part, dict):
-                        part_type = part.get("type", "")
-                    else:
-                        part_type = getattr(part, "type", "")
-                    if part_type in self._MULTIMODAL_TYPES:
-                        return True
-            except Exception:
-                # iteration failed, skip this message
-                continue
-
-        return False
-    
     def _get_trace_context(self, request: Request) -> Optional[Dict[str, str]]:
         try:
             return self.llm_server.get_trace_context(request)
@@ -702,7 +669,7 @@ class KsanaOpenAIServing:
         model_config = self.llm_server.engine_args
 
         # Multimodal request: let plugin handle messages directly
-        if self._is_multimodal_request(messages):
+        if is_multimodal_messages(messages):
             # Check if model supports multimodal by verifying plugin is loaded
             has_multimodal_plugin = (
                 hasattr(self.llm_server, 'model')

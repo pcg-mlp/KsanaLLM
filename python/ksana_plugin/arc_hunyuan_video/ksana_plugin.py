@@ -40,7 +40,7 @@ parent2_dir = os.path.abspath(os.path.join(parent_dir, os.pardir))
 sys.path.append(parent2_dir)
 
 from arc_hunyuan_video.video_audio_encoder import VideoAudioEncoder
-from plugin_utils import free_cache, ResourceManager
+from plugin_utils import free_cache
 from ksana_encoder.encoder_client import EncoderClient
 
 
@@ -192,10 +192,6 @@ class KsanaPlugin:
         self, messages: List[Dict], additional_params: Dict, plugin_timing_metrics=None
     ):
         """Internal preprocessing method that processes messages and returns results as tuple."""
-        # Resolve remote URLs / base64 data URIs to local temp files
-        rm = ResourceManager()
-        messages = rm.resolve(messages)
-
         # Convert OpenAI format messages to model-specific format
         question, video_path, audio_path, task = KsanaPlugin.convert_openai_messages(
             messages, additional_params
@@ -254,10 +250,6 @@ class KsanaPlugin:
         """
         messages: Optional[List[Dict]] = kwargs["messages"]
         additional_params = kwargs.get("additional_params", {})
-
-        # Resolve remote URLs / base64 data URIs to local temp files
-        rm = ResourceManager()
-        messages = rm.resolve(messages)
 
         # Convert OpenAI format messages to model-specific format
         question, video_path, audio_path, task = KsanaPlugin.convert_openai_messages(

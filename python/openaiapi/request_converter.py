@@ -25,6 +25,7 @@ from openaiapi.openai_protocol import (
     UsageInfo,
     ChoiceLogprobs, ChatCompletionTokenLogprob, TopLogprob
 )
+from openaiapi.utils import is_multimodal_messages
 import numpy as np
 
 
@@ -341,9 +342,10 @@ class RequestConverter:
         # Use input_tokens as the primary input if available
         if hasattr(request, 'input_tokens') and request.input_tokens:
             ksana_request["input_tokens"] = request.input_tokens
-        
-        # for plugin preprocessing
-        if hasattr(request, 'messages') and request.messages:
+
+        # Forward messages only for multimodal requests (for plugin preprocessing).
+        if (hasattr(request, 'messages') and request.messages
+                and is_multimodal_messages(request.messages)):
             ksana_request["messages"] = request.messages
 
         
