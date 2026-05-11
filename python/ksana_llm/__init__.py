@@ -22,6 +22,15 @@ except ImportError:
     except ImportError:
         print(f"Warning: Failed to import optional modules, please check")
 
+# Expose request_id as a top-level module so bare `from request_id import ...`
+# works both in dev mode (python/request_id.py on sys.path) and after wheel
+# install (request_id.py is copied into the ksana_llm package by setup.py).
+try:
+    from ksana_llm import request_id
+    sys.modules['request_id'] = request_id
+except ImportError:
+    pass
+
 
 from .exceptions import KsanaEngineError
 from .ksana_executor import KsanaExecutor
