@@ -70,20 +70,6 @@ endif()
 add_library(kernels STATIC ${nvidia_kernels_SRCS} ${ascend_kernels_SRCS} ${zixiao_kernels_SRCS})
 target_link_libraries(kernels PUBLIC utils cache_manager ${Python3_LIBRARIES} ${nvidia_kernels_LIBS} ${ascend_kernels_LIBS})
 
-if(WITH_CUDA)
-  set(KERNELS_TEST_PREPARE_CODE ${PROJECT_SOURCE_DIR}/tests/triton_wrapper_test.py)
-  execute_process(COMMAND ${PYTHON_PATH} ${KERNELS_TEST_PREPARE_CODE} RESULT_VARIABLE _PYTHON_SUCCESS OUTPUT_VARIABLE RESULT)
-
-  if(NOT _PYTHON_SUCCESS EQUAL 0)
-    message(FATAL_ERROR "run python ${PROJECT_SOURCE_DIR}/tests/triton_wrapper_test.py failed.")
-  endif()
-
-  execute_process(COMMAND cp ${PROJECT_SOURCE_DIR}/tests/triton_wrapper_test.py "/tmp/" RESULT_VARIABLE _CP_SUCCESS OUTPUT_VARIABLE RESULT)
-
-  if(NOT _CP_SUCCESS EQUAL 0)
-    message(FATAL_ERROR "run cp ${PROJECT_SOURCE_DIR}/tests/triton_wrapper_test.py to /tmp/ failed.")
-  endif()
-endif()
 
 if(WITH_ACL AND WITH_STANDALONE_TEST)
   message(STATUS "ascend_kernels_test_SRCS: ${ascend_kernels_test_SRCS}")

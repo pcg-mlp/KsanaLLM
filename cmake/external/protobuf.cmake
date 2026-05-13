@@ -31,6 +31,15 @@ if((NOT protobuf_POPULATED) AND (NOT com_google_protobuf_POPULATED))
     set(com_google_protobuf_SOURCE_DIR ${protobuf_SOURCE_DIR})
 
     add_subdirectory(${protobuf_SOURCE_DIR}/cmake ${protobuf_BINARY_DIR})
+
+    # Suppress warnings from protobuf source compilation
+    get_property(_protobuf_targets DIRECTORY ${protobuf_SOURCE_DIR}/cmake PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_target IN LISTS _protobuf_targets)
+      get_target_property(_type ${_target} TYPE)
+      if(_type STREQUAL "STATIC_LIBRARY" OR _type STREQUAL "SHARED_LIBRARY" OR _type STREQUAL "OBJECT_LIBRARY")
+        target_compile_options(${_target} PRIVATE -w)
+      endif()
+    endforeach()
 endif()
 
 # 打印 Protobuf 的构建目录
@@ -43,7 +52,7 @@ set(Protobuf_INCLUDE_DIRS ${protobuf_SOURCE_DIR}/src)
 set(Protobuf_IMPORT_DIRS ${Protobuf_INCLUDE_DIR})
 set(PROTOBUF_PROTOC_EXECUTABLE protobuf::protoc)
 
-include_directories(${Protobuf_INCLUDE_DIR})
+include_directories(SYSTEM ${Protobuf_INCLUDE_DIR})
 
 # 设置 Protobuf 的所有库
 set(Protobuf_LIBRARIES protobuf)

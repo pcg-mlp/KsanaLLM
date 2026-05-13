@@ -61,7 +61,22 @@ if(WITH_ACL)
   file(GLOB_RECURSE layers_test_ascend_SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/ascend/*test.cpp)
 endif()
 
-file(GLOB_RECURSE layers_test_SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/*test.cpp
-  ${layers_test_nvidia_SRCS} ${layers_test_ascend_SRCS})
-message(STATUS "layers_test_SRCS: ${layers_test_SRCS}")
-cpp_test(layers_test SRCS ${layers_test_SRCS} DEPS layers runtime utils executor)
+set(layers_test_common_DEPS layers runtime utils executor)
+
+cpp_test(matmul_layers_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/matmul_layer_test.cpp
+  DEPS ${layers_test_common_DEPS})
+
+cpp_test(moe_layers_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/moe_layer_test.cpp
+       ${layers_test_nvidia_SRCS}
+  DEPS ${layers_test_common_DEPS})
+
+cpp_test(attention_layers_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/attention_layer_test.cpp
+  DEPS ${layers_test_common_DEPS})
+
+cpp_test(misc_layers_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/misc_layer_test.cpp
+       ${layers_test_ascend_SRCS}
+  DEPS ${layers_test_common_DEPS})
