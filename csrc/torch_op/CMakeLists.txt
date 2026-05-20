@@ -17,7 +17,14 @@ set_target_properties(torch_serving PROPERTIES
 )
 
 if(WITH_CUDA OR WITH_TOPS)
-  target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES} ksana_llm_libs)
+  # Use --whole-archive to ensure ALL symbols from static libs are exported into the .so,
+  # so that test binaries can dynamically link against torch_serving and find all symbols.
+  # ksana_llm_libs is INTERFACE so we extract its member libraries via generator expression.
+  get_target_property(_ksana_libs ksana_llm_libs INTERFACE_LINK_LIBRARIES)
+  target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES}
+    -Wl,--whole-archive
+    ${_ksana_libs}
+    -Wl,--no-whole-archive)
 endif()
 
 if(WITH_ACL)

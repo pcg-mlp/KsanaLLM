@@ -13,12 +13,28 @@ function(cpp_test TARGET_NAME)
     cmake_parse_arguments(cpp_test "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     add_executable(${TARGET_NAME} ${cpp_test_SRCS})
 
-    # Tests link many STATIC libs; force-link all objects from DEPS to avoid undefined references.
+    # Dynamically link against libtorch_serving.so to avoid embedding ~3GB debug info +
+    # 493MB CUDA fatbin into every test binary (reduces 4.2GB → ~24MB per test).
+    # torch_serving.so already contains all symbols from ksana_llm_libs, so we only
+    # need to link the .so. DEPS are kept in add_dependencies for build ordering.
     target_link_libraries(${TARGET_NAME}
-      -Wl,--whole-archive ${cpp_test_DEPS} -Wl,--no-whole-archive
-      ksana_llm_libs gtest_main gtest gmock_main gmock -pthread ${cpp_test_LIBS})
+      -Wl,--copy-dt-needed-entries -Wl,--allow-shlib-undefined
+      torch_serving gtest_main gtest gmock_main gmock -pthread ${cpp_test_LIBS})
 
-    add_dependencies(${TARGET_NAME} ${cpp_test_DEPS} gtest_main gtest gmock_main gmock)
+    # ksana_llm_libs and DEPS are for build ordering only (not linking - torch_serving provides all symbols)
+    add_dependencies(${TARGET_NAME} ${cpp_test_DEPS} ksana_llm_libs torch_serving gtest_main gtest gmock_main gmock)
+
+    # Propagate INTERFACE_INCLUDE_DIRECTORIES from DEPS so test code can find headers
+    # from header-only deps (e.g., cppzmq/zmq.hpp) that were previously propagated via linking.
+    foreach(_dep ${cpp_test_DEPS})
+      if(TARGET ${_dep})
+        target_include_directories(${TARGET_NAME} PRIVATE
+          $<TARGET_PROPERTY:${_dep},INTERFACE_INCLUDE_DIRECTORIES>)
+      endif()
+    endforeach()
+    set_target_properties(${TARGET_NAME} PROPERTIES
+      BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
+      INSTALL_RPATH "$ORIGIN/../lib")
     add_test(NAME ${TARGET_NAME}
       COMMAND ${TARGET_NAME} ${cpp_test_ARGS}
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
