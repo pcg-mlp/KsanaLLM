@@ -167,7 +167,8 @@ void InvokeAddResidualsBiasThenMul(const void* input1, const void* residual1, co
 // for the tensor input with shape [m, n]
 //  out = act(input[:, :n/2]) * input[:, n/2:]
 template <template <typename T> class Activation, typename T>
-void InvokeRowBasedGatedActivation(const void* input, const int m, const int n, void* output, cudaStream_t stream);
+void InvokeRowBasedGatedActivation(const void* input, const int m, const int n, void* output, cudaStream_t stream,
+                                   float swiglu_limit = 0.0f);
 
 // Invoke activation in-place, `output` must be the same as `input`.
 template <template <typename T> class Activation, typename T>
@@ -190,10 +191,6 @@ template <typename T>
 void InvokeQKRmsNorm(void* qkv_ptr, const void* q_gamma, const void* k_gamma, const float layernorm_eps,
                      const int32_t total_tokens, const int32_t num_heads, const int32_t num_kv_heads,
                      const int32_t head_size, const int64_t* mask, cudaStream_t stream);
-
-template <typename T>
-void Expand(void* input, void* output, const int m, const int expand_size, const int n, const size_t stride,
-            cudaStream_t stream);
 
 void CustomAllReduceInit(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, int total_ranks,
                          bool is_full_nvlink, uint32_t root_rank);
@@ -314,8 +311,9 @@ template <typename T>
 size_t InvokeGetBlockGemmWorkspaceSize(int m, int k, int n);
 
 struct PerTokenGroupQuantFusionParams {
-  bool fuse_silu_mul{false};  // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`
-  bool scale_ue8m0{false};    // Use UE8M0 (uint8 exponential) format for scales
+  bool fuse_silu_mul{false};      // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`
+  bool scale_ue8m0{false};        // Use UE8M0 (uint8 exponential) format for scales
+  float swiglu_limit{0.0f};       // > 0 时在 fuse_silu_mul 前 clamp
 };
 template <typename T>
 void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,

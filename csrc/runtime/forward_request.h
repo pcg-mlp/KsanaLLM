@@ -65,6 +65,25 @@ struct ForwardRequest {
   // The kv cache addresses
   std::vector<void*> kv_cache_ptrs;
 
+  // The SWA kv cache block IDs for sliding window attention.
+  // Empty when SWA is disabled.
+  std::vector<int> swa_kv_cache_blocks;
+
+  // The base address of the first SWA kv cache block (block_id=0).
+  // Since SWA blocks are allocated in contiguous memory (each block is block_size apart),
+  // only the base address is needed. nullptr when SWA is disabled.
+  void* swa_block_base_addr = nullptr;
+
+  // Per-block FA global index: swa_kv_cache_block_idx_offsets[i] is the FA block
+  // global index corresponding to swa_kv_cache_blocks[i].
+  // Must have the same length as swa_kv_cache_blocks.
+  std::vector<size_t> swa_kv_cache_block_idx_offsets;
+
+  // Total number of blocks in the SWA pool. Filled by model_builder in SWA-enabled paths
+  // (taken from swa_block_allocator_manager_); used by the attention kernel for bounds checks.
+  // 0 indicates SWA pool is not enabled.
+  int64_t swa_pool_block_num = 0;
+
   // The length of the flexible cache, indicating the number of elements stored in the flexible cache for potential
   // reuse in subsequent computations.
   int flexible_cache_len = 0;

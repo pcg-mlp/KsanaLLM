@@ -9,6 +9,7 @@
 
 #include "batch_scheduler/event_driven_scheduler/continuous_batching_backend.h"
 #include "configure/environment.h"
+#include "profiler/profile_event.h"
 #include "profiler/timer.h"
 #include "runtime/schedule_output.h"
 #include "utils/logger.h"
@@ -505,13 +506,18 @@ void EventDrivenScheduleProcessor::Stop() {
 void EventDrivenScheduleProcessor::AsyncSchedulerLoop() {
   KLLM_LOG_SCHEDULER << "started";
   while (!terminated_) {
-    SchedEvent event = event_queue_.Get();
+    SchedEvent event;
+    {
+      PROFILE_EVENT_SCOPE(sched_loop_wait, "Engine.AsyncSchedulerLoop.Wait");
+      event = event_queue_.Get();
+    }
     if (terminated_) {
       break;
     }
     if (event.IsEmpty()) {
       continue;  // 空事件仅用于 Stop() 时唤醒 Get()
     }
+    PROFILE_EVENT_SCOPE(sched_loop_iter, "Engine.AsyncSchedulerLoop.iter");
     {
       std::lock_guard<std::mutex> guard(infer_request_mutex_);
       DispatchEvent(event);
@@ -530,6 +536,7 @@ void EventDrivenScheduleProcessor::AsyncSchedulerLoop() {
       RunScheduleForBatches();
     }
     if (pending_get_schedule_result_) {
+      PROFILE_EVENT_SCOPE(sched_pending_retry, "Engine.AsyncSchedulerLoop.PendingRetry");
       std::lock_guard<std::mutex> guard(infer_request_mutex_);
       if (TryBuildAndLaunchScheduleResult(schedule_context_)) {
         // Prepare next schedule result in advance after current schedule result is launched
@@ -541,6 +548,7 @@ void EventDrivenScheduleProcessor::AsyncSchedulerLoop() {
 }
 
 void EventDrivenScheduleProcessor::DispatchEvent(SchedEvent& event) {
+  PROFILE_EVENT_SCOPE(dispatch_event, "Engine.DispatchEvent");
   KLLM_LOG_SCHEDULER << "EventType: " << SchedEventType2Str(event.GetType());
   switch (event.GetType()) {
     case SchedEventType::EventAddRequest: {
@@ -587,6 +595,7 @@ void EventDrivenScheduleProcessor::DispatchEvent(SchedEvent& event) {
 }
 
 void EventDrivenScheduleProcessor::OnEventGetScheduleResult() {
+  PROFILE_EVENT_SCOPE(on_get_schedule_result, "Engine.OnEventGetScheduleResult");
   if (TryBuildAndLaunchScheduleResult(schedule_context_)) {
     pending_get_schedule_result_ = false;
   } else {
@@ -635,6 +644,7 @@ void EventDrivenScheduleProcessor::OnEventAddRequest(const std::shared_ptr<Event
 
 void EventDrivenScheduleProcessor::OnEventUpdateAfterGeneration(
     const std::shared_ptr<EventUpdateAfterGenerationInfo>& info) {
+  PROFILE_EVENT_SCOPE(on_update_after_generation, "Engine.OnEventUpdateAfterGeneration");
   size_t multi_batch_id = info->gen_results.multi_batch_id;
   std::vector<ScheduleBackendEvent> backend_events;
   backend_->UpdateWithGenerationResult(multi_batch_id, info->gen_results, schedule_context_, backend_events);
@@ -715,7 +725,9 @@ void EventDrivenScheduleProcessor::OnEventSwapTaskFinished(const std::shared_ptr
                        << ", finished_req_ids=" << Vector2Str(finished_req_ids) << ", left_req_num=" << left_req_num;
     KLLM_CHECK(info->req_id == finished_req_ids[0]);
 
-    Status merge_status = dp_cache_managers_[dp_idx]->MergeSwapinRequest(info->req_id, req_it->second->kv_cache_blocks);
+    Status merge_status = dp_cache_managers_[dp_idx]->MergeSwapinRequest(
+        info->req_id, req_it->second->kv_cache_blocks, req_it->second->swa_kv_cache_blocks,
+        req_it->second->swa_kv_cache_block_idx_offsets);
     if (!merge_status.OK()) {
       KLLM_LOG_ERROR << "MergeSwapinRequest failed for req_id=" << info->req_id
                      << ", msg=" << merge_status.GetMessage();
@@ -732,6 +744,7 @@ void EventDrivenScheduleProcessor::OnEventSwapTaskFinished(const std::shared_ptr
 }
 
 void EventDrivenScheduleProcessor::RunScheduleForBatches() {
+  PROFILE_EVENT_SCOPE(run_schedule_for_batches, "Engine.RunScheduleForBatches");
   KLLM_LOG_SCHEDULER << "enter";
   bool has_resource_released = false;
   do {
@@ -740,12 +753,18 @@ void EventDrivenScheduleProcessor::RunScheduleForBatches() {
     schedule_context_.SetScheduleStartTimeInMs(schedule_start_time_in_ms);
     for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
       std::vector<ScheduleBackendEvent> pre_schedule_events;
-      backend_->PreSchedule(schedule_context_, planning_batches_, pre_schedule_events);
+      {
+        PROFILE_EVENT_SCOPE(pre_schedule, "Engine.RunScheduleForBatches.PreSchedule");
+        backend_->PreSchedule(schedule_context_, planning_batches_, pre_schedule_events);
+      }
       bool resource_released = ApplyBackendEventsToState(pre_schedule_events);
       has_resource_released |= resource_released;
 
       std::vector<ScheduleBackendEvent> backend_events;
-      backend_->Schedule(schedule_context_, planning_batches_, backend_events);
+      {
+        PROFILE_EVENT_SCOPE(schedule_backend, "Engine.RunScheduleForBatches.Schedule");
+        backend_->Schedule(schedule_context_, planning_batches_, backend_events);
+      }
 
       resource_released = ApplyBackendEventsToState(backend_events);
       has_resource_released |= resource_released;
@@ -754,6 +773,7 @@ void EventDrivenScheduleProcessor::RunScheduleForBatches() {
 }
 
 bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleContext& ctx) {
+  PROFILE_EVENT_SCOPE(try_build_and_launch, "Engine.TryBuildAndLaunchScheduleResult");
   PlanningBatch* planning_batch = planning_batches_[0].get();
 
   if (!planning_batch->IsLaunchable()) {

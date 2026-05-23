@@ -7,7 +7,8 @@
 
 #include "cache_manager/prefix_cache_manager.h"
 #include "device/device_types.h"
-#include "models/common/model_test_helper.h"
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "models/llama/llama_model.h"
 #include "samplers/sampler.h"
 #include "tests/test.h"
@@ -55,9 +56,11 @@ class ForwardTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
 
+    block_cache_layout_ = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+    env->InitializeBlockManagerConfig(block_cache_layout_);
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
@@ -88,6 +91,8 @@ class ForwardTest : public testing::Test {
   }
 
   void TearDown() override {}
+
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   // 加载模型权重
   // 加载模型权重，返回模型和权重
@@ -126,7 +131,7 @@ class ForwardTest : public testing::Test {
     }
     llama_weight->ProcessWeights();  // End Loader Weight
     std::shared_ptr<LlamaModel> llama =
-        std::make_shared<LlamaModel>(model_config, runtime_config, 0, context_, llama_weight);
+        std::make_shared<LlamaModel>(model_config, runtime_config, 0, context_, llama_weight, block_cache_layout_);
 
     return {llama, llama_weight};
   }

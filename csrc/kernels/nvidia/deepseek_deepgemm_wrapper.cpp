@@ -4,12 +4,38 @@
 
 #include "kernels/nvidia/deepseek_deepgemm_wrapper.h"
 
+#include <c10/cuda/CUDAStream.h>
+
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "device/nvidia/cuda_utils.h"
 #include "utils/memory_utils.h"
+#include "utils/tensor.h"
 
 namespace ksana_llm {
 namespace nvidia {
+
+// Major-ness stuffs
+// Adapted from:
+// https://github.com/deepseek-ai/DeepGEMM/blob/main/csrc/utils/layout.hpp
+static void MajorCheck(const torch::Tensor& t) {
+  const auto dim = t.dim();
+  KLLM_CHECK(dim == 2 or dim == 3);
+  if (dim == 3) {
+    KLLM_CHECK(t.stride(0) == t.size(-2) * t.size(-1));
+  }
+  KLLM_CHECK(t.stride(-2) == 1 or t.stride(-1) == 1);
+}
+
+// Tensor utils
+// Adapted from:
+// https://github.com/deepseek-ai/DeepGEMM/blob/main/csrc/utils/layout.hpp
+template <int N>
+static auto GetShape(const torch::Tensor& t) {
+  KLLM_CHECK(t.dim() == N);
+  return [&t]<size_t... Is>(std::index_sequence<Is...>) {
+    return std::make_tuple(static_cast<int>(t.sizes()[Is])...);
+  }(std::make_index_sequence<N>());
+}
 
 DeepSeekDeepGEMMWrapper* DeepSeekDeepGEMMWrapper::GetInstance() {
 #if ENABLE_DEEPSEEK_DEEPGEMM
@@ -40,8 +66,12 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
                                            const std::pair<torch::Tensor, torch::Tensor>& kv_fp8,
                                            const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                                            const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits,
-                                           bool clean_logits) {
+                                           cudaStream_t stream, bool clean_logits) {
 #if ENABLE_DEEPSEEK_DEEPGEMM
+  // Save current torch CUDA stream and set to the passed-in stream
+  auto original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(at::cuda::getStreamFromExternal(stream, original_stream.device_index()));
+
   KLLM_CHECK_WITH_INFO(q_fp8.dim() == 3, "Expect q tensor of shape [seq_len, num_heads, head_dim]");
   KLLM_CHECK_WITH_INFO(kv_fp8.first.dim() == 2, "Expect kv tensor of shape [seq_len_kv, head_dim]");
   KLLM_CHECK_WITH_INFO(kv_fp8.second.dim() == 1 || kv_fp8.second.dim() == 2, "Expect kv scales tensor of rank 1 or 2");
@@ -97,6 +127,9 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
   CUDA_CHECK_LAST_ERROR(deepseek::SmxxFp8MqaLogits(
       q_fp8, kv_fp8.first, kv_fp8.second, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, seq_len, seq_len_kv,
       max_seqlen_k, stride_logits, num_heads, head_dim, seq_len_alignment, clean_logits));
+
+  // Restore original CUDA stream
+  at::cuda::setCurrentCUDAStream(original_stream);
 #else
   KLLM_KERNEL_THROW("ENABLE_DEEPSEEK_DEEPGEMM=0, skipping DeepSeek DeepGEMM kernel.");
 #endif
@@ -105,8 +138,13 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
 void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, const torch::Tensor& fused_kv_cache,
                                                 const torch::Tensor& weights, const torch::Tensor& context_lens,
                                                 const torch::Tensor& block_table, const torch::Tensor& schedule_meta,
-                                                torch::Tensor& logits, int max_context_len, bool clean_logits) {
+                                                torch::Tensor& logits, int max_context_len, cudaStream_t stream,
+                                                bool clean_logits) {
 #if ENABLE_DEEPSEEK_DEEPGEMM
+  // Save current torch CUDA stream and set to the passed-in stream
+  auto original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(at::cuda::getStreamFromExternal(stream, original_stream.device_index()));
+
   KLLM_CHECK_WITH_INFO(q_fp8.dim() == 4, "Expect q tensor of shape [batch_size, next_n, num_heads, head_dim]");
   KLLM_CHECK_WITH_INFO(fused_kv_cache.dim() == 4, "Expect fused_kv_cache tensor of rank 4");
   KLLM_CHECK_WITH_INFO(weights.dim() == 2, "Expect weights tensor of rank 2");
@@ -196,14 +234,22 @@ void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, cons
       q_fp8, kv_cache, kv_cache_scales, weights, context_lens, logits, block_table, schedule_meta, batch_size, next_n,
       num_heads, head_dim, num_kv_blocks, block_kv, is_context_lens_2d, kv_cache_stride_bytes, aligned_max_context_len,
       block_table_stride, num_sms, split_kv, clean_logits, max_context_len));
+
+  // Restore original CUDA stream
+  at::cuda::setCurrentCUDAStream(original_stream);
 #else
   KLLM_KERNEL_THROW("ENABLE_DEEPSEEK_DEEPGEMM=0, skipping DeepSeek DeepGEMM kernel.");
 #endif
 }
 
 void DeepSeekDeepGEMMWrapper::PagedMqaLogitsMetadata(const torch::Tensor& context_lens,
-                                                     torch::Tensor& schedule_metadata, int batch_size, int block_kv) {
+                                                     torch::Tensor& schedule_metadata, int batch_size, int block_kv,
+                                                     cudaStream_t stream) {
 #if ENABLE_DEEPSEEK_DEEPGEMM
+  // Save current torch CUDA stream and set to the passed-in stream
+  auto original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(at::cuda::getStreamFromExternal(stream, original_stream.device_index()));
+
   // NOTE(jinxcwu)
   // https://github.com/deepseek-ai/DeepGEMM/pull/231/files#diff-59e30829961e1b429bc12115673562f6f15d2ed347cac8d27a879bf101e977cbL125
   const bool is_context_lens_2d = context_lens.dim() == 2;
@@ -227,6 +273,83 @@ void DeepSeekDeepGEMMWrapper::PagedMqaLogitsMetadata(const torch::Tensor& contex
 
   CUDA_CHECK_LAST_ERROR(deepseek::SmxxPagedMqaLogitsMetadata(context_lens, schedule_metadata, batch_size, next_n,
                                                              block_kv, num_device_sms_, is_context_lens_2d));
+
+  // Restore original CUDA stream
+  at::cuda::setCurrentCUDAStream(original_stream);
+#else
+  KLLM_KERNEL_THROW("ENABLE_DEEPSEEK_DEEPGEMM=0, skipping DeepSeek DeepGEMM kernel.");
+#endif
+}
+
+void DeepSeekDeepGEMMWrapper::Tf32HcPreNormGemm(const Tensor& a_tensor, const Tensor& b_tensor, Tensor& d_tensor,
+                                                Tensor& sqr_sum_tensor, const int num_splits, const int rank,
+                                                cudaStream_t stream) {
+#if ENABLE_DEEPSEEK_DEEPGEMM
+  // Save current torch CUDA stream and set to the passed-in stream
+  auto original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(at::cuda::getStreamFromExternal(stream, original_stream.device_index()));
+
+  // Convert Ksana tensor to torch tensor
+  auto device = torch::Device(torch::kCUDA, rank);
+  auto a = torch::from_blob(a_tensor.GetPtr<bfloat16*>(),
+                            {static_cast<int64_t>(a_tensor.shape[0]), static_cast<int64_t>(a_tensor.shape[1])},
+                            torch::TensorOptions().dtype(torch::kBFloat16).device(device));
+  auto b = torch::from_blob(b_tensor.GetPtr<float*>(),
+                            {static_cast<int64_t>(b_tensor.shape[0]), static_cast<int64_t>(b_tensor.shape[1])},
+                            torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto d_shape = num_splits > 1 ? std::vector<int64_t>{num_splits, static_cast<int64_t>(d_tensor.shape[1]),
+                                                       static_cast<int64_t>(d_tensor.shape[2])}
+                                : std::vector<int64_t>{static_cast<int64_t>(d_tensor.shape[1]),
+                                                       static_cast<int64_t>(d_tensor.shape[2])};
+  auto d = torch::from_blob(d_tensor.GetPtr<float*>(), d_shape,
+                            torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto sqr_sum_shape = num_splits > 1 ? std::vector<int64_t>{num_splits, static_cast<int64_t>(sqr_sum_tensor.shape[1])}
+                                      : std::vector<int64_t>{static_cast<int64_t>(sqr_sum_tensor.shape[1])};
+  auto sqr_sum = torch::from_blob(sqr_sum_tensor.GetPtr<float*>(), sqr_sum_shape,
+                                  torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+  // A and B must be K-major, D must be N-major
+  MajorCheck(a);
+  MajorCheck(b);
+  MajorCheck(d);
+  KLLM_CHECK_WITH_INFO(a.stride(-1) == 1, "Tensor a must be row-major");
+  KLLM_CHECK_WITH_INFO(b.stride(-1) == 1, "Tensor b must be row-major");
+  KLLM_CHECK_WITH_INFO(d.stride(-1) == 1, "Tensor d must be row-major");
+
+  // S must be contiguous
+  KLLM_CHECK_WITH_INFO(sqr_sum.is_contiguous(), "Tensor sqr_sum must be contiguous");
+
+  // Type and shape checks
+  const auto& [m, k] = GetShape<2>(a);
+  const auto& [n, k_] = GetShape<2>(b);
+  if (num_splits > 1) {
+    const auto& [num_splits_, m_, n_] = GetShape<3>(d);
+    const auto& [num_splits__, m__] = GetShape<2>(sqr_sum);
+    KLLM_CHECK(num_splits == num_splits_ and num_splits == num_splits__);
+    KLLM_CHECK_WITH_INFO(m == m_ and m == m__ and n == n_ and k == k_, "Shape mismatch for num_splits > 0");
+  } else {
+    const auto& [m_, n_] = GetShape<2>(d);
+    const auto& [m__] = GetShape<1>(sqr_sum);
+    KLLM_CHECK_WITH_INFO(m == m_ and m == m__ and n == n_ and k == k_, "Shape mismatch for num_splits = 1");
+  }
+  KLLM_CHECK(n > 0 and k > 0);
+  KLLM_CHECK_WITH_INFO(a.scalar_type() == torch::kBFloat16, "Tensor a must be bfloat16");
+  KLLM_CHECK_WITH_INFO(b.scalar_type() == torch::kFloat, "Tensor b must be float");
+  KLLM_CHECK_WITH_INFO(d.scalar_type() == torch::kFloat, "Tensor d must be float");
+  KLLM_CHECK_WITH_INFO(sqr_sum.scalar_type() == torch::kFloat, "Tensor sqr_sum must be float");
+
+  // Do nothing if the problem is empty
+  if (m == 0) {
+    // Restore original CUDA stream before early return
+    at::cuda::setCurrentCUDAStream(original_stream);
+    return;
+  }
+
+  // Dispatch into different implements
+  CUDA_CHECK_LAST_ERROR(deepseek::Sm90Tf32HcPreNormGemm(a, b, d, sqr_sum, m, n, k, num_splits));
+
+  // Restore original CUDA stream
+  at::cuda::setCurrentCUDAStream(original_stream);
 #else
   KLLM_KERNEL_THROW("ENABLE_DEEPSEEK_DEEPGEMM=0, skipping DeepSeek DeepGEMM kernel.");
 #endif

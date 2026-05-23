@@ -82,9 +82,11 @@ class Environment {
   void InitializeAttentionBackend();
 
   // Parse environment from YAML config file.
-  // model_dir_override is used to override model_dir and tokenizer_dir in config_file
+  // model_dir_override is used to override model_dir and tokenizer_dir in config_file.
+  // json_model_override_args: optional JSON string to override ModelConfig fields after parsing.
   Status ParseConfig(const std::string &config_file, const std::string &model_dir_override = "",
-                     const std::string &model_config_filename = "config.json");
+                     const std::string &model_config_filename = "config.json",
+                     const std::string &json_model_override_args = "");
 
   // Get the model config
   Status GetModelConfig(ModelConfig &model_config);
@@ -133,7 +135,9 @@ class Environment {
   }
 
   // Calculate block size via model configs.
-  Status InitializeBlockManagerConfig() { return schedule_config_parser_.InitializeBlockManagerConfig(model_config_); }
+  Status InitializeBlockManagerConfig(std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
+    return schedule_config_parser_.InitializeBlockManagerConfig(model_config_, block_cache_layout);
+  }
 
   // Init Expert-Parallel Config from env.
   void InitializeExpertParallelConfig() { schedule_config_parser_.InitializeExpertParallelConfig(); }
@@ -227,7 +231,8 @@ class Environment {
 
   // Parse model config from model dir.
   Status ParseModelAndScheduleConfig(YamlReader &yaml_reader, const std::string &model_dir,
-                                     const std::string &tokenizer_dir, const std::string &model_config_filename);
+                                     const std::string &tokenizer_dir, const std::string &model_config_filename,
+                                     const std::string &json_model_override_args);
 
  private:
   bool model_config_initialized_;

@@ -10,6 +10,7 @@
 #include "models/bge_reranker_minicpm/bge_reranker_minicpm_config_parser.h"
 #include "models/chatglm/chatglm_config_parser.h"
 #include "models/deepseek_v3/deepseek_v3_config_parser.h"
+#include "models/deepseek_v4/deepseek_v4_config_parser.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_config_parser.h"
 #include "models/glm4_moe/glm4_moe_config_parser.h"
 #include "models/llama/llama_model_config_parser.h"
@@ -30,6 +31,10 @@ Status ModelConfigParserFactory::CreateModelConfigParser(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_DEEPSEEK: {
       model_config_parser = std::make_shared<DeepSeekV3ConfigParser>();
+      break;
+    }
+    case ModelArchitecture::ARCH_DEEPSEEK_V4: {
+      model_config_parser = std::make_shared<DeepSeekV4ConfigParser>();
       break;
     }
     case ModelArchitecture::ARCH_QWEN: {

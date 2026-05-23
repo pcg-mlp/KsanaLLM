@@ -45,6 +45,8 @@ enum class ModelArchitecture {
   ARCH_HUNYUAN_TURBO,
   // GLM4-MoE
   ARCH_GLM4_MOE,
+  // DeepSeek V4
+  ARCH_DEEPSEEK_V4,
   // unknown
   ARCH_UNKNOWN,
 };

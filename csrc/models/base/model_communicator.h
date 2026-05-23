@@ -47,9 +47,10 @@ class ModelCommunicator {
   // The trt all reduce layer.
   std::shared_ptr<TrtAllReduceSumLayer> tp_trt_all_reduce_sum_layer_;
 
-  // This value is determined by the performance testing of
-  // `3rdparty/LLM_kernels/csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h`
-  size_t kTrtReduceThreshold = 256 * 7168 * 2;
+  // Perf-tested threshold (bytes) for switching from trt-allreduce to custom/nccl allreduce.
+  static constexpr size_t kTrtReduceThreshold2GPU = 5 * 1024 * 1024;   // 5 MB
+  static constexpr size_t kTrtReduceThreshold4GPU = 1 * 1024 * 1024;   // 1 MB
+  size_t kTrtReduceThreshold = 0;  // set at runtime based on tp_size_
 #elif defined(ENABLE_ACL)
   // The default all reduce layer.
   std::shared_ptr<HcclAllReduceSumLayer> hccl_all_reduce_sum_layer_;

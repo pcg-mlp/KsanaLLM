@@ -27,7 +27,6 @@
 DEFINE_string(config_file, "examples/ksana_llm.yaml", "The config file path");
 DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
 DEFINE_int32(port, 8080, "HTTP service port, default is 8080");
-
 namespace ksana_llm {
 
 size_t GetDecodeTokenNumThreshold() {
@@ -76,7 +75,7 @@ void Environment::Reset() {
 }
 
 Status Environment::ParseConfig(const std::string &config_file, const std::string &model_dir_override,
-                                const std::string &model_config_filename) {
+                                const std::string &model_config_filename, const std::string &json_model_override_args) {
   Reset();
   YamlReader yaml_reader;
   const Status status = yaml_reader.LoadFile(config_file);
@@ -136,7 +135,8 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
   model_config_.is_embedding_model =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "model_spec.base_model.is_embedding_model", false);
 
-  STATUS_CHECK_RETURN(ParseModelAndScheduleConfig(yaml_reader, base_model_dir, tokenizer_dir, model_config_filename));
+  STATUS_CHECK_RETURN(ParseModelAndScheduleConfig(yaml_reader, base_model_dir, tokenizer_dir, model_config_filename,
+                                                  json_model_override_args));
 
   return Status();
 }
@@ -152,10 +152,22 @@ Status Environment::UpdateModelConfig() {
 
 Status Environment::ParseModelAndScheduleConfig(YamlReader &yaml_reader, const std::string &model_dir,
                                                 const std::string &tokenizer_dir,
-                                                const std::string &model_config_filename) {
+                                                const std::string &model_config_filename,
+                                                const std::string &json_model_override_args) {
   KLLM_CHECK_WITH_INFO(!model_config_initialized_, "model_config_initialized_ initialized.");
   EnvModelConfigParser model_config_parser(yaml_weight_quant_method_, yaml_gptq_backend_);
   model_config_parser.ParseModelConfig(model_dir, tokenizer_dir, model_config_filename, model_config_);
+
+  if (!json_model_override_args.empty()) {
+    KLLM_LOG_INFO << "Overriding members in model_config_ with json_model_override_args: " << json_model_override_args;
+    try {
+      nlohmann::json override_json = nlohmann::json::parse(json_model_override_args);
+      ApplyJsonModelOverride(override_json, model_config_);
+    } catch (const std::exception &e) {
+      KLLM_LOG_WARNING << "json_model_override_args: failed to parse JSON, skipping override: " << e.what();
+    }
+  }
+
   schedule_config_parser_.ParseScheduleConfig(yaml_reader, model_config_);
   schedule_config_parser_.UpdateModelConfig(model_config_);
 

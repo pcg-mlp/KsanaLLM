@@ -46,8 +46,9 @@ void ParseFP8QuantConfig(const nlohmann::json &config_json, bool is_moe, QuantCo
   quant_config.scale_fmt = config_json.value("scale_fmt", "none");
   KLLM_LOG_INFO << fmt::format(
       "using quant model, quant method fp8, method type: {}, is_checkpoint_fp8_serialized: {}, "
-      "is_activation_scheme_static: {}",
-      quant_config.method, quant_config.is_checkpoint_fp8_serialized, quant_config.is_activation_scheme_static);
+      "is_activation_scheme_static: {}, scale_fmt: {}",
+      quant_config.method, quant_config.is_checkpoint_fp8_serialized, quant_config.is_activation_scheme_static,
+      quant_config.scale_fmt);
 }
 
 void ParseModelOptQuantConfig(const nlohmann::json &config_json, bool is_moe, QuantConfig &quant_config) {

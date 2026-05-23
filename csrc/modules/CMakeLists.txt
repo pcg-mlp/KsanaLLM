@@ -21,7 +21,7 @@ if(WITH_ACL)
 endif()
 
 add_library(modules STATIC ${modules_SRCS})
-target_link_libraries(modules PUBLIC 
+target_link_libraries(modules PUBLIC
   -Wl,--whole-archive
   layers ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS}
   -Wl,--no-whole-archive)
@@ -35,6 +35,9 @@ if(WITH_STANDALONE_TEST)
     set(MODELS_TEST_LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
     cpp_test(module_mla_test SRCS ${PROJECT_SOURCE_DIR}/csrc/modules/attention/multihead_latent_attention_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     cpp_test(module_bmm_test SRCS ${PROJECT_SOURCE_DIR}/csrc/modules/basic/bmm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+    cpp_test(module_layernorm_test SRCS ${PROJECT_SOURCE_DIR}/csrc/modules/basic/layernorm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+    if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
+      cpp_test(module_mhc_test SRCS ${PROJECT_SOURCE_DIR}/csrc/modules/basic/mhc_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+    endif()
   endif()
 endif()
-

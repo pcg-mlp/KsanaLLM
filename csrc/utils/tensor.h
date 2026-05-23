@@ -158,6 +158,7 @@ class Tensor {
 
   Tensor* input_scales = nullptr;
   Tensor* weight_scales = nullptr;
+  Tensor* weight_global_scale = nullptr;
   Tensor* pre_quant_scales = nullptr;
 
   // input_alpha is used as a coefficient for input

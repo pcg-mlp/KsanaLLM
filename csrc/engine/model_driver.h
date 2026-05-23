@@ -66,7 +66,9 @@ class ModelDriver {
   Status InitializeResultReporter(std::shared_ptr<DistributedControlCoordinator> distributed_control_coordinator);
 
   // Create block manager on executor process.
-  Status CreateBlockManager(const BlockAllocatorManagerConfig& block_allocator_manager_config);
+  // swa_block_allocator_manager_config is optional; empty map means SWA is disabled.
+  Status CreateBlockManager(const BlockAllocatorManagerConfig& block_allocator_manager_config,
+                            const BlockAllocatorManagerConfig& swa_block_allocator_manager_config = {});
 
   // Create executor runtime on executor process.
   Status CreateExecutorRuntime(const VocabInfo& vocab_info);
@@ -87,7 +89,6 @@ class ModelDriver {
   void UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_output);
   Status HandleRequestRecv();
   Status HandleSchedule();
-  Status HandleScheduleOutputSend();
   Status HandleScheduleUpdate();
 
   // For distributed worker only.
@@ -133,9 +134,6 @@ class ModelDriver {
 
   // Recv sampling output from last worker and update schedule state.
   std::unique_ptr<std::thread> distribted_master_thread_ = nullptr;
-
-  std::unique_ptr<std::thread> schedule_output_send_thread_ = nullptr;
-  std::shared_ptr<BlockingQueue<std::shared_ptr<ScheduleOutput>>> schedule_output_queue_ = nullptr;
 
   std::unique_ptr<std::thread> schedule_update_thread_ = nullptr;
   std::shared_ptr<BlockingQueue<std::shared_ptr<SamplingOutput>>> sampling_output_queue_ = nullptr;

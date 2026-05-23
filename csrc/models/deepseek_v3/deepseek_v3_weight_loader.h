@@ -29,15 +29,14 @@ class DeepSeekV3WeightLoader : public BaseModelWeightLoader {
   virtual Status PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map,
                                          int dev_rank) override;
 
- private:
-  Status InitWeightLoaderImpl(std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config);
+ protected:
+  Status InitWeightLoaderImpl(DataType weight_data_type);
 
   // Load EPLB mapping configuration from JSON file
   Status InitExpertMap(const size_t& num_experts, const size_t& expert_start_id, const size_t& expert_end_id,
                        int dev_rank, std::vector<std::vector<int>>& expert_map,
                        std::unordered_map<std::string, Tensor>& device_model_weights);
 
- private:
   PipelineConfig pipeline_config_;
   RuntimeConfig runtime_config_;
   std::unique_ptr<DeepSeekV3WeightImplBase> weight_impl_;

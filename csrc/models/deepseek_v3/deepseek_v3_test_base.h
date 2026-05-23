@@ -16,6 +16,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 #include "test.h"
 
@@ -78,7 +79,12 @@ class DeepSeekV3Test : public testing::Test {
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     env->SetAttnBackendConfig(attn_backend_config);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+
+    InitPipelineConfigForTest(env, model_config);
+
+    block_cache_layout_ = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
+
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
@@ -137,6 +143,8 @@ class DeepSeekV3Test : public testing::Test {
   std::shared_ptr<HiddenUnitBufferHelper> hidden_unit_buffer_helper = nullptr;
   HiddenUnitDeviceBuffer *hidden_unit = nullptr;
 
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
+
   template <typename weight_data_type>
   void TestDeepSeekV3Forward() {
     int device_id = 0;
@@ -160,8 +168,8 @@ class DeepSeekV3Test : public testing::Test {
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
     std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight();
-    std::shared_ptr<DeepSeekV3Model> deepseek_v3 =
-        std::make_shared<DeepSeekV3Model>(model_config, runtime_config, device_id, context, deepseek_v3_weight);
+    std::shared_ptr<DeepSeekV3Model> deepseek_v3 = std::make_shared<DeepSeekV3Model>(
+        model_config, runtime_config, device_id, context, deepseek_v3_weight, block_cache_layout_);
 
     // ContextDecode
     auto forward = std::make_unique<ForwardRequest>();
@@ -275,7 +283,8 @@ class DeepSeekV3Test : public testing::Test {
     std::vector<SamplingRequest> sample_reqs = {sample_req, decode_sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context);
     sampler->Sampling(sample_reqs, context->device->GetPrimaryComputeStream());
-    std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
+    std::cout << fmt::format("Only sampling: generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0],
+                             generated_tokens1[0])
               << std::endl;
     // Check if generated tokens match any group of expected tokens
     bool match0 = false, match1 = false;
@@ -297,7 +306,8 @@ class DeepSeekV3Test : public testing::Test {
     }
     EXPECT_TRUE(deepseek_v3->Forward(deepseek_v3_weight, forward_reqs, hidden_unit, RunMode::kMain).OK());
     sampler->Sampling(sample_reqs, context->device->GetPrimaryComputeStream());
-    std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
+    std::cout << fmt::format("Main forward: generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0],
+                             generated_tokens1[0])
               << std::endl;
     // Check if generated tokens match any group of expected tokens
     match0 = false;
@@ -338,7 +348,8 @@ class DeepSeekV3Test : public testing::Test {
     }
     EXPECT_TRUE(deepseek_v3->Forward(deepseek_v3_weight, forward_reqs, hidden_unit, RunMode::kNextN).OK());
     sampler->Sampling(sample_reqs, context->device->GetPrimaryComputeStream());
-    std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
+    std::cout << fmt::format("NextN forward: generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0],
+                             generated_tokens1[0])
               << std::endl;
     // Check if generated tokens match any group of expected tokens
     match0 = false;

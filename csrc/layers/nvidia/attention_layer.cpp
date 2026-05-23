@@ -54,6 +54,8 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
     RoPEScalingFactor rope_scaling_factor_config = std::any_cast<const RoPEScalingFactor>(parameters[parameter_index]);
     // parameters[parameter_index + 1] is max_batch_size
     llm_kernels::nvidia::RotaryEmbeddingType rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT;
+    bool use_deepseek_rope =
+        rope_scaling_factor_config.use_deepseek_rope || rope_scaling_factor_config.use_deepseek_v4_rope;
     float scaling_factor = 1.0f;
     float low_freq_factor = 1.0f;
     float high_freq_factor = 4.0f;
@@ -90,13 +92,18 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
         rotary_dim = qk_rope_head_dim_;  // mla rope dim
         beta_fast = rope_scaling_factor_config.beta_fast;
         beta_slow = rope_scaling_factor_config.beta_slow;
-        mscale_all_dim = rope_scaling_factor_config.mscale_all_dim;
-        mscale = deepseek_yarn_get_mscale(scaling_factor, rope_scaling_factor_config.mscale) /
-                 deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim) * attn_factor;
-        // Get attn scale
-        float qk_head_dim_scale = 1.0f / sqrt(qk_rope_head_dim_ + qk_nope_head_dim_);
-        float attn_mscale = deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim);
-        attn_scale_ = qk_head_dim_scale * attn_mscale * attn_mscale;
+        if (rope_scaling_factor_config.use_deepseek_v4_rope) {
+          // index层和普通层的attn_scale_值不一样
+          attn_scale_ = 1.0f / std::sqrt(head_size_);
+        } else {
+          mscale_all_dim = rope_scaling_factor_config.mscale_all_dim;
+          mscale = deepseek_yarn_get_mscale(scaling_factor, rope_scaling_factor_config.mscale) /
+                   deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim) * attn_factor;
+          // Get attn scale
+          float qk_head_dim_scale = 1.0f / sqrt(qk_rope_head_dim_ + qk_nope_head_dim_);
+          float attn_mscale = deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim);
+          attn_scale_ = qk_head_dim_scale * attn_mscale * attn_mscale;
+        }
       } else {
         mscale = common_yarn_get_mscale(scaling_factor) * attn_factor;
       }
@@ -134,7 +141,7 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
         cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, head_size_, num_heads_, num_kv_heads_,
         stride_size_, is_neox, context_->device->GetPrimaryComputeStream().Get(), rotary_embedding_type, scaling_factor,
         low_freq_factor, high_freq_factor, original_max_position_embeddings, scaling_alpha, mrope_section_ptr,
-        xdrope_section_ptr, beta_fast, beta_slow, mscale, mscale_all_dim, rope_scaling_factor_config.use_deepseek_rope);
+        xdrope_section_ptr, beta_fast, beta_slow, mscale, mscale_all_dim, use_deepseek_rope);
   } else if (position_encoding == PositionEncoding::ALIBI) {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr),
                                                                   num_heads_ * tensor_para_size_,
@@ -163,6 +170,7 @@ float AttentionLayer::common_yarn_get_mscale(const float scale) {
   }
   return 0.1f * std::log(scale) + 1.0f;
 }
+
 template <typename T>
 Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
                                const RoPEScalingFactor& rope_scaling_factor_config, void* cos_sin_cache_ptr,
@@ -188,9 +196,11 @@ Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddin
       // DeepSeek YARN specific configuration
       beta_fast = rope_scaling_factor_config.beta_fast;
       beta_slow = rope_scaling_factor_config.beta_slow;
-      mscale_all_dim = rope_scaling_factor_config.mscale_all_dim;
-      mscale = AttentionLayer::deepseek_yarn_get_mscale(scaling_factor, rope_scaling_factor_config.mscale) /
-               AttentionLayer::deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim) * attn_factor;
+      if (rope_scaling_factor_config.use_deepseek_v4_rope) {
+        mscale_all_dim = rope_scaling_factor_config.mscale_all_dim;
+        mscale = AttentionLayer::deepseek_yarn_get_mscale(scaling_factor, rope_scaling_factor_config.mscale) /
+                 AttentionLayer::deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim) * attn_factor;
+      }
     } else {
       mscale = AttentionLayer::common_yarn_get_mscale(scaling_factor) * attn_factor;
     }
@@ -202,7 +212,7 @@ Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddin
   // Initialize rotary embedding with YARN configuration
   rotary_embedding_cuda->SetConfig<T>(cos_sin_cache_ptr, rotary_dim, max_seq_len, rope_theta, head_dim, head_dim,
                                       n_heads,   // num_heads
-                                      1,         // num_kv_heads = num_heads for indexer
+                                      1,         // num_kv_heads
                                       head_dim,  // stride_size
                                       is_neox,   // MLA uses False, Indexer uses True
                                       stream, rotary_embedding_type, scaling_factor,

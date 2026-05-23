@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/common/common_model.h"
 #include "models/qwen/qwen_model.h"
 
@@ -16,7 +17,8 @@ namespace ksana_llm {
 class QwenEmbeddingModel : public CommonModel {
  public:
   QwenEmbeddingModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                     std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+                     std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                     std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~QwenEmbeddingModel();
 
   // Non-copyable, non-movable (pinned_host_buffer_ is a raw CUDA allocation).
@@ -25,9 +27,9 @@ class QwenEmbeddingModel : public CommonModel {
 
  protected:
   using CommonModel::context_;
-  using CommonModel::rank_;
   using CommonModel::GetHiddenUnitBufferTensors;
   using CommonModel::model_config_;
+  using CommonModel::rank_;
 
  private:
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;

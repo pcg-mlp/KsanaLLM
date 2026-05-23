@@ -4,9 +4,9 @@
 
 #include <stdlib.h>
 
+#include <filesystem>
 #include <memory>
 #include <random>
-#include <filesystem>
 #include <vector>
 
 #include "3rdparty/half/include/half.hpp"
@@ -26,6 +26,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
@@ -78,7 +79,7 @@ class InternlmxComposer2Test : public testing::Test {
     InitLoguru();
     AttentionBackendManager::GetInstance()->Initialize();
     env_ = Singleton<Environment>::GetInstance();
-    const auto &env = env_;
+    const auto& env = env_;
     SetupWeightLoaderConfig();
     context = std::make_shared<Context>();
     context->global.reset(new GlobalContext(1, 1, 1, env));
@@ -101,22 +102,21 @@ class InternlmxComposer2Test : public testing::Test {
     env->GetModelConfig(model_config);
     env->GetPipelineConfig(pipeline_config);
 
-    nlohmann::json test_config_json = {
-        {"architectures", {"InternLMXComposer2ForCausalLM"}},
-        {"bos_token_id", 1},
-        {"eos_token_id", 2},
-        {"pad_token_id", 2},
-        {"hidden_size", 512},
-        {"intermediate_size", 2048},
-        {"max_position_embeddings", 4096},
-        {"num_attention_heads", 8},
-        {"num_hidden_layers", 1},
-        {"num_key_value_heads", 8},
-        {"rms_norm_eps", 1e-5},
-        {"rope_theta", 1000000},
-        {"tie_word_embeddings", false},
-        {"vocab_size", 2048},
-        {"model_type", "internlm2"}};
+    nlohmann::json test_config_json = {{"architectures", {"InternLMXComposer2ForCausalLM"}},
+                                       {"bos_token_id", 1},
+                                       {"eos_token_id", 2},
+                                       {"pad_token_id", 2},
+                                       {"hidden_size", 512},
+                                       {"intermediate_size", 2048},
+                                       {"max_position_embeddings", 4096},
+                                       {"num_attention_heads", 8},
+                                       {"num_hidden_layers", 1},
+                                       {"num_key_value_heads", 8},
+                                       {"rms_norm_eps", 1e-5},
+                                       {"rope_theta", 1000000},
+                                       {"tie_word_embeddings", false},
+                                       {"vocab_size", 2048},
+                                       {"model_type", "internlm2"}};
 
     InternlmxComposer2ConfigParser config_parser;
     ParallelismBasicConfig parallel_basic_config;
@@ -140,11 +140,7 @@ class InternlmxComposer2Test : public testing::Test {
     model_config.vocab_size = ixc2_config->vocab_size;
     model_config.weight_data_type = TYPE_FP16;
     model_config.layernorm_eps = ixc2_config->layernorm_eps;
-
-    pipeline_config.lower_layer_idx = 0;
-    pipeline_config.upper_layer_idx = static_cast<int>(model_config.num_layer) - 1;
-    pipeline_config.lower_nextn_layer_idx = -1;
-    pipeline_config.upper_nextn_layer_idx = -1;
+    InitPipelineConfigForTest(env, model_config);
 
     BatchSchedulerConfig batch_scheduler_config;
     env->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -153,10 +149,11 @@ class InternlmxComposer2Test : public testing::Test {
     batch_scheduler_config.max_token_len = 128;
     env->SetBatchSchedulerConfig(batch_scheduler_config);
 
-    env->SetPipelineConfig(pipeline_config);
     env->SetModelConfig(model_config);
     env->UpdateModelConfig();
-    env->InitializeBlockManagerConfig();
+
+    block_cache_layout_ = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
 
     BlockManagerConfig block_manager_config;
     env->GetBlockManagerConfig(block_manager_config);
@@ -210,7 +207,9 @@ class InternlmxComposer2Test : public testing::Test {
   std::shared_ptr<BlockAllocatorGroupInterface> engine_block_group;
   std::shared_ptr<BlockAllocatorGroupInterface> executor_block_group;
   std::shared_ptr<Context> context{nullptr};
-  HiddenUnitDeviceBuffer *hidden_unit = nullptr;
+  HiddenUnitDeviceBuffer* hidden_unit = nullptr;
+
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
@@ -244,8 +243,8 @@ class InternlmxComposer2Test : public testing::Test {
     auto fake_weight = std::make_shared<FakeWeight>(device_id);
     BuildMockInternlmxComposer2Weights(*fake_weight, model_config);
     std::shared_ptr<BaseWeight> model_weight = fake_weight;
-    std::shared_ptr<InternlmxComposer2Model> model =
-        std::make_shared<InternlmxComposer2Model>(model_config, runtime_config, device_id, context, model_weight);
+    std::shared_ptr<InternlmxComposer2Model> model = std::make_shared<InternlmxComposer2Model>(
+        model_config, runtime_config, device_id, context, model_weight, block_cache_layout_);
 
     auto forward = std::make_unique<ForwardRequest>();
     std::vector<int> input_ids = {233, 1203};
@@ -351,7 +350,7 @@ class InternlmxComposer2Test : public testing::Test {
     (*forward_reqs[1].forwarding_tokens).emplace_back(generated_tokens1[0]);
     generated_tokens0.clear();
     generated_tokens1.clear();
-    for (auto &forward_req : forward_reqs) {
+    for (auto& forward_req : forward_reqs) {
       forward_req.infer_stage = InferStage::kDecode;
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
@@ -364,7 +363,7 @@ class InternlmxComposer2Test : public testing::Test {
     (*forward_reqs[1].forwarding_tokens).emplace_back(generated_tokens1[0]);
     generated_tokens0.clear();
     generated_tokens1.clear();
-    for (auto &forward_req : forward_reqs) {
+    for (auto& forward_req : forward_reqs) {
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
 
@@ -383,7 +382,7 @@ class InternlmxComposer2Test : public testing::Test {
 #endif
 
     EventRecord(start, context->device->GetPrimaryComputeStream());
-    for (auto &forward_req : multi_forward_reqs) {
+    for (auto& forward_req : multi_forward_reqs) {
       forward_req.infer_stage = InferStage::kDecode;
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
@@ -458,12 +457,10 @@ TEST_F(InternlmxComposer2Test, ConfigParserBasicTest) {
 
 TEST_F(InternlmxComposer2Test, ConfigParserQuantW4A8AWQTest) {
 #ifdef ENABLE_CUDA
-  nlohmann::json config_json = {{"hidden_size", 4096},
-                                {"num_attention_heads", 32},
-                                {"num_hidden_layers", 32},
-                                {"num_key_value_heads", 8},
-                                {"vocab_size", 92544},
-                                {"quantization_config", {{"quant_method", "modelopt"}, {"quant_algo", "W4A8_AWQ"}}}};
+  nlohmann::json config_json = {
+      {"hidden_size", 4096},     {"num_attention_heads", 32},
+      {"num_hidden_layers", 32}, {"num_key_value_heads", 8},
+      {"vocab_size", 92544},     {"quantization_config", {{"quant_method", "modelopt"}, {"quant_algo", "W4A8_AWQ"}}}};
 
   InternlmxComposer2ConfigParser parser;
   ParallelismBasicConfig parallel_config;
@@ -502,9 +499,8 @@ TEST_F(InternlmxComposer2Test, ConfigParserNoQuantTest) {
 
 TEST_F(InternlmxComposer2Test, ConfigParserUnsupportedQuantMethodTest) {
 #ifdef ENABLE_CUDA
-  nlohmann::json config_json = {{"hidden_size", 4096},
-                                {"num_attention_heads", 32},
-                                {"quantization_config", {{"quant_method", "unsupported"}}}};
+  nlohmann::json config_json = {
+      {"hidden_size", 4096}, {"num_attention_heads", 32}, {"quantization_config", {{"quant_method", "unsupported"}}}};
 
   InternlmxComposer2ConfigParser parser;
   ParallelismBasicConfig parallel_config;
@@ -614,22 +610,22 @@ TEST_F(InternlmxComposer2Test, ConfigParserDefaultsTest) {
 
 TEST_F(InternlmxComposer2Test, ConfigParserComprehensiveTest) {
 #ifdef ENABLE_CUDA
-  nlohmann::json comprehensive_config = {{"bos_token_id", 100},
-                                         {"eos_token_id", 101},
-                                         {"pad_token_id", 102},
-                                         {"head_dim", 256},
-                                         {"hidden_size", 2048},
-                                         {"intermediate_size", 8192},
-                                         {"max_position_embeddings", 16384},
-                                         {"num_attention_heads", 16},
-                                         {"num_hidden_layers", 24},
-                                         {"num_key_value_heads", 4},
-                                         {"rms_norm_eps", 1e-6},
-                                         {"rope_theta", 10000.0},
-                                         {"tie_word_embeddings", true},
-                                         {"vocab_size", 50000},
-                                         {"quantization_config",
-                                          {{"quant_method", "modelopt"}, {"quant_algo", "W4A8_AWQ"}}}};
+  nlohmann::json comprehensive_config = {
+      {"bos_token_id", 100},
+      {"eos_token_id", 101},
+      {"pad_token_id", 102},
+      {"head_dim", 256},
+      {"hidden_size", 2048},
+      {"intermediate_size", 8192},
+      {"max_position_embeddings", 16384},
+      {"num_attention_heads", 16},
+      {"num_hidden_layers", 24},
+      {"num_key_value_heads", 4},
+      {"rms_norm_eps", 1e-6},
+      {"rope_theta", 10000.0},
+      {"tie_word_embeddings", true},
+      {"vocab_size", 50000},
+      {"quantization_config", {{"quant_method", "modelopt"}, {"quant_algo", "W4A8_AWQ"}}}};
 
   InternlmxComposer2ConfigParser parser;
   ParallelismBasicConfig parallel_config;
@@ -803,8 +799,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsNormTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
   EXPECT_TRUE(device_model_weights.find("model.norm.weight") != device_model_weights.end());
 #endif
@@ -832,8 +828,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsEmbedTokensTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -860,8 +856,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsTokEmbeddingsTest)
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -888,8 +884,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsLmHeadTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -916,8 +912,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsOutputWeightTest) 
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -943,8 +939,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsPLoraATest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
   EXPECT_TRUE(device_model_weights.find("model.layers.0.mlp.gate_proj.Plora_A.weight") != device_model_weights.end());
 #endif
@@ -971,8 +967,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsPLoraBTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
   EXPECT_TRUE(device_model_weights.find("model.layers.0.mlp.gate_proj.Plora_B.weight") != device_model_weights.end());
 #endif
@@ -1001,8 +997,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsAttnNormTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1025,8 +1021,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsInputLayerNormTest
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1049,8 +1045,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsPostAttnNormTest) 
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1073,8 +1069,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsAttentionNormTest)
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1097,8 +1093,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsFfnNormTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1126,8 +1122,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsOProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1155,8 +1151,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsWoTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1183,8 +1179,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsMlpGateProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1211,8 +1207,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsMlpUpProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1239,8 +1235,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsMlpDownProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1267,8 +1263,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsMlpW1Test) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1295,8 +1291,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsMlpW2Test) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1323,8 +1319,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsMlpW3Test) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1355,8 +1351,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsQProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1387,8 +1383,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsKProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1419,8 +1415,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsVProjTest) {
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -1451,8 +1447,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsInterleavedQKVTest
 
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 
   auto it = device_model_weights.find("model.layers.0.self_attn.query_key_value.weight");
@@ -1489,8 +1485,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderProcessModelWeightsInterleavedPLoraQK
 
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 
   auto it = device_model_weights.find(weight_name);
@@ -1552,8 +1548,8 @@ TEST_F(InternlmxComposer2Test, WeightLoaderPostProcessModelWeightsTest) {
 
   std::unordered_map<std::string, Tensor> device_model_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
-  Status status = weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights,
-                                                   left_host_weights);
+  Status status =
+      weight_loader.ProcessModelWeights(host_model_weights, kDeviceRank, device_model_weights, left_host_weights);
   EXPECT_TRUE(status.OK());
 
   Status post_status = weight_loader.PostProcessModelWeights(device_model_weights, kDeviceRank);

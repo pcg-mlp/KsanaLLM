@@ -2,6 +2,8 @@
 
 ==============================================================================*/
 #include "runtime/weight_instance.h"
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "tests/test.h"
 
 namespace ksana_llm {
@@ -25,14 +27,16 @@ class WeightInstanceTest : public ::testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/Qwen1.5-Moe-A2.7B-18188");
     env->GetModelConfig(model_config_);
+    InitPipelineConfigForTest(env, model_config_);
 
     AttnBackendConfig attn_backend_config;
     env->GetAttnBackendConfig(attn_backend_config);
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     env->SetAttnBackendConfig(attn_backend_config);
 
+    auto block_cache_layout = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+    env->InitializeBlockManagerConfig(block_cache_layout);
     env->GetBlockManagerConfig(block_manager_config);
     block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;

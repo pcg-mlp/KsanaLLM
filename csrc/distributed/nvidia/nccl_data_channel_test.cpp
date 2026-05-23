@@ -24,6 +24,8 @@
 #include "configure/environment.h"
 #include "distributed/nvidia/nccl_data_channel.h"
 #include "distributed/socket_util.h"
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "test.h"
 #include "utils/memory_utils.h"
 #include "utils/singleton.h"
@@ -46,9 +48,14 @@ class NcclDataChannelTest : public testing::Test {
     Singleton<Environment>::GetInstance()->ParseConfig(config_path);
     env_ = Singleton<Environment>::GetInstance();
 
+    ModelConfig model_config;
+    env_->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env_, model_config);
+
     // Set block manager.
+    auto block_cache_layout = GetTestModelCacheLayout(env_);
     BlockManagerConfig block_manager_config;
-    Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
+    Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig(block_cache_layout);
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
 
     env_->GetRuntimeConfig(runtime_config_);

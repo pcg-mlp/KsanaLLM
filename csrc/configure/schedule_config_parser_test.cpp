@@ -87,6 +87,49 @@ class ScheduleConfigParserTest : public ::testing::Test {
     return temp_file_path.string();
   }
 
+  // Helper function to create a temporary YAML configuration file with an
+  // optional swa_block_num_ratio under setting.cache_manager.
+  // Pass swa_block_num_ratio < 0 to omit the key entirely.
+  std::string CreateTempYamlConfigWithSwa(float swa_block_num_ratio = -1.0f) {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+    temp_files_.push_back(temp_file_path.string());
+
+    std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+    temp_dirs_.push_back(model_dir.string());
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    std::ofstream file(temp_file_path);
+    if (!file.is_open()) {
+      return "";
+    }
+
+    file << "setting:\n";
+    file << "  global:\n";
+    file << "    tensor_para_size: 1\n";
+    file << "  batch_scheduler:\n";
+    file << "    max_token_len: 4096\n";
+    file << "    max_step_tokens: 4096\n";
+    file << "    max_batch_size: 32\n";
+    file << "  block_manager:\n";
+    file << "    block_token_num: 16\n";
+    file << "    reserved_device_memory_ratio: 0.01\n";
+    if (swa_block_num_ratio >= 0.0f) {
+      file << "  cache_manager:\n";
+      file << "    swa_block_num_ratio: " << swa_block_num_ratio << "\n";
+    }
+    file << "model_spec:\n";
+    file << "  base_model:\n";
+    file << "    model_dir: \"" << model_dir.string() << "\"\n";
+
+    file.close();
+    return temp_file_path.string();
+  }
+
   // Helper function to create a temporary YAML configuration file
   std::string CreateTempYamlConfig(bool enable_prefix_caching = false, size_t split_fuse_token_num = 0,
                                    bool use_flashinfer_for_decode = false) {
@@ -206,6 +249,142 @@ TEST_F(ScheduleConfigParserTest, VisualModelDisablesPrefixCachingAndSplitFuse) {
   BatchSchedulerConfig batch_config;
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_EQ(batch_config.split_fuse_token_num, 0) << "SplitFuse should be disabled (0) for Visual Model";
+}
+
+// ================================================================
+// DSv4 Chunk Prefill: split_fuse_token_num 必须是 block_token_num (256) 的整数倍
+// ================================================================
+// 说明:
+//   - DSv4 启用 use_mla + use_dsv4_attn 时, block_token_num 在 ParseScheduleConfig
+//     里被强制设为 256 (见 schedule_config_parser.cpp 中 use_dsv4_attn 分支)。
+//   - 之后我们对 split_fuse_token_num 做整除性校验, 不满足直接抛异常。
+//   - 校验仅在 use_dsv4_attn=true 且 split_fuse_token_num>0 时触发。
+
+// 合法: split_fuse_token_num == block_token_num (256), 必须通过。
+TEST_F(ScheduleConfigParserTest, DSv4ChunkPrefillAcceptsBlockAligned) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/256);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.use_mla = true;
+  model_config.use_dsv4_attn = true;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 256u);
+}
+
+// 合法: split_fuse_token_num == 2 * block_token_num (512), 必须通过。
+TEST_F(ScheduleConfigParserTest, DSv4ChunkPrefillAcceptsMultiBlock) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/512);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.use_mla = true;
+  model_config.use_dsv4_attn = true;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 512u);
+}
+
+// 非法: 257 不是 256 的倍数, 必须抛异常。
+TEST_F(ScheduleConfigParserTest, DSv4ChunkPrefillRejectsNonAligned257) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/257);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.use_mla = true;
+  model_config.use_dsv4_attn = true;
+
+  EXPECT_ANY_THROW(parser_->ParseScheduleConfig(yaml_reader, model_config));
+}
+
+// 非法: 100 < 256 且不是其整数倍, 必须抛异常。
+TEST_F(ScheduleConfigParserTest, DSv4ChunkPrefillRejectsNonAligned100) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/100);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.use_mla = true;
+  model_config.use_dsv4_attn = true;
+
+  EXPECT_ANY_THROW(parser_->ParseScheduleConfig(yaml_reader, model_config));
+}
+
+// 边界: split_fuse_token_num == 0 表示禁用 split-fuse, 跳过校验, 不抛。
+TEST_F(ScheduleConfigParserTest, DSv4ChunkPrefillSkipsCheckWhenDisabled) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/0);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.use_mla = true;
+  model_config.use_dsv4_attn = true;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 0u);
+}
+
+// 隔离性: 非 DSv4 模型即便 split_fuse_token_num 非整除 block_token_num 也不应触发该 check。
+// (此处 yaml 默认 block_token_num=16, 非 DSv4 不会被覆盖, 257 % 16 != 0 但属于非 DSv4 路径, 不应抛。)
+TEST_F(ScheduleConfigParserTest, NonDSv4ChunkPrefillSkipsCheck) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/257);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  // 不设置 use_mla / use_dsv4_attn, 保持默认 false。
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 257u);
 }
 
 // Test: UpdateMembers allows k/v scales equal to 1.0 when FlashInfer is enabled.
@@ -797,6 +976,133 @@ TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorDefaults) {
   EXPECT_EQ(config.master_server_addr, "127.0.0.1:50051");
   EXPECT_EQ(config.global_segment_size, 16u * 1024 * 1024);
   EXPECT_EQ(config.local_buffer_size, 16u * 1024 * 1024);
+}
+
+// ==================== swa_block_num_ratio 配置解析与自动调整测试 ====================
+
+// Test: swa_block_num_ratio defaults to 0.0 when the key is absent from YAML,
+// and stays 0.0 for a non-SWA model (no auto-adjustment).
+TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioDefaultsToHalfWhenNotConfigured) {
+  // Omit setting.cache_manager.swa_block_num_ratio from YAML (pass -1 sentinel);
+  // the default value is 0.5 regardless of whether the model has SWA.
+  std::string yaml_path = CreateTempYamlConfigWithSwa(-1.0f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  // Non-SWA model: use_dsv4_attn=false, sliding_window=0
+  // num_key_value_heads=1 bypasses the divisibility check in UpdateModelConfig.
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.use_dsv4_attn = false;
+  model_config.dsv4_attn_config.sliding_window = 0;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
+      << "swa_block_num_ratio should default to 0.5 when not configured in YAML";
+}
+
+// Test: swa_block_num_ratio is read from YAML when explicitly set.
+TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioReadFromYaml) {
+  // Explicitly set swa_block_num_ratio to 0.3 in YAML
+  std::string yaml_path = CreateTempYamlConfigWithSwa(0.3f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.use_dsv4_attn = false;
+  model_config.dsv4_attn_config.sliding_window = 0;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.3f) << "swa_block_num_ratio should be the value read from YAML";
+}
+
+// Test: when the model has SWA and swa_block_num_ratio is not set in YAML,
+// it uses the default value of 0.5.
+TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioDefaultsToHalfForSwaModel) {
+  // Omit swa_block_num_ratio from YAML
+  std::string yaml_path = CreateTempYamlConfigWithSwa(-1.0f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  // SWA model: use_dsv4_attn=true, sliding_window > 0
+  // num_key_value_heads=1 bypasses the divisibility check in UpdateModelConfig.
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.use_dsv4_attn = true;
+  model_config.dsv4_attn_config.sliding_window = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
+      << "swa_block_num_ratio should default to 0.5 for SWA model when not configured";
+}
+
+// Test: when the model has SWA but swa_block_num_ratio is explicitly set to a
+// non-zero value in YAML, UpdateModelConfig must NOT override it.
+TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitNonZeroPreservedForSwaModel) {
+  // Explicitly set swa_block_num_ratio to 0.25 in YAML
+  std::string yaml_path = CreateTempYamlConfigWithSwa(0.25f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  // SWA model; num_key_value_heads=1 bypasses the divisibility check.
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.use_dsv4_attn = true;
+  model_config.dsv4_attn_config.sliding_window = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.25f)
+      << "Explicit non-zero swa_block_num_ratio should not be overridden by auto-adjustment";
+}
+
+// Test: when swa_block_num_ratio is explicitly set to 0 in YAML, it is corrected
+// to the default 0.5 because 0 is not a valid ratio (<=0 triggers correction).
+TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitZeroCorrectedToDefault) {
+  // Explicitly set swa_block_num_ratio to 0 in YAML
+  std::string yaml_path = CreateTempYamlConfigWithSwa(0.0f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  // SWA model; num_key_value_heads=1 bypasses the divisibility check.
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.use_dsv4_attn = true;
+  model_config.dsv4_attn_config.sliding_window = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
+      << "swa_block_num_ratio=0 in YAML should be corrected to the default 0.5";
 }
 
 }  // namespace ksana_llm

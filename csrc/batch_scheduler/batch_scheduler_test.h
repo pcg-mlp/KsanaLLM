@@ -27,6 +27,7 @@ class BaseSchedulerTest : public testing::Test {
     waiting_timeout_in_ms_ = 600000;
     enable_swap_ = true;
     max_pp_batch_num_ = 1;
+    sliding_window_size_ = 0;
   }
 
   void CommonSetUp(int dp_num = 1, int tp_num = 4, int ep_world_size = 1) {
@@ -40,7 +41,16 @@ class BaseSchedulerTest : public testing::Test {
 
     block_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(block_manager_config_, tp_num);
 
-    env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, tp_num, block_allocator_group);
+    // When SWA is enabled, create a separate SWA block allocator group.
+    // SWA blocks do not need host swap, so host_allocator_config.blocks_num = 0.
+    if (sliding_window_size_ > 0) {
+      BlockManagerConfig swa_block_manager_config = block_manager_config_;
+      swa_block_manager_config.host_allocator_config.blocks_num = 0;
+      swa_block_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(swa_block_manager_config, tp_num);
+    }
+
+    env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, tp_num, block_allocator_group,
+                                                            sliding_window_size_, swa_block_allocator_group);
 
     // Create Context
     std::string config_file = GetTestConfigFile();
@@ -49,9 +59,11 @@ class BaseSchedulerTest : public testing::Test {
     schedule_output_pool_ = std::make_shared<ScheduleOutputPool>();
 
     KLLM_LOG_INFO << "enable_prefix_cache=" << cache_manager_config.enable_prefix_caching
-                  << ", split_fuse_num=" << batch_scheduler_config_.split_fuse_token_num;
+                  << ", split_fuse_num=" << batch_scheduler_config_.split_fuse_token_num
+                  << ", sliding_window_size=" << sliding_window_size_;
 
-    cache_manager = CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group);
+    cache_manager =
+        CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group, swa_block_allocator_group);
     cache_manager->InitializeCachedBlocks();
 
     InitScheduleProcessor();
@@ -112,6 +124,7 @@ class BaseSchedulerTest : public testing::Test {
     if (enable_flexible_cache_) {
       cache_manager_config.min_flexible_cache_num = cache_manager_config.block_token_num * 4;
     }
+    cache_manager_config.sliding_window_size = sliding_window_size_;
   }
 
  protected:
@@ -137,6 +150,9 @@ class BaseSchedulerTest : public testing::Test {
   size_t waiting_timeout_in_ms_;
   bool enable_swap_ = true;
   size_t max_pp_batch_num_;
+  // SWA (Sliding Window Attention) configuration; 0 means SWA disabled.
+  size_t sliding_window_size_ = 0;
+  std::shared_ptr<FakedBlockAllocatorGroup> swa_block_allocator_group = nullptr;
 };
 
 }  // namespace ksana_llm

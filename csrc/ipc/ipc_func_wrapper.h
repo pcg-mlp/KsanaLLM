@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/environment.h"
 #include "distributed/control_message.h"
 #include "distributed/distributed_control_coordinator.h"
@@ -103,6 +104,9 @@ class IpcFuncWrapper {
       std::shared_ptr<DistributedControlCoordinator> distributed_control_coordinator);
   Status ConnectResultReporterChannel();
 
+  // Set the cache layout for specific model instance.
+  void SetBlockCacheLayout(std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
+
   // Engine to executor, blocking.
   Status SetWeightInstance(std::shared_ptr<WeightInstanceInterface> model_weight);
   Status LoadWeight();
@@ -117,7 +121,10 @@ class IpcFuncWrapper {
   // Engine to executor, blocking.
   Status SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager,
                                   int dp_group_id);
-  Status CreateBlockAllocatorManager(const BlockAllocatorManagerConfig& block_allocator_manager_config);
+  // Register the executor-side SWA block allocator manager so the callable can initialize it.
+  Status SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager);
+  Status CreateBlockAllocatorManager(const BlockAllocatorManagerConfig& block_allocator_manager_config,
+                                     const BlockAllocatorManagerConfig& swa_block_allocator_manager_config = {});
 
   // Engine to executor, blocking.
   Status SetExecutorRuntime(std::shared_ptr<ExecutorRuntime> executor_runtime);

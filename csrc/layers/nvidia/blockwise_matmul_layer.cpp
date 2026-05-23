@@ -23,8 +23,9 @@ Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const
   k_ = std::any_cast<size_t>(parameters[parameter_index++]);
   block_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   weight_ = std::any_cast<Tensor>(parameters[parameter_index++]);
-  if (parameter_index < parameters.size()) {
+  if (parameters.size() >= parameter_index + 2) {
     skip_quant_ = std::any_cast<const bool>(parameters[parameter_index++]);
+    swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
   }
 
   KLLM_CHECK_WITH_INFO(max_m_ % kAlignSize_ == 0,
@@ -259,7 +260,10 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
   cudaStream_t compute_stream = context_->device->GetPrimaryComputeStream().Get();
   if (!skip_quant_) {
     InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, cur_m, k_, /*is_column_major*/ true, compute_stream, block_size_,
-                                       PerTokenGroupQuantFusionParams{.fuse_silu_mul = (k == 2 * k_)});
+                                       PerTokenGroupQuantFusionParams{
+                                           .fuse_silu_mul = (k == 2 * k_),
+                                           .swiglu_limit = swiglu_limit_,
+                                       });
   }
 
   void* b = input_tensors[1].GetPtr<void>();

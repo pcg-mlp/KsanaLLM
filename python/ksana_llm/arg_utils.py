@@ -50,7 +50,9 @@ class EngineArgs:
     tool_parser_plugin: Optional[str] = None
     served_model_name: Optional[str] = None
     """Override model name returned by OpenAI API v1/models endpoint."""
-    
+    json_model_override_args: Optional[str] = None
+    """JSON string to override ModelConfig fields after parsing, e.g. '{"num_layer":32}'."""
+
     @classmethod
     def from_config_file(cls, config_file: str) -> "EngineArgs":
         if not os.path.exists(config_file):
@@ -118,7 +120,7 @@ class EngineArgs:
                 model_dir, trust_remote_code=True
             ).to_dict()
         except ValueError as e:
-            if not "deepseek_v32" in str(e):
+            if not "deepseek_v32" in str(e) and not "deepseek_v4" in str(e):
                 raise e
             from .hf_transformers_model_config import DeepseekV3Config
             model_config = DeepseekV3Config.from_pretrained(
@@ -289,6 +291,14 @@ class EngineArgs:
                  "If not specified, will extract from model_dir path or use default model name. "
                  "Example: --served-model-name deepseek-v3",
         )
+        parser.add_argument(
+            "--json-model-override-args",
+            type=str,
+            default=None,
+            help="JSON string to override ModelConfig fields after parsing, "
+            'e.g. \'{"num_layer":32,"rope_theta":500000.0}\'. '
+            "Aligned with sglang --json-model-override-args.",
+        )
         # EPD (Encoder-Prefill-Decode) separation parameters
         parser.add_argument(
             "--encoder-url",
@@ -348,6 +358,8 @@ class EngineArgs:
             engine_args.chat_template_content_format = args.chat_template_content_format
         if args.served_model_name is not None:
             engine_args.served_model_name = args.served_model_name
+        if args.json_model_override_args is not None:
+            engine_args.json_model_override_args = args.json_model_override_args
 
         # EPD separation parameters
         if args.encoder_url is not None:

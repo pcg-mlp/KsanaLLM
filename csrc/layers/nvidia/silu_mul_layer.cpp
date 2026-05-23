@@ -12,6 +12,8 @@ namespace ksana_llm {
 Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                           std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
+  int parameter_index = 0;
+  swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
   return Status();
 }
 
@@ -25,7 +27,7 @@ Status SiluMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vec
     InvokeRowBasedGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
         reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), static_cast<int>(input_tensors[0].shape[0]),
         static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-        context_->device->GetPrimaryComputeStream().Get());
+        context_->device->GetPrimaryComputeStream().Get(), swiglu_limit_);
     output_tensors[0].shape = input_tensors[0].shape;
     output_tensors[0].shape[1] = output_tensors[0].shape[1] / 2;
     output_tensors[0].dtype = input_tensors[0].dtype;

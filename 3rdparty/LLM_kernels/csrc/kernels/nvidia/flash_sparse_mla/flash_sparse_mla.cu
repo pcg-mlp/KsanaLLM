@@ -44,8 +44,10 @@ namespace nvidia {
 
 using namespace llm_kernels::utils;
 
+inline constexpr int kMinNumHeads = 64;
+
 int GetNumSmParts(int num_heads_q, int seqlen_q) {
-  return Decode_Sm90_Impl{}.get_meta(std::max(64, num_heads_q), seqlen_q).num_sm_parts;
+  return Decode_Sm90_Impl{}.get_meta(std::max(kMinNumHeads, num_heads_q), seqlen_q).num_sm_parts;
 }
 
 int GetDecodingSchedMetaSize() { return DecodingSchedMetaSize; }
@@ -79,7 +81,8 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
                                      int head_size_v, float softmax_scale, cudaStream_t stream, float* workspace_ptr,
                                      SCALAR_T* out_ptr, int* topk_length_ptr, float* attn_sink_ptr,
                                      CACHE_T* extra_kcache_ptr, int* extra_indices_ptr, int* extra_topk_length_ptr,
-                                     int extra_num_blocks, int extra_block_size, int extra_topk) {
+                                     int extra_num_blocks, int extra_block_size, int extra_topk,
+                                     int extra_kcache_batch_stride) {
   using bf16 = cutlass::bfloat16_t;
 
   // Check the architecture
@@ -183,7 +186,7 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
   KLLM_KERNEL_CHECK_WITH_INFO(arch.is_sm90a(), "Only sm90 is supported");
   impl = new Decode_Sm90_Impl();
 
-  DecodeImplMeta impl_meta = impl->get_meta(std::max(64, num_heads_q), seqlen_q);
+  DecodeImplMeta impl_meta = impl->get_meta(std::max(kMinNumHeads, num_heads_q), seqlen_q);
 
   const std::vector<int> q_shape{batch_size, seqlen_q, num_heads_q, head_size_k};
   const std::vector<int> kcache_shape{num_blocks, block_size, num_heads_k, bytes_per_token};
@@ -210,54 +213,61 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
   float* lse_ptr = workspace_ptr;
   workspace_ptr += AlignSize(lse_shape[0] * lse_stride[0]);
 
-  SparseAttnDecodeParams params = {batch_size,
-                                   seqlen_q,
-                                   num_heads_q,
-                                   num_heads_k,
-                                   head_size_k,
-                                   head_size_v,
-                                   softmax_scale,
-                                   softmax_scale * LOG_2_E,
-                                   num_blocks,
-                                   block_size,
-                                   topk,
-                                   model_type,
+  SparseAttnDecodeParams params = {
+      batch_size,
+      seqlen_q,
+      num_heads_q,
+      num_heads_k,
+      head_size_k,
+      head_size_v,
+      softmax_scale,
+      softmax_scale * LOG_2_E,
+      num_blocks,
+      block_size,
+      topk,
+      model_type,
 
-                                   reinterpret_cast<bf16*>(q_ptr),
-                                   reinterpret_cast<bf16*>(kcache_ptr),
-                                   indices_ptr,
-                                   topk_length_ptr,
-                                   attn_sink_ptr,
-                                   lse_ptr,
-                                   reinterpret_cast<bf16*>(out_ptr),
+      reinterpret_cast<bf16*>(q_ptr),
+      reinterpret_cast<bf16*>(kcache_ptr),
+      indices_ptr,
+      topk_length_ptr,
+      attn_sink_ptr,
+      lse_ptr,
+      reinterpret_cast<bf16*>(out_ptr),
 
-                                   extra_num_blocks,
-                                   extra_block_size,
-                                   extra_topk,
-                                   reinterpret_cast<bf16*>(extra_kcache_ptr),
-                                   extra_indices_ptr,
-                                   extra_topk_length_ptr,
+      extra_num_blocks,
+      extra_block_size,
+      extra_topk,
+      reinterpret_cast<bf16*>(extra_kcache_ptr),
+      extra_indices_ptr,
+      extra_topk_length_ptr,
 
-                                   q_stride[0],
-                                   q_stride[1],
-                                   q_stride[2],
-                                   kcache_batch_stride > 0
-                                       ? kcache_batch_stride
-                                       : kcache_stride[0],  // k_batch_stride can be larger than kcache_stride[0]
-                                   kcache_stride[1],
-                                   indices_stride[0],
-                                   indices_stride[1],
-                                   lse_stride[0],
-                                   lse_stride[1],
-                                   out_stride[0],
-                                   out_stride[1],
-                                   out_stride[2],
+      q_stride[0],
+      q_stride[1],
+      q_stride[2],
+      kcache_batch_stride > 0 ? kcache_batch_stride
+                              : kcache_stride[0],  // kcache_batch_stride can be larger than kcache_stride[0]
+      kcache_stride[1],
+      indices_stride[0],
+      indices_stride[1],
+      lse_stride[0],
+      lse_stride[1],
+      out_stride[0],
+      out_stride[1],
+      out_stride[2],
 
-                                   have_extra_kcache ? extra_kcache_stride[0] : 0,
-                                   have_extra_kcache ? extra_kcache_stride[1] : 0,
-                                   have_extra_kcache ? extra_indices_stride[0] : 0,
-                                   have_extra_kcache ? extra_indices_stride[1] : 0,
-                                   stream};
+      // extra_kcache 在 dim 0 上的 byte stride, 选择优先级:
+      //   1) caller 显式传入的 extra_kcache_batch_stride (primary 与 extra pool 的 per-block 大小不同时必填);
+      //   2) primary 的 kcache_batch_stride (primary 与 extra 共池布局);
+      //   3) 按 shape 计算的 extra_kcache_stride[0] 兜底。
+      have_extra_kcache ? (extra_kcache_batch_stride > 0
+                               ? extra_kcache_batch_stride
+                               : (kcache_batch_stride > 0 ? kcache_batch_stride : extra_kcache_stride[0]))
+                        : 0,
+      have_extra_kcache ? extra_kcache_stride[1] : 0,
+      have_extra_kcache ? extra_indices_stride[0] : 0,
+      have_extra_kcache ? extra_indices_stride[1] : 0,
+      stream};
 
   // Get MLA metadata if necessary
   if (!sched_meta_initialized) {
@@ -269,7 +279,7 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
                                                       extra_topk,
                                                       topk_length_ptr,
                                                       extra_topk_length_ptr,
-                                                      nullptr,
+                                                      /*seqlens_k_ptr*/ nullptr,
                                                       reinterpret_cast<DecodingSchedMeta*>(tile_scheduler_metadata_ptr),
                                                       num_splits_ptr,
                                                       impl_meta.num_sm_parts,
@@ -363,7 +373,7 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
 #  define INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(SCALAR_T, CACHE_T, KV_DTYPE)                               \
     template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE>(                           \
         void*, CACHE_T*, int*, int*, int*, bool, int, int, int, int, int, int, int, int, int, int, float, \
-        cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int)
+        cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int, int)
 INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla);
 INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 #  undef INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE
@@ -386,11 +396,12 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
                                      int head_size_v, float softmax_scale, cudaStream_t stream, float* workspace_ptr,
                                      SCALAR_T* out_ptr, int* topk_length_ptr, float* attn_sink_ptr,
                                      CACHE_T* extra_kcache_ptr, int* extra_indices_ptr, int* extra_topk_length_ptr,
-                                     int extra_num_blocks, int extra_block_size, int extra_topk) {}
+                                     int extra_num_blocks, int extra_block_size, int extra_topk,
+                                     int extra_kcache_batch_stride) {}
 #  define INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(SCALAR_T, CACHE_T, KV_DTYPE)                               \
     template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE>(                           \
         void*, CACHE_T*, int*, int*, int*, bool, int, int, int, int, int, int, int, int, int, int, float, \
-        cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int)
+        cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int, int)
 INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla);
 INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 #  undef INVOKE_SPARSE_FLASH_MLA_WITH_KVCACHE

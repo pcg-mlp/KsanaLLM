@@ -101,14 +101,16 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
                                   std::vector<Tensor>& output_tensors) {
   // When indices tensor is present, use DSA; otherwise, use MHA
   if (indices_tensor.GetElementNumber() > 0) {
-    return flash_sparse_mla_attention_layer_->Forward(
+    STATUS_CHECK_RETURN(flash_sparse_mla_attention_layer_->Forward(
         {model_input->flash_input.rotary_embedding_pos, model_input->flash_input.rotary_embedding_mask,
          context_q_rope_tensor, k_rope_buffer_tensor, context_q_nope_tensor, /*q_ptr*/ k_buffer[0], kv_buffer_tensor,
          model_input->flash_input.kv_list, model_input->dp_input_prefix_uint64_tensor,
          model_input->dp_prefill_q_offset_uint64_tensor, model_input->flash_input.kv_cache_offset,
          model_input->layer_kv_cache_ptr, model_input->flash_input.block_table,
          model_input->flash_input.tile_scheduler_metadata, model_input->flash_input.num_splits, indices_tensor},
-        output_tensors);
+        output_tensors));
+    model_input->flash_input.tile_scheduler_metadata.shape[2] = 1;  // Mark meta as initialized
+    return Status();
   } else {
     // When prefix cache hits, the following proj must be applied after fetching the prefix from kv cache
     if (/*dp_total_prefix_tokens*/ attn_ctx.forward_shape.shape[11] == 0) {

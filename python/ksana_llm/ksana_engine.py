@@ -102,6 +102,7 @@ class KsanaLLMEngine:
         plugin_config: PluginConfig,
         endpoint_config: EndpointConfig,
         pre_post_processor: TokenizerProcessorOpBase,
+        json_model_override_args: str = None,
     ):
         """Initialize a KsanaLLMEngine instance.
 
@@ -110,15 +111,32 @@ class KsanaLLMEngine:
             plugin_config: Configuration for the Ksana plugin.
             endpoint_config: Configuration for the endpoint.
             pre_post_processor: The pre/post processor that contains the tokenizer.
+            json_model_override_args: Optional JSON string to override ModelConfig fields,
+                e.g. '{"num_layer":32,"rope_theta":500000.0}'.
         """
         self._config_file = config_file
-        
+
         import os
+
         log_level = os.environ.get("KLLM_LOG_LEVEL", "INFO")
         logger.debug(f"KsanaLLMEngine initializing with config_file={config_file}, KLLM_LOG_LEVEL={log_level}")
 
+        # Pass json_model_override_args directly to the C++ Serving constructor so
+        # that it reaches Environment::ParseConfig before FLAGS_json_model_override_args
+        # is read.  The old sys.argv injection approach never worked because
+        # gflags::ParseCommandLineFlags() is never called in the pybind11 path.
+        _json_override = (
+            json_model_override_args if json_model_override_args is not None else ""
+        )
+        if _json_override:
+            logger.debug(
+                f"Passing json_model_override_args to Serving: {_json_override}"
+            )
+
         # The serving instance.
-        self._serving = libtorch_serving.Serving(self._config_file, True, -1)
+        self._serving = libtorch_serving.Serving(
+            self._config_file, True, -1, _json_override
+        )
 
         self._ksana_plugin = KsanaPlugin(plugin_config)
         logger.debug(f"KsanaPlugin initialized with plugin_name={plugin_config.plugin_name}")
@@ -196,6 +214,7 @@ class KsanaLLMEngine:
             plugin_config=plugin_config,
             endpoint_config=endpoint_config,
             pre_post_processor=pre_post_processor,
+            json_model_override_args=args.json_model_override_args,
         )
 
     def _build_generator_config(
@@ -290,6 +309,20 @@ class KsanaLLMEngine:
             prompt_text = self.pre_post_processor.build_prompt(
                 prompt_text, model_type, use_chat_template)
             input_tokens = self.pre_post_processor.encode(prompt_text)
+
+        # Reject empty inputs early so we never feed an empty token vector into the
+        # C++ inference path (which historically segfaults on empty input).
+        # Common cause: clients posting an unsupported schema (e.g. sglang's
+        # {"text": ..., "sampling_params": {...}}) — Ksana /generate only
+        # understands "prompt" / "input_tokens" / "messages".
+        if (input_tokens is None or len(input_tokens) == 0) and messages is None:
+            raise KsanaEngineError(
+                "Empty input: request must contain non-empty 'prompt', 'input_tokens', "
+                "or 'messages'. (Hint: Ksana /generate does NOT accept sglang's "
+                "{\"text\", \"sampling_params\"} schema; use --backend ksana / "
+                "ksana-server / openai-chat instead.)",
+                400,
+            )
 
         # Create a KsanaPythonInput object
         ksana_python_input = libtorch_serving.KsanaPythonInput()
@@ -457,14 +490,14 @@ class KsanaLLMEngine:
             "request-id",
             "traceparent",
         ]
-        
+
         parts = []
         for field in header_fields:
             value = req_ctx.get(field, "-") if req_ctx else "-"
             # 将 header 名称转换为下划线格式
             key = field.replace("-", "_")
             parts.append(f"{key}={value}")
-        
+
         return " ".join(parts)
 
     async def generate(

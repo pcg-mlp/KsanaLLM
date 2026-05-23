@@ -12,6 +12,7 @@
 #  include "jit/device_runtime.hpp"
 #  include "jit/kernel_runtime.hpp"
 
+#  include "jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp"
 #  include "jit_kernels/impls/smxx_clean_logits.hpp"
 #  include "jit_kernels/impls/smxx_fp8_mqa_logits.hpp"
 #  include "jit_kernels/impls/smxx_fp8_paged_mqa_logits.hpp"
@@ -88,6 +89,12 @@ void SmxxPagedMqaLogitsMetadata(const torch::Tensor& context_lens, const torch::
                                             is_context_lens_2d);
 }
 
+void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const torch::Tensor& d,
+                           const torch::Tensor& sqr_sum, const int& m, const int& n, const int& k,
+                           const int& num_splits) {
+  deep_gemm::sm90_tf32_hc_prenorm_gemm(a, b, d, sqr_sum, m, n, k, num_splits);
+}
+
 }  // namespace deepseek
 
 #else   // ENABLE_DEEPSEEK_DEEPGEMM
@@ -103,6 +110,10 @@ void SmxxFp8PagedMqaLogits(const torch::Tensor&, const torch::Tensor&, const tor
                            const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, int,
                            int, int, int, int, int, int, int, int, int, int, bool, int) {}
 void SmxxPagedMqaLogitsMetadata(const torch::Tensor&, const torch::Tensor&, int, int, int) {}
+
+void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const torch::Tensor& d,
+                           const torch::Tensor& sqr_sum, const int& m, const int& n, const int& k,
+                           const int& num_splits) {}
 
 }  // namespace deepseek
 #endif  // ENABLE_DEEPSEEK_DEEPGEMM

@@ -42,11 +42,11 @@ class FusedBatchedMoeTest : public testing::Test {
 
 // 零输入 smoke test: 全零 input/weight → 输出应全零
 TEST_F(FusedBatchedMoeTest, ZeroInputProducesZeroOutput) {
-  constexpr int num_experts = 2;
+  constexpr int num_experts = 8;
   constexpr int max_num_tokens = 4;
   constexpr int hidden_size = 128;
   constexpr int inter_size = 128;
-  constexpr int topk = 1;
+  constexpr int topk = 8;
 
   const size_t input_bytes = num_experts * max_num_tokens * hidden_size * sizeof(__nv_bfloat16);
   const size_t w1_bytes = num_experts * (inter_size * 2) * hidden_size * sizeof(__nv_bfloat16);
@@ -75,14 +75,14 @@ TEST_F(FusedBatchedMoeTest, ZeroInputProducesZeroOutput) {
 
   // 每个 expert 分配 max_num_tokens 个 token
   std::vector<int> h_expert_num_tokens(num_experts, max_num_tokens);
-  CUDA_CHECK(cudaMemcpy(d_expert_num_tokens, h_expert_num_tokens.data(), expert_num_tokens_bytes,
-                         cudaMemcpyHostToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(d_expert_num_tokens, h_expert_num_tokens.data(), expert_num_tokens_bytes, cudaMemcpyHostToDevice));
 
   InvokeFusedBatchedMoe<__nv_bfloat16>(d_output, d_input, d_w1, d_w2,
-                                        /*input_scale=*/nullptr, /*weight1_scale=*/nullptr, /*weight2_scale=*/nullptr,
-                                        num_experts, d_expert_num_tokens, max_num_tokens, hidden_size, inter_size, topk,
-                                        /*use_fp8=*/false, /*use_int8_w8a8=*/false, /*use_int4=*/false,
-                                        /*group_size=*/0, d_intermediate, d_silu, stream);
+                                       /*input_scale=*/nullptr, /*weight1_scale=*/nullptr, /*weight2_scale=*/nullptr,
+                                       num_experts, d_expert_num_tokens, max_num_tokens, hidden_size, inter_size, topk,
+                                       /*use_fp8=*/false, /*use_int8_w8a8=*/false, /*use_int4=*/false,
+                                       /*group_size=*/0, d_intermediate, d_silu, stream);
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
 

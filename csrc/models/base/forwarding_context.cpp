@@ -28,8 +28,7 @@ size_t SelectEffectiveStepTokenNum(const RuntimeConfig& runtime_config,
 }
 
 std::string FormatDecodeOnlyShrinkLog(const RuntimeConfig& runtime_config,
-                                      const BatchSchedulerConfig& batch_scheduler_config,
-                                      size_t effective_token_num) {
+                                      const BatchSchedulerConfig& batch_scheduler_config, size_t effective_token_num) {
   return fmt::format(
       "ForwardingBuffers::Init decode-only: shrink token_num {} -> {} "
       "(max_batch_size={}, max_decode_tokens_per_req={} [mtp={}, ptp={}], attn_dp={})",
@@ -47,7 +46,7 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   const size_t hidden_units = model_config.hidden_units;
   const size_t head_num_per_tp = head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   const size_t num_kv_heads_per_tp =
-      model_config.num_key_value_heads / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+      DivRoundUp(model_config.num_key_value_heads, runtime_config.parallel_basic_config.attn_tensor_parallel_size);
   size_t vocab_size_pad = DivRoundUp(model_config.vocab_size, tensor_para_size) * tensor_para_size;
 
   BatchSchedulerConfig batch_scheduler_config;
@@ -72,7 +71,8 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
 
   // inter_size_per_tp * 2 is used for the output of the fused gate_proj and up_proj in mlp
   const size_t qkv_head_num = model_config.use_mla ? head_num_per_tp : head_num_per_tp + 2 * num_kv_heads_per_tp;
-  const size_t max_dim = std::max({qkv_head_num * size_per_head, hidden_units, inter_size_per_tp * 2});
+  const size_t max_dim =
+      std::max({qkv_head_num * size_per_head, hidden_units * model_config.mhc_config.hc_mult, inter_size_per_tp * 2});
   // 2 is for concatenate of embedding_norm and hidden norm in mtp
   const size_t mtp_concat_hidden_size = (enable_mtp && context->global->IsSamplingNode()) ? hidden_units * 2 : 0;
   size_t all_to_all_hidden_size = 0;
@@ -81,9 +81,8 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
     // shared_buffer = max_token_num * shared_buffer_unit_size, so we scale all_to_all_hidden_size
     // so that: max_token_num * all_to_all_hidden_size >=
     //   local_num_experts * expert_world_size * ll_tokens * max(hidden, inter*2)
-    size_t ll_tokens = runtime_config.deepep_low_latency_max_tokens > 0
-                           ? runtime_config.deepep_low_latency_max_tokens
-                           : runtime_config.max_step_token_num;
+    size_t ll_tokens = runtime_config.deepep_low_latency_max_tokens > 0 ? runtime_config.deepep_low_latency_max_tokens
+                                                                        : runtime_config.max_step_token_num;
     ExpertParallelConfig expert_parallel_config;
     env->GetExpertParallelConfig(expert_parallel_config);
     size_t local_num_experts = expert_parallel_config.local_num_experts;
@@ -96,11 +95,11 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
     all_to_all_hidden_size =
         runtime_config.parallel_basic_config.expert_world_size * std::max(hidden_units, inter_size_per_tp * 2);
   }
-  size_t shared_buffer_unit_size =
-      std::max({inter_size_per_tp, hidden_units, mtp_concat_hidden_size, all_to_all_hidden_size});
+  size_t shared_buffer_unit_size = std::max({inter_size_per_tp, hidden_units * model_config.mhc_config.hc_mult,
+                                             mtp_concat_hidden_size, all_to_all_hidden_size});
 
   size_t mla_hidden_buffer_size = 0;
-  if (model_config.use_mla) {
+  if (model_config.use_mla && !model_config.use_dsv4_attn) {
     const size_t qk_nope_head_dim = model_config.mla_config.qk_nope_head_dim;
     const size_t qk_rope_head_dim = model_config.mla_config.qk_rope_head_dim;
     const size_t v_head_dim = model_config.mla_config.v_head_dim;
@@ -180,7 +179,8 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
     }
   }
 
-  buffers_shape_map["mtp_hidden_buffer_tensors"] = {enable_mtp ? max_token_num * model_config.hidden_units : 0};
+  buffers_shape_map["mtp_hidden_buffer_tensors"] = {
+      enable_mtp ? max_token_num * model_config.hidden_units * model_config.mhc_config.hc_mult : 0};
 }
 
 void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
@@ -227,15 +227,7 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   buffers_ = std::make_unique<ForwardingBuffers>();
   buffers_->Init(context, rank, model_config, runtime_config, buffer_mgr);
 
-  size_t max_token_num = runtime_config.max_step_token_num;
-  const size_t residual_buffer_size = max_token_num * model_config.hidden_units;
   const DataType weight_type = model_config.weight_data_type;
-  // For distributed mode, the device buffer is used directly.
-  if (context->global->IsStandalone()) {
-    TensorBuffer* local_residual_buffer =
-        buffer_mgr->CreateBufferTensor("local_residual_buffer_", {residual_buffer_size}, weight_type);
-    local_residual_buffer_tensors_ = local_residual_buffer->GetTensors();
-  }
 
   int rotary_embedding = model_config.rope_scaling_factor_config.use_deepseek_rope
                              ? model_config.mla_config.qk_rope_head_dim
@@ -244,8 +236,23 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   float scale_factor = model_config.rope_scaling_factor_config.factor;
 
   std::unordered_set<std::string> possible_rope_types = {"su", "longrope", "llama3"};
-  if (possible_rope_types.find(model_config.rope_scaling_factor_config.type) == possible_rope_types.end() &&
-      !model_config.rope_scaling_factor_config.has_alpha) {
+  if (model_config.use_dsv4_attn) {
+    // DSV4: cos_sin_cache uses default rope (for compress_ratio==0 layers),
+    //       compress_cos_sin_cache uses yarn rope (for compress_ratio>0 layers).
+    TensorBuffer* cos_sin_cache_buffer = buffer_mgr->CreateBufferTensor(
+        "cos_sin_cache_tensor_", {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings)},
+        weight_type);
+    cos_sin_cache_tensor_ = cos_sin_cache_buffer->GetTensors()[0];
+
+    max_position_embeddings = model_config.rope_scaling_factor_config.original_max_position_embeddings;
+    TensorBuffer* compress_cos_sin_cache_buffer = buffer_mgr->CreateBufferTensor(
+        "compress_cos_sin_cache_tensor_",
+        {static_cast<size_t>(rotary_embedding),
+         static_cast<size_t>(max_position_embeddings) * static_cast<size_t>(scale_factor)},
+        weight_type);
+    compress_cos_sin_cache_tensor_ = compress_cos_sin_cache_buffer->GetTensors()[0];
+  } else if (possible_rope_types.find(model_config.rope_scaling_factor_config.type) == possible_rope_types.end() &&
+             !model_config.rope_scaling_factor_config.has_alpha) {
     if (model_config.rope_scaling_factor_config.type == "yarn") {
       max_position_embeddings = model_config.rope_scaling_factor_config.original_max_position_embeddings;
     }
@@ -272,7 +279,8 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
 
 void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
                              const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config,
-                             ForwardingBuffers* buffers, BufferManager* buffer_mgr) {
+                             ForwardingBuffers* buffers, BufferManager* buffer_mgr,
+                             std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
   pipeline_config_ = pipeline_config;
   context_ = context;
   rank_ = rank;
@@ -298,7 +306,8 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
   TensorBuffer* forward_shape_buffer = buffer_mgr->CreateBufferTensor("forward_shape", {1}, TYPE_INVALID);
   attn_ctx_.forward_shape = forward_shape_buffer->GetTensors()[0];
 
-  model_input_ = std::make_shared<ModelInput>(model_config, runtime_config, rank_, context_);
+  block_cache_layout_ = block_cache_layout;
+  model_input_ = std::make_shared<ModelInput>(model_config, runtime_config, rank_, context_, block_cache_layout_);
 
   attn_ctx_.flag_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_BOOL, {1});
 

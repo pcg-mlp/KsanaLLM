@@ -6,6 +6,7 @@
 
 #include <climits>
 
+#include "batch_scheduler/full_cache_hit_handler.h"
 #include "configure/environment.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "profiler/reporter.h"
@@ -309,10 +310,7 @@ void GlobalCacheFetcher::UpdateRequestWorkload(std::shared_ptr<InferRequest>& re
     } else {
       // standalone/prefill 模式下未查到 token(s)：prefill 最后 1 个 input token 来采样
       ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
-      planning_workload.prefill_start_offset = seq_token_num - kStepGenerateTokenNum;
-      planning_workload.prefill_token_num = kStepGenerateTokenNum;
-      req->SetPlanningWorkload(planning_workload);
-      req->SetRemainingWorkload(planning_workload);
+      HandleFullPrefixCacheHit(req, planning_workload, seq_token_num);
 
       KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req->req_id
                      << " workload set (no tokens): prefill_start_offset=" << planning_workload.prefill_start_offset

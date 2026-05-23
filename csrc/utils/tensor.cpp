@@ -195,6 +195,7 @@ void Tensor::AssignMembers(const Tensor& other) {
   perm = other.perm;
   input_scales = other.input_scales;
   weight_scales = other.weight_scales;
+  weight_global_scale = other.weight_global_scale;
   pre_quant_scales = other.pre_quant_scales;
   input_alpha = other.input_alpha;
   alpha = other.alpha;

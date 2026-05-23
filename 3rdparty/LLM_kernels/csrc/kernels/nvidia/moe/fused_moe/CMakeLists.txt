@@ -55,3 +55,13 @@ execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/csrc/kernels/nvidia/moe/comm
 execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/csrc/kernels/nvidia/moe/common.py ${CMAKE_BINARY_DIR})
 cc_test(fused_moe_config_find_test SRCS ${fused_moe_test_SRCS})
 
+# fused_moe_test.cpp depends on <nlohmann/json.hpp>. The header is fetched by
+# csrc/CMakeLists.txt (include external/nlohmann_json) into ${THIRD_PARTY_PATH}/install/nlohmann_json.
+# However, that include_directories() call is directory-scoped to csrc/ and does not
+# propagate here. Add the include path explicitly for this test target.
+# Guard against WITH_TESTING=OFF (cc_test macro skips add_executable when testing is disabled).
+if(TARGET fused_moe_config_find_test)
+  target_include_directories(fused_moe_config_find_test PRIVATE
+    ${THIRD_PARTY_PATH}/install/nlohmann_json/single_include)
+endif()
+

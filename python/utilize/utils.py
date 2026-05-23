@@ -27,6 +27,10 @@ import regex as re
 from typing_extensions import Never, TypeIs, assert_never
 from .logger import init_logger
 
+import partial_json_parser
+from partial_json_parser.core.options import Allow
+from json import JSONDecodeError, JSONDecoder
+
 logger = init_logger(__name__)
 
 _K = TypeVar("_K", bound=Hashable)
@@ -36,6 +40,16 @@ _T = TypeVar("_T")
 GB_bytes = 1_000_000_000
 
 GiB_bytes = 1 << 30
+
+
+def partial_json_loads(input_str: str, flags: Allow) -> tuple[Any, int]:
+    try:
+        return (partial_json_parser.loads(input_str, flags), len(input_str))
+    except JSONDecodeError as e:
+        if "Extra data" in e.msg:
+            dec = JSONDecoder()
+            return dec.raw_decode(input_str)
+        raise
 
 
 def random_uuid() -> str:

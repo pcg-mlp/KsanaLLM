@@ -286,7 +286,6 @@ class ParallelTester {
   void DoParallelRequestAndCheck(int client_num, std::vector<RequestInfo>& reqs, std::vector<ExeHookInterface*>& hooks,
                                  int timeout = 10) {
     KLLM_LOG_INFO << "DoParallelRequestAndCheck start.  client_num=" << client_num << ", request_num=" << reqs.size();
-    KLLM_CHECK_WITH_INFO(hooks.size() > 0, "There must be some hooks");
     KLLM_CHECK_WITH_INFO(round < 1,
                          "DoParallelRequestAndCheck can be invoke once, because schedule_processor is stopped");
     round++;

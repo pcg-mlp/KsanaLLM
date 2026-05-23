@@ -5,6 +5,7 @@
 
 #include "models/common/model_interface.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/multihead_attention.h"
 #include "modules/basic/moe.h"
@@ -62,11 +63,12 @@ class Llama4 : public ModelInterface {
 class Llama4Model : public CommonModel {
  public:
   Llama4Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-              std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+              std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+              std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~Llama4Model() = default;
 
  private:
-  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:

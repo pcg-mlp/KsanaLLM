@@ -26,17 +26,25 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_mixture_of_experts llm_kernels_nvidia_kernel_moe_utils
     llm_kernels_nvidia_kernel_blockwise_gemm llm_kernels_nvidia_utils
     llm_kernels_nvidia_kernel_flash_mla llm_kernels_nvidia_kernel_expand
-    llm_kernels_nvidia_kernel_flash_sparse_mla
-    llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_machete
-    llm_kernels_nvidia_kernel_moe_wna16 llm_kernels_nvidia_kernel_dequant
+    llm_kernels_nvidia_kernel_flash_sparse_mla llm_kernels_nvidia_kernel_gather
+    llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_topk_softplus_sqrt
+    llm_kernels_nvidia_kernel_sglang_topk_softplus_sqrt llm_kernels_nvidia_kernel_machete
+    llm_kernels_nvidia_kernel_moe_wna16 llm_kernels_nvidia_kernel_dequant llm_kernels_nvidia_kernel_dequant_fp4
     llm_kernels_nvidia_kernel_marlin_moe llm_kernels_nvidia_kernel_trt_all_reduce
     llm_kernels_nvidia_kernel_quant_fp8 llm_kernels_nvidia_kernel_fused_add_norm
     llm_kernels_nvidia_kernel_split llm_kernels_nvidia_kernel_sglang_elementwise
+    llm_kernels_nvidia_kernel_sglang_deepseek_v4 llm_kernels_nvidia_kernel_sglang_topk
+    llm_kernels_nvidia_kernel_vllm_deepseek_v4
     llm_kernels_nvidia_kernel_adjust_mem llm_kernels_nvidia_kernel_gemm
     llm_kernels_nvidia_kernel_moe_cutlass_moe llm_kernels_nvidia_kernel_moe_expert_map
     llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale
-    llm_kernels_nvidia_kernel_logits_topk llm_kernels_nvidia_kernel_weight_scale
-    llm_kernels_nvidia_kernel_flashinfer_attention)
+    llm_kernels_nvidia_kernel_logits_topk
+    llm_kernels_nvidia_kernel_flashinfer_attention
+    llm_kernels_nvidia_kernel_sglang_marlin_moe_wna16
+    llm_kernels_nvidia_kernel_humming_ops
+    llm_kernels_nvidia_kernel_humming_jit
+    llm_kernels_nvidia_kernel_humming_launcher
+    llm_kernels_nvidia_kernel_humming_preprocess)
 endif()
 
 

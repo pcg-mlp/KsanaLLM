@@ -106,7 +106,7 @@ Status PagedSparseMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_t
   SCALAR_T* expanded_out_ptr = out_ptr;
   int num_heads = this->num_heads_;
 
-  void* workspace_ptr = workspace_buffer_->GetPtr<void>();
+  uint8_t* workspace_ptr = workspace_buffer_->GetPtr<uint8_t>();
   const int head_size_q = this->kv_lora_rank_ + this->qk_rope_head_dim_;
   if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
     // Quant bf16 q_ptr into fp8 quant_q_ptr
@@ -135,9 +135,9 @@ Status PagedSparseMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_t
       /*sched_meta_initialized, shape[2] is the init flag*/ tile_scheduler_metadata_tensor.shape[2] != 0, batch_size,
       q_seq_len, num_heads, head_size_q, num_blocks, this->block_token_num_,
       /*num_heads_k*/ 1,
-      /*kcache_batch_stride*/ this->block_size_ / this->layer_num_, topk, this->kv_lora_rank_, this->attn_scale_,
-      stream, reinterpret_cast<float*>(workspace_ptr), expanded_out_ptr));
-  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8DsMla && this->num_heads_ < kMinNumHeads) {
+      /*kcache_batch_stride*/ this->block_size_, topk, this->kv_lora_rank_, this->attn_scale_, stream,
+      reinterpret_cast<float*>(workspace_ptr), expanded_out_ptr));
+  if (KV_DTYPE != llm_kernels::utils::KVCacheType::kFp8E4M3 && this->num_heads_ < kMinNumHeads) {
     const size_t dst_pitch = this->num_heads_ * this->kv_lora_rank_ * sizeof(SCALAR_T);
     const size_t src_pitch = kMinNumHeads * this->kv_lora_rank_ * sizeof(SCALAR_T);
     // Squeeze expanded_out_ptr to out_ptr

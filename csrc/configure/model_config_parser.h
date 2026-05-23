@@ -16,6 +16,11 @@
 
 namespace ksana_llm {
 
+// Apply JSON override to ModelConfig fields after parsing.
+// Fields present in override_json overwrite the corresponding ModelConfig members.
+// Unknown fields are silently ignored; type mismatches emit a WARNING and are skipped.
+void ApplyJsonModelOverride(const nlohmann::json &override_json, ModelConfig &model_config);
+
 class EnvModelConfigParser {
  public:
   EnvModelConfigParser(const std::string &weight_quant_method, const std::string &gptq_backend)

@@ -29,6 +29,7 @@ class ModelRunner {
   void SetModelInstance(std::shared_ptr<ModelInstance> model_instance);
   void SetModelWeight(std::shared_ptr<WeightInstanceInterface> model_weight);
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
+  void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager);
   void SetExecutorBlockManager(std::shared_ptr<ExecutorBlockManager> executor_block_manager);
   void SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool);
   void SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> sampling_output_pool);
@@ -45,7 +46,6 @@ class ModelRunner {
   Status HandlePreprocess();
   Status HandleExecute();
   Status HandlePostprocess();
-  Status HandleResultReportProcess();
   Status HandleDistributedScheduleOutput();
 
   void GetHiddenShape(const std::shared_ptr<ScheduleOutput>& schedule_output, std::vector<size_t>& shape);
@@ -81,10 +81,6 @@ class ModelRunner {
   // Read forward output and sampling.
   std::thread postprocess_thread_;
   std::shared_ptr<BlockingQueue<std::shared_ptr<NewModelOutput>>> model_output_queue_ = nullptr;
-
-  // Read sampling output and report to engine process.
-  std::thread result_report_thread_;
-  std::shared_ptr<BlockingQueue<std::shared_ptr<SamplingOutput>>> sampling_output_queue_ = nullptr;
 
   std::shared_ptr<SamplingOutputPool> sampling_output_pool_ = nullptr;
 

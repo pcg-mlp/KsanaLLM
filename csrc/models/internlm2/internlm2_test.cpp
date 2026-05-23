@@ -4,8 +4,8 @@
 
 #include <stdlib.h>
 
-#include <memory>
 #include <filesystem>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -24,6 +24,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
@@ -54,9 +55,12 @@ class Internlm2Test : public testing::Test {
     env->ParseConfig(config_path, model_path);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
+
+    block_cache_layout_ = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
 
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
 
     block_manager_config.device_allocator_config.blocks_num = 10;
@@ -106,6 +110,8 @@ class Internlm2Test : public testing::Test {
   std::shared_ptr<HiddenUnitBufferHelper> hidden_unit_buffer_helper = nullptr;
   HiddenUnitDeviceBuffer *hidden_unit = nullptr;
 
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
+
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
   std::unique_ptr<Internlm2ConfigParser> parser_;
@@ -128,7 +134,7 @@ class Internlm2Test : public testing::Test {
             {"model_type", "internlm2"}};
   }
 
-  std::shared_ptr<Internlm2Config> ParseConfig(const nlohmann::json& config_json) {
+  std::shared_ptr<Internlm2Config> ParseConfig(const nlohmann::json &config_json) {
     ParallelismBasicConfig parallel_basic_config;
     parallel_basic_config.tensor_parallel_size = 1;
     std::shared_ptr<BaseModelConfig> base_model_config;
@@ -156,8 +162,8 @@ class Internlm2Test : public testing::Test {
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
     std::shared_ptr<BaseWeight> internlm2_weight = weight_instance->GetWeight();
-    std::shared_ptr<Internlm2Model> internlm2 =
-        std::make_shared<Internlm2Model>(model_config, runtime_config, device_id, context, internlm2_weight);
+    std::shared_ptr<Internlm2Model> internlm2 = std::make_shared<Internlm2Model>(
+        model_config, runtime_config, device_id, context, internlm2_weight, block_cache_layout_);
 
     auto forward = std::make_unique<ForwardRequest>();
     std::vector<int> input_ids = {233, 1203};
@@ -321,8 +327,8 @@ TEST_F(Internlm2Test, Internlm2ForwardTest) {
 TEST_F(Internlm2Test, ParseModelConfigBasic) {
   nlohmann::json config_with_quant = CreateBaseConfig();
   config_with_quant["quantization_config"] = {{"quant_method", "modelopt"},
-                                               {"quant_algo", "W4A8_AWQ"},
-                                               {"producer", {{"name", "modelopt"}, {"version", "0.33.1"}}}};
+                                              {"quant_algo", "W4A8_AWQ"},
+                                              {"producer", {{"name", "modelopt"}, {"version", "0.33.1"}}}};
 
   auto internlm2_config = ParseConfig(config_with_quant);
   ASSERT_NE(internlm2_config, nullptr);

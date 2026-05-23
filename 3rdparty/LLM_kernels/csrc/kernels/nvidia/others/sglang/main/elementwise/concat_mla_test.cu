@@ -55,7 +55,7 @@ class LlamaNvidiaConcatMlaTestSuit : public NvidiaTestSuitBase {
     // Invoke expand and concat for reference
     auto cuda_ref_run = [&]() {
       InvokeExpand<T>(reinterpret_cast<const T*>(k_rope_meta.data_ptr),
-                      reinterpret_cast<T*>(k_rope_expand_meta.data_ptr), num_tokens, num_heads, qk_rope_head_dim, 0,
+                      reinterpret_cast<T*>(k_rope_expand_meta.data_ptr), num_tokens, num_heads, qk_rope_head_dim,
                       stream);
       Concat<T>(reinterpret_cast<const T*>(k_nope_meta.data_ptr),
                 reinterpret_cast<const T*>(k_rope_expand_meta.data_ptr), qk_nope_head_dim, qk_rope_head_dim,

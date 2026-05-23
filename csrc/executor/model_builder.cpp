@@ -4,6 +4,8 @@
 
 #include "executor/model_builder.h"
 
+#include "profiler/profile_event.h"
+
 namespace ksana_llm {
 
 ModelBuilder::ModelBuilder(std::shared_ptr<Context> context) : context_(context) {}
@@ -14,9 +16,13 @@ void ModelBuilder::SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManage
   block_allocator_manager_ = block_allocator_manager;
 }
 
+void ModelBuilder::SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager) {
+  swa_block_allocator_manager_ = swa_block_allocator_manager;
+}
+
 void ModelBuilder::BuildForwardRequests(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
                                         std::vector<ForwardRequest>& forward_reqs) {
-  // maybe async
+  PROFILE_EVENT_SCOPE(build_forward_requests, "Exec.BuildModelInput.BuildForwardRequests");
   for (auto& req_ptr : reqs) {
     req_ptr->block_allocator_manager = block_allocator_manager_;
     req_ptr->model_instance = model_instance_;
@@ -36,6 +42,19 @@ void ModelBuilder::BuildForwardRequestFromInferRequest(ForwardRequest& forward_r
   // Skip all kv blocks that not belong to current db group.
   if (attn_dp_group_id == req_ptr->attn_dp_group_id) {
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs(attn_dp_rank_id);
+
+    // Populate SWA block base address when SWA is enabled.
+    // Since SWA blocks are contiguous in memory (each block is block_size apart),
+    // only the base address of block_id=0 is needed.
+    if (swa_block_allocator_manager_ && !req_ptr->swa_kv_cache_blocks.empty()) {
+      auto swa_group = swa_block_allocator_manager_->GetBlockAllocatorGroup(req_ptr->attn_dp_group_id);
+      std::vector<void*> swa_block_ptrs(1);
+      swa_group->GetDeviceBlockAllocator(attn_dp_rank_id)->GetBlockPtrs({0}, swa_block_ptrs);
+      forward_req.swa_block_base_addr = swa_block_ptrs[0];
+      forward_req.swa_kv_cache_blocks = req_ptr->swa_kv_cache_blocks;
+      // SWA pool 总 block 数: attention kernel 需要它做 indices 上限校验。
+      forward_req.swa_pool_block_num = static_cast<int64_t>(swa_group->GetBlockAllocatorGroupConfig().device_block_num);
+    }
   }
 
   forward_req.req_id = req_ptr->req_id;
@@ -58,6 +77,7 @@ void ModelBuilder::BuildForwardRequestFromInferRequest(ForwardRequest& forward_r
   forward_req.sampling_config = &(req_ptr->sampling_config);
   forward_req.attn_dp_group_id = req_ptr->attn_dp_group_id;
   forward_req.block_allocator_manager = block_allocator_manager_;
+  forward_req.swa_kv_cache_block_idx_offsets = req_ptr->swa_kv_cache_block_idx_offsets;
 
   // Skip all kv blocks that not belong to current db group.
   if (attn_dp_group_id == req_ptr->attn_dp_group_id) {
@@ -103,16 +123,22 @@ void ModelBuilder::BuildFlatKVCacheBlkIds(uint32_t layer_num, const std::vector<
                                           std::vector<std::vector<int32_t>>& atb_block_ids,
                                           std::shared_ptr<BlockAllocatorInterface> block_allocator) {
   atb_block_ids.resize(rank_num);
+  const ModelConfig& model_config = model_instance_->GetModelConfig();
 
   // for dedicate device kv blocks
   size_t base_id = block_allocator->GetBlocksBaseId();
   std::vector<int32_t> base_block_ids;
   base_block_ids.reserve(device_block_ids.size());
   std::transform(device_block_ids.begin(), device_block_ids.end(), std::back_inserter(base_block_ids),
-                 [base_id, layer_num](int block_id) {
-                   size_t original_block_id = block_id - base_id;
-                   // NOTE(karlluo): only support bfloat16 or float16, so we just dedicate sizeof(float16) here
-                   return original_block_id * layer_num * 2;
+                 [base_id, layer_num, &model_config](int block_id) {
+                   const size_t original_block_id = block_id - base_id;
+                   if (model_config.use_dsa) {
+                     return original_block_id;
+                   } else if (model_config.use_mla) {
+                     return original_block_id * layer_num;
+                   } else {
+                     return original_block_id * layer_num * 2;
+                   }
                  });
 
   for (size_t rank = 0; rank < rank_num; ++rank) {
@@ -122,10 +148,14 @@ void ModelBuilder::BuildFlatKVCacheBlkIds(uint32_t layer_num, const std::vector<
 
 Status ModelBuilder::BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output,
                                      std::shared_ptr<NewModelInput> model_input, const RunMode run_mode) {
+  PROFILE_EVENT_SCOPE(build_model_input, "Exec.BuildModelInput.Total");
   model_input->schedule_output = schedule_output;
   model_input->run_mode = run_mode;
 
-  ReorderInferRequests(model_input->schedule_output->executor_running_reqs);
+  {
+    PROFILE_EVENT_SCOPE(reorder_infer_requests, "Exec.BuildModelInput.Reorder");
+    ReorderInferRequests(model_input->schedule_output->executor_running_reqs);
+  }
   BuildForwardRequests(model_input->schedule_output->executor_running_reqs, model_input->reqs);
   return Status();
 }

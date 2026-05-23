@@ -30,6 +30,7 @@
 #include "utils/singleton.h"
 #include "utils/status.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/environment_test_helper.h"
 
 using namespace ksana_llm;
@@ -47,15 +48,18 @@ class ControlChannelTest : public testing::Test {
     master_env_->ParseConfig(config_file);
     worker_env_->ParseConfig(config_file);
 
+    master_block_cache_layout_ = GetTestModelCacheLayout(master_env_);
+    worker_block_cache_layout_ = GetTestModelCacheLayout(worker_env_);
+
     BlockManagerConfig master_block_manager_config;
-    master_env_->InitializeBlockManagerConfig();
+    master_env_->InitializeBlockManagerConfig(master_block_cache_layout_);
     master_env_->GetBlockManagerConfig(master_block_manager_config);
     master_block_manager_config.device_allocator_config.blocks_num = 10;
     master_block_manager_config.host_allocator_config.blocks_num = 8;
     master_env_->SetBlockManagerConfig(master_block_manager_config);
 
     BlockManagerConfig worker_block_manager_config;
-    worker_env_->InitializeBlockManagerConfig();
+    worker_env_->InitializeBlockManagerConfig(worker_block_cache_layout_);
     worker_env_->GetBlockManagerConfig(worker_block_manager_config);
     worker_block_manager_config.device_allocator_config.blocks_num = 6;
     worker_block_manager_config.host_allocator_config.blocks_num = 4;
@@ -117,6 +121,9 @@ class ControlChannelTest : public testing::Test {
  protected:
   std::shared_ptr<Environment> master_env_ = nullptr;
   std::shared_ptr<Environment> worker_env_ = nullptr;
+
+  std::shared_ptr<BaseModelCacheLayout> master_block_cache_layout_ = nullptr;
+  std::shared_ptr<BaseModelCacheLayout> worker_block_cache_layout_ = nullptr;
 
   std::shared_ptr<GlobalContext> master_global_context_ = nullptr;
   std::shared_ptr<GlobalContext> worker_global_context_ = nullptr;

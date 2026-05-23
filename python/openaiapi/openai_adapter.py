@@ -27,6 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openaiapi.request_converter import RequestConverter
 from openaiapi.encoding_dsv32 import encode_messages
+from openaiapi import encoding_dsv4
 from openaiapi.tool_parsers import ToolParser
 from openaiapi.utils import is_multimodal_messages
 
@@ -159,6 +160,7 @@ class KsanaOpenAIServing:
         self._model_info = self._extract_model_info()
 
         self.use_deepseek_v32_encoding = False
+        self.use_deepseek_v4_encoding = False
 
     def _initialize_tokenizer(self) -> Any:
         """Initialize tokenizer, avoid repeat getting tokenizer"""
@@ -689,7 +691,7 @@ class KsanaOpenAIServing:
             }
             return messages, [], [engine_prompt]
 
-        if self.use_deepseek_v32_encoding:
+        if self.use_deepseek_v32_encoding or self.use_deepseek_v4_encoding:
             self.maybe_serialize_tool_calls(messages)
             conversation = messages
             mm_data_future = None
@@ -746,6 +748,33 @@ class KsanaOpenAIServing:
                 conversation[0]["tools"] = tool_dicts
             request_prompt = encode_messages(
                 conversation, thinking_mode=thinking_mode, drop_thinking=False
+            )
+        elif self.use_deepseek_v4_encoding:
+            # DeepSeek-V4 encoding with thinking mode, reasoning effort, and task support
+            thinking_requested = (request.chat_template_kwargs or {}).get("thinking", False)
+            thinking_mode = "thinking" if thinking_requested else "chat"
+
+            if conversation[0]["role"] != "system":
+                # insert an empty system prompt to help render tool system prompt
+                conversation.insert(0, {"role": "system", "content": ""})
+            if tool_dicts:
+                conversation[0]["tools"] = tool_dicts
+
+            # V4 reasoning effort: only accepts "max" / "high" / None
+            reasoning_effort = getattr(request, "reasoning_effort", None)
+            v4_reasoning_effort = (
+                reasoning_effort if reasoning_effort in ("max", "high") else None
+            )
+
+            # V4 task support
+            task = getattr(request, "task", None)
+            if task is not None:
+                encoding_dsv4.attach_task_to_last_user_message(conversation, task)
+
+            request_prompt = encoding_dsv4.encode_messages(
+                conversation,
+                thinking_mode=thinking_mode,
+                reasoning_effort=v4_reasoning_effort,
             )
         else:
             request_prompt = apply_hf_chat_template(

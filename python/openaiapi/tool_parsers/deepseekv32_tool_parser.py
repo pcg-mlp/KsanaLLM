@@ -79,6 +79,7 @@ class DeepSeekV32ToolParser(ToolParser):
         self.eos_token = "<｜end▁of▁sentence｜>"
         self.bot_token = "<｜DSML｜function_calls>"
         self.eot_token = "</｜DSML｜function_calls>"
+        self.function_calls_regex = r"<｜DSML｜function_calls>(.*?)</｜DSML｜function_calls>"
         self.invoke_begin_regex = r'<｜DSML｜invoke\s+name="([^"]+)"\s*>'
         self.invoke_end_token = "</｜DSML｜invoke>"
         self.parameter_regex = r'<｜DSML｜parameter\s+name="([^"]+)"\s+string="([^"]+)"\s*>(.*?)</｜DSML｜parameter>'
@@ -141,8 +142,8 @@ class DeepSeekV32ToolParser(ToolParser):
         return parameters
 
     def extract_tool_calls(
-        self, 
-        model_output: str, 
+        self,
+        model_output: str,
         request: ChatCompletionRequest
     ) -> ExtractedToolCallInformation:
         """
@@ -165,7 +166,7 @@ class DeepSeekV32ToolParser(ToolParser):
         try:
             # Extract content between function_calls tags
             function_calls_match = re.search(
-                r"<｜DSML｜function_calls>(.*?)</｜DSML｜function_calls>",
+                self.function_calls_regex,
                 model_output,
                 re.DOTALL,
             )
@@ -297,7 +298,7 @@ class DeepSeekV32ToolParser(ToolParser):
                                 name=func_name,
                                 arguments="",
                             ).model_dump(exclude_none=True),
-                        ) 
+                        )
                     )
                     self.current_tool_name_sent = True
                     all_calls.extend(calls_for_this_invoke)

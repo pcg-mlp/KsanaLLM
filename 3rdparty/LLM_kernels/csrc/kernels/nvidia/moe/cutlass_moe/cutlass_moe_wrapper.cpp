@@ -40,9 +40,12 @@ void CutlassMoeWrapper::Init() {
 CutlassMoeWrapper::~CutlassMoeWrapper() = default;
 
 size_t CutlassMoeWrapper::GetWorkspaceSize(size_t num_token, size_t experts_per_token, size_t num_experts_on_rank,
-                                           size_t hidden_size, size_t inter_size) {
+                                           size_t hidden_size, size_t inter_size,
+                                           const std::optional<Tensor>& swiglu_alpha,
+                                           const std::optional<Tensor>& swiglu_beta,
+                                           const std::optional<Tensor>& swiglu_limit) {
 #if ENABLE_CUTLASSMOE
-  return fused_moe_runner_->getRuntimeWorkspaceInfo(std::nullopt, std::nullopt, std::nullopt, experts_per_token,
+  return fused_moe_runner_->getRuntimeWorkspaceInfo(swiglu_alpha, swiglu_beta, swiglu_limit, experts_per_token,
                                                     num_token, hidden_size, inter_size, num_experts_on_rank, tp_size_,
                                                     tp_rank_, ep_size_, ep_rank_, min_latency_mode_, {}, std::nullopt);
 #else
@@ -61,11 +64,13 @@ void CutlassMoeWrapper::SetWorkspacePtr(void* workspace_ptr) {
 void CutlassMoeWrapper::Forward(Tensor& output, const Tensor& input, const Tensor& token_selected_experts,
                                 const std::optional<Tensor>& token_final_scales, const Tensor& fc1_expert_weights,
                                 const Tensor& fc2_expert_weights, const std::vector<Tensor>& quant_scales,
-                                const std::vector<int64_t>& profile_ids, cudaStream_t stream) {
+                                const std::optional<Tensor>& swiglu_alpha, const std::optional<Tensor>& swiglu_beta,
+                                const std::optional<Tensor>& swiglu_limit, const std::vector<int64_t>& profile_ids,
+                                cudaStream_t stream) {
 #if ENABLE_CUTLASSMOE
   fused_moe_runner_->runMoe(output, input, token_selected_experts, token_final_scales, fc1_expert_weights, std::nullopt,
-                            fc2_expert_weights, std::nullopt, quant_scales, std::nullopt, false, std::nullopt,
-                            std::nullopt, std::nullopt, tp_size_, tp_rank_, ep_size_, ep_rank_, cluster_size_,
+                            fc2_expert_weights, std::nullopt, quant_scales, std::nullopt, false, swiglu_alpha,
+                            swiglu_beta, swiglu_limit, tp_size_, tp_rank_, ep_size_, ep_rank_, cluster_size_,
                             cluster_rank_, enable_alltoall_, min_latency_mode_, profile_ids, std::nullopt, stream);
 #else
   KLLM_KERNEL_THROW("ENABLE_CUTLASSMOE=0, skipping Cutlass Moe kernel.");

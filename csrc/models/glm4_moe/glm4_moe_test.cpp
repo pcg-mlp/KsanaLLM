@@ -27,6 +27,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
@@ -62,12 +63,6 @@ class Glm4MoeTest : public testing::Test {
     env->ParseConfig(config_path, model_path);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
-    env->GetPipelineConfig(pipeline_config);
-
-    pipeline_config.lower_layer_idx = 0;
-    pipeline_config.upper_layer_idx = static_cast<int>(model_config.num_layer) - 1;
-    pipeline_config.lower_nextn_layer_idx = -1;
-    pipeline_config.upper_nextn_layer_idx = -1;
 
     BatchSchedulerConfig batch_scheduler_config;
     env->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -76,10 +71,14 @@ class Glm4MoeTest : public testing::Test {
     batch_scheduler_config.max_token_len = 128;
     env->SetBatchSchedulerConfig(batch_scheduler_config);
 
-    env->SetPipelineConfig(pipeline_config);
     env->SetModelConfig(model_config);
     env->UpdateModelConfig();
-    env->InitializeBlockManagerConfig();
+
+    env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config, /* enable_mtp */ false);
+
+    block_cache_layout_ = GetTestModelCacheLayout(env_);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
 
     BlockManagerConfig block_manager_config;
     env->GetBlockManagerConfig(block_manager_config);
@@ -133,6 +132,8 @@ class Glm4MoeTest : public testing::Test {
   std::shared_ptr<BlockAllocatorGroupInterface> executor_block_group;
   std::shared_ptr<Context> context{nullptr};
   HiddenUnitDeviceBuffer* hidden_unit = nullptr;
+
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
@@ -189,8 +190,8 @@ class Glm4MoeTest : public testing::Test {
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
     std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
-    std::shared_ptr<Glm4MoeModel> model =
-        std::make_shared<Glm4MoeModel>(model_config, runtime_config, device_id, context, model_weight);
+    std::shared_ptr<Glm4MoeModel> model = std::make_shared<Glm4MoeModel>(model_config, runtime_config, device_id,
+                                                                         context, model_weight, block_cache_layout_);
 
     // ContextDecode forward
     auto forward = std::make_unique<ForwardRequest>();
@@ -566,57 +567,58 @@ TEST_F(Glm4MoeTest, ConfigParserMoeSpecificTest) {
 
 TEST_F(Glm4MoeTest, ConfigW4A8HelperTest) {
 #ifdef ENABLE_CUDA
-    // IsWeightMatchW4A8: primary W4A8
-    {Glm4MoeConfig config;
-config.quant_config.method = QUANT_W4A8_AWQ;
-EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.mlp.experts.0.gate_proj.weight"));
-EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.self_attn.q_proj.weight"));
-}
+  // IsWeightMatchW4A8: primary W4A8
+  {
+    Glm4MoeConfig config;
+    config.quant_config.method = QUANT_W4A8_AWQ;
+    EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.mlp.experts.0.gate_proj.weight"));
+    EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.self_attn.q_proj.weight"));
+  }
 
-// IsWeightMatchW4A8: mixed quantization (FP8 primary + W4A8 sub for experts)
-{
-  Glm4MoeConfig config;
-  config.quant_config.method = QUANT_FP8_E4M3;
-  QuantConfig sub_config;
-  sub_config.method = QUANT_W4A8_AWQ;
-  sub_config.pattern_layers = {".mlp.experts."};
-  sub_config.ignored_layers = {"model.layers.92"};
-  config.sub_quant_configs.push_back(sub_config);
+  // IsWeightMatchW4A8: mixed quantization (FP8 primary + W4A8 sub for experts)
+  {
+    Glm4MoeConfig config;
+    config.quant_config.method = QUANT_FP8_E4M3;
+    QuantConfig sub_config;
+    sub_config.method = QUANT_W4A8_AWQ;
+    sub_config.pattern_layers = {".mlp.experts."};
+    sub_config.ignored_layers = {"model.layers.92"};
+    config.sub_quant_configs.push_back(sub_config);
 
-  EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.mlp.experts.0.gate_proj.weight"));
-  EXPECT_FALSE(config.IsWeightMatchW4A8("model.layers.92.mlp.experts.0.gate_proj.weight"));
-  EXPECT_FALSE(config.IsWeightMatchW4A8("model.layers.0.self_attn.q_proj.weight"));
-}
+    EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.mlp.experts.0.gate_proj.weight"));
+    EXPECT_FALSE(config.IsWeightMatchW4A8("model.layers.92.mlp.experts.0.gate_proj.weight"));
+    EXPECT_FALSE(config.IsWeightMatchW4A8("model.layers.0.self_attn.q_proj.weight"));
+  }
 
-// ContainW4A8Weights
-{
-  Glm4MoeConfig config;
-  config.quant_config.method = QUANT_FP8_E4M3;
-  EXPECT_FALSE(config.ContainW4A8Weights());
-  config.quant_config.method = QUANT_W4A8_AWQ;
-  EXPECT_TRUE(config.ContainW4A8Weights());
+  // ContainW4A8Weights
+  {
+    Glm4MoeConfig config;
+    config.quant_config.method = QUANT_FP8_E4M3;
+    EXPECT_FALSE(config.ContainW4A8Weights());
+    config.quant_config.method = QUANT_W4A8_AWQ;
+    EXPECT_TRUE(config.ContainW4A8Weights());
 
-  Glm4MoeConfig config2;
-  config2.quant_config.method = QUANT_FP8_E4M3;
-  QuantConfig sub_config;
-  sub_config.method = QUANT_GPTQ;
-  config2.sub_quant_configs.push_back(sub_config);
-  EXPECT_TRUE(config2.ContainW4A8Weights());
-}
+    Glm4MoeConfig config2;
+    config2.quant_config.method = QUANT_FP8_E4M3;
+    QuantConfig sub_config;
+    sub_config.method = QUANT_GPTQ;
+    config2.sub_quant_configs.push_back(sub_config);
+    EXPECT_TRUE(config2.ContainW4A8Weights());
+  }
 
-// IsW4A8Contain: weight name suffix matching
-{
-  Glm4MoeConfig config;
-  config.quant_config.method = QUANT_W4A8_AWQ;
-  config.quant_config.input_scale = true;
+  // IsW4A8Contain: weight name suffix matching
+  {
+    Glm4MoeConfig config;
+    config.quant_config.method = QUANT_W4A8_AWQ;
+    config.quant_config.input_scale = true;
 
-  EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.qweight"));
-  EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.scales"));
-  EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.qzeros"));
-  EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.input_scale"));
-  EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.weight_scale"));
-  EXPECT_FALSE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.weight"));
-}
+    EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.qweight"));
+    EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.scales"));
+    EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.qzeros"));
+    EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.input_scale"));
+    EXPECT_TRUE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.weight_scale"));
+    EXPECT_FALSE(config.IsW4A8Contain("model.layers.0.mlp.experts.0.gate_proj.weight"));
+  }
 #endif
 }
 
@@ -626,53 +628,54 @@ EXPECT_TRUE(config.IsWeightMatchW4A8("model.layers.0.self_attn.q_proj.weight"));
 
 TEST_F(Glm4MoeTest, WeightLoaderFilterTest) {
 #ifdef ENABLE_CUDA
-    // Test skip list: shared_head.* should be filtered out
-    {Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
-std::vector<std::string> weight_names = {
-    "model.layers.0.self_attn.q_proj.weight",
-    "model.layers.0.mlp.gate.weight",
-    "shared_head.head.weight",
-    "shared_head.norm.weight",
-    "model.embed_tokens.weight",
-    "lm_head.weight",
-};
-EXPECT_TRUE(weight_loader.FilterWeightNames(weight_names).OK());
-for (const auto& name : weight_names) {
-  EXPECT_EQ(name.find("shared_head"), std::string::npos) << "should filter: " << name;
-}
-}
-
-// Test layer range: only layers 0-1 kept, layers 2-3 filtered
-{
-  PipelineConfig wl_pipeline_config;
-  wl_pipeline_config.lower_layer_idx = 0;
-  wl_pipeline_config.upper_layer_idx = 1;
-  wl_pipeline_config.lower_nextn_layer_idx = -1;
-  wl_pipeline_config.upper_nextn_layer_idx = -1;
-  env_->SetPipelineConfig(wl_pipeline_config);
-
-  Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
-  std::vector<std::string> weight_names = {
-      "model.layers.0.self_attn.q_proj.weight",
-      "model.layers.1.self_attn.q_proj.weight",
-      "model.layers.2.self_attn.q_proj.weight",
-      "model.layers.3.self_attn.q_proj.weight",
-      "model.embed_tokens.weight",
-  };
-  EXPECT_TRUE(weight_loader.FilterWeightNames(weight_names).OK());
-
-  bool found_layer_0 = false, found_layer_1 = false, found_layer_2 = false, found_embed = false;
-  for (const auto& name : weight_names) {
-    if (name.find("layers.0.") != std::string::npos) found_layer_0 = true;
-    if (name.find("layers.1.") != std::string::npos) found_layer_1 = true;
-    if (name.find("layers.2.") != std::string::npos) found_layer_2 = true;
-    if (name.find("embed_tokens") != std::string::npos) found_embed = true;
+  // Test skip list: shared_head.* should be filtered out
+  {
+    Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
+    std::vector<std::string> weight_names = {
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.0.mlp.gate.weight",
+        "shared_head.head.weight",
+        "shared_head.norm.weight",
+        "model.embed_tokens.weight",
+        "lm_head.weight",
+    };
+    EXPECT_TRUE(weight_loader.FilterWeightNames(weight_names).OK());
+    for (const auto& name : weight_names) {
+      EXPECT_EQ(name.find("shared_head"), std::string::npos) << "should filter: " << name;
+    }
   }
-  EXPECT_TRUE(found_layer_0);
-  EXPECT_TRUE(found_layer_1);
-  EXPECT_FALSE(found_layer_2);
-  EXPECT_TRUE(found_embed);
-}
+
+  // Test layer range: only layers 0-1 kept, layers 2-3 filtered
+  {
+    PipelineConfig wl_pipeline_config;
+    wl_pipeline_config.lower_layer_idx = 0;
+    wl_pipeline_config.upper_layer_idx = 1;
+    wl_pipeline_config.lower_nextn_layer_idx = -1;
+    wl_pipeline_config.upper_nextn_layer_idx = -1;
+    env_->SetPipelineConfig(wl_pipeline_config);
+
+    Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
+    std::vector<std::string> weight_names = {
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.1.self_attn.q_proj.weight",
+        "model.layers.2.self_attn.q_proj.weight",
+        "model.layers.3.self_attn.q_proj.weight",
+        "model.embed_tokens.weight",
+    };
+    EXPECT_TRUE(weight_loader.FilterWeightNames(weight_names).OK());
+
+    bool found_layer_0 = false, found_layer_1 = false, found_layer_2 = false, found_embed = false;
+    for (const auto& name : weight_names) {
+      if (name.find("layers.0.") != std::string::npos) found_layer_0 = true;
+      if (name.find("layers.1.") != std::string::npos) found_layer_1 = true;
+      if (name.find("layers.2.") != std::string::npos) found_layer_2 = true;
+      if (name.find("embed_tokens") != std::string::npos) found_embed = true;
+    }
+    EXPECT_TRUE(found_layer_0);
+    EXPECT_TRUE(found_layer_1);
+    EXPECT_FALSE(found_layer_2);
+    EXPECT_TRUE(found_embed);
+  }
 #endif
 }
 
@@ -682,21 +685,22 @@ for (const auto& name : weight_names) {
 
 TEST_F(Glm4MoeTest, WeightLoaderPreProcessTest) {
 #ifdef ENABLE_CUDA
-    // Common (non-quantized)
-    {weight_loader_config_->is_quant = false;
-Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
-std::unordered_map<std::string, Tensor> host_model_weights;
-EXPECT_TRUE(weight_loader.PreProcessModelWeights(host_model_weights).OK());
-}
+  // Common (non-quantized)
+  {
+    weight_loader_config_->is_quant = false;
+    Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
+    std::unordered_map<std::string, Tensor> host_model_weights;
+    EXPECT_TRUE(weight_loader.PreProcessModelWeights(host_model_weights).OK());
+  }
 
-// FP8 quantized
-{
-  weight_loader_config_->is_quant = true;
-  weight_loader_config_->quant_config.method = QUANT_FP8_E4M3;
-  Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
-  std::unordered_map<std::string, Tensor> host_model_weights;
-  EXPECT_TRUE(weight_loader.PreProcessModelWeights(host_model_weights).OK());
-}
+  // FP8 quantized
+  {
+    weight_loader_config_->is_quant = true;
+    weight_loader_config_->quant_config.method = QUANT_FP8_E4M3;
+    Glm4MoeWeightLoader weight_loader(weight_loader_config_, env_, context);
+    std::unordered_map<std::string, Tensor> host_model_weights;
+    EXPECT_TRUE(weight_loader.PreProcessModelWeights(host_model_weights).OK());
+  }
 #endif
 }
 
@@ -1033,8 +1037,6 @@ TEST_F(Glm4MoeTest, WeightLoaderMtpEhProjTest) {
       << "MTP eh_proj.input_scale should be loaded";
 #endif
 }
-
-
 
 // ============================================================================
 // 15. Config — W4A8 helpers (IsW4A8Method, GetW4A8QuantConfig, IsW4A8Contain)

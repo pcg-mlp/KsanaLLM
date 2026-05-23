@@ -22,9 +22,11 @@
 #ifdef ENABLE_CUDA
 #  include "layers/set_torch_stream_layer.h"
 #endif
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/context.h"
 #include "configure/environment.h"
 #include "models/base/base_model.h"
+#include "models/base/forwarding_context.h"
 #include "models/base/model_communicator.h"
 #include "models/base/model_input.h"
 #include "models/base/model_output.h"
@@ -36,10 +38,9 @@
 #include "utils/tensor.h"
 #include "utils/utils.h"
 
-#include "models/base/forwarding_context.h"
-
 #include "modules/basic/layernorm.h"
 #include "modules/basic/linear.h"
+#include "modules/basic/mhc.h"
 
 namespace ksana_llm {
 
@@ -73,7 +74,8 @@ class CommonModel : public BaseModel {
   ~CommonModel() override;
 
   // Initialize the run config.
-  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
+  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight,
+                     std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
   float* GetLogitsPtr() override;
 
@@ -169,6 +171,15 @@ class CommonModel : public BaseModel {
                            ForwardingContext& forwarding_context);
 
   virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context);
+
+  // Only set by required models
+  std::unique_ptr<Mhc> initial_mhc_;
+  std::unique_ptr<Mhc> final_mhc_;
+  MhcBuffers mhc_buffers_;
+
+  // When set, LmHead uses these for kNextN instead of final_mhc_/lm_head_prenorm_.
+  std::unique_ptr<Mhc> nextn_final_mhc_;
+  std::unique_ptr<Layernorm> nextn_shared_head_norm_;
 };
 
 }  // namespace ksana_llm

@@ -398,123 +398,6 @@ TEST_F(MlaPagedAttentionTestSuit, PagedSparseMlaConvertBlockTableKernelAccTest) 
   }
 }
 
-#ifdef ENABLE_FP8
-TEST_F(MlaPagedAttentionTestSuit, MlaIndexerFlashKVCacheCopyKernelAccTest) {
-  // Lanch kernel wrapper
-  MlaIndexerFlashKVCacheCopy(reinterpret_cast<__nv_fp8_e4m3*>(dev_k_src_), dev_v_src_, dev_k_list_, dev_v_list_,
-                             dev_prefix_offsets_, dev_without_prefix_offsets_, dev_block_offsets_, block_size_,
-                             batch_size_, total_len_without_prefix_, k_value_num_, v_value_num_, stream);
-
-  // Copy block from device to host
-  std::vector<float> host_k_dst;
-  CopyDeviceBlocksToHost(host_k_dst);
-  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-  // Only check v (float scale part)
-  size_t v_total_idx = 0;
-  for (size_t batch_idx = 0; batch_idx < batch_size_; batch_idx++) {
-    for (int token_idx = input_prefix_len_[batch_idx]; token_idx < input_token_num_[batch_idx]; token_idx++) {
-      for (int i = 0; i < v_value_num_; i++) {
-        EXPECT_FLOAT_EQ(host_v_src_[v_total_idx],
-                        host_k_dst[((host_block_offsets_[batch_idx] + token_idx / block_size_) * block_bytes_ +
-                                    block_size_ * k_value_num_) /
-                                       sizeof(float) +
-                                   token_idx % block_size_ * v_value_num_ + i]);
-        ++v_total_idx;
-      }
-    }
-  }
-}
-
-TEST_F(MlaPagedAttentionTestSuit, MlaIndexerPagedKVCacheCopyKernelAccTest) {
-  for (int req_q_len = 1; req_q_len <= 1; req_q_len++) {
-    // Lanch kernel wrapper
-    MlaIndexerPagedKVCacheCopy(reinterpret_cast<__nv_fp8_e4m3*>(dev_k_src_), dev_v_src_, dev_k_list_, dev_v_list_,
-                               dev_input_lengths_, dev_block_offsets_, block_size_, batch_size_, req_q_len,
-                               k_value_num_, v_value_num_, stream);
-
-    // Copy block from device to host
-    std::vector<float> host_k_dst;
-    CopyDeviceBlocksToHost(host_k_dst);
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-    // Only check v (float scale part)
-    size_t v_total_idx = 0;
-    for (size_t batch_idx = 0; batch_idx < batch_size_; batch_idx++) {
-      for (int token_idx = input_token_num_[batch_idx] - req_q_len; token_idx < input_token_num_[batch_idx];
-           token_idx++) {
-        for (int i = 0; i < v_value_num_; i++) {
-          EXPECT_FLOAT_EQ(host_v_src_[v_total_idx],
-                          host_k_dst[((host_block_offsets_[batch_idx] + token_idx / block_size_) * block_bytes_ +
-                                      block_size_ * k_value_num_) /
-                                         sizeof(float) +
-                                     token_idx % block_size_ * v_value_num_ + i]);
-          ++v_total_idx;
-        }
-      }
-    }
-  }
-}
-
-// Performance test is disabled by default
-TEST_F(MlaPagedAttentionTestSuit, DISABLED_MlaIndexerPagedKVCacheCopyKernelPerfTest) {
-  const std::vector<size_t> batch_sizes = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
-  const int req_q_len = 1;
-
-  for (const size_t batch_size : batch_sizes) {
-    const size_t token_num = batch_size * req_q_len;
-    // Prepare device data
-    BufferMeta d_k = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {token_num, static_cast<size_t>(k_value_num_)},
-                                                 /*is_random_init*/ true);
-    BufferMeta d_v = CreateBuffer<float>(MemoryType::MEMORY_GPU, {token_num, static_cast<size_t>(v_value_num_)},
-                                         /*is_random_init*/ true);
-    BufferMeta h_input_lengths = CreateBuffer<int>(MemoryType::MEMORY_CPU, {batch_size}, /*is_random_init*/ false);
-    BufferMeta h_block_offsets = CreateBuffer<int>(MemoryType::MEMORY_CPU, {batch_size}, /*is_random_init*/ false);
-    BufferMeta h_k_list = CreateBuffer<size_t>(MemoryType::MEMORY_CPU, {batch_size}, /*is_random_init*/ false);
-    BufferMeta h_v_list = CreateBuffer<size_t>(MemoryType::MEMORY_CPU, {batch_size}, /*is_random_init*/ false);
-    // Construct arbitrary input length and block offset
-    for (size_t i = 0; i < batch_size; i++) {
-      reinterpret_cast<int*>(h_input_lengths.data_ptr)[i] = 30;
-      reinterpret_cast<int*>(h_block_offsets.data_ptr)[i] = i;
-      cudaMallocAsync(&(reinterpret_cast<void**>(h_k_list.data_ptr)[i]), block_bytes_, stream);
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    for (size_t i = 0; i < batch_size; i++) {
-      reinterpret_cast<void**>(h_v_list.data_ptr)[i] =
-          reinterpret_cast<uint8_t**>(h_k_list.data_ptr)[i] + block_size_ * k_value_num_;
-    }
-    BufferMeta d_input_lengths = CopyToDevice<int>(h_input_lengths);
-    BufferMeta d_block_offsets = CopyToDevice<int>(h_block_offsets);
-    BufferMeta d_k_list = CopyToDevice<size_t>(h_k_list);
-    BufferMeta d_v_list = CopyToDevice<size_t>(h_v_list);
-
-    const int warmups = 5;
-    const int iterations = 10;
-    // Run kernel
-    auto cuda_run = [&]() {
-      MlaIndexerPagedKVCacheCopy(
-          reinterpret_cast<__nv_fp8_e4m3*>(d_k.data_ptr), reinterpret_cast<float*>(d_v.data_ptr),
-          reinterpret_cast<void**>(d_k_list.data_ptr), reinterpret_cast<void**>(d_v_list.data_ptr),
-          reinterpret_cast<int*>(d_input_lengths.data_ptr), reinterpret_cast<int*>(d_block_offsets.data_ptr),
-          block_size_, batch_size, req_q_len, k_value_num_, v_value_num_, stream);
-    };
-    const float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
-    std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
-
-    // Free data
-    DeleteBuffer(d_k);
-    DeleteBuffer(d_v);
-    DeleteBuffer(h_input_lengths);
-    DeleteBuffer(h_block_offsets);
-    DeleteBuffer(h_k_list);
-    DeleteBuffer(h_v_list);
-    DeleteBuffer(d_input_lengths);
-    DeleteBuffer(d_block_offsets);
-    DeleteBuffer(d_k_list);
-    DeleteBuffer(d_v_list);
-  }
-}
-
 // Performance test is disabled by default
 TEST_F(MlaPagedAttentionTestSuit, DISABLED_MlaPagedFp8DsMlaKVCacheCopyKernelPerfTest) {
   const std::vector<size_t> batch_sizes = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
@@ -565,7 +448,6 @@ TEST_F(MlaPagedAttentionTestSuit, DISABLED_MlaPagedFp8DsMlaKVCacheCopyKernelPerf
     DeleteBuffer(d_k_list);
   }
 }
-#endif
 
 TEST_F(MlaPagedAttentionTestSuit, MlaFlashKVCacheCopyKernelAccTest) {
   // Lanch kernel wrapper.

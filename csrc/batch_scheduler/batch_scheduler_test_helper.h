@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <algorithm>
 #include <sstream>
 
 #include "cache_manager/block_allocator/block_allocator_interface.h"
@@ -37,18 +38,6 @@ struct FakedState {
   int DEVICE_ID_OFFSET = 10000;
   int HOST_DEVICE_ID = 9;
 };
-static FakedState g_faked_state;
-
-inline void ResetFakedState() {
-  std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
-  g_faked_state.host_free_block_.clear();
-  g_faked_state.device_free_block_.clear();
-  g_faked_state.host_alloc_block_.clear();
-  g_faked_state.device_alloc_block_.clear();
-  g_faked_state.device_kv_cache_contents_.clear();
-  g_faked_state.host_kv_cache_contents_.clear();
-}
-
 class FakedMemoryAllocator : public MemoryAllocatorInterface {
  public:
   virtual ~FakedMemoryAllocator() {}
@@ -79,12 +68,9 @@ class FakedMemoryAllocator : public MemoryAllocatorInterface {
 
 class FakedBlockAllocator : public BlockAllocatorInterface {
  public:
-  FakedBlockAllocator(MemoryLocation location, int rank = 0,
-                      std::shared_ptr<MemoryAllocatorInterface> memory_allocator = nullptr) {
-    location_ = location;
-    rank_ = rank;
-    memory_allocator_ = memory_allocator;
-  }
+  FakedBlockAllocator(MemoryLocation location, int rank, std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
+                      FakedState& faked_state)
+      : location_(location), rank_(rank), memory_allocator_(memory_allocator), faked_state_(faked_state) {}
 
   virtual ~FakedBlockAllocator() {}
 
@@ -95,23 +81,23 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
   virtual Status AllocateBlocks(size_t block_num, std::vector<int>& blocks) override {
     if (location_ == MemoryLocation::LOCATION_DEVICE) {
       memory_allocator_->SetDevice(rank_);
-      return AllocBlocks(g_cur_device_id, block_num, blocks, g_faked_state.device_free_block_[g_cur_device_id],
-                         g_faked_state.device_alloc_block_[g_cur_device_id]);
+      return AllocBlocks(g_cur_device_id, block_num, blocks, faked_state_.device_free_block_[g_cur_device_id],
+                         faked_state_.device_alloc_block_[g_cur_device_id]);
     } else {
-      std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
-      return AllocBlocks(g_faked_state.HOST_DEVICE_ID, block_num, blocks, g_faked_state.host_free_block_,
-                         g_faked_state.host_alloc_block_);
+      std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
+      return AllocBlocks(faked_state_.HOST_DEVICE_ID, block_num, blocks, faked_state_.host_free_block_,
+                         faked_state_.host_alloc_block_);
     }
   }
 
   virtual Status FreeBlocks(const std::vector<int>& blocks) override {
     if (location_ == MemoryLocation::LOCATION_DEVICE) {
       memory_allocator_->SetDevice(rank_);
-      return FreeBlocks(g_cur_device_id, blocks, g_faked_state.device_free_block_[g_cur_device_id],
-                        g_faked_state.device_alloc_block_[g_cur_device_id]);
+      return FreeBlocks(g_cur_device_id, blocks, faked_state_.device_free_block_[g_cur_device_id],
+                        faked_state_.device_alloc_block_[g_cur_device_id]);
     } else {
-      return FreeBlocks(g_faked_state.HOST_DEVICE_ID, blocks, g_faked_state.host_free_block_,
-                        g_faked_state.host_alloc_block_);
+      return FreeBlocks(faked_state_.HOST_DEVICE_ID, blocks, faked_state_.host_free_block_,
+                        faked_state_.host_alloc_block_);
     }
   }
 
@@ -126,24 +112,24 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
 
   virtual size_t GetFreeBlockNumber() override {
     if (location_ == MemoryLocation::LOCATION_DEVICE) {
-      return g_faked_state.device_free_block_[g_cur_device_id].size();
+      return faked_state_.device_free_block_[g_cur_device_id].size();
     } else {
-      return g_faked_state.host_free_block_.size();
+      return faked_state_.host_free_block_.size();
     }
   }
 
   virtual size_t GetUsedBlockNumber() override {
     if (location_ == MemoryLocation::LOCATION_DEVICE) {
-      return g_faked_state.device_alloc_block_[g_cur_device_id].size();
+      return faked_state_.device_alloc_block_[g_cur_device_id].size();
     } else {
-      return g_faked_state.host_alloc_block_.size();
+      return faked_state_.host_alloc_block_.size();
     }
   }
 
  private:
   Status AllocBlocks(int device_id, size_t block_num, std::vector<int>& blocks, std::unordered_set<int>& free_blocks,
                      std::unordered_set<int>& used_blocks) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     if (block_num > free_blocks.size()) {
       KLLM_LOG_DEBUG << "Failed to alloc on device " << device_id << ", block_num=" << block_num
                      << ", free_blocks.size()=" << free_blocks.size();
@@ -171,7 +157,7 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
 
   Status FreeBlocks(int device_id, const std::vector<int>& blocks, std::unordered_set<int>& free_blocks,
                     std::unordered_set<int>& used_blocks) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     std::stringstream ss_blocks;
     for (auto block_id : blocks) {
       ss_blocks << block_id << ", ";
@@ -200,6 +186,9 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
   MemoryLocation location_ = MemoryLocation::LOCATION_HOST;
   int rank_ = -1;
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
+  // Reference to the owning FakedBlockAllocatorGroup's state; lifetime is
+  // guaranteed by the group which holds both this allocator and faked_state_.
+  FakedState& faked_state_;
 };
 
 class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
@@ -216,46 +205,47 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
     KLLM_LOG_INFO << "device_num=" << device_num_ << ", block_token_num=" << block_token_num_
                   << ", host_block_num=" << host_block_num_ << ", device_block_num=" << device_block_num_;
     KLLM_CHECK_WITH_INFO(
-        (host_block_num_ <= g_faked_state.DEVICE_ID_OFFSET) && (device_block_num_ < g_faked_state.DEVICE_ID_OFFSET),
-        FormatStr("block_num should be less than DEVICE_ID_OFFSET=%d", g_faked_state.DEVICE_ID_OFFSET));
-    KLLM_CHECK_WITH_INFO((device_num_ <= g_faked_state.HOST_DEVICE_ID),
-                         FormatStr("device_num should be less than HOST_DEVICE_ID=%d", g_faked_state.HOST_DEVICE_ID));
+        (host_block_num_ <= faked_state_.DEVICE_ID_OFFSET) && (device_block_num_ < faked_state_.DEVICE_ID_OFFSET),
+        FormatStr("block_num should be less than DEVICE_ID_OFFSET=%d", faked_state_.DEVICE_ID_OFFSET));
+    KLLM_CHECK_WITH_INFO((device_num_ <= faked_state_.HOST_DEVICE_ID),
+                         FormatStr("device_num should be less than HOST_DEVICE_ID=%d", faked_state_.HOST_DEVICE_ID));
 
     memory_allocator_ = std::make_shared<FakedMemoryAllocator>();
-    host_allocator_ = std::make_shared<FakedBlockAllocator>(MemoryLocation::LOCATION_HOST, 0, memory_allocator_);
+    host_allocator_ =
+        std::make_shared<FakedBlockAllocator>(MemoryLocation::LOCATION_HOST, 0, memory_allocator_, faked_state_);
     for (size_t dev_id = 0; dev_id < static_cast<size_t>(device_num_); ++dev_id) {
-      dev_allocators_[dev_id] =
-          std::make_shared<FakedBlockAllocator>(MemoryLocation::LOCATION_DEVICE, dev_id, memory_allocator_);
+      dev_allocators_[dev_id] = std::make_shared<FakedBlockAllocator>(MemoryLocation::LOCATION_DEVICE, dev_id,
+                                                                      memory_allocator_, faked_state_);
     }
 
     // Init free block ids and kv cache contents
-    g_faked_state.host_kv_cache_contents_.resize(device_num_);
+    faked_state_.host_kv_cache_contents_.resize(device_num_);
     for (int i = 0; i < host_block_num_; i++) {
-      int d_blk_id = g_faked_state.HOST_DEVICE_ID * g_faked_state.DEVICE_ID_OFFSET + i;
+      int d_blk_id = faked_state_.HOST_DEVICE_ID * faked_state_.DEVICE_ID_OFFSET + i;
       std::vector<int> temp_kv;
       for (int j = 0; j < block_token_num_; j++) {
-        temp_kv.push_back(g_faked_state.DEFAULT_KV_CONTENT);
+        temp_kv.push_back(faked_state_.DEFAULT_KV_CONTENT);
       }
       for (int d_i = 0; d_i < device_num_; d_i++) {
-        g_faked_state.host_kv_cache_contents_[d_i][d_blk_id] = temp_kv;
+        faked_state_.host_kv_cache_contents_[d_i][d_blk_id] = temp_kv;
       }
-      g_faked_state.host_free_block_.insert(d_blk_id);
+      faked_state_.host_free_block_.insert(d_blk_id);
     }
 
     for (int d_i = 0; d_i < device_num_; d_i++) {
       std::map<int, std::vector<int>> temp_block_kv;
-      g_faked_state.device_kv_cache_contents_.push_back(temp_block_kv);
+      faked_state_.device_kv_cache_contents_.push_back(temp_block_kv);
       std::unordered_set<int> temp_blocks;
-      g_faked_state.device_free_block_.push_back(temp_blocks);
-      g_faked_state.device_alloc_block_.push_back(temp_blocks);
+      faked_state_.device_free_block_.push_back(temp_blocks);
+      faked_state_.device_alloc_block_.push_back(temp_blocks);
       for (int b_i = 0; b_i < device_block_num_; b_i++) {
         int d_blk_id = b_i;
         std::vector<int> temp_kv;
         for (int j = 0; j < block_token_num_; j++) {
-          temp_kv.push_back(g_faked_state.DEFAULT_KV_CONTENT);
+          temp_kv.push_back(faked_state_.DEFAULT_KV_CONTENT);
         }
-        g_faked_state.device_kv_cache_contents_[d_i][d_blk_id] = temp_kv;
-        g_faked_state.device_free_block_[d_i].insert(d_blk_id);
+        faked_state_.device_kv_cache_contents_[d_i][d_blk_id] = temp_kv;
+        faked_state_.device_free_block_[d_i].insert(d_blk_id);
       }
     }
 
@@ -286,11 +276,11 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
     std::vector<int> host_blocks{host_block_id};
 
     // Copy kv-cache contents
-    CopyKvCacheContents(host_blocks, device_blocks, g_faked_state.host_kv_cache_contents_[device_id],
-                        g_faked_state.device_kv_cache_contents_[device_id]);
+    CopyKvCacheContents(host_blocks, device_blocks, faked_state_.host_kv_cache_contents_[device_id],
+                        faked_state_.device_kv_cache_contents_[device_id]);
 
     // Reset contents in host block for this device.
-    ResetKvCacheContents(host_blocks, g_faked_state.host_kv_cache_contents_[device_id]);
+    ResetKvCacheContents(host_blocks, faked_state_.host_kv_cache_contents_[device_id]);
 
     // TODO(robertyuan): Simulate communication delay
     std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -310,11 +300,11 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
     std::vector<int> host_blocks{host_block_id};
 
     // Copy kv-cache contents
-    CopyKvCacheContents(device_blocks, host_blocks, g_faked_state.device_kv_cache_contents_[device_id],
-                        g_faked_state.host_kv_cache_contents_[device_id]);
+    CopyKvCacheContents(device_blocks, host_blocks, faked_state_.device_kv_cache_contents_[device_id],
+                        faked_state_.host_kv_cache_contents_[device_id]);
 
     // Reset contents in block
-    ResetKvCacheContents(device_blocks, g_faked_state.device_kv_cache_contents_[device_id]);
+    ResetKvCacheContents(device_blocks, faked_state_.device_kv_cache_contents_[device_id]);
     // TODO(robertyuan): Simulate communication delay
     std::this_thread::sleep_for(std::chrono::microseconds(1));
 
@@ -362,8 +352,82 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
 
  public:
   // Functions not in BlockManagerInferface
+
+  // Record a generated token into the SWA kv cache block at the given
+  // global token offset. The offset is relative to the full token sequence;
+  // the method maps it to the correct swa_kv_cache_blocks entry using
+  // swa_kv_cache_block_idx_offsets.
+  void RecordSwaGeneratedToken(std::shared_ptr<InferRequest>& req, int global_offset, int output_token) {
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
+    const size_t global_block_idx = static_cast<size_t>(global_offset / block_token_num_);
+    const auto& offsets = req->swa_kv_cache_block_idx_offsets;
+    const auto it = std::find(offsets.begin(), offsets.end(), global_block_idx);
+    int offset_in_block = global_offset % block_token_num_;
+    KLLM_CHECK_WITH_INFO(it != offsets.end(), FormatStr("RecordSwaGeneratedToken: global_block_idx=%zu not found in "
+                                                        "swa_kv_cache_block_idx_offsets. req_id=%d, global_offset=%d",
+                                                        global_block_idx, req->req_id, global_offset));
+    int block_offset = static_cast<int>(it - offsets.begin());
+    KLLM_CHECK_WITH_INFO(
+        static_cast<size_t>(block_offset) < req->swa_kv_cache_blocks.size(),
+        FormatStr("RecordSwaGeneratedToken: block_offset=%d >= swa_kv_cache_blocks.size()=%zu. req_id=%d", block_offset,
+                  req->swa_kv_cache_blocks.size(), req->req_id));
+    for (int d_i = 0; d_i < device_num_; d_i++) {
+      int block_idx = req->swa_kv_cache_blocks[block_offset];
+      KLLM_CHECK_WITH_INFO(faked_state_.device_kv_cache_contents_[d_i].find(block_idx) !=
+                               faked_state_.device_kv_cache_contents_[d_i].end(),
+                           FormatStr("RecordSwaGeneratedToken: SWA block kv cache content not exist on device %d. "
+                                     "req_id=%d, block_idx=%d.",
+                                     d_i, req->req_id, block_idx));
+      faked_state_.device_kv_cache_contents_[d_i][block_idx][offset_in_block] = output_token + d_i;
+    }
+  }
+
+  // Collect kv cache contents from swa_kv_cache_blocks for the sliding
+  // window [swa_left_token, total_token_num). Results are written to
+  // swa_kv_cache_contents in token order.
+  void CollectSwaKvCacheContent(std::shared_ptr<InferRequest>& req, int swa_left_token, int total_token_num,
+                                std::vector<int>& swa_kv_cache_contents) {
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
+    int window_token_num = total_token_num - swa_left_token;
+    // Collect from device 0
+    swa_kv_cache_contents.resize(window_token_num);
+    for (int i = 0; i < window_token_num; i++) {
+      int global_token_idx = swa_left_token + i;
+      const size_t global_block_idx_c = static_cast<size_t>(global_token_idx / block_token_num_);
+      const auto& offsets_c = req->swa_kv_cache_block_idx_offsets;
+      const auto it_c = std::find(offsets_c.begin(), offsets_c.end(), global_block_idx_c);
+      int offset_in_block = global_token_idx % block_token_num_;
+      KLLM_CHECK_WITH_INFO(
+          it_c != offsets_c.end(),
+          FormatStr("CollectSwaKvCacheContent: global_block_idx=%zu not found in swa_kv_cache_block_idx_offsets. "
+                    "req_id=%d, global_token_idx=%d",
+                    global_block_idx_c, req->req_id, global_token_idx));
+      int block_offset = static_cast<int>(it_c - offsets_c.begin());
+      int block_idx = req->swa_kv_cache_blocks[block_offset];
+      swa_kv_cache_contents[i] = faked_state_.device_kv_cache_contents_[0][block_idx][offset_in_block];
+    }
+    // Check all devices have consistent contents (device d content = device 0 content + d)
+    if (device_num_ > 1) {
+      for (int d_i = 1; d_i < device_num_; d_i++) {
+        for (int i = 0; i < window_token_num; i++) {
+          int global_token_idx = swa_left_token + i;
+          const size_t global_block_idx_d = static_cast<size_t>(global_token_idx / block_token_num_);
+          const auto& offsets_d = req->swa_kv_cache_block_idx_offsets;
+          const auto it_d = std::find(offsets_d.begin(), offsets_d.end(), global_block_idx_d);
+          int offset_in_block = global_token_idx % block_token_num_;
+          int block_offset_d = static_cast<int>(it_d - offsets_d.begin());
+          int block_idx = req->swa_kv_cache_blocks[block_offset_d];
+          int content_d = faked_state_.device_kv_cache_contents_[d_i][block_idx][offset_in_block];
+          KLLM_CHECK_WITH_INFO(
+              swa_kv_cache_contents[i] == content_d - d_i,
+              FormatStr("SWA kv cache content diff between device 0 and device %d, token_idx=%d.", d_i, i));
+        }
+      }
+    }
+  }
+
   void CollectKvCacheContent(std::shared_ptr<InferRequest>& req, std::vector<int>& kv_cache_contents) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     int kv_cache_token_num = req->output_tokens.size();
     // Collect kv cache content from device 0
     CollectKvCacheContentFromDevice(0, req->kv_cache_blocks, kv_cache_token_num, kv_cache_contents);
@@ -384,7 +448,7 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
   }
 
   void RecordGeneratedToken(std::shared_ptr<InferRequest>& req, int offset, int output_token) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     // Compute block offset
     // If block num is not enough for recording, there must be some bug in scheduler
     int block_offset = offset / block_token_num_;
@@ -396,11 +460,11 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
           FormatStr("Block not exist. Req id %d, block offset=%d, device_idx=%d, kv_cache_blocks.size()=%d.",
                     req->req_id, block_offset, d_i, kv_cache_blocks.size()));
       int block_idx = kv_cache_blocks[block_offset];
-      KLLM_CHECK_WITH_INFO(g_faked_state.device_kv_cache_contents_[d_i].find(block_idx) !=
-                               g_faked_state.device_kv_cache_contents_[d_i].end(),
+      KLLM_CHECK_WITH_INFO(faked_state_.device_kv_cache_contents_[d_i].find(block_idx) !=
+                               faked_state_.device_kv_cache_contents_[d_i].end(),
                            FormatStr("Block kv cache content not exist on device %d. Req id %d, block idx=%d.", d_i,
                                      req->req_id, block_idx));
-      g_faked_state.device_kv_cache_contents_[d_i][block_idx][offset_in_block] = output_token + d_i;
+      faked_state_.device_kv_cache_contents_[d_i][block_idx][offset_in_block] = output_token + d_i;
     }
   }
 
@@ -416,7 +480,7 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
  private:
   void CollectKvCacheContentFromDevice(int device_idx, std::vector<int>& block_list, int token_num,
                                        std::vector<int>& kv_cache_contents) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     kv_cache_contents.resize(token_num);
     for (int i = 0; i < token_num; i++) {
       int block_offset = i / block_token_num_;
@@ -425,14 +489,14 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
                            FormatStr("block list on device %d is broken. size=%d, visiting block idx=%d.", device_idx,
                                      block_list.size(), block_offset));
       int block_idx = block_list[block_offset];
-      kv_cache_contents[i] = g_faked_state.device_kv_cache_contents_[device_idx][block_idx][offset_in_block];
+      kv_cache_contents[i] = faked_state_.device_kv_cache_contents_[device_idx][block_idx][offset_in_block];
     }
   }
 
   void CopyKvCacheContents(const std::vector<int>& src_blks, const std::vector<int>& dst_blks,
                            std::map<int, std::vector<int>>& src_kv_contents,
                            std::map<int, std::vector<int>>& dst_kv_contents) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     KLLM_CHECK_WITH_INFO(src_blks.size() <= dst_blks.size(),
                          FormatStr("src_blks.size > dst_blks.size(), %d, %d", src_blks.size(), dst_blks.size()));
     for (size_t i = 0; i < src_blks.size(); i++) {
@@ -455,16 +519,20 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
   }
 
   void ResetKvCacheContents(const std::vector<int>& blks, std::map<int, std::vector<int>>& kv_contents) {
-    std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+    std::lock_guard<std::recursive_mutex> guard(faked_state_.mux_);
     for (auto blk : blks) {
       auto content_it = kv_contents.find(blk);
       KLLM_CHECK_WITH_INFO(content_it != kv_contents.end(),
                            FormatStr("Kv cache content of block %d does not exist", blk));
       for (int i = 0; i < block_token_num_; i++) {
-        content_it->second[i] = g_faked_state.DEFAULT_KV_CONTENT;
+        content_it->second[i] = faked_state_.DEFAULT_KV_CONTENT;
       }
     }
   }
+
+  // Each FakedBlockAllocatorGroup owns its own state, fully isolated from
+  // other groups (e.g. a separate swa_block_allocator_group).
+  FakedState faked_state_;
 
   BlockManagerConfig block_manager_config_;
   BlockAllocatorGroupConfig block_allocator_group_config_;
@@ -484,9 +552,18 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
   std::unordered_map<int, std::shared_ptr<BlockAllocatorInterface>> dev_allocators_;
 };
 
-inline void GenerateAFakeToken(std::vector<int>& input_tokens, int& output_token, int seed) {
+// Generate a fake output token from input_tokens and optional swa_tokens.
+// When swa_tokens is non-empty (SWA mode), the hash mixes both contributions
+// independently so that the result is deterministic without requiring the
+// caller to concatenate the two vectors (which would change the hash value
+// compared to the non-SWA path and break CheckRequestOutput verification).
+inline void GenerateAFakeToken(std::vector<int>& input_tokens, int& output_token, int seed,
+                               const std::vector<int>& swa_tokens = {}) {
   int sum_of_elems = std::accumulate(input_tokens.begin(), input_tokens.end(), 0);
-  output_token = ((sum_of_elems * 0x3e1f9d7) % 0x19de1f3 + seed) % 200000;
+  int swa_sum = std::accumulate(swa_tokens.begin(), swa_tokens.end(), 0);
+  // Mix swa contribution with a different multiplier to avoid aliasing with
+  // the main input hash.
+  output_token = (((sum_of_elems * 0x3e1f9d7) ^ (swa_sum * 0x1a2b3c7)) % 0x19de1f3 + seed) % 200000;
 }
 
 inline int GetFakeSeed(int offset, const std::vector<std::pair<int, int>>& seeds) {
@@ -505,8 +582,13 @@ inline int GetFakeSeed(int offset, const std::vector<std::pair<int, int>>& seeds
 
 inline int GetFakeEndId() { return -1; }
 
+// Generate a sequence of fake tokens.
+// When sliding_window_size > 0 (SWA mode), each generation step also passes
+// the sliding-window slice of the current output sequence as swa_tokens to
+// GenerateAFakeToken, matching the logic used in RunAStep's SWA path.
 inline void GenerateFakeTokens(std::vector<int>& input_tokens, int output_token_num, std::vector<int>& output_tokens,
-                               bool with_eos, const std::vector<std::pair<int, int>>& seed_list) {
+                               bool with_eos, const std::vector<std::pair<int, int>>& seed_list,
+                               size_t sliding_window_size = 0) {
   output_tokens.clear();
   if (input_tokens.size() > 0) {
     output_tokens.resize(input_tokens.size());
@@ -519,7 +601,16 @@ inline void GenerateFakeTokens(std::vector<int>& input_tokens, int output_token_
   }
   for (int i = 0; i < output_token_num; i++) {
     int output_token;
-    GenerateAFakeToken(output_tokens, output_token, GetFakeSeed(input_tokens.size() + i, seed_list));
+    if (sliding_window_size > 0) {
+      // Build the SWA window: the last sliding_window_size tokens of the
+      // current output sequence, mirroring RunAStep's SWA generation path.
+      int total_len = static_cast<int>(output_tokens.size());
+      int swa_left = std::max(total_len - static_cast<int>(sliding_window_size), 0);
+      std::vector<int> swa_tokens(output_tokens.begin() + swa_left, output_tokens.end());
+      GenerateAFakeToken(output_tokens, output_token, GetFakeSeed(input_tokens.size() + i, seed_list), swa_tokens);
+    } else {
+      GenerateAFakeToken(output_tokens, output_token, GetFakeSeed(input_tokens.size() + i, seed_list));
+    }
     output_tokens.push_back(output_token);
   }
   if (with_eos) {
@@ -570,10 +661,15 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
 
 class BatchSchedulerEnvironmentSimulator {
  public:
+  // sliding_window_size: 0 means SWA disabled; > 0 enables SWA mode in RunAStep.
+  // swa_block_allocator_group: separate allocator group for SWA blocks (mirrors DirectCacheManager's two-group design).
   BatchSchedulerEnvironmentSimulator(const BlockManagerConfig& block_manager_config, int tp_num,
-                                     std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group)
-      : tp_num_(tp_num) {
+                                     std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group,
+                                     size_t sliding_window_size = 0,
+                                     std::shared_ptr<FakedBlockAllocatorGroup> swa_block_allocator_group = nullptr)
+      : tp_num_(tp_num), sliding_window_size_(sliding_window_size) {
     block_allocator_group_ = block_allocator_group;
+    swa_block_allocator_group_ = swa_block_allocator_group;
     block_manager_config_ = block_manager_config;
     ProfilerConfig profiler_config;
   }
@@ -588,9 +684,25 @@ class BatchSchedulerEnvironmentSimulator {
       // This operation should be done before generation because kv cache is
       // writen during generating next token
       KLLM_LOG_DEBUG << "RunAStep:" << req;
-      // Generate kv cache for not cached tokens
+      // Generate kv cache for not cached tokens; also record into SWA blocks when enabled.
       for (size_t i = req->kv_cached_token_num; i < req->forwarding_tokens.size(); ++i) {
         block_allocator_group_->RecordGeneratedToken(req, i, req->forwarding_tokens[i]);
+        // If SWA is enabled and the request has SWA blocks, record into SWA cache as well.
+        if (sliding_window_size_ > 0 && swa_block_allocator_group_ && !req->swa_kv_cache_blocks.empty()) {
+          // Only record tokens that fall within the SWA block range [swa_block_start_token, swa_block_end_token).
+          // Use swa_block_allocator_group_ (not block_allocator_group_) to mirror DirectCacheManager's two-group
+          // design.
+          const auto& swa_offsets = req->swa_kv_cache_block_idx_offsets;
+          int swa_block_start_token = swa_offsets.empty() ? 0
+                                                          : static_cast<int>(swa_offsets.front()) *
+                                                                swa_block_allocator_group_->block_token_num_;
+          int swa_block_end_token = swa_offsets.empty() ? 0
+                                                        : (static_cast<int>(swa_offsets.back()) + 1) *
+                                                              swa_block_allocator_group_->block_token_num_;
+          if (static_cast<int>(i) >= swa_block_start_token && static_cast<int>(i) < swa_block_end_token) {
+            swa_block_allocator_group_->RecordSwaGeneratedToken(req, static_cast<int>(i), req->forwarding_tokens[i]);
+          }
+        }
       }
 
       // Generate a token
@@ -600,31 +712,77 @@ class BatchSchedulerEnvironmentSimulator {
       if (req->forwarding_tokens.size() >= req->output_tokens.size()) {
         // Generate new tokens
         if ((req->output_tokens.size() - req->input_tokens.size()) < (size_t)(req_output_num_map_[req->req_id] - 1)) {
-          std::vector<int> kv_contents;
-          // Generate next token based on recorded kv cache content
-          // If memory operations break kv cache content, generation results will be wrong
-          block_allocator_group_->CollectKvCacheContent(req, kv_contents);
-          GenerateAToken(kv_contents, output_token,
-                         GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
+          if (sliding_window_size_ > 0 && swa_block_allocator_group_ && !req->swa_kv_cache_blocks.empty()) {
+            // SWA mode: combine full KV cache content with SWA window content to generate next token.
+            // Use swa_block_allocator_group_ for SWA contents to mirror DirectCacheManager's two-group design.
+            std::vector<int> full_kv_contents;
+            block_allocator_group_->CollectKvCacheContent(req, full_kv_contents);
 
-          std::ostringstream ss;
-          ss << "GenerateToken " << *req << ", new_generate_token:" << output_token
-             << ", kv_contents size: " << kv_contents.size() << ", kv not equal {";
-          for (size_t i = 0; i < kv_contents.size(); i++) {
-            EXPECT_EQ(req->forwarding_tokens[i], kv_contents[i]);
-            if (req->forwarding_tokens[i] != kv_contents[i]) {
-              int block_offset = i / block_allocator_group_->block_token_num_;
-              int offset_in_block = i % block_allocator_group_->block_token_num_;
-              auto& block_list = req->kv_cache_blocks;
-              int block_idx = block_list[block_offset];
-              ss << "kv_cache_not_equal token idx:" << i << ": tokens(" << req->output_tokens[i] << "), fwd("
-                 << req->forwarding_tokens[i] << ") vs cache(" << kv_contents[i] << "), block_offset:" << block_offset
-                 << ", offset_in_block:" << offset_in_block << ", block_idx:" << block_idx << ", ";
-              std::cout << ss.str() << std::endl;
+            int total_token_num = static_cast<int>(req->forwarding_tokens.size());
+            int swa_left_token = std::max(total_token_num - static_cast<int>(sliding_window_size_), 0);
+
+            // Clamp the collection range to the actual SWA block coverage
+            // [swa_block_start_token, swa_block_end_token). Tokens outside this
+            // range have not been recorded into SWA blocks (they were skipped in
+            // the recording loop above) and must not be read.
+            const auto& swa_offsets2 = req->swa_kv_cache_block_idx_offsets;
+            int swa_block_start_token = swa_offsets2.empty() ? 0
+                                                             : static_cast<int>(swa_offsets2.front()) *
+                                                                   swa_block_allocator_group_->block_token_num_;
+            int swa_block_end_token = swa_offsets2.empty() ? 0
+                                                           : (static_cast<int>(swa_offsets2.back()) + 1) *
+                                                                 swa_block_allocator_group_->block_token_num_;
+            swa_left_token = std::max(swa_left_token, swa_block_start_token);
+            int swa_right_token = std::min(total_token_num, swa_block_end_token);
+
+            std::vector<int> swa_contents;
+            if (swa_left_token < swa_right_token) {
+              swa_block_allocator_group_->CollectSwaKvCacheContent(req, swa_left_token, swa_right_token, swa_contents);
             }
+
+            // Verify SWA cache contents match the corresponding forwarding tokens.
+            for (int i = 0; i < static_cast<int>(swa_contents.size()); i++) {
+              EXPECT_EQ(req->forwarding_tokens[swa_left_token + i], swa_contents[i]);
+            }
+
+            // Pass full KV cache content and SWA window content separately to
+            // GenerateAFakeToken so the hash is computed without concatenation.
+            // Concatenating would change the sum and produce a different token
+            // than what CheckRequestOutput (which uses only input_tokens) expects.
+            GenerateAToken(full_kv_contents, output_token,
+                           GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]), swa_contents);
+
+            KLLM_LOG_DEBUG << "SWA GenerateToken req_id=" << req->req_id << ", new_generate_token=" << output_token
+                           << ", full_kv_contents.size=" << full_kv_contents.size()
+                           << ", swa_contents.size=" << swa_contents.size();
+          } else {
+            // Non-SWA mode: use full KV cache content only.
+            std::vector<int> kv_contents;
+            // Generate next token based on recorded kv cache content
+            // If memory operations break kv cache content, generation results will be wrong
+            block_allocator_group_->CollectKvCacheContent(req, kv_contents);
+            GenerateAToken(kv_contents, output_token,
+                           GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
+
+            std::ostringstream ss;
+            ss << "GenerateToken " << *req << ", new_generate_token:" << output_token
+               << ", kv_contents size: " << kv_contents.size() << ", kv not equal {";
+            for (size_t i = 0; i < kv_contents.size(); i++) {
+              EXPECT_EQ(req->forwarding_tokens[i], kv_contents[i]);
+              if (req->forwarding_tokens[i] != kv_contents[i]) {
+                int block_offset = i / block_allocator_group_->block_token_num_;
+                int offset_in_block = i % block_allocator_group_->block_token_num_;
+                auto& block_list = req->kv_cache_blocks;
+                int block_idx = block_list[block_offset];
+                ss << "kv_cache_not_equal token idx:" << i << ": tokens(" << req->output_tokens[i] << "), fwd("
+                   << req->forwarding_tokens[i] << ") vs cache(" << kv_contents[i] << "), block_offset:" << block_offset
+                   << ", offset_in_block:" << offset_in_block << ", block_idx:" << block_idx << ", ";
+                std::cout << ss.str() << std::endl;
+              }
+            }
+            ss << "} ";
+            KLLM_LOG_DEBUG << ss.str();
           }
-          ss << "} ";
-          KLLM_LOG_DEBUG << ss.str();
         }
         req->generated_tokens = {output_token};
         KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << ", forwarding_token num=" << req->forwarding_tokens.size()
@@ -665,7 +823,7 @@ class BatchSchedulerEnvironmentSimulator {
     bool with_eos = true;
 
     GenerateFakeTokens(req->input_tokens, expected_generate_output_token_num, expect_output_tokens, with_eos,
-                       req_generation_seeds_[req->req_id]);
+                       req_generation_seeds_[req->req_id], sliding_window_size_);
     if (req->finish_status.OK()) {
       EXPECT_EQ(expect_output_tokens.size(), req->output_tokens.size());
       if (expect_output_tokens.size() != req->output_tokens.size()) {
@@ -718,14 +876,17 @@ class BatchSchedulerEnvironmentSimulator {
     req_generation_seeds_[req_id] = seeds;
   }
 
-  void GenerateAToken(std::vector<int>& input_tokens, int& output_token, int seed) {
-    GenerateAFakeToken(input_tokens, output_token, seed);
+  void GenerateAToken(std::vector<int>& input_tokens, int& output_token, int seed,
+                      const std::vector<int>& swa_tokens = {}) {
+    GenerateAFakeToken(input_tokens, output_token, seed, swa_tokens);
   }
 
   int GetSeed(int offset, const std::vector<std::pair<int, int>>& seeds) { return GetFakeSeed(offset, seeds); }
 
  private:
   std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group_ = nullptr;
+  // Separate allocator group for SWA blocks; mirrors DirectCacheManager's two-group design.
+  std::shared_ptr<FakedBlockAllocatorGroup> swa_block_allocator_group_ = nullptr;
   std::unordered_map<int, int> req_output_num_map_;
 
   BlockManagerConfig block_manager_config_;
@@ -734,6 +895,8 @@ class BatchSchedulerEnvironmentSimulator {
   // <req_1, {<0, seed1>, <8, seed2>}> means req_1 will use seed1 to generate token from 0 to 8-1, seed2 for 8 to end.
   std::unordered_map<int, std::vector<std::pair<int, int>>> req_generation_seeds_;
   int tp_num_;
+  // 0 means SWA disabled; > 0 enables SWA mode in RunAStep.
+  size_t sliding_window_size_ = 0;
 };
 
 }  // namespace ksana_llm

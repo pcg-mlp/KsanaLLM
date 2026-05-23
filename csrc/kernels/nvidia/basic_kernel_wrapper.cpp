@@ -19,7 +19,6 @@
 #include "csrc/kernels/nvidia/cast/cast.h"
 #include "csrc/kernels/nvidia/concat/concat.h"
 #include "csrc/kernels/nvidia/embedding/embedding.h"
-#include "csrc/kernels/nvidia/expand/expand.h"
 #include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #include "csrc/kernels/nvidia/fused_add_norm/fused_add_norm.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
@@ -198,7 +197,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
@@ -503,14 +502,20 @@ void InvokeGatedActivation(const void* input, const void* bias, const void* gate
 }
 
 template <template <typename T> class Activation, typename T>
-void InvokeRowBasedGatedActivation(const void* input, const int m, const int n, void* output, cudaStream_t stream) {
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeRowBasedActivation<Activation, T>(
-      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), m, n, stream));
+void InvokeRowBasedGatedActivation(const void* input, const int m, const int n, void* output, cudaStream_t stream,
+                                   float swiglu_limit) {
+  if (swiglu_limit > 0.0f) {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeRowBasedActivation<Activation, T, /*HAS_SWIGLU_LIMIT*/ true>(
+        reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), m, n, swiglu_limit, stream));
+  } else {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeRowBasedActivation<Activation, T, /*HAS_SWIGLU_LIMIT*/ false>(
+        reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), m, n, /*swiglu_limit=*/0.0f, stream));
+  }
 }
 
 #define INVOKE_ROW_BASED_GATED_ACTIVATION(Activation, T)                                                  \
   template void InvokeRowBasedGatedActivation<Activation, T>(const void* input, const int m, const int n, \
-                                                             void* output, cudaStream_t stream)
+                                                             void* output, cudaStream_t stream, float swiglu_limit)
 INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, float);
 INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, half);
 INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, __nv_bfloat16);
@@ -576,20 +581,6 @@ CONCAT_MLA_K(float);
 CONCAT_MLA_K(half);
 CONCAT_MLA_K(__nv_bfloat16);
 #undef CONCAT_MLA_K
-
-template <typename T>
-void Expand(void* input, void* output, const int m, const int expand_size, const int n, const size_t stride,
-            cudaStream_t stream) {
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeExpand<T>(
-      reinterpret_cast<const T*>(input), reinterpret_cast<T*>(output), m, expand_size, n, stride, stream));
-}
-#define INVOKE_EXPAND(T)                                                                              \
-  template void Expand<T>(void* input, void* output, const int m, const int expand_size, const int n, \
-                          const size_t stride, cudaStream_t stream)
-INVOKE_EXPAND(float);
-INVOKE_EXPAND(half);
-INVOKE_EXPAND(__nv_bfloat16);
-#undef INVOKE_EXPAND
 
 // ptr: 指向所维护的CustomAllreduce算子的指针
 // signals: 所有GPU共享的中间结果的指针数组
@@ -857,6 +848,14 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
                                  permutation, stream.Get());
 #else
     KLLM_THROW(fmt::format("Permute of type {} is not yet implement", GetTypeString(input_tensor.dtype)));
+#endif
+  } else if (input_tensor.dtype == TYPE_FP8_E8M0) {
+#if defined(ENABLE_FP8) && CUDART_VERSION >= 12080
+    InvokePermute<__nv_fp8_e8m0>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape,
+                                 permutation, stream.Get());
+#else
+    KLLM_THROW(
+        fmt::format("Permute of type {} is not yet implement, requires CUDA 12.8+", GetTypeString(input_tensor.dtype)));
 #endif
   } else {
     KLLM_THROW(fmt::format("Permute of type {} is not yet implement", GetTypeString(input_tensor.dtype)));
@@ -1196,7 +1195,8 @@ void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* ou
                                      const PerTokenGroupQuantFusionParams& params) {
 #ifdef ENABLE_FP8
   llm_kernels::nvidia::per_token_group_quant_fp8<T>(input, output_q, output_s, m, n, group_size, is_column_major,
-                                                    params.fuse_silu_mul, params.scale_ue8m0, stream);
+                                                    params.fuse_silu_mul, params.scale_ue8m0, params.swiglu_limit,
+                                                    stream);
 #else
   KLLM_THROW("FP8 is not supported in this build. Please enable FP8 support.");
 #endif

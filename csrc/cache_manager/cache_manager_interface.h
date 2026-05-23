@@ -51,22 +51,105 @@ class CacheManagerInterface {
   // The unique_block_num will always large than 0.
   // check_token_num is the token number need to check. It is always equal or less than input_token_ids.size().
   // check_token_num is less than input_token_ids.size() during chunked prefilling.
+  //
+  // FA and SWA caches are aligned (need_swa_align=true internally).
+  // shared_block_num: number of FA blocks matched (= last_fa_valid_idx, which equals last_swa_valid_idx when aligned).
+  //                   When SWA is disabled this is simply the full FA-matched count.
+  // unique_block_num: remaining FA blocks needed beyond shared_block_num to cover check_token_num.
+  // shared_token_num: shared_block_num * block_token_num.
+  // The request can enter inference immediately after this call.
   virtual Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids,
                                              size_t check_token_num, size_t& shared_block_num, size_t& unique_block_num,
                                              size_t& shared_token_num) = 0;
 
+  // Variant used before remote cache loading (need_swa_align=false internally).
+  // FA cache and SWA cache hit positions are allowed to be unaligned so that the FA hit length
+  // is preserved for subsequent remote loading.
+  //
+  // FA group (output first):
+  //   fa_shared_block_num:  number of FA blocks actually matched in the prefix tree (last_fa_valid_idx).
+  //   fa_unique_block_num:  blocks needed beyond fa_shared_block_num to cover check_token_num.
+  //   fa_shared_token_num:  fa_shared_block_num * block_token_num.
+  //
+  // SWA group (output second):
+  //   swa_shared_block_num: number of FA blocks whose SWA window is fully valid (last_swa_valid_idx).
+  //                         Always <= fa_shared_block_num.
+  //   swa_unique_block_num: blocks needed beyond swa_shared_block_num to cover check_token_num.
+  //   swa_shared_token_num: swa_shared_block_num * block_token_num (SWA-aligned token boundary).
+  //
+  // The request enters kRemoteLoading state and must call AllocateBlocksForRemoteCache
+  // followed by ConfirmRemoteCacheLoadingResult before inference.
+  virtual Status GetRequestPrefixBlockNumberBeforeRemoteCacheLoading(
+      int64_t req_id, const std::vector<int>& input_token_ids, size_t check_token_num, size_t& fa_shared_block_num,
+      size_t& fa_unique_block_num, size_t& fa_shared_token_num, size_t& swa_shared_block_num,
+      size_t& swa_unique_block_num, size_t& swa_shared_token_num) = 0;
+
+  // Allocate blocks for remote cache loading.
+  // fa_block_num: number of FA blocks to allocate for remote loading
+  //   (= target FA block total - already-hit FA block count).
+  // swa_block_num: number of SWA blocks to allocate for remote loading
+  //   (= SWA window size, independent of fa_block_num).
+  //
+  // Allocation logic:
+  //   - New FA blocks are appended to cached_blocks (same as AllocateRequestBlocks).
+  //   - New SWA blocks are bound to the first swa_block_num new FA blocks; FA ids are recorded in
+  //     remote_cache_swa_fa_block_ids after success.
+  //
+  // req_block_ids: same role as in AllocateRequestBlocks — synchronized with prefix cached_blocks and
+  //   appended with newly allocated FA memory_block_ids on success.
+  // Returns:
+  //   remote_fa_block_ids: memory_block_id list of newly allocated FA blocks (length=fa_block_num).
+  //   remote_swa_block_ids: memory_block_id list of newly allocated SWA blocks (length=swa_block_num).
+  virtual Status AllocateBlocksForRemoteCache(int64_t req_id, std::vector<int>& req_block_ids, size_t fa_block_num,
+                                              size_t swa_block_num, std::vector<int>& remote_fa_block_ids,
+                                              std::vector<int>& remote_swa_block_ids) = 0;
+
+  // Confirm the result of remote cache loading and transition out of kRemoteLoading state.
+  //
+  // kvcached_token_ids: the actual token ids loaded into the remote cache blocks.
+  //   Passed through to UpdateRequestTokens for newly loaded blocks.
+  //
+  // shareable_kvcache_token_num: number of tokens whose KV cache content is confirmed available.
+  //   Preconditions (enforced; returns RET_RUNTIME_FAILED on violation):
+  //   - If SWA is enabled:  >= token position of the rightmost token in swa_window_fa_block_ids.
+  //   - If SWA is disabled: >= fa_prefix_block_num * block_token_num.
+  //   This value must not reduce the request's existing coverage.
+  //
+  // matched_remote_swa_block_indexs: offsets into remote_cache_swa_fa_block_ids that matched.
+  //   Size must be <= 1 (SWA window block count is fixed at 1).
+  //   matched_remote_swa_block_indexs[0]=k means remote_cache_swa_fa_block_ids[k] holds the
+  //   SWA content for the position at shareable_kvcache_token_num - 1.
+  //
+  // Processing (no SWA):
+  //   1. Truncate cached_blocks to shareable_block_num = shareable_kvcache_token_num / block_token_num.
+  //   2. If cached_blocks.size() > fa_prefix_block_num, call UpdateRequestTokens for new blocks.
+  //
+  // Processing (SWA enabled, window size == 1):
+  //   Case 0 (no match): free all remote SWA blocks; truncate cached_blocks to fa_prefix_block_num.
+  //   Case 1 (matched):  Transfer SWA block to cached_blocks[shareable_block_num-1]; update
+  //                      swa_window_fa_block_ids; truncate cached_blocks to shareable_block_num;
+  //                      if shareable_block_num > fa_prefix_block_num, call UpdateRequestTokens.
+  virtual Status ConfirmRemoteCacheLoadingResult(int64_t req_id, const std::vector<int>& kvcached_token_ids,
+                                                 size_t shareable_kvcache_token_num,
+                                                 const std::vector<size_t>& matched_remote_swa_block_indexs) = 0;
+
   // Allocate new blocks for request, called only when req is running.
-  virtual Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids) = 0;
+  // swa_req_block_ids and swa_block_idx_offsets are filled only when swa_block_allocator_group is configured.
+  virtual Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
+                                       std::vector<int>& swa_req_block_ids,
+                                       std::vector<size_t>& swa_block_idx_offsets) = 0;
 
   virtual void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
                                    std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
                                    size_t& req_flexible_cache_len) = 0;
 
   // Update the token ids of this request.
-  // This method will update request memory blocks if the origin block is merged and set block_merged as true
+  // This method will update request memory blocks if the origin block is merged and set block_merged as true.
+  // swa_req_block_ids and swa_block_idx_offsets are updated only when swa_block_allocator_group is configured.
   virtual Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
                                      size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids,
-                                     bool& block_merged) = 0;
+                                     bool& block_merged, std::vector<int>& swa_req_block_ids,
+                                     std::vector<size_t>& swa_block_idx_offsets) = 0;
 
   // Get the freeable/needed block num if swap out/in a request.
   virtual Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) = 0;
@@ -96,7 +179,10 @@ class CacheManagerInterface {
 
   // Merge the swapped in block to the tree, update block ids for infer request.
   // The swapin of the request's block must be done before call this.
-  virtual Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids) = 0;
+  // swa_req_block_ids and swa_block_idx_offsets are updated only when swa_block_allocator_group is configured.
+  virtual Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids,
+                                    std::vector<int>& swa_req_block_ids,
+                                    std::vector<size_t>& swa_block_idx_offsets) = 0;
 
   // Drop a swaped cached request.
   virtual void DestroySwappedRequest(int64_t req_id) = 0;

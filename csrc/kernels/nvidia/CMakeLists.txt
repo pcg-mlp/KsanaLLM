@@ -35,7 +35,7 @@ target_link_libraries(llm_kernels_nvidia_kernel_triton PUBLIC utils ${TORCH_LIBR
 # cc_test(flash_attn_cpp_wrapper_test SRCS ${FLASH_ATTN_CPP_WRAPPER_TEST_SRCS} DEPS
 #     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 
-if (SM STREQUAL "90" OR SM STREQUAL "90a")
+if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
     file(GLOB_RECURSE DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS deepseek_deepgemm_wrapper_test.cpp)
     cc_test(deepseek_deepgemm_wrapper_test SRCS ${DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS} DEPS
         llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})

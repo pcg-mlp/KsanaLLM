@@ -58,7 +58,10 @@ void InvokeFlashSparseMlaWithKVCache(
         nullptr,                       // extra_num_blocks x extra_block_size x num_heads_k x bytes_per_token (optional)
     int* extra_indices_ptr = nullptr,  // batch_size x seqlen_q x extra_topk (optioanl)
     int* extra_topk_length_ptr = nullptr,  // batch_size (optioanl)
-    int extra_num_blocks = 0, int extra_block_size = 0, int extra_topk = 0);
+    int extra_num_blocks = 0, int extra_block_size = 0, int extra_topk = 0,
+    // 可选: extra_kcache_ptr 在 dim 0 上的 byte stride。当 primary 与 extra KV pool 物理独立、两侧 per-block 大小不同时
+    // 必须由 caller 显式传入; <= 0 时复用 primary 的 kcache_batch_stride (适用于共池布局)。
+    int extra_kcache_batch_stride = -1);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

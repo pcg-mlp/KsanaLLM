@@ -15,7 +15,8 @@ namespace ksana_llm {
 // Used to manage parent and children processes.
 class InferenceSupervisor {
  public:
-  InferenceSupervisor(const std::string& config_file, bool is_engine, int executor_id);
+  InferenceSupervisor(const std::string& config_file, bool is_engine, int executor_id,
+                      const std::string& json_model_override_args = "");
   ~InferenceSupervisor();
 
   // Initialize ipc resources.

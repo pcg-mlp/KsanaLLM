@@ -34,6 +34,8 @@ Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const Runti
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   group_size_ = std::any_cast<int>(parameters[parameter_index++]);
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
+  const float swiglu_limit = std::any_cast<float>(parameters[parameter_index++]);
+  KLLM_CHECK_WITH_INFO(!(swiglu_limit > 0.0f), "MarlinMoeLayer does not support swiglu_limit.");
   return Status();
 }
 

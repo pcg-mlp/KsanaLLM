@@ -26,9 +26,11 @@
  */
 #include "moe_utils.h"
 
+#include <cuda_fp8.h>
 #include <cub/cub.cuh>
 #include <flashinfer/activation.cuh>
 
+#include "csrc/kernels/nvidia/common/vec_dtypes.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels {
@@ -82,7 +84,10 @@ __device__ __forceinline__ FP8_TYPE scaled_fp8_conversion(float const val, float
   }
 
   float r = fmax(-FP8_E4M3_MAX, fmin(x, FP8_E4M3_MAX));
-  return static_cast<FP8_TYPE>(r);
+  // NOTE: FP8_TYPE is uint8_t; a plain static_cast<uint8_t>(float) does INTEGER
+  // truncation (e.g. 127.5 → 127), which collides with E4M3 NaN encoding (0x7F).
+  // Use CUDA's proper float-to-FP8 conversion intrinsic to get the actual FP8 bits.
+  return static_cast<FP8_TYPE>(__nv_cvt_float_to_fp8(r, __NV_SATFINITE, __NV_E4M3));
 }
 
 template <typename scalar_t, bool is_scale_inverted>
@@ -433,18 +438,10 @@ __global__ void dynamic_per_token_scaled_fp8_quant_kernel(FP8_TYPE* __restrict__
   scalar_t const* __restrict__ token_input = &input[offset];
   FP8_TYPE* __restrict__ token_output = &out[offset];
 
-  // For vectorization, token_input and token_output pointers need to be
-  // aligned at 8-byte and 4-byte addresses respectively.
-  bool const can_vectorize = hidden_size % 4 == 0;
-
   float absmax_val = 0.0f;
-  if (can_vectorize) {
-    absmax_val = thread_max_vec(token_input, hidden_size, tid, blockDim.x);
-  } else {
-    for (int i = tid; i < hidden_size; i += blockDim.x) {
-      float const x = static_cast<float>(token_input[i]);
-      absmax_val = max(absmax_val, fabs(x));
-    }
+  for (int i = tid; i < hidden_size; i += blockDim.x) {
+    float const x = static_cast<float>(token_input[i]);
+    absmax_val = max(absmax_val, fabs(x));
   }
 
   using BlockReduce = cub::BlockReduce<float, 1024>;
@@ -464,12 +461,8 @@ __global__ void dynamic_per_token_scaled_fp8_quant_kernel(FP8_TYPE* __restrict__
   __syncthreads();
 
   // Note that we don't use inverted scales so we can match FBGemm impl.
-  if (can_vectorize) {
-    scaled_fp8_conversion_vec<scalar_t, false>(token_output, token_input, token_scale, hidden_size, tid, blockDim.x);
-  } else {
-    for (int i = tid; i < hidden_size; i += blockDim.x) {
-      token_output[i] = scaled_fp8_conversion<false>(static_cast<float>(token_input[i]), token_scale);
-    }
+  for (int i = tid; i < hidden_size; i += blockDim.x) {
+    token_output[i] = scaled_fp8_conversion<false>(static_cast<float>(token_input[i]), token_scale);
   }
 }
 
@@ -546,36 +539,63 @@ __global__ void scaled_fp8_quant_kernel(FP8_TYPE* __restrict__ out, const scalar
   scaled_fp8_conversion_vec<scalar_t, true>(out, input, inverted_scale, num_elems, tid, blockDim.x * gridDim.x);
 }
 
-template <typename scalar_t, int TOPK>
+template <typename scalar_t, int TOPK, bool UseExpertParallel>
 __global__ void moe_sum_kernel(scalar_t* __restrict__ out,          // [..., d]
                                const scalar_t* __restrict__ input,  // [..., topk, d]
+                               const int* __restrict__ topk_ids,    // [..., topk], only used when UseExpertParallel
                                const int d) {
   const int64_t token_idx = blockIdx.x;
-  for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
-    scalar_t x = 0.0;
-#pragma unroll
-    for (int k = 0; k < TOPK; ++k) {
-      x += *(&input[token_idx * TOPK * d + k * d + idx]);
-    }
-    out[token_idx * d + idx] = x;
-  }
-}
 
-template <typename scalar_t, int TOPK>
-__global__ void moe_sum_kernel_expert_parallel(scalar_t* __restrict__ out,          // [..., d]
-                                               const scalar_t* __restrict__ input,  // [..., topk, d]
-                                               const int* __restrict__ topk_ids,    // [..., topk]
-                                               const int d) {
-  const int64_t token_idx = blockIdx.x;
-  for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
-    scalar_t x = 0.0;
+  // 128-bit load/store: half/bf16 -> 8 elements, float -> 4 elements
+  constexpr int VEC_SIZE = 16 / sizeof(scalar_t);
+
+  const int64_t d_vec = d / VEC_SIZE;
+  const int64_t d_tail = d_vec * VEC_SIZE;
+
+  const scalar_t* token_input = input + token_idx * TOPK * d;
+  scalar_t* token_output = out + token_idx * d;
+
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
+
+  // Vectorized main loop: each iteration loads/stores 16 bytes
+  for (int64_t vec_idx = threadIdx.x; vec_idx < d_vec; vec_idx += blockDim.x) {
+    vec_t<scalar_t, VEC_SIZE> acc;  // TODO(yfnjin): Maybe use float accumulation for better accuracy
+    acc.fill(static_cast<scalar_t>(0.0f));
+
 #pragma unroll
     for (int k = 0; k < TOPK; ++k) {
-      if (topk_ids[token_idx * TOPK + k] >= 0) {
-        x += *(&input[token_idx * TOPK * d + k * d + idx]);
+      if constexpr (UseExpertParallel) {
+        if (topk_ids[token_idx * TOPK + k] < 0) {
+          continue;
+        }
+      }
+      vec_t<scalar_t, VEC_SIZE> v;
+      v.load(token_input + k * d + vec_idx * VEC_SIZE);
+#pragma unroll
+      for (int i = 0; i < VEC_SIZE; ++i) {
+        acc[i] += v[i];
       }
     }
-    out[token_idx * d + idx] = x;
+
+    // Store directly
+    acc.store(token_output + vec_idx * VEC_SIZE);
+  }
+
+  // Scalar tail for remaining elements (when d % VEC_SIZE != 0)
+  for (int64_t idx = d_tail + threadIdx.x; idx < d; idx += blockDim.x) {
+    scalar_t acc = static_cast<scalar_t>(0.0f);
+#pragma unroll
+    for (int k = 0; k < TOPK; ++k) {
+      if constexpr (UseExpertParallel) {
+        if (topk_ids[token_idx * TOPK + k] < 0) {
+          continue;
+        }
+      }
+      acc += token_input[k * d + idx];
+    }
+    token_output[idx] = acc;
   }
 }
 
@@ -594,26 +614,34 @@ __global__ void sum_out_dim1_kernel(scalar_t* __restrict__ out, const scalar_t* 
   }
 }
 
-template <typename T>
-__global__ void silu_and_mul_kernel(const T* x, T* out, size_t size, size_t inter_size) {
+template <typename T, bool HAS_SWIGLU_LIMIT>
+__global__ void silu_and_mul_kernel(const T* x, T* out, size_t size, size_t inter_size, float swiglu_limit) {
   const int64_t token_idx = blockIdx.x;
   if (token_idx >= size) return;
   for (int64_t idx = threadIdx.x; idx < inter_size; idx += blockDim.x) {
     float a = *(&x[token_idx * 2 * inter_size + idx]);
     float b = *(&x[token_idx * 2 * inter_size + inter_size + idx]);
+    if constexpr (HAS_SWIGLU_LIMIT) {
+      a = fminf(a, swiglu_limit);
+      b = fminf(fmaxf(b, -swiglu_limit), swiglu_limit);
+    }
     out[token_idx * inter_size + idx] = a / (1.0f + expf(-a)) * b;
   }
 }
 
-template <typename T>
+template <typename T, bool HAS_SWIGLU_LIMIT>
 __global__ void silu_and_mul_kernel_expert_parallel(const T* x, T* out, const int* topk_ids, size_t size,
-                                                    size_t inter_size) {
+                                                    size_t inter_size, float swiglu_limit) {
   const int64_t token_idx = blockIdx.x;
   if (token_idx >= size) return;
   if (topk_ids[token_idx] < 0) return;
   for (int64_t idx = threadIdx.x; idx < inter_size; idx += blockDim.x) {
     float a = *(&x[token_idx * 2 * inter_size + idx]);
     float b = *(&x[token_idx * 2 * inter_size + inter_size + idx]);
+    if constexpr (HAS_SWIGLU_LIMIT) {
+      a = fminf(a, swiglu_limit);
+      b = fminf(fmaxf(b, -swiglu_limit), swiglu_limit);
+    }
     out[token_idx * inter_size + idx] = a / (1.0f + expf(-a)) * b;
   }
 }
@@ -766,7 +794,9 @@ void InvokeDynamicPerTokenScaledFP8Quant(const T* input, const float* scale, con
                                          const int hidden_size, const int num_tokens, const cudaStream_t& stream) {
   dim3 const grid(num_tokens);
   dim3 const block(std::min(hidden_size, 1024));
-  dynamic_per_token_scaled_fp8_quant_kernel<T><<<grid, block, 0, stream>>>(output, scale, input, scale_ub, hidden_size);
+  dynamic_per_token_scaled_fp8_quant_kernel<T>
+      <<<grid, block, 0, stream>>>(static_cast<FP8_TYPE*>(output), const_cast<float*>(scale), input,
+                                   static_cast<float const*>(scale_ub), hidden_size);
 }
 
 template <typename T>
@@ -775,7 +805,7 @@ void InvokeDynamicScaledFP8Quant(const T* input, float* scale, void* output, con
   dim3 grid(num_tokens);
   dim3 block(1024);
   segmented_max_reduction<T><<<grid, block, 0, stream>>>(scale, input, num_elems);
-  scaled_fp8_quant_kernel<T><<<grid, block, 0, stream>>>(output, input, scale, num_elems);
+  scaled_fp8_quant_kernel<T><<<grid, block, 0, stream>>>(static_cast<FP8_TYPE*>(output), input, scale, num_elems);
 }
 
 template <typename T>
@@ -783,7 +813,7 @@ void InvokeStaticScaledFP8Quant(const T* input, float* scale, void* output, cons
                                 const cudaStream_t& stream) {
   dim3 grid(num_tokens);
   dim3 block(1024);
-  scaled_fp8_quant_kernel<T><<<grid, block, 0, stream>>>(output, input, scale, num_elems);
+  scaled_fp8_quant_kernel<T><<<grid, block, 0, stream>>>(static_cast<FP8_TYPE*>(output), input, scale, num_elems);
 }
 
 template <typename T, bool UseExpertParallel>
@@ -792,19 +822,17 @@ void InvokeMoeSum(void* input,     // [num_tokens, topk, hidden_size]
                   void* topk_ids,  // [..., topk]
                   int num_tokens, int topk, int hidden_size, const cudaStream_t& stream) {
   dim3 grid(num_tokens);
-  dim3 block(std::min(hidden_size, 1024));
+  // token<=64: 1024 threads for best single-token latency.
+  // token>64:  512 threads for better occupancy at scale.
+  dim3 block((num_tokens <= 64) ? 1024 : 512);
   switch (topk) {
-#define CASE_LAUNCH_MOE_SUM_KERNEL(TOPK)                                                                              \
-  case TOPK:                                                                                                          \
-    if constexpr (UseExpertParallel) {                                                                                \
-      moe_sum_kernel_expert_parallel<T, TOPK>                                                                         \
-          <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input),               \
-                                       reinterpret_cast<const int*>(topk_ids), hidden_size);                          \
-    } else {                                                                                                          \
-      moe_sum_kernel<T, TOPK>                                                                                         \
-          <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), hidden_size); \
-    }                                                                                                                 \
-    break;
+#define CASE_LAUNCH_MOE_SUM_KERNEL(TOPK)                                                                            \
+  case TOPK: {                                                                                                      \
+    constexpr auto kernel = moe_sum_kernel<T, TOPK, UseExpertParallel>;                                             \
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<T*>(output),                            \
+                           reinterpret_cast<const T*>(input), reinterpret_cast<const int*>(topk_ids), hidden_size); \
+    break;                                                                                                          \
+  }
     CASE_LAUNCH_MOE_SUM_KERNEL(1);
     CASE_LAUNCH_MOE_SUM_KERNEL(2);
     CASE_LAUNCH_MOE_SUM_KERNEL(3);
@@ -843,9 +871,148 @@ INVOKE_MOE_SUM(half);
 INVOKE_MOE_SUM(__nv_bfloat16);
 #undef INVOKE_MOE_SUM
 
+// ─── MoeFusedMulSum: fused multiply-by-topk-weight + sum across topk ────────
+// Combines multiply-by-topk-weight + sum into a single kernel.
+// Eliminates one kernel launch + topk * hidden_size * sizeof(T) bytes of
+// redundant global memory traffic per token.
+//
+// input:  [num_tokens * topk, hidden_size] — GEMM2 output (read-only)
+// topk_weights: [num_tokens * topk] (float) — flat layout, one weight per row
+// topk_ids: [num_tokens, topk] (int) — for EP masking (skip if < 0)
+// output: [num_tokens, hidden_size] — weighted sum across topk experts
+template <typename T, int TOPK, bool UseExpertParallel>
+__global__ void moe_fused_mul_sum_kernel(const T* __restrict__ input, const float* __restrict__ topk_weights,
+                                         const int* __restrict__ topk_ids, T* __restrict__ output,
+                                         const int hidden_size) {
+  const int64_t token_idx = blockIdx.x;
+
+  // 128-bit vectorized access: 8 elements for half/bf16, 4 for float
+  constexpr int VEC_SIZE = 16 / sizeof(T);
+
+  const int64_t d = hidden_size;
+  const int64_t d_vec = d / VEC_SIZE;
+  const int64_t d_tail = d_vec * VEC_SIZE;
+
+  const T* token_input = input + token_idx * TOPK * d;
+  T* token_output = output + token_idx * d;
+
+  // Load topk_weights for this token (TOPK values)
+  float weights[TOPK];
+#pragma unroll
+  for (int k = 0; k < TOPK; ++k) {
+    weights[k] = topk_weights[token_idx * TOPK + k];
+  }
+
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
+
+  // Vectorized main loop
+  for (int64_t vec_idx = threadIdx.x; vec_idx < d_vec; vec_idx += blockDim.x) {
+    // Use float accumulator for precision
+    float acc[VEC_SIZE];
+#pragma unroll
+    for (int i = 0; i < VEC_SIZE; ++i) {
+      acc[i] = 0.0f;
+    }
+
+#pragma unroll
+    for (int k = 0; k < TOPK; ++k) {
+      if constexpr (UseExpertParallel) {
+        if (topk_ids[token_idx * TOPK + k] < 0) {
+          continue;
+        }
+      }
+      vec_t<T, VEC_SIZE> v;
+      v.load(token_input + k * d + vec_idx * VEC_SIZE);
+#pragma unroll
+      for (int i = 0; i < VEC_SIZE; ++i) {
+        acc[i] += static_cast<float>(v[i]) * weights[k];
+      }
+    }
+
+    // Cast back to T and store
+    vec_t<T, VEC_SIZE> out_vec;
+#pragma unroll
+    for (int i = 0; i < VEC_SIZE; ++i) {
+      out_vec[i] = static_cast<T>(acc[i]);
+    }
+    out_vec.store(token_output + vec_idx * VEC_SIZE);
+  }
+
+  // Scalar tail for remaining elements
+  for (int64_t idx = d_tail + threadIdx.x; idx < d; idx += blockDim.x) {
+    float acc = 0.0f;
+#pragma unroll
+    for (int k = 0; k < TOPK; ++k) {
+      if constexpr (UseExpertParallel) {
+        if (topk_ids[token_idx * TOPK + k] < 0) {
+          continue;
+        }
+      }
+      acc += static_cast<float>(token_input[k * d + idx]) * weights[k];
+    }
+    token_output[idx] = static_cast<T>(acc);
+  }
+}
+
 template <typename T, bool UseExpertParallel>
+void InvokeMoeFusedMulSum(const void* input,          // [num_tokens * topk, hidden_size]
+                          const float* topk_weights,  // [num_tokens * topk] (flat)
+                          const void* topk_ids,       // [num_tokens, topk]
+                          void* output,               // [num_tokens, hidden_size]
+                          int num_tokens, int topk, int hidden_size, const cudaStream_t& stream) {
+  if (num_tokens == 0) return;
+
+  dim3 grid(num_tokens);
+  dim3 block((num_tokens <= 64) ? 1024 : 512);
+
+  switch (topk) {
+#define CASE_LAUNCH_MOE_FUSED_MUL_SUM(TOPK)                                                                    \
+  case TOPK: {                                                                                                 \
+    constexpr auto kernel = moe_fused_mul_sum_kernel<T, TOPK, UseExpertParallel>;                              \
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<const T*>(input), topk_weights,    \
+                           reinterpret_cast<const int*>(topk_ids), reinterpret_cast<T*>(output), hidden_size); \
+    break;                                                                                                     \
+  }
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(1);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(2);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(3);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(4);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(5);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(6);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(7);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(8);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(9);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(10);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(11);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(12);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(13);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(14);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(15);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(16);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(32);
+    CASE_LAUNCH_MOE_FUSED_MUL_SUM(64);
+#undef CASE_LAUNCH_MOE_FUSED_MUL_SUM
+    default:
+      KLLM_KERNEL_CHECK_WITH_INFO(false, "MoeFusedMulSum: unsupported topk value");
+      break;
+  }
+}
+
+#define INVOKE_MOE_FUSED_MUL_SUM(T)                                                                          \
+  template void InvokeMoeFusedMulSum<T, true>(const void*, const float*, const void*, void*, int, int, int,  \
+                                              const cudaStream_t&);                                          \
+  template void InvokeMoeFusedMulSum<T, false>(const void*, const float*, const void*, void*, int, int, int, \
+                                               const cudaStream_t&)
+INVOKE_MOE_FUSED_MUL_SUM(float);
+INVOKE_MOE_FUSED_MUL_SUM(half);
+INVOKE_MOE_FUSED_MUL_SUM(__nv_bfloat16);
+#undef INVOKE_MOE_FUSED_MUL_SUM
+
+template <typename T, bool UseExpertParallel, bool HAS_SWIGLU_LIMIT>
 void SiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
-                const cudaStream_t& stream) {
+                float swiglu_limit, const cudaStream_t& stream) {
   // input: dtype: FP16/BFP16, shape: [num_tokens, topk, inter_size * 2]
   // output: dtype: FP16/BFP16, shape: [num_tokens, topk, inter_size]
   // elements_num = num_tokens * topk * inter_size
@@ -853,18 +1020,19 @@ void SiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_
   dim3 grid(total_expert_count);
   dim3 block(std::min(inter_size, static_cast<size_t>(1024)));
   if constexpr (UseExpertParallel) {
-    silu_and_mul_kernel_expert_parallel<T>
-        <<<grid, block, 0, stream>>>(input, output, topk_ids, total_expert_count, inter_size);
+    silu_and_mul_kernel_expert_parallel<T, HAS_SWIGLU_LIMIT>
+        <<<grid, block, 0, stream>>>(input, output, topk_ids, total_expert_count, inter_size, swiglu_limit);
   } else {
-    silu_and_mul_kernel<T><<<grid, block, 0, stream>>>(input, output, total_expert_count, inter_size);
+    silu_and_mul_kernel<T, HAS_SWIGLU_LIMIT>
+        <<<grid, block, 0, stream>>>(input, output, total_expert_count, inter_size, swiglu_limit);
   }
 }
 
-#define SILU_AND_MUL(T)                                                                                   \
-  template void SiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, size_t elements_num,  \
-                                    size_t inter_size, const cudaStream_t& stream);                       \
-  template void SiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, size_t elements_num, \
-                                     size_t inter_size, const cudaStream_t& stream)
+#define SILU_AND_MUL(T)                                                                                           \
+  template void SiluAndMul<T, true, true>(const T*, T*, const int*, size_t, size_t, float, const cudaStream_t&);  \
+  template void SiluAndMul<T, true, false>(const T*, T*, const int*, size_t, size_t, float, const cudaStream_t&); \
+  template void SiluAndMul<T, false, true>(const T*, T*, const int*, size_t, size_t, float, const cudaStream_t&); \
+  template void SiluAndMul<T, false, false>(const T*, T*, const int*, size_t, size_t, float, const cudaStream_t&)
 SILU_AND_MUL(float);
 SILU_AND_MUL(half);
 SILU_AND_MUL(__nv_bfloat16);
@@ -890,25 +1058,32 @@ FLASHINFER_SILU_AND_MUL(half);
 FLASHINFER_SILU_AND_MUL(__nv_bfloat16);
 #undef FLASHINFER_SILU_AND_MUL
 
-template <typename T, bool UseExpertParallel>
+template <typename T, bool UseExpertParallel, bool HAS_SWIGLU_LIMIT>
 void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
-                      const cudaStream_t& stream) {
+                      float swiglu_limit, const cudaStream_t& stream) {
   if constexpr (UseExpertParallel) {
-    SiluAndMul<T, true>(input, output, topk_ids, elements_num, inter_size, stream);
+    SiluAndMul<T, true, HAS_SWIGLU_LIMIT>(input, output, topk_ids, elements_num, inter_size, swiglu_limit, stream);
   } else {
+    if constexpr (HAS_SWIGLU_LIMIT) {
+      // flashinfer 的 act_and_mul_kernel 不支持 clamp, 强制走本地 kernel
+      SiluAndMul<T, false, true>(input, output, topk_ids, elements_num, inter_size, swiglu_limit, stream);
+    } else {
 #if defined(ENABLE_FLASHINFER)
-    FlashinferSiluAndMul<T>(input, output, topk_ids, elements_num, inter_size, stream);
+      FlashinferSiluAndMul<T>(input, output, topk_ids, elements_num, inter_size, stream);
 #else
-    SiluAndMul<T, false>(input, output, topk_ids, elements_num, inter_size, stream);
+      SiluAndMul<T, false, false>(input, output, topk_ids, elements_num, inter_size, 0.0f, stream);
 #endif
+    }
   }
 }
 
-#define INVOKE_SILU_AND_MUL(T)                                                                                  \
-  template void InvokeSiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, size_t elements_num,  \
-                                          size_t inter_size, const cudaStream_t& stream);                       \
-  template void InvokeSiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, size_t elements_num, \
-                                           size_t inter_size, const cudaStream_t& stream)
+#define INVOKE_SILU_AND_MUL(T)                                                                                         \
+  template void InvokeSiluAndMul<T, true, true>(const T*, T*, const int*, size_t, size_t, float, const cudaStream_t&); \
+  template void InvokeSiluAndMul<T, true, false>(const T*, T*, const int*, size_t, size_t, float,                      \
+                                                 const cudaStream_t&);                                                 \
+  template void InvokeSiluAndMul<T, false, true>(const T*, T*, const int*, size_t, size_t, float,                      \
+                                                 const cudaStream_t&);                                                 \
+  template void InvokeSiluAndMul<T, false, false>(const T*, T*, const int*, size_t, size_t, float, const cudaStream_t&)
 INVOKE_SILU_AND_MUL(float);
 INVOKE_SILU_AND_MUL(half);
 INVOKE_SILU_AND_MUL(__nv_bfloat16);
@@ -954,5 +1129,67 @@ void InvokeFillIntToBuffer(int* output, void* fill_info, int* fill_info_on_host,
   fill_buffer_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(output, static_cast<int*>(fill_info), fill_info_length);
 }
 
+// FP8 dynamic quantization — needed for humming W4A8 MoE path
+template void InvokeDynamicScaledFP8Quant<__nv_bfloat16>(const __nv_bfloat16* input, float* scale, void* output,
+                                                         const int num_tokens, const int num_elems,
+                                                         const cudaStream_t& stream);
+template void InvokeDynamicScaledFP8Quant<__half>(const __half* input, float* scale, void* output, const int num_tokens,
+                                                  const int num_elems, const cudaStream_t& stream);
+template void InvokeDynamicScaledFP8Quant<float>(const float* input, float* scale, void* output, const int num_tokens,
+                                                 const int num_elems, const cudaStream_t& stream);
+
+// FP8 per-token dynamic quantization — correct function for humming W4A8 (per-token scale)
+template void InvokeDynamicPerTokenScaledFP8Quant<__nv_bfloat16>(const __nv_bfloat16* input, const float* scale,
+                                                                 const void* scale_ub, void* output,
+                                                                 const int hidden_size, const int num_tokens,
+                                                                 const cudaStream_t& stream);
+template void InvokeDynamicPerTokenScaledFP8Quant<__half>(const __half* input, const float* scale, const void* scale_ub,
+                                                          void* output, const int hidden_size, const int num_tokens,
+                                                          const cudaStream_t& stream);
+template void InvokeDynamicPerTokenScaledFP8Quant<float>(const float* input, const float* scale, const void* scale_ub,
+                                                         void* output, const int hidden_size, const int num_tokens,
+                                                         const cudaStream_t& stream);
+
+// 每个 thread 读一个 topk_ids[i]，把对应专家位置的 mask byte 置 1。
+// 同一 byte 上不同 thread 写入相同的常量值 1，按 PTX 内存模型语义不构成竞争——
+// 即便底层是 read-modify-write，最终值仍然是 1。
+template <typename T>
+__global__ void build_active_expert_mask_kernel(const T* __restrict__ topk_ids, uint8_t* __restrict__ active_expert_mask,
+                                                int32_t numel, int32_t num_experts) {
+  const int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int32_t stride = gridDim.x * blockDim.x;
+  for (int32_t i = tid; i < numel; i += stride) {
+    const int32_t eid = static_cast<int32_t>(topk_ids[i]);
+    if (eid >= 0 && eid < num_experts) {
+      active_expert_mask[eid] = 1;
+    }
+  }
+}
+
+template <typename T>
+void InvokeBuildActiveExpertMask(const T* topk_ids, uint8_t* active_expert_mask, int32_t numel, int32_t num_experts,
+                                 const cudaStream_t& stream) {
+  if (active_expert_mask == nullptr || num_experts <= 0) {
+    return;
+  }
+  // 1) 整 mask 清零；num_experts 通常 ≤ 256，bytes 极小，cudaMemsetAsync 几乎免费
+  cudaMemsetAsync(active_expert_mask, 0, static_cast<size_t>(num_experts), stream);
+
+  // 2) scatter：标记命中专家。numel 极少超过 chunk_size(32K) * top_k，启动开销 < 几 us
+  if (numel <= 0) {
+    return;
+  }
+  constexpr int kBlockSize = 256;
+  const int num_blocks = static_cast<int>((static_cast<int64_t>(numel) + kBlockSize - 1) / kBlockSize);
+  build_active_expert_mask_kernel<T><<<num_blocks, kBlockSize, 0, stream>>>(topk_ids, active_expert_mask, numel,
+                                                                            num_experts);
+}
+
+#define INSTANTIATE_BUILD_ACTIVE_EXPERT_MASK(T)                                                                       \
+  template void InvokeBuildActiveExpertMask<T>(const T* topk_ids, uint8_t* active_expert_mask, int32_t numel,         \
+                                               int32_t num_experts, const cudaStream_t& stream)
+INSTANTIATE_BUILD_ACTIVE_EXPERT_MASK(int32_t);
+INSTANTIATE_BUILD_ACTIVE_EXPERT_MASK(uint32_t);
+#undef INSTANTIATE_BUILD_ACTIVE_EXPERT_MASK
 }  // namespace nvidia
 }  // namespace llm_kernels

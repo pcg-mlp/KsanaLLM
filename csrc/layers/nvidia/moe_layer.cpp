@@ -8,6 +8,7 @@
 #include "kernels/nvidia/basic_kernel_wrapper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
 #include "layers/grouped_topk_layer.h"
+#include "layers/topk_softplus_sqrt_layer.h"
 #include "utils/singleton.h"
 #include "utils/utils.h"
 
@@ -63,6 +64,9 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   int group_size = std::any_cast<int>(parameters[parameter_index++]);
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
+  swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
+  num_hash_layers_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  vocab_size_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
 
   w4afp8_moe_backend_ = runtime_config.w4afp8_moe_backend;
 
@@ -78,6 +82,9 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
                       w4afp8_moe_backend_ == W4AFP8_MOE_BACKEND::TensorTriton)
                          ? DataType::TYPE_BLOCK_FP8_E4M3
                          : compute_dtype_;
+  } else if (int_weight_dtype == DataType::TYPE_FP4_E2M1FN_x2) {
+    weight_dtype_ = DataType::TYPE_FP4_E2M1FN_x2;
+    compute_dtype_ = DataType::TYPE_BLOCK_FP8_E4M3;
   }
 
   // fp8 blockwise处理
@@ -86,6 +93,8 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
     block_shape_ = {128, 128};
   } else if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
     block_shape_ = {0, group_size};
+  } else if (weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
+    block_shape_ = {0, 128};  // group_size=128 for merged FP4 scales
   }
 
   // 计算全局ep_size和ep_rank
@@ -103,20 +112,41 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
     low_latency_max_tokens_ = runtime_config.deepep_low_latency_max_tokens;
   }
 
-  // Initialize GroupedTopkLayer
-  grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
-  GroupedTopkLayerParameters grouped_topk_params{
-      .topk = expert_topk_,
-      .renormalize = norm_topk_prob_,
-      .num_expert_group = num_expert_group_,
-      .topk_group = expert_groups_topk_,
-      .scoring_func = scoring_func_,
-      .routed_scaling_factor = routed_scaling_factor_,
-      .use_e_score_correction_bias = use_e_score_correction_bias_,
-      .score_threshold =
-          0.f  // NOTE: Disable score thresholding (set to 0) as this MoE kernel lacks handling for -1 indices
-  };
-  grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
+  use_topk_softplus_sqrt_ = (scoring_func_ == "sqrtsoftplus");
+  if (use_topk_softplus_sqrt_) {
+    KLLM_CHECK_WITH_INFO(use_vllm_moe_,
+                         "MoeLayer: scoring_func='sqrtsoftplus' requires use_vllm_moe=true "
+                         "(non-vllm Cutlass MoE path does not support sqrt+softplus gating)");
+    use_hash_ = (layer_idx_ < static_cast<int>(num_hash_layers_));
+    TopKSoftplusSqrtLayerParameters softplus_sqrt_params{};
+    softplus_sqrt_params.topk = static_cast<uint32_t>(expert_topk_);
+    softplus_sqrt_params.num_experts = static_cast<uint32_t>(expert_num_per_node_ * global_expert_para_size_);
+    softplus_sqrt_params.max_token_num = static_cast<uint32_t>(max_token_num_);
+    softplus_sqrt_params.renormalize = norm_topk_prob_;
+    softplus_sqrt_params.routed_scaling_factor = routed_scaling_factor_;
+    softplus_sqrt_params.use_hash = use_hash_;
+    softplus_sqrt_params.use_correction_bias = !use_hash_ && use_e_score_correction_bias_;
+    softplus_sqrt_params.topk_ids_dtype = TYPE_INT32;
+
+    topk_softplus_sqrt_layer_ = std::make_shared<TopKSoftplusSqrtLayer>();
+    topk_softplus_sqrt_layer_->Init({softplus_sqrt_params}, runtime_config, context, rank);
+    softplus_sqrt_workspace_size_ = topk_softplus_sqrt_layer_->GetWorkspaceSize();
+  } else {
+    // Initialize GroupedTopkLayer (existing V3/GLM4/Qwen3-MoE path).
+    grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
+    GroupedTopkLayerParameters grouped_topk_params{
+        .topk = expert_topk_,
+        .renormalize = norm_topk_prob_,
+        .num_expert_group = num_expert_group_,
+        .topk_group = expert_groups_topk_,
+        .scoring_func = scoring_func_,
+        .routed_scaling_factor = routed_scaling_factor_,
+        .use_e_score_correction_bias = use_e_score_correction_bias_,
+        .score_threshold =
+            0.f  // NOTE: Disable score thresholding (set to 0) as this MoE kernel lacks handling for -1 indices
+    };
+    grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
+  }
 
   // EPLB data dump configuration from runtime_config
   enable_dump_eplb_data_ = runtime_config.enable_dump_eplb_data;
@@ -220,11 +250,20 @@ size_t MoeLayer::GetWorkspaceSizeT() {
               AlignAddress(expert_num_per_node_ * expert_hidden_size_ * expert_inter_size_ * 2 * sizeof(char));
         }
       }
+      if (weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
+        // FP4 dequant output: FP8 weights + BF16 merged scales
+        size_t fp4_elements = expert_num_per_node_ * expert_inter_size_ * 2 * expert_hidden_size_;
+        size_t fp4_fp8_size = fp4_elements * sizeof(uint8_t);
+        size_t fp4_scale_size = (fp4_elements / 128) * sizeof(uint16_t);
+        dequant_workspace_size = AlignAddress(fp4_fp8_size + fp4_scale_size);
+      }
 
       max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + max_fused_id_buffer_size +
                       intermediate_cache1_and_cache3_size + intermediate_cache2_size + a1_and_a2_q_size +
                       a1_and_a2_scale_size + dequant_workspace_size;
     }
+    const size_t softplus_sqrt_ws_aligned = use_topk_softplus_sqrt_ ? AlignAddress(softplus_sqrt_workspace_size_) : 0;
+    max_ws_bytes_ += softplus_sqrt_ws_aligned;
   }
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MoeLayer", rank_, max_ws_bytes_);
   return max_ws_bytes_;
@@ -238,6 +277,19 @@ Status MoeLayer::SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buf
   lora_workspace_size_ = 0;  // NO support for lora
   moe_workspace_size_ =
       max_ws_bytes_ - scale_probabilities_size_ - src_to_dest_map_size_ - selected_expert_size_ - lora_workspace_size_;
+
+  if (use_topk_softplus_sqrt_ && softplus_sqrt_workspace_size_ > 0) {
+    // Carve a slice off the end of the main workspace for the inner gate.
+    // The main workspace's other consumers (topk_weights_ptr_ / topk_ids_ptr_ /
+    // fused_id_buffer_ / intermediate_caches / a*_q / a*_scale / dequant) are
+    // positioned by use_vllm_moe_ pointer math inside ForwardT; we append our
+    // slice strictly past their highest end-offset computed in GetWorkspaceSizeT.
+    const size_t slice_offset = max_ws_bytes_ - AlignAddress(softplus_sqrt_workspace_size_);
+    auto slice = std::make_shared<Tensor>(workspace_buffer_->location, TYPE_UINT8,
+                                          std::vector<size_t>{softplus_sqrt_workspace_size_},
+                                          reinterpret_cast<int8_t*>(workspace_buffer_->GetPtr<void>()) + slice_offset);
+    topk_softplus_sqrt_layer_->SetWorkspaceBuffer(slice);
+  }
 
   return Status();
 }
@@ -312,12 +364,13 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
           a2_q_ = a1_q_;  // 共享
           a1_scale_ = a1_q_ + a1_and_a2_q_size;
           a2_scale_ = a1_scale_;  // 共享
-          if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
+          if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2 ||
+              weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
             dequant_workspace_ = a1_scale_ + a1_and_a2_scale_size;
           }
         }
       }
-        // LCOV_EXCL_STOP
+      // LCOV_EXCL_STOP
     }
   }
 
@@ -336,6 +389,12 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
         w1_scale = input_tensors[2].scales->GetPtr<void>();
         w2_scale = input_tensors[3].scales->GetPtr<void>();
       }
+    } else if (weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
+      // FP4: scales are E8M0 format, bound via weight_scales in PostProcess
+      if (input_tensors[2].weight_scales != nullptr) {
+        w1_scale = input_tensors[2].weight_scales->GetPtr<void>();
+        w2_scale = input_tensors[3].weight_scales->GetPtr<void>();
+      }
     }
     void* w1_input_scale = input_tensors[2].input_scales ? input_tensors[2].input_scales->GetPtr<void>() : nullptr;
     void* w2_input_scale = input_tensors[3].input_scales ? input_tensors[3].input_scales->GetPtr<void>() : nullptr;
@@ -352,7 +411,11 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
       output_tensors.push_back(workspace_tensor);
     }
     // 使用 GroupedTopkLayer 计算 topk
-    ExecuteGroupedTopk<T>(input_tensors, output_tensors);
+    if (use_topk_softplus_sqrt_) {
+      STATUS_CHECK_RETURN(ExecuteTopkSoftplusSqrt<T>(input_tensors, output_tensors));
+    } else {
+      ExecuteGroupedTopk<T>(input_tensors, output_tensors);
+    }
 
     // LCOV_EXCL_START
     auto AutoInvoke = [&](auto template_param, void* hidden_states_ptr, void* output_hidden_states_ptr,
@@ -423,6 +486,7 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
                                           dequant_workspace_,               // dequant_workspace
                                           w4afp8_moe_backend_,              // w4afp8_moe_backend
                                           rank_,                            // rank
+                                          swiglu_limit_,                    // swiglu_limit
                                           context_->device->GetPrimaryComputeStream().Get());  // stream
       }
     };
@@ -465,6 +529,8 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
       // LCOV_EXCL_STOP
     }
   } else {
+    KLLM_CHECK_WITH_INFO(!use_topk_softplus_sqrt_,
+                         "MoeLayer: sqrt+softplus gate is only supported on the use_vllm_moe path");
     // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     if (moe_scale_norm_mode_ == MoeScaleNormMode::RE_NORM) {
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
@@ -572,6 +638,89 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
     output_tensors[1].shape = deepep_output_tensors[1].shape;
     // LCOV_EXCL_STOP
   }
+  return Status();
+}
+
+template <typename T>
+Status MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensors,
+                                         std::vector<Tensor>& output_tensors) {
+  // Layout of input_tensors (from MoE::Forward):
+  //   [0] hidden_states
+  //   [1] router_logits
+  //   [2] up_gate_proj_weight
+  //   [3] down_proj_weight
+  //   [4] eplb_expert_map
+  //   [5] gate extra weight (tid2eid [vocab, topk] int32 for hash;
+  //                          correction_bias [num_experts] fp32 for bias)
+  //   [6] input_ids [num_tokens] int32 (hash path only)
+
+  std::vector<Tensor> softplus_inputs;
+  std::vector<Tensor> softplus_outputs;
+
+  const size_t num_tokens = input_tensors[0].shape[0];
+
+  // Router logits.
+  softplus_inputs.push_back(input_tensors[1]);
+
+  if (use_hash_) {
+    KLLM_CHECK_WITH_INFO(input_tensors.size() >= 7,
+                         "MoeLayer: hash path requires input_ids (slot 6) and tid2eid (slot 5)");
+    softplus_inputs.push_back(input_tensors[6]);  // input_ids
+    softplus_inputs.push_back(input_tensors[5]);  // tid2eid
+  } else if (use_e_score_correction_bias_) {
+    KLLM_CHECK_WITH_INFO(input_tensors.size() >= 6, "MoeLayer: correction-bias path requires bias at slot 5");
+    softplus_inputs.push_back(input_tensors[5]);  // bias
+  }
+
+  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
+                             topk_weights_ptr_);
+  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
+                         topk_ids_ptr_);
+  softplus_outputs.push_back(topk_weights_tensor);
+  softplus_outputs.push_back(topk_ids_tensor);
+
+  Status status = topk_softplus_sqrt_layer_->Forward(softplus_inputs, softplus_outputs);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "ExecuteTopkSoftplusSqrt ERROR: forward failed";
+    return status;
+  }
+
+  if (enable_dump_eplb_data_) {
+    DumpEplbData(topk_ids_tensor);
+  }
+
+  if (enable_load_eplb_config_ && input_tensors[4].shape[0] > layer_idx_) {
+    size_t num_experts = input_tensors[4].shape[1];
+    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+                                        reinterpret_cast<int32_t*>(layer_expert_ptr),
+                                        context_->device->GetPrimaryComputeStream().Get());
+  }
+
+  if (using_deepep_) {
+    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
+    std::vector<Tensor>& deepep_output_tensors = output_tensors;
+    bool use_scales = output_tensors.size() > kWorkspaceTensorIndex;
+    if (use_scales) {
+      Tensor a1_q_tensor = output_tensors[kA1QTensorIndex];
+      Tensor a1_scale_tensor = output_tensors[kA1ScaleTensorIndex];
+      Tensor workspace_tensor = output_tensors[kWorkspaceTensorIndex];
+      InvokePerTokenGroupQuantFp8E4m3<T>(input_tensors[0].GetPtr<void>(), a1_q_tensor.GetPtr<void>(),
+                                         a1_scale_tensor.GetPtr<void>(), num_tokens, expert_hidden_size_, false,
+                                         context_->device->GetPrimaryComputeStream().Get());
+      deepep_input_tensors.push_back(a1_q_tensor);
+      deepep_input_tensors.push_back(a1_scale_tensor);
+      deepep_input_tensors.push_back(workspace_tensor);
+    }
+    KLLM_LOG_DEBUG << fmt::format("ExecuteTopkSoftplusSqrt: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
+                                  deepep_input_tensors[1].shape[0]);
+    Dispatch(deepep_input_tensors, deepep_output_tensors);
+    KLLM_LOG_DEBUG << fmt::format("ExecuteTopkSoftplusSqrt: Dispatch output shape {} {}",
+                                  deepep_output_tensors[0].shape[0], deepep_output_tensors[1].shape[0]);
+    topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+    topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+  }
+
   return Status();
 }
 

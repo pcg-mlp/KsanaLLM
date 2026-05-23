@@ -118,6 +118,12 @@ class CutlassMoeLayer : public BaseLayer {
   std::shared_ptr<llm_kernels::nvidia::CutlassMoeWrapper> cutlass_moe_wrapper_;
 
   std::shared_ptr<ExpertParallelManager> expert_parallel_manager_;
+
+  // Swiglu-limit contract fields (strict isolation — own members, not from MoeLayer).
+  float swiglu_limit_ = 0.0f;
+  std::vector<float> swiglu_limit_host_;
+  size_t swiglu_limit_ptr_size_ = 0;
+  void* swiglu_limit_ptr_ = nullptr;
 };
 #endif
 }  // namespace ksana_llm

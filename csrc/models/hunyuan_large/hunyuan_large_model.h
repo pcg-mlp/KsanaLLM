@@ -5,6 +5,7 @@
 #include "models/common/common_model.h"
 #include "models/common/model_interface.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/cross_layer_attention.h"
 #include "modules/ffn/two_layered_ffn.h"
@@ -63,7 +64,8 @@ class HunyuanLarge : public ModelInterface {
 class HunyuanLargeModel : public CommonModel {
  public:
   HunyuanLargeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                    std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+                    std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                    std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
  private:
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;

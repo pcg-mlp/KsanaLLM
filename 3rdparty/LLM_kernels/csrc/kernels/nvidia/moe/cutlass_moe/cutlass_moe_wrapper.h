@@ -39,14 +39,17 @@ class CutlassMoeWrapper {
   void Init();
 
   size_t GetWorkspaceSize(size_t num_token, size_t experts_per_token, size_t num_experts_on_rank, size_t hidden_size,
-                          size_t inter_size);
+                          size_t inter_size, const std::optional<Tensor>& swiglu_alpha,
+                          const std::optional<Tensor>& swiglu_beta, const std::optional<Tensor>& swiglu_limit);
 
   void SetWorkspacePtr(void* workspace_ptr);
 
   void Forward(Tensor& output, const Tensor& input, const Tensor& token_selected_experts,
                const std::optional<Tensor>& token_final_scales, const Tensor& fc1_expert_weights,
                const Tensor& fc2_expert_weights, const std::vector<Tensor>& quant_scales,
-               const std::vector<int64_t>& profile_ids, cudaStream_t stream);
+               const std::optional<Tensor>& swiglu_alpha, const std::optional<Tensor>& swiglu_beta,
+               const std::optional<Tensor>& swiglu_limit, const std::vector<int64_t>& profile_ids,
+               cudaStream_t stream);
 
   size_t GetProfileWorkspace(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
                              const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,

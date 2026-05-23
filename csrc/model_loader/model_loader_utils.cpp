@@ -237,7 +237,12 @@ Status FilterModelFormatFiles(ModelFormat model_format, std::vector<std::string>
 }
 
 int GetLayerIdxFromName(const std::string& weight_name) {
-  static const std::regex layer_regex("model\\.layers.(\\d+)\\..+");
+  // Match patterns like:
+  //   model.layers.0.xxx
+  //   layers.0.hcxxx / layers.0.attnxxx / layers.0.ffnxxx
+  //   mtp.0.xxx
+  static const std::regex layer_regex(
+      "(?:model\\.)?(?:layers|mtp)\\.(\\d+)\\..+");
   std::smatch layer_idx_match;
 
   if (std::regex_match(weight_name, layer_idx_match, layer_regex)) {

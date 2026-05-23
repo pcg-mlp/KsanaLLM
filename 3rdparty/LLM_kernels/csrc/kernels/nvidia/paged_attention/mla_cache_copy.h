@@ -27,21 +27,6 @@ void FlashSparseMlaConvertBlockTable(int* indices, int* block_table, size_t* wit
 void PagedSparseMlaConvertBlockTable(int* indices, int* block_table, int q_seq_len, int topk, int batch_size,
                                      int max_num_blocks_per_seq, int block_size, cudaStream_t stream);
 
-#ifdef ENABLE_FP8
-void MlaIndexerFlashKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list,
-                                size_t* prefix_offsets, size_t* without_prefix_offsets, int* block_offsets,
-                                int block_size, int batch_size, int total_len, int k_stride_size, int v_stride_size,
-                                cudaStream_t stream);
-
-void MlaIndexerKVReverseCacheCopy(__nv_fp8_e4m3* k_dst, float* v_dst, void** k_list, void** v_list, size_t* seq_len_offset,
-                             int* block_offsets, int block_size, int batch_size, int total_len, int k_stride_size,
-                             int v_stride_size, cudaStream_t stream);
-
-void MlaIndexerPagedKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list, int* input_lengths,
-                                int* block_offsets, int block_size, int batch_size, int req_q_len, int k_stride_size,
-                                int v_stride_size, cudaStream_t stream);
-#endif
-
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void MlaFlashKVCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* prefix_offsets,
                          size_t* without_prefix_offsets, int* block_offsets, int block_size, int batch_size,

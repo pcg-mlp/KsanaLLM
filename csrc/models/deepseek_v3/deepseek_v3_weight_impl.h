@@ -28,12 +28,10 @@ class DeepSeekV3WeightImplBase {
 
   // Transpose and split weight along axis = 0, then with param `transpose` to decide whether to transpose back
   virtual Status TransSplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank,
-                                    std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config, size_t para_size,
-                                    bool transpose) = 0;
+                                    size_t para_size, bool transpose) = 0;
 
   // Split weight along axis = 0, then with param `skip_transpose` to decide whether skip transpose
-  virtual Status SplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank,
-                               std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config, size_t para_size,
+  virtual Status SplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank, size_t para_size,
                                bool transpose) = 0;
 
   virtual Status GetExpertsIdx(const std::string& expert_name, int32_t& layer_idx_, int32_t& expert_idx_) = 0;
@@ -82,12 +80,10 @@ class DeepSeekV3WeightImpl : public DeepSeekV3WeightImplBase {
   Tensor& GetTempTensor(const std::vector<size_t>& shape, DataType data_type, int dev_rank) override;
 
   Status PermuteWeight(Tensor& input_tensor, const std::vector<size_t>& permutation, int dev_rank) override;
-  Status TransSplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank,
-                            std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config, size_t para_size,
+  Status TransSplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank, size_t para_size,
                             bool transpose = false) override;
 
-  Status SplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank,
-                       std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config, size_t para_size,
+  Status SplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank, size_t para_size,
                        bool transpose = false) override;
 
   Status GetExpertsIdx(const std::string& expert_name, int32_t& layer_idx_, int32_t& expert_idx_) override;

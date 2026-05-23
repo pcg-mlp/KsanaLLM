@@ -333,7 +333,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     // Process each page_input sequentially
     // Page_inputs are ordered by token_num in descending order, align with the order of forward requests
     size_t skip_tokens = dp_context_tokens;
-    for (const auto& page_input : forwarding_context.GetModelInput()->page_inputs) {
+    for (auto& page_input : forwarding_context.GetModelInput()->page_inputs) {
       const size_t current_tokens = page_input.total_dp_input_ids_len;
 
       // Offset tensors by `skip_tokens` or `skip_tokens - dp_context_tokens`
@@ -360,9 +360,6 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
           current_k_rope_buffer_tensor, current_indices_tensor, current_output_tensors));
 
       skip_tokens += current_tokens;
-    }
-    for (auto& page_input : forwarding_context.GetModelInput()->page_inputs) {
-      page_input.tile_scheduler_metadata.shape[2] = 1;  // mark meta as intialized
     }
   }
 

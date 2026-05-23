@@ -316,6 +316,19 @@ class ChatCompletionRequest(OpenAIRequestModel):
         description=("Additional kwargs to pass to the template renderer. "
                      "Will be accessible by the chat template."),
     )
+    reasoning_effort: Optional[Literal["low", "medium", "high", "max"]] = Field(
+        default=None,
+        description="Constrains effort on reasoning for reasoning models. "
+        "DeepSeek-V4 only accepts 'max' / 'high' / None.",
+    )
+    task: Optional[
+        Literal["action", "query", "authority", "domain", "title", "read_url"]
+    ] = Field(
+        default=None,
+        description="DeepSeek-V4 quick instruction task. When set, the last "
+        "user/developer message is treated as a single-shot classification prompt "
+        "and the corresponding task special token is appended before generation.",
+    )
 
     @model_validator(mode="before")
     @classmethod

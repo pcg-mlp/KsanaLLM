@@ -11,4 +11,4 @@ target_link_libraries(llm_kernels_nvidia_kernel_moe_utils PUBLIC -lcublas -lcuda
 # for test
 file(GLOB_RECURSE MOE_TEST_SRCS *test.cu)
 cc_test(llm_kernels_nvidia_kernel_moe_utils_test SRCS ${MOE_TEST_SRCS} DEPS
-    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_moe_utils)
+    llm_kernels_nvidia_kernel_moe_utils llm_kernels_nvidia_utils)

@@ -12,6 +12,8 @@
 #include "layers/machete_matmul_layer.h"
 #include "layers/marlin_matmul_layer.h"
 #include "layers/marlin_moe_layer.h"
+#include "layers/marlin_fp4_moe_layer.h"
+#include "layers/humming_fp4_moe_layer.h"
 #include "layers/matmul_layer.h"
 #include "layers/moe_layer.h"
 
@@ -72,6 +74,24 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
       &MoeLayerFactory::BuildLayer<MoeLayer>;
   builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
       &MoeLayerFactory::BuildLayer<MoeLayer>;
+
+  // for deepseek v4 FP4 MoE experts (FP4 weight → runtime dequant to FP8 → GroupTriton compute)
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MoeLayer>;
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MoeLayer>;
+
+  // for deepseek v4 FP4 MoE experts — Marlin W4A16 path
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MarlinFp4MoeLayer>;
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MarlinFp4MoeLayer>;
+
+  // for deepseek v4 FP4 MoE experts — Humming W4A16/W4A8 path
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, HUMMING_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<HummingFp4MoeLayer>;
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, HUMMING_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<HummingFp4MoeLayer>;
 #  endif
 #endif
 }
@@ -120,10 +140,22 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
       }
     }
   }
+  // Detect FP4 expert weights
+  bool enable_moe_fp4 = (model_config_.quant_config.expert_dtype == "fp4");
   // MoE layer size check
   size_t up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2];
   size_t down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
-  if (enable_moe_int4) {
+  if (enable_moe_fp4 && runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4Marlin) {
+    // Marlin FP4: weights are repacked to Marlin tile format [E, K/16, N*2],
+    // so shape-based hidden_size derivation is not applicable.
+    // Use model config values directly (already computed above).
+    up_gate_hidden_size = hidden_size;
+    down_hidden_size = hidden_size;
+  } else if (enable_moe_fp4) {
+    // FP4: 2 values per byte (same packing ratio as INT4)
+    up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2] * 2;
+    down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
+  } else if (enable_moe_int4) {
     if (weight_type == TYPE_INT8 || weight_type == TYPE_UINT8) {
       // INT8/UINT8 storage (W4A8/DeepSeek): 2 x 4-bit values per byte
       up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2] * 2;
@@ -167,14 +199,18 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
   moe_matmul_param.push_back(runtime_config_.enable_full_shared_expert);             // dp = ep
   // Set fp8_weight_dtype: distinguish between blockwise FP8 and per-tensor FP8
-  if (!enable_moe_int4 && model_config_.quant_config.is_fp8_blockwise) {
+  // When FP4 is enabled, experts use FP4 weights not FP8, so fp8_weight_dtype must be INVALID
+  if (!enable_moe_int4 && !enable_moe_fp4 && model_config_.quant_config.is_fp8_blockwise) {
     moe_matmul_param.push_back(DataType::TYPE_BLOCK_FP8_E4M3);  // fp8_weight_dtype: blockwise FP8
-  } else if (!enable_moe_int4 && weight_type == TYPE_FP8_E4M3) {
+  } else if (!enable_moe_int4 && !enable_moe_fp4 && weight_type == TYPE_FP8_E4M3) {
     moe_matmul_param.push_back(DataType::TYPE_FP8_E4M3);  // fp8_weight_dtype: per-tensor FP8
   } else {
     moe_matmul_param.push_back(DataType::TYPE_INVALID);  // fp8_weight_dtype: not FP8
   }
-  if (enable_moe_int4) {
+  if (enable_moe_fp4) {
+    moe_matmul_param.push_back(DataType::TYPE_FP4_E2M1FN_x2);   // int_weight_dtype: FP4
+    moe_matmul_param.push_back(static_cast<int>(128));            // group_size: 128 for merged FP4 scales
+  } else if (enable_moe_int4) {
     if (weight_type == TYPE_UINT8) {
       moe_matmul_param.push_back(TYPE_UINT4x2);  // int_weight_dtype
     } else if (weight_type == TYPE_INT8) {
@@ -196,7 +232,20 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
     moe_matmul_param.push_back(0);                       // group_size
   }
   moe_matmul_param.push_back(model_config_.moe_config.apply_weight);
+  moe_matmul_param.push_back(model_config_.swiglu_limit);      // swiglu_limit (>0 means enabled)
+  moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.num_hash_layers));
+  moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.vocab_size));
 
+  // FP4 MoE layer creation
+  if (enable_moe_fp4) {
+    if (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4Marlin) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND);
+    } else if (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A16 ||
+               runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A8) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, HUMMING_MOE_BACKEND);
+    }
+    return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND);
+  }
   // FP8 MoE layer creation
   if (weight_type == TYPE_FP8_E4M3) {
     QuantMode quant_mode = model_config_.quant_config.is_fp8_blockwise ? MOE_QUANT_BLOCK_FP8_E4M3 : MOE_QUANT_FP8_E4M3;
@@ -244,6 +293,18 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::CreateLayer(DataType weight_type, Da
   } else if (backend == CUTLASS_MOE_BACKEND) {
     // CutlassMoeLayer uses expert_parallel_manager
     std::static_pointer_cast<CutlassMoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
+  }
+
+  // For FP4 Marlin path: MarlinFp4MoeLayer needs expert_parallel_manager
+  // TYPE_FP4_E2M1FN_x2 with MARLIN_MOE_BACKEND → MarlinFp4MoeLayer
+  // TYPE_I4_GROUP with MARLIN_MOE_BACKEND → MarlinMoeLayer (no EP, different class)
+  if (backend == MARLIN_MOE_BACKEND && weight_type == TYPE_FP4_E2M1FN_x2) {
+    std::static_pointer_cast<MarlinFp4MoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
+  }
+
+  // For Humming path: HummingFp4MoeLayer needs expert_parallel_manager
+  if (backend == HUMMING_MOE_BACKEND) {
+    std::static_pointer_cast<HummingFp4MoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
   }
 
   return layer;

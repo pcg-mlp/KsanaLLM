@@ -8,6 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--type", help="inference type", type=str)
 parser.add_argument("--activation", help="activation type", type=str)
 parser.add_argument("--activation_kernel", help="activation kernel", type=str)
+parser.add_argument("--swiglu_limit", help="swiglu clamp limit (float, optional)", type=float, default=None)
 
 def InvokeGenericActivation(args):
     inference_data_type = torch.float32
@@ -63,7 +64,12 @@ def InvokeRowBasedActivation(args):
     mid_col = num_cols // 2
     gate_proj_output = input[:, :mid_col]
     up_proj_output = input[:, mid_col:]
-    
+
+    if args.swiglu_limit is not None:
+        lim = float(args.swiglu_limit)
+        gate_proj_output = torch.clamp(gate_proj_output, max=lim)
+        up_proj_output   = torch.clamp(up_proj_output, min=-lim, max=lim)
+
     act = torch.nn.SiLU()
 
     output = act(gate_proj_output) * up_proj_output

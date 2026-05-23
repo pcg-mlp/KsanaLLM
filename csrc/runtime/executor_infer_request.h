@@ -184,6 +184,15 @@ class ExecutorInferRequest {
   // The key and value are stored in same blocks.
   std::vector<int> kv_cache_blocks;
 
+  // The SWA kv cache blocks for sliding window attention.
+  // Mirrors InferRequest::swa_kv_cache_blocks.
+  std::vector<int> swa_kv_cache_blocks;
+
+  // Per-block FA global index: swa_kv_cache_block_idx_offsets[i] is the FA block
+  // global index corresponding to swa_kv_cache_blocks[i].
+  // Mirrors InferRequest::swa_kv_cache_block_idx_offsets.
+  std::vector<size_t> swa_kv_cache_block_idx_offsets;
+
   // The max token number of one block.
   size_t block_token_num;
 
@@ -231,6 +240,15 @@ class InferRequestPatch {
   // The kv cache blocks this request used, shared across devices.
   std::vector<int> delta_kv_cache_blocks;
   size_t kv_cache_blocks_offset = 0;
+
+  // The full SWA kv cache blocks; mirrors InferRequest::swa_kv_cache_blocks.
+  // Always carries the complete block list (not incremental).
+  std::vector<int> swa_kv_cache_blocks;
+
+  // Per-block FA global index: swa_kv_cache_block_idx_offsets[i] is the FA block
+  // global index corresponding to swa_kv_cache_blocks[i].
+  // Mirrors InferRequest::swa_kv_cache_block_idx_offsets.
+  std::vector<size_t> swa_kv_cache_block_idx_offsets;
 
   // context decode or decode stage.
   InferStage infer_stage = InferStage::kContext;

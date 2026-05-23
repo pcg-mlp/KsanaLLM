@@ -167,6 +167,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
   int group_size = 128;
   bool apply_weight = false;
+  float swiglu_limit = 0.0f;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -189,6 +190,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
   params.push_back(apply_weight);
+  params.push_back(swiglu_limit);
 
   int num_tokens = 9;
   auto options = torch::TensorOptions().device(torch::kCUDA, kDeviceRank);
@@ -466,6 +468,9 @@ TEST_F(LayerTest, MoeLayerTest) {
   DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
+  float swiglu_limit = 0.0f;
+  uint32_t num_hash_layers = 0;
+  uint32_t vocab_size = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -489,6 +494,9 @@ TEST_F(LayerTest, MoeLayerTest) {
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
   params.push_back(apply_weight);
+  params.push_back(swiglu_limit);
+  params.push_back(num_hash_layers);
+  params.push_back(vocab_size);
 
   auto int8_option = torch::TensorOptions().dtype(torch::kInt8).device(torch::kCUDA);
   auto int32_option = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
@@ -946,6 +954,7 @@ TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
   DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
+  float swiglu_limit = 0.0f;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -969,6 +978,7 @@ TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
   params.push_back(apply_weight);
+  params.push_back(swiglu_limit);
 
   auto int8_option = torch::TensorOptions().dtype(torch::kInt8).device(torch::kCUDA);
   auto int32_option = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
@@ -1264,6 +1274,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
+  float swiglu_limit = 0.0f;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -1287,6 +1298,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
   params.push_back(apply_weight);
+  params.push_back(swiglu_limit);
 
   std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   auto t1 = std::chrono::high_resolution_clock::now();

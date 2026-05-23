@@ -3,10 +3,16 @@
 ==============================================================================*/
 #pragma once
 
+#include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/environment.h"
 #include "models/base/base_model.h"
+#include "models/base/forward_meta/c4_indexer_meta.h"
+#include "models/base/forward_meta/compressor_meta.h"
+#include "models/base/forward_meta/dsv4_mqa_meta.h"
 #include "runtime/forward_request.h"
 #include "runtime/infer_stage.h"
 #include "utils/tensor.h"
@@ -17,7 +23,7 @@ namespace ksana_llm {
 class ModelInput {
  public:
   ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
-             std::shared_ptr<Context> context);
+             std::shared_ptr<Context> context, std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~ModelInput();
 
   // Parse forward request.
@@ -244,6 +250,17 @@ class ModelInput {
   const int rank_;
   std::shared_ptr<Context> context_;
 
+  // The cache layout of every kv cache block.
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
+
+  // Active kv cache types for the current model ("attention" / optionally "indexer").
+  // The model layout is fixed at startup, so this list is computed once after construction.
+  std::vector<std::string> kv_cache_types_;
+
+  // Per-(kv_cache_type, layer_index) offsets, computed once after construction.
+  // Outer key is the kv_cache_type; inner index is the layer index.
+  std::unordered_map<std::string, std::vector<KvCacheLayerOffsets>> kv_cache_layer_offsets_;
+
   // Total bytes occupied by one kv cache block
   int block_size_;
   int layer_num_on_node_;
@@ -270,6 +287,7 @@ class ModelInput {
   Tensor cur_seq_len_start;                      // 每个token可以看到的开始位置的token索引
   Tensor cur_seq_len_end;                        // 每个token可以看到的结束位置的token索引
   std::vector<Tensor> paged_schedule_metas;      // for paged sparse mla indexer
+  Tensor store_out_loc;                          // used to store indexer kv cache
 
   // Reused vectors during model_input preparation,
   // avoid destruction during MemcpyAsync
@@ -303,6 +321,7 @@ class ModelInput {
     Tensor cur_seq_len_start;    // 每个token可以看到的开始位置的token索引
     Tensor cur_seq_len_end;      // 每个token可以看到的结束位置的token索引
     Tensor paged_schedule_meta;  // for paged sparse mla indexer
+    Tensor store_out_loc;
 
     size_t q_seq_len = 0;
     size_t expanded_batch_size = 1;
@@ -319,6 +338,10 @@ class ModelInput {
   input_info flash_input;               // input_ids length is non-specialized, use flash attention
   std::vector<input_info> page_inputs;  // input_ids length is fixed (`[1, decode_token_num_threshold]`), use page
                                         // attention, maintain only `page_input` with non-empty `dp_reqs`
+
+  std::unique_ptr<CompressorMeta> compressor_meta_;  // meta for compress module
+  std::unique_ptr<C4IndexerMeta> c4_indexer_meta_;   // meta for c4 indexer module
+  std::unique_ptr<Dsv4MqaMeta> dsv4_mqa_meta_;       // meta for dsv4 mqa attention module
 
   // Divide the forward requests into two categories: flash, page (with different lengths)
   void PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs);
@@ -338,6 +361,7 @@ class ModelInput {
   void PrepareFlashRotary(input_info& input);
   void PrepareFlexibleCache(input_info& input);
   void PrepareCuSeqLen(input_info& input, bool is_paged);
+  void PrepareStoreOutLoc(input_info& input);
 };
 
 }  // namespace ksana_llm

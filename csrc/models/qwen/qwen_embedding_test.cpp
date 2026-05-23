@@ -25,6 +25,7 @@
 #include "utils/request.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
@@ -58,6 +59,7 @@ class QwenEmbeddingTest : public testing::Test {
     env_->ParseConfig(config_path, model_path);
     env_->UpdateModelConfig();
     env_->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env_, model_config);
 
     // Embedding models must have these flags set.
     // In production, model_config_parser.cpp detects 1_Pooling/config.json automatically.
@@ -66,8 +68,6 @@ class QwenEmbeddingTest : public testing::Test {
     EXPECT_EQ(model_config.pooling_type, PoolingType::LAST);
     EXPECT_TRUE(model_config.normalize_embedding);
 
-    env_->GetPipelineConfig(pipeline_config);
-
     BatchSchedulerConfig batch_scheduler_config;
     env_->GetBatchSchedulerConfig(batch_scheduler_config);
     batch_scheduler_config.max_batch_size = 4;
@@ -75,10 +75,11 @@ class QwenEmbeddingTest : public testing::Test {
     batch_scheduler_config.max_token_len = 256;
     env_->SetBatchSchedulerConfig(batch_scheduler_config);
 
-    env_->SetPipelineConfig(pipeline_config);
     env_->SetModelConfig(model_config);
     env_->UpdateModelConfig();
-    env_->InitializeBlockManagerConfig();
+
+    block_cache_layout_ = GetTestModelCacheLayout(env_);
+    env_->InitializeBlockManagerConfig(block_cache_layout_);
 
     BlockManagerConfig block_manager_config;
     env_->GetBlockManagerConfig(block_manager_config);
@@ -129,6 +130,8 @@ class QwenEmbeddingTest : public testing::Test {
   std::shared_ptr<Context> context{nullptr};
   std::shared_ptr<HiddenUnitBufferHelper> hidden_unit_buffer_helper = nullptr;
   HiddenUnitDeviceBuffer* hidden_unit = nullptr;
+
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
@@ -193,8 +196,8 @@ class QwenEmbeddingTest : public testing::Test {
     std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
 
     // Create QwenEmbeddingModel.
-    std::shared_ptr<QwenEmbeddingModel> model =
-        std::make_shared<QwenEmbeddingModel>(model_config, runtime_config, device_id, context, model_weight);
+    std::shared_ptr<QwenEmbeddingModel> model = std::make_shared<QwenEmbeddingModel>(
+        model_config, runtime_config, device_id, context, model_weight, block_cache_layout_);
 
     // Prepare a single embedding request (prefill only, no decode).
     std::vector<int> input_ids = {151643, 8506, 553, 220, 16};  // "Hello world" tokenized roughly
@@ -269,8 +272,8 @@ class QwenEmbeddingTest : public testing::Test {
     weight_instance->Load();
     std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
 
-    std::shared_ptr<QwenEmbeddingModel> model =
-        std::make_shared<QwenEmbeddingModel>(model_config, runtime_config, device_id, context, model_weight);
+    std::shared_ptr<QwenEmbeddingModel> model = std::make_shared<QwenEmbeddingModel>(
+        model_config, runtime_config, device_id, context, model_weight, block_cache_layout_);
 
     // Two different sequences.
     std::vector<int> input_ids_0 = {151643, 8506, 553, 220, 16};
@@ -338,8 +341,8 @@ class QwenEmbeddingTest : public testing::Test {
     weight_instance->Load();
     std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
 
-    std::shared_ptr<QwenEmbeddingModel> model =
-        std::make_shared<QwenEmbeddingModel>(model_config, runtime_config, device_id, context, model_weight);
+    std::shared_ptr<QwenEmbeddingModel> model = std::make_shared<QwenEmbeddingModel>(
+        model_config, runtime_config, device_id, context, model_weight, block_cache_layout_);
 
     std::vector<int> input_ids = {151643, 8506, 553, 220, 16};
     std::shared_ptr<std::unordered_map<std::string, TargetDescribe>> request_target;
@@ -411,8 +414,8 @@ class QwenEmbeddingTest : public testing::Test {
     weight_instance->Load();
     std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
 
-    std::shared_ptr<QwenEmbeddingModel> model =
-        std::make_shared<QwenEmbeddingModel>(test_config, runtime_config, device_id, context, model_weight);
+    std::shared_ptr<QwenEmbeddingModel> model = std::make_shared<QwenEmbeddingModel>(
+        test_config, runtime_config, device_id, context, model_weight, block_cache_layout_);
 
     std::vector<int> input_ids = {151643, 8506, 553, 220, 16};
     std::shared_ptr<std::unordered_map<std::string, TargetDescribe>> request_target;
@@ -444,7 +447,10 @@ class QwenEmbeddingTest : public testing::Test {
     // Verify not all zeros.
     bool has_nonzero = false;
     for (size_t i = 0; i < emb.data.size(); ++i) {
-      if (emb.data[i] != 0) { has_nonzero = true; break; }
+      if (emb.data[i] != 0) {
+        has_nonzero = true;
+        break;
+      }
     }
     EXPECT_TRUE(has_nonzero) << label << " embedding output is all zeros";
 

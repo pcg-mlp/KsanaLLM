@@ -78,7 +78,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
                     void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,
                     void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size, int inter_size,
                     size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
-                    int rank, cudaStream_t stream);
+                    int rank, float swiglu_limit, cudaStream_t stream);
 
 template <typename T>
 void InvokeFusedBatchedMoe(void* output, const void* input, const void* weight1, const void* weight2,

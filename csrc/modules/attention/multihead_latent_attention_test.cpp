@@ -8,6 +8,7 @@
 #include <filesystem>
 
 #include "cache_manager/prefix_cache_manager.h"
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
 #include "models/base/model_weight.h"
@@ -115,9 +116,8 @@ template <typename T>
 class MultiHeadLatentAttentionTestModel : public CommonModel {
  public:
   using CommonModel::context_;
+  using CommonModel::forwarding_context_;
   using CommonModel::model_config_;
-
-  std::unique_ptr<ForwardingContext> forwarding_context_ = nullptr;
 
   using CommonModel::cast_layer_;
 
@@ -126,14 +126,12 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
   MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                     const int rank, std::shared_ptr<Context> context,
-                                    std::shared_ptr<BaseWeight> base_weight)
+                                    std::shared_ptr<BaseWeight> base_weight,
+                                    std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
       : CommonModel(model_config, runtime_config, rank, context) {
     ModelRunConfig model_run_config;
     model_run_config.position_encoding = PositionEncoding::ROPE;
-    CommonModel::InitRunConfig(model_run_config, base_weight);
-    forwarding_context_ = std::make_unique<ForwardingContext>();
-    forwarding_context_->Init(context_, rank_, model_config_, runtime_config_, pipeline_config_,
-                              model_buffers_.buffers_.get(), GetBufferManager());
+    CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
   }
 
   ~MultiHeadLatentAttentionTestModel() {}
@@ -361,6 +359,7 @@ class MlaTest : public testing::Test {
 
     env->ParseConfig(config_path, std::filesystem::absolute(config_path_relate.parent_path() / "deepseekv2").string());
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
 
     // kv_cache_dtype must be set before calling env->InitializeBlockManagerConfig()
     if (test_name.find("FlashMlaKvFP8") != std::string::npos) {
@@ -381,7 +380,8 @@ class MlaTest : public testing::Test {
         env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype = TYPE_FP8_DS_MLA;
       }
     }
-    env->InitializeBlockManagerConfig();
+    block_cache_layout_ = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
     BlockManagerConfig block_manager_config;
     env->GetBlockManagerConfig(block_manager_config);
     block_manager_config.block_host_memory_factor = 0;
@@ -438,6 +438,7 @@ class MlaTest : public testing::Test {
   std::shared_ptr<BlockAllocatorGroupInterface> engine_block_group;
   std::shared_ptr<BlockAllocatorGroupInterface> executor_block_group;
   std::shared_ptr<Context> context;
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   std::shared_ptr<PrefixCacheManager> cache_manager;
 
@@ -451,7 +452,7 @@ class MlaTest : public testing::Test {
     std::shared_ptr<ksana_llm::BaseWeight> bs1 = base_weight;
     std::shared_ptr<MultiHeadLatentAttentionTestModel<weight_data_type>> test_mla_model =
         std::make_shared<MultiHeadLatentAttentionTestModel<weight_data_type>>(model_config, runtime_config, 0, context,
-                                                                              bs1);
+                                                                              bs1, block_cache_layout_);
 
     // ContextDecode
     ForwardRequest forward;

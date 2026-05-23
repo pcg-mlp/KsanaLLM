@@ -19,7 +19,8 @@
 
 namespace ksana_llm {
 
-InferenceSupervisor::InferenceSupervisor(const std::string &config_file, bool is_engine, int executor_id) {
+InferenceSupervisor::InferenceSupervisor(const std::string &config_file, bool is_engine, int executor_id,
+                                         const std::string &json_model_override_args) {
   config_file_ = config_file;
   is_engine_ = is_engine;
   executor_id_ = executor_id;
@@ -30,7 +31,7 @@ InferenceSupervisor::InferenceSupervisor(const std::string &config_file, bool is
     env_->InitializeAttentionBackend();
   }
 
-  STATUS_CHECK_FAILURE(env_->ParseConfig(config_file_));
+  STATUS_CHECK_FAILURE(env_->ParseConfig(config_file_, "", "config.json", json_model_override_args));
 
   RuntimeConfig runtime_config;
   STATUS_CHECK_FAILURE(env_->GetRuntimeConfig(runtime_config));

@@ -28,6 +28,7 @@
 #include "utils/singleton.h"
 #include "utils/string_utils.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "models/base/fake_weight_for_test.h"
 #include "models/common/model_test_helper.h"
 #include "utils/safetensors_file_tensor_loader_test_helper.h"
@@ -119,9 +120,11 @@ class FakeTinyWeightTest : public testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_config_path_relate, model_config_filename_);
     STATUS_CHECK_FAILURE(env->GetModelConfig(model_config));
+    InitPipelineConfigForTest(env, model_config);
 
+    block_cache_layout_ = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+    env->InitializeBlockManagerConfig(block_cache_layout_);
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_INFO << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
@@ -178,6 +181,7 @@ class FakeTinyWeightTest : public testing::Test {
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
   std::shared_ptr<PrefixCacheManager> cache_manager_ = nullptr;
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   /*
    * This function tests forward funtion works with fake weight.
@@ -212,7 +216,8 @@ class FakeTinyWeightTest : public testing::Test {
 
     bool reuse_prefix_config = false;
     std::shared_ptr<FakeModel<weight_data_type>> fake_model = std::make_shared<FakeModel<weight_data_type>>(
-        llama, context_, rank_, model_config, runtime_config, pipeline_config_, llama_weight, reuse_prefix_config);
+        llama, context_, rank_, model_config, runtime_config, pipeline_config_, llama_weight, reuse_prefix_config,
+        block_cache_layout_);
 
     // ContextDecode
     int hidden_state_len = model_config.head_num * model_config.size_per_head;
@@ -339,7 +344,7 @@ class FakeTinyWeightTest : public testing::Test {
                                      model_test_config.use_shared_moe, &default_weight_initializer);
     std::shared_ptr<ModelInterface> gpt = std::make_shared<Gpt>();
     std::shared_ptr<FakeModel<float16>> fake_model = std::make_shared<FakeModel<float16>>(
-        gpt, context_, rank_, model_config, runtime_config, pipeline_config_, gpt_weight, false);
+        gpt, context_, rank_, model_config, runtime_config, pipeline_config_, gpt_weight, false, block_cache_layout_);
     // ContextDecode
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
@@ -742,8 +747,8 @@ TEST_F(FakeBgeRerankerModelTest, ForwardTest) {
   DefaultWeightValueInitializer default_weight_initializer2;
   std::shared_ptr<FakeBgeRerankerWeight> fake_base_weight = std::make_shared<FakeBgeRerankerWeight>(
       model_config, runtime_config, rank_, false, false, false, &default_weight_initializer2);
-  std::shared_ptr<BgeRerankerMinicpmModel> bge_model =
-      std::make_shared<BgeRerankerMinicpmModel>(model_config, runtime_config, rank_, context_, fake_base_weight);
+  std::shared_ptr<BgeRerankerMinicpmModel> bge_model = std::make_shared<BgeRerankerMinicpmModel>(
+      model_config, runtime_config, rank_, context_, fake_base_weight, block_cache_layout_);
 
   ModelRunConfig model_run_config;
   BgeRerankerMinicpm bge_interface;

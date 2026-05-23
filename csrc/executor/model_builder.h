@@ -18,6 +18,8 @@ class ModelBuilder {
 
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
 
+  void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager);
+
   void SetModelInstance(std::shared_ptr<ModelInstance> model_instance);
 
   // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
@@ -91,6 +93,8 @@ class ModelBuilder {
 
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
+  // The SWA block allocator manager; nullptr when SWA is disabled.
+  std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager_ = nullptr;
 };
 
 }  // namespace ksana_llm

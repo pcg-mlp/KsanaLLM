@@ -12,6 +12,7 @@
 
 #include "modules/basic/add.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/multihead_attention.h"
 #include "modules/basic/mul.h"
@@ -102,7 +103,8 @@ class InternlmxComposer2 : public ModelInterface {
 class InternlmxComposer2Model : public CommonModel {
  public:
   InternlmxComposer2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                          std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+                          std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                          std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~InternlmxComposer2Model() {}
 
  private:

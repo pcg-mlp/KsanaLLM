@@ -126,6 +126,8 @@ enum DataType {
   TYPE_UINT4x2,
   TYPE_INT4x2,
   TYPE_FP8_DS_MLA,
+  TYPE_FP8_E8M0,
+  TYPE_FP4_E2M1FN_x2,
 #elif defined(ENABLE_ACL)
   TYPE_INVALID = aclDataType::ACL_DT_UNDEFINED,
   TYPE_BOOL = aclDataType::ACL_BOOL,
@@ -151,6 +153,8 @@ enum DataType {
   TYPE_UINT4x2 = aclDataType::ACL_DT_UNDEFINED - 7,
   TYPE_INT4x2 = aclDataType::ACL_DT_UNDEFINED - 8,
   TYPE_FP8_DS_MLA = aclDataType::ACL_DT_UNDEFINED - 9,
+  TYPE_FP8_E8M0 = aclDataType::ACL_DT_UNDEFINED - 10,
+  TYPE_FP4_E2M1FN_x2 = aclDataType::ACL_DT_UNDEFINED - 11,
 #elif defined(ENABLE_TOPS)
   TYPE_INVALID,
   TYPE_FP32,
@@ -181,6 +185,8 @@ enum DataType {
   TYPE_UINT4x2,
   TYPE_INT4x2,
   TYPE_FP8_DS_MLA,
+  TYPE_FP8_E8M0,
+  TYPE_FP4_E2M1FN_x2,
 #endif
 };
 
@@ -207,7 +213,9 @@ __attribute__((unused)) static std::string GetTypeString(DataType dtype) {
                                                                   {TYPE_FP8_E5M2, "fp8_e5m2"},
                                                                   {TYPE_VOID, "void"},
                                                                   {TYPE_POINTER, "pointer"},
-                                                                  {TYPE_FP8_DS_MLA, "fp8_ds_mla"}};
+                                                                  {TYPE_FP8_DS_MLA, "fp8_ds_mla"},
+                                                                  {TYPE_FP8_E8M0, "fp8_e8m0"},
+                                                                  {TYPE_FP4_E2M1FN_x2, "fp4_e2m1fn_x2"}};
   return type_map.count(dtype) ? type_map.at(dtype) : "invalid";
 }
 

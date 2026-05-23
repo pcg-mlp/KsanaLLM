@@ -87,12 +87,9 @@ Status DraftGeneratorController::FilterDraftTokens(std::vector<std::shared_ptr<E
       per_index_str += fmt::format("{:.1f}%", draft_num > 0 ? hit_num * 100.f / draft_num : 0.f);
     }
     KLLM_LOG_INFO << fmt::format(
-      "Draft hit rate: {:.1f}%, Hit tokens: {}, "
-      "Draft tokens: {}; Per draft token hit rate: [{}]",
-      agg_draft > 0 ? agg_hit * 100.f / agg_draft : 0.f,
-      agg_hit,
-      agg_draft,
-      per_index_str);
+        "Draft hit rate: {:.1f}%, Hit tokens: {}, "
+        "Draft tokens: {}; Per draft token hit rate: [{}]",
+        agg_draft > 0 ? agg_hit * 100.f / agg_draft : 0.f, agg_hit, agg_draft, per_index_str);
     accumulated_hit_count.clear();
   }
   REPORT_METRIC("spec_draft_hit_num", total_hit_num);

@@ -23,11 +23,13 @@ namespace nvidia {
  * @param is_column_major Whether the input is in column-major order
  * @param fuse_silu_mul Whether to apply silu-mul to the input fisrt
  * @param scale_ue8m0 Whether to use UE8M0 format for scales
+ * @param swiglu_limit Clamp threshold (>0 to enable): gate clamped to (-inf, limit], up clamped to [-limit, limit]
  * @param stream CUDA stream
  */
 template <typename T>
 void per_token_group_quant_fp8(const void* input, void* output_q, void* output_s, int m, int n, int64_t group_size,
-                               bool is_column_major, bool fuse_silu_mul, bool scale_ue8m0, cudaStream_t stream);
+                               bool is_column_major, bool fuse_silu_mul, bool scale_ue8m0, float swiglu_limit,
+                               cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

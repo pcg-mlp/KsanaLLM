@@ -8,6 +8,8 @@
 #include "cache_manager/prefix_cache_manager.h"
 #include "device/common_device.h"
 #include "device/device_utils.h"
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "models/deepseek_v3/deepseek_v3_model.h"
 #include "runtime/weight_instance.h"
 #include "samplers/sampler.h"
@@ -37,6 +39,7 @@ class DeepSeekV3DPTest : public testing::Test {
   std::shared_ptr<Context> context{nullptr};
   std::vector<std::shared_ptr<DeepSeekV3Model>> deepseek_v3_dps;
   std::vector<std::shared_ptr<BaseWeight>> deepseek_v3_weight_dps;
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   void InitEnv() {
     std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";
@@ -56,14 +59,16 @@ class DeepSeekV3DPTest : public testing::Test {
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
 
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
     env->GetAttnBackendConfig(attn_backend_config);
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     env->SetAttnBackendConfig(attn_backend_config);
+    block_cache_layout_ = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+    env->InitializeBlockManagerConfig(block_cache_layout_);
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
@@ -108,8 +113,8 @@ class DeepSeekV3DPTest : public testing::Test {
           std::make_unique<WeightInstance>(model_config, runtime_config, context);
       weight_instance->Load();
       std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight();
-      std::shared_ptr<DeepSeekV3Model> deepseek_v3 =
-          std::make_shared<DeepSeekV3Model>(model_config, runtime_config, device_id, context, deepseek_v3_weight);
+      std::shared_ptr<DeepSeekV3Model> deepseek_v3 = std::make_shared<DeepSeekV3Model>(
+          model_config, runtime_config, device_id, context, deepseek_v3_weight, block_cache_layout_);
 
       deepseek_v3_dps.push_back(deepseek_v3);
       deepseek_v3_weight_dps.push_back(deepseek_v3_weight);

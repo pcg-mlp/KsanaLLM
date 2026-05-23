@@ -68,6 +68,13 @@ target_link_libraries(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale PU
     llm_kernels_nvidia_utils)
 target_link_libraries(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale PRIVATE cutlass_c4x)
 
+# set kernels target for dequant_fp4
+file(GLOB_RECURSE DEQUANT_FP4_SRCS dequant_fp4.cu)
+add_library(llm_kernels_nvidia_kernel_dequant_fp4 STATIC ${DEQUANT_FP4_SRCS})
+set_property(TARGET llm_kernels_nvidia_kernel_dequant_fp4 PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET llm_kernels_nvidia_kernel_dequant_fp4 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(llm_kernels_nvidia_kernel_dequant_fp4 PUBLIC -lcublas -lcudart -lcublasLt llm_kernels_nvidia_utils)
+
 # for test
 file(GLOB_RECURSE DEQUANT_TEST_SRCS dequant_test.cu)
 cc_test(llm_kernels_nvidia_kernel_dequant_test SRCS ${DEQUANT_TEST_SRCS} DEPS
@@ -78,4 +85,10 @@ cc_test(llm_kernels_nvidia_kernel_dequant_test SRCS ${DEQUANT_TEST_SRCS} DEPS
 file(GLOB_RECURSE PER_TENSOR_QUANT_BY_SCALE_TEST_SRCS per_tensor_quant_by_scale_test.cu)
 cc_test(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale_test SRCS ${PER_TENSOR_QUANT_BY_SCALE_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale
+    torch c10)
+
+file(GLOB_RECURSE DEQUANT_FP4_TEST_SRCS dequant_fp4_test.cu)
+cc_test(llm_kernels_nvidia_kernel_dequant_fp4_test SRCS ${DEQUANT_FP4_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils
+    llm_kernels_nvidia_kernel_dequant_fp4
     torch c10)

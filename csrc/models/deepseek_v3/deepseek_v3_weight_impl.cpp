@@ -9,6 +9,8 @@
 
 #include "kernels/permute.h"
 #include "model_loader/model_loader_utils.h"
+#include "utils/logger.h"
+#include "utils/string_utils.h"
 #include "utils/utils.h"
 
 #ifdef ENABLE_CUDA
@@ -59,8 +61,7 @@ Status DeepSeekV3WeightImpl<T>::PermuteWeight(Tensor& input_tensor, const std::v
 // TODO(huicongyao): compare TransplitOptTrans with Memcpy2dAsync
 template <typename T>
 Status DeepSeekV3WeightImpl<T>::TransSplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor,
-                                                   int dev_rank, std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config,
-                                                   size_t para_size, bool transpose) {
+                                                   int dev_rank, size_t para_size, bool transpose) {
   Tensor& full_dev_tensor = GetTempTensor(host_weight_tensor.shape, host_weight_tensor.dtype, dev_rank);
 
   MemcpyAsync(full_dev_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(),
@@ -92,8 +93,7 @@ Status DeepSeekV3WeightImpl<T>::TransSplitOptTrans(const Tensor& host_weight_ten
 
 template <typename T>
 Status DeepSeekV3WeightImpl<T>::SplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank,
-                                              std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config, size_t para_size,
-                                              bool transpose) {
+                                              size_t para_size, bool transpose) {
   std::vector<size_t> slice_shape = {static_cast<size_t>(DivRoundUp(host_weight_tensor.shape[0], para_size)),
                                      host_weight_tensor.shape[1]};
   Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, slice_shape, nullptr,
@@ -170,6 +170,10 @@ Status DeepSeekV3WeightImpl<T>::ProcessGateUpProjWeight(const std::string& file_
                   context_->device->GetMemoryManageStream());
   }
 
+  KLLM_LOG_DEBUG << fmt::format("[ProcessGateUpProjWeight] name: {}, shape: [{}, {}], dtype: {}, is_quant: {}",
+                                file_weight_name_replace, gate_up_proj_tensor.shape[0], gate_up_proj_tensor.shape[1],
+                                static_cast<int>(gate_up_proj_tensor.dtype), is_quant_weight);
+
   return Status();
 }
 
@@ -242,6 +246,14 @@ Status DeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
       device_model_weights[quant_nope_rope_weight_scale_name] = std::move(device_model_weights[weight_scale_name]);
       device_model_weights.erase(weight_name);
       device_model_weights.erase(weight_scale_name);
+      KLLM_LOG_DEBUG << fmt::format("[PostProcessFp8] q_b_proj renamed: {} -> {}, scale: {} -> {}", weight_name,
+                                    quant_nope_rope_weight_name, weight_scale_name, quant_nope_rope_weight_scale_name);
+      KLLM_LOG_DEBUG << fmt::format(
+          "[PostProcessFp8] weight shape: {}, dtype: {}, scale shape: {}, dtype: {}",
+          Vector2Str(std::vector<size_t>(device_model_weights.at(quant_nope_rope_weight_name).shape)),
+          device_model_weights.at(quant_nope_rope_weight_name).dtype,
+          Vector2Str(std::vector<size_t>(device_model_weights.at(quant_nope_rope_weight_scale_name).shape)),
+          device_model_weights.at(quant_nope_rope_weight_scale_name).dtype);
       continue;
     }
     if (weight_name.find(".kv_b_proj.weight") != std::string::npos) {
@@ -282,6 +294,10 @@ Status DeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
       w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, dequant_kv_b_nope_proj.shape[1]};
       std::string w_uk_t_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uk_t.weight";
       device_model_weights[w_uk_t_name] = w_uk_t_tensor;
+      KLLM_LOG_DEBUG << fmt::format("[PostProcessFp8] kv_b_proj dequant: {}, dequant shape: {}, dtype: {}", weight_name,
+                                    Vector2Str(std::vector<size_t>(dequant_kv_b_proj.shape)), dequant_kv_b_proj.dtype);
+      KLLM_LOG_DEBUG << fmt::format("[PostProcessFp8] w_uk_t stored: {}, shape: {}, dtype: {}", w_uk_t_name,
+                                    Vector2Str(std::vector<size_t>(w_uk_t_tensor.shape)), w_uk_t_tensor.dtype);
 
       // Permute dequant_nope_weight to w_uv
       Tensor w_uv_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, w_uk_t_tensor.dtype,
@@ -291,6 +307,8 @@ Status DeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
       Permute(dequant_v_head_proj, w_uv_tensor, {0, 2, 1}, context_->device->GetMemoryManageStream());
       std::string w_uv_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uv.weight";
       device_model_weights[w_uv_name] = w_uv_tensor;
+      KLLM_LOG_DEBUG << fmt::format("[PostProcessFp8] w_uv stored: {}, shape: {}, dtype: {}", w_uv_name,
+                                    Vector2Str(std::vector<size_t>(w_uv_tensor.shape)), w_uv_tensor.dtype);
       dequant_v_head_proj.shape = {head_num_tp * v_head_dim, dequant_kv_b_proj.shape[1]};
 
       // Quant kv_b_nope_proj and v_head_proj
@@ -335,6 +353,14 @@ Status DeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
                                dequant_v_head_proj.shape[1], dev_rank);
       device_model_weights[quant_v_head_weight_name] = quant_v_head_weight;
       device_model_weights[quant_v_head_weight_scale_name] = quant_v_head_weight_scale;
+      KLLM_LOG_DEBUG << fmt::format("[PostProcessFp8] requant nope: {}, shape: {}, dtype: {}, scale shape: {}",
+                                    quant_nope_weight_name, Vector2Str(std::vector<size_t>(quant_nope_weight.shape)),
+                                    quant_nope_weight.dtype,
+                                    Vector2Str(std::vector<size_t>(quant_nope_weight_scale.shape)));
+      KLLM_LOG_DEBUG << fmt::format(
+          "[PostProcessFp8] requant v_head: {}, shape: {}, dtype: {}, scale shape: {}", quant_v_head_weight_name,
+          Vector2Str(std::vector<size_t>(quant_v_head_weight.shape)), quant_v_head_weight.dtype,
+          Vector2Str(std::vector<size_t>(quant_v_head_weight_scale.shape)));
       device_model_weights.erase(weight_name);
       device_model_weights.erase(weight_scale_name);
       continue;
@@ -424,6 +450,10 @@ bool DeepSeekV3WeightImpl<T>::LoadMoeFp8E4m3BlockWiseScale(
                   host_weight_tensor.GetPtr<void>() + src_upgate_offset, expert_scale_pitch, MEMCPY_HOST_TO_DEVICE,
                   context_->device->GetMemoryManageStream());
     }
+    KLLM_LOG_DEBUG << fmt::format(
+        "[LoadMoeFp8Scale] stored up_gate scale: {}, shape: {}, dtype: {}", up_gate_experts_scale_name,
+        Vector2Str(std::vector<size_t>(device_model_weights.at(up_gate_experts_scale_name).shape)),
+        device_model_weights.at(up_gate_experts_scale_name).dtype);
   }
   if (host_weight_name.find(".down_proj.weight_scale") != std::string::npos) {
     std::string down_experts_scale_name =
@@ -447,6 +477,10 @@ bool DeepSeekV3WeightImpl<T>::LoadMoeFp8E4m3BlockWiseScale(
                       static_cast<size_t>(expert_idx) * expert_scale_pitch,
                   dst_pitch, host_weight_tensor.GetPtr<void>() + src_down_offset, src_pitch, dst_pitch,
                   down_experts_scale_shape[1], MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
+    KLLM_LOG_DEBUG << fmt::format(
+        "[LoadMoeFp8Scale] stored down scale: {}, shape: {}, dtype: {}", down_experts_scale_name,
+        Vector2Str(std::vector<size_t>(device_model_weights.at(down_experts_scale_name).shape)),
+        device_model_weights.at(down_experts_scale_name).dtype);
   }
   return true;
 }
@@ -491,6 +525,9 @@ bool DeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
     MemcpyAsync(weight_scale_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(),
                 weight_scale_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
     device_model_weights[host_weight_name] = weight_scale_tensor;
+    KLLM_LOG_DEBUG << fmt::format("[LoadMlaFp8Scale] stored indexer scale: {}, shape: {}, dtype: {}", host_weight_name,
+                                  Vector2Str(std::vector<size_t>(weight_scale_tensor.shape)),
+                                  weight_scale_tensor.dtype);
   }
   // For q_a_proj scale
   if (host_weight_name.find(".q_a_proj.weight_scale_inv") != std::string::npos) {
@@ -511,6 +548,9 @@ bool DeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
     if (device_model_weights.find(fused_tensor_name) == device_model_weights.end()) {
       device_model_weights[fused_tensor_name] = fused_tensor;
     }
+    KLLM_LOG_DEBUG << fmt::format("[LoadMlaFp8Scale] stored q_a_proj fused scale: {}, shape: {}, dtype: {}",
+                                  fused_tensor_name, Vector2Str(std::vector<size_t>(fused_tensor.shape)),
+                                  fused_tensor.dtype);
   }
   // For q_b_proj scale
   if (host_weight_name.find(".q_b_proj.weight_scale_inv") != std::string::npos) {
@@ -525,6 +565,9 @@ bool DeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
     MemcpyAsync(weight_scale_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>() + tensor_para_offset,
                 weight_scale_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
     device_model_weights[host_weight_name] = weight_scale_tensor;
+    KLLM_LOG_DEBUG << fmt::format("[LoadMlaFp8Scale] stored q_b_proj scale: {}, shape: {}, dtype: {}", host_weight_name,
+                                  Vector2Str(std::vector<size_t>(weight_scale_tensor.shape)),
+                                  weight_scale_tensor.dtype);
   }
   // For kv_a_proj scale
   if (host_weight_name.find(".kv_a_proj_with_mqa.weight_scale_inv") != std::string::npos) {
@@ -548,6 +591,9 @@ bool DeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
     if (device_model_weights.find(fused_tensor_name) == device_model_weights.end()) {
       device_model_weights[fused_tensor_name] = fused_tensor;
     }
+    KLLM_LOG_DEBUG << fmt::format("[LoadMlaFp8Scale] stored kv_a_proj fused scale: {}, shape: {}, dtype: {}",
+                                  fused_tensor_name, Vector2Str(std::vector<size_t>(fused_tensor.shape)),
+                                  fused_tensor.dtype);
   }
   // For kv_b_proj_scale
   if (host_weight_name.find(".kv_b_proj.weight_scale_inv") != std::string::npos) {
@@ -562,16 +608,20 @@ bool DeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
     MemcpyAsync(weight_scale_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>() + tensor_para_offset,
                 weight_scale_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
     device_model_weights[host_weight_name] = weight_scale_tensor;
+    KLLM_LOG_DEBUG << fmt::format("[LoadMlaFp8Scale] stored kv_b_proj scale: {}, shape: {}, dtype: {}",
+                                  host_weight_name, Vector2Str(std::vector<size_t>(weight_scale_tensor.shape)),
+                                  weight_scale_tensor.dtype);
   }
   // For o_proj scale
   if (host_weight_name.find(".o_proj.weight_scale_inv") != std::string::npos) {
     // fp8: Transpose, then split along axis = 0, then transpose
     size_t split_size = runtime_config_.enable_o_proj_out_of_dp ? deepseek_v3_config->tensor_para_size : attn_tp_size;
     Tensor dev_tensor;
-    TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, split_size,
-                       deepseek_v3_config->is_quant);
+    TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, split_size, deepseek_v3_config->is_quant);
 
     device_model_weights[host_weight_name] = dev_tensor;
+    KLLM_LOG_DEBUG << fmt::format("[LoadMlaFp8Scale] stored o_proj scale: {}, shape: {}, dtype: {}", host_weight_name,
+                                  Vector2Str(std::vector<size_t>(dev_tensor.shape)), dev_tensor.dtype);
   }
   return true;
 }
@@ -620,7 +670,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
     if (host_weight_name.find(".mlp.down_proj.") != std::string::npos ||
         host_weight_name.find(".mlp.shared_expert.down_proj.") != std::string::npos) {
       Tensor dev_tensor;
-      SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, mlp_tensor_para_size, false);
+      SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, mlp_tensor_para_size, false);
       device_model_weights[host_weight_name] = dev_tensor;
       continue;
     }
@@ -629,7 +679,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
         host_weight_name.find(".mlp.shared_expert.gate_proj.") != std::string::npos ||
         host_weight_name.find(".mlp.gate_proj.") != std::string::npos) {
       Tensor dev_tensor;
-      TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, mlp_tensor_para_size, true);
+      TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, mlp_tensor_para_size, true);
       device_model_weights[host_weight_name] = dev_tensor;
       continue;
     }
@@ -776,7 +826,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
         }
         // Split along axis=1 first
         Tensor dev_tensor;
-        TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, attn_tp_size, true);
+        TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, attn_tp_size, true);
         std::string q_b_nope_rope_name = GetReplacedName(host_weight_name, ".q_b_proj.", ".q_b_nope_rope_proj.");
         device_model_weights[q_b_nope_rope_name] = dev_tensor;
         continue;
@@ -817,7 +867,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
               host_weight_name, kv_lora_rank, qk_rope_head_dim));
         }
         Tensor dev_tensor;
-        TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, attn_tp_size, true);
+        TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, attn_tp_size, true);
 
         // For kv_b_nope_proj
         std::string kv_b_nope_name = GetReplacedName(host_weight_name, ".kv_b_proj.", ".kv_b_nope_proj.");
@@ -846,8 +896,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
       }
       if (host_weight_name.find(".self_attn.o_proj.") != std::string::npos) {
         Tensor dev_tensor;
-        SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, attn_tp_size,
-                      !deepseek_v3_config->is_quant);
+        SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, attn_tp_size, !deepseek_v3_config->is_quant);
         device_model_weights[host_weight_name] = dev_tensor;
         continue;
       }

@@ -43,6 +43,114 @@ class EventDrivenSchedulerTest : public BaseSchedulerTest {
   }
 };
 
+TEST_F(EventDrivenSchedulerTest, SwaBasicTokenGenerationTest) {
+  // SWA enabled, prefix cache disabled.
+  // In SWA mode RunAStep generates tokens from combined (full KV + SWA window) contents,
+  // so DefaultResultCheckHook (which uses GenerateFakeTokens on input_tokens only) is not
+  // applicable here. We verify that all requests complete and no swap is triggered.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = false;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  // No result-check hook: correctness of SWA token generation is verified inside RunAStep
+  // via EXPECT_EQ on swa_contents vs forwarding_tokens.
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+
+  // Run requests one by one
+  int request_num = 30;
+  int client_num = 1;
+  int max_expect_output_num = 100;
+  int max_input_num = 400;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+}
+
+TEST_F(EventDrivenSchedulerTest, SwaPrefixCacheBasicTokenGenerationTest) {
+  // SWA enabled, prefix cache enabled.
+  // In SWA mode RunAStep generates tokens from combined (full KV + SWA window) contents,
+  // so DefaultResultCheckHook (which uses GenerateFakeTokens on input_tokens only) is not
+  // applicable here. We verify that all requests complete and no swap is triggered.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = true;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  // No result-check hook: correctness of SWA token generation is verified inside RunAStep
+  // via EXPECT_EQ on swa_contents vs forwarding_tokens.
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+
+  // Run requests one by one
+  int request_num = 30;
+  int client_num = 1;
+  int max_expect_output_num = 100;
+  int max_input_num = 400;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+}
+
+TEST_F(EventDrivenSchedulerTest, SwaPrefixCacheSwapOutInNotTriggeredPressTest) {
+  // SWA enabled, prefix cache enabled, parallel requests.
+  // Verify that all requests complete and no swap is triggered.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = true;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  // No result-check hook: correctness of SWA token generation is verified inside RunAStep.
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+
+  // Run requests in parallel; input and max output token are limited so swap is not triggered.
+  int request_num = 100;
+  int client_num = 10;
+  int max_expect_output_num = 40;
+  int max_input_num = 60;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
+}
+
+TEST_F(EventDrivenSchedulerTest, SwaSwapOutInNotTriggeredPressTest) {
+  // SWA enabled, prefix cache disabled, parallel requests.
+  // Verify that all requests complete and no swap is triggered.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = false;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  // No result-check hook: correctness of SWA token generation is verified inside RunAStep.
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+
+  // Run requests in parallel; input and max output token are limited so swap is not triggered.
+  int request_num = 100;
+  int client_num = 10;
+  int max_expect_output_num = 40;
+  int max_input_num = 60;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
+}
+
 TEST_F(EventDrivenSchedulerTest, BasicTokenGenerationTest) {
   CommonSetUp();
   ParallelTester tester(schedule_processor_, env_simulator_);

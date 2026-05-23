@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "batch_scheduler/full_cache_hit_handler.h"
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "configure/schedule_config_parser.h"
 #include "runtime/schedule_output.h"
@@ -131,7 +132,8 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
 
       bool block_merged = false;
       const Status update_status = cache_manager->UpdateRequestTokens(
-          req->req_id, req->forwarding_tokens, req->kv_cached_token_num, req->kv_cache_blocks, block_merged);
+          req->req_id, req->forwarding_tokens, req->kv_cached_token_num, req->kv_cache_blocks, block_merged,
+          req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
       if (!update_status.OK()) {
         EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, req, update_status, events,
                       emitted_event_keys);
@@ -212,7 +214,9 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       }
 
       const size_t req_step_block_num = cache_manager->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
-      Status status = cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
+      Status status =
+          cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
+                                               req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
       if (status.OK()) {
         has_success = true;
         planning_batch.AddRunningReq(dp_idx, req);
@@ -360,7 +364,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         continue;
       }
 
-      Status status = cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
+      Status status =
+          cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
+                                               req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
       if (!status.OK()) {
         KLLM_LOG_SCHEDULER << "Failed to allocate blocks for req_id=" << req->req_id
                            << ", required_block_num=" << req_step_block_num
@@ -370,11 +376,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       }
       has_success = true;
 
-      if (shared_token_num == seq_token_num) {
-        planning_workload.prefill_start_offset = shared_token_num - kStepGenerateTokenNum;
-        planning_workload.prefill_token_num = kStepGenerateTokenNum;
-        req->SetPlanningWorkload(planning_workload);
-        req->SetRemainingWorkload(planning_workload);
+      if (shared_token_num >= seq_token_num) {
+        HandleFullPrefixCacheHit(req, planning_workload, seq_token_num);
       } else if (shared_token_num > 0) {
         size_t planning_prefill_token_num =
             planning_workload.prefill_token_num + planning_workload.prefill_start_offset;

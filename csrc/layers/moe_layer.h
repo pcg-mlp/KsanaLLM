@@ -9,6 +9,7 @@
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_layer.h"
 #include "layers/grouped_topk_layer.h"
+#include "layers/topk_softplus_sqrt_layer.h"
 #include "models/base/base_weight.h"
 #include "models/common_moe/moe_config.h"
 
@@ -41,10 +42,18 @@ class MoeLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
+  // Test-only observability: true iff Init picked the sqrt+softplus gate.
+  bool IsUsingTopkSoftplusSqrt() const { return use_topk_softplus_sqrt_; }
+
  private:
   // 执行 GroupedTopk 计算与 Dispatch 分发
   template <typename T>
   Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+  // Softplus+sqrt gating used by DeepSeek V4 (parallel to ExecuteGroupedTopk).
+  template <typename T>
+  Status ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensors,
+                                 std::vector<Tensor>& output_tensors);
 
   // Used for distributing and gathering topk_ids and hidden_buffer in Expert-Parallel scenarios
   Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
@@ -89,6 +98,7 @@ class MoeLayer : public BaseLayer {
   float routed_scaling_factor_ = 1.0f;
   bool use_e_score_correction_bias_ = false;
   bool enable_full_shared_expert_ = false;
+  float swiglu_limit_ = 0.0f;
 
   size_t scale_probabilities_size_;
   size_t src_to_dest_map_size_;
@@ -153,6 +163,25 @@ class MoeLayer : public BaseLayer {
 
   // GroupedTopk layer for handling topk computation
   std::shared_ptr<GroupedTopkLayer> grouped_topk_layer_;
+
+  // Set from scoring_func_ == "sqrtsoftplus". When true, topk_softplus_sqrt_layer_
+  // is used for gating instead of grouped_topk_layer_.
+  bool use_topk_softplus_sqrt_ = false;
+
+  // Derived at Init: layer_idx < num_hash_layers_. Only meaningful when
+  // use_topk_softplus_sqrt_ is true.
+  bool use_hash_ = false;
+
+  // DeepSeek V4 hash routing: first num_hash_layers_ MoE layers use a
+  // per-token-id expert-index lookup table (tid2eid) instead of score-based top-k.
+  uint32_t num_hash_layers_ = 0;
+  uint32_t vocab_size_ = 0;
+
+  // Size of the inner gate's workspace (only set when use_topk_softplus_sqrt_).
+  size_t softplus_sqrt_workspace_size_ = 0;
+
+  // Alternate gate used when use_topk_softplus_sqrt_ is true.
+  std::shared_ptr<TopKSoftplusSqrtLayer> topk_softplus_sqrt_layer_;
 
   std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
 

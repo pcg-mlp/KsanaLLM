@@ -15,6 +15,7 @@
 #include "models/bge_reranker_minicpm/bge_reranker_minicpm_weight_loader.h"
 #include "models/chatglm/chatglm_model_weight_loader.h"
 #include "models/deepseek_v3/deepseek_v3_weight_loader.h"
+#include "models/deepseek_v4/deepseek_v4_weight_loader.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_weight_loader.h"
 #include "models/glm4_moe/glm4_moe_weight_loader.h"
 #include "models/llama/llama_model_weight_loader.h"
@@ -81,6 +82,10 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_MINICPM: {
       model_weight_loader = std::make_shared<BgeRerankerMinicpmWeightLoader>(model_config, env, context);
+      break;
+    }
+    case ModelArchitecture::ARCH_DEEPSEEK_V4: {
+      model_weight_loader = std::make_shared<DeepSeekV4WeightLoader>(model_config, env, context);
       break;
     }
     default: {

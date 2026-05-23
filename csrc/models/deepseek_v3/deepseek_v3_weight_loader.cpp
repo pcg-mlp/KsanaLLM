@@ -28,7 +28,7 @@ DeepSeekV3WeightLoader::DeepSeekV3WeightLoader(std::shared_ptr<BaseModelConfig> 
 
   std::shared_ptr<DeepSeekV3Config> deepseek_v3_config = std::dynamic_pointer_cast<DeepSeekV3Config>(model_config_);
 
-  InitWeightLoaderImpl(deepseek_v3_config);
+  InitWeightLoaderImpl(deepseek_v3_config->weight_data_type);
 }
 
 DeepSeekV3WeightLoader::~DeepSeekV3WeightLoader() {}
@@ -88,12 +88,15 @@ Status DeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
 
 Status DeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map,
                                                        int dev_rank) {
+  KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] start, total weights: {}", dev_rank,
+                                dev_weights_map.size());
   std::shared_ptr<DeepSeekV3Config> deepseek_v3_config = std::dynamic_pointer_cast<DeepSeekV3Config>(model_config_);
   std::unordered_set<std::string> post_processed_weights;
   if (deepseek_v3_config->quant_config.is_fp8_blockwise) {
 #if defined(ENABLE_FP8) && defined(ENABLE_FP8_TORCH)
     // Post process weight and scale for q_b_proj and kv_b_proj
     weight_impl_->PostProcessFp8E4m3BlockWiseQuantWeights(dev_weights_map, dev_rank, deepseek_v3_config);
+    KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] PostProcessFp8E4m3BlockWiseQuantWeights done", dev_rank);
 #endif
     for (auto& [weight_name, weight_tensor] : dev_weights_map) {
       // for fp8 weight, bind weight scale
@@ -102,7 +105,8 @@ Status DeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
         auto scale_iter = dev_weights_map.find(weight_scale_name);
         if (scale_iter != dev_weights_map.end()) {
           weight_tensor.weight_scales = &(scale_iter->second);
-          KLLM_LOG_DEBUG << fmt::format("bind {}, shape: {} to {}, shape: {}\n", weight_scale_name,
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] bind fp8 scale {} (shape: {}) -> {} (shape: {})",
+                                        dev_rank, weight_scale_name,
                                         Vector2Str(std::vector<size_t>(weight_tensor.weight_scales->shape)),
                                         weight_name, Vector2Str(std::vector<size_t>(weight_tensor.shape)));
           post_processed_weights.insert(weight_scale_name);
@@ -117,7 +121,12 @@ Status DeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
   for (auto& [weight_name, weight_tensor] : dev_weights_map) {
     if (weights_to_permute_[dev_rank].find(weight_name) != weights_to_permute_[dev_rank].end()) {
       // permute weight tensor
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] permute: {}, shape before: {}, dtype: {}", dev_rank,
+                                    weight_name, Vector2Str(std::vector<size_t>(weight_tensor.shape)),
+                                    weight_tensor.dtype);
       weight_impl_->PermuteWeight(weight_tensor, {1, 0}, dev_rank);
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] permute done: {}, shape after: {}", dev_rank,
+                                    weight_name, Vector2Str(std::vector<size_t>(weight_tensor.shape)));
     }
 
     if (post_processed_weights.find(weight_name) != post_processed_weights.end()) {
@@ -131,23 +140,26 @@ Status DeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
 
     // NOTE: `e_score_correction_bias` need to cast into fp32 for better performance
     if (weight_name.find("gate.e_score_correction_bias") != std::string::npos) {
-      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, from {} to {}\n", dev_rank, weight_name,
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] cast {} from {} to {}", dev_rank, weight_name,
                                     weight_tensor.dtype, TYPE_FP32);
       CastDeviceTensorType(weight_tensor, TYPE_FP32, dev_rank);
       continue;
     }
     if (weight_tensor.dtype != deepseek_v3_config->weight_data_type) {
-      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, from {} to {}\n", dev_rank, weight_name,
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] cast {} from {} to {}", dev_rank, weight_name,
                                     weight_tensor.dtype, deepseek_v3_config->weight_data_type);
       CastDeviceTensorType(weight_tensor, deepseek_v3_config->weight_data_type, dev_rank);
     }
   }
 
   if (deepseek_v3_config->ContainGptqWeights()) {
-    KLLM_LOG_DEBUG << "Start gptq post process";
+    KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] start gptq post process", dev_rank);
     weight_impl_->PostProcessInt4QuantWeights(dev_weights_map, dev_rank, deepseek_v3_config);
+    KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] gptq post process done", dev_rank);
   }
 
+  KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [PostProcess] complete, total weights: {}", dev_rank,
+                                dev_weights_map.size());
   return Status();
 }
 
@@ -160,6 +172,8 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
   int32_t layer_idx = -1, expert_idx = -1;
   size_t num_experts = deepseek_v3_config->moe_config.num_experts;
   bool use_vllm_moe = deepseek_v3_config->moe_config.use_vllm_moe;
+  KLLM_LOG_DEBUG << fmt::format("num_experts = {}, use_vllm_moe = {}", num_experts, use_vllm_moe);
+  KLLM_LOG_DEBUG << "is_fp8_blockwise: " << deepseek_v3_config->quant_config.is_fp8_blockwise;
   // moe combines tensor parallel and moe parallel
   ExpertParallelConfig& expert_parallel_config = deepseek_v3_config->expert_parallel_config;
   size_t expert_node_rank = expert_parallel_config.expert_node_rank;
@@ -179,11 +193,11 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
   std::vector<std::vector<int>> expert_map(num_layers, std::vector<int>(num_experts, -1));
   InitExpertMap(num_experts, expert_start_id, expert_end_id, dev_rank, expert_map, device_model_weights);
 
-  KLLM_LOG_INFO << fmt::format("expert_world_size = {}, expert_para_size = {}, global_expert_para_size = {}",
-                               expert_parallel_config.expert_world_size, expert_parallel_config.expert_para_size,
-                               global_expert_para_size);
-  KLLM_LOG_INFO << fmt::format("In rank {} node_rank {}, valid experts is [{}, {})", dev_rank, expert_node_rank,
-                               expert_start_id, expert_end_id);
+  KLLM_LOG_DEBUG << fmt::format("expert_world_size = {}, expert_para_size = {}, global_expert_para_size = {}",
+                                expert_parallel_config.expert_world_size, expert_parallel_config.expert_para_size,
+                                global_expert_para_size);
+  KLLM_LOG_DEBUG << fmt::format("In rank {} node_rank {}, valid experts is [{}, {})", dev_rank, expert_node_rank,
+                                expert_start_id, expert_end_id);
 
   size_t moe_inter_size_per_rank =
       DivRoundUp(deepseek_v3_config->moe_config.moe_inter_size, deepseek_v3_config->moe_tensor_para_size);
@@ -227,8 +241,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       continue;
     }
 
-    KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, processing weight: {}, shape: {}", dev_rank, file_weight_name,
-                                  Vector2Str(std::vector<size_t>(host_weight_tensor.shape)));
+    KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, processing weight: {}, shape: {}, dtype: {}", dev_rank,
+                                  file_weight_name, Vector2Str(std::vector<size_t>(host_weight_tensor.shape)),
+                                  host_weight_tensor.dtype);
 
     // 1. MOE layer
     // Instructions for loading MoE model weights:
@@ -286,6 +301,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
                       host_weight_tensor.GetPtr<void>() + src_upgate_offset, expert_pitch, MEMCPY_HOST_TO_DEVICE,
                       context_->device->GetMemoryManageStream());
         }
+        KLLM_LOG_DEBUG << fmt::format(
+            "Dev_rank: {}, [MoE up_gate] stored: {}, shape: {}, dtype: {}", dev_rank, up_gate_experts_name,
+            Vector2Str(std::vector<size_t>(up_gate_experts_tensor.shape)), up_gate_experts_tensor.dtype);
         continue;
       }
 
@@ -308,6 +326,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
         Memcpy2DAsync(down_expert_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx_) * expert_pitch, dst_pitch,
                       host_weight_tensor.GetPtr<void>() + src_down_offset, src_pitch, dst_pitch, hidden_units,
                       MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
+        KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MoE down] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                      down_experts_name, Vector2Str(std::vector<size_t>(down_expert_tensor.shape)),
+                                      down_expert_tensor.dtype);
         continue;
       }
     }
@@ -353,6 +374,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
           std::string q_b_nope_rope_name =
               file_weight_name.substr(0, file_weight_name.find_first_of('_')) + "_attn.q_b_nope_rope_proj.weight";
           device_model_weights[q_b_nope_rope_name] = q_b_nope_rope_tensor;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA q_b_nope_rope] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        q_b_nope_rope_name, Vector2Str(std::vector<size_t>(q_b_nope_rope_tensor.shape)),
+                                        q_b_nope_rope_tensor.dtype);
         } else {
           // For fp8 blockwise quant, do not split the weights initially, split them after dequantization later.
           std::string q_b_proj_name =
@@ -369,6 +393,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
                       para_pitch, MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
 
           device_model_weights[q_b_proj_name] = q_b_proj_tensor;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA q_b_proj fp8] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        q_b_proj_name, Vector2Str(std::vector<size_t>(q_b_proj_tensor.shape)),
+                                        q_b_proj_tensor.dtype);
         }
         continue;
       }
@@ -393,6 +420,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
         if (fused_tensor.dtype == DataType::TYPE_FP16 || fused_tensor.dtype == DataType::TYPE_BF16) {
           weights_to_permute_[dev_rank].insert(fused_tensor_name);
         }
+        KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA q_a_proj fused] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                      fused_tensor_name, Vector2Str(std::vector<size_t>(fused_tensor.shape)),
+                                      fused_tensor.dtype);
         continue;
       }
       if (file_weight_name.find(".kv_a_proj_with_mqa.weight") != std::string::npos) {
@@ -422,6 +452,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
         if (fused_tensor.dtype == DataType::TYPE_FP16 || fused_tensor.dtype == DataType::TYPE_BF16) {
           weights_to_permute_[dev_rank].insert(fused_tensor_name);
         }
+        KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA kv_a fused] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                      fused_tensor_name, Vector2Str(std::vector<size_t>(fused_tensor.shape)),
+                                      fused_tensor.dtype);
         continue;
       }
       if (file_weight_name.find(".kv_b_proj.weight") != std::string::npos) {
@@ -459,6 +492,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
           PermuteDeviceTensor(kv_b_nope_tensor, {1, 0}, dev_rank, kv_b_nope_permute);
 
           device_model_weights[kv_b_nope_name] = kv_b_nope_permute;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA kv_b_nope] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        kv_b_nope_name, Vector2Str(std::vector<size_t>(kv_b_nope_permute.shape)),
+                                        kv_b_nope_permute.dtype);
 
           // For v_head_proj weight load
           std::string v_head_name =
@@ -479,18 +515,27 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
           PermuteDeviceTensor(v_head_tensor, {1, 0}, dev_rank, v_head_permute);
 
           device_model_weights[v_head_name] = v_head_permute;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA v_head] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        v_head_name, Vector2Str(std::vector<size_t>(v_head_permute.shape)),
+                                        v_head_permute.dtype);
 
           // Copy kv_b_nope_proj to w_uk_t
           Tensor w_uk_t_tensor = kv_b_nope_tensor;
           w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, kv_b_nope_tensor.shape[1]};
           std::string w_uk_t_name = kv_b_nope_name.substr(0, kv_b_nope_name.find_first_of('_')) + "_attn.w_uk_t.weight";
           device_model_weights[w_uk_t_name] = w_uk_t_tensor;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA w_uk_t] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        w_uk_t_name, Vector2Str(std::vector<size_t>(w_uk_t_tensor.shape)),
+                                        w_uk_t_tensor.dtype);
 
           // Permute vhead_weight_name to w_uv
           v_head_tensor.shape = {head_num_tp, v_head_dim, v_head_shape[1]};
           weight_impl_->PermuteWeight(v_head_tensor, {0, 2, 1}, dev_rank);
           std::string w_uv_name = v_head_name.substr(0, v_head_name.find_first_of('_')) + "_attn.w_uv.weight";
           device_model_weights[w_uv_name] = v_head_tensor;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA w_uv] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        w_uv_name, Vector2Str(std::vector<size_t>(v_head_tensor.shape)),
+                                        v_head_tensor.dtype);
         } else {
           // For fp8 blockwise quant, do not split the weights initially, split them after dequantization later.
           std::vector<size_t> kv_b_proj_shape = {
@@ -505,6 +550,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
                       para_pitch, MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
 
           device_model_weights[file_weight_name] = kv_b_proj_tensor;
+          KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA kv_b_proj fp8] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                        file_weight_name, Vector2Str(std::vector<size_t>(kv_b_proj_tensor.shape)),
+                                        kv_b_proj_tensor.dtype);
         }
         continue;
       }
@@ -515,10 +563,12 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
             runtime_config_.enable_o_proj_out_of_dp ? deepseek_v3_config->tensor_para_size : attn_tp_size;
         Tensor dev_tensor;
         bool is_this_weight_quant = deepseek_v3_config->is_quant && !deepseek_v3_config->is_compressed_tensors;
-        weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, split_size,
-                                         is_this_weight_quant);
+        weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, split_size, is_this_weight_quant);
 
         device_model_weights[file_weight_name] = dev_tensor;
+        KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLA o_proj] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                      file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                      dev_tensor.dtype);
         continue;
       }
     }
@@ -537,14 +587,20 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       // For compressed-tensors (moe-int4), dense/shared_expert weights are NOT quantized (bf16/fp16).
       // Use actual weight dtype to determine if transpose is needed, not global is_quant.
       bool is_this_weight_quant = deepseek_v3_config->is_quant && !deepseek_v3_config->is_compressed_tensors;
-      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config, mlp_tensor_para_size,
+      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, mlp_tensor_para_size,
                                   !is_this_weight_quant);
       if (deepseek_v3_config->use_mla && deepseek_v3_config->type != "deepseek_v2") {
         // deepseek v3 need to combine gate & up proj
         weight_impl_->ProcessGateUpProjWeight(file_weight_name, dev_tensor, device_model_weights, dev_rank,
                                               is_this_weight_quant);
+        KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLP gate_up fused] processed: {}, shape: {}, dtype: {}", dev_rank,
+                                      file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                      dev_tensor.dtype);
       } else {
         device_model_weights[file_weight_name] = dev_tensor;
+        KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLP gate/up] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                      file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                      dev_tensor.dtype);
       }
       continue;
     }
@@ -561,9 +617,12 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       size_t mlp_tensor_para_size =
           runtime_config_.enable_full_shared_expert ? 1 : context_->global->GetTensorParallelSize();
       bool is_this_weight_quant = deepseek_v3_config->is_quant && !deepseek_v3_config->is_compressed_tensors;
-      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config,
-                                       mlp_tensor_para_size, is_this_weight_quant);
+      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, mlp_tensor_para_size,
+                                       is_this_weight_quant);
       device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [MLP down] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
       continue;
     }
 
@@ -579,6 +638,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
                   MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
 
       device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [norm/bias/indexer] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
       continue;
     }
 
@@ -593,6 +655,9 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
                   MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
       weight_impl_->PermuteWeight(dev_tensor, {1, 0}, dev_rank);
       device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [gate/indexer permute] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
       continue;
     }
 
@@ -600,9 +665,12 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
     // Split along axis = 0
     if (file_weight_name.find(".eh_proj.weight") != std::string::npos) {
       Tensor dev_tensor;
-      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config,
-                                  context_->global->GetTensorParallelSize(), true);
+      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, context_->global->GetTensorParallelSize(),
+                                  true);
       device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [eh_proj] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
       continue;
     }
 
@@ -611,10 +679,13 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
     // Embedding TP needs to be transposed first, then split, and then transposed back.
     if (CheckWeightNameMatched(file_weight_name, {"model.embed_tokens.weight"}, true)) {
       Tensor dev_tensor;
-      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, deepseek_v3_config,
+      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank,
                                        context_->global->GetTensorParallelSize(), true);
 
       device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [embed_tokens] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
       continue;
     }
 
@@ -622,9 +693,12 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
     // lm_head need to split along axis = 0, and then transpose
     if (CheckWeightNameMatched(file_weight_name, {"lm_head.weight"}, true)) {
       Tensor permute_dev_tensor;
-      weight_impl_->SplitOptTrans(host_weight_tensor, permute_dev_tensor, dev_rank, deepseek_v3_config,
+      weight_impl_->SplitOptTrans(host_weight_tensor, permute_dev_tensor, dev_rank,
                                   context_->global->GetTensorParallelSize(), true);
       device_model_weights[file_weight_name] = permute_dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, [lm_head] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(permute_dev_tensor.shape)),
+                                    permute_dev_tensor.dtype);
       continue;
     }
   }
@@ -638,8 +712,8 @@ Status DeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<std:
   return Status();
 }
 
-Status DeepSeekV3WeightLoader::InitWeightLoaderImpl(std::shared_ptr<DeepSeekV3Config>& deepseek_v3_config) {
-  switch (deepseek_v3_config->weight_data_type) {
+Status DeepSeekV3WeightLoader::InitWeightLoaderImpl(DataType weight_data_type) {
+  switch (weight_data_type) {
     case DataType::TYPE_FP32:
       weight_impl_ = std::make_unique<DeepSeekV3WeightImpl<float>>(context_, runtime_config_);
       break;
@@ -651,7 +725,7 @@ Status DeepSeekV3WeightLoader::InitWeightLoaderImpl(std::shared_ptr<DeepSeekV3Co
       break;
     default:
       // Handle unexpected data type if needed
-      KLLM_THROW(fmt::format("Unexpected data type: {}", deepseek_v3_config->weight_data_type));
+      KLLM_THROW(fmt::format("Unexpected data type: {}", weight_data_type));
       break;
   }
   return Status();
@@ -682,7 +756,7 @@ Status DeepSeekV3WeightLoader::InitExpertMap(const size_t& num_experts, const si
           }
         }
       }
-      KLLM_LOG_INFO << fmt::format("Successed to load EPLB map from {}.", runtime_config_.eplb_config_path);
+      KLLM_LOG_DEBUG << fmt::format("Successed to load EPLB map from {}.", runtime_config_.eplb_config_path);
     }
   }
 

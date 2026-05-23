@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <c10/cuda/CUDAStream.h>
 #include <torch/torch.h>
 
 #include <cmath>
@@ -118,8 +119,8 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCanCompute) {
   auto logits = torch::zeros({aligned_seq_len, stride_logits}, torch::kFloat32).to(device_);
 
   // Run the kernel - should not throw
-  EXPECT_NO_THROW(
-      wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, true));
+  EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
+                                        logits, at::cuda::getCurrentCUDAStream().stream(), true));
   cudaDeviceSynchronize();
 
   // Verify output contains finite values in valid region
@@ -175,8 +176,8 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsWithContextParallelism) {
   const int aligned_seq_len = ((seq_len + 3) / 4) * 4;
   auto logits = torch::zeros({aligned_seq_len, stride_logits}, torch::kFloat32).to(device_);
 
-  EXPECT_NO_THROW(
-      wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, true));
+  EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
+                                        logits, at::cuda::getCurrentCUDAStream().stream(), true));
   cudaDeviceSynchronize();
 
   // Verify output is produced
@@ -198,7 +199,8 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, PagedMqaLogitsMetadataGeneration) {
   auto schedule_meta = torch::zeros({num_sms + 1, 2}, torch::kInt32).to(device_);
 
   // Generate metadata - should not throw
-  EXPECT_NO_THROW(wrapper->PagedMqaLogitsMetadata(context_lens, schedule_meta, batch_size, block_kv));
+  EXPECT_NO_THROW(wrapper->PagedMqaLogitsMetadata(context_lens, schedule_meta, batch_size, block_kv,
+                                                  at::cuda::getCurrentCUDAStream().stream()));
   cudaDeviceSynchronize();
 
   // Verify the metadata is populated
@@ -258,7 +260,8 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8PagedMqaLogitsCanCompute) {
 
   // Generate schedule metadata
   auto schedule_meta = torch::zeros({num_sms + 1, 2}, torch::kInt32).to(device_);
-  wrapper->PagedMqaLogitsMetadata(context_lens, schedule_meta, batch_size, block_kv);
+  wrapper->PagedMqaLogitsMetadata(context_lens, schedule_meta, batch_size, block_kv,
+                                  at::cuda::getCurrentCUDAStream().stream());
 
   // Allocate output logits with proper alignment
   constexpr int split_kv = 256;
@@ -267,7 +270,7 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8PagedMqaLogitsCanCompute) {
 
   // Run the kernel - should not throw
   EXPECT_NO_THROW(wrapper->Fp8PagedMqaLogits(q_fp8, fused_kv_cache, weights, context_lens, block_table, schedule_meta,
-                                             logits, max_model_len, true));
+                                             logits, max_model_len, at::cuda::getCurrentCUDAStream().stream(), true));
   cudaDeviceSynchronize();
 
   // Verify output contains finite values within context length
@@ -316,13 +319,13 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCleanLogitsFlag) {
   // Test with clean_logits = true
   auto logits_clean = torch::full({aligned_seq_len, stride_logits}, 999.0f, torch::kFloat32).to(device_);
   EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits_clean, true));
+                                        logits_clean, at::cuda::getCurrentCUDAStream().stream(), true));
   cudaDeviceSynchronize();
 
   // Test with clean_logits = false
   auto logits_no_clean = torch::full({aligned_seq_len, stride_logits}, 999.0f, torch::kFloat32).to(device_);
   EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits_no_clean, false));
+                                        logits_no_clean, at::cuda::getCurrentCUDAStream().stream(), false));
   cudaDeviceSynchronize();
 
   auto logits_clean_cpu = logits_clean.narrow(0, 0, seq_len).narrow(1, 0, seq_len_kv).to(torch::kCPU);
@@ -360,8 +363,8 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsLargeScale) {
   const int aligned_seq_len = ((seq_len + 3) / 4) * 4;
   auto logits = torch::zeros({aligned_seq_len, stride_logits}, torch::kFloat32).to(device_);
 
-  EXPECT_NO_THROW(
-      wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, true));
+  EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
+                                        logits, at::cuda::getCurrentCUDAStream().stream(), true));
   cudaDeviceSynchronize();
 
   // Verify computation completed

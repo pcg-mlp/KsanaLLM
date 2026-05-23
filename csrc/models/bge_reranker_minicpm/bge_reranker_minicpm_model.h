@@ -12,12 +12,14 @@
 #include "utils/status.h"
 #include "utils/utils.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/common/simple_decoder_layer.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/multihead_attention.h"
 #include "modules/basic/add.h"
 #include "modules/basic/add_mul.h"
 #include "modules/ffn/two_layered_ffn.h"
+
 namespace ksana_llm {
 
 // Custom decoder layer for BGE reranker that supports scale_depth
@@ -60,11 +62,13 @@ class BgeRerankerMinicpm : public ModelInterface {
 class BgeRerankerMinicpmModel : public CommonModel {
  public:
   BgeRerankerMinicpmModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                          std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+                          std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                          std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~BgeRerankerMinicpmModel() {}
 
  private:
-  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
+  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight,
+                     std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
   // Implement pure virtual functions from CommonModel
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;

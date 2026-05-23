@@ -22,6 +22,8 @@ class SiluMulLayer : public BaseLayer {
   template <typename T>
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
+  float swiglu_limit_;
+
  protected:
 #ifdef ENABLE_ACL
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;

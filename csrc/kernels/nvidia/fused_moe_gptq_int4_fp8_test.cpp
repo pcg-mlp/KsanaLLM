@@ -176,7 +176,7 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
       Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
           d_qa.data_ptr(), d_b.data_ptr(), d_8o.data_ptr(), d_qa_scale.data_ptr(), d_qb_scale.data_ptr(), nullptr,
           d_sorted_token_ids.data_ptr(), d_expert_ids.data_ptr(), d_num_tokens_post_padded.data_ptr(), n, k, em, numel,
-          mul_routed_weight, topk, group_size, false, config, stream);
+          mul_routed_weight, topk, group_size, false, num_experts, config, stream);
     };
     float quant8_time = MeasureCudaExecutionTime(quant8_kernel, stream);
 

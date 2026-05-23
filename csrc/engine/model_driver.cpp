@@ -7,6 +7,7 @@
 #include <torch/csrc/autograd/python_variable.h>
 
 #include "distributed/control_message.h"
+#include "profiler/profile_event.h"
 
 namespace ksana_llm {
 
@@ -15,7 +16,6 @@ ModelDriver::ModelDriver(Channel<std::pair<Status, std::shared_ptr<Request>>>& r
                          std::shared_ptr<SamplingOutputPool> sampling_output_pool, std::shared_ptr<Context> context)
     : request_queue_(request_queue), context_(context) {
   schedule_output_pool_ = schedule_output_pool;
-  schedule_output_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<ScheduleOutput>>>();
 
   sampling_output_pool_ = sampling_output_pool;
   if (sampling_output_pool_) {
@@ -128,8 +128,10 @@ Status ModelDriver::InitializeResultReporter(
   return status;
 }
 
-Status ModelDriver::CreateBlockManager(const BlockAllocatorManagerConfig& block_allocator_manager_config) {
-  return ipc_func_wrapper_->CreateBlockAllocatorManager(block_allocator_manager_config);
+Status ModelDriver::CreateBlockManager(const BlockAllocatorManagerConfig& block_allocator_manager_config,
+                                       const BlockAllocatorManagerConfig& swa_block_allocator_manager_config) {
+  return ipc_func_wrapper_->CreateBlockAllocatorManager(block_allocator_manager_config,
+                                                        swa_block_allocator_manager_config);
 }
 
 Status ModelDriver::CreateExecutorRuntime(const VocabInfo& vocab_info) {
@@ -166,9 +168,6 @@ Status ModelDriver::Start() {
         std::unique_ptr<std::thread>(new std::thread(&ModelDriver::HandleDistributedScheduleOutput, this));
   }
 
-  schedule_output_send_thread_ =
-      std::unique_ptr<std::thread>(new std::thread(&ModelDriver::HandleScheduleOutputSend, this));
-
   return Status();
 }
 
@@ -176,8 +175,6 @@ Status ModelDriver::Stop() {
   terminated_.store(true);
 
   schedule_processor_->Stop();
-
-  schedule_output_queue_->Stop();
 
   if (sampling_output_queue_) {
     sampling_output_queue_->Stop();
@@ -188,9 +185,6 @@ Status ModelDriver::Stop() {
   }
   if (schedule_thread_) {
     schedule_thread_->join();
-  }
-  if (schedule_output_send_thread_) {
-    schedule_output_send_thread_->join();
   }
   if (schedule_update_thread_) {
     schedule_update_thread_->join();
@@ -375,12 +369,18 @@ void ModelDriver::SetInferRequestTransferMode(std::shared_ptr<ScheduleOutput> sc
 Status ModelDriver::HandleSchedule() {
   while (!terminated_.load()) {
     // The scheduler should be blocked if no requests.
-    std::shared_ptr<ScheduleResult> schedule_result = schedule_processor_->GetNextScheduleResult();
+    std::shared_ptr<ScheduleResult> schedule_result;
+    {
+      PROFILE_EVENT_SCOPE(handle_schedule_get_next, "Engine.HandleSchedule.GetNext");
+      schedule_result = schedule_processor_->GetNextScheduleResult();
+    }
     std::shared_ptr<ScheduleOutput> schedule_output = schedule_result->schedule_output;
     if (!schedule_output) {
       KLLM_LOG_INFO << "HandleSchedule stopped.";
       break;
     }
+
+    PROFILE_EVENT_SCOPE(handle_schedule_iter, "Engine.HandleSchedule.iter");
 
     SetInferRequestTransferMode(schedule_output);
 
@@ -433,7 +433,13 @@ Status ModelDriver::HandleSchedule() {
       std::lock_guard<std::mutex> guard(schedule_result_map_mutex_);
       schedule_result_map_[schedule_output->schedule_id] = schedule_result;
     }
-    schedule_output_queue_->Put(schedule_output);
+
+    // A1 优化：原 HandleScheduleOutputSend 线程在此被裁掉，直接发起 IPC dispatch，
+    // 少一次 BlockingQueue Put/Get 带来的线程唤醒延迟。
+    {
+      PROFILE_EVENT_SCOPE(handle_schedule_dispatch, "Engine.HandleSchedule.Dispatch");
+      ipc_func_wrapper_->DispatchScheduleOutput(schedule_output);
+    }
     if (context_->global->IsDistributedMaster()) {
       schedule_output_pool_->PutSendScheduleOutput(schedule_output.get());
     }
@@ -441,20 +447,8 @@ Status ModelDriver::HandleSchedule() {
   return Status();
 }
 
-Status ModelDriver::HandleScheduleOutputSend() {
-  while (!terminated_.load()) {
-    std::shared_ptr<ScheduleOutput> schedule_output = schedule_output_queue_->Get();
-    if (!schedule_output) {
-      KLLM_LOG_INFO << "HandleScheduleOutputSend stopped.";
-      break;
-    }
-
-    ipc_func_wrapper_->DispatchScheduleOutput(schedule_output);
-  }
-  return Status();
-}
-
 void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_output) {
+  PROFILE_EVENT_SCOPE(update_sampling_total, "Engine.UpdateSamplingOutput.Total");
   std::lock_guard<std::mutex> guard(schedule_result_map_mutex_);
   size_t schedule_id = sampling_output->schedule_id;
   auto it = schedule_result_map_.find(schedule_id);
@@ -523,7 +517,10 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
     KLLM_LOG_DEBUG << "UpdateSamplingOutput: sent tokens for " << reqs_transfer_tokens.size() << " requests";
   }
 
-  schedule_processor_->UpdateWithGenerationResult(schedule_result->generation_output_group);
+  {
+    PROFILE_EVENT_SCOPE(update_sampling_notify, "Engine.UpdateSamplingOutput.NotifyScheduler");
+    schedule_processor_->UpdateWithGenerationResult(schedule_result->generation_output_group);
+  }
   schedule_result_map_.erase(it);
 }
 
@@ -536,12 +533,17 @@ Status ModelDriver::HandleScheduleUpdate() {
   }
 
   while (!terminated_.load()) {
-    std::shared_ptr<SamplingOutput> sampling_output = sampling_output_queue_->Get();
+    std::shared_ptr<SamplingOutput> sampling_output;
+    {
+      PROFILE_EVENT_SCOPE(update_queue_get, "Engine.HandleScheduleUpdate.QueueGet");
+      sampling_output = sampling_output_queue_->Get();
+    }
     if (!sampling_output) {
       KLLM_LOG_INFO << "HandleScheduleUpdate stopped.";
       break;
     }
 
+    PROFILE_EVENT_SCOPE(update_iter, "Engine.HandleScheduleUpdate.iter");
     if (!context_->global->IsDistributedWorker()) {
       UpdateSamplingOutput(sampling_output);
     }

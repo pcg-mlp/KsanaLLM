@@ -5,6 +5,7 @@
 
 #include "batch_scheduler/event_driven_scheduler/global_cache_query_hook.h"
 
+#include "batch_scheduler/full_cache_hit_handler.h"
 #include "configure/environment.h"
 #include "profiler/reporter.h"
 #include "utils/logger.h"
@@ -74,7 +75,8 @@ bool GlobalCacheQueryHook::PrepareRequest(InferRequestPtr& req, std::shared_ptr<
                      << ", req_step_block_num=" << req_step_block_num << ", shared_token_num=" << shared_token_num;
 
   // 分配 block
-  Status status = cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
+  Status status = cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
+                                                       req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
   if (!status.OK()) {
     KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: AllocateRequestBlocks failed for req_id=" << req->req_id
                        << ", msg=" << status.GetMessage();
@@ -87,18 +89,7 @@ bool GlobalCacheQueryHook::PrepareRequest(InferRequestPtr& req, std::shared_ptr<
                        << ", shared_token_num=" << shared_token_num << ", seq_token_num=" << seq_token_num;
 
     if (shared_token_num >= seq_token_num) {
-      // 本地 prefix cache 完全命中：保留最后 kStepGenerateTokenNum 个 token 的 prefill_token_num，
-      // 避免 prefill_token_num=0 导致 GetPlanningSequenceLen() 走 decode 分支返回 0
-      KLLM_CHECK_WITH_INFO(
-          seq_token_num >= kStepGenerateTokenNum,
-          FormatStr("req_id=%ld seq_token_num(%zu) < kStepGenerateTokenNum", req->req_id, seq_token_num));
-      planning_workload.prefill_start_offset = seq_token_num - kStepGenerateTokenNum;
-      planning_workload.prefill_token_num = kStepGenerateTokenNum;
-      req->SetPlanningWorkload(planning_workload);
-      req->SetRemainingWorkload(planning_workload);
-
-      KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: req_id=" << req->req_id << " full local cache hit, retain last "
-                         << kStepGenerateTokenNum << " token(s) for prefill";
+      HandleFullPrefixCacheHit(req, planning_workload, seq_token_num);
     } else {
       // 部分命中：调整 offset
       size_t planning_prefill_token_num = planning_workload.prefill_token_num + planning_workload.prefill_start_offset;

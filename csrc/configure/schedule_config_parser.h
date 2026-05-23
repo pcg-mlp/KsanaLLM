@@ -22,6 +22,9 @@
 
 namespace ksana_llm {
 
+// Forward declare.
+class BaseModelCacheLayout;
+
 enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
 
 enum ScheduleStrategy { CONTINUOUS_BATCHING = 0 };
@@ -122,6 +125,11 @@ struct BatchSchedulerConfig {
 
   // ADP Balance Strategy configuration
   AttentionDPGroupBalanceConfig attention_dp_lb_config;
+
+  // Ratio of SWA (Sliding Window Attention) blocks relative to the total device block count.
+  // swa_block_num = device_block_num * swa_block_num_ratio.
+  // 0.0 means SWA block allocator is disabled.
+  float swa_block_num_ratio = 0.0f;
 };
 
 struct AllocatorConfig {
@@ -141,6 +149,11 @@ struct BlockManagerConfig {
   // The config of allocator for cpu/gpu/npu.
   AllocatorConfig host_allocator_config;
   AllocatorConfig device_allocator_config;
+
+  // The config of SWA (Sliding Window Attention) device block allocator.
+  // block_size is set from the "SWA-cache" layout; blocks_num is derived from
+  // device_block_num * swa_block_num_ratio in CalculateBlockNumber.
+  AllocatorConfig swa_device_allocator_config;
 
   // The ratio of reserved device memory.
   float reserved_device_memory_ratio = 0.05;
@@ -175,6 +188,10 @@ struct CacheManagerConfig {
 
   // Whether enable prefix caching.
   bool enable_prefix_caching = false;
+
+  // Sliding window size for SWA (Sliding Window Attention) KV cache.
+  // 0 means SWA is disabled (no sliding window, keep all KV blocks).
+  size_t sliding_window_size = 0;
 };
 
 // For multiple node pipeline.
@@ -307,9 +324,6 @@ struct AttnBackendConfig {
 
   // "kv_cache.dtype" specified in the yaml config
   std::string kv_cache_dtype_str = "auto";
-  // Config for each KV cache used by the model
-  // Mapping from KV cache type ("attention"/"indexer") to its config
-  std::unordered_map<std::string, KVCacheConfig> kv_cache_configs;
 
   // User preference for FlashAttention implementation selection.
   enum class FlashAttnImplChoice {
@@ -332,6 +346,8 @@ struct ParallelismBasicConfig {
 };
 
 enum W4AFP8_MOE_BACKEND { Default = 0, GroupTriton = 1, TensorTriton = 2 };
+
+enum FP4_MOE_BACKEND_TYPE { FP4Triton = 0, FP4Marlin = 1, FP4HummingW4A16 = 2, FP4HummingW4A8 = 3 };
 
 // The communication mode for MoE all-to-all dispatch/combine.
 enum class MoeAllToAllMode {
@@ -369,6 +385,9 @@ struct RuntimeConfig {
 
   // Backend type of w4afp8 moe
   W4AFP8_MOE_BACKEND w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
+
+  // Backend type of FP4 MoE (for DeepSeek V4 FP4 models)
+  FP4_MOE_BACKEND_TYPE fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4Marlin;
 
   // Whether to normalize q and k before rotary position embedding in attention.
   // bool enable_qk_pre_norm_before_rotary_pos = false;
@@ -523,13 +542,15 @@ class ScheduleConfigParser {
   void InitGlobalCacheConnectorConfig(YamlReader &yaml_reader);
 
   // Calculate block size via model configs.
-  Status InitializeBlockManagerConfig(const ModelConfig &model_config);
+  Status InitializeBlockManagerConfig(const ModelConfig &model_config,
+                                      std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
   // Init Expert-Parallel Config from env.
   void InitializeExpertParallelConfig();
 
   // Init KV cache configs for all attention modules
-  void InitializeKVCacheConfigs(const ModelConfig &model_config, const PipelineConfig &pipeline_config);
+  void InitializeKVCacheConfigs(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
+                                std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
  private:
   // The config of batch schedule.

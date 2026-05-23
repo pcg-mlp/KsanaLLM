@@ -4,6 +4,8 @@
 
 #include <cstdlib>
 
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "samplers/sampler.h"
 #include "tests/test.h"
 
@@ -31,8 +33,10 @@ class SamplerTest : public testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config_);
+    InitPipelineConfigForTest(env, model_config_);
+    auto block_cache_layout = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+    env->InitializeBlockManagerConfig(block_cache_layout);
     env->GetBlockManagerConfig(block_manager_config);
 
     vocab_size_ = model_config_.vocab_size;

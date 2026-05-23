@@ -45,6 +45,7 @@ template void RandomGPUBuffer(__nv_bfloat16* data_ptr, const size_t n_elems, con
 template void RandomGPUBuffer(int32_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 template void RandomGPUBuffer(bool* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 template void RandomGPUBuffer(char* data_ptr, const size_t n_elems, const float max_val, const float min_val);
+template void RandomGPUBuffer(unsigned char* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 #ifdef ENABLE_FP8
 template void RandomGPUBuffer(__nv_fp8_e4m3* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 #endif

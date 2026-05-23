@@ -27,3 +27,10 @@ file(GLOB_RECURSE cache_block_allocator_test_SRCS
 
 message(STATUS "cache_block_allocator_test_SRCS: ${cache_block_allocator_test_SRCS}")
 # cpp_test(cache_block_allocator_test SRCS ${cache_block_allocator_test_SRCS} DEPS cache_manager runtime)
+
+# cache_layout_test
+file(GLOB_RECURSE cache_layout_test_SRCS
+  ${PROJECT_SOURCE_DIR}/csrc/cache_manager/cache_layout/*test.cpp)
+
+message(STATUS "cache_layout_test_SRCS: ${cache_layout_test_SRCS}")
+cpp_test(cache_layout_test SRCS ${cache_layout_test_SRCS} DEPS cache_manager runtime)

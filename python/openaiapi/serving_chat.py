@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Union, Any, AsyncGenerator, Tuple, Fina
 from functools import lru_cache
 
 import partial_json_parser
+from partial_json_parser.core.options import Allow
 from pydantic import TypeAdapter
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -45,6 +46,7 @@ from openaiapi.tool_parsers import ToolParser, ToolParserManager
 from openaiapi.reasoning import ReasoningParser, ReasoningParserManager
 from openaiapi.transformers_utils.chat_utils import (
     AnyTokenizer, make_tool_call_id, get_history_tool_calls_cnt)
+from utilize.utils import partial_json_loads
 from utilize.logger import get_logger
 
 logger = get_logger(__name__)
@@ -107,6 +109,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             # NOTE(winminkong): The current support is only for the deepseek-v3.2 OpenAI API
             # released on December 1st, 2025.
             self.use_deepseek_v32_encoding = True
+
+        if self.config.tool_call_parser == 'deepseek_v4':
+            # NOTE(winminkong): DeepSeek-V4 uses DSML encoding format with
+            # thinking mode, reasoning effort, and task support.
+            self.use_deepseek_v4_encoding = True
     
     @lru_cache(maxsize=128)
     def _format_message(self, role: str, content: str) -> str:
@@ -133,7 +140,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         """
         if not self.config.reasoning_parser:
             return False
-        if self.config.reasoning_parser in ["deepseek_v3"]:
+        if self.config.reasoning_parser in ["deepseek_v3", "deepseek_v4"]:
             # Models that require explicit enable thinking (thinking=True)
             return (
                 request.chat_template_kwargs is not None
@@ -534,16 +541,29 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 ])
                         elif request and request.tool_choice == "required":
                             fn_name_returned = function_name_returned[i]
-                            # TODO(winminkong): change to streaming parser function
-                            if self.reasoning_parser and reasoning_parser._in_reasoning:
-                                _, content = \
-                                reasoning_parser.extract_reasoning_content(
-                                    current_text
-                                )
+                            if self.reasoning_parser:
+                                delta_message = (
+                                    reasoning_parser.
+                                    extract_reasoning_content_streaming(
+                                        previous_text,
+                                        current_text,
+                                        delta_text,
+                                        previous_token_ids,
+                                        current_token_ids,
+                                        output_tokenids,
+                                    ))
+                                if delta_message and delta_message.content:
+                                    last_step_delta_content[i] += delta_message.content
+                                if reasoning_parser._in_reasoning:
+                                    delta_message.content = None
+                                else:
+                                    delta_message = None
+                                content = last_step_delta_content[i]
+                                
                             else:
                                 content = current_text
-
-                            delta_message, function_name_returned[i] \
+                            logger.debug(f"required content: {content}")
+                            tool_delta_message, function_name_returned[i] \
                                 = self.extract_tool_call_required_streaming(
                                 previous_text=previous_text,
                                 current_text=content,
@@ -552,7 +572,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 tool_call_idx=history_tool_call_cnt
                             )
 
-                            if delta_message:
+                            if tool_delta_message:
                                 chunk_data = {
                                     "id": request_id,
                                     "object": "chat.completion.chunk",
@@ -560,16 +580,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     "model": model_name,
                                     "choices": [{
                                         "index": i,
-                                        "delta": delta_message.model_dump(exclude_unset=True),
+                                        "delta": tool_delta_message.model_dump(exclude_unset=True),
                                         "finish_reason": None
                                     }]
                                 }
+                                if (tool_delta_message and tool_delta_message.tool_calls and
+                                        tool_delta_message.tool_calls[0].id is not None):
+                                    history_tool_call_cnt += 1
                                 yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n"
                                 continue  # 对于 required 模式，工具调用是唯一输出
-                            if (delta_message and delta_message.tool_calls and
-                                    delta_message.tool_calls[0].id is not None):
-                                history_tool_call_cnt += 1
-                                tools_streamed[i] = True
                         # auto tool choice and reasoning parser enabled, extract reasoning content
                         elif tool_choice_auto and self.reasoning_parser:
                             assert reasoning_parser is not None
@@ -1416,9 +1435,12 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             # if the current text is empty, we cannot parse it
             return None, function_name_returned
         try:
-            obj = partial_json_parser.loads(current_text)
-        except partial_json_parser.core.exceptions.MalformedJSON:
-            logger.debug('not enough tokens to parse into JSON yet')
+            flags = Allow.ALL
+            obj, _ = partial_json_loads(current_text, flags)
+        except (
+            partial_json_parser.core.exceptions.MalformedJSON,
+            json.JSONDecodeError,
+        ):
             obj = None
 
         # check if the current text is a valid array
@@ -1428,61 +1450,67 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             function_name_returned = False
             delta_message = None
         else:
-            _, finishes_previous_tool = KsanaOpenAIServingChat._filter_delta_text(
-                delta_text, previous_text)
+            _, finishes_previous_tool = KsanaOpenAIServingChat._filter_delta_text(delta_text, previous_text)
             # take the last tool call from the generated list
             current_tool_call = obj[-1]
 
             # once parameters have been generated the name is complete as well
-            if not finishes_previous_tool and ("name" not in current_tool_call
-                                               or "parameters"
-                                               not in current_tool_call):
+            if not finishes_previous_tool and (
+                "name" not in current_tool_call or "parameters" not in current_tool_call
+            ):
                 function_name_returned = False
                 delta_message = None
             else:
                 if not function_name_returned:
                     # get partly generated arguments from the latest tool call
-                    param_match = re.search(r'.*"parameters":\s*(.*)',
-                                            current_text)
+                    param_match = re.search(
+                        r'.*"parameters":\s*(.*)', current_text, re.DOTALL
+                    )
                     arguments = param_match.group(1) if param_match else ""
-                    arguments, _ = KsanaOpenAIServingChat._filter_delta_text(
-                        arguments, previous_text)
+                    arguments, _ = KsanaOpenAIServingChat._filter_delta_text(arguments, previous_text)
 
                     # if this iteration finishes a previous tool call but a
                     # new incomplete tool is already generated, take the
                     # previous from the list
-                    if (finishes_previous_tool
-                            and "parameters" not in current_tool_call):
+                    if finishes_previous_tool and "parameters" not in current_tool_call:
                         current_tool_call = obj[-2]
 
                     function_name_returned = True
                     tool_call_id = make_tool_call_id(
                         id_type=self.tool_call_id_type,
                         func_name=current_tool_call["name"],
-                        idx=tool_call_idx)
-                    delta_message = DeltaMessage(tool_calls=[
-                        DeltaToolCall(id=tool_call_id,
-                                      function=DeltaFunctionCall(
-                                          name=current_tool_call["name"],
-                                          arguments=arguments),
-                                      index=len(obj) - 1,
-                                      type="function")
-                    ])
+                        idx=tool_call_idx,
+                    )
+                    delta_message = DeltaMessage(
+                        tool_calls=[
+                            DeltaToolCall(
+                                id=tool_call_id,
+                                function=DeltaFunctionCall(
+                                    name=current_tool_call["name"], arguments=arguments
+                                ),
+                                index=len(obj) - 1,
+                                type="function",
+                            )
+                        ]
+                    )
 
                 else:
-                    delta_text, _ = KsanaOpenAIServingChat._filter_delta_text(
-                        delta_text, previous_text)
+                    delta_text, _ = KsanaOpenAIServingChat._filter_delta_text(delta_text, previous_text)
 
                     if delta_text != "":
-                        delta_message = DeltaMessage(tool_calls=[
-                            DeltaToolCall(
-                                function=DeltaFunctionCall(
-                                    # OpenAI API returns None
-                                    # instead of name every time
-                                    name=None,
-                                    arguments=delta_text),
-                                index=len(obj) - 1)
-                        ])
+                        delta_message = DeltaMessage(
+                            tool_calls=[
+                                DeltaToolCall(
+                                    function=DeltaFunctionCall(
+                                        # OpenAI API returns None
+                                        # instead of name every time
+                                        name=None,
+                                        arguments=delta_text,
+                                    ),
+                                    index=len(obj) - 1,
+                                )
+                            ]
+                        )
                     else:
                         delta_message = None
 

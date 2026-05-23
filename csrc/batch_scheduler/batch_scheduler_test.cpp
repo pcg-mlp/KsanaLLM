@@ -27,6 +27,113 @@ class BatchSchedulerTest : public BaseSchedulerTest {
   }
 };
 
+TEST_F(BatchSchedulerTest, SwaBasicTokenGenerationTest) {
+  // SWA enabled, prefix cache disabled.
+  // DefaultResultCheckHook uses GenerateFakeTokens with sliding_window_size_, which mirrors
+  // the SWA-aware token generation in RunAStep, so output correctness is fully verified.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = false;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  hooks.push_back(&default_hook);
+
+  // Run requests one by one
+  int request_num = 30;
+  int client_num = 1;
+  int max_expect_output_num = 100;
+  int max_input_num = 400;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+}
+
+TEST_F(BatchSchedulerTest, SwaPrefixCacheBasicTokenGenerationTest) {
+  // SWA enabled, prefix cache enabled.
+  // Verify that all requests complete with both SWA and prefix caching.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = true;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  hooks.push_back(&default_hook);
+
+  // Run requests one by one
+  int request_num = 30;
+  int client_num = 1;
+  int max_expect_output_num = 100;
+  int max_input_num = 400;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+}
+
+TEST_F(BatchSchedulerTest, SwaPrefixCacheSwapOutInNotTriggeredPressTest) {
+  // SWA enabled, prefix cache enabled, parallel requests.
+  // Verify that all requests complete and no swap is triggered.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = true;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  hooks.push_back(&default_hook);
+
+  // Run requests in parallel; input and max output token are limited so swap is not triggered.
+  int request_num = 100;
+  int client_num = 10;
+  int max_expect_output_num = 40;
+  int max_input_num = 60;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
+}
+
+TEST_F(BatchSchedulerTest, SwaSwapOutInNotTriggeredPressTest) {
+  // SWA enabled, prefix cache disabled, parallel requests.
+  // Verify that all requests complete and no swap is triggered.
+  sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
+  enable_prefix_cache_ = false;
+  CommonSetUp();
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  hooks.push_back(&default_hook);
+
+  // Run requests in parallel; input and max output token are limited so swap is not triggered.
+  int request_num = 100;
+  int client_num = 10;
+  int max_expect_output_num = 40;
+  int max_input_num = 60;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
+}
+
 TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
   CommonSetUp();
   ParallelTester tester(schedule_processor_, env_simulator_);

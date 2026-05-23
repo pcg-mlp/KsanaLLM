@@ -23,11 +23,12 @@ namespace ksana_llm {
 
 QwenEmbeddingModel::QwenEmbeddingModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                        const int rank, std::shared_ptr<Context> context,
-                                       std::shared_ptr<BaseWeight> base_weight)
+                                       std::shared_ptr<BaseWeight> base_weight,
+                                       std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
     : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   qwen_.GetModelRunConfig(model_run_config, model_config);
-  CommonModel::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
 
   // Pre-allocate a pinned host memory buffer for async D2H copy of embedding results.
   // Size = max_batch_size * hidden_size * sizeof(bf16/fp16) (2 bytes per element).
@@ -200,16 +201,12 @@ Status QwenEmbeddingModel::LmHead(ForwardingContext& forwarding_context,
 
     switch (input_tensor.dtype) {
       case TYPE_BF16:
-        llm_kernels::nvidia::InvokeMeanPooling(input_tensor.GetPtr<__nv_bfloat16>(),
-                                               offset_tensor.GetPtr<size_t>(),
-                                               batch_size, hidden_size,
-                                               output_tensor.GetPtr<__nv_bfloat16>(), stream);
+        llm_kernels::nvidia::InvokeMeanPooling(input_tensor.GetPtr<__nv_bfloat16>(), offset_tensor.GetPtr<size_t>(),
+                                               batch_size, hidden_size, output_tensor.GetPtr<__nv_bfloat16>(), stream);
         break;
       case TYPE_FP16:
-        llm_kernels::nvidia::InvokeMeanPooling(input_tensor.GetPtr<half>(),
-                                               offset_tensor.GetPtr<size_t>(),
-                                               batch_size, hidden_size,
-                                               output_tensor.GetPtr<half>(), stream);
+        llm_kernels::nvidia::InvokeMeanPooling(input_tensor.GetPtr<half>(), offset_tensor.GetPtr<size_t>(), batch_size,
+                                               hidden_size, output_tensor.GetPtr<half>(), stream);
         break;
       default:
         KLLM_LOG_ERROR << "Unsupported dtype for MeanPooling: " << static_cast<int>(input_tensor.dtype);

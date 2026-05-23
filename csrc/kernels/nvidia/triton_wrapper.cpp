@@ -3,11 +3,15 @@
 ==============================================================================*/
 #include "kernels/nvidia/triton_wrapper.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
+#include "csrc/utils/nvidia/cuda_utils.h"
 #include "device/nvidia/cuda_utils.h"
 #include "utils/logger.h"
 #include "utils/string_utils.h"
@@ -50,6 +54,8 @@ inline std::string ConvertToString(const T& value) {
     return value ? "True" : "False";
   } else if (std::is_same<T, size_t>::value) {
     return std::to_string(value);
+  } else if (std::is_same<T, float>::value) {
+    return fmt::format("{:g}", value);
   } else {
     return "Unknown";
   }
@@ -68,9 +74,20 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["fused_moe_gptq_int4_fp8_kernel"] = {"BLOCK_SIZE_M", "BLOCK_SIZE_N",      "BLOCK_SIZE_K",
                                                        "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
                                                        "compute_type", "group_size",        "quant_a_per_tensor"};
+  kernel_key_map_["fused_moe_wfp4afp8_kernel"] = {"BLOCK_SIZE_M", "BLOCK_SIZE_N",      "BLOCK_SIZE_K",
+                                                  "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
+                                                  "compute_type", "group_size",        "quant_a_per_tensor"};
   kernel_key_map_["fused_batched_moe_kernel"] = {"group_n",      "group_k",       "BLOCK_SIZE_M", "BLOCK_SIZE_N",
                                                  "BLOCK_SIZE_K", "GROUP_SIZE_M",  "top_k",        "compute_type",
                                                  "use_fp8_w8a8", "use_int8_w8a16"};
+  kernel_key_map_["mhc_pre_big_fuse_kernel"] = {
+      "hidden_size",         "rms_eps",         "mhc_pre_eps", "mhc_sinkhorn_eps",
+      "mhc_post_mult_value", "sinkhorn_repeat", "n_splits",    "mhc_mult"};
+  kernel_key_map_["mhc_pre_big_fuse_with_norm_kernel"] = {
+      "hidden_size",         "rms_eps",         "mhc_pre_eps", "mhc_sinkhorn_eps",
+      "mhc_post_mult_value", "sinkhorn_repeat", "n_splits",    "mhc_mult"};
+  kernel_key_map_["mhc_post_fwd_kernel"] = {"mhc", "hidden", "n_thr", "h_blk"};
+  kernel_key_map_["mhc_head_big_fuse_kernel"] = {"hidden_size", "rms_eps", "mhc_pre_eps", "n_splits", "mhc_mult"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -132,8 +149,6 @@ std::optional<std::shared_ptr<TritonKernel>> TritonWrapper::LoadTritonKernelJson
   kernel->block_x = kernel->num_warps * 32;
   kernel->block_y = 1;
   kernel->block_z = 1;
-  kernel->grid_y = 1;
-  kernel->grid_z = 1;
   kernel->kernel_name = kernel_name;
   return kernel;
 }
@@ -156,7 +171,8 @@ CUresult TritonWrapper::LoadTritonKernelFromFile(const std::string& file_path,
 
 void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void* args[],
                                        const std::unordered_map<std::string, std::string>& map, size_t grid_x,
-                                       size_t grid_y, size_t grid_z, cudaStream_t stream) {
+                                       size_t grid_y, size_t grid_z, cudaStream_t stream, int block_x, int block_y,
+                                       int block_z) {
   const auto kernel_name = ConstructKernelName(kernel_base_name, map);
   if (!kernel_name) {
     KLLM_THROW(fmt::format("Failed to get kernel file name by kernel name {}.", kernel_base_name));
@@ -169,30 +185,57 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
     std::string config_path = fmt::format("{}/{}.json", kernels_dir_, *kernel_name);
     auto triton_kernel = LoadTritonKernelJsonFile(config_path, kernel_base_name);
     if (!triton_kernel) {
-      KLLM_LOG_ERROR << fmt::format("Failed to load triton kernel json file. {}", config_path);
-      return;
+      // 之前这里只 log error 然后 return，会让上层 wrapper 静默跳过 kernel 发射 ——
+      // 输出 buffer 不会被改写，模型推理结果错乱但服务能起来，问题极难定位。
+      // 改为直接 throw，让缺失 cubin/json 的配置在第一次触发时就明确暴露。
+      KLLM_THROW(
+          fmt::format("Failed to load triton kernel json file: {}. The triton kernel for "
+                      "this configuration was not pre-generated; please re-run the kernel "
+                      "creator.sh / re-configure cmake to produce the missing artifact.",
+                      config_path));
     }
 
     std::string cubin_path = fmt::format("{}/{}.cubin", kernels_dir_, *kernel_name);
     CUresult result = LoadTritonKernelFromFile(cubin_path, *triton_kernel);
     if (result != CUDA_SUCCESS) {
-      KLLM_LOG_ERROR << fmt::format("Could not load kernel {}", cubin_path);
-      return;
+      KLLM_THROW(
+          fmt::format("Could not load triton kernel cubin: {}. Re-run the kernel "
+                      "creator.sh to regenerate it.",
+                      cubin_path));
     }
     kernel_map_[kernel_stream_name] = *triton_kernel;
   }
   kernel = kernel_map_[kernel_stream_name];
+  if (block_x <= 0) {
+    block_x = kernel->block_x;
+  }
+  if (block_y <= 0) {
+    block_y = kernel->block_y;
+  }
+  if (block_z <= 0) {
+    block_z = kernel->block_z;
+  }
+  CUlaunchAttribute attrs[1];
+  attrs[0].id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
+  attrs[0].value.programmaticStreamSerializationAllowed = llm_kernels::utils::GetEnablePDL() ? 1 : 0;
+
+  CUlaunchConfig config = {};
+  config.gridDimX = grid_x;
+  config.gridDimY = grid_y;
+  config.gridDimZ = grid_z;
+  config.blockDimX = block_x;
+  config.blockDimY = block_y;
+  config.blockDimZ = block_z;
+  config.sharedMemBytes = kernel->shm_size;
+  config.hStream = stream;
+  config.numAttrs = 1;
+  config.attrs = attrs;
+
   CUDA_CHECK_WITH_LOG(
-      cuLaunchKernel(kernel->kernel, grid_x, grid_y, grid_z,             // Grid dimensions
-                     kernel->block_x, kernel->block_y, kernel->block_z,  // Block dimensions
-                     kernel->shm_size,                                   // Shared memory size
-                     stream,                                             // Stream
-                     args,                                               // Kernel parameters
-                     nullptr),
-      fmt::format("cuLaunchKernel failed. kernel_stream_name: {}, grid_x={} ,grid_y={}, grid_z={}, "
-                  "kernel->block_x={}, kernel->block_y={}, kernel->block_z={}, kernel->shm_size={}",
-                  kernel_stream_name, grid_x, grid_y, grid_z, kernel->block_x, kernel->block_y, kernel->block_z,
-                  kernel->shm_size));  // Extra options
+      cuLaunchKernelEx(&config, kernel->kernel, args, nullptr),
+      fmt::format("cuLaunchKernelEx failed. kernel_stream_name: {}, grid_x={}, grid_y={}, grid_z={}, "
+                  "block_x={}, block_y={}, block_z={}, kernel->shm_size={}",
+                  kernel_stream_name, grid_x, grid_y, grid_z, block_x, block_y, block_z, kernel->shm_size));
 }
 
 template <typename T>
@@ -206,6 +249,14 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
                                          std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_kernel";
 
+  // Triton >= 3.x (NVIDIA backend) appends two implicit CUdeviceptr params at the tail of every
+  // compiled kernel's .param list: `global_scratch` and `profile_scratch`. See
+  // triton/backends/nvidia/driver.py: _launch(... CUdeviceptr global_scratch, CUdeviceptr profile_scratch, ...).
+  // If the C++ wrapper does not supply these, cuLaunchKernel reads past args[] on the stack and
+  // libcuda segfaults (observed as CUDA_ERROR_INVALID_VALUE followed by GPF in dmesg). Pass NULL
+  // for both; the current fused_moe_kernel does not reference either scratch buffer.
+  CUdeviceptr global_scratch = 0;
+  CUdeviceptr profile_scratch = 0;
   void* args[] = {
       &a,
       &b,
@@ -220,6 +271,8 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
       &k,
       &max_num_tokens_padded,
       &numel,
+      &global_scratch,
+      &profile_scratch,
   };
   std::unordered_map<std::string, std::string> map = {{"group_n", ConvertToString(block_shape0)},
                                                       {"group_k", ConvertToString(block_shape1)},
@@ -304,9 +357,10 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
                                                     void* topk_weights, void* sorted_token_ids, void* expert_ids,
                                                     void* num_tokens_post_padded, int n, int k,
                                                     int max_num_tokens_padded, int numel, bool mul_routed_weight,
-                                                    int top_k, int group_size, bool quant_a_per_tensor,
+                                                    int top_k, int group_size, bool quant_a_per_tensor, int num_experts,
                                                     std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_gptq_int4_fp8_kernel";
+  (void)num_experts;
 
   void* args[] = {
       &a,
@@ -339,12 +393,68 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
   template void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel<T>(                                         \
       void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights, void* sorted_token_ids, \
       void* expert_ids, void* num_tokens_post_padded, int n, int k, int max_num_tokens_padded, int numel,  \
-      bool mul_routed_weight, int top_k, int group_size, bool quant_a_per_tensor,                          \
+      bool mul_routed_weight, int top_k, int group_size, bool quant_a_per_tensor, int num_experts,         \
       std::unordered_map<std::string, int> config, cudaStream_t stream)
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(float);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(half);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(__nv_bfloat16);
 #undef INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeFusedMoeWfp4Afp8Kernel(void* a, void* b, void* c, void* a_scale, void* b_scale,
+                                                 void* topk_weights, void* sorted_token_ids, void* expert_ids,
+                                                 void* num_tokens_post_padded, int n, int k, int max_num_tokens_padded,
+                                                 int numel, bool mul_routed_weight, int top_k, int group_size,
+                                                 bool quant_a_per_tensor, int num_experts,
+                                                 std::unordered_map<std::string, int> config, cudaStream_t stream) {
+  std::string kernel_name = "fused_moe_wfp4afp8_kernel";
+
+  // Triton >= 3.x (NVIDIA backend) appends two implicit CUdeviceptr params at the tail of every
+  // compiled kernel's .param list: `global_scratch` and `profile_scratch`. The wfp4afp8 cubin is
+  // built with newer Triton; without supplying these tails, cuLaunchKernelEx reads past args[]
+  // and libcuda returns CUDA_ERROR_INVALID_VALUE. The kernel itself does not reference either
+  // scratch buffer, so passing NULL is safe.
+  CUdeviceptr global_scratch = 0;
+  CUdeviceptr profile_scratch = 0;
+  void* args[] = {
+      &a,
+      &b,
+      &c,
+      &a_scale,
+      &b_scale,
+      &topk_weights,
+      &sorted_token_ids,
+      &expert_ids,
+      &num_tokens_post_padded,
+      &n,
+      &k,
+      &max_num_tokens_padded,
+      &numel,
+      &global_scratch,
+      &profile_scratch,
+  };
+  std::unordered_map<std::string, std::string> map = {{"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
+                                                      {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},
+                                                      {"BLOCK_SIZE_K", ConvertToString(config["block_size_k"])},
+                                                      {"GROUP_SIZE_M", ConvertToString(config["group_size_m"])},
+                                                      {"MUL_ROUTED_WEIGHT", ConvertToString(mul_routed_weight)},
+                                                      {"top_k", ConvertToString(top_k)},
+                                                      {"compute_type", GetComputeType<T>()},
+                                                      {"group_size", ConvertToString(group_size)},
+                                                      {"quant_a_per_tensor", ConvertToString(quant_a_per_tensor)}};
+  size_t grid_x = CeilDiv(max_num_tokens_padded, config.at("block_size_m")) * CeilDiv(n, config.at("block_size_n"));
+  InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
+}
+#define INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(T)                                                                \
+  template void TritonWrapper::InvokeFusedMoeWfp4Afp8Kernel<T>(                                            \
+      void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights, void* sorted_token_ids, \
+      void* expert_ids, void* num_tokens_post_padded, int n, int k, int max_num_tokens_padded, int numel,  \
+      bool mul_routed_weight, int top_k, int group_size, bool quant_a_per_tensor, int num_experts,         \
+      std::unordered_map<std::string, int> config, cudaStream_t stream)
+INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(float);
+INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(half);
+INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(__nv_bfloat16);
+#undef INVOKE_FUSED_MOE_WFP4AFP8_KERNEL
 
 template <typename T>
 void TritonWrapper::InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void* expert_num_tokens, void* a_scale,
@@ -426,5 +536,116 @@ INVOKE_FUSED_BATCHED_MOE_KERNEL(float);
 INVOKE_FUSED_BATCHED_MOE_KERNEL(half);
 INVOKE_FUSED_BATCHED_MOE_KERNEL(__nv_bfloat16);
 #undef INVOKE_FUSED_BATCHED_MOE_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeMhcPreBigFuseKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale,
+                                              void* mhc_base, void* residual, void* post_mix, void* comb_mix,
+                                              void* layer_input, int num_tokens, int hidden_size, float rms_eps,
+                                              float mhc_pre_eps, float mhc_sinkhorn_eps, float mhc_post_mult_value,
+                                              int sinkhorn_repeat, int n_splits, int mhc_mult, cudaStream_t stream) {
+  std::string kernel_name = "mhc_pre_big_fuse_kernel";
+
+  void* args[] = {
+      &comb_mix,  &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base,
+      &mhc_scale, &post_mix,     &residual,        &num_tokens,
+  };
+  std::unordered_map<std::string, std::string> map = {{"hidden_size", ConvertToString(hidden_size)},
+                                                      {"rms_eps", ConvertToString(rms_eps)},
+                                                      {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},
+                                                      {"mhc_sinkhorn_eps", ConvertToString(mhc_sinkhorn_eps)},
+                                                      {"mhc_post_mult_value", ConvertToString(mhc_post_mult_value)},
+                                                      {"sinkhorn_repeat", ConvertToString(sinkhorn_repeat)},
+                                                      {"n_splits", ConvertToString(n_splits)},
+                                                      {"mhc_mult", ConvertToString(mhc_mult)}};
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, 96, 1, 1);
+}
+#define INVOKE_MHC_PRE_BIG_FUSE_KERNEL(T)                                                                           \
+  template void TritonWrapper::InvokeMhcPreBigFuseKernel<T>(void*, void*, void*, void*, void*, void*, void*, void*, \
+                                                            int, int, float, float, float, float, int, int, int,    \
+                                                            cudaStream_t)
+INVOKE_MHC_PRE_BIG_FUSE_KERNEL(float);
+INVOKE_MHC_PRE_BIG_FUSE_KERNEL(half);
+INVOKE_MHC_PRE_BIG_FUSE_KERNEL(__nv_bfloat16);
+#undef INVOKE_MHC_PRE_BIG_FUSE_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeMhcPreBigFuseWithNormKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale,
+                                                      void* mhc_base, void* residual, void* norm_weight, void* post_mix,
+                                                      void* comb_mix, void* layer_input, int num_tokens,
+                                                      int hidden_size, float rms_eps, float mhc_pre_eps,
+                                                      float mhc_sinkhorn_eps, float mhc_post_mult_value,
+                                                      int sinkhorn_repeat, int n_splits, int mhc_mult,
+                                                      cudaStream_t stream) {
+  std::string kernel_name = "mhc_pre_big_fuse_with_norm_kernel";
+
+  void* args[] = {
+      &comb_mix,  &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base,
+      &mhc_scale, &norm_weight,  &post_mix,        &residual,    &num_tokens,
+  };
+  std::unordered_map<std::string, std::string> map = {{"hidden_size", ConvertToString(hidden_size)},
+                                                      {"rms_eps", ConvertToString(rms_eps)},
+                                                      {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},
+                                                      {"mhc_sinkhorn_eps", ConvertToString(mhc_sinkhorn_eps)},
+                                                      {"mhc_post_mult_value", ConvertToString(mhc_post_mult_value)},
+                                                      {"sinkhorn_repeat", ConvertToString(sinkhorn_repeat)},
+                                                      {"n_splits", ConvertToString(n_splits)},
+                                                      {"mhc_mult", ConvertToString(mhc_mult)}};
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, 96, 1, 1);
+}
+#define INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL(T)                                                                  \
+  template void TritonWrapper::InvokeMhcPreBigFuseWithNormKernel<T>(void*, void*, void*, void*, void*, void*, void*, \
+                                                                    void*, void*, int, int, float, float, float,     \
+                                                                    float, int, int, int, cudaStream_t)
+INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL(float);
+INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL(half);
+INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL(__nv_bfloat16);
+#undef INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeMhcPostFwdKernel(void* a, void* b, void* c, void* d, void* x, int num_tokens, int mhc,
+                                           int hidden, int n_thr, int h_blk, cudaStream_t stream) {
+  std::string kernel_name = "mhc_post_fwd_kernel";
+
+  void* args[] = {
+      &a, &b, &c, &d, &x, &num_tokens,
+  };
+  std::unordered_map<std::string, std::string> map = {{"mhc", ConvertToString(mhc)},
+                                                      {"hidden", ConvertToString(hidden)},
+                                                      {"n_thr", ConvertToString(n_thr)},
+                                                      {"h_blk", ConvertToString(h_blk)}};
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, n_thr, 1, 1);
+}
+#define INVOKE_MHC_POST_KERNEL(T)                                                                                    \
+  template void TritonWrapper::InvokeMhcPostFwdKernel<T>(void*, void*, void*, void*, void*, int, int, int, int, int, \
+                                                         cudaStream_t)
+INVOKE_MHC_POST_KERNEL(float);
+INVOKE_MHC_POST_KERNEL(half);
+INVOKE_MHC_POST_KERNEL(__nv_bfloat16);
+#undef INVOKE_MHC_POST_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeMhcHeadBigFuseKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale,
+                                               void* mhc_base, void* residual, void* layer_input, int num_tokens,
+                                               int hidden_size, float rms_eps, float mhc_pre_eps, int n_splits,
+                                               int mhc_mult, cudaStream_t stream) {
+  std::string kernel_name = "mhc_head_big_fuse_kernel";
+
+  void* args[] = {
+      &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base, &mhc_scale, &residual, &num_tokens,
+  };
+  std::unordered_map<std::string, std::string> map = {{"hidden_size", ConvertToString(hidden_size)},
+                                                      {"rms_eps", ConvertToString(rms_eps)},
+                                                      {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},
+                                                      {"n_splits", ConvertToString(n_splits)},
+                                                      {"mhc_mult", ConvertToString(mhc_mult)}};
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, 64, 1, 1);
+}
+#define INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(T)                                                                       \
+  template void TritonWrapper::InvokeMhcHeadBigFuseKernel<T>(void*, void*, void*, void*, void*, void*, int, int, \
+                                                             float, float, int, int, cudaStream_t)
+INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(float);
+INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(half);
+INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(__nv_bfloat16);
+#undef INVOKE_MHC_HEAD_BIG_FUSE_KERNEL
 
 }  // namespace ksana_llm

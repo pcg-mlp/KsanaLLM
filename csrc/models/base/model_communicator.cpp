@@ -44,11 +44,19 @@ ModelCommunicator::ModelCommunicator(Tensor* input, int rank, const RuntimeConfi
     // TODO(yfnjin): Temporarily disable trt reduce for mla-based models due to precision issues
     ModelConfig model_config;
     Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
-    if (tp_size_ == 2 && !model_config.use_mla) {
+    if ((tp_size_ == 2 || tp_size_ == 4) && (model_config.use_dsv4_attn || !model_config.use_mla)) {
+      // Set threshold based on GPU count
+      kTrtReduceThreshold = (tp_size_ <= 2) ? kTrtReduceThreshold2GPU : kTrtReduceThreshold4GPU;
       // When nvlink is not available, lower the threshold for using trt allreduce
       if (!context_->device->ext->IsFullNvLink()) {
-        kTrtReduceThreshold >>= 1;
+        if (tp_size_ == 2) {
+          kTrtReduceThreshold >>= 1;
+        } else {
+          kTrtReduceThreshold = 0;
+        }
       }
+    }
+    if (kTrtReduceThreshold > 0) {
       // TrtReduceSumLayer for tensor parallelism
       tp_trt_all_reduce_sum_layer_ = std::make_shared<TrtAllReduceSumLayer>();
       tp_trt_all_reduce_sum_layer_->Init({kTrtReduceThreshold}, runtime_config, context_, rank_);

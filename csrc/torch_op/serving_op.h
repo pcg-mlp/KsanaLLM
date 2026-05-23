@@ -16,7 +16,8 @@ namespace ksana_llm {
 // The torch OP for inference.
 class ServingOp : public torch::jit::CustomClassHolder {
  public:
-  ServingOp(const std::string &config_file, bool is_engine, int executor_id);
+  ServingOp(const std::string &config_file, bool is_engine, int executor_id,
+            const std::string &json_model_override_args = "");
   ~ServingOp();
 
   // Initialize ipc resources.

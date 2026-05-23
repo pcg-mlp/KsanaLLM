@@ -10,7 +10,8 @@ Linear::Linear(const std::string& weight_name, const LayerCreationContext& creat
                const LinearComputeBackend& linear_compute_backend, const bool skip_quant) {
   proj_layer_ = creation_context.matmul_layer_factory->AutoCreateLayer(
       creation_context.base_weight, weight_name, creation_context.weight_type, creation_context.input_type,
-      creation_context.output_type, linear_compute_backend, std::vector<std::any>{skip_quant});
+      creation_context.output_type, linear_compute_backend,
+      std::vector<std::any>{skip_quant, creation_context.model_config.swiglu_limit});
   proj_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspace(proj_layer_->GetWorkspaceSize()));
 
   proj_layer_->Preprocess(creation_context.model_config, creation_context.runtime_config);

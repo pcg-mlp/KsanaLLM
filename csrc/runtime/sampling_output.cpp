@@ -6,10 +6,12 @@
 
 #include "distributed/packet_util.h"
 #include "ipc/core/ipc_func_serialization.h"
+#include "profiler/profile_event.h"
 
 namespace ksana_llm {
 
 Status SamplingOutputParser::SerializeSamplingOutput(const SamplingOutput* sampling_output, void* ptr, size_t* bytes) {
+  PROFILE_EVENT_SCOPE(serialize_sampling_output_total, "Executor.SerializeSamplingOutput.Total");
   SerializeInit(*bytes);
   // schedule_id
   SerializePod<size_t>(sampling_output->schedule_id, ptr, *bytes);
@@ -66,6 +68,7 @@ Status SamplingOutputParser::SerializeSamplingOutput(const SamplingOutput* sampl
 }
 
 Status SamplingOutputParser::DeserializeSamplingOutput(const void* ptr, SamplingOutput* sampling_output) {
+  PROFILE_EVENT_SCOPE(deserialize_sampling_output_total, "Engine.DeserializeSamplingOutput.Total");
   size_t offset = 0;
 
   // schedule_id

@@ -4,6 +4,8 @@
 #pragma once
 
 #include "cache_manager/cache_manager_interface.h"
+#include "configure/environment.h"
+#include "helpers/model_test_helper.h"
 #include "models/base/buffer_manager.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/layer_creation_context.h"
@@ -12,6 +14,7 @@
 #include "layers/cast_layer.h"
 #include "models/base/fake_weight_for_test.h"
 #include "models/common/model_interface.h"
+#include "utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -21,7 +24,8 @@ class FakeModel {
   FakeModel(std::shared_ptr<ModelInterface> model, std::shared_ptr<Context> context, const int rank,
             ModelConfig& model_config, RuntimeConfig& runtime_config, PipelineConfig pipeline_config,
             std::shared_ptr<BaseWeight> base_weight,
-            bool reuse_prefix_config)  // TODO(robertyuan): reuse_prefix_config is a weird param
+            bool reuse_prefix_config,  // TODO(robertyuan): reuse_prefix_config is a weird param
+            std::shared_ptr<BaseModelCacheLayout> block_cache_layout = nullptr)
       : model_(model),
         context_(context),
         rank_(rank),
@@ -32,12 +36,19 @@ class FakeModel {
 
     buffers_.Init(context_, rank_, model_config, runtime_config, &buffer_mgr_);
     forwarding_context_.Init(context, rank, model_config, runtime_config, pipeline_config, buffers_.buffers_.get(),
-                             &buffer_mgr_);
+                             &buffer_mgr_, block_cache_layout);
     // Initialize instances for each layer.
     layer_creation_context_.Init(base_weight, context, rank, pipeline_config, model_config, runtime_config,
                                  &buffer_mgr_);
 
-    Tensor& residual_buffer_tensor = buffers_.local_residual_buffer_tensors_[0];
+    // Create residual buffer for test
+    size_t residual_buffer_size =
+        runtime_config.max_step_token_num * model_config.hidden_units * model_config.mhc_config.hc_mult;
+    TensorBuffer* residual_buffer_tb = buffer_mgr_.CreateBufferTensor(
+        "residual_buffer_for_test_", {residual_buffer_size}, model_config.weight_data_type);
+    residual_buffer_ = residual_buffer_tb->GetTensors();
+
+    Tensor& residual_buffer_tensor = residual_buffer_[0];
     host_residual_buffer_tensor_ =
         Tensor(MemoryLocation::LOCATION_HOST, residual_buffer_tensor.dtype, residual_buffer_tensor.shape);
     TensorBuffer* residual_fp32_buffer =
@@ -79,13 +90,13 @@ class FakeModel {
   Status Forward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode = RunMode::kMain) {
     forwarding_context_.UpdateBeforeForward(forward_reqs, run_mode);
     LookupEmbedding();
-    model_->Forward(buffers_.local_residual_buffer_tensors_, forwarding_context_);
+    model_->Forward(residual_buffer_, forwarding_context_);
     forwarding_context_.UpdateAfterForward(forward_reqs);
     return Status();
   }
 
   Status GetOutputToCPU(std::vector<float>& cpu_fp32_data) {
-    auto& residula_buffer_tensor = buffers_.local_residual_buffer_tensors_[0];
+    auto& residula_buffer_tensor = residual_buffer_[0];
     cpu_fp32_data.resize(residula_buffer_tensor.GetElementNumber());
     STATUS_CHECK_RETURN(
         cast_layer_->Forward({residula_buffer_tensor, forwarding_context_.GetAttentionForwardContext().forward_shape},
@@ -132,7 +143,7 @@ class FakeModel {
 
     FakeEmbeddingResults(input_ids_cpu, residual_buffer_vector, head_num_, size_per_head_);
 
-    Tensor& gpu_tensor = buffers_.local_residual_buffer_tensors_[0];
+    Tensor& gpu_tensor = residual_buffer_[0];
     gpu_tensor.shape = {input_ids_num, head_num_ * size_per_head_};
     host_residual_buffer_tensor_.shape = gpu_tensor.shape;
     CopyVectorToHostTensor(host_residual_buffer_tensor_, host_residual_buffer_tensor_.dtype, residual_buffer_vector);
@@ -157,6 +168,7 @@ class FakeModel {
   BufferManager buffer_mgr_;
 
   Tensor host_residual_buffer_tensor_;
+  std::vector<Tensor> residual_buffer_{1};
   std::vector<Tensor> residual_fp32_buffer_{1};
   std::shared_ptr<BaseLayer> cast_layer_;
 

@@ -50,8 +50,10 @@ struct AttentionCreationConfig {
   DataType kv_cache_dtype;  // kv cache data type
   int rotary_embedding;
   float rope_theta;
+  float compress_rope_theta;
   PositionEncoding position_encoding;
   std::any cos_sin_cache_ptr;
+  std::any compress_cos_sin_cache_ptr;
   size_t max_batch_size;
   size_t max_decode_tokens_per_req;
 
@@ -74,9 +76,9 @@ struct ModelCreationConfig {
   AttentionCreationConfig attn_config;
   LayernormCreationConfig layernorm_config;
 
-  void Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config, Tensor cos_sin_cache_tensor_,
-            PositionEncoding position_encoding, bool reuse_prefix_caching, int layer_num_on_node,
-            const int* mrope_section_ptr, const int* xdrope_section_ptr);
+  void Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config, const Tensor& cos_sin_cache_tensor_,
+            const Tensor& compress_cos_sin_cache_tensor_, PositionEncoding position_encoding, bool reuse_prefix_caching,
+            int layer_num_on_node, const int* mrope_section_ptr, const int* xdrope_section_ptr);
 };
 
 // Temp, remove later

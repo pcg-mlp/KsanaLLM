@@ -26,6 +26,10 @@ void ExecutorRuntime::SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorMan
   block_allocator_manager_ = block_allocator_manager;
 }
 
+void ExecutorRuntime::SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager) {
+  swa_block_allocator_manager_ = swa_block_allocator_manager;
+}
+
 void ExecutorRuntime::SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool) {
   hidden_unit_buffer_pool_ = hidden_unit_buffer_pool;
 }
@@ -75,6 +79,9 @@ Status ExecutorRuntime::Initialize() {
   model_builder_ = std::make_shared<ModelBuilder>(context_);
   model_builder_->SetModelInstance(model_instance_);
   model_builder_->SetBlockAllocatorManager(block_allocator_manager_);
+  if (swa_block_allocator_manager_) {
+    model_builder_->SetSwaBlockAllocatorManager(swa_block_allocator_manager_);
+  }
 
   model_executor_ = std::make_shared<ModelExecutor>();
   model_executor_->SetModelInstance(model_instance_);

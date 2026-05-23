@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <filesystem>
 
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "models/quant/quant_weight.h"
 #include "test.h"
 #include "utils/singleton.h"
@@ -26,9 +28,11 @@ class QuantWeightTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/hunyuan_large");
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
 
+    auto block_cache_layout = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
+    env->InitializeBlockManagerConfig(block_cache_layout);
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 

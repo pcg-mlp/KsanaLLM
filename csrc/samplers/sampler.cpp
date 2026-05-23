@@ -216,8 +216,12 @@ void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
 
 void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
                                         std::vector<std::vector<float>>& probs_output, Stream& stream) {
+  PROFILE_EVENT_SCOPE(sampler_copy_probs_total, "Exec.Sampler.CopyProbsOutputToRequests.Total");
   auto copy_probs_after_synchronize = CopyProbsOutput(sampling_reqs, stream, probs_output);
-  StreamSynchronize(stream);
+  {
+    PROFILE_EVENT_SCOPE(sampler_stream_sync, "Exec.Sampler.CopyProbsOutputToRequests.StreamSync");
+    StreamSynchronize(stream);
+  }
   copy_probs_after_synchronize();
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
     auto& req = sampling_reqs[i];

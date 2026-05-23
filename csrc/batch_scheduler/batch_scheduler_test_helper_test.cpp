@@ -6,6 +6,7 @@
 #include "batch_scheduler/batch_scheduler_test_client.h"
 
 #include <memory>
+#include <numeric>
 #include "test.h"
 #include "utils/logger.h"
 #include "utils/singleton.h"
@@ -418,6 +419,105 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   ScheduleOutput* schedule_output = nullptr;
 };
+
+TEST_F(BatchSchedulerEnvironmentSimulatorTest, SwaBasicTokenGenerationTest) {
+  // Parameters per plan section 3.4
+  const int sliding_window_size = 12;  // = 2 * block_token_num
+  const int block_token_num = 6;
+  const int device_num = 2;
+  const int input_token_num = 20;
+  const int expected_output_token_num = 30;
+
+  // Set up block manager config with the specified block_token_num
+  block_manager_config.host_allocator_config.blocks_num = 100;
+  block_manager_config.device_allocator_config.blocks_num = 100;
+  block_manager_config.device_allocator_config.block_token_num = block_token_num;
+  this->device_num = device_num;
+
+  // Create main KV cache block allocator group
+  std::shared_ptr<FakedBlockAllocatorGroup> main_block_allocator_group =
+      std::make_shared<FakedBlockAllocatorGroup>(block_manager_config, device_num);
+
+  // Create SWA block allocator group (no host blocks needed for SWA)
+  BlockManagerConfig swa_block_manager_config = block_manager_config;
+  swa_block_manager_config.host_allocator_config.blocks_num = 0;
+  std::shared_ptr<FakedBlockAllocatorGroup> swa_block_allocator_group =
+      std::make_shared<FakedBlockAllocatorGroup>(swa_block_manager_config, device_num);
+
+  // Create simulator with SWA enabled
+  if (env_simulator) {
+    delete env_simulator;
+    env_simulator = nullptr;
+  }
+  env_simulator =
+      new BatchSchedulerEnvironmentSimulator(block_manager_config, device_num, main_block_allocator_group,
+                                             static_cast<size_t>(sliding_window_size), swa_block_allocator_group);
+
+  // Init request
+  std::shared_ptr<Request> req;
+  std::vector<std::pair<int, int>> seeds;
+  seeds.push_back(std::make_pair(0, 42));
+  std::vector<std::shared_ptr<InferRequest>> infer_req_list =
+      env_simulator->InitRequest(1, input_token_num, expected_output_token_num, req, seeds);
+  std::shared_ptr<InferRequest> infer_req = infer_req_list[0];
+
+  // Allocate main KV cache blocks (enough for input + output)
+  int total_token_num = input_token_num + expected_output_token_num;
+  int total_block_num = (total_token_num + block_token_num - 1) / block_token_num;
+  std::vector<int> main_blocks;
+  main_block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(total_block_num, main_blocks);
+  infer_req->kv_cache_blocks.insert(infer_req->kv_cache_blocks.end(), main_blocks.begin(), main_blocks.end());
+
+  // Allocate SWA blocks: only need to cover sliding_window_size tokens
+  int swa_block_num = sliding_window_size / block_token_num;
+  std::vector<int> swa_blocks;
+  swa_block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(swa_block_num, swa_blocks);
+  infer_req->swa_kv_cache_blocks.insert(infer_req->swa_kv_cache_blocks.end(), swa_blocks.begin(), swa_blocks.end());
+  infer_req->swa_kv_cache_block_idx_offsets.resize(swa_blocks.size());
+  std::iota(infer_req->swa_kv_cache_block_idx_offsets.begin(), infer_req->swa_kv_cache_block_idx_offsets.end(),
+            static_cast<size_t>(0));
+
+  // Run simulation steps
+  infer_req->ResetPrefillingTokens();
+
+  int max_output_step = expected_output_token_num + 10;
+  for (int step = 0; step < max_output_step; step++) {
+    if (infer_req->finished) break;
+
+    infer_req->SetPlanningTask();
+    infer_req->LaunchPlanningTask();
+
+    std::vector<std::shared_ptr<InferRequest>> running_reqs = {infer_req};
+    env_simulator->RunAStep(running_reqs);
+
+    infer_req->UpdateAfterInflightTaskFinished();
+    infer_req->ResetInflightTask();
+    if (infer_req->IsEosGenerated()) {
+      infer_req->finished = true;
+    }
+  }
+
+  // Verify: the output token sequence length should match expected
+  EXPECT_EQ(infer_req->output_tokens.size(), static_cast<size_t>(input_token_num + expected_output_token_num));
+
+  // Verify SWA block contents: after simulation, the SWA blocks should contain
+  // the tokens from the last sliding_window_size positions of the sequence.
+  // The SWA blocks cover [swa_kv_cache_block_idx_offsets[0] * block_token_num, ...).
+  // Since swa_kv_cache_block_idx_offsets={0,1} and swa_block_num=2, they cover tokens [0, 12).
+  // After the full run, the last written tokens in SWA blocks correspond to
+  // the last sliding_window_size tokens of the forwarding sequence.
+  // We verify by collecting SWA cache content for the initial window [0, sliding_window_size).
+  std::vector<int> swa_contents;
+  int swa_left = 0;
+  int swa_right = sliding_window_size;
+  swa_block_allocator_group->CollectSwaKvCacheContent(infer_req, swa_left, swa_right, swa_contents);
+  EXPECT_EQ(static_cast<int>(swa_contents.size()), sliding_window_size);
+  // Each SWA content entry should match the corresponding forwarding token
+  for (int i = 0; i < sliding_window_size; i++) {
+    EXPECT_EQ(swa_contents[i], infer_req->output_tokens[swa_left + i])
+        << "SWA content mismatch at token index " << (swa_left + i);
+  }
+}
 
 TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {
   int prefix_block_num = 3;

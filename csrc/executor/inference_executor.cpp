@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 
+#include "cache_manager/cache_layout/cache_layout_factory.h"
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
 #include "global_cache_connector/global_cache_connector_factory.h"
@@ -114,6 +115,11 @@ Status InferenceExecutor::Initialize() {
   model_instance_ = std::make_shared<ModelInstance>(model_config, runtime_config, context_, model_weight_);
   ipc_func_wrapper_->SetModelInstance(model_instance_);
 
+  // Create cache layout.
+  block_cache_layout_ = CacheLayoutFactory::CreateModelCacheLayout(model_config);
+  model_instance_->SetBlockCacheLayout(block_cache_layout_);
+  ipc_func_wrapper_->SetBlockCacheLayout(block_cache_layout_);
+
   ipc_func_wrapper_->SetEnvironment(env_);
   ipc_func_wrapper_->SetDeviceCommunicationContext(context_);
   ipc_func_wrapper_->SetCustomCommunicationContext(context_);
@@ -163,6 +169,15 @@ Status InferenceExecutor::Initialize() {
   int device_idx_in_dp_group = context_->device->GetDeviceId() % context_->global->GetAttentionTensorParallelSize();
   ipc_func_wrapper_->SetBlockAllocatorManager(block_allocator_manager_, dp_group_id);
 
+  // Create and register the SWA block allocator manager only when SWA is enabled,
+  // indicated by model_config.dsv4_attn_config.sliding_window > 0.
+  if (model_config.dsv4_attn_config.sliding_window > 0) {
+    KLLM_LOG_INFO << "InferenceExecutor create SWA block allocator manager, sliding_window="
+                  << model_config.dsv4_attn_config.sliding_window;
+    swa_block_allocator_manager_ = std::make_shared<BlockAllocatorManager>(false, memory_allocator, context_);
+    ipc_func_wrapper_->SetSwaBlockAllocatorManager(swa_block_allocator_manager_);
+  }
+
   if (context_->global->IsDistributedWorker()) {
     CacheManagerConfig cache_manager_config;
     STATUS_CHECK_RETURN(env_->GetCacheManagerConfig(cache_manager_config));
@@ -191,6 +206,9 @@ Status InferenceExecutor::Initialize() {
   model_runner_->SetModelInstance(model_instance_);
   model_runner_->SetModelWeight(model_weight_);
   model_runner_->SetBlockAllocatorManager(block_allocator_manager_);
+  if (swa_block_allocator_manager_) {
+    model_runner_->SetSwaBlockAllocatorManager(swa_block_allocator_manager_);
+  }
 
   // Only for distributed mode.
   if (!context_->global->IsStandalone()) {

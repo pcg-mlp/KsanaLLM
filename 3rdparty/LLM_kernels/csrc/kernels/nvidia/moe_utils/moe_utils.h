@@ -60,15 +60,18 @@ void InvokeMoeSum(void* input,     // [num_tokens, topk, hidden_size]
                   void* topk_ids,  // [..., topk]
                   int num_tokens, int topk, int hidden_size, const cudaStream_t& stream);
 
-template <typename T, bool UseExpertParallel>
+template <typename T, bool UseExpertParallel, bool HAS_SWIGLU_LIMIT = false>
 void SiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
-                const cudaStream_t& stream);
+                float swiglu_limit, const cudaStream_t& stream);
+// NOTE: flashinfer::activation::act_and_mul_kernel has no swiglu_limit/clamp
+// support. Callers that need clamp must route through SiluAndMul (see
+// InvokeSiluAndMul's HAS_SWIGLU_LIMIT=true branch).
 template <typename T>
 void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
                           const cudaStream_t& stream);
-template <typename T, bool UseExpertParallel>
+template <typename T, bool UseExpertParallel, bool HAS_SWIGLU_LIMIT = false>
 void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
-                      const cudaStream_t& stream);
+                      float swiglu_limit, const cudaStream_t& stream);
 
 template <typename T>
 void InvokeWeightDequant(const uint8_t* x, const float* s, T* output, int M, int N, int block_size,
@@ -77,5 +80,25 @@ void InvokeWeightDequant(const uint8_t* x, const float* s, T* output, int M, int
 void InvokeFillIntToBuffer(int* output, void* fill_info, int* fill_info_on_host, int fill_info_length,
                            const cudaStream_t& stream);
 
+// Fused multiply-by-topk-weight + sum across topk experts.
+// Replaces InvokeMoeMulTopkWeight + InvokeMoeSum with a single kernel launch.
+// input: [num_tokens * topk, hidden_size], topk_weights: [num_tokens * topk] (flat float)
+// topk_ids: [num_tokens, topk] (int, for EP mask), output: [num_tokens, hidden_size]
+template <typename T, bool UseExpertParallel>
+void InvokeMoeFusedMulSum(const void* input, const float* topk_weights, const void* topk_ids,
+                          void* output, int num_tokens, int topk, int hidden_size,
+                          const cudaStream_t& stream);
+
+// 根据 topk_ids 构建 active expert mask，用于 fused MoE 离线反量化路径跳过未命中专家。
+//   topk_ids: int32_t[numel]  - 每个 (token, topk-rank) 槽位上的专家 id
+//   active_expert_mask: uint8_t[num_experts] - 输出，命中专家位置写 1，其余写 0
+//   numel:    int32_t        - topk_ids 元素个数 (= chunk_num_tokens * topk)
+//   num_experts: int32_t     - 本 rank 上的专家数
+// 实现：1) cudaMemsetAsync 把 mask 整体清 0
+//       2) 启动 scatter kernel，每个 thread 读一个 topk_ids[i]，置 mask[eid] = 1
+//          (同 byte 多线程写同值，无竞争且与最终值一致)
+template <typename T>
+void InvokeBuildActiveExpertMask(const T* topk_ids, uint8_t* active_expert_mask, int32_t numel, int32_t num_experts,
+                                 const cudaStream_t& stream);
 }  // namespace nvidia
 }  // namespace llm_kernels

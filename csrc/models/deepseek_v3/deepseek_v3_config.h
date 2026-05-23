@@ -29,6 +29,7 @@ inline void PrepareDeepSeekV3Attributes(const nlohmann::json& config_json, Model
     model_config.moe_config.norm_topk_prob = config_json.value("norm_topk_prob", true);
     model_config.moe_config.routed_scaling_factor = config_json.value("routed_scaling_factor", 1.0f);
     if (model_config.moe_config.topk_method == "noaux_tc") {
+      // NOTICE(winminkong): 后续需要注意计算逻辑,前三层没有该bias权重。
       model_config.moe_config.use_e_score_correction_bias = true;
     } else {
       model_config.moe_config.use_e_score_correction_bias = false;
@@ -152,9 +153,9 @@ struct DeepSeekV3Config : public BaseModelConfig {
 
   ModelFileFormat model_file_format;
 
-  bool load_bias = true;     // Check if load all weights bias.
-  int cla_share_factor = 0;  // Determines the number of layers that share k and v.
-  bool use_qk_norm = false;  // Check if normlize the attention out q and k.
+  bool load_bias = true;               // Check if load all weights bias.
+  int cla_share_factor = 0;            // Determines the number of layers that share k and v.
+  bool use_qk_norm = false;            // Check if normlize the attention out q and k.
   bool is_compressed_tensors = false;  // compressed-tensors quant format (weight already transposed)
 
   std::vector<std::pair<std::regex, std::string>> w4a8_patterns_ = {

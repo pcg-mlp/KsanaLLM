@@ -33,6 +33,8 @@ size_t GetTypeSize(DataType dtype) {
       {TYPE_FP8_E5M2, sizeof(uint8_t)},
 #endif
       {TYPE_FP8_DS_MLA, sizeof(uint8_t)},
+      {TYPE_FP8_E8M0, sizeof(uint8_t)},
+      {TYPE_FP4_E2M1FN_x2, sizeof(uint8_t)},  // 2 FP4 values packed per byte
   };
   return type_map.at(dtype);
 }

@@ -265,6 +265,19 @@ class InferRequest {
   // The key and value are stored in same blocks.
   std::vector<int> kv_cache_blocks;
 
+  // The SWA kv cache blocks for sliding window attention.
+  // swa_kv_cache_blocks[i] holds the memory_block_id of the i-th SWA block.
+  // swa_kv_cache_block_idx_offsets[i] is the FA block global index that
+  //   swa_kv_cache_blocks[i] corresponds to.
+  // Both vectors always have the same length.
+  // The covered range must include [max(kv_cached_token_num - sliding_window_size, 0), T].
+  std::vector<int> swa_kv_cache_blocks;
+
+  // Per-block FA global index: swa_kv_cache_block_idx_offsets[i] is the FA block
+  // global index corresponding to swa_kv_cache_blocks[i].
+  // Must have the same length as swa_kv_cache_blocks.
+  std::vector<size_t> swa_kv_cache_block_idx_offsets;
+
   // The max token number of one block.
   size_t block_token_num;
 

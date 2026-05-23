@@ -84,6 +84,11 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   group_size_ = std::any_cast<int>(parameters[parameter_index++]);
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
+  swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
+
+  if (swiglu_limit_ > 0.0f) {
+    swiglu_limit_host_.assign(expert_num_per_node_, swiglu_limit_);
+  }
 
   // 清空tactic
   config_map_.clear();
@@ -155,6 +160,12 @@ void CutlassMoeLayer::SetExpertParallelManager(std::shared_ptr<ExpertParallelMan
 size_t CutlassMoeLayer::GetWorkspaceSize() {
   topk_weights_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(float), 256);
   topk_ids_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(int32_t), 256);
+  // dummy KTensor (null data) — wrapper only reads has_value() to pick SwigluBias sizing
+  std::optional<KTensor> swiglu_limit_for_ws;
+  if (swiglu_limit_ > 0.0f) {
+    swiglu_limit_for_ws = KTensor(nullptr, {expert_num_per_node_}, KScalarType::Float);
+  }
+  swiglu_limit_ptr_size_ = (swiglu_limit_ > 0.0f) ? RoundUp(expert_num_per_node_ * sizeof(float), 256) : 0;
 
   // LowLatency模式需要额外的adapted空间和recv_expert_count空间
   if (use_low_latency_mode_) {
@@ -166,7 +177,8 @@ size_t CutlassMoeLayer::GetWorkspaceSize() {
     kernel_workspace_size =
         RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_dispatch_token_num),
                                                        1,  // LL模式下 effective_topk = 1
-                                                       expert_num_per_node_, expert_hidden_size_, expert_inter_size_),
+                                                       expert_num_per_node_, expert_hidden_size_, expert_inter_size_,
+                                                       std::nullopt, std::nullopt, swiglu_limit_for_ws),
                 256);
 
     // adapted_topk_weights/ids: [max_dispatch_token_num, topk=1]
@@ -175,21 +187,23 @@ size_t CutlassMoeLayer::GetWorkspaceSize() {
     recv_expert_count_size_ = RoundUp(expert_num_per_node_ * sizeof(int32_t), 256);
 
     max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + adapted_topk_weights_size_ + adapted_topk_ids_size_ +
-                    recv_expert_count_size_ + kernel_workspace_size;
+                    recv_expert_count_size_ + kernel_workspace_size + swiglu_limit_ptr_size_;
 
     KLLM_LOG_DEBUG << fmt::format(
         "Rank[{}] LowLatency workspace: max_dispatch_token_num={} "
         "(local_experts={} * num_ranks={} * max_tokens={}), "
-        "topk_weights={}, topk_ids={}, adapted_weights={}, adapted_ids={}, recv_count={}, kernel={}, total={}",
+        "topk_weights={}, topk_ids={}, adapted_weights={}, adapted_ids={}, recv_count={}, kernel={}, swiglu={}, "
+        "total={}",
         rank_, max_dispatch_token_num, expert_num_per_node_, global_expert_para_size_, low_latency_max_tokens_,
         topk_weights_ptr_size, topk_ids_ptr_size, adapted_topk_weights_size_, adapted_topk_ids_size_,
-        recv_expert_count_size_, kernel_workspace_size, max_ws_bytes_);
+        recv_expert_count_size_, kernel_workspace_size, swiglu_limit_ptr_size_, max_ws_bytes_);
   } else {
-    kernel_workspace_size = RoundUp(
-        cutlass_moe_wrapper_->GetWorkspaceSize(std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_token_num_), expert_topk_,
-                                               expert_num_per_node_, expert_hidden_size_, expert_inter_size_),
-        256);
-    max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + kernel_workspace_size;
+    kernel_workspace_size =
+        RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(
+                    std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_token_num_), expert_topk_, expert_num_per_node_,
+                    expert_hidden_size_, expert_inter_size_, std::nullopt, std::nullopt, swiglu_limit_for_ws),
+                256);
+    max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + kernel_workspace_size + swiglu_limit_ptr_size_;
     KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for CutlassMoeLayer", rank_, max_ws_bytes_);
   }
 
@@ -302,6 +316,15 @@ Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
     }
 
     cutlass_moe_wrapper_->SetWorkspacePtr(kernel_workspace_ptr_);
+    if (swiglu_limit_ > 0.0f) {
+      swiglu_limit_ptr_ = kernel_workspace_ptr_ + kernel_workspace_size;
+    }
+  }
+
+  // workspace is shared across layers; refill every Forward
+  if (swiglu_limit_ > 0.0f) {
+    cudaMemcpyAsync(swiglu_limit_ptr_, swiglu_limit_host_.data(), expert_num_per_node_ * sizeof(float),
+                    cudaMemcpyHostToDevice, context_->device->GetPrimaryComputeStream().Get());
   }
 
   // 获取并转换权重
@@ -423,13 +446,18 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
     KTensor token_selected_experts_ktensor = TensorToKTensor(chunk_topk_ids);
     KTensor token_final_scales_ktensor = TensorToKTensor(chunk_topk_weights);
 
+    std::optional<KTensor> swiglu_limit_ktensor;
+    if (swiglu_limit_ > 0.0f) {
+      swiglu_limit_ktensor = KTensor(swiglu_limit_ptr_, {expert_num_per_node_}, KScalarType::Float);
+    }
+
     // TODO(zezhao): GetBestTactic(solve_token) 用于获取最优tactic，LowLatency模式下由于空桶存在，因此传入的该值过大，
     // 在较低有效 token 数时性能会下降
     size_t valid_tokens = use_low_latency_mode_ ? low_latency_max_tokens_ : solve_token;
     cutlass_moe_wrapper_->Forward(output_ktensor, input_ktensor, token_selected_experts_ktensor,
                                   token_final_scales_ktensor, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
-                                  quant_scales_ktensors, GetBestTactic(valid_tokens),
-                                  context_->device->GetPrimaryComputeStream().Get());
+                                  quant_scales_ktensors, std::nullopt, std::nullopt, swiglu_limit_ktensor,
+                                  GetBestTactic(valid_tokens), context_->device->GetPrimaryComputeStream().Get());
   }
   return Status();
 }

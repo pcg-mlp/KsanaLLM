@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/environment.h"
 #include "configure/schedule_config_parser.h"
 #include "ipc/core/ipc_func_types.h"
@@ -33,8 +34,13 @@ class ResetPipelineConfigCallable : public IpcCallable {
 
   void SetEnvironment(std::shared_ptr<Environment> env);
 
+  void SetBlockCacheLayout(std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
+
  private:
   std::shared_ptr<Environment> env_ = nullptr;
+
+  // The model-level cache layout (holds all block cache layouts keyed by type).
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 };
 
 class ResetPipelineConfigCallback : public IpcCallback, public IpcWaiter {

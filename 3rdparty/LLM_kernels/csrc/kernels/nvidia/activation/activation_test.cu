@@ -154,8 +154,9 @@ class LlamaNvidiaActivationTestSuit : public NvidiaTestSuitBase {
 
       output_ref_meta.LoadNpy<T>("row_based_activation_test_output.npy", MemoryType::MEMORY_GPU);
 
-      InvokeRowBasedActivation<Activation, T>(reinterpret_cast<T*>(output_meta.data_ptr),
-                                              reinterpret_cast<T*>(input_meta.data_ptr), m, n, stream);
+      InvokeRowBasedActivation<Activation, T, /*HAS_SWIGLU_LIMIT*/ false>(
+          reinterpret_cast<T*>(output_meta.data_ptr),
+          reinterpret_cast<T*>(input_meta.data_ptr), m, n, /*swiglu_limit=*/ 0.0f, stream);
       CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
       CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
@@ -164,8 +165,9 @@ class LlamaNvidiaActivationTestSuit : public NvidiaTestSuitBase {
                          output_ref_meta, output_meta, 1e-5f, 1e-5f));
 
       auto cuda_run = [&]() {
-        InvokeRowBasedActivation<Activation, T>(reinterpret_cast<T*>(output_meta.data_ptr),
-                                                reinterpret_cast<T*>(input_meta.data_ptr), m, n, stream);
+        InvokeRowBasedActivation<Activation, T, /*HAS_SWIGLU_LIMIT*/ false>(
+            reinterpret_cast<T*>(output_meta.data_ptr),
+            reinterpret_cast<T*>(input_meta.data_ptr), m, n, /*swiglu_limit=*/ 0.0f, stream);
       };
       float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
       std::cout << std::left << "Row-based Activation " << GetActivationName<Activation, T>() << " m="
@@ -175,6 +177,47 @@ class LlamaNvidiaActivationTestSuit : public NvidiaTestSuitBase {
       DeleteBuffer(output_meta);
       DeleteBuffer(input_meta);
     }
+  }
+
+  template <template <typename T> class Activation, typename T>
+  void TestRowBasedActivationWithLimit(cudaStream_t stream) {
+    const size_t m = 64, n = 4096;
+    const float swiglu_limit = 10.0f;
+
+    BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n}, /*is_random_init*/ true);
+    BufferMeta output_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n / 2}, false);
+    BufferMeta output_ref_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n / 2}, false);
+
+    std::string type_str = "float";
+    if (std::is_same<T, half>::value)              type_str = "half";
+    else if (std::is_same<T, __nv_bfloat16>::value) type_str = "bfloat16";
+
+    input_meta.SaveToNpy<T>("row_based_activation_test_input.npy");
+
+    // Extended Python command: includes --swiglu_limit
+    std::stringstream ss;
+    ss << "python activation_test.py --activation_kernel=InvokeRowBasedActivation"
+       << " --type=" << type_str << " --activation=silu"
+       << " --swiglu_limit=" << swiglu_limit;
+    system(ss.str().c_str());
+
+    output_ref_meta.LoadNpy<T>("row_based_activation_test_output.npy", MemoryType::MEMORY_GPU);
+
+    InvokeRowBasedActivation<Activation, T, /*HAS_SWIGLU_LIMIT*/ true>(
+        reinterpret_cast<T*>(output_meta.data_ptr),
+        reinterpret_cast<T*>(input_meta.data_ptr),
+        m, n, swiglu_limit, stream);
+    cudaStreamSynchronize(stream);
+    cudaDeviceSynchronize();
+
+    EXPECT_TRUE(
+        CheckResult<T>("row_based_activation_swiglu_" + type_str + "_m_" + std::to_string(m) +
+                        "_n_" + std::to_string(n),
+                        output_ref_meta, output_meta, 1e-2f, 1e-2f));
+
+    DeleteBuffer(output_ref_meta);
+    DeleteBuffer(output_meta);
+    DeleteBuffer(input_meta);
   }
 };
 
@@ -194,6 +237,16 @@ TEST_F(LlamaNvidiaActivationTestSuit, FloatRowBasedActivationCommonTest) {
 
 TEST_F(LlamaNvidiaActivationTestSuit, Bf16RowBasedActivationCommonTest) {
   TestRowBasedActivation<SiluActivation, __nv_bfloat16>(stream);
+}
+
+TEST_F(LlamaNvidiaActivationTestSuit, HalfRowBasedActivationSwigluLimitTest) {
+  TestRowBasedActivationWithLimit<SiluActivation, half>(stream);
+}
+TEST_F(LlamaNvidiaActivationTestSuit, FloatRowBasedActivationSwigluLimitTest) {
+  TestRowBasedActivationWithLimit<SiluActivation, float>(stream);
+}
+TEST_F(LlamaNvidiaActivationTestSuit, Bf16RowBasedActivationSwigluLimitTest) {
+  TestRowBasedActivationWithLimit<SiluActivation, __nv_bfloat16>(stream);
 }
 
 }  // namespace test

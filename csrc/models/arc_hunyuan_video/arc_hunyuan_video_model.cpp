@@ -39,11 +39,12 @@ Status ArcHunyuanVideo::Forward(std::vector<Tensor>& residual_buffer, Forwarding
  */
 ArcHunyuanVideoModel::ArcHunyuanVideoModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                            const int rank, std::shared_ptr<Context> context,
-                                           std::shared_ptr<BaseWeight> base_weight)
+                                           std::shared_ptr<BaseWeight> base_weight,
+                                           std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
     : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   arc_hunyuan_video_.GetModelRunConfig(model_run_config, model_config);
-  CommonModel::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
 }
 
 Status ArcHunyuanVideoModel::CreateLayers(LayerCreationContext& creation_context,

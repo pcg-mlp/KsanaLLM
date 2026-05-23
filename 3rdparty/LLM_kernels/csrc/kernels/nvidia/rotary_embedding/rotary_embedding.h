@@ -101,9 +101,10 @@ class RotaryEmbeddingCuda {
   template <typename T>
   void Forward();
 
+  void* cos_sin_cache_;  // [max_position_embeddings, rotary_dim]
+
  private:
   RotaryEmbeddingParam params_;
-  void* cos_sin_cache_;  // [max_position_embeddings, rotary_dim]
   void* query_;
   void* key_;
 };

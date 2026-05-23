@@ -13,6 +13,7 @@
 #include "batch_scheduler/global_cache_fetcher.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/schedule_processor.h"
+#include "cache_manager/cache_layout/cache_layout_factory.h"
 #include "cache_manager/cache_manager_factory.h"
 #include "configure/environment.h"
 #include "connector/connector.h"
@@ -120,8 +121,11 @@ Status InferenceEngine::Initialize() {
                   << pipeline_config.upper_nextn_layer_idx << "].";
   }
 
+  // Create cache layout.
+  block_cache_layout_ = CacheLayoutFactory::CreateModelCacheLayout(model_config, pipeline_config, runtime_config);
+
   // Get block size config of specific layers, runtime_config is changed, get it again.
-  STATUS_CHECK_RETURN(env_->InitializeBlockManagerConfig());
+  STATUS_CHECK_RETURN(env_->InitializeBlockManagerConfig(block_cache_layout_));
   STATUS_CHECK_RETURN(env_->GetRuntimeConfig(runtime_config));
 
   // set layer range to executors.
@@ -210,12 +214,46 @@ Status InferenceEngine::Initialize() {
     block_allocator_manager_config[dp_id] = dp_group_config;
   }
 
+  // Build SWA block allocator manager config when SWA is enabled
+  // (indicated by model_config.dsv4_attn_config.sliding_window > 0).
+  BlockManagerConfig block_manager_config;
+  STATUS_CHECK_RETURN(env_->GetBlockManagerConfig(block_manager_config));
+  const size_t swa_block_num = block_manager_config.swa_device_allocator_config.blocks_num;
+  const size_t swa_block_size = block_manager_config.swa_device_allocator_config.block_size;
+  const size_t main_block_num = block_manager_config.device_allocator_config.blocks_num;
+  const size_t main_block_size = block_manager_config.device_allocator_config.block_size;
+  BatchSchedulerConfig swa_log_bs_cfg;
+  STATUS_CHECK_RETURN(env_->GetBatchSchedulerConfig(swa_log_bs_cfg));
+  const float swa_block_num_ratio = swa_log_bs_cfg.swa_block_num_ratio;
+  BlockAllocatorManagerConfig swa_block_allocator_manager_config;
+  if (model_config.dsv4_attn_config.sliding_window > 0) {
+    KLLM_LOG_INFO << "InferenceEngine create SWA block allocator group, sliding_window="
+                  << model_config.dsv4_attn_config.sliding_window << ", swa_block_num_ratio=" << swa_block_num_ratio
+                  << ", swa_block_num=" << swa_block_num << ", swa_block_size=" << swa_block_size
+                  << ", main_block_num=" << main_block_num << ", main_block_size=" << main_block_size;
+    for (size_t dp_id = 0; dp_id < context_->global->GetAttentionDataParallelSize(); ++dp_id) {
+      BlockAllocatorGroupConfig swa_dp_group_config;
+      swa_dp_group_config.devices = env_->GetDataParaGroupDevices(dp_id);
+      swa_dp_group_config.device_block_num = swa_block_num;
+      swa_dp_group_config.host_block_num = 0;
+      swa_dp_group_config.block_size = swa_block_size;
+      swa_block_allocator_manager_config[dp_id] = swa_dp_group_config;
+    }
+  }
+
   // Create cache manager.
   if (!context_->global->IsDistributedWorker()) {
     std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
     // Pass ipc_func_wrapper_ to BlockAllocatorManager for engine-side BatchSwap IPC support
     BlockAllocatorManager block_allocator_manager(true, block_allocator_manager_config, memory_allocator_, context_,
                                                   nullptr, nullptr, ipc_func_wrapper_);
+
+    // Create SWA block allocator manager when SWA is enabled.
+    std::unique_ptr<BlockAllocatorManager> swa_block_allocator_manager;
+    if (!swa_block_allocator_manager_config.empty()) {
+      swa_block_allocator_manager = std::make_unique<BlockAllocatorManager>(true, swa_block_allocator_manager_config,
+                                                                            memory_allocator_, context_);
+    }
 
     CacheManagerConfig cache_manager_config;
     STATUS_CHECK_RETURN(env_->GetCacheManagerConfig(cache_manager_config));
@@ -224,13 +262,18 @@ Status InferenceEngine::Initialize() {
     for (size_t dp_id = 0; dp_id < context_->global->GetAttentionDataParallelSize(); ++dp_id) {
       std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
           block_allocator_manager.GetBlockAllocatorGroup(dp_id);
-      cache_managers_.emplace_back(
-          CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group));
+      std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group;
+      if (swa_block_allocator_manager) {
+        swa_block_allocator_group = swa_block_allocator_manager->GetBlockAllocatorGroup(dp_id);
+      }
+      cache_managers_.emplace_back(CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group,
+                                                                           swa_block_allocator_group));
     }
   }
 
-  // Create block manager on executors.
-  STATUS_CHECK_RETURN(model_driver_->CreateBlockManager(block_allocator_manager_config));
+  // Create block manager on executors (KV + optional SWA).
+  STATUS_CHECK_RETURN(
+      model_driver_->CreateBlockManager(block_allocator_manager_config, swa_block_allocator_manager_config));
 
   if (!context_->global->IsStandalone()) {
     distributed_control_coordinator_->Barrier();

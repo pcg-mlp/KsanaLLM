@@ -38,10 +38,20 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(size_t, GetRequestUsableBlockNumber, (int64_t), (override));
   MOCK_METHOD(Status, GetRequestPrefixBlockNumber,
               (int64_t, const std::vector<int>&, size_t, size_t&, size_t&, size_t&), (override));
-  MOCK_METHOD(Status, AllocateRequestBlocks, (int64_t, size_t, std::vector<int>&), (override));
+  MOCK_METHOD(Status, GetRequestPrefixBlockNumberBeforeRemoteCacheLoading,
+              (int64_t, const std::vector<int>&, size_t, size_t&, size_t&, size_t&, size_t&, size_t&, size_t&),
+              (override));
+  MOCK_METHOD(Status, AllocateBlocksForRemoteCache,
+              (int64_t, std::vector<int>&, size_t, size_t, std::vector<int>&, std::vector<int>&), (override));
+  MOCK_METHOD(Status, ConfirmRemoteCacheLoadingResult,
+              (int64_t, const std::vector<int>&, size_t, const std::vector<size_t>&), (override));
+  MOCK_METHOD(Status, AllocateRequestBlocks,
+              (int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&), (override));
   MOCK_METHOD(void, UpdateFlexibleCache,
               (int64_t, const std::vector<int>&, int, std::vector<FlexibleCachedCopyTask>&, size_t&), (override));
-  MOCK_METHOD(Status, UpdateRequestTokens, (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&),
+  MOCK_METHOD(Status, UpdateRequestTokens,
+              (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
+               std::vector<size_t>&),
               (override));
   MOCK_METHOD(Status, GetRequestFreeableBlockNum, (int64_t, size_t&), (override));
   MOCK_METHOD(Status, GetRequestNeededBlockNumForOneNextToken, (int64_t, size_t&), (override));
@@ -57,7 +67,8 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(Status, WaitSwapinRequests,
               (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
   MOCK_METHOD(Status, MergeSwapoutRequest, (int64_t), (override));
-  MOCK_METHOD(Status, MergeSwapinRequest, (int64_t, std::vector<int>&), (override));
+  MOCK_METHOD(Status, MergeSwapinRequest, (int64_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&),
+              (override));
   MOCK_METHOD(void, DestroySwappedRequest, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));

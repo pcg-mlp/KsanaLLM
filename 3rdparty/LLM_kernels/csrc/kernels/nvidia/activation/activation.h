@@ -44,8 +44,11 @@ struct IdentityActivation;
 
 // for the tensor input with shape [m, n]
 //  out = act(input[:, :n/2]) * input[:, n/2:]
-template <template <typename T> class Activation, typename T>
-void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n, cudaStream_t& stream);
+//  HAS_SWIGLU_LIMIT=true 时, 在 activation 之前先 clamp gate/up
+//  (仅对 SiluActivation 的 SwiGLU 语义有意义)
+template <template <typename T> class Activation, typename T, bool HAS_SWIGLU_LIMIT = false>
+void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n,
+                              float swiglu_limit, cudaStream_t& stream);
 
 // fused act and matmul+bias into one kernel inplace
 // for silu: data = act(data) * gated_weight

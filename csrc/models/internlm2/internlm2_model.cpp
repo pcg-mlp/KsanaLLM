@@ -45,11 +45,12 @@ Status Internlm2::Forward(std::vector<Tensor>& residual_buffer, ForwardingContex
 }
 
 Internlm2Model::Internlm2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+                               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                               std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
     : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   internlm2_.GetModelRunConfig(model_run_config, model_config);
-  CommonModel::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
 }
 
 Status Internlm2Model::CreateLayers(LayerCreationContext& creation_context,

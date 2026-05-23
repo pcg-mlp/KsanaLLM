@@ -31,7 +31,8 @@ namespace ksana_llm {
 
 void SignalHandler(int signal_num) { GetServiceLifetimeManager()->ShutdownService(); }
 
-ServingOp::ServingOp(const std::string &config_file, bool is_engine, int executor_id) {
+ServingOp::ServingOp(const std::string &config_file, bool is_engine, int executor_id,
+                     const std::string &json_model_override_args) {
   config_file_ = config_file;
   is_engine_ = is_engine;
   executor_id_ = executor_id;
@@ -44,7 +45,8 @@ ServingOp::ServingOp(const std::string &config_file, bool is_engine, int executo
     KLLM_LOG_INFO << "Executor " << executor_id_ << " pid " << getpid() << std::endl;
   }
 
-  inference_supervisor_ = std::make_shared<InferenceSupervisor>(config_file_, is_engine_, executor_id_);
+  inference_supervisor_ =
+      std::make_shared<InferenceSupervisor>(config_file_, is_engine_, executor_id_, json_model_override_args);
 
   // Create lifetime manager.
   SetServiceLifetimeManager(std::make_shared<KsanaServiceLifetimeManager>(inference_supervisor_));
@@ -236,7 +238,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
 
   // Export `ServingOp` to python.
   pybind11::class_<ksana_llm::ServingOp, std::shared_ptr<ksana_llm::ServingOp>>(m, "Serving")
-      .def(pybind11::init<std::string, bool, int>())
+      .def(pybind11::init<std::string, bool, int, std::string>(), py::arg("config_file"), py::arg("is_engine"),
+           py::arg("executor_id"), py::arg("json_model_override_args") = "")
       .def("init_ipc", &ksana_llm::ServingOp::InitIpc)
       .def("init_serving", &ksana_llm::ServingOp::InitServing, py::arg("think_end_token_id") = -1)
       .def("start_executor", &ksana_llm::ServingOp::StartExecutor)

@@ -33,6 +33,7 @@ class ExecutorRuntime {
   void SetModelInstance(std::shared_ptr<ModelInstance> model_instance);
   void SetModelWeight(std::shared_ptr<WeightInstanceInterface> model_weight);
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
+  void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager);
   void SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool);
   void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller);
 
@@ -68,6 +69,8 @@ class ExecutorRuntime {
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<WeightInstanceInterface> model_weight_ = nullptr;
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
+  // The SWA block allocator manager; nullptr when SWA is disabled.
+  std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager_ = nullptr;
 
   // The hidden buffer used for manager.
   std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool_ = nullptr;

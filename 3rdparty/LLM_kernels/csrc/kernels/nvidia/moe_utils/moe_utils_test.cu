@@ -27,6 +27,8 @@ class LlamaNvidiaMoeTestSuit : public NvidiaTestSuitBase {
   void SiluMulKernelAccTest();
   template <typename T>
   void SiluMulKernelPerformanceTest();
+  template <typename T>
+  void TestSiluAndMulSwigluLimit(cudaStream_t stream);
 
  protected:
   size_t inter_size = 1024;
@@ -94,7 +96,7 @@ void LlamaNvidiaMoeTestSuit::SiluMulKernelAccTest() {
                                                      /*is_random_init*/ true);
 
     SiluAndMul<T, false>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output_ref.data_ptr),
-                         nullptr, num_elements, inter_size, stream);
+                         nullptr, num_elements, inter_size, 0.0f, stream);
     FlashinferSiluAndMul<T>(reinterpret_cast<const T*>(d_input.data_ptr),
                             reinterpret_cast<T*>(d_output_flashinfer.data_ptr), nullptr, num_elements, inter_size,
                             stream);
@@ -120,7 +122,7 @@ void LlamaNvidiaMoeTestSuit::SiluMulKernelPerformanceTest() {
 
     auto cuda_run = [&]() {
       SiluAndMul<T, false>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output.data_ptr),
-                           nullptr, num_elements, inter_size, stream);
+                           nullptr, num_elements, inter_size, 0.0f, stream);
     };
     float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
     std::cout << std::left << std::setw(25) << "SiluAndMul "
@@ -137,6 +139,72 @@ void LlamaNvidiaMoeTestSuit::SiluMulKernelPerformanceTest() {
     DeleteBuffer(d_input);
     DeleteBuffer(d_output);
   }
+}
+
+template <typename T>
+void LlamaNvidiaMoeTestSuit::TestSiluAndMulSwigluLimit(cudaStream_t stream) {
+  const size_t num_tokens = 4, topk = 2, inter_size = 128;
+  const size_t elements_num = num_tokens * topk * inter_size;
+  const float swiglu_limit = 10.0f;
+
+  BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU,
+                                           {num_tokens, topk, 2 * inter_size},
+                                           /*is_random_init*/ true);
+  // 让前 16 个 gate 元素 = +20 (> limit, clamp 生效),
+  // 让前 16 个 up 元素 = -15 (clamp 到 -10)
+  {
+    std::vector<T> host(num_tokens * topk * 2 * inter_size);
+    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(host.data(), input_meta.data_ptr, host.size() * sizeof(T),
+               cudaMemcpyDeviceToHost));
+    for (int i = 0; i < 16; ++i) {
+      host[i] = static_cast<T>(20.0f);                                    // gate half of token 0, expert 0
+      host[inter_size + i] = static_cast<T>(-15.0f);                      // up half of token 0, expert 0
+    }
+    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(input_meta.data_ptr, host.data(), host.size() * sizeof(T),
+               cudaMemcpyHostToDevice));
+  }
+
+  BufferMeta output_clamped = CreateBuffer<T>(MemoryType::MEMORY_GPU,
+                                                {num_tokens, topk, inter_size}, false);
+  BufferMeta output_noclamp = CreateBuffer<T>(MemoryType::MEMORY_GPU,
+                                                {num_tokens, topk, inter_size}, false);
+
+  InvokeSiluAndMul<T, /*UseExpertParallel*/ false, /*HAS_SWIGLU_LIMIT*/ true>(
+      reinterpret_cast<T*>(input_meta.data_ptr),
+      reinterpret_cast<T*>(output_clamped.data_ptr),
+      /*topk_ids*/ nullptr, elements_num, inter_size, swiglu_limit, stream);
+  InvokeSiluAndMul<T, /*UseExpertParallel*/ false, /*HAS_SWIGLU_LIMIT*/ false>(
+      reinterpret_cast<T*>(input_meta.data_ptr),
+      reinterpret_cast<T*>(output_noclamp.data_ptr),
+      /*topk_ids*/ nullptr, elements_num, inter_size, 0.0f, stream);
+  cudaStreamSynchronize(stream);
+
+  // Verify: first 16 outputs differ between clamp and no-clamp
+  std::vector<T> out_c(16), out_nc(16);
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(out_c.data(), output_clamped.data_ptr, 16 * sizeof(T), cudaMemcpyDeviceToHost));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(out_nc.data(), output_noclamp.data_ptr, 16 * sizeof(T), cudaMemcpyDeviceToHost));
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_NE(static_cast<float>(out_c[i]), static_cast<float>(out_nc[i]))
+        << "clamp should change output at index " << i;
+  }
+
+  // Verify: clamped output matches CPU reference (gate=10, up=-10, silu(10)*(-10))
+  const float silu_10 = 10.0f / (1.0f + std::exp(-10.0f));
+  const float expected = silu_10 * (-10.0f);
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_NEAR(static_cast<float>(out_c[i]), expected, 1e-2f);
+  }
+
+  DeleteBuffer(output_clamped);
+  DeleteBuffer(output_noclamp);
+  DeleteBuffer(input_meta);
+}
+
+TEST_F(LlamaNvidiaMoeTestSuit, SiluAndMulSwigluLimitHalfTest) {
+  TestSiluAndMulSwigluLimit<half>(stream);
+}
+TEST_F(LlamaNvidiaMoeTestSuit, SiluAndMulSwigluLimitBf16Test) {
+  TestSiluAndMulSwigluLimit<__nv_bfloat16>(stream);
 }
 
 TEST_F(LlamaNvidiaMoeTestSuit, halfSiluKernelTest) {

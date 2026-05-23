@@ -4,8 +4,10 @@
 
 #include "kernels/nvidia/moe_kernel_wrapper.h"
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <string>
 
 #include "kernels/nvidia/kernel_wrapper.h"
 
@@ -32,6 +34,7 @@
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant.h"
+#include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant_fp4.h"
 #include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/per_tensor_quant_by_scale.h"
 #include "csrc/kernels/nvidia/moe/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
@@ -53,6 +56,49 @@
 #include "utils/search_status.h"
 
 namespace ksana_llm {
+
+// 稀疏化反量化开关：默认开启（即 dequant 仅处理被 topk 命中的专家）。
+//   设置 KSANA_DISABLE_DEQUANT_FP4_SPARSE=1/true/True/TRUE/on/ON 可关闭，回退到全专家反量化（用于回归测试 / 排障）。
+inline bool IsDequantFp4SparseEnabled() {
+  static const bool enabled = []() {
+    const char* v = std::getenv("KSANA_DISABLE_DEQUANT_FP4_SPARSE");
+    if (v == nullptr) {
+      return true;
+    }
+    const std::string s(v);
+    return !(s == "1" || s == "true" || s == "True" || s == "TRUE" || s == "on" || s == "ON");
+  }();
+  return enabled;
+}
+
+// Per-thread 持久 device buffer，用于存放 active_expert_mask[num_experts]。
+//   - 每个 rank 线程一份（thread_local），整个 inference 周期内复用，避免每次 dequant 调用都重分配。
+//   - 内存量极小（num_experts 字节，DSv4 ≤ 256B），可忽略。
+//   - 线程退出时不主动 free（CUDA context 可能已销毁），仅占用极少 device memory。
+inline uint8_t* GetOrAllocateActiveExpertMaskBuffer(int num_experts) {
+  thread_local uint8_t* buffer = nullptr;
+  thread_local int allocated_size = 0;
+  if (num_experts <= 0) {
+    return nullptr;
+  }
+  if (allocated_size < num_experts) {
+    if (buffer != nullptr) {
+      cudaFree(buffer);
+      buffer = nullptr;
+    }
+    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&buffer), static_cast<size_t>(num_experts));
+    if (err != cudaSuccess || buffer == nullptr) {
+      KLLM_LOG_ERROR << fmt::format(
+          "GetOrAllocateActiveExpertMaskBuffer: cudaMalloc({} bytes) failed: {}; will fallback to full dequant.",
+          num_experts, cudaGetErrorString(err));
+      buffer = nullptr;
+      allocated_size = 0;
+      return nullptr;
+    }
+    allocated_size = num_experts;
+  }
+  return buffer;
+}
 
 // Adapted from https://github.com/vllm-project/vllm/blob/v0.8.4/vllm/model_executor/layers/fused_moe/fused_moe.py#L676
 void UpdateMoeWna16BlockConfig(std::unordered_map<std::string, int>& config, bool use_moe_wna16_cuda,
@@ -375,9 +421,87 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
                               DataType weight_dtype, DataType compute_dtype, bool use_moe_wna16_cuda,
                               void* dequant_workspace, std::vector<int>& block_shape, int num_experts_per_node,
                               bool fuse_silu_mul, bool skip_quantization, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
-                              const cudaStream_t& stream) {
+                              float swiglu_limit, const cudaStream_t& stream) {
   if (chunk_num_tokens < config.at("block_size_m")) {
     max_num_tokens_padded = std::min(max_num_tokens_padded, chunk_num_tokens * topk * config.at("block_size_m"));
+  }
+
+  if (weight_dtype == DataType::TYPE_FP4_E2M1FN_x2 && compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
+    // 一次解析、进程内缓存：USE_ON_FLY_WFP4AFP8 = 1/true/True/TRUE 时启用 on-fly 反量化路径，
+    // 其他情况（含未设置）走旧的离线 dequant_fp4_fp8 路径。
+    static const bool use_on_fly_wfp4afp8 = []() {
+      const char* v = std::getenv("USE_ON_FLY_WFP4AFP8");
+      if (v == nullptr) {
+        return false;
+      }
+      const std::string s(v);
+      return s == "1" || s == "true" || s == "True" || s == "TRUE";
+    }();
+
+    if (use_on_fly_wfp4afp8) {
+      // 新路径：直接把 raw MXFP4 packed 权重 + E8M0 scale 喂给 fused_moe_wfp4afp8_kernel,
+      // kernel 内部 on-the-fly 把 FP4 反量化为 FP8 后参与 GEMM。
+      //   - b: [E, N, K/2] uint8 (MXFP4 packed)
+      //   - b_scale: [E, N, K/group_size] uint8 (E8M0)，group_size 固定 32 (MXFP4 OCP 标准)
+      //   - a: 经 per-token-group fp8 量化后的 a_q + a_scale[m, K/128]
+      constexpr int kMxfp4GroupSize = 32;
+      std::unordered_map<std::string, int> moe_fp4_config = config;
+      moe_fp4_config["block_size_n"] = 128;
+      moe_fp4_config["block_size_k"] = 128;
+
+      if (!skip_quantization) {
+        InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+      }
+
+      Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeWfp4Afp8Kernel<T>(
+          a_q, b, c, a_scale, b_scale, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, n, k,
+          max_num_tokens_padded, numel, mul_routed_weight, topk, kMxfp4GroupSize, /*quant_a_per_tensor=*/false,
+          num_experts_per_node, moe_fp4_config, stream);
+      return;
+    }
+
+    // FP4 → FP8 dequantization, then GroupTriton FP8 MoE kernel
+    int group_size = block_shape[1];  // 128 for FP4
+    std::unordered_map<std::string, int> moe_fp4_config = config;
+    moe_fp4_config["block_size_n"] = 128;
+    moe_fp4_config["block_size_k"] = 128;
+
+    // Step 1: Dequant FP4 weights → FP8 + BF16 merged scales
+    size_t total_elements = static_cast<size_t>(num_experts_per_node) * n * k;
+    size_t num_groups_128 = total_elements / 128;
+    void* fp8_output = dequant_workspace;
+    void* bf16_scale_output = static_cast<char*>(dequant_workspace) + total_elements;
+
+    // ---- 稀疏化优化：先构建 active expert mask，再让 dequant 仅处理命中专家 ----
+    // 关键不变量：fp8_output / bf16_scale_output 仍按 [num_experts, ...] 密集 stride 寻址；
+    //   未命中专家在 workspace 中的区域不会被 dequant 写入，但 fused MoE GEMM 永远不读它们
+    //   （expert_ids 只含命中专家），所以脏数据无影响。
+    const bool sparse_enabled = IsDequantFp4SparseEnabled();
+    uint8_t* active_expert_mask = nullptr;
+    if (sparse_enabled) {
+      active_expert_mask = GetOrAllocateActiveExpertMaskBuffer(num_experts_per_node);
+      if (active_expert_mask != nullptr) {
+        // numel = chunk_num_tokens * topk，与 dequant 共用同一 stream，自然串行
+        llm_kernels::nvidia::InvokeBuildActiveExpertMask<int32_t>(
+            reinterpret_cast<const int32_t*>(topk_ids), active_expert_mask, numel, num_experts_per_node, stream);
+      }
+    }
+
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::dequant::dequant_fp4_fp8_launcher(
+        stream, fp8_output, bf16_scale_output, b, b_scale, num_groups_128, active_expert_mask,
+        active_expert_mask != nullptr ? static_cast<size_t>(num_experts_per_node) : 0));
+
+    // Step 2: Quantize activations (per-token-group)
+    if (!skip_quantization) {
+      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+    }
+
+    // Step 3: FP8 fused MoE kernel (GroupTriton path)
+    Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
+        a_q, fp8_output, c, a_scale, bf16_scale_output, topk_weights, sorted_token_ids, expert_ids,
+        num_tokens_post_padded, n, k, max_num_tokens_padded, numel, mul_routed_weight, topk, group_size,
+        /*quant_a_per_tensor=*/false, num_experts_per_node, moe_fp4_config, stream);
+    return;
   }
 
   if ((weight_dtype == DataType::TYPE_UINT4x2 || weight_dtype == DataType::TYPE_INT4x2) && block_shape.size() > 1 &&
@@ -419,7 +543,7 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
         Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
             a_q, dequant_workspace, c, a_input_alpha, b_scale, topk_weights, sorted_token_ids, expert_ids,
             num_tokens_post_padded, n, k, max_num_tokens_padded, numel, mul_routed_weight, topk, group_size, true,
-            moe_wna16_config, stream);
+            num_experts_per_node, moe_wna16_config, stream);
       } else if (w4afp8_moe_backend == W4AFP8_MOE_BACKEND::GroupTriton) {
         if (!skip_quantization) {
           InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
@@ -427,7 +551,7 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
         Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
             a_q, dequant_workspace, c, a_scale, b_scale, topk_weights, sorted_token_ids, expert_ids,
             num_tokens_post_padded, n, k, max_num_tokens_padded, numel, mul_routed_weight, topk, group_size, false,
-            moe_wna16_config, stream);
+            num_experts_per_node, moe_wna16_config, stream);
       } else {
         KLLM_THROW(fmt::format("Unsupport w4afp8_moe_backend: {}", w4afp8_moe_backend));
       }
@@ -447,7 +571,10 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
       if (!skip_quantization) {
         InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream,
                                            /*group_size*/ block_shape[1],
-                                           PerTokenGroupQuantFusionParams{.fuse_silu_mul = fuse_silu_mul});
+                                           PerTokenGroupQuantFusionParams{
+                                               .fuse_silu_mul = fuse_silu_mul,
+                                               .swiglu_limit = swiglu_limit,
+                                           });
       }
       a = a_q;
     }
@@ -476,7 +603,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
                     void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,
                     void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size, int inter_size,
                     size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
-                    int rank, cudaStream_t stream) {
+                    int rank, float swiglu_limit, cudaStream_t stream) {
   // hidden_states [num_tokens, hidden_size] dtype = T
   // w1 [num_experts_per_node, inter_size * 2, hidden_size]
   // w2 [num_experts_per_node, hidden_size, inter_size]
@@ -542,6 +669,17 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
     } else {
       config = {{"block_size_m", 64}, {"group_size_m", 1}};
     }
+  } else if (weight_dtype == DataType::TYPE_FP4_E2M1FN_x2) {
+    const int numel_local = M * topk;
+    const int hit_experts = std::max(1, std::min(numel_local, num_experts_per_node));
+    const int avg_tok_per_expert = (numel_local + hit_experts - 1) / hit_experts;
+    int block_size_m = 16;
+    if (avg_tok_per_expert >= 48) {
+      block_size_m = 64;
+    } else if (avg_tok_per_expert >= 24) {
+      block_size_m = 32;
+    }
+    config = {{"block_size_m", block_size_m}, {"group_size_m", 1}};
   } else {
     config = {{"block_size_m", 64}, {"block_size_n", 64}, {"block_size_k", 32}, {"group_size_m", 8}};
     if (M <= num_experts_per_node || (M <= 32 && is_marlin)) {
@@ -627,16 +765,29 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
         reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), false, topk,
         tokens_in_chunk, numel, tokens_in_chunk, hidden_size, inter_size * 2, max_num_tokens_padded, config,
         weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape, num_experts_per_node,
-        /*fuse_silu_mul*/ false, hidden_states == nullptr, w4afp8_moe_backend, stream);
+        /*fuse_silu_mul*/ false, hidden_states == nullptr, w4afp8_moe_backend,
+        /*swiglu_limit=*/0.0f, stream);
 
-    // When T is __nv_fp8e4m3, we fuse silu_mul into group quant
+    // Stage-boundary dump hook (DSv4 precision compare). Synchronous D2H copy of
+    // When T is __nv_fp8e4m3, we normally fuse silu_mul into group quant inside the
+    // second fused_moe kernel call. But the fused kernel does NOT support the
+    // swiglu_limit clamp (grep'd the kernel source — HAS_SWIGLU_LIMIT is only wired
+    // in activation.cu and moe_utils.cu::silu_and_mul_kernel, neither of which is the
+    // fused path). When the model (e.g. DSv4) requires swiglu_limit, disable fusion
+    // so the standalone InvokeSiluAndMul below runs with the clamp.
     bool fuse_silu_mul =
         (weight_dtype == DataType::TYPE_BLOCK_FP8_E4M3 && compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3);
     if (!fuse_silu_mul) {
       const size_t elements_num = static_cast<size_t>(tokens_in_chunk) * topk * inter_size * 2;
-      llm_kernels::nvidia::InvokeSiluAndMul<T, UseExpertParallel>(
-          reinterpret_cast<const T*>(curr_intermediate_cache1), reinterpret_cast<T*>(curr_intermediate_cache2),
-          reinterpret_cast<const int*>(curr_topk_ids), elements_num, inter_size, stream);
+      if (swiglu_limit > 0.0f) {
+        llm_kernels::nvidia::InvokeSiluAndMul<T, UseExpertParallel, /*HAS_SWIGLU_LIMIT*/ true>(
+            reinterpret_cast<const T*>(curr_intermediate_cache1), reinterpret_cast<T*>(curr_intermediate_cache2),
+            reinterpret_cast<const int*>(curr_topk_ids), elements_num, inter_size, swiglu_limit, stream);
+      } else {
+        llm_kernels::nvidia::InvokeSiluAndMul<T, UseExpertParallel, /*HAS_SWIGLU_LIMIT*/ false>(
+            reinterpret_cast<const T*>(curr_intermediate_cache1), reinterpret_cast<T*>(curr_intermediate_cache2),
+            reinterpret_cast<const int*>(curr_topk_ids), elements_num, inter_size, /*swiglu_limit=*/0.0f, stream);
+      }
     }
 
     InvokeFusedMoeKernelFunc<T>(fuse_silu_mul ? curr_intermediate_cache1 : curr_intermediate_cache2, w2,
@@ -646,7 +797,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
                                 reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), true, 1, tokens_in_chunk * topk,
                                 numel, tokens_in_chunk * topk, inter_size, hidden_size, max_num_tokens_padded, config,
                                 weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape,
-                                num_experts_per_node, fuse_silu_mul, false, w4afp8_moe_backend, stream);
+                                num_experts_per_node, fuse_silu_mul, false, w4afp8_moe_backend, swiglu_limit, stream);
 
     // 使用fp8并且使用deepep，需要在这里更新a1_q和a2_q
     if (hidden_states == nullptr) {
@@ -670,7 +821,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
       float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, \
       void* intermediate_cache3, void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size,   \
       int inter_size, size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend, \
-      int rank, cudaStream_t stream);                                                                                \
+      int rank, float swiglu_limit, cudaStream_t stream);                                                            \
   template void InvokeFusedMoe<T, false>(                                                                            \
       void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,              \
       bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q,         \
@@ -679,7 +830,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
       float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, \
       void* intermediate_cache3, void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size,   \
       int inter_size, size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend, \
-      int rank, cudaStream_t stream)
+      int rank, float swiglu_limit, cudaStream_t stream)
 FUSEDMOE(float);
 FUSEDMOE(half);
 FUSEDMOE(__nv_bfloat16);
@@ -762,7 +913,7 @@ void InvokeFusedBatchedMoe(void* output, const void* input, const void* weight1,
   llm_kernels::nvidia::InvokeSiluAndMul<T, false>(reinterpret_cast<const T*>(intermediate_output),
                                                   reinterpret_cast<T*>(silu_output),
                                                   nullptr,  // topk_ids not needed for batched mode
-                                                  elements_num, inter_size, stream);
+                                                  elements_num, inter_size, /*swiglu_limit=*/0.0f, stream);
 
   // ========== Stage 3: weight2 * silu_output → output ==========
   // Calculate strides for second kernel (silu_output * weight2)

@@ -375,6 +375,8 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
       [[fallthrough]];
     case ModelArchitecture::ARCH_DEEPSEEK:
       [[fallthrough]];
+    case ModelArchitecture::ARCH_DEEPSEEK_V4:
+      [[fallthrough]];
     case ModelArchitecture::ARCH_QWEN2_MOE:
       [[fallthrough]];
     case ModelArchitecture::ARCH_QWEN3_MOE:

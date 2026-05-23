@@ -31,6 +31,7 @@ struct RoPEScalingFactor {
   float beta_slow{1.0f};
   float mscale{1.0f};
   float mscale_all_dim{1.0f};
+  bool use_deepseek_v4_rope{false};
 };
 
 enum QuantMode {
@@ -109,14 +110,21 @@ __attribute__((unused)) static std::string GetLinearComputeBackendString(LinearC
  *     DeepSeek-only backend that implements a group-GEMM strategy (using CUTLASS).
  *     Only supports the w4afp8 weight format.
  */
-enum MoeComputeBackend { DEFAULT_MOE_BACKEND, CUTLASS_MOE_BACKEND, MARLIN_MOE_BACKEND, TRITON_MOE_BACKEND };
+enum MoeComputeBackend {
+  DEFAULT_MOE_BACKEND,
+  CUTLASS_MOE_BACKEND,
+  MARLIN_MOE_BACKEND,
+  TRITON_MOE_BACKEND,
+  HUMMING_MOE_BACKEND
+};
 
 __attribute__((unused)) static std::string GetMoeComputeBackendString(MoeComputeBackend moe_compute_backend) {
   static const std::unordered_map<MoeComputeBackend, std::string> moe_compute_backend_map{
       {DEFAULT_MOE_BACKEND, "default_moe"},
       {CUTLASS_MOE_BACKEND, "cutlass_moe"},
       {MARLIN_MOE_BACKEND, "marlin_moe"},
-      {TRITON_MOE_BACKEND, "triton_moe"}};
+      {TRITON_MOE_BACKEND, "triton_moe"},
+      {HUMMING_MOE_BACKEND, "humming_moe"}};
   return moe_compute_backend_map.count(moe_compute_backend) ? moe_compute_backend_map.at(moe_compute_backend)
                                                             : "Unknown";
 }
@@ -129,16 +137,14 @@ enum class DistributedCommunicationType {
 
 // Pooling type for embedding models.
 enum class PoolingType {
-  LAST = 0,   // Extract last token hidden state (Qwen3-Embedding, GTE-Qwen, etc.)
-  CLS = 1,    // Extract first token (CLS) hidden state (BERT, BGE, etc.)
-  MEAN = 2,   // Average all token hidden states (E5, Jina, etc.)
+  LAST = 0,  // Extract last token hidden state (Qwen3-Embedding, GTE-Qwen, etc.)
+  CLS = 1,   // Extract first token (CLS) hidden state (BERT, BGE, etc.)
+  MEAN = 2,  // Average all token hidden states (E5, Jina, etc.)
 };
 
 inline std::string GetPoolingTypeString(PoolingType pooling_type) {
   static const std::unordered_map<PoolingType, std::string> pooling_type_map{
-      {PoolingType::LAST, "last"},
-      {PoolingType::CLS, "cls"},
-      {PoolingType::MEAN, "mean"}};
+      {PoolingType::LAST, "last"}, {PoolingType::CLS, "cls"}, {PoolingType::MEAN, "mean"}};
   return pooling_type_map.count(pooling_type) ? pooling_type_map.at(pooling_type) : "Unknown";
 }
 
@@ -192,6 +198,9 @@ struct QuantConfig {
 
   // Ignored layers
   std::vector<std::string> ignored_layers;
+
+  // for deepseek v4 fp4 moe
+  std::string expert_dtype{"none"};
 };
 
 // The Moe informations.
@@ -247,6 +256,24 @@ struct DsaConfig {
   bool indexer_rope_interleave = false;
 };
 
+// The DeepSeek v4 mHC informations.
+struct MhcConfig {
+  uint32_t hc_mult = 1;
+  uint32_t hc_sinkhorn_iters = 0;
+  float hc_eps = 0.0f;
+};
+
+// The DeepSeek v4 attn informations.
+struct Dsv4AttnConfig {
+  uint32_t o_groups = 0;
+  uint32_t o_lora_rank = 0;
+  uint32_t q_lora_rank = 0;
+  uint32_t qk_rope_head_dim = 0;
+  uint32_t sliding_window = 0;
+  float compress_rope_theta{160000.0f};
+  std::vector<uint32_t> compress_ratios;
+};
+
 // The model informations.
 struct ModelConfig {
   // The model name.
@@ -294,6 +321,12 @@ struct ModelConfig {
   bool tie_word_embeddings;
   bool exist_tie_embeddings_param = true;
 
+  // SwiGLU activation clamp (DeepSeek-V4 起引入).
+  // swiglu_limit > 0 时,在 SiLU*Mul 前 clamp:
+  //   gate (前半): clamp(max = swiglu_limit)
+  //   up   (后半): clamp(min = -swiglu_limit, max = swiglu_limit)
+  float swiglu_limit = 0.0f;
+
   // The activation function used.
   std::string activation_function{"swiglu"};
 
@@ -337,6 +370,12 @@ struct ModelConfig {
   // For dsa model
   bool use_dsa = false;
   DsaConfig dsa_config;
+  // For dsv4 model
+  bool use_dsv4_attn = false;
+  Dsv4AttnConfig dsv4_attn_config;
+  // For mhc model
+  bool use_mhc = false;
+  MhcConfig mhc_config;
 
   // For arc-hunyuan-video
   // TODO(jinxcwu) 后续要简化下，不是所有都需要的
@@ -369,6 +408,9 @@ struct ModelConfig {
   float scale_depth = 1.f;
   // For choose lm_head.linear_head weight (for bge-reranker-v2-minicpm-layerwise)
   int start_layer = 0;
+
+  // for deepseek_v4
+  uint32_t num_hash_layers = 0;
 };
 
 }  // namespace ksana_llm

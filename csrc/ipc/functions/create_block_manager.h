@@ -19,6 +19,8 @@ class CreateBlockManagerRequest : public IpcRequest {
   virtual Status Deserialize(const void* ptr) override;
 
   BlockAllocatorManagerConfig block_allocator_manager_config;
+  // Optional SWA block allocator config; empty map means SWA is disabled.
+  BlockAllocatorManagerConfig swa_block_allocator_manager_config;
 };
 
 class CreateBlockManagerResponse : public IpcResponse {
@@ -37,9 +39,12 @@ class CreateBlockManagerCallable : public IpcCallable {
   virtual Status Call(const IpcRequest* request, IpcResponse* response, IpcContext* context) override;
 
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager);
+  void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager);
 
  private:
   std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager_ = nullptr;
+  // Optional SWA block allocator manager; nullptr means SWA is disabled.
+  std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager_ = nullptr;
 };
 
 class CreateBlockManagerCallback : public IpcCallback, public IpcWaiter {

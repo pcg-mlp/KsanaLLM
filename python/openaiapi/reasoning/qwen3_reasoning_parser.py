@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 
 # Qwen3 and GLM versions 4.5, 4.7, 5, etc. all share the same reasoning parser.
-@ReasoningParserManager.register_module(["qwen3", "glm45"])
+@ReasoningParserManager.register_module(["qwen3", "glm45", "deepseek_v4"])
 class Qwen3ReasoningParser(ReasoningParser):
     """
     Reasoning parser for the Qwen3 model.

@@ -5,6 +5,7 @@
 
 #include "models/common/model_interface.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/multihead_attention.h"
 #include "modules/basic/linear.h"
@@ -90,7 +91,8 @@ class Glm4Moe : public ModelInterface {
 class Glm4MoeModel : public CommonModel {
  public:
   Glm4MoeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+               std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~Glm4MoeModel() = default;
 
  private:

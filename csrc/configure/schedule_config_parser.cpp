@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 
 #include "fmt/core.h"
@@ -14,6 +15,8 @@
 #include "configure/environment.h"
 #include "utils/memory_utils.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
+#include "cache_manager/cache_layout/cache_layout_factory.h"
 #include "device/device_utils.h"
 #include "models/common/common_config.h"
 #include "models/common_moe/moe_config.h"
@@ -153,7 +156,10 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   } else {
     // 添加默认值
     runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
-    if (model_config.quant_config.method == QUANT_GPTQ) {
+    if (model_config.quant_config.expert_dtype == "fp4") {
+      runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::GroupTriton;
+      KLLM_LOG_INFO << "Detected FP4 expert model, setting W4AFP8_MOE_BACKEND == GroupTriton";
+    } else if (model_config.quant_config.method == QUANT_GPTQ) {
       // 主量化类型是GPTQ说明是纯int4模型
       runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
       KLLM_LOG_INFO << "Detected pure int4 model, setting W4AFP8_MOE_BACKEND == Default";
@@ -171,6 +177,22 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
         KLLM_LOG_INFO << "Detected moe-int4 model, setting W4AFP8_MOE_BACKEND == GroupTriton";
       }
     }
+  }
+
+  // Parsing FP4_MOE_BACKEND from env
+  const char* fp4_moe_backend_env = std::getenv("FP4_MOE_BACKEND");
+  if (fp4_moe_backend_env) {
+    std::string backend_str(fp4_moe_backend_env);
+    if (backend_str == "marlin") {
+      runtime_config_.fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4Marlin;
+    } else if (backend_str == "humming_w4a16") {
+      runtime_config_.fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4HummingW4A16;
+    } else if (backend_str == "humming_w4a8") {
+      runtime_config_.fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4HummingW4A8;
+    } else {
+      runtime_config_.fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4Triton;
+    }
+    KLLM_LOG_INFO << fmt::format("FP4_MOE_BACKEND set to: {}", backend_str);
   }
 
   KLLM_CHECK_WITH_INFO(
@@ -342,10 +364,17 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   // Read block manager config.
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
-  // If the model uses MLA, automatically enable Flash MLA and set block_token_num to 64.
+  // If the model uses MLA, automatically enable Flash MLA and set block_token_num appropriately.
+  // DSv4 uses a C128 attention cache that requires block_token_num to be a multiple of 128,
+  // so use 256 for DSv4 models instead of the standard Flash MLA value of 64.
   if (model_config.use_mla) {
-    block_manager_config_.device_allocator_config.block_token_num = 64;
-    KLLM_LOG_INFO << "Automatically activate Flash MLA for MLA models, setting block_token_num to 64 for flash_mla";
+    if (model_config.use_dsv4_attn) {
+      block_manager_config_.device_allocator_config.block_token_num = 256;
+      KLLM_LOG_INFO << "Automatically activate Flash MLA for DSv4 models, setting block_token_num to 256";
+    } else {
+      block_manager_config_.device_allocator_config.block_token_num = 64;
+      KLLM_LOG_INFO << "Automatically activate Flash MLA for MLA models, setting block_token_num to 64 for flash_mla";
+    }
   }
   block_manager_config_.host_allocator_config.block_token_num =
       block_manager_config_.device_allocator_config.block_token_num;
@@ -363,6 +392,12 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.block_manager.host_pool_size_gb", 0);
 
   // Load cache manager config
+  batch_scheduler_config_.swa_block_num_ratio =
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.cache_manager.swa_block_num_ratio", 0.5f);
+  // Correct invalid values: if the user configured a non-positive ratio, fall back to the default 0.5.
+  if (batch_scheduler_config_.swa_block_num_ratio <= 0.0f) {
+    batch_scheduler_config_.swa_block_num_ratio = 0.5f;
+  }
   cache_manager_config_.swap_threadpool_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 2);
   cache_manager_config_.min_flexible_cache_num =
@@ -394,6 +429,21 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     KLLM_LOG_WARNING << "While prefix caching is disabled，split_fuse_token_num will always be disabled. So set "
                         "split_fuse_token_num to 0.";
     batch_scheduler_config_.split_fuse_token_num = 0;
+  }
+
+  // DSv4 模型要求 split_fuse_token_num 必须是 block_token_num 的整数倍, 原因:
+  // 1) prefix cache commit 单位是 block, 非倍数会让中间 chunk 的尾 block 无法 shareable, 降低命中率
+  // 2) c128 attention indexer 按 128 对齐 (block_token_num=256 已是 128 的倍数, 取 256 倍数自然兼容)
+  // 直接报错而不是 round-up/down: 让错误配置立即可见, 避免静默改值引入难调试的问题。
+  // 仅对 DSv4 生效, 其他模型保持原行为。
+  if (model_config.use_dsv4_attn && batch_scheduler_config_.split_fuse_token_num > 0) {
+    const size_t block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+    KLLM_CHECK_WITH_INFO(
+        batch_scheduler_config_.split_fuse_token_num % block_token_num == 0,
+        fmt::format("DSv4 requires split_fuse_token_num ({}) to be a multiple of block_token_num ({}); "
+                    "set yaml setting.batch_scheduler.split_fuse_token_num to {}, {}, or any multiple.",
+                    batch_scheduler_config_.split_fuse_token_num, block_token_num, block_token_num,
+                    block_token_num * 2));
   }
 
   // Read parallel config.
@@ -553,10 +603,12 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
   // Update dtype of kv cache
   auto &kv_cache_dtype_str = runtime_config_.attn_backend_config.kv_cache_dtype_str;
   if (model_config.use_dsa) {
-    if (kv_cache_dtype_str != "fp8_e4m3") {
-      // If fp8_e4m3 is not specified,
-      // DeepSeek Sparse MLA prefers the custom fp8 format (Better precision,
-      // but larger block size, and computation uses BF16)
+    // DSA/DSV4 prefers the custom fp8 format (Better precision,
+    // but larger block size, and computation uses BF16)
+    if (model_config.use_dsv4_attn) {
+      kv_cache_dtype_str = "fp8_ds_mla";
+    } else if (kv_cache_dtype_str != "fp8_e4m3") {
+      // DSA also supports standard FP8 format with FP8 compute
       kv_cache_dtype_str = "fp8_ds_mla";
     }
   } else {
@@ -726,8 +778,9 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
     KLLM_LOG_WARNING << "flexible cache and qk norm cannot be used together, set min_flexible_cache_num to 0";
   }
 
-  if (runtime_config_.parallel_basic_config.tensor_parallel_size > model_config.num_key_value_heads ||
-      model_config.num_key_value_heads % runtime_config_.parallel_basic_config.tensor_parallel_size != 0) {
+  if ((runtime_config_.parallel_basic_config.tensor_parallel_size > model_config.num_key_value_heads ||
+       model_config.num_key_value_heads % runtime_config_.parallel_basic_config.tensor_parallel_size != 0) &&
+      model_config.num_key_value_heads != 1) {
     KLLM_THROW(
         fmt::format("The size of key_value_heads cannot be evenly divided by the size of "
                     "runtime_config_.parallel_basic_config.tensor_parallel_size. "
@@ -792,103 +845,30 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
 
+  // Propagate SWA sliding_window_size from DeepSeek v4 model config.
+  if (model_config.use_dsv4_attn) {
+    cache_manager_config_.sliding_window_size = model_config.dsv4_attn_config.sliding_window;
+  }
+
   return Status();
 }
 
 void ScheduleConfigParser::InitializeKVCacheConfigs(const ModelConfig &model_config,
-                                                    const PipelineConfig &pipeline_config) {
-  runtime_config_.attn_backend_config.kv_cache_configs.clear();
+                                                    const PipelineConfig &pipeline_config,
+                                                    std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
+  runtime_config_.attn_backend_config.block_size =
+      block_cache_layout->GetBlockCacheLayout("kv-cache")->GetBlockCacheSize();
 
-  const bool predict_nextn =
-      static_cast<int>(pipeline_config.lower_nextn_layer_idx) >= static_cast<int>(model_config.num_layer);
-  const size_t node_nextn_layer_num =
-      predict_nextn ? pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1 : 0;
-  const size_t node_layer_num =
-      pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1 + node_nextn_layer_num;
-
-  const size_t block_token_num = runtime_config_.attn_backend_config.block_token_num;
-
-  auto ComputeBlockBytes = [&](const size_t node_layer_num, const size_t local_num_key_value_heads,
-                               const size_t key_value_heads_bytes, const std::string &kv_cache_type) -> size_t {
-    const size_t block_token_bytes = node_layer_num * local_num_key_value_heads * key_value_heads_bytes;
-    const size_t block_bytes = block_token_bytes * block_token_num;
-
-    KLLM_LOG_INFO << fmt::format("Each block of {} takes bytes: {} * {} * {} * {} = {}", kv_cache_type, node_layer_num,
-                                 local_num_key_value_heads, key_value_heads_bytes, block_token_num, block_bytes);
-
-    return block_bytes;
-  };
-
-  // Cumulative offset of current part within one block of a layer
-  size_t total_offset = 0;
-  // Cumulative space occupied by one block across all KV caches
-  runtime_config_.attn_backend_config.block_size = 0;
-
-  if (model_config.use_dsa) {
-    // DeepSeek Sparse MLA has an extra indexer module
-    const std::string kv_cache_type = "indexer";
-    KVCacheConfig kv_cache_config;
-    // Always quant to fp8_e4m3
-    const DataType kv_cache_dtype = TYPE_FP8_E4M3;
-    // layout: [key: block_token_num x index_head_dim (fp8 quant)][value: block_token_num x index_head_dim / 128 (fp32
-    // scale)}]
-    const size_t local_num_key_value_heads = 1;
-    const size_t key_value_heads_bytes =
-        model_config.dsa_config.index_head_dim * GetTypeSize(kv_cache_dtype) +
-        model_config.dsa_config.index_head_dim / /*quant_block_size*/ 128 * GetTypeSize(TYPE_FP32);
-    kv_cache_config.block_bytes =
-        ComputeBlockBytes(node_layer_num, local_num_key_value_heads, key_value_heads_bytes, kv_cache_type);
-    kv_cache_config.k_offset = total_offset;
-    kv_cache_config.v_offset = kv_cache_config.k_offset + block_token_num * local_num_key_value_heads *
-                                                              model_config.dsa_config.index_head_dim *
-                                                              GetTypeSize(kv_cache_dtype);
-    total_offset += kv_cache_config.block_bytes / node_layer_num;
-    runtime_config_.attn_backend_config.block_size += kv_cache_config.block_bytes;
-    KLLM_LOG_INFO << fmt::format("kv_cache_type: {}, kv_cache_k_offset: {}, kv_cache_v_offset: {}, kv_cache_dtype: {}",
-                                 kv_cache_type, kv_cache_config.k_offset, kv_cache_config.v_offset,
-                                 GetTypeString(kv_cache_dtype));
-    runtime_config_.attn_backend_config.kv_cache_configs.emplace(kv_cache_type, std::move(kv_cache_config));
+  // Store SWA block size if the "SWA-cache" layout is registered (DeepSeek-V4 models).
+  if (block_cache_layout->IsBlockCacheTypeExist("SWA-cache")) {
+    block_manager_config_.swa_device_allocator_config.block_size =
+        block_cache_layout->GetBlockCacheLayout("SWA-cache")->GetBlockCacheSize();
+    block_manager_config_.swa_device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
   }
-
-  const std::string kv_cache_type = "attention";
-  KVCacheConfig kv_cache_config;
-  const DataType &kv_cache_dtype = runtime_config_.attn_backend_config.kv_cache_dtype;
-  kv_cache_config.k_offset = total_offset;
-  if (model_config.use_mla) {
-    const size_t local_num_key_value_heads = 1;
-    size_t key_value_heads_bytes;
-    if (kv_cache_dtype == TYPE_FP8_DS_MLA) {
-      // layout: [key/value: block_token_num x (kv_lora_rank (fp8 quant) + kv_lora_rank / 128 (fp32 scale) +
-      // qk_rope_head_dim)]
-      key_value_heads_bytes = model_config.mla_config.kv_lora_rank * GetTypeSize(TYPE_FP8_E4M3) +
-                              model_config.mla_config.kv_lora_rank / /*quant_block_size*/ 128 * GetTypeSize(TYPE_FP32) +
-                              model_config.mla_config.qk_rope_head_dim * GetTypeSize(model_config.weight_data_type);
-    } else {
-      // layout: [key/value: block_token_num x (kv_lora_rank + qk_rope_head_dim)]
-      key_value_heads_bytes = (model_config.mla_config.kv_lora_rank + model_config.mla_config.qk_rope_head_dim) *
-                              GetTypeSize(kv_cache_dtype);
-    }
-    kv_cache_config.block_bytes =
-        ComputeBlockBytes(node_layer_num, local_num_key_value_heads, key_value_heads_bytes, kv_cache_type);
-    kv_cache_config.v_offset = kv_cache_config.k_offset;
-  } else {
-    // layout: [key {block_token_num, head_num, head_dim}][value {block_token_num, head_num, head_dim}]
-    const size_t local_num_key_value_heads =
-        model_config.num_key_value_heads / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-    const size_t key_value_heads_bytes = model_config.size_per_head * 2 * GetTypeSize(kv_cache_dtype);
-    kv_cache_config.block_bytes =
-        ComputeBlockBytes(node_layer_num, local_num_key_value_heads, key_value_heads_bytes, kv_cache_type);
-    kv_cache_config.v_offset = kv_cache_config.k_offset + kv_cache_config.block_bytes / node_layer_num / 2;
-  }
-  total_offset += kv_cache_config.block_bytes / node_layer_num;
-  runtime_config_.attn_backend_config.block_size += kv_cache_config.block_bytes;
-  KLLM_LOG_INFO << fmt::format("kv_cache_type: {}, kv_cache_k_offset: {}, kv_cache_v_offset: {}, kv_cache_dtype: {}",
-                               kv_cache_type, kv_cache_config.k_offset, kv_cache_config.v_offset,
-                               GetTypeString(kv_cache_dtype));
-  runtime_config_.attn_backend_config.kv_cache_configs.emplace(kv_cache_type, std::move(kv_cache_config));
 }
 
-Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &model_config) {
+Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &model_config,
+                                                          std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
   if (pipeline_config_.lower_layer_idx < 0 || pipeline_config_.upper_layer_idx < 0) {
     pipeline_config_.lower_layer_idx = 0;
     pipeline_config_.upper_layer_idx = model_config.num_layer - 1;
@@ -898,7 +878,7 @@ Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &mod
     }
   }
 
-  InitializeKVCacheConfigs(model_config, pipeline_config_);
+  InitializeKVCacheConfigs(model_config, pipeline_config_, block_cache_layout);
 
   block_manager_config_.host_allocator_config.block_size = runtime_config_.attn_backend_config.block_size;
   block_manager_config_.device_allocator_config.block_size = runtime_config_.attn_backend_config.block_size;
@@ -992,7 +972,20 @@ Status ScheduleConfigParser::CalculateBlockNumber(size_t device_free, size_t dev
                 << ", device_free:" << device_block_memory_size
                 << ", block_size:" << block_manager_config_.host_allocator_config.block_size;
 
-  size_t device_blocks_num = device_block_memory_size / block_manager_config_.device_allocator_config.block_size;
+  // When SWA is enabled, each KV block is paired with swa_block_num_ratio SWA blocks.
+  // The effective memory cost per KV block is:
+  //   kv_block_size + swa_block_num_ratio * swa_block_size
+  // so that device_blocks_num = device_block_memory_size / effective_block_size.
+  const float swa_block_num_ratio = batch_scheduler_config_.swa_block_num_ratio;
+  const size_t swa_block_size = block_manager_config_.swa_device_allocator_config.block_size;
+  size_t effective_block_size = block_manager_config_.device_allocator_config.block_size;
+  if (swa_block_num_ratio > 0.0f && swa_block_size > 0) {
+    effective_block_size += static_cast<size_t>(swa_block_num_ratio * static_cast<float>(swa_block_size));
+    KLLM_LOG_INFO << "SWA enabled: swa_block_num_ratio=" << swa_block_num_ratio << ", swa_block_size=" << swa_block_size
+                  << ", effective_block_size=" << effective_block_size;
+  }
+
+  size_t device_blocks_num = device_block_memory_size / effective_block_size;
   size_t host_blocks_num = host_block_memory_size / block_manager_config_.host_allocator_config.block_size;
   KLLM_LOG_INFO << "Device blocks limit = " << device_blocks_num << "."
                 << "Host blocks limit = " << host_blocks_num << ".";
@@ -1027,6 +1020,13 @@ Status ScheduleConfigParser::CalculateBlockNumber(size_t device_free, size_t dev
 
   block_manager_config_.device_allocator_config.blocks_num = device_blocks_num;
   block_manager_config_.host_allocator_config.blocks_num = host_blocks_num;
+
+  // Compute and store the SWA device block count.
+  if (swa_block_num_ratio > 0.0f && swa_block_size > 0) {
+    block_manager_config_.swa_device_allocator_config.blocks_num =
+        static_cast<size_t>(static_cast<float>(device_blocks_num) * swa_block_num_ratio);
+    KLLM_LOG_INFO << "SWA device block num: " << block_manager_config_.swa_device_allocator_config.blocks_num;
+  }
 
   return Status();
 }

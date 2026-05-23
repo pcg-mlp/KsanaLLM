@@ -71,14 +71,28 @@ Status ResetPipelineConfigRequest::Deserialize(const void* ptr) {
 
 void ResetPipelineConfigCallable::SetEnvironment(std::shared_ptr<Environment> env) { env_ = env; }
 
-Status ResetPipelineConfigCallable::Call(const IpcRequest* request, IpcResponse* response,
-                                                  IpcContext* context) {
-  const ResetPipelineConfigRequest* real_req =
-      reinterpret_cast<const ResetPipelineConfigRequest*>(request);
+void ResetPipelineConfigCallable::SetBlockCacheLayout(std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
+  block_cache_layout_ = block_cache_layout;
+}
+
+Status ResetPipelineConfigCallable::Call(const IpcRequest* request, IpcResponse* response, IpcContext* context) {
+  const ResetPipelineConfigRequest* real_req = reinterpret_cast<const ResetPipelineConfigRequest*>(request);
   env_->SetPipelineConfig(real_req->pipeline_config);
 
+  // Create cache memory layout.
+  ModelConfig model_config;
+  STATUS_CHECK_RETURN(env_->GetModelConfig(model_config));
+
+  RuntimeConfig runtime_config;
+  STATUS_CHECK_RETURN(env_->GetRuntimeConfig(runtime_config));
+
+  PipelineConfig pipeline_config;
+  STATUS_CHECK_RETURN(env_->GetPipelineConfig(pipeline_config));
+
+  block_cache_layout_->Initialize(model_config, pipeline_config, runtime_config);
+
   // Get block size, must invoked before load model.
-  STATUS_CHECK_RETURN(env_->InitializeBlockManagerConfig());
+  STATUS_CHECK_RETURN(env_->InitializeBlockManagerConfig(block_cache_layout_));
 
   return Status();
 }

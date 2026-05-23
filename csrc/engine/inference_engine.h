@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "cache_manager/cache_manager_interface.h"
 #include "distributed/distributed_control_coordinator.h"
 #include "engine/model_driver.h"
@@ -72,6 +73,9 @@ class InferenceEngine {
 
   // IPC function wrapper for inter-process communication
   std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper_ = nullptr;
+
+  // The model-level cache layout (holds all block cache layouts keyed by type).
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   // Whether the handle loop terminated.
   std::atomic<bool> terminated_ = false;

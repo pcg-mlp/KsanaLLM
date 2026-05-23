@@ -23,12 +23,26 @@ class LlamaNvidiaCastTestSuit : public NvidiaTestSuitBase {
  protected:
   using NvidiaTestSuitBase::stream;
   const std::vector<size_t> test_data_size = {1ul, 4ul, 33ul, 1024ul, 32768ul};
-  size_t warmup_times = 10;
-  size_t test_times = 50;
+  const std::vector<size_t> perf_data_size = {1048576ul, 4194304ul, 16777216ul};
+  size_t warmup_times = 5;
+  size_t test_times = 20;
 
   cudaEvent_t start;
   cudaEvent_t stop;
+
+  void PrintPerfResult(const char* name, size_t data_size, float time_ms, size_t src_bytes, size_t dst_bytes) {
+    float avg_ms = time_ms / test_times;
+    // Total bytes = read src + write dst
+    double total_bytes = static_cast<double>(data_size) * (src_bytes + dst_bytes);
+    double throughput_gbps = (total_bytes / (1.0e9)) / (avg_ms / 1000.0);
+    std::cout << name << " size: " << data_size << " avg_time: " << avg_ms << " ms"
+              << " throughput: " << throughput_gbps << " GB/s" << std::endl;
+  }
 };
+
+// ============================================================================
+// Correctness Tests
+// ============================================================================
 
 TEST_F(LlamaNvidiaCastTestSuit, TestCastFloatToHalf) {
   for (size_t input_data_size : test_data_size) {
@@ -467,6 +481,103 @@ TEST_F(LlamaNvidiaCastTestSuit, TestCastFp8E4M3toBFloat16) {
   }
 }
 #endif
+
+// ============================================================================
+// Performance Benchmarks (large data sizes)
+// Prefixed with DISABLED_ to skip by default. Run with --gtest_also_run_disabled_tests.
+// ============================================================================
+
+TEST_F(LlamaNvidiaCastTestSuit, DISABLED_PerfBenchmarkFloatToHalf) {
+  std::cout << "\n=== Performance Benchmark: FloatToHalf ===" << std::endl;
+  for (size_t data_size : perf_data_size) {
+    BufferMeta input = CreateBuffer<float>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ true);
+    BufferMeta output = CreateBuffer<half>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ false);
+
+    auto run = [&]() {
+      FloatToHalf(reinterpret_cast<float*>(input.data_ptr), data_size, reinterpret_cast<half*>(output.data_ptr),
+                  stream);
+    };
+    float time_ms = MeasureCudaExecutionTime(run, stream, warmup_times, test_times);
+    PrintPerfResult("FloatToHalf", data_size, time_ms, sizeof(float), sizeof(half));
+
+    // Quick correctness check on first 1000 elements
+    BufferMeta input_host = CopyToHost<float>(input);
+    BufferMeta output_host = CopyToHost<half>(output);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+    for (size_t i = 0; i < std::min(data_size, (size_t)1000); ++i) {
+      half* out_ptr = reinterpret_cast<half*>(output_host.data_ptr);
+      float* in_ptr = reinterpret_cast<float*>(input_host.data_ptr);
+      EXPECT_TRUE((half_float::half)(out_ptr[i]) == (half_float::half)(in_ptr[i]));
+    }
+  }
+}
+
+TEST_F(LlamaNvidiaCastTestSuit, DISABLED_PerfBenchmarkFloatToBFloat16) {
+  std::cout << "\n=== Performance Benchmark: FloatToBFloat16 ===" << std::endl;
+  for (size_t data_size : perf_data_size) {
+    BufferMeta input = CreateBuffer<float>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ true);
+    BufferMeta output = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ false);
+
+    auto run = [&]() {
+      FloatToBFloat16(reinterpret_cast<float*>(input.data_ptr), data_size,
+                      reinterpret_cast<__nv_bfloat16*>(output.data_ptr), stream);
+    };
+    float time_ms = MeasureCudaExecutionTime(run, stream, warmup_times, test_times);
+    PrintPerfResult("FloatToBFloat16", data_size, time_ms, sizeof(float), sizeof(__nv_bfloat16));
+  }
+}
+
+TEST_F(LlamaNvidiaCastTestSuit, DISABLED_PerfBenchmarkHalfToFloat) {
+  std::cout << "\n=== Performance Benchmark: HalfToFloat (no stride) ===" << std::endl;
+  for (size_t data_size : perf_data_size) {
+    BufferMeta input = CreateBuffer<half>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ true);
+    BufferMeta output = CreateBuffer<float>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ false);
+
+    auto run = [&]() {
+      HalfToFloat(reinterpret_cast<half*>(input.data_ptr), data_size, reinterpret_cast<float*>(output.data_ptr),
+                  stream);
+    };
+    float time_ms = MeasureCudaExecutionTime(run, stream, warmup_times, test_times);
+    PrintPerfResult("HalfToFloat", data_size, time_ms, sizeof(half), sizeof(float));
+  }
+}
+
+TEST_F(LlamaNvidiaCastTestSuit, DISABLED_PerfBenchmarkBFloat16ToFloat) {
+  std::cout << "\n=== Performance Benchmark: BFloat16ToFloat (no stride) ===" << std::endl;
+  for (size_t data_size : perf_data_size) {
+    BufferMeta input = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ true);
+    BufferMeta output = CreateBuffer<float>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ false);
+
+    auto run = [&]() {
+      BFloat16ToFloat(reinterpret_cast<__nv_bfloat16*>(input.data_ptr), data_size,
+                      reinterpret_cast<float*>(output.data_ptr), stream);
+    };
+    float time_ms = MeasureCudaExecutionTime(run, stream, warmup_times, test_times);
+    PrintPerfResult("BFloat16ToFloat", data_size, time_ms, sizeof(__nv_bfloat16), sizeof(float));
+  }
+}
+
+TEST_F(LlamaNvidiaCastTestSuit, DISABLED_PerfBenchmarkHalfToBFloat16) {
+  std::cout << "\n=== Performance Benchmark: HalfToBFloat16 (in-place) ===" << std::endl;
+  for (size_t data_size : perf_data_size) {
+    BufferMeta buffer = CreateBuffer<half>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ true);
+
+    auto run = [&]() { HalfToBFloat16(buffer.data_ptr, data_size, stream); };
+    float time_ms = MeasureCudaExecutionTime(run, stream, warmup_times, test_times);
+    PrintPerfResult("HalfToBFloat16", data_size, time_ms, sizeof(half), sizeof(__nv_bfloat16));
+  }
+}
+
+TEST_F(LlamaNvidiaCastTestSuit, DISABLED_PerfBenchmarkBFloat16ToHalf) {
+  std::cout << "\n=== Performance Benchmark: BFloat16ToHalf (in-place) ===" << std::endl;
+  for (size_t data_size : perf_data_size) {
+    BufferMeta buffer = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {data_size}, /*is_random_init*/ true);
+
+    auto run = [&]() { BFloat16ToHalf(buffer.data_ptr, data_size, stream); };
+    float time_ms = MeasureCudaExecutionTime(run, stream, warmup_times, test_times);
+    PrintPerfResult("BFloat16ToHalf", data_size, time_ms, sizeof(__nv_bfloat16), sizeof(half));
+  }
+}
 
 }  // namespace test
 }  // namespace nvidia

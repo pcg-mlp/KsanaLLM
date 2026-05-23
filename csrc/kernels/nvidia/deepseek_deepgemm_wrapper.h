@@ -3,11 +3,13 @@
 ==============================================================================*/
 #pragma once
 
+#include <cuda_runtime.h>
 #include <torch/torch.h>
 #include <memory>
 
 #include "device/nvidia/deepseek_deepgemm_bridge.h"
 #include "utils/logger.h"
+#include "utils/tensor.h"
 
 namespace ksana_llm {
 namespace nvidia {
@@ -25,16 +27,21 @@ class DeepSeekDeepGEMMWrapper {
   // MQA attention functions using DeepSeek's DeepGEMM
   void Fp8MqaLogits(const torch::Tensor& q_fp8, const std::pair<torch::Tensor, torch::Tensor>& kv_fp8,
                     const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
-                    const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits, bool clean_logits = true);
+                    const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits, cudaStream_t stream,
+                    bool clean_logits = true);
 
   void Fp8PagedMqaLogits(const torch::Tensor& q_fp8, const torch::Tensor& fused_kv_cache, const torch::Tensor& weights,
                          const torch::Tensor& context_lens, const torch::Tensor& block_table,
                          const torch::Tensor& schedule_meta, torch::Tensor& logits, int max_context_len,
-                         bool clean_logits = false);
+                         cudaStream_t stream, bool clean_logits = false);
 
   // Generate schedule metadata for paged MQA
   void PagedMqaLogitsMetadata(const torch::Tensor& context_lens, torch::Tensor& schedule_metadata, int batch_size,
-                              int block_kv);
+                              int block_kv, cudaStream_t stream);
+
+  // Fused norm and gemm for mHC
+  void Tf32HcPreNormGemm(const Tensor& a_tensor, const Tensor& b_tensor, Tensor& d_tensor, Tensor& sqr_sum_tensor,
+                         const int num_splits, const int rank, cudaStream_t stream);
 
  private:
   int num_device_sms_;

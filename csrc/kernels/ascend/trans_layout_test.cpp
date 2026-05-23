@@ -7,6 +7,8 @@
 #include "3rdparty/half/include/half.hpp"
 #include "configure/context.h"
 #include "configure/environment.h"
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "kernels/trans_layout.h"
 #include "utils/singleton.h"
 #include "utils/tensor.h"
@@ -22,12 +24,15 @@ class TransLayoutTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
-    Singleton<Environment>::GetInstance()->ParseConfig(config_path);
-    Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+    auto env = Singleton<Environment>::GetInstance();
+    env->ParseConfig(config_path);
+    env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
 
+    auto block_cache_layout = GetTestModelCacheLayout(env);
     BlockManagerConfig block_manager_config;
-    Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
-    Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
+    env->InitializeBlockManagerConfig(block_cache_layout);
+    env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
   }
 

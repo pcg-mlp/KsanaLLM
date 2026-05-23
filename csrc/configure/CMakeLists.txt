@@ -23,7 +23,8 @@ if(WITH_STANDALONE_TEST)
   
   cpp_test(schedule_config_parser_test SRCS ${configure_test_SRCS} DEPS configure)
   cpp_test(quant_config_parser_test SRCS ${PROJECT_SOURCE_DIR}/csrc/configure/quant_config_parser_test.cpp DEPS configure models runtime executor LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+  cpp_test(model_config_parser_test SRCS ${PROJECT_SOURCE_DIR}/csrc/configure/model_config_parser_test.cpp DEPS configure models runtime executor LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
   
-  # cpp_test(environment_test SRCS ${PROJECT_SOURCE_DIR}/csrc/configure/environment_test.cpp DEPS configure)
+  cpp_test(environment_test SRCS ${PROJECT_SOURCE_DIR}/csrc/configure/environment_test.cpp DEPS configure models runtime executor LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
   # Other tests can be added here with their specific dependencies
 endif()

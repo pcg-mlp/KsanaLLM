@@ -32,12 +32,15 @@ add_subdirectory(fused_add_norm)
 add_subdirectory(split)
 add_subdirectory(identity)
 add_subdirectory(marlin_moe)
-# 新逻辑
+add_subdirectory(gather)
 add_subdirectory(gemm)
 add_subdirectory(others)
 add_subdirectory(moe)
-# index
-add_subdirectory(weight_scale)
 add_subdirectory(logits_topk)
 add_subdirectory(pooling)
-
+add_subdirectory(swa_topk_idxs)
+# For Triton/TileLang kernels,
+# generation can be omitted for lower SM architectures.
+if(HAS_SM90 OR HAS_SM90A)
+  add_subdirectory(mhc)
+endif()

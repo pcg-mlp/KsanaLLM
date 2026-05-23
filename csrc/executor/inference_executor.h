@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <mutex>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/context.h"
 #include "configure/environment.h"
 #include "distributed/distributed_control_coordinator.h"
@@ -74,10 +75,15 @@ class InferenceExecutor {
 
   // The block allocator manager, used to manage device memory and kv block.
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
+  // The SWA block allocator manager; nullptr when SWA is disabled.
+  std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager_ = nullptr;
   std::shared_ptr<ExecutorBlockManager> executor_block_manager_ = nullptr;
 
   // The executor runtime object.
   std::shared_ptr<ExecutorRuntime> executor_runtime_ = nullptr;
+
+  // The model-level cache layout (holds all block cache layouts keyed by type).
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   std::shared_ptr<ModelRunner> model_runner_ = nullptr;
 

@@ -11,10 +11,13 @@ namespace ksana_llm {
 // Create CacheManager instance.
 class CacheManagerFactory {
  public:
-  // Create a prefix cache manager instance.
+  // Create a cache manager instance.
+  // swa_block_allocator_group is optional; when non-null and sliding_window_size > 0,
+  // DirectCacheManager will use it for SWA KV cache block allocation.
   static std::shared_ptr<CacheManagerInterface> CreateCacheManager(
       const CacheManagerConfig& cache_manager_config,
-      std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group);
+      std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group,
+      std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group = nullptr);
 };
 
 }  // namespace ksana_llm

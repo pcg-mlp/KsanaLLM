@@ -15,6 +15,8 @@
 #  include "device/nvidia/nccl_utils.h"
 #endif
 #include "configure/global_context.h"
+#include "helpers/block_cache_layout_helper.h"
+#include "helpers/model_test_helper.h"
 #include "models/base/model_input.h"
 #include "tests/test.h"
 #include "utils/singleton.h"
@@ -59,8 +61,11 @@ class ModelInputTest : public testing::Test {
     model_config.use_mla = true;
     env->SetModelConfig(model_config);
 
+    InitPipelineConfigForTest(env, model_config);
+
     // Initialize the block manager.
-    env->InitializeBlockManagerConfig();
+    auto block_cache_layout = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout);
     BlockManagerConfig block_manager_config;
     env->GetBlockManagerConfig(block_manager_config);
     block_manager_config.block_host_memory_factor = 0.0;
@@ -82,7 +87,7 @@ class ModelInputTest : public testing::Test {
     env->schedule_config_parser_.runtime_config_ = runtime_config;
 
     // Initialize the model input object.
-    model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context);
+    model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context, block_cache_layout);
 
     // Initialize the random seed with 0.
     std::srand(0);

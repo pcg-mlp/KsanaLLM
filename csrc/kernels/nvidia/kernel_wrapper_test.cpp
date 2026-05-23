@@ -689,11 +689,11 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
           if (expert_para_size == 1) {
             llm_kernels::nvidia::InvokeSiluAndMul<half, false>(
                 reinterpret_cast<const half*>(intermediate_cache1), reinterpret_cast<half*>(intermediate_cache2),
-                reinterpret_cast<const int*>(topk_ids_ptr), elements_num, inter_size, stream);
+                reinterpret_cast<const int*>(topk_ids_ptr), elements_num, inter_size, /*swiglu_limit=*/ 0.0f, stream);
           } else {
             llm_kernels::nvidia::InvokeSiluAndMul<half, true>(
                 reinterpret_cast<const half*>(intermediate_cache1), reinterpret_cast<half*>(intermediate_cache2),
-                reinterpret_cast<const int*>(topk_ids_ptr), elements_num, inter_size, stream);
+                reinterpret_cast<const int*>(topk_ids_ptr), elements_num, inter_size, /*swiglu_limit=*/ 0.0f, stream);
           }
         }
         {

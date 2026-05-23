@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/base/layer_creation_context.h"
 #include "profiler/profile_event.h"
 #include "utils/tensor.h"
@@ -76,8 +77,8 @@ struct ForwardingBuffers {
 struct ModelBuffers {
   std::unique_ptr<ForwardingBuffers> buffers_;
 
-  std::vector<Tensor> local_residual_buffer_tensors_{1};
   Tensor cos_sin_cache_tensor_;
+  Tensor compress_cos_sin_cache_tensor_;
 
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
             const RuntimeConfig& runtime_config, BufferManager* buffer_mgr);
@@ -88,7 +89,7 @@ class ForwardingContext {
   ~ForwardingContext() {}
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
             const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
-            BufferManager* buffer_mgr);
+            BufferManager* buffer_mgr, std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
   void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
 
@@ -106,6 +107,8 @@ class ForwardingContext {
   std::shared_ptr<ModelOutput>& GetModelOutput() { return model_output_; }
 
   std::shared_ptr<ModelInput>& GetModelInput() { return model_input_; }
+
+  std::shared_ptr<BaseModelCacheLayout>& GetBlockCacheLayout() { return block_cache_layout_; }
 
   inline BatchRequestSchedInfo& GetBatchRequestSchedInfo() { return batch_event_info_; }
 
@@ -153,6 +156,9 @@ class ForwardingContext {
 
   // Buffers for temporary buffers during the whole model inference
   ForwardingBuffers* buffers_;
+
+  // The cache layout of every kv cache block.
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   // The original vocab size of the model
   size_t vocab_size_;

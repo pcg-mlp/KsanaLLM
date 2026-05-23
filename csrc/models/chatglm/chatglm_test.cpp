@@ -24,6 +24,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
@@ -57,12 +58,7 @@ class ChatglmTest : public testing::Test {
     env_->ParseConfig(config_path, model_path);
     env_->UpdateModelConfig();
     env_->GetModelConfig(model_config);
-    env_->GetPipelineConfig(pipeline_config);
-
-    pipeline_config.lower_layer_idx = 0;
-    pipeline_config.upper_layer_idx = static_cast<int>(model_config.num_layer) - 1;
-    pipeline_config.lower_nextn_layer_idx = -1;
-    pipeline_config.upper_nextn_layer_idx = -1;
+    InitPipelineConfigForTest(env_, model_config);
 
     BatchSchedulerConfig batch_scheduler_config;
     env_->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -71,10 +67,11 @@ class ChatglmTest : public testing::Test {
     batch_scheduler_config.max_token_len = 128;
     env_->SetBatchSchedulerConfig(batch_scheduler_config);
 
-    env_->SetPipelineConfig(pipeline_config);
     env_->SetModelConfig(model_config);
     env_->UpdateModelConfig();
-    env_->InitializeBlockManagerConfig();
+
+    block_cache_layout_ = GetTestModelCacheLayout(env_);
+    env_->InitializeBlockManagerConfig(block_cache_layout_);
 
     BlockManagerConfig block_manager_config;
     env_->GetBlockManagerConfig(block_manager_config);
@@ -129,6 +126,8 @@ class ChatglmTest : public testing::Test {
   std::shared_ptr<Context> context{nullptr};
   HiddenUnitDeviceBuffer* hidden_unit = nullptr;
 
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
+
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
   std::shared_ptr<Environment> env_;
@@ -176,8 +175,9 @@ class ChatglmTest : public testing::Test {
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
     std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
-    std::shared_ptr<ChatglmModel> model =
-        std::make_shared<ChatglmModel>(model_config, runtime_config, device_id, context, model_weight);
+
+    std::shared_ptr<ChatglmModel> model = std::make_shared<ChatglmModel>(model_config, runtime_config, device_id,
+                                                                         context, model_weight, block_cache_layout_);
 
     // ---- ContextDecode forward ----
     std::vector<int> input_ids = {233, 1203};
@@ -497,7 +497,9 @@ TEST_F(ChatglmTest, MultiStepGenerationTest) {
       std::make_unique<WeightInstance>(model_config, runtime_config, context);
   weight_instance->Load();
   std::shared_ptr<BaseWeight> model_weight = weight_instance->GetWeight();
-  auto model = std::make_shared<ChatglmModel>(model_config, runtime_config, device_id, context, model_weight);
+
+  auto model = std::make_shared<ChatglmModel>(model_config, runtime_config, device_id, context, model_weight,
+                                              block_cache_layout_);
 
   std::vector<int> input_ids = {233, 1203};
   std::vector<FlexibleCachedCopyTask> flexible_tasks;

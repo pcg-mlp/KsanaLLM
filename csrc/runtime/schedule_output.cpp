@@ -8,6 +8,7 @@
 #include "batch_scheduler/schedule_processor_interface.h"
 #include "distributed/packet_util.h"
 #include "ipc/core/ipc_func_serialization.h"
+#include "profiler/profile_event.h"
 #include "runtime/executor_infer_request.h"
 #include "utils/status.h"
 #include "utils/string_utils.h"
@@ -363,6 +364,12 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     // kv_cache_blocks
     SerializeVector<int>(req->kv_cache_blocks, ptr, offset);
 
+    // swa_kv_cache_blocks
+    SerializeVector<int>(req->swa_kv_cache_blocks, ptr, offset);
+
+    // swa_kv_cache_block_idx_offsets
+    SerializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
+
     // block_token_num
     SerializePod<size_t>(req->block_token_num, ptr, offset);
 
@@ -500,6 +507,12 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     // kv_cache_blocks
     DeserializeVector<int>(req->kv_cache_blocks, ptr, offset);
 
+    // swa_kv_cache_blocks
+    DeserializeVector<int>(req->swa_kv_cache_blocks, ptr, offset);
+
+    // swa_kv_cache_block_idx_offsets
+    DeserializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
+
     // block_token_num
     req->block_token_num = DeserializePod<size_t>(ptr, offset);
 
@@ -572,6 +585,12 @@ static Status SerializeInferRequestPatches(const std::vector<std::shared_ptr<Inf
     // kv_cache_blocks_offset
     SerializePod<size_t>(req->kv_cache_blocks_offset, ptr, offset);
 
+    // swa_kv_cache_blocks (full list, not incremental)
+    SerializeVector<int>(req->swa_kv_cache_blocks, ptr, offset);
+
+    // swa_kv_cache_block_idx_offsets
+    SerializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
+
     // infer_stage
     SerializeEnum<InferStage>(req->infer_stage, ptr, offset);
 
@@ -617,6 +636,12 @@ static Status DeserializeInferRequestPatches(std::vector<std::shared_ptr<InferRe
     // kv_cache_blocks_offset
     req_patch->kv_cache_blocks_offset = DeserializePod<size_t>(ptr, offset);
 
+    // swa_kv_cache_blocks (full list, not incremental)
+    DeserializeVector<int>(req_patch->swa_kv_cache_blocks, ptr, offset);
+
+    // swa_kv_cache_block_idx_offsets
+    DeserializeVector<size_t>(req_patch->swa_kv_cache_block_idx_offsets, ptr, offset);
+
     // infer_stage
     req_patch->infer_stage = DeserializeEnum<InferStage>(ptr, offset);
 
@@ -642,60 +667,77 @@ void ScheduleOutputParser::SetScheduleProcessor(const std::shared_ptr<SchedulePr
 }
 
 Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* schedule_output, void* ptr, size_t* bytes) {
+  PROFILE_EVENT_SCOPE(serialize_schedule_output_total, "Engine.SerializeScheduleOutput.Total");
   KLLM_CHECK_WITH_INFO(schedule_processor_ != nullptr,
                        "ScheduleOutputParser::schedule_processor_ is nullptr when serializing. "
                        "Please call ScheduleOutputParser::SetScheduleProcessor(...) before SerializeScheduleOutput.");
-  schedule_processor_->Lock();
+  {
+    PROFILE_EVENT_SCOPE(serialize_lock_wait, "Engine.SerializeScheduleOutput.LockWait");
+    schedule_processor_->Lock();
+  }
   // Process full and patch requests.
   std::vector<std::shared_ptr<InferRequest>> full_running_reqs;
   std::vector<std::shared_ptr<InferRequestPatch>> patch_running_reqs;
-  for (const auto& req : schedule_output->running_reqs) {
-    if (!req->patch_transfer) {
-      full_running_reqs.push_back(req);
-      continue;
+  {
+    PROFILE_EVENT_SCOPE(serialize_under_lock, "Engine.SerializeScheduleOutput.UnderLock");
+    for (const auto& req : schedule_output->running_reqs) {
+      if (!req->patch_transfer) {
+        full_running_reqs.push_back(req);
+        continue;
+      }
+
+      std::shared_ptr<InferRequestPatch> patch_req = std::make_shared<InferRequestPatch>();
+
+      patch_req->step = req->step;
+      patch_req->req_id = req->req_id;
+      patch_req->infer_stage = req->infer_stage;
+      patch_req->prefix_cache_len = req->prefix_cache_len;
+      patch_req->kv_cached_token_num = req->kv_cached_token_num;
+      patch_req->forwarding_tokens_draft_num = req->forwarding_tokens_draft_num;
+      patch_req->sampling_token_num = req->sampling_token_num;
+
+      // TODO(yancyliu): transfer full forwarding_tokens & kv_cache_blocks now, change to incremental later.
+      patch_req->forwarding_tokens_offset = 0;
+      patch_req->delta_forwarding_tokens = req->forwarding_tokens;
+
+      patch_req->kv_cache_blocks_offset = 0;
+      patch_req->delta_kv_cache_blocks = req->kv_cache_blocks;
+
+      // Transfer full swa_kv_cache_blocks (SWA blocks are always sent in full).
+      patch_req->swa_kv_cache_blocks = req->swa_kv_cache_blocks;
+      patch_req->swa_kv_cache_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
+
+      patch_running_reqs.push_back(patch_req);
     }
 
-    std::shared_ptr<InferRequestPatch> patch_req = std::make_shared<InferRequestPatch>();
+    SerializeInit(*bytes);
 
-    patch_req->step = req->step;
-    patch_req->req_id = req->req_id;
-    patch_req->infer_stage = req->infer_stage;
-    patch_req->prefix_cache_len = req->prefix_cache_len;
-    patch_req->kv_cached_token_num = req->kv_cached_token_num;
-    patch_req->forwarding_tokens_draft_num = req->forwarding_tokens_draft_num;
-    patch_req->sampling_token_num = req->sampling_token_num;
+    // schedule_id
+    SerializePod<size_t>(schedule_output->schedule_id, ptr, *bytes);
 
-    // TODO(yancyliu): transfer full forwarding_tokens & kv_cache_blocks now, change to incremental later.
-    patch_req->forwarding_tokens_offset = 0;
-    patch_req->delta_forwarding_tokens = req->forwarding_tokens;
+    // finish_req_ids
+    SerializeVectorOfVector(schedule_output->finish_req_ids, ptr, *bytes);
 
-    patch_req->kv_cache_blocks_offset = 0;
-    patch_req->delta_kv_cache_blocks = req->kv_cache_blocks;
-
-    patch_running_reqs.push_back(patch_req);
-  }
-
-  SerializeInit(*bytes);
-
-  // schedule_id
-  SerializePod<size_t>(schedule_output->schedule_id, ptr, *bytes);
-
-  // finish_req_ids
-  SerializeVectorOfVector(schedule_output->finish_req_ids, ptr, *bytes);
-
-  // merged swapout/swapin req ids
-  SerializeVectorOfVector<int64_t>(schedule_output->merged_swapout_req_ids, ptr, *bytes);
-  SerializeVectorOfVector<int64_t>(schedule_output->merged_swapin_req_ids, ptr, *bytes);
+    // merged swapout/swapin req ids
+    SerializeVectorOfVector<int64_t>(schedule_output->merged_swapout_req_ids, ptr, *bytes);
+    SerializeVectorOfVector<int64_t>(schedule_output->merged_swapin_req_ids, ptr, *bytes);
 
   // swapout/swapin req block ids
   SerializeSwapReqBlockIds(schedule_output->swapout_req_block_ids, ptr, *bytes);
   SerializeSwapReqBlockIds(schedule_output->swapin_req_block_ids, ptr, *bytes);
 
-  // running reqs or executor running reqs.
-  // NOTE: Use lock & unlock here, because running_reqs maybe modified in scheduler thread.
-  // And this will cause wrong serialized bytes.
-  SerializeInferRequests(full_running_reqs, ptr, *bytes);
-  SerializeInferRequestPatches(patch_running_reqs, ptr, *bytes);
+    // running reqs or executor running reqs.
+    // NOTE: Use lock & unlock here, because running_reqs maybe modified in scheduler thread.
+    // And this will cause wrong serialized bytes.
+    {
+      PROFILE_EVENT_SCOPE(serialize_full_reqs, "Engine.SerializeScheduleOutput.FullReqs");
+      SerializeInferRequests(full_running_reqs, ptr, *bytes);
+    }
+    {
+      PROFILE_EVENT_SCOPE(serialize_patch_reqs, "Engine.SerializeScheduleOutput.PatchReqs");
+      SerializeInferRequestPatches(patch_running_reqs, ptr, *bytes);
+    }
+  }
   schedule_processor_->Unlock();
 
   // NOTE: structured_generator_configs and need_create_generator_req_ids are now
@@ -705,6 +747,7 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
 }
 
 Status ScheduleOutputParser::DeserializeScheduleOutput(const void* ptr, ScheduleOutput* schedule_output) {
+  PROFILE_EVENT_SCOPE(deserialize_schedule_output_total, "Executor.DeserializeScheduleOutput.Total");
   size_t offset = 0;
 
   // schedule_id
@@ -722,8 +765,14 @@ Status ScheduleOutputParser::DeserializeScheduleOutput(const void* ptr, Schedule
   DeserializeSwapReqBlockIds(schedule_output->swapin_req_block_ids, ptr, offset);
 
   // running reqs.
-  DeserializeInferRequests(schedule_output->executor_running_reqs, ptr, offset);
-  DeserializeInferRequestPatches(schedule_output->running_req_patches, ptr, offset);
+  {
+    PROFILE_EVENT_SCOPE(deserialize_full_reqs, "Executor.DeserializeScheduleOutput.FullReqs");
+    DeserializeInferRequests(schedule_output->executor_running_reqs, ptr, offset);
+  }
+  {
+    PROFILE_EVENT_SCOPE(deserialize_patch_reqs, "Executor.DeserializeScheduleOutput.PatchReqs");
+    DeserializeInferRequestPatches(schedule_output->running_req_patches, ptr, offset);
+  }
 
   // NOTE: structured_generator_configs and need_create_generator_req_ids are now
   // embedded in each ExecutorInferRequest, so we extract them from the requests

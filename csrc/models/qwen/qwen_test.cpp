@@ -17,6 +17,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 
 using namespace ksana_llm;
@@ -46,8 +47,12 @@ class QwenTest : public testing::Test {
     env->ParseConfig(config_path, model_path);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
+
+    block_cache_layout_ = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
+
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
@@ -85,8 +90,7 @@ class QwenTest : public testing::Test {
     hidden_unit = hidden_unit_buffer_helper->CreateDeviceBuffer();
   }
 
-  void TearDown() override {
-  }
+  void TearDown() override {}
 
  protected:
   ModelConfig model_config;
@@ -99,6 +103,8 @@ class QwenTest : public testing::Test {
   std::shared_ptr<Context> context{nullptr};
   std::shared_ptr<HiddenUnitBufferHelper> hidden_unit_buffer_helper = nullptr;
   HiddenUnitDeviceBuffer *hidden_unit = nullptr;
+
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
@@ -123,7 +129,7 @@ class QwenTest : public testing::Test {
     weight_instance->Load();
     std::shared_ptr<BaseWeight> qwen_weight = weight_instance->GetWeight();
     std::shared_ptr<QwenModel> qwen =
-        std::make_shared<QwenModel>(model_config, runtime_config, device_id, context, qwen_weight);
+        std::make_shared<QwenModel>(model_config, runtime_config, device_id, context, qwen_weight, block_cache_layout_);
 
     // ContextDecode
     auto forward = std::make_unique<ForwardRequest>();

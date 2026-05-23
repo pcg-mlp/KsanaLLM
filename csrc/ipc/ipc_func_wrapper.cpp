@@ -8,6 +8,7 @@
 
 #include "batch_scheduler/global_cache_fetcher.h"
 #include "ipc/core/ipc_func_types.h"
+#include "profiler/profile_event.h"
 #include "ipc/functions/add_executor.h"
 #include "ipc/functions/batch_swap.h"
 #include "ipc/functions/connect_nccl_data_channel.h"
@@ -471,6 +472,12 @@ Status IpcFuncWrapper::SetEPCommunicationConfig(const std::vector<EPCommunicatio
   return Status();
 }
 
+void IpcFuncWrapper::SetBlockCacheLayout(std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
+  auto pipeline_callable =
+      ipc_func_proxy_->GetSharedIpcFuncCallable<ResetPipelineConfigCallable>(IPC_FUNC_RESET_PIPELINE_CONFIG);
+  pipeline_callable->SetBlockCacheLayout(block_cache_layout);
+}
+
 Status IpcFuncWrapper::SetWeightInstance(std::shared_ptr<WeightInstanceInterface> model_weight) {
   auto callable = ipc_func_proxy_->GetSharedIpcFuncCallable<LoadWeightCallable>(IPC_FUNC_LOAD_WEIGHT);
   callable->SetWeightInstance(model_weight);
@@ -544,7 +551,17 @@ Status IpcFuncWrapper::SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorMa
   return Status();
 }
 
-Status IpcFuncWrapper::CreateBlockAllocatorManager(const BlockAllocatorManagerConfig& block_allocator_manager_config) {
+Status IpcFuncWrapper::SetSwaBlockAllocatorManager(
+    std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager) {
+  auto block_mgr_callable =
+      ipc_func_proxy_->GetSharedIpcFuncCallable<CreateBlockManagerCallable>(IPC_FUNC_CREATE_BLOCK_ALLOCATOR);
+  block_mgr_callable->SetSwaBlockAllocatorManager(swa_block_allocator_manager);
+  return Status();
+}
+
+Status IpcFuncWrapper::CreateBlockAllocatorManager(
+    const BlockAllocatorManagerConfig& block_allocator_manager_config,
+    const BlockAllocatorManagerConfig& swa_block_allocator_manager_config) {
   auto callback =
       ipc_func_proxy_->GetSharedIpcFuncCallback<CreateBlockManagerCallback>(IPC_FUNC_CREATE_BLOCK_ALLOCATOR);
   callback->Reset(executor_num_);
@@ -553,6 +570,7 @@ Status IpcFuncWrapper::CreateBlockAllocatorManager(const BlockAllocatorManagerCo
       CreateBroadcastContext(IPC_FUNC_CREATE_BLOCK_ALLOCATOR, true, false, true, true);
   std::shared_ptr<CreateBlockManagerRequest> request = std::make_shared<CreateBlockManagerRequest>();
   request->block_allocator_manager_config = block_allocator_manager_config;
+  request->swa_block_allocator_manager_config = swa_block_allocator_manager_config;
   STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
 
   callback->Wait();
@@ -597,6 +615,7 @@ Status IpcFuncWrapper::SetScheduleOutputRecvQueue(
 }
 
 Status IpcFuncWrapper::DispatchScheduleOutput(std::shared_ptr<ScheduleOutput> schedule_output) {
+  PROFILE_EVENT_SCOPE(dispatch_schedule_output, "Ipc.DispatchScheduleOutput");
   std::shared_ptr<IpcContext> ipc_context =
       CreateBroadcastContext(IPC_FUNC_DISPATCH_SCHEDULE_OUTPUT, true, true, true, false);
   std::shared_ptr<DispatchScheduleOutputRequest> request = std::make_shared<DispatchScheduleOutputRequest>();
@@ -631,6 +650,7 @@ Status IpcFuncWrapper::SetSamplingOutputRecvQueue(
 }
 
 Status IpcFuncWrapper::ReportSamplingOutput(std::shared_ptr<SamplingOutput> sampling_output) {
+  PROFILE_EVENT_SCOPE(report_sampling_output, "Ipc.ReportSamplingOutput");
   std::shared_ptr<IpcContext> ipc_context =
       CreateExecutor2EngineContext(IPC_FUNC_REPORT_SAMPLING_OUTPUT, executor_id_, true, true, false, false);
   std::shared_ptr<ReportSamplingOutputRequest> request = std::make_shared<ReportSamplingOutputRequest>();

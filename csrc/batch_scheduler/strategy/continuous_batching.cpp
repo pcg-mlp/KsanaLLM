@@ -11,6 +11,7 @@
 #include "fmt/format.h"
 
 #include "base_strategy.h"
+#include "batch_scheduler/full_cache_hit_handler.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "batch_scheduler/state/scheduler_tick_tok.h"
@@ -50,11 +51,11 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
   // dp_max_batch_size_ stays as the global limit (checked against the shared counter across all DPs).
   // per_dp_max_batch_size_ is the per-DP local limit (checked against this DP's own request count).
   if (runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
-    per_dp_max_batch_size_ = batch_scheduler_config_.max_batch_size /
-                             runtime_config_.parallel_basic_config.attn_data_parallel_size;
+    per_dp_max_batch_size_ =
+        batch_scheduler_config_.max_batch_size / runtime_config_.parallel_basic_config.attn_data_parallel_size;
     KLLM_LOG_INFO << fmt::format("DeepEP low_latency: per_dp_max_batch_size_ = {} (max_batch_size={}, dp={})",
-                                per_dp_max_batch_size_, batch_scheduler_config_.max_batch_size,
-                                runtime_config_.parallel_basic_config.attn_data_parallel_size);
+                                 per_dp_max_batch_size_, batch_scheduler_config_.max_batch_size,
+                                 runtime_config_.parallel_basic_config.attn_data_parallel_size);
   }
 
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
@@ -441,7 +442,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     // Always update cache manager, even if request is finished.
     bool block_merged = false;
     const Status status = cache_manager_->UpdateRequestTokens(
-        req->req_id, req->forwarding_tokens, req->kv_cached_token_num, req->kv_cache_blocks, block_merged);
+        req->req_id, req->forwarding_tokens, req->kv_cached_token_num, req->kv_cache_blocks, block_merged,
+        req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
 
     if (!status.OK()) {
       KLLM_LOG_SCHEDULER << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();
@@ -563,7 +565,9 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
     const size_t max_required_token_num = GetMaxRequiredTokenNum(req->GetPlanningSequenceLen());
     const size_t req_step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
 
-    Status status = cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
+    Status status =
+        cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
+                                              req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
     if (status.OK()) {
       DetermineDraftNum(req);
       batch_state_->schedule_output->running_reqs.push_back(req);
@@ -711,8 +715,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
     // Reject empty requests early to prevent size_t underflow in prefix cache logic.
     if (seq_token_num == 0) {
-      KLLM_LOG_ERROR << "Empty request detected, req_id=" << req->req_id
-                     << ", seq_token_num=0, aborting request.";
+      KLLM_LOG_ERROR << "Empty request detected, req_id=" << req->req_id << ", seq_token_num=0, aborting request.";
       StopRequest(req, Status(RET_INVALID_ARGUMENT, "Empty input tokens."), RequestState::kWaiting);
       it = batch_state_->waiting_queue.erase(it);
       continue;
@@ -789,8 +792,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     // Get usable block number every time, the blocks matched by req are not reusable here.
     const size_t total_free_block_num = cache_manager_->GetRequestUsableBlockNumber(req->req_id);
     if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
-        per_dp_batch_size < per_dp_max_batch_size_ &&
-        step_token_num + seq_token_num <= dp_max_step_token_num_ &&
+        per_dp_batch_size < per_dp_max_batch_size_ && step_token_num + seq_token_num <= dp_max_step_token_num_ &&
         req_step_block_num + launch_block_threshold <= total_free_block_num) {
       // Assume we could succ, so that the AllocateRequestBlocks is not blocked.
       scheduler_shared_counter_->step_batch_size.Increase(1);
@@ -799,23 +801,15 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       per_dp_batch_size++;
       scheduler_ticktok_->Unlock();
 
-      Status status = cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
+      Status status =
+          cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
+                                                req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
       if (status.OK()) {
         step_not_kv_cached_token_num += seq_token_num - shared_token_num;
 
-        // if full matched, skip decode and put it to the end of decode list.
-        if (shared_token_num == seq_token_num && seq_token_num >= kStepGenerateTokenNum) {
-          KLLM_LOG_SCHEDULER << "Full matched, skip prefill, " << req->ScheduleStateToStr();
+        if (shared_token_num >= seq_token_num) {
           REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
-          // If shared_token_num is equal to forwarding size, means all tokens have valid kv cache
-          // but don't have logits to generate next token, need to recompute the last token to generate next token
-          // NOTE: this happens only when request is just received.
-
-          req->infer_stage = InferStage::kDecode;
-          planning_workload.prefill_start_offset = shared_token_num - kStepGenerateTokenNum;
-          planning_workload.prefill_token_num = kStepGenerateTokenNum;
-          req->SetPlanningWorkload(planning_workload);
-          req->SetRemainingWorkload(planning_workload);
+          HandleFullPrefixCacheHit(req, planning_workload, seq_token_num);
         } else {
           KLLM_LOG_SCHEDULER << "shared token not equal forwarding size, " << req->ScheduleStateToStr();
           assert(seq_token_num > shared_token_num);
@@ -1157,7 +1151,8 @@ Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, boo
       }
 
       auto &req = it->second;
-      status = cache_manager_->MergeSwapinRequest(req->req_id, req->kv_cache_blocks);
+      status = cache_manager_->MergeSwapinRequest(req->req_id, req->kv_cache_blocks, req->swa_kv_cache_blocks,
+                                                  req->swa_kv_cache_block_idx_offsets);
       if (!status.OK()) {
         KLLM_LOG_SCHEDULER << "Error MergeSwapinRequest " << *req << ", info: " << status.GetMessage();
         return status;

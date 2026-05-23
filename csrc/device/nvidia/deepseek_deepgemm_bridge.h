@@ -26,4 +26,8 @@ void SmxxFp8PagedMqaLogits(const torch::Tensor& q, const torch::Tensor& kv_cache
 void SmxxPagedMqaLogitsMetadata(const torch::Tensor& context_lens, const torch::Tensor& schedule_metadata,
                                 int batch_size, int next_n, int block_kv, int num_sms, bool is_context_lens_2d);
 
+void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const torch::Tensor& d,
+                           const torch::Tensor& sqr_sum, const int& m, const int& n, const int& k,
+                           const int& num_splits);
+
 }  // namespace deepseek

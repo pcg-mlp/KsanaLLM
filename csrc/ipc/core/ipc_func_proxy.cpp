@@ -10,6 +10,7 @@
 #include "device/device_utils.h"
 #include "distributed/packet_type.h"
 #include "ipc/core/ipc_func_types.h"
+#include "profiler/profile_event.h"
 
 namespace ksana_llm {
 
@@ -146,6 +147,7 @@ Status IpcFuncProxy::Invoke(const IpcRequest* request, IpcResponse* response, Ip
 }
 
 Status IpcFuncProxy::WaitingUntilIpcFuncFinished(std::shared_ptr<IpcNotifier>& ipc_notifier) {
+  PROFILE_EVENT_SCOPE(ipc_sync_wait, "Ipc.WaitingUntilIpcFuncFinished");
   std::unique_lock<std::mutex> lock(ipc_notifier->mutex);
   ipc_notifier->cv.wait(lock, [this, &ipc_notifier] { return ipc_notifier->finished; });
 
@@ -161,6 +163,7 @@ Status IpcFuncProxy::NotifyWaitingIpcFunc(std::shared_ptr<IpcNotifier>& ipc_noti
 }
 
 void IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context) {
+  PROFILE_EVENT_SCOPE(ipc_send_request_total, "Ipc.SendIpcRequest.Total");
   std::shared_ptr<IpcProcessChannel> ipc_channel = nullptr;
   if (ipc_role_ == IpcRole::IPC_ROLE_ENGINE) {
     if (context->to_rank < 0) {
@@ -172,9 +175,12 @@ void IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context
     ipc_channel = ipc_channel_manager_->GetExecutor2EngineChannel(context->from_rank);
   }
 
-  if (!ipc_channel->WaitWritableAndLock()) {
-    KLLM_LOG_WARNING << "SendIpcRequest error, channel stopped, break..";
-    return;
+  {
+    PROFILE_EVENT_SCOPE(ipc_send_request_wait, "Ipc.SendIpcRequest.WaitWritable");
+    if (!ipc_channel->WaitWritableAndLock()) {
+      KLLM_LOG_WARNING << "SendIpcRequest error, channel stopped, break..";
+      return;
+    }
   }
 
   size_t* size_ptr = reinterpret_cast<size_t*>(ipc_channel->GetWritePtr());
@@ -182,17 +188,24 @@ void IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context
   void* data_ptr = reinterpret_cast<void*>(context_ptr + 1);
 
   memcpy(context_ptr, context, sizeof(IpcContext));
-  request->Serialize(data_ptr, size_ptr);
+  {
+    PROFILE_EVENT_SCOPE(ipc_send_request_serialize, "Ipc.SendIpcRequest.Serialize");
+    request->Serialize(data_ptr, size_ptr);
+  }
   *size_ptr += sizeof(IpcContext);
   context_ptr->is_response = false;
 
-  if (!ipc_channel->WriteAndUnlock()) {
-    KLLM_LOG_WARNING << "SendIpcRequest error, channel stopped, break..";
-    return;
+  {
+    PROFILE_EVENT_SCOPE(ipc_send_request_notify, "Ipc.SendIpcRequest.WriteAndUnlock");
+    if (!ipc_channel->WriteAndUnlock()) {
+      KLLM_LOG_WARNING << "SendIpcRequest error, channel stopped, break..";
+      return;
+    }
   }
 }
 
 void IpcFuncProxy::SendIpcResponse(const IpcResponse* response, IpcContext* context) {
+  PROFILE_EVENT_SCOPE(ipc_send_response_total, "Ipc.SendIpcResponse.Total");
   std::shared_ptr<IpcProcessChannel> ipc_channel = nullptr;
 
   int to_rank = (context->to_rank >= 0) ? context->to_rank : ipc_executor_id_;
@@ -202,9 +215,12 @@ void IpcFuncProxy::SendIpcResponse(const IpcResponse* response, IpcContext* cont
     ipc_channel = ipc_channel_manager_->GetExecutor2EngineChannel(to_rank);
   }
 
-  if (!ipc_channel->WaitWritableAndLock()) {
-    KLLM_LOG_WARNING << "SendIpcResponse error, channel stopped, break..";
-    return;
+  {
+    PROFILE_EVENT_SCOPE(ipc_send_response_wait, "Ipc.SendIpcResponse.WaitWritable");
+    if (!ipc_channel->WaitWritableAndLock()) {
+      KLLM_LOG_WARNING << "SendIpcResponse error, channel stopped, break..";
+      return;
+    }
   }
 
   size_t* size_ptr = reinterpret_cast<size_t*>(ipc_channel->GetWritePtr());
@@ -212,20 +228,27 @@ void IpcFuncProxy::SendIpcResponse(const IpcResponse* response, IpcContext* cont
   void* data_ptr = reinterpret_cast<void*>(context_ptr + 1);
 
   memcpy(context_ptr, context, sizeof(IpcContext));
-  response->Serialize(data_ptr, size_ptr);
+  {
+    PROFILE_EVENT_SCOPE(ipc_send_response_serialize, "Ipc.SendIpcResponse.Serialize");
+    response->Serialize(data_ptr, size_ptr);
+  }
   *size_ptr += sizeof(IpcContext);
   context_ptr->is_response = true;
 
   // Reset to_rank to real, so the broadcast caller knows who reply it.
   context_ptr->to_rank = to_rank;
 
-  if (!ipc_channel->WriteAndUnlock()) {
-    KLLM_LOG_WARNING << "SendIpcResponse error, channel stopped, break..";
-    return;
+  {
+    PROFILE_EVENT_SCOPE(ipc_send_response_notify, "Ipc.SendIpcResponse.WriteAndUnlock");
+    if (!ipc_channel->WriteAndUnlock()) {
+      KLLM_LOG_WARNING << "SendIpcResponse error, channel stopped, break..";
+      return;
+    }
   }
 }
 
 void IpcFuncProxy::ExecuteIpcPacketsImpl(int executor_id, int current_rank, IpcContext* context_ptr, void* data_ptr) {
+  PROFILE_EVENT_SCOPE(ipc_execute_packet, "Ipc.ExecuteIpcPacketsImpl");
   // Deserialize and execution.
   if (!context_ptr->is_response) {
     int func_info_id = context_ptr->share_callable ? -1 : executor_id;
@@ -240,13 +263,17 @@ void IpcFuncProxy::ExecuteIpcPacketsImpl(int executor_id, int current_rank, IpcC
       ipc_func_info.mutex->lock();
     }
 
-    // This will change ipc_func_info.request state, so it is not thread-safe.
-    ipc_func_info.request->Deserialize(data_ptr);
+    {
+      PROFILE_EVENT_SCOPE(ipc_request_deserialize, "Ipc.ExecuteIpcPackets.RequestDeserialize");
+      ipc_func_info.request->Deserialize(data_ptr);
+    }
     ipc_func_info.request->role = ipc_role_;
     ipc_func_info.request->rank = current_rank;
-    ipc_func_info.callable->Call(ipc_func_info.request.get(), ipc_func_info.response.get(), context_ptr);
+    {
+      PROFILE_EVENT_SCOPE(ipc_request_call, "Ipc.ExecuteIpcPackets.RequestCall");
+      ipc_func_info.callable->Call(ipc_func_info.request.get(), ipc_func_info.response.get(), context_ptr);
+    }
 
-    // Send response only if not in oneway invocation.
     if (!context_ptr->is_oneway) {
       SendIpcResponse(ipc_func_info.response.get(), context_ptr);
     }
@@ -258,28 +285,34 @@ void IpcFuncProxy::ExecuteIpcPacketsImpl(int executor_id, int current_rank, IpcC
     int func_info_id = context_ptr->share_callback ? -1 : executor_id;
     IpcFuncInfo& ipc_func_info = GetIpcFuncInfo(context_ptr->func_id, func_info_id);
 
-    // async mode, callback.
     if (context_ptr->is_async) {
-      // Heavy task callbacks may also be executed concurrently
       bool need_lock = context_ptr->share_callback || context_ptr->is_heavy;
 
       if (need_lock) {
         ipc_func_info.mutex->lock();
       }
 
-      ipc_func_info.response->Deserialize(data_ptr);
+      {
+        PROFILE_EVENT_SCOPE(ipc_response_deserialize, "Ipc.ExecuteIpcPackets.ResponseDeserialize");
+        ipc_func_info.response->Deserialize(data_ptr);
+      }
       ipc_func_info.response->role = ipc_role_;
       ipc_func_info.response->rank = current_rank;
-      ipc_func_info.callback->Call(ipc_func_info.response.get(), context_ptr);
+      {
+        PROFILE_EVENT_SCOPE(ipc_response_callback, "Ipc.ExecuteIpcPackets.ResponseCallback");
+        ipc_func_info.callback->Call(ipc_func_info.response.get(), context_ptr);
+      }
 
       if (need_lock) {
         ipc_func_info.mutex->unlock();
       }
 
     } else {
-      // sync mode, weakup waiting caller.
       std::shared_ptr<IpcNotifier> ipc_notifier = GetIpcNotifier(context_ptr->exec_seq);
-      ipc_notifier->response->Deserialize(data_ptr);
+      {
+        PROFILE_EVENT_SCOPE(ipc_response_deserialize_sync, "Ipc.ExecuteIpcPackets.ResponseDeserializeSync");
+        ipc_notifier->response->Deserialize(data_ptr);
+      }
       ipc_notifier->response->role = ipc_role_;
       ipc_notifier->response->rank = current_rank;
       NotifyWaitingIpcFunc(ipc_notifier);
@@ -309,13 +342,18 @@ Status IpcFuncProxy::ExecuteIpcLongTasks() {
   }
 
   while (!stopped_) {
-    IpcTask ipc_task = ipc_long_task_queue_.Get();
+    IpcTask ipc_task;
+    {
+      PROFILE_EVENT_SCOPE(ipc_long_wait, "Ipc.ExecuteIpcLongTasks.QueueGet");
+      ipc_task = ipc_long_task_queue_.Get();
+    }
     void* packet = ipc_task.packet;
     if (!packet) {
       KLLM_LOG_INFO << "ExecuteIpcLongTasks stopped.";
       break;
     }
 
+    PROFILE_EVENT_SCOPE(ipc_long_iter, "Ipc.ExecuteIpcLongTasks.iter");
     IpcContext* context_ptr = reinterpret_cast<IpcContext*>(packet);
     void* data_ptr = reinterpret_cast<void*>(context_ptr + 1);
 
@@ -336,11 +374,15 @@ Status IpcFuncProxy::ExecuteIpcPackets(int executor_id, std::shared_ptr<IpcProce
   }
 
   while (!stopped_) {
-    if (!ipc_channel->WaitReadableAndLock()) {
-      KLLM_LOG_WARNING << "ExecuteIpcPackets error, executor " << executor_id << " channel stopped, break..";
-      break;
+    {
+      PROFILE_EVENT_SCOPE(ipc_recv_wait, "Ipc.ExecuteIpcPackets.WaitReadable");
+      if (!ipc_channel->WaitReadableAndLock()) {
+        KLLM_LOG_WARNING << "ExecuteIpcPackets error, executor " << executor_id << " channel stopped, break..";
+        break;
+      }
     }
 
+    PROFILE_EVENT_SCOPE(ipc_recv_iter, "Ipc.ExecuteIpcPackets.iter");
     // The memory is shared by multiple executors, DO NOT modify anything here.
     size_t* size_ptr = reinterpret_cast<size_t*>(ipc_channel->GetReadPtr());
     IpcContext* context_ptr = reinterpret_cast<IpcContext*>(size_ptr + 1);

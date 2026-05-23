@@ -27,6 +27,9 @@ class LayernormLayer : public BaseLayer {
 
  protected:
   float rms_norm_eps_;
+  // Used by per-head no-weight RMSNorm
+  uint32_t num_heads_{0u};
+  uint32_t head_dim_{0u};
   // NOTE(karlluo): only need by ascend
   int workspace_block_id_{-1};
   size_t workspace_size_{0ul};

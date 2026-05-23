@@ -15,6 +15,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
 
+#include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 #include "test.h"
 
@@ -44,9 +45,12 @@ class BgeRerankerMinicpmTest : public testing::Test {
     env->ParseConfig(config_path, model_path);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    InitPipelineConfigForTest(env, model_config);
+
+    block_cache_layout_ = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout_);
 
     BlockManagerConfig block_manager_config;
-    env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
 
@@ -98,6 +102,8 @@ class BgeRerankerMinicpmTest : public testing::Test {
   std::shared_ptr<HiddenUnitBufferHelper> hidden_unit_buffer_helper;
   HiddenUnitDeviceBuffer *hidden_unit = nullptr;
 
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
+
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager;
 
@@ -115,8 +121,8 @@ class BgeRerankerMinicpmTest : public testing::Test {
     weight_instance->Load();
     auto bge_reranker_minicpm_weight = weight_instance->GetWeight();
 
-    auto bge_reranker_minicpm = std::make_shared<BgeRerankerMinicpmModel>(model_config, runtime_config, device_id,
-                                                                          context, bge_reranker_minicpm_weight);
+    auto bge_reranker_minicpm = std::make_shared<BgeRerankerMinicpmModel>(
+        model_config, runtime_config, device_id, context, bge_reranker_minicpm_weight, block_cache_layout_);
 
     // Context forward
     auto forward = std::make_unique<ForwardRequest>();

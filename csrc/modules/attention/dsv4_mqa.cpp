@@ -1,0 +1,365 @@
+/* Copyright 2026 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#include "modules/attention/dsv4_mqa.h"
+
+#include <fmt/core.h>
+#include <string>
+
+#include "layers/flash_dsv4_attention_layer.h"
+#include "layers/paged_dsv4_attention_layer.h"
+#include "profiler/profile_event.h"
+
+namespace ksana_llm {
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constructor
+// ─────────────────────────────────────────────────────────────────────────────
+Dsv4Mqa::Dsv4Mqa(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_norm,
+                 LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
+                 Dsv4AttnBuffer& dsv4_attn_buffer)
+    : dsv4_attn_buffer_(dsv4_attn_buffer) {
+  layer_idx_ = layer_idx;
+  const std::string attn_prefix = fmt::format("model.layers.{}.self_attn", layer_idx);
+
+  const auto& model_config = model_creation_config.attn_config.model_config;
+  const auto& dsv4_attn_config = model_config.dsv4_attn_config;
+  const auto& linear_backend = model_config.quant_config.backend;
+  const float layernorm_eps = model_creation_config.layernorm_config.layernorm_eps;
+  const size_t atp_size = creation_context.runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+
+  auto& attn_config = model_creation_config.attn_config;
+  // attn_config.idx must be set first
+  attn_config.idx = layer_idx - creation_context.pipeline_config.lower_layer_idx;
+  if (layer_idx >= static_cast<int>(model_creation_config.attn_config.model_config.num_layer)) {
+    attn_config.idx = creation_context.pipeline_config.upper_layer_idx -
+                      creation_context.pipeline_config.lower_layer_idx + layer_idx -
+                      model_creation_config.attn_config.model_config.num_layer + 1;
+  }
+
+  // ── Dimension fields ────────────────────────────────────────────────────────
+  // head_dim = qk_nope_head_dim + qk_rope_head_dim (== v_head_dim for MQA)
+  head_dim_ = model_config.size_per_head;
+  q_lora_rank_ = dsv4_attn_config.q_lora_rank;
+  o_lora_rank_ = dsv4_attn_config.o_lora_rank;
+  KLLM_CHECK_WITH_INFO(model_config.head_num % atp_size == 0, "head_num must be divisible by atp_size");
+  n_local_heads_ = model_config.head_num / atp_size;
+  KLLM_CHECK_WITH_INFO(dsv4_attn_config.o_groups % atp_size == 0, "o_groups must be divisible by atp_size");
+  o_local_groups_ = dsv4_attn_config.o_groups / atp_size;
+
+  // ── compress_ratio ───────────────────────────────────────────────────────────
+  KLLM_CHECK_WITH_INFO(
+      layer_idx >= 0 && layer_idx < static_cast<int>(model_config.dsv4_attn_config.compress_ratios.size()),
+      "layer_idx out of bounds for compress_ratios array");
+  compress_ratio_ = dsv4_attn_config.compress_ratios[layer_idx];
+  KLLM_CHECK_WITH_INFO(compress_ratio_ == 0 || compress_ratio_ == 4 || compress_ratio_ == 128,
+                       "Dsv4Attn requires compress_ratio in {0, 4, 128}");
+
+  // ── Q path weights ───────────────────────────────────────────────────────────
+  // wqkv_a: [hidden_size → q_lora_rank + head_dim]
+  wqkv_a_proj_ = std::make_unique<Linear>(attn_prefix + ".wqkv_a.weight", creation_context, linear_backend);
+
+  // Parallel q_norm + kv_norm: strided RMSNorm
+  qkv_a_norm_ =
+      std::make_unique<Layernorm>(attn_prefix + ".q_norm.weight", attn_prefix + ".kv_norm.weight", layernorm_eps,
+                                  creation_context, static_cast<int32_t>(q_lora_rank_ + head_dim_));
+
+  // wq_b: [q_lora_rank → n_heads * head_dim], TP column-parallel
+  wq_b_proj_ = std::make_unique<Linear>(attn_prefix + ".wq_b.weight", creation_context, linear_backend);
+
+  // ── DSV4 Attention layers ─────────────────────────────────────────────────────
+  // Initialize flash (prefill) and paged (decode) DSV4 attention layers
+  // following the same pattern as FlashMlaAttention/PagedMlaAttention.
+  std::vector<std::any> attention_param;
+  attention_param.push_back(attn_config.model_config.quant_config.method);  // quant method
+  attention_param.push_back(attn_config.model_config.layernorm_eps);        // layernorm eps
+  attention_param.push_back(attn_config.model_config.use_qk_norm);          // use_qk_norm
+  attention_param.push_back(attn_config.idx);                               // local layer idx
+  attention_param.push_back(attn_config.layer_num_on_node);                 // layer_num_on_node
+  attention_param.push_back(attn_config.max_position_embeddings);           // max_position_embeddings
+  attention_param.push_back(attn_config.head_num_per_tp);                   // head_num_per_tp
+  attention_param.push_back(attn_config.num_kv_heads_per_tp);               // num_kv_heads_per_tp
+  attention_param.push_back(attn_config.size_per_head);                     // size_per_head
+  attention_param.push_back(attn_config.stride_size);       // stride_size (head_num + num_kv_heads * 2) * size_per_head
+  attention_param.push_back(attn_config.tensor_para_size);  // tensor_para_size
+  attention_param.push_back(attn_config.kv_cache_dtype);    // kv_cache_dtype
+  attention_param.push_back(attn_config.model_config.k_scales[layer_idx]);  // k_scale
+  attention_param.push_back(attn_config.model_config.v_scales[layer_idx]);  // v_scale
+  attention_param.push_back(attn_config.rotary_embedding);                  // rotary_embedding
+  attention_param.push_back(compress_ratio_ > 0 ? attn_config.compress_rope_theta
+                                                : attn_config.rope_theta);  // rope_theta
+  // MLA params
+  attention_param.push_back(static_cast<uint32_t>(dsv4_attn_config.qk_rope_head_dim));  // qk_rope_head_dim
+  attention_param.push_back(
+      static_cast<uint32_t>(model_config.size_per_head - dsv4_attn_config.qk_rope_head_dim));  // qk_nope_head_dim
+  attention_param.push_back(static_cast<uint32_t>(dsv4_attn_config.q_lora_rank));              // q_lora_rank
+  attention_param.push_back(static_cast<uint32_t>(0));                           // kv_lora_rank (N/A for MQA)
+  attention_param.push_back(static_cast<uint32_t>(model_config.size_per_head));  // v_head_dim
+  // End MLA params
+  attention_param.push_back(is_neox);                        // is_neox
+  attention_param.push_back(attn_config.position_encoding);  // position_encoding
+  attention_param.push_back(compress_ratio_ > 0 ? attn_config.compress_cos_sin_cache_ptr
+                                                : attn_config.cos_sin_cache_ptr);  // cos_sin_cache
+  if (compress_ratio_ > 0) {
+    attention_param.push_back(attn_config.model_config.rope_scaling_factor_config);  // rope_scaling (yarn)
+  } else {
+    attention_param.push_back(
+        RoPEScalingFactor{.use_deepseek_rope = true});  // rope_scaling (default, with deepseek rope kernel)
+  }
+  attention_param.push_back(attn_config.max_batch_size);  // max_batch_size
+  // Temperature tuning
+  attention_param.push_back(attn_config.model_config.attn_temperature_tuning);  // attn_temperature_tuning
+  attention_param.push_back(attn_config.model_config.attn_scale);               // attn_scale
+  attention_param.push_back(attn_config.model_config.floor_scale);              // floor_scale
+
+  // Flash attention (prefill)
+  std::vector<std::any> flash_attention_param = attention_param;
+  flash_attention_param.push_back(true);  // is_multi_token
+  flash_attention_param.push_back(attn_config.mrope_section_ptr);
+  flash_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
+  flash_attention_param.push_back(compress_ratio_);  // dsv4 specific (append last)
+
+  flash_dsv4_attention_layer_ = std::make_unique<FlashDsv4AttentionLayer>();
+  flash_dsv4_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, creation_context.context,
+                                    creation_context.rank);
+  flash_dsv4_attention_layer_->SetWorkspaceBuffer(
+      creation_context.workspace_mgr->GetWorkspace(flash_dsv4_attention_layer_->GetWorkspaceSize()));
+
+  // Paged attention (decode)
+  std::vector<std::any> paged_attention_param = attention_param;
+  paged_attention_param.push_back(false);    // is_multi_token
+  paged_attention_param.push_back(nullptr);  // mrope_section_ptr
+  paged_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
+  paged_attention_param.push_back(compress_ratio_);  // dsv4 specific (append last)
+
+  paged_dsv4_attention_layer_ = std::make_unique<PagedDsv4AttentionLayer>();
+  paged_dsv4_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
+                                    creation_context.rank);
+  paged_dsv4_attention_layer_->SetWorkspaceBuffer(
+      creation_context.workspace_mgr->GetWorkspace(paged_dsv4_attention_layer_->GetWorkspaceSize()));
+
+  // ── Attention sink weight ─────────────────────────────────────────────────────
+  attn_sink_weight_ = creation_context.base_weight->GetModelWeights(attn_prefix + ".attn_sink");
+
+  // ── Output path weights ──────────────────────────────────────────────────────
+  // wo_a: group-wise Bmm, weight shape [n_local_groups, o_lora_rank, head_dim * n_local_heads / n_local_groups]
+  wo_a_bmm_ = std::make_unique<Bmm>(attn_prefix + ".wo_a.weight", creation_context, linear_backend);
+
+  // wo_b: [n_groups * o_lora_rank → hidden_size], TP row-parallel
+  wo_b_proj_ = std::make_unique<Linear>(attn_prefix + ".wo_b.weight", creation_context, linear_backend);
+
+  // ── Compressor / C4Indexer (production modules from modules/attention/) ──────
+  if (compress_ratio_ > 0) {
+    compressor_ =
+        std::make_unique<Compressor>(layer_idx_, /*is_in_indexer=*/false, creation_context, model_creation_config);
+  }
+  if (compress_ratio_ == 4) {
+    c4_indexer_ = std::make_unique<C4Indexer>(layer_idx_, creation_context, model_creation_config);
+  }
+}
+
+Status Dsv4Mqa::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
+                              const RuntimeConfig& runtime_config, Dsv4AttnBuffer& dsv4_attn_buffer) {
+  const DataType weight_type = attn_config.model_config.weight_data_type;
+  const size_t max_token_num = runtime_config.max_step_token_num;
+  const size_t head_dim = attn_config.model_config.size_per_head;
+  const size_t index_n_heads = attn_config.model_config.dsa_config.index_n_heads;
+  const size_t index_head_dim = attn_config.model_config.dsa_config.index_head_dim;
+
+  const size_t kv_compressed_output_buffer_size = max_token_num * head_dim;
+  dsv4_attn_buffer.kv_compressed_output_buffer = buffer_mgr->CreateBufferTensor(
+      "dsv4_attn_buffer.kv_compressed_output_buffer", {kv_compressed_output_buffer_size}, weight_type);
+
+  const size_t q_indexer_buffer_size = max_token_num * index_n_heads * index_head_dim;
+  dsv4_attn_buffer.q_indexer_buffer =
+      buffer_mgr->CreateBufferTensor("dsv4_attn_buffer.q_indexer_buffer", {q_indexer_buffer_size}, weight_type);
+
+  return Status();
+}
+
+Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
+                        ForwardingContext& forwarding_context) {
+  const int rank = forwarding_context.GetCurrentRank();
+  PROFILE_EVENT_SCOPE(dsv4_mqa_forward, "dsv4_mqa_forward", rank);
+
+  const auto& x_tensors = hidden_buffer_tensors_0;  // [T, hidden_size]
+  const size_t total_tokens = x_tensors[0].shape[0];
+
+  // ── Step 1: Q path + KV path ──────────────────────────────────────────
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+
+  // ── Fused wqkv_a path ───────────────────────────────────────────────────
+  // wqkv_a: [T, hidden_size] → [T, q_lora_rank + head_dim] (in hidden_buffer_tensors_1)
+  std::vector<Tensor>& qkv_a_tensors = hidden_buffer_tensors_1;
+  STATUS_CHECK_RETURN(wqkv_a_proj_->Forward(x_tensors, qkv_a_tensors));
+
+  // Parallel RMSNorm: reads strided q_a and kv_a from wqkv_a output, writes contiguous
+  //   q_a_input:  ptr = base,               shape = {T, q_lora_rank}, stride = q_lora_rank + head_dim
+  //   kv_a_input: ptr = base + q_lora_rank, shape = {T, head_dim},    stride = q_lora_rank + head_dim
+  // Place normed q_a/kv_a in reduce_buffer_tensors
+  std::vector<Tensor> q_a_tensors{reduce_buffer_tensors[0].GetView({total_tokens, static_cast<size_t>(q_lora_rank_)})};
+  Tensor kv_a_tensor{reduce_buffer_tensors[0].GetView({total_tokens, static_cast<size_t>(head_dim_)},
+                                                      q_a_tensors[0].GetElementNumber())};
+  std::vector<Tensor> parallel_norm_outputs = {q_a_tensors[0], kv_a_tensor};
+  STATUS_CHECK_RETURN(qkv_a_norm_->ForwardParallel(
+      {qkv_a_tensors[0].GetView({total_tokens, static_cast<size_t>(q_lora_rank_)}),
+       qkv_a_tensors[0].GetView({total_tokens, static_cast<size_t>(head_dim_)}, q_lora_rank_)},
+      parallel_norm_outputs));
+
+  // Now hidden_buffer_tensors_1 is free
+
+  const auto& model_input = forwarding_context.GetModelInput();
+  const auto& dsv4_mqa_meta = model_input->dsv4_mqa_meta_;
+
+  // ── C4 Indexer (compress_ratio == 4) ─────────────────────────────────────
+  auto& topk_indices_tensor = dsv4_mqa_meta->c4_block_indices_tensor;
+  if (c4_indexer_) {
+    // Pass x [T, hidden_size] and q_a [T, q_lora_rank] (after normed) to c4_indexer.
+    // Use hidden_buffer_tensors_1[0] as workspace for c4_indexer intermediates.
+    // Output kv_compressed_output_tensor [T, head_dim] and topk_indices [T, index_topk] stored in pre-allocated buffer.
+    CREATE_BUFFER_SCOPE(q_indexer_tensors, dsv4_attn_buffer_.q_indexer_buffer);
+    STATUS_CHECK_RETURN(c4_indexer_->Forward(x_tensors[0], q_a_tensors[0],
+                                             /*workspace*/ hidden_buffer_tensors_1[0], q_indexer_tensors,
+                                             topk_indices_tensor, forwarding_context));
+  }
+
+  // ── Compressor (compress_ratio != 0) ─────────────────────────────────────
+  CREATE_BUFFER_SCOPE(kv_compressed_output_tensors, dsv4_attn_buffer_.kv_compressed_output_buffer);
+  Tensor& kv_compressed_output_tensor = kv_compressed_output_tensors[0];
+  if (compressor_) {
+    // Pass x [T, hidden_size] to compressor.
+    // Use hidden_buffer_tensors_1[0] as workspace for compressor intermediates.
+    // Output kv_compressed_output_tensor [T, head_dim] stored in pre-allocated buffer.
+    STATUS_CHECK_RETURN(compressor_->Forward(x_tensors[0], /*workspace*/ hidden_buffer_tensors_1[0],
+                                             kv_compressed_output_tensor, forwarding_context));
+  }
+
+  // Now hidden_buffer_tensors_0 and hidden_buffer_tensors_1 are free
+
+  // ── wq_b: q_lora → Q ─────────────────────────────────────────────────────
+  // wq_b: [T, q_lora_rank] → [T, n_local_heads * head_dim] (in hidden_buffer_tensors_1)
+  std::vector<Tensor>& q_tensors = hidden_buffer_tensors_1;
+  STATUS_CHECK_RETURN(wq_b_proj_->Forward(q_a_tensors, q_tensors));
+
+  // Now hidden_buffer_tensors_0 is free
+
+  // ── Step 2: DSV4 MQA attention ─────────────────────────────────────────────
+  // DSV4 attention layers handle RoPE, KV cache store, and sparse MQA internally.
+  Tensor& attn_output = hidden_buffer_tensors_0[0];
+  // Temporarily reuse some meta from model_input
+  KLLM_CHECK(dsv4_mqa_meta->page_inputs.size() == model_input->page_inputs.size());
+  const size_t dp_context_tokens = dsv4_mqa_meta->dp_context_tokens;
+  const size_t dp_decode_tokens = dsv4_mqa_meta->dp_decode_tokens;
+  const size_t q_stride = n_local_heads_ * head_dim_;
+  const size_t kv_stride = head_dim_;
+
+  if (dp_context_tokens > 0) {
+    Tensor context_q = q_tensors[0].GetView({dp_context_tokens, q_stride});
+    Tensor context_kv = kv_a_tensor.GetView({dp_context_tokens, kv_stride});
+    std::vector<Tensor> context_output = {attn_output.GetView({dp_context_tokens, q_stride})};
+
+    Tensor& flash_tile_sched_meta = compress_ratio_ == 0   ? model_input->flash_input.tile_scheduler_metadata
+                                    : compress_ratio_ == 4 ? dsv4_mqa_meta->flash_input.c4_tile_scheduler_metadata
+                                                           : dsv4_mqa_meta->flash_input.c128_tile_scheduler_metadata;
+    Tensor& flash_num_splits = compress_ratio_ == 0   ? model_input->flash_input.num_splits
+                               : compress_ratio_ == 4 ? dsv4_mqa_meta->flash_input.c4_num_splits
+                                                      : dsv4_mqa_meta->flash_input.c128_num_splits;
+    std::vector<Tensor> flash_inputs = {
+        model_input->flash_input.rotary_embedding_pos,        // rotary_embedding_pos
+        context_q,                                            // q
+        context_kv,                                           // kv
+        dsv4_mqa_meta->layer_swa_kv_cache_ptr_tensor,         // layer_swa_kv_cache_ptr
+        flash_tile_sched_meta,                                // tile_scheduler_metadata
+        flash_num_splits,                                     // num_splits
+        attn_sink_weight_,                                    // attn_sink
+        dsv4_mqa_meta->flash_input.raw_out_loc_tensor,        // raw_out_loc
+        dsv4_mqa_meta->flash_input.swa_block_indices_tensor,  // swa_indices
+    };
+    if (compress_ratio_ > 0) {
+      flash_inputs.push_back(model_input->layer_kv_cache_ptr);  // layer_extra_kv_cache_ptr
+      if (compress_ratio_ == 4) {
+        flash_inputs.push_back(
+            topk_indices_tensor.GetView({dp_context_tokens, topk_indices_tensor.shape[1]}));  // extra_indices
+      } else {
+        flash_inputs.push_back(dsv4_mqa_meta->flash_input.c128_block_indices_tensor);  // extra_indices
+        flash_inputs.push_back(dsv4_mqa_meta->flash_input.c128_topk_lengths_tensor);   // extra_topk_length
+      }
+    }
+    STATUS_CHECK_RETURN(flash_dsv4_attention_layer_->Forward(flash_inputs, context_output));
+    flash_tile_sched_meta.shape[2] = 1;  // Mark tile_scheduler_metadata as initialized
+  }
+
+  if (dp_decode_tokens > 0) {
+    size_t skip_tokens = dp_context_tokens;
+
+    for (size_t i = 0; i < dsv4_mqa_meta->page_inputs.size(); i++) {
+      const size_t current_tokens = dsv4_mqa_meta->page_inputs[i].total_dp_input_ids_len;
+
+      Tensor current_q = q_tensors[0].GetView({current_tokens, q_stride}, skip_tokens * q_stride);
+      Tensor current_kv = kv_a_tensor.GetView({current_tokens, kv_stride}, skip_tokens * kv_stride);
+      std::vector<Tensor> current_output = {attn_output.GetView({current_tokens, q_stride}, skip_tokens * q_stride)};
+
+      Tensor& page_tile_sched_meta = compress_ratio_ == 0 ? model_input->page_inputs[i].tile_scheduler_metadata
+                                     : compress_ratio_ == 4
+                                         ? dsv4_mqa_meta->page_inputs[i].c4_tile_scheduler_metadata
+                                         : dsv4_mqa_meta->page_inputs[i].c128_tile_scheduler_metadata;
+      Tensor& page_num_splits = compress_ratio_ == 0   ? model_input->page_inputs[i].num_splits
+                                : compress_ratio_ == 4 ? dsv4_mqa_meta->page_inputs[i].c4_num_splits
+                                                       : dsv4_mqa_meta->page_inputs[i].c128_num_splits;
+      std::vector<Tensor> paged_inputs = {
+          model_input->page_inputs[i].rotary_embedding_pos,        // rotary_embedding_pos
+          current_q,                                               // q
+          current_kv,                                              // kv
+          dsv4_mqa_meta->layer_swa_kv_cache_ptr_tensor,            // layer_swa_kv_cache_ptr
+          page_tile_sched_meta,                                    // tile_scheduler_metadata
+          page_num_splits,                                         // num_splits
+          attn_sink_weight_,                                       // attn_sink
+          dsv4_mqa_meta->page_inputs[i].raw_out_loc_tensor,        // raw_out_loc
+          dsv4_mqa_meta->page_inputs[i].swa_block_indices_tensor,  // swa_indices
+      };
+      if (compress_ratio_ > 0) {
+        paged_inputs.push_back(model_input->layer_kv_cache_ptr);  // layer_extra_kv_cache_ptr
+        if (compress_ratio_ == 4) {
+          paged_inputs.push_back(
+              topk_indices_tensor.GetView({current_tokens, topk_indices_tensor.shape[1]},
+                                          skip_tokens * topk_indices_tensor.shape[1]));     // extra_indices
+        } else {                                                                            // compress_ratio_ == 128
+          paged_inputs.push_back(dsv4_mqa_meta->page_inputs[i].c128_block_indices_tensor);  // extra_indices
+          paged_inputs.push_back(dsv4_mqa_meta->page_inputs[i].c128_topk_lengths_tensor);   // extra_topk_length
+        }
+      }
+      STATUS_CHECK_RETURN(paged_dsv4_attention_layer_->Forward(paged_inputs, current_output));
+      page_tile_sched_meta.shape[2] = 1;  // Mark tile_scheduler_metadata as initialized
+
+      skip_tokens += current_tokens;
+    }
+  }
+
+  // Restore output shape after attention (in hidden_buffer_tensors_0)
+  // Reshape for group-wise Bmm: [T, n_local_heads * head_dim] → [T, n_local_groups, d_per_group]
+  const size_t d_per_group = n_local_heads_ * head_dim_ / o_local_groups_;
+  attn_output.shape = {total_tokens, o_local_groups_, d_per_group};
+
+  // Now hidden_buffer_tensors_1 and reduce_buffer_tensors are free
+
+  // ── Step 3: Output path ─────────────────────────────────────────────────────
+  // wo_a Bmm: [T, n_local_groups, d_per_group] × [n_local_groups, d_per_group, o_lora_rank]
+  //         → [T, n_local_groups, o_lora_rank]
+  STATUS_CHECK_RETURN(wo_a_bmm_->Forward(/*attn_output*/ hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+
+  // Flatten for wo_b: [T, n_local_groups * o_lora_rank]
+  hidden_buffer_tensors_1[0].shape = {total_tokens, o_local_groups_ * o_lora_rank_};
+
+  // wo_b: [T, n_local_groups * o_lora_rank] → [T, hidden_size]
+  // (in reduce_buffer_tensors if TP mode, otherwise in hidden_buffer_tensors_0)
+  if (forwarding_context.GetModelCommunicator()) {
+    STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1, reduce_buffer_tensors));
+  } else {
+    STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1, hidden_buffer_tensors_0));
+  }
+
+  return Status();
+}
+
+}  // namespace ksana_llm

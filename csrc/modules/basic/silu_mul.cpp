@@ -10,7 +10,8 @@ namespace ksana_llm {
 
 SiluMul::SiluMul(const LayerCreationContext& creation_context) {
   silu_mul_layer_ = std::make_shared<SiluMulLayer>();
-  silu_mul_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
+  silu_mul_layer_->Init({creation_context.model_config.swiglu_limit}, creation_context.runtime_config,
+                        creation_context.context, creation_context.rank);
 }
 
 SiluMul::~SiluMul() {}

@@ -16,6 +16,7 @@
 #include "modules/basic/layernorm.h"
 #include "modules/basic/linear.h"
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/multihead_attention.h"
 #include "modules/ffn/two_layered_ffn.h"
@@ -87,7 +88,8 @@ class Gpt : public ModelInterface {
 class GptModel : public CommonModel {
  public:
   GptModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-           std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+           std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+           std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~GptModel() {}
 
  private:

@@ -2,6 +2,12 @@ build
 debug
 testing
 deps
+
+.roo
+.cursor
+.codebuddy
+temp
+.tapd-config
 core.*
 .cache
 *.pyc
@@ -106,3 +112,7 @@ d.*
 python/ksana_plugin/arc_hunyuan_video/ARIAL.TTF
 
 .agent
+
+# 本地工作笔记 (plans / specs), 不追入仓库
+docs/superpowers/
+plans

@@ -3,21 +3,21 @@
 ==============================================================================*/
 #pragma once
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/common/common_model.h"
 #include "modules/attention/multihead_latent_attention.h"
 #include "modules/attention/sparse_mla_indexer.h"
 #include "modules/basic/add_norm.h"
+#include "modules/basic/all_reduce_fused_norm_add.h"
 #include "modules/basic/linear.h"
 #include "modules/basic/moe.h"
 #include "modules/ffn/two_layered_ffn.h"
-#include "modules/basic/all_reduce_fused_norm_add.h"
 
 namespace ksana_llm {
 class DeepSeekV3DecoderLayer {
  public:
   DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
-                         ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
-                         TensorBuffer* moe_buffer);
+                         ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers, TensorBuffer* moe_buffer);
 
   ~DeepSeekV3DecoderLayer() = default;
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
@@ -56,8 +56,6 @@ class DeepSeekV3DecoderLayer {
   MlaBuffers& mla_buffers_;
   TensorBuffer* const moe_buffer_;
 
-  // Be a replacement of residual_buffer_, for distributed mode only.
-  std::vector<Tensor> local_residual_buffer_{1};
   std::vector<Tensor> distributed_device_buffer_;
   std::vector<Tensor> distributed_device_buffer_prefill_;
 
@@ -89,7 +87,8 @@ class DeepSeekV3MtpLayer {
 class DeepSeekV3Model : public CommonModel {
  public:
   DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                  std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+                  std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                  std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
 

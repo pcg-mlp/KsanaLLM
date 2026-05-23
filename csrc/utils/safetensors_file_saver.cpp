@@ -35,7 +35,7 @@ std::string SafetensorsFileSaver::ConvertDataTypeToSafetensorsDtype(DataType dat
     case TYPE_FP8_E4M3:
       return "F8_E4M3";
     case TYPE_UINT8:
-      return "UI8";
+      return "U8";
     default:
       KLLM_THROW(fmt::format("Unsupported data type: {}", GetTypeString(data_type)));
   }

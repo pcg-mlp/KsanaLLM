@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/context.h"
 #include "configure/environment.h"
 #include "kernels/cast.h"
@@ -38,6 +39,9 @@ class ModelInstance {
 
   // Load model with specified model config.
   void Load();
+
+  // Set the cache layout for specific model instance.
+  void SetBlockCacheLayout(std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
   // The instance name.
   std::string name;
@@ -89,6 +93,9 @@ class ModelInstance {
   // The base modes
   std::shared_ptr<BaseModel> model_instance_;
   std::shared_ptr<ThreadPool> loader_models_threadpool_ = nullptr;
+
+  // The model-level cache layout (holds all block cache layouts keyed by type).
+  std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;
 };
 
 }  // namespace ksana_llm

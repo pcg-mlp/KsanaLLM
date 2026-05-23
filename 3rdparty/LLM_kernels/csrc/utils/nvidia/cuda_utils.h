@@ -55,7 +55,8 @@ namespace utils {
     }                                                                                       \
   } while (0)
 
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+// cudaLaunchKernelEx requires CUDA 12.0+; runtime SM>=90 check is in GetEnablePDL().
+#if (defined(CUDART_VERSION) && (CUDART_VERSION >= 12000))
 #  define LAUNCH_KERNEL_WITH_PDL(kernel, grid_dim, block_dim, smem_size, stream, ...)           \
     do {                                                                                        \
       cudaLaunchAttribute attrs[1];                                                             \

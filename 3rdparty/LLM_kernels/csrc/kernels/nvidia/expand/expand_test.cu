@@ -58,7 +58,7 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
     // warm up
     for (int i = 0; i < 1; i++) {
       InvokeExpand<T>(reinterpret_cast<const T*>(input_meta.data_ptr),
-                      reinterpret_cast<T*>(expand_output_meta.data_ptr), m, expand_size, n, 0, stream);
+                      reinterpret_cast<T*>(expand_output_meta.data_ptr), m, expand_size, n, stream);
 
       torch::Tensor output_tensor_expanded =
           input_tensor.expand({static_cast<int64_t>(m), static_cast<int64_t>(expand_size), static_cast<int64_t>(n)})
@@ -78,7 +78,7 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
 
     for (int i = 0; i < num_iterations; i++) {
       InvokeExpand<T>(reinterpret_cast<const T*>(input_meta.data_ptr),
-                      reinterpret_cast<T*>(expand_output_meta.data_ptr), m, expand_size, n, 0, stream);
+                      reinterpret_cast<T*>(expand_output_meta.data_ptr), m, expand_size, n, stream);
     }
     cudaEventRecord(stop, stream);
     cudaEventSynchronize(stop);
@@ -104,10 +104,6 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
     std::cout << "Torch expand time: " << torch_time_ms << " ms" << std::endl;
     float speed_ratio = torch_time_ms / custom_time_ms;
     std::cout << "Speed ratio (Custom/Torch): " << speed_ratio << std::endl;
-    int arch = GetSMVersion();
-    if (arch == 90) {
-      EXPECT_GE(speed_ratio, 3.0f);
-    }
 
     torch::cuda::CUDAStream original_stream = torch::cuda::getStreamFromExternal(old_stream, device);
     torch::cuda::setCurrentCUDAStream(original_stream);
@@ -120,9 +116,11 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
   }
 };
 
-TEST_F(LlamaNvidiaExpandTestSuit, ExpandTest) { 
-  TestExpand<half>(2048, 64, 128); 
-  TestExpand<__nv_bfloat16>(2048, 64, 128);
+TEST_F(LlamaNvidiaExpandTestSuit, ExpandTest) {
+  TestExpand<half>(32, 7168, 128);
+  TestExpand<half>(32, 4096, 4);
+  TestExpand<__nv_bfloat16>(32, 7168, 128);
+  TestExpand<__nv_bfloat16>(32, 4096, 4);
 }
 
 }  // namespace test

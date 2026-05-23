@@ -5,6 +5,7 @@
 
 #include "cache_manager/base_cache_manager.h"
 #include "cache_manager/cache_manager_interface.h"
+#include "cache_manager/swa_cache_manager.h"
 
 #include "configure/environment.h"
 #include "runtime/request_state.h"
@@ -38,6 +39,17 @@ struct DirectCachedRequest {
   // The cached blocks associated with this request, not include root node.
   // Contain all blocks even when request is waiting, or blocks that haved been swapped.
   std::vector<DirectCachedBlock*> cached_blocks;
+
+  // FA block ids that are currently inside this request's SWA window.
+  // The list is ordered by block index (smallest index first).
+  // Used to call FreeSWABlock for each id when the request ends or the SWA
+  // window slides past a block in UpdateRequestTokens.
+  std::vector<size_t> swa_window_fa_block_ids;
+
+  // The cached_blocks index of swa_window_fa_block_ids[0].
+  // Maintained so that UpdateRequestTokens can compute block positions
+  // directly without scanning cached_blocks.
+  size_t swa_window_start_block_idx = 0;
 };
 
 // Used to support prefix caching.
@@ -45,7 +57,8 @@ class DirectCacheManager : public CacheManagerInterface,
                            public BaseCacheManager<DirectCachedBlock, DirectCachedRequest> {
  public:
   explicit DirectCacheManager(const CacheManagerConfig& cache_manager_config,
-                              std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group = nullptr);
+                              std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group = nullptr,
+                              std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group = nullptr);
   ~DirectCacheManager();
 
   // Initialize all the memory blocks.
@@ -82,13 +95,39 @@ class DirectCacheManager : public CacheManagerInterface,
                                      size_t& shared_block_num, size_t& unique_block_num,
                                      size_t& shared_token_num) override;
 
+  // Not supported by DirectCacheManager; all FA/SWA shared counts are 0.
+  // FA group (first): fa_shared_block_num, fa_unique_block_num, fa_shared_token_num.
+  // SWA group (second): swa_shared_block_num, swa_unique_block_num, swa_shared_token_num.
+  Status GetRequestPrefixBlockNumberBeforeRemoteCacheLoading(int64_t req_id, const std::vector<int>& input_token_ids,
+                                                             size_t check_token_num, size_t& fa_shared_block_num,
+                                                             size_t& fa_unique_block_num, size_t& fa_shared_token_num,
+                                                             size_t& swa_shared_block_num, size_t& swa_unique_block_num,
+                                                             size_t& swa_shared_token_num) override;
+
+  // Not supported by DirectCacheManager; returns RET_RUNTIME_FAILED.
+  Status AllocateBlocksForRemoteCache(int64_t /*req_id*/, std::vector<int>& /*req_block_ids*/,
+                                      size_t /*fa_block_num*/, size_t /*swa_block_num*/,
+                                      std::vector<int>& /*remote_fa_block_ids*/,
+                                      std::vector<int>& /*remote_swa_block_ids*/) override {
+    return Status(RET_RUNTIME_FAILED, "AllocateBlocksForRemoteCache is not supported by DirectCacheManager.");
+  }
+
+  // Not supported by DirectCacheManager; returns RET_RUNTIME_FAILED.
+  Status ConfirmRemoteCacheLoadingResult(int64_t /*req_id*/, const std::vector<int>& /*kvcached_token_ids*/,
+                                         size_t /*shareable_kvcache_token_num*/,
+                                         const std::vector<size_t>& /*matched_remote_swa_block_indexs*/) override {
+    return Status(RET_RUNTIME_FAILED, "ConfirmRemoteCacheLoadingResult is not supported by DirectCacheManager.");
+  }
+
   // Allocate new blocks for request, called only when req is running.
-  Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids) override;
+  Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
+                               std::vector<int>& swa_req_block_ids,
+                               std::vector<size_t>& swa_block_idx_offsets) override;
 
   // Update the token ids of this request.
   Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
-                             size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids,
-                             bool& block_merged) override;
+                             size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids, bool& block_merged,
+                             std::vector<int>& swa_req_block_ids, std::vector<size_t>& swa_block_idx_offsets) override;
 
   void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
                            std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
@@ -120,7 +159,8 @@ class DirectCacheManager : public CacheManagerInterface,
 
   // Merge the swapped in block to the tree, update block ids for infer request.
   // The swapin of the request's block must be done before call this.
-  Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids) override;
+  Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids, std::vector<int>& swa_req_block_ids,
+                            std::vector<size_t>& swa_block_idx_offsets) override;
 
   // Drop a swaped cached request.
   void DestroySwappedRequest(int64_t req_id) override;
@@ -132,6 +172,9 @@ class DirectCacheManager : public CacheManagerInterface,
 
  private:
   AsyncSwapCallbackFunc swap_callback_func_ = nullptr;
+
+  // SWA cache manager; null when SWA is not configured.
+  std::unique_ptr<SWACacheManager> swa_cache_manager_;
 
   // Create a new cached block.
   DirectCachedBlock* CreateCachedBlock(size_t block_id);

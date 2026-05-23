@@ -19,8 +19,6 @@ namespace ksana_llm {
 
 struct TritonKernel {
   int shm_size;
-  int grid_y;
-  int grid_z;
   int block_x;
   int block_y;
   int block_z;
@@ -74,12 +72,26 @@ class TritonWrapper {
                                    int b_zp_stride1, bool mul_routed_weight, int top_k, bool has_zp, int weight_bits,
                                    int group_size, std::unordered_map<std::string, int> config, cudaStream_t stream);
 
+  // num_experts 仅用于 profile 日志（打印每专家权重大小 / 总权重大小），不影响 kernel 启动。
   template <typename T>
   void InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,
                                        void* sorted_token_ids, void* expert_ids, void* num_tokens_post_padded, int n,
                                        int k, int max_num_tokens_padded, int numel, bool mul_routed_weight, int top_k,
-                                       int group_size, bool quant_a_per_tensor,
+                                       int group_size, bool quant_a_per_tensor, int num_experts,
                                        std::unordered_map<std::string, int> config, cudaStream_t stream);
+
+  // 执行 W=MXFP4 / A=FP8 的 fused MoE kernel：
+  //   - b 为 MXFP4 packed uint8，shape [E, N, K/2]
+  //   - b_scale 为 E8M0 uint8，shape [E, N, K/group_size] (group_size = 32, MXFP4 标准)
+  //   - a 为 FP8 E4M3，a_scale 为 fp32 (per-tensor 标量 或 per-token-group [m, K/128])
+  // kernel 内部把 MXFP4 on-the-fly 转 FP8 再做 GEMM。
+  // num_experts 仅用于 profile 日志（打印每专家权重大小 / 总权重大小），不影响 kernel 启动。
+  template <typename T>
+  void InvokeFusedMoeWfp4Afp8Kernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,
+                                    void* sorted_token_ids, void* expert_ids, void* num_tokens_post_padded, int n,
+                                    int k, int max_num_tokens_padded, int numel, bool mul_routed_weight, int top_k,
+                                    int group_size, bool quant_a_per_tensor, int num_experts,
+                                    std::unordered_map<std::string, int> config, cudaStream_t stream);
 
   /**
    * @brief 执行融合的批量MoE内核计算
@@ -110,6 +122,29 @@ class TritonWrapper {
                                    int top_k, bool use_fp8_w8a8, bool use_int8_w8a16, bool per_act_token_quant,
                                    std::unordered_map<std::string, int> config, cudaStream_t stream);
 
+  template <typename T>
+  void InvokeMhcPreBigFuseKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale, void* mhc_base,
+                                 void* residual, void* post_mix, void* comb_mix, void* layer_input, int num_tokens,
+                                 int hidden_size, float rms_eps, float mhc_pre_eps, float mhc_sinkhorn_eps,
+                                 float mhc_post_mult_value, int sinkhorn_repeat, int n_splits, int mhc_mult,
+                                 cudaStream_t stream);
+
+  template <typename T>
+  void InvokeMhcPreBigFuseWithNormKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale, void* mhc_base,
+                                         void* residual, void* norm_weight, void* post_mix, void* comb_mix,
+                                         void* layer_input, int num_tokens, int hidden_size, float rms_eps,
+                                         float mhc_pre_eps, float mhc_sinkhorn_eps, float mhc_post_mult_value,
+                                         int sinkhorn_repeat, int n_splits, int mhc_mult, cudaStream_t stream);
+
+  template <typename T>
+  void InvokeMhcPostFwdKernel(void* a, void* b, void* c, void* d, void* x, int num_tokens, int mhc, int hidden,
+                              int n_thr, int h_blk, cudaStream_t stream);
+
+  template <typename T>
+  void InvokeMhcHeadBigFuseKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale, void* mhc_base,
+                                  void* residual, void* layer_input, int num_tokens, int hidden_size, float rms_eps,
+                                  float mhc_pre_eps, int n_splits, int mhc_mult, cudaStream_t stream);
+
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,
                                                  const std::unordered_map<std::string, std::string>& map);
@@ -121,7 +156,7 @@ class TritonWrapper {
 
   void InvokeTritonKernel(const std::string& kernel_base_name, void* args[],
                           const std::unordered_map<std::string, std::string>& map, size_t grid_x, size_t grid_y,
-                          size_t grid_z, cudaStream_t stream);
+                          size_t grid_z, cudaStream_t stream, int block_x = -1, int block_y = -1, int block_z = -1);
 
   std::unordered_map<std::string, std::vector<std::string>> kernel_key_map_;
 

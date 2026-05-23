@@ -91,22 +91,24 @@ __global__ void InvokeRotaryEmbeddingKernel(
   const T* cos_ptr = cache_ptr;
   const T* sin_ptr = cache_ptr + embed_dim;
 
-  const int nq = num_heads * embed_dim;
-  for (int i = threadIdx.x; i < nq; i += blockDim.x) {
-    const int head_idx = i / embed_dim;
-    const int64_t token_head = token_idx * query_stride + head_idx * query_head_size;
-    const int rot_offset = i % embed_dim;
-    if (query != nullptr) {
+  if (query != nullptr) {
+    const int nq = num_heads * embed_dim;
+    for (int i = threadIdx.x; i < nq; i += blockDim.x) {
+      const int head_idx = i / embed_dim;
+      const int64_t token_head = token_idx * query_stride + head_idx * query_head_size;
+      const int rot_offset = i % embed_dim;
       ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, is_reverse);
     }
   }
 
-  const int nk = num_kv_heads * embed_dim;
-  for (int i = threadIdx.x; i < nk; i += blockDim.x) {
-    const int head_idx = i / embed_dim;
-    const int64_t token_head = token_idx * key_stride + head_idx * key_head_size;
-    const int rot_offset = i % embed_dim;
-    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, is_reverse);
+  if (key != nullptr) {
+    const int nk = num_kv_heads * embed_dim;
+    for (int i = threadIdx.x; i < nk; i += blockDim.x) {
+      const int head_idx = i / embed_dim;
+      const int64_t token_head = token_idx * key_stride + head_idx * key_head_size;
+      const int rot_offset = i % embed_dim;
+      ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, is_reverse);
+    }
   }
 }
 

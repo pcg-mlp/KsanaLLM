@@ -40,7 +40,8 @@ CommonModel::CommonModel(const ModelConfig& model_config, const RuntimeConfig& r
 
 CommonModel::~CommonModel() {}
 
-void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
+void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight,
+                                std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
   prefix_caching_enabled_ = runtime_config_.enable_prefix_caching;
   speculative_decoding_enabled_ = runtime_config_.enable_speculative_decoding;
 
@@ -62,7 +63,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
     // Initialize all forwarding contexts in the buffer
     forwarding_context_ = std::make_unique<ForwardingContext>();
     forwarding_context_->Init(context_, rank_, model_config_, runtime_config_, pipeline_config_,
-                              model_buffers_.buffers_.get(), GetBufferManager());
+                              model_buffers_.buffers_.get(), GetBufferManager(), block_cache_layout);
     KLLM_LOG_DEBUG << "Initialized forwarding context buffer.";
   }
 
@@ -137,8 +138,8 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   }
   bool reuse_prefix_config = prefix_caching_enabled_ || speculative_decoding_enabled_;
   model_creation_config.Init(model_config_, runtime_config_, model_buffers_.cos_sin_cache_tensor_,
-                             model_run_config_.position_encoding, reuse_prefix_config, layer_num_on_node,
-                             mrotary_section_tensor_.GetPtr<const int>(false),
+                             model_buffers_.compress_cos_sin_cache_tensor_, model_run_config_.position_encoding,
+                             reuse_prefix_config, layer_num_on_node, mrotary_section_tensor_.GetPtr<const int>(false),
                              xdrotary_section_tensor_.GetPtr<const int>(false));
 
   // create matmul layer
@@ -381,6 +382,18 @@ Status CommonModel::LookupEmbedding(ForwardingContext& forwarding_context,
     input_refit_layer_->Forward(emb_tensors, residual_buffer);
     emb_tensors.pop_back();
   }
+
+  if (initial_mhc_) {
+    // Expand residual_buffer from [t, d] to [t, hc, d]
+    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+    std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
+    MemcpyAsync(hidden_buffer_tensors_1[0].GetPtr<void>(), residual_buffer[0].GetPtr<void>(),
+                residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                forwarding_context.GetContext()->device->GetPrimaryComputeStream());
+    hidden_buffer_tensors_1[0].shape = residual_buffer[0].shape;
+    hidden_buffer_tensors_1[0].dtype = residual_buffer[0].dtype;
+    initial_mhc_->InitialForward(hidden_buffer_tensors_1, residual_buffer);
+  }
   return Status();
 }
 
@@ -389,6 +402,7 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::Begin);
+
   // save hidden result if enable MTP model
   if (runtime_config_.mtp_step_num > 0) {
     auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
@@ -397,6 +411,14 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
                 residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
                 context_->device->GetPrimaryComputeStream());
+  }
+
+  // Squeeze residual_buffer from [t, hc, d] to [t, d]
+  if (run_mode == RunMode::kNextN && nextn_final_mhc_) {
+    // Use MTP-specific hc_head for NextN mode
+    nextn_final_mhc_->FinalForward(residual_buffer, residual_buffer);
+  } else if (final_mhc_) {
+    final_mhc_->FinalForward(residual_buffer, residual_buffer);
   }
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
@@ -410,7 +432,10 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   // final norm
   // Only pre norm model performs final norm.
   // Both input and output are in `residual_buffer`.
-  if (lm_head_prenorm_) {
+  if (run_mode == RunMode::kNextN && nextn_shared_head_norm_) {
+    // Use MTP-specific shared_head.norm for NextN mode
+    nextn_shared_head_norm_->Forward(residual_buffer, residual_buffer);
+  } else if (lm_head_prenorm_) {
     lm_head_prenorm_->Forward(residual_buffer, residual_buffer);
   }
 

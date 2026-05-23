@@ -51,29 +51,30 @@ SparseMlaIndexer::SparseMlaIndexer(int layer_idx, LayerCreationContext& creation
   // from '<brace-enclosed initializer list>' to 'std::vector<std::any>' so
   // we use push back to make it work.
   std::vector<std::any> indexer_param;
-  indexer_param.push_back(static_cast<int>(attn_config.model_config.hidden_units));                 // 0: dim
-  indexer_param.push_back(static_cast<int>(n_heads_));                                              // 1: n_heads
-  indexer_param.push_back(static_cast<int>(head_dim_));                                             // 2: head_dim
-  indexer_param.push_back(static_cast<int>(attn_config.model_config.mla_config.qk_rope_head_dim));  // 3: rope_head_dim
-  indexer_param.push_back(static_cast<int>(index_topk_));                                           // 4: index_topk
-  indexer_param.push_back(static_cast<int>(block_size_));  // 5: block_size (kv block size)
-  indexer_param.push_back(128);                            // 6: quant_block_size (quantization block size)
-  indexer_param.push_back(attn_config.position_encoding);  // 7: rotary_embedding type
-  indexer_param.push_back(attn_config.rope_theta);         // 8: rope_theta
-  indexer_param.push_back(attn_config.cos_sin_cache_ptr);  // 9: cos/sin cache
-  indexer_param.push_back(attn_config.model_config.rope_scaling_factor_config);  // 10: rope scaling
-  indexer_param.push_back(static_cast<int>(attn_config.max_batch_size));         // 11: max_batch_size
-  indexer_param.push_back(attn_config.max_position_embeddings);                  // 12: max_seq_len
-  indexer_param.push_back(attn_config.idx);                                      // 13: local_layer_idx
-  indexer_param.push_back(model_config.dsa_config.indexer_rope_interleave);      // 14: rope_interleave
-  indexer_param.push_back(model_config.quant_config.scale_fmt);                  // 15: scale_fmt
+  indexer_param.push_back(static_cast<int>(n_heads_));                                              // n_heads
+  indexer_param.push_back(static_cast<int>(head_dim_));                                             // head_dim
+  indexer_param.push_back(static_cast<int>(attn_config.model_config.mla_config.qk_rope_head_dim));  // rope_head_dim
+  indexer_param.push_back(static_cast<int>(index_topk_));                                           // index_topk
+  indexer_param.push_back(static_cast<int>(block_size_));  // block_size (kv block size)
+  indexer_param.push_back(128);                            // quant_block_size (quantization block size)
+  indexer_param.push_back(attn_config.position_encoding);  // rotary_embedding type
+  indexer_param.push_back(attn_config.rope_theta);         // rope_theta
+  indexer_param.push_back(attn_config.cos_sin_cache_ptr);  // cos/sin cache
+  indexer_param.push_back(attn_config.model_config.rope_scaling_factor_config);  // rope scaling
+  indexer_param.push_back(static_cast<int>(attn_config.max_batch_size));         // max_batch_size
+  indexer_param.push_back(attn_config.max_position_embeddings);                  // max_seq_len
+  indexer_param.push_back(attn_config.idx);                                      // local_layer_idx
+  indexer_param.push_back(static_cast<int>(attn_config.layer_num_on_node));      // layer_num_on_node
+  indexer_param.push_back(model_config.dsa_config.indexer_rope_interleave);      // rope_interleave
+  indexer_param.push_back(model_config.quant_config.scale_fmt);                  // scale_fmt
+  indexer_param.push_back(
+      /*compress_ratio*/ static_cast<uint32_t>(1));  // compress_ratio (DSA does not use compressor)
   flash_sparse_mla_indexer_layer_->Init(indexer_param, creation_context.runtime_config, creation_context.context,
                                         creation_context.rank);
   flash_sparse_mla_indexer_layer_->SetWorkspaceBuffer(
       creation_context.workspace_mgr->GetWorkspace(flash_sparse_mla_indexer_layer_->GetWorkspaceSize()));
 
-  indexer_param.push_back(static_cast<int>(attn_config.layer_num_on_node));          // 15: layer_num_on_node
-  indexer_param.push_back(static_cast<int>(attn_config.max_decode_tokens_per_req));  // 16: max_decode_tokens_per_req
+  indexer_param.push_back(static_cast<int>(attn_config.max_decode_tokens_per_req));  // 18: max_decode_tokens_per_req
   paged_sparse_mla_indexer_layer_->Init(indexer_param, creation_context.runtime_config, creation_context.context,
                                         creation_context.rank);
   paged_sparse_mla_indexer_layer_->SetWorkspaceBuffer(
@@ -160,9 +161,8 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     std::vector<Tensor> context_output_tensors = {topk_indices.GetView({dp_context_tokens, index_topk_})};
     STATUS_CHECK_RETURN(flash_sparse_mla_indexer_layer_->Forward(
         {context_q_indexer, context_k_indexer, context_weights, quant_workspace,
-         model_input->flash_input.rotary_embedding_pos, model_input->flash_input.rotary_embedding_mask,
-         model_input->flash_input.indexer_kv_list, model_input->flash_input.kv_cache_offset,
-         model_input->dp_prefill_q_offset_uint64_tensor, model_input->dp_input_prefix_uint64_tensor,
+         model_input->flash_input.rotary_embedding_pos,
+         model_input->flash_input.store_out_loc, /*unused*/ model_input->flash_input.input_length,
          model_input->dp_input_offset_uint64_tensor, model_input->flash_input.block_table,
          model_input->flash_input.cur_seq_len_start, model_input->flash_input.cur_seq_len_end,
          model_input->layer_indexer_kv_cache_ptr, attn_ctx.forward_shape},
@@ -174,7 +174,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     // Process page_dual and page_single sequentially
     // Page_dual is placed before page_single, since requests are sorted by token_num in descending order
     size_t skip_tokens = 0;
-    for (const auto& page_input : model_input->page_inputs) {
+    for (auto& page_input : model_input->page_inputs) {
       const size_t current_tokens = page_input.total_dp_input_ids_len;
       // Offset tensors by `dp_context_tokens + skip_tokens`
       const size_t total_offset = dp_context_tokens + skip_tokens;
@@ -190,15 +190,13 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
 
       STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
           {current_q_indexer, current_k_indexer, current_weights, quant_workspace, page_input.rotary_embedding_pos,
-           page_input.rotary_embedding_mask, page_input.input_length, page_input.expanded_input_length,
-           page_input.indexer_kv_list, page_input.kv_cache_offset, page_input.block_table,
+           page_input.store_out_loc, page_input.input_length, page_input.expanded_input_length, page_input.block_table,
            page_input.expanded_block_table, page_input.cur_seq_len_start, page_input.cur_seq_len_end,
            model_input->layer_indexer_kv_cache_ptr, page_input.paged_schedule_meta},
           current_output_tensors));
+      page_input.paged_schedule_meta.shape[2] = 1;  // Mark meta as initialized
+
       skip_tokens += current_tokens;
-    }
-    for (auto& page_input : model_input->page_inputs) {
-      page_input.paged_schedule_meta.shape[2] = 1;  // mark meta as initialized
     }
   }
 

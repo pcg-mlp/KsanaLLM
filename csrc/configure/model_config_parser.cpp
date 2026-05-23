@@ -20,6 +20,7 @@
 #include "models/common/common_config.h"
 #include "models/common_moe/moe_config.h"
 #include "models/deepseek_v3/deepseek_v3_config.h"
+#include "models/deepseek_v4/deepseek_v4_config.h"
 #include "models/gpt/gpt_config.h"
 #include "utils/gguf_file_tensor_loader.h"
 #include "utils/logger.h"
@@ -138,10 +139,11 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
       KLLM_THROW(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
     }
   }
-  // Force v32 to use ue8m0 scale for accuracy
-  if (model_config.is_quant && model_config.type == "deepseek_v32") {
+  // Force ds v32/v4 to use ue8m0 scale for accuracy
+  if (model_config.is_quant && (model_config.type == "deepseek_v32" || model_config.type == "deepseek_v4")) {
     model_config.quant_config.scale_fmt = "ue8m0";
   }
+  model_config.quant_config.expert_dtype = config_json.value("expert_dtype", "none");
 
   if (model_config.quant_config.method == QUANT_GPTQ && model_config.quant_config.desc_act == true) {
     model_config.quant_config.backend = MARLIN_LINEAR_BACKEND;
@@ -236,7 +238,8 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
       if (model_config.rope_scaling_factor_config.type == "dynamic" && rope_scaling_setting.contains("alpha")) {
         model_config.rope_scaling_factor_config.has_alpha = true;
         model_config.rope_scaling_factor_config.scaling_alpha = rope_scaling_setting.value("alpha", 1.0f);
-      } else {
+      } else if (model_config.rope_scaling_factor_config.type != "yarn") {
+        // yarn already uses original_max_position_embeddings directly; skip factor scaling
         derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
       }
     }
@@ -291,9 +294,13 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
       model_config.rope_scaling_factor_config.type = "internlm2_dynamic";
     }
   }
+  // NOTICE(winminkong): 先让deepseek_v4的rope计算也走deepseek_rope逻辑，后续有问题再修改
   if (model_config.use_mla) {
     // MLA model has special rotary dim
     model_config.rope_scaling_factor_config.use_deepseek_rope = true;
+  }
+  if (model_config.use_dsv4_attn) {
+    model_config.rope_scaling_factor_config.use_deepseek_v4_rope = true;
   }
 
   model_config.max_training_seq_len = static_cast<int>(derived_max_model_len);
@@ -520,6 +527,8 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
                model_config.type == "deepseek_v2" || model_config.type == "kimi_k2" ||
                model_config.type == "glm_moe_dsa") {
       PrepareDeepSeekV3Attributes(config_json, model_config);
+    } else if (model_config.type == "deepseek_v4") {
+      PrepareDeepSeekV4Attributes(config_json, model_config);
     } else if (model_config.type == "glm4_moe") {
       PrepareGlm4MoeAttributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {
@@ -592,7 +601,7 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       nlohmann::json modules_json = ReadJsonFromFile(modules_json_path);
       if (!modules_json.empty() && modules_json.is_array()) {
         bool found_normalize = false;
-        for (const auto& module : modules_json) {
+        for (const auto &module : modules_json) {
           if (module.value("type", "") == "sentence_transformers.models.Normalize") {
             found_normalize = true;
             break;
@@ -611,4 +620,37 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
 
   return Status();
 }
+
+// Helper macro: try to get a field from override_json and assign it to model_config.
+// Emits a WARNING and skips the field if the JSON value cannot be converted to the target type.
+#define APPLY_OVERRIDE_FIELD(json, cfg, field, T)                                                   \
+  if ((json).contains(#field)) {                                                                    \
+    try {                                                                                           \
+      (cfg).field = (json).at(#field).get<T>();                                                     \
+      KLLM_LOG_INFO << "json_model_override_args: override " #field " = " << (cfg).field;           \
+    } catch (const std::exception &_e) {                                                            \
+      KLLM_LOG_WARNING << "json_model_override_args: failed to override " #field ": " << _e.what(); \
+    }                                                                                               \
+  }
+
+void ApplyJsonModelOverride(const nlohmann::json &override_json, ModelConfig &model_config) {
+  // Unsigned integer fields
+  APPLY_OVERRIDE_FIELD(override_json, model_config, num_layer, uint32_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, hidden_units, uint32_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, head_num, size_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, num_key_value_heads, size_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, inter_size, uint32_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, size_per_head, uint32_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, vocab_size, uint32_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, rotary_embedding, uint32_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, max_training_seq_len, size_t)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, max_position_embeddings, int)
+  // Float fields
+  APPLY_OVERRIDE_FIELD(override_json, model_config, rope_theta, float)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, layernorm_eps, float)
+  // String fields
+  APPLY_OVERRIDE_FIELD(override_json, model_config, name, std::string)
+  APPLY_OVERRIDE_FIELD(override_json, model_config, type, std::string)
+}
+
 }  // namespace ksana_llm

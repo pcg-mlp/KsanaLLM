@@ -137,9 +137,66 @@ struct IdentityActivation {
   static __device__ __forceinline__ T apply(const T& val) { return val; }
 };
 
-template <template <typename T> class Activation, typename T>
+// SwiGLU clamp helpers (仅供 RowBasedActivationKernel 的 SiluActivation 路径使用)
+template <typename T>
+__device__ __forceinline__ T ApplyGateClamp(const T& val, float lim);  // clamp(max = lim)
+template <typename T>
+__device__ __forceinline__ T ApplyUpClamp(const T& val, float lim);    // clamp(min = -lim, max = lim)
+
+template <>
+__device__ __forceinline__ float ApplyGateClamp<float>(const float& val, float lim) {
+  return fminf(val, lim);
+}
+template <>
+__device__ __forceinline__ float ApplyUpClamp<float>(const float& val, float lim) {
+  return fminf(fmaxf(val, -lim), lim);
+}
+
+template <>
+__device__ __forceinline__ half ApplyGateClamp<half>(const half& val, float lim) {
+  return __float2half(fminf(__half2float(val), lim));
+}
+template <>
+__device__ __forceinline__ half ApplyUpClamp<half>(const half& val, float lim) {
+  return __float2half(fminf(fmaxf(__half2float(val), -lim), lim));
+}
+
+template <>
+__device__ __forceinline__ half2 ApplyGateClamp<half2>(const half2& val, float lim) {
+  return __floats2half2_rn(fminf(__half2float(val.x), lim),
+                           fminf(__half2float(val.y), lim));
+}
+template <>
+__device__ __forceinline__ half2 ApplyUpClamp<half2>(const half2& val, float lim) {
+  return __floats2half2_rn(
+      fminf(fmaxf(__half2float(val.x), -lim), lim),
+      fminf(fmaxf(__half2float(val.y), -lim), lim));
+}
+
+template <>
+__device__ __forceinline__ __nv_bfloat16 ApplyGateClamp<__nv_bfloat16>(const __nv_bfloat16& val, float lim) {
+  return __float2bfloat16(fminf(__bfloat162float(val), lim));
+}
+template <>
+__device__ __forceinline__ __nv_bfloat16 ApplyUpClamp<__nv_bfloat16>(const __nv_bfloat16& val, float lim) {
+  return __float2bfloat16(fminf(fmaxf(__bfloat162float(val), -lim), lim));
+}
+
+template <>
+__device__ __forceinline__ __nv_bfloat162 ApplyGateClamp<__nv_bfloat162>(const __nv_bfloat162& val, float lim) {
+  return __floats2bfloat162_rn(fminf(__bfloat162float(val.x), lim),
+                               fminf(__bfloat162float(val.y), lim));
+}
+template <>
+__device__ __forceinline__ __nv_bfloat162 ApplyUpClamp<__nv_bfloat162>(const __nv_bfloat162& val, float lim) {
+  return __floats2bfloat162_rn(
+      fminf(fmaxf(__bfloat162float(val.x), -lim), lim),
+      fminf(fmaxf(__bfloat162float(val.y), -lim), lim));
+}
+
+template <template <typename T> class Activation, typename T, bool HAS_SWIGLU_LIMIT>
 __global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, int32_t m, int32_t n, int32_t stride,
-                                         int32_t for_range, int32_t packed_elems) {
+                                         int32_t for_range, int32_t packed_elems, float swiglu_limit) {
   /*
    * - input: row-major matrix with logical shape [m, n]. The last dimension is split into two contiguous halves:
    *     [0 .. n/2)  -> value part
@@ -181,6 +238,15 @@ __global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, in
       gate_in_1 = gate_base[col_1];
     }
 
+    if constexpr (HAS_SWIGLU_LIMIT) {
+      val_in_0  = ApplyGateClamp<T>(val_in_0,  swiglu_limit);
+      gate_in_0 = ApplyUpClamp<T>  (gate_in_0, swiglu_limit);
+      if (has_c1) {
+        val_in_1  = ApplyGateClamp<T>(val_in_1,  swiglu_limit);
+        gate_in_1 = ApplyUpClamp<T>  (gate_in_1, swiglu_limit);
+      }
+    }
+
     ActType act_0 = Activation<T>::apply(val_in_0);
     T out_0 = CastCudaDataType<T>(act_0 * CastCudaDataType<ActType>(gate_in_0));
 
@@ -197,8 +263,9 @@ __global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, in
   }
 }
 
-template <template <typename T> class Activation, typename T>
-void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n, cudaStream_t& stream) {
+template <template <typename T> class Activation, typename T, bool HAS_SWIGLU_LIMIT>
+void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n,
+                              float swiglu_limit, cudaStream_t& stream) {
   using PT = typename PackTypeAlign<T>::type;
   int32_t packed_elems = ElemsNum<PT>::value;
   int32_t divided_column_num = n / 2;
@@ -210,23 +277,28 @@ void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int
   dim3 grid(m), block(BLOCK_SIZE);
   size_t for_range = ceil(static_cast<float>(divided_column_num) / packed_elems / BLOCK_SIZE);
   if (packed_elems == 1) {  // not using PT
-    RowBasedActivationKernel<Activation, T>
+    RowBasedActivationKernel<Activation, T, HAS_SWIGLU_LIMIT>
         <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(out), reinterpret_cast<const T*>(input), m, n / packed_elems,
-                                     divided_column_num / packed_elems, for_range, packed_elems);
+                                     divided_column_num / packed_elems, for_range, packed_elems, swiglu_limit);
   } else {
-    RowBasedActivationKernel<Activation, PT>
+    RowBasedActivationKernel<Activation, PT, HAS_SWIGLU_LIMIT>
         <<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out), reinterpret_cast<const PT*>(input), m,
-                                     n / packed_elems, divided_column_num / packed_elems, for_range, packed_elems);
+                                     n / packed_elems, divided_column_num / packed_elems, for_range, packed_elems,
+                                     swiglu_limit);
   }
 }
 
-#define INSTANTIATE_ROW_BASED_ACTIVATION(Activation, T)                                                            \
-  template void InvokeRowBasedActivation<Activation, T>(T * out, const T* input, const int32_t m, const int32_t n, \
-                                                            cudaStream_t& stream);
+#define INSTANTIATE_ROW_BASED_ACTIVATION(Activation, T, HAS_LIM)                                          \
+  template void InvokeRowBasedActivation<Activation, T, HAS_LIM>(T * out, const T* input, const int32_t m,\
+                                                                 const int32_t n, float swiglu_limit,     \
+                                                                 cudaStream_t& stream);
 
-INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float);
-INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, half);
-INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, __nv_bfloat16);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float, false);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float, true);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, half, false);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, half, true);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, __nv_bfloat16, false);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, __nv_bfloat16, true);
 
 template <template <typename T> class Activation, typename T, typename BT>
 __global__ void InvokeGenericActivationKernel(T* out, const BT* __restrict bias, const T* __restrict gated_weights,

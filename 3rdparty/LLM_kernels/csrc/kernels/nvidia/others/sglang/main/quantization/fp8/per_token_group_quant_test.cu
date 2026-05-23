@@ -62,7 +62,8 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
     // Call the kernel
     per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_meta.data_ptr, output_s_meta.data_ptr, m, n, group_size_,
-                                 is_column_major, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false, stream);
+                                 is_column_major, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false,
+                                 /*swiglu_limit*/ 0.0f, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // Copy output data back to host
@@ -122,13 +123,16 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
     // Invoke the fused version
     per_token_group_quant_fp8<T>(input_meta.data_ptr, fused_output_q_meta.data_ptr, fused_output_s_meta.data_ptr, m, n,
-                                 group_size_, is_column_major, /*fuse_silu_mul*/ true, scale_ue8m0, stream);
+                                 group_size_, is_column_major, /*fuse_silu_mul*/ true, scale_ue8m0,
+                                 /*swiglu_limit*/ 0.0f, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     // Invoke the unfused version
-    InvokeRowBasedActivation<SiluActivation, T>(reinterpret_cast<T*>(input_meta.data_ptr),
-                                                reinterpret_cast<const T*>(input_meta.data_ptr), m, n * 2, stream);
+    InvokeRowBasedActivation<SiluActivation, T, /*HAS_SWIGLU_LIMIT*/ false>(
+        reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr), m, n * 2,
+        /*swiglu_limit=*/0.0f, stream);
     per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_meta.data_ptr, output_s_meta.data_ptr, m, n, group_size_,
-                                 is_column_major, /*fuse_silu_mul*/ false, scale_ue8m0, stream);
+                                 is_column_major, /*fuse_silu_mul*/ false, scale_ue8m0,
+                                 /*swiglu_limit*/ 0.0f, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // Verify accuracy
@@ -186,7 +190,8 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_PerTokenGroupQuantFp8P
     auto cuda_run = [&]() {
       per_token_group_quant_fp8<__nv_bfloat16>(
           d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num, hidden_size, group_size_,
-          /*is_column_major*/ false, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false, stream);
+          /*is_column_major*/ false, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false,
+          /*swiglu_limit*/ 0.0f, stream);
     };
     const float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
     std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
@@ -220,6 +225,90 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, BFloat16SiluMulPerTokenGroupQua
   }
 }
 
+TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, SwigluLimitSiluMulPerTokenGroupQuantFp8Test) {
+  const size_t m = 8, n = 128;
+  const float swiglu_limit = 3.0f;
+  using T = __nv_bfloat16;
+
+  // Input shape: [m, 2*n] (gate in [0..n-1], up in [n..2n-1])
+  // Output shape: [m, n] fp8 + [m, n/group_size_] float scale
+  const size_t q_size = m * n;
+  const size_t s_size = m * n / group_size_;
+
+  BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n * 2}, /*is_random_init*/ false);
+  BufferMeta output_q_clamp = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {q_size}, /*is_random_init*/ false);
+  BufferMeta output_s_clamp = CreateBuffer<float>(MemoryType::MEMORY_GPU, {s_size}, /*is_random_init*/ false);
+  BufferMeta output_q_noclamp = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {q_size}, /*is_random_init*/ false);
+  BufferMeta output_s_noclamp = CreateBuffer<float>(MemoryType::MEMORY_GPU, {s_size}, /*is_random_init*/ false);
+
+  // Initialize host input:
+  // All positions: gate=0.5, up=0.5 (small baseline values producing silu(0.5)*0.5 ≈ 0.188)
+  // Token 0, ALL gate positions: set to +8.0 (well above limit=3)
+  // Token 0, ALL up positions: set to +8.0 (well above limit=3)
+  // With clamp: gate=clamp(8, max=3)=3, up=clamp(8, [-3,3])=3
+  //   silu(3)*3 ≈ 2.884 * 3 ≈ 8.65 (group max ≈ 8.65)
+  // Without clamp: silu(8)*8 ≈ 8.0 * 8 = 64.0 (group max ≈ 64.0)
+  // The scales will differ by ~7x, making this a robust test.
+  std::vector<T> h_input(m * n * 2);
+  for (size_t i = 0; i < m * n * 2; ++i) {
+    h_input[i] = __float2bfloat16(0.5f);
+  }
+  // Token 0: ALL gate positions [0..127] = 8.0
+  for (size_t j = 0; j < n; ++j) {
+    h_input[j] = __float2bfloat16(8.0f);
+  }
+  // Token 0: ALL up positions [128..255] = 8.0
+  for (size_t j = 0; j < n; ++j) {
+    h_input[n + j] = __float2bfloat16(8.0f);
+  }
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaMemcpy(input_meta.data_ptr, h_input.data(), m * n * 2 * sizeof(T), cudaMemcpyHostToDevice));
+
+  // Call with HAS_SWIGLU_LIMIT=true
+  per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_clamp.data_ptr, output_s_clamp.data_ptr, m, n, group_size_,
+                               /*is_column_major*/ false, /*fuse_silu_mul*/ true, /*scale_ue8m0*/ false,
+                               /*swiglu_limit*/ swiglu_limit, stream);
+
+  // Call with HAS_SWIGLU_LIMIT=false
+  per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_noclamp.data_ptr, output_s_noclamp.data_ptr, m, n,
+                               group_size_, /*is_column_major*/ false, /*fuse_silu_mul*/ true, /*scale_ue8m0*/ false,
+                               /*swiglu_limit*/ 0.0f, stream);
+  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+  // Copy outputs back to host
+  std::vector<float> h_s_clamp(s_size), h_s_noclamp(s_size);
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaMemcpy(h_s_clamp.data(), output_s_clamp.data_ptr, s_size * sizeof(float), cudaMemcpyDeviceToHost));
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaMemcpy(h_s_noclamp.data(), output_s_noclamp.data_ptr, s_size * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Validation: scale for token 0 group 0 should be much smaller with clamp than without.
+  // With clamp: silu(clamp(8,3)) * clamp(8,[-3,3]) = silu(3)*3 ≈ 2.884*3 ≈ 8.65
+  //   scale_clamp = 8.65 / 448 ≈ 0.0193
+  // Without clamp: silu(8)*8 ≈ 8.0*8 = 64.0
+  //   scale_noclamp = 64.0 / 448 ≈ 0.1429
+  // Expect: scale_clamp < scale_noclamp (by at least 3x)
+  const float scale_clamp = h_s_clamp[0];
+  const float scale_noclamp = h_s_noclamp[0];
+  EXPECT_GT(scale_noclamp, scale_clamp * 3.0f) << "noclamp scale (" << scale_noclamp << ") should be > 3x clamp scale ("
+                                               << scale_clamp << "), indicating clamp reduced input magnitudes";
+
+  // Also verify absolute bounds on clamp scale:
+  // silu(3) = 3 / (1 + e^{-3}) ≈ 2.8761, silu(3)*3 ≈ 8.628
+  // expected scale_clamp ≈ 8.628 / 448 ≈ 0.01926
+  const float silu3 = 3.0f / (1.0f + expf(-3.0f));
+  const float expected_group_max_clamp = silu3 * 3.0f;
+  const float expected_scale_clamp = expected_group_max_clamp / 448.0f;
+  EXPECT_NEAR(scale_clamp, expected_scale_clamp, expected_scale_clamp * 0.1f)
+      << "clamp scale should be approximately " << expected_scale_clamp;
+
+  DeleteBuffer(input_meta);
+  DeleteBuffer(output_q_clamp);
+  DeleteBuffer(output_s_clamp);
+  DeleteBuffer(output_q_noclamp);
+  DeleteBuffer(output_s_noclamp);
+}
+
 // Performance test is disabled by default
 TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_SiluMulPerTokenGroupQuantFp8PerfTest) {
   const std::vector<size_t> token_nums = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
@@ -239,18 +328,20 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_SiluMulPerTokenGroupQu
     const int iterations = 10;
     // Run the fused version
     auto cuda_run_fused = [&]() {
-      per_token_group_quant_fp8<__nv_bfloat16>(
-          d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num, hidden_size, group_size_,
-          /*is_column_major*/ false, /*fuse_silu_mul*/ true, /*scale_ue8m0*/ false, stream);
+      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
+                                               hidden_size, group_size_,
+                                               /*is_column_major*/ false, /*fuse_silu_mul*/ true, /*scale_ue8m0*/ false,
+                                               /*swiglu_limit*/ 0.0f, stream);
     };
     // Run the unfused version
     auto cuda_run_unfused = [&]() {
-      InvokeRowBasedActivation<SiluActivation, __nv_bfloat16>(reinterpret_cast<__nv_bfloat16*>(d_input.data_ptr),
-                                                              reinterpret_cast<const __nv_bfloat16*>(d_input.data_ptr),
-                                                              token_num, hidden_size * 2, stream);
+      InvokeRowBasedActivation<SiluActivation, __nv_bfloat16, /*HAS_SWIGLU_LIMIT*/ false>(
+          reinterpret_cast<__nv_bfloat16*>(d_input.data_ptr), reinterpret_cast<const __nv_bfloat16*>(d_input.data_ptr),
+          token_num, hidden_size * 2, /*swiglu_limit=*/0.0f, stream);
       per_token_group_quant_fp8<__nv_bfloat16>(
           d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num, hidden_size, group_size_,
-          /*is_column_major*/ false, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false, stream);
+          /*is_column_major*/ false, /*fuse_silu_mul*/ false, /*scale_ue8m0*/ false,
+          /*swiglu_limit*/ 0.0f, stream);
     };
     const float elapsed_ms_fused = MeasureCudaExecutionTime(cuda_run_fused, stream, warmups, iterations);
     const float elapsed_ms_unfused = MeasureCudaExecutionTime(cuda_run_unfused, stream, warmups, iterations);

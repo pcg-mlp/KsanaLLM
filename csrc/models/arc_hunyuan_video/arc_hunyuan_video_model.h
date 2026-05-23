@@ -5,6 +5,7 @@
 
 #include <unordered_map>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/common/model_interface.h"
 #include "models/common/simple_decoder_layer.h"
 
@@ -26,7 +27,8 @@ class ArcHunyuanVideo : public ModelInterface {
 class ArcHunyuanVideoModel : public CommonModel {
  public:
   ArcHunyuanVideoModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                       std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
+                       std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
+                       std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~ArcHunyuanVideoModel() = default;
 
  private:
