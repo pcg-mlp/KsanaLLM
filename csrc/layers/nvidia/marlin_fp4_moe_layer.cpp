@@ -68,8 +68,8 @@ Status MarlinFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const R
   [[maybe_unused]] DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   [[maybe_unused]] int group_size = std::any_cast<int>(parameters[parameter_index++]);
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
-  has_swiglu_limit_ = std::any_cast<bool>(parameters[parameter_index++]);
   swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
+  has_swiglu_limit_ = (swiglu_limit_ > 0.0f);
   num_hash_layers_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
   vocab_size_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
 
