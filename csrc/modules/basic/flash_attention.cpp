@@ -137,15 +137,13 @@ Status FlashAttention::AddAttentionPrefixCache(std::vector<Tensor>& hidden_buffe
   const size_t dtype_size = GetTypeSize(mmha_origin_input.dtype);
   const size_t size_per_token = mmha_origin_input.shape[1] * dtype_size;
   for (size_t idx = 0; idx < model_input->dp_batch_size; ++idx) {
-    const size_t src_offset =
-        (model_input->dp_input_offset_list_uint64[idx] - model_input->dp_input_prefix_list_uint64[idx]) *
-        size_per_token;
-    const size_t input_length =
-        model_input->dp_input_offset_list_uint64[idx + 1] - model_input->dp_input_offset_list_uint64[idx];
-    const size_t prefix_length =
-        model_input->dp_input_prefix_list_uint64[idx + 1] - model_input->dp_input_prefix_list_uint64[idx];
+    const size_t input_offset = model_input->dp_input_offset_uint64_host.GetPtr<size_t>()[idx];
+    const size_t prefix_offset = model_input->dp_input_prefix_list_uint64[idx];
+    const size_t src_offset = (input_offset - prefix_offset) * size_per_token;
+    const size_t input_length = model_input->dp_input_offset_uint64_host.GetPtr<size_t>()[idx + 1] - input_offset;
+    const size_t prefix_length = model_input->dp_input_prefix_list_uint64[idx + 1] - prefix_offset;
     const size_t copy_size = (input_length - prefix_length) * size_per_token;
-    const size_t dst_offset = (model_input->dp_input_offset_list_uint64[idx] + prefix_length) * size_per_token;
+    const size_t dst_offset = (input_offset + prefix_length) * size_per_token;
     // The single token is located in the latter half; copy it all at once and then exit
     if (idx >= model_input->dp_multi_token_request_num && model_input->dp_single_token_request_num > 0) {
       MemcpyAsync(shared_buffer_tensors[0].template GetPtr<void>(),
@@ -187,8 +185,8 @@ Status FlashAttention::RemoveAttentionPrefixCache(std::vector<Tensor>& hidden_bu
   for (size_t idx = 0; idx < model_input->dp_multi_token_request_num; ++idx) {
     size_t prefix_length =
         model_input->dp_input_prefix_list_uint64[idx + 1] - model_input->dp_input_prefix_list_uint64[idx];
-    size_t input_length =
-        model_input->dp_input_offset_list_uint64[idx + 1] - model_input->dp_input_offset_list_uint64[idx];
+    size_t input_length = model_input->dp_input_offset_uint64_host.GetPtr<size_t>()[idx + 1] -
+                          model_input->dp_input_offset_uint64_host.GetPtr<size_t>()[idx];
     src_offset += prefix_length * size_per_token;
     size_t copy_size = size_per_token * (input_length - prefix_length);
 

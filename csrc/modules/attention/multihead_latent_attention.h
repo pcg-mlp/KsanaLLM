@@ -29,9 +29,6 @@ struct MlaBuffers {
   TensorBuffer* q_nope_buffer;
   TensorBuffer* q_rope_buffer;
   TensorBuffer* topk_indices_buffer;
-
-  // shared
-  TensorBuffer* shared_prefix_kv_buffer;
 };
 
 class MultiHeadLatentAttention {

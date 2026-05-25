@@ -137,19 +137,21 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
 
     std::vector<Tensor> context_outputs = {topk_indices.GetView({dp_context_tokens, index_topk_})};
     STATUS_CHECK_RETURN(flash_sparse_mla_indexer_layer_->Forward(
-        {context_q_indexer,                                      // q
-         context_k_indexer,                                      // k
-         context_weights,                                        // weights
-         quant_workspace,                                        // quant_workspace
-         model_input->flash_input.rotary_embedding_pos,          // rotary_embedding_pos
-         c4_indexer_meta->gathered_c4_out_loc_tensor,            // store_out_loc (unused for C4)
-         c4_indexer_meta->flash_input.extend_lens_tensor,        // extend_lens
-         model_input->dp_input_offset_uint64_tensor,             // dp_input_offset
-         model_input->flash_input.block_table,                   // block_table
-         c4_indexer_meta->flash_input.cur_seq_len_start_tensor,  // cur_seq_len_start
-         c4_indexer_meta->flash_input.cur_seq_len_end_tensor,    // cur_seq_len_end
-         model_input->layer_indexer_kv_cache_ptr,                // layer_indexer_kv_cache_ptr
-         attn_ctx.forward_shape},                                // forward_shape
+        {context_q_indexer,                                          // q
+         context_k_indexer,                                          // k
+         context_weights,                                            // weights
+         quant_workspace,                                            // quant_workspace
+         model_input->flash_input.rotary_embedding_pos,              // rotary_embedding_pos
+         c4_indexer_meta->gathered_c4_out_loc_tensor,                // store_out_loc (unused for C4)
+         model_input->dp_input_offset_uint64_tensor,                 // dp_input_offset
+         model_input->flash_input.block_table,                       // block_table
+         c4_indexer_meta->flash_input.cu_seq_len_start_tensor,       // cu_seq_len_start
+         c4_indexer_meta->flash_input.cu_seq_len_end_tensor,         // cu_seq_len_end
+         c4_indexer_meta->flash_input.batch_indices_tensor,          // batch_indices
+         model_input->layer_indexer_kv_cache_ptr,                    // layer_indexer_kv_cache_ptr
+         c4_indexer_meta->indexer_meta->chunk_token_starts_host,     // chunk_token_starts (HOST)
+         c4_indexer_meta->indexer_meta->chunk_kv_token_ranges_host,  // chunk_kv_token_ranges (HOST)
+         attn_ctx.forward_shape},                                    // forward_shape
         context_outputs));
   }
 
@@ -180,8 +182,8 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
            c4_indexer_meta->page_inputs[i].expanded_c4_seq_lens_tensor,  // expanded_c4_seq_lens
            model_input->page_inputs[i].block_table,                      // block_table
            model_input->page_inputs[i].expanded_block_table,             // expanded_block_table
-           c4_indexer_meta->page_inputs[i].cur_seq_len_start_tensor,     // cur_seq_len_start
-           c4_indexer_meta->page_inputs[i].cur_seq_len_end_tensor,       // cur_seq_len_end
+           c4_indexer_meta->page_inputs[i].cu_seq_len_start_tensor,      // cur_seq_len_start
+           c4_indexer_meta->page_inputs[i].cu_seq_len_end_tensor,        // cur_seq_len_end
            model_input->layer_indexer_kv_cache_ptr,                      // layer_indexer_kv_cache_ptr
            model_input->page_inputs[i].paged_schedule_meta},             // paged_schedule_meta
           current_outputs));

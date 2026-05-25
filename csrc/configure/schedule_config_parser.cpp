@@ -180,7 +180,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   }
 
   // Parsing FP4_MOE_BACKEND from env
-  const char* fp4_moe_backend_env = std::getenv("FP4_MOE_BACKEND");
+  const char *fp4_moe_backend_env = std::getenv("FP4_MOE_BACKEND");
   if (fp4_moe_backend_env) {
     std::string backend_str(fp4_moe_backend_env);
     if (backend_str == "marlin") {
@@ -269,6 +269,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_token_len", 0);
   batch_scheduler_config_.max_step_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
+  batch_scheduler_config_.max_chunked_kv_tokens =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_chunked_kv_tokens", 0);
   batch_scheduler_config_.max_batch_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 128);
   batch_scheduler_config_.max_pretransfer_batch_size = yaml_reader.GetScalar<size_t>(
@@ -565,21 +567,20 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
         fmt::format("DeepEP requires tensor_parallel_size == attn_data_parallel_size, but got tp={}, dp={}",
                     runtime_config_.parallel_basic_config.tensor_parallel_size,
                     runtime_config_.parallel_basic_config.attn_data_parallel_size));
-    KLLM_CHECK_WITH_INFO(
-        runtime_config_.enable_full_shared_expert,
-        "DeepEP requires enable_full_shared_expert to be true, please set it in the config yaml.");
+    KLLM_CHECK_WITH_INFO(runtime_config_.enable_full_shared_expert,
+                         "DeepEP requires enable_full_shared_expert to be true, please set it in the config yaml.");
   }
 
   // Read deepep_low_latency_max_tokens from yaml config.
-  runtime_config_.deepep_low_latency_max_tokens = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "setting.global.deepep_low_latency_max_tokens", 256);
+  runtime_config_.deepep_low_latency_max_tokens =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.deepep_low_latency_max_tokens", 256);
 
   // When DeepEP low_latency is enabled, cap deepep_low_latency_max_tokens
   // to max_batch_size / dp. max_batch_size is the global total across all DPs,
   // so each DP's dispatch buffer only needs to handle its fair share.
   if (runtime_config_.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
-    size_t per_dp_batch = batch_scheduler_config_.max_batch_size /
-                          runtime_config_.parallel_basic_config.attn_data_parallel_size;
+    size_t per_dp_batch =
+        batch_scheduler_config_.max_batch_size / runtime_config_.parallel_basic_config.attn_data_parallel_size;
     runtime_config_.deepep_low_latency_max_tokens =
         std::min(runtime_config_.deepep_low_latency_max_tokens, per_dp_batch);
     KLLM_LOG_INFO << fmt::format(
@@ -815,12 +816,30 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   } else {
     runtime_config_.max_seq_len = model_config.max_training_seq_len;
   }
+  KLLM_LOG_INFO << "Set max_token_len to " << runtime_config_.max_seq_len;
   batch_scheduler_config_.max_token_len = runtime_config_.max_seq_len;
 
-  if ((batch_scheduler_config_.split_fuse_token_num == 0) &&
-      (batch_scheduler_config_.max_step_token_num < batch_scheduler_config_.max_token_len)) {
-    // if no split fuse, request cannot be processed if max_step_num < input token num
+  if ((!batch_scheduler_config_.split_fuse_token_num ||
+       !runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv) &&
+      batch_scheduler_config_.max_step_token_num < batch_scheduler_config_.max_token_len) {
+    KLLM_LOG_WARNING << fmt::format(
+        "Reset max_step_token_num {} to max_token_len {}, since split fuse is not enabled or chunked KV is not "
+        "supported",
+        batch_scheduler_config_.max_step_token_num, batch_scheduler_config_.max_token_len);
     batch_scheduler_config_.max_step_token_num = batch_scheduler_config_.max_token_len;
+  }
+
+  if (batch_scheduler_config_.max_chunked_kv_tokens == 0) {
+    // Set to max_step_token_num by default
+    batch_scheduler_config_.max_chunked_kv_tokens = batch_scheduler_config_.max_step_token_num;
+  }
+  // max_chunked_kv_tokens must be at least max_seq_len so any single request
+  // can fit in one chunk
+  if (batch_scheduler_config_.max_chunked_kv_tokens < batch_scheduler_config_.max_token_len) {
+    KLLM_LOG_WARNING << fmt::format(
+        "Reset max_chunked_kv_tokens {} to max_token_len {} to ensure any single request can fit in one chunk",
+        batch_scheduler_config_.max_chunked_kv_tokens, batch_scheduler_config_.max_token_len);
+    batch_scheduler_config_.max_chunked_kv_tokens = batch_scheduler_config_.max_token_len;
   }
 
   // Align max_step_token_num to tp_size for even token distribution across ranks
@@ -836,6 +855,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.max_batch_size = batch_scheduler_config_.max_batch_size;
   runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
   runtime_config_.max_step_token_num = batch_scheduler_config_.max_step_token_num;
+  runtime_config_.max_chunked_kv_tokens = batch_scheduler_config_.max_chunked_kv_tokens;
   runtime_config_.mtp_step_num = batch_scheduler_config_.mtp_step_num;
   runtime_config_.enable_async = batch_scheduler_config_.enable_async;
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
@@ -1016,6 +1036,11 @@ Status ScheduleConfigParser::CalculateBlockNumber(size_t device_free, size_t dev
         "Since available device blocks are insufficient, max_step_token_num is reduced from {} to {}",
         batch_scheduler_config_.max_step_token_num, usable_tokens);
     batch_scheduler_config_.max_step_token_num = usable_tokens;
+  }
+  if (usable_tokens < batch_scheduler_config_.max_token_len) {
+    KLLM_LOG_WARNING << fmt::format(
+        "Unable to support configured max_token_len ({}), max available context length is {}",
+        batch_scheduler_config_.max_token_len, usable_tokens);
   }
 
   block_manager_config_.device_allocator_config.blocks_num = device_blocks_num;

@@ -116,10 +116,10 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
   input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
+  dp_input_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
   dp_input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  dp_input_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1});
+  dp_prefill_q_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
   dp_prefill_q_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  dp_prefill_q_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1});
   input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
   dp_input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
 
@@ -141,8 +141,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
   block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_table_block_num});
   if (model_config.use_dsa) {
-    cur_seq_len_start = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-    cur_seq_len_end = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
     store_out_loc = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
     // kv cache meta for the indexer module
     indexer_kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
@@ -239,6 +237,13 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     c4_indexer_meta_ = std::make_unique<C4IndexerMeta>(runtime_config_, rank_, context_);
     dsv4_mqa_meta_ = std::make_unique<Dsv4MqaMeta>(model_config_, runtime_config_, layer_num_on_node_, rank_, context_,
                                                    block_cache_layout);
+  } else {
+    if (model_config_.use_dsa) {
+      indexer_meta_ = std::make_unique<IndexerMeta>(runtime_config_, rank_, context_, /*compress_ratio=*/1);
+    }
+    if (model_config_.use_mla) {
+      mla_meta_ = std::make_unique<MlaMeta>(runtime_config_, rank_, context_);
+    }
   }
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
@@ -343,8 +348,6 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
   block_table.shape = {0};
   expanded_block_table.shape = {0};
   num_splits.shape = {0};
-  cur_seq_len_start.shape = {0};
-  cur_seq_len_end.shape = {0};
   store_out_loc.shape = {0};
 
   // Reset the input_infos
@@ -445,6 +448,12 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   }
   if (dsv4_mqa_meta_) {
     dsv4_mqa_meta_->Prepare(forward_reqs);
+  }
+  if (indexer_meta_) {
+    indexer_meta_->Prepare(forward_reqs);
+  }
+  if (mla_meta_) {
+    mla_meta_->Prepare(forward_reqs);
   }
 
   PreparePrefill();
@@ -1173,8 +1182,10 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
   }
   input.total_dp_input_ids_len = total_input_len - dp_total_prefix_len;
 
-  std::vector<int64_t> rotary_mask_host(total_input_len, 1);
-  std::vector<int64_t> rotary_pos_host(total_input_len);
+  const size_t rotary_host_size =
+      enable_blocked_multi_token_forwarding_kv_ ? input.total_dp_input_ids_len : total_input_len;
+  std::vector<int64_t> rotary_mask_host(rotary_host_size, 1);
+  std::vector<int64_t> rotary_pos_host(rotary_host_size);
 
   size_t rotary_host_idx = 0;
   for (const auto& req : input.dp_reqs) {
@@ -1390,7 +1401,6 @@ void ModelInput::PreparePrefill() {
     PrepareKVCacheBlockTable(flash_input);
   }
   PrepareFlashRotary(flash_input);
-  PrepareCuSeqLen(flash_input, false);
   PrepareStoreOutLoc(flash_input);
 }
 
@@ -1405,7 +1415,6 @@ void ModelInput::PrepareDecode() {
     PrepareKVCacheBlockTable(page_input);
     PrepareDecodeRotary(page_input);
     PrepareFlashMla(page_input);
-    PrepareCuSeqLen(page_input, true);
     PrepareStoreOutLoc(page_input);
   }
 }
@@ -1478,7 +1487,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   input_ids_cpu.clear();
   input_offset_list_uint64.assign(1, 0);
   input_prefix_list_uint64.assign(1, 0);
-  dp_input_offset_list_uint64.assign(1, 0);
   dp_input_prefix_list_uint64.assign(1, 0);
   multi_token_request_max_tokens = 0;
   single_token_request_max_tokens = 0;
@@ -1488,7 +1496,10 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
 
   std::vector<size_t> logits_idx_list(total_sampling_token_num_);
   size_t logits_idx_list_idx = 0;
-  std::vector<size_t> dp_prefill_q_offset(1, 0);
+  size_t* dp_prefill_q_offset_uint64_ptr = dp_prefill_q_offset_uint64_host.GetPtr<size_t>();
+  dp_prefill_q_offset_uint64_ptr[0] = 0;
+  size_t* dp_input_offset_uint64_ptr = dp_input_offset_uint64_host.GetPtr<size_t>();
+  dp_input_offset_uint64_ptr[0] = 0;
   std::vector<size_t> dp_input_ids_lens(attn_dp_group_size_, 0);
 
   auto process_func = [&](const ForwardRequest& req) {
@@ -1513,8 +1524,10 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back() + skip_token_num);
       if (in_dp_group) {
         dp_multi_token_request_max_tokens = std::max(dp_multi_token_request_max_tokens, input_length);
-        dp_prefill_q_offset.emplace_back(dp_prefill_q_offset.back() + input_ids_len);
-        dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + input_length);
+        *(dp_prefill_q_offset_uint64_ptr + 1) = *dp_prefill_q_offset_uint64_ptr + input_ids_len;
+        ++dp_prefill_q_offset_uint64_ptr;
+        *(dp_input_offset_uint64_ptr + 1) = *dp_input_offset_uint64_ptr + input_length;
+        ++dp_input_offset_uint64_ptr;
         dp_input_prefix_list_uint64.emplace_back(dp_input_prefix_list_uint64.back() + skip_token_num);
       }
     } else {
@@ -1523,8 +1536,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back());
       if (in_dp_group) {
         dp_single_token_request_max_tokens = std::max(dp_single_token_request_max_tokens, input_length);
-        dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + input_ids_len);
-        dp_input_prefix_list_uint64.emplace_back(dp_input_prefix_list_uint64.back());
       }
     }
 
@@ -1553,9 +1564,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   KLLM_LOG_DEBUG << "logits_idx_list " << logits_idx_list;
   KLLM_LOG_DEBUG << "input_offset_list_uint64 " << input_offset_list_uint64;
   KLLM_LOG_DEBUG << "input_prefix_list_uint64 " << input_prefix_list_uint64;
-  KLLM_LOG_DEBUG << "dp_input_offset_list_uint64 " << dp_input_offset_list_uint64;
   KLLM_LOG_DEBUG << "dp_input_prefix_list_uint64 " << dp_input_prefix_list_uint64;
-  KLLM_LOG_DEBUG << "dp_prefill_q_offset " << dp_prefill_q_offset;
 
   input_ids.shape = {input_ids_cpu.size()};
   input_ids.dtype = TYPE_INT32;
@@ -1569,20 +1578,10 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
               logits_idx_list.size() * sizeof(decltype(logits_idx_list)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->device->GetH2DStream());
 
-  dp_prefill_q_offset_uint64_tensor.shape = {dp_prefill_q_offset.size()};
-  dp_prefill_q_offset_uint64_tensor.dtype = TYPE_UINT64;
-  MemcpyAsync(dp_prefill_q_offset_uint64_tensor.GetPtr<void>(), dp_prefill_q_offset.data(),
-              dp_prefill_q_offset.size() * sizeof(decltype(dp_prefill_q_offset)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
-
-  std::vector<int> int32_vector(dp_prefill_q_offset.size());
-  for (size_t i = 0; i < dp_prefill_q_offset.size(); ++i) {
-    int32_vector[i] = static_cast<int>(dp_prefill_q_offset[i]);
-  }
-  dp_prefill_q_offset_int32_tensor.shape = {int32_vector.size()};
-  dp_prefill_q_offset_int32_tensor.dtype = TYPE_INT32;
-  MemcpyAsync(dp_prefill_q_offset_int32_tensor.GetPtr<void>(), int32_vector.data(),
-              int32_vector.size() * sizeof(decltype(int32_vector)::value_type), MEMCPY_HOST_TO_DEVICE,
+  dp_prefill_q_offset_uint64_host.shape = {forward_reqs.size() + 1};
+  dp_prefill_q_offset_uint64_tensor.shape = {dp_prefill_q_offset_uint64_host.shape[0]};
+  MemcpyAsync(dp_prefill_q_offset_uint64_tensor.GetPtr<void>(), dp_prefill_q_offset_uint64_host.GetPtr<void>(),
+              dp_prefill_q_offset_uint64_host.shape[0] * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->device->GetH2DStream());
 
   input_offset_uint64_tensor.shape = {input_offset_list_uint64.size()};
@@ -1591,20 +1590,10 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
               input_offset_list_uint64.size() * sizeof(decltype(input_offset_list_uint64)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 
-  dp_input_offset_uint64_tensor.shape = {dp_input_offset_list_uint64.size()};
-  dp_input_offset_uint64_tensor.dtype = TYPE_UINT64;
-  MemcpyAsync(dp_input_offset_uint64_tensor.GetPtr<void>(), dp_input_offset_list_uint64.data(),
-              dp_input_offset_list_uint64.size() * sizeof(decltype(dp_input_offset_list_uint64)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-
-  int32_vector.resize(dp_input_offset_list_uint64.size());
-  for (size_t i = 0; i < dp_input_offset_list_uint64.size(); ++i) {
-    int32_vector[i] = static_cast<int>(dp_input_offset_list_uint64[i]);
-  }
-  dp_input_offset_int32_tensor.shape = {int32_vector.size()};
-  dp_input_offset_int32_tensor.dtype = TYPE_INT32;
-  MemcpyAsync(dp_input_offset_int32_tensor.GetPtr<void>(), int32_vector.data(),
-              int32_vector.size() * sizeof(decltype(int32_vector)::value_type), MEMCPY_HOST_TO_DEVICE,
+  dp_input_offset_uint64_host.shape = {forward_reqs.size() + 1};
+  dp_input_offset_uint64_tensor.shape = {dp_input_offset_uint64_host.shape[0]};
+  MemcpyAsync(dp_input_offset_uint64_tensor.GetPtr<void>(), dp_input_offset_uint64_host.GetPtr<void>(),
+              dp_input_offset_uint64_host.shape[0] * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
               context_->device->GetH2DStream());
 
   input_prefix_uint64_tensor.shape = {input_prefix_list_uint64.size()};
@@ -1630,52 +1619,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
 #ifdef ENABLE_ACL
   // Event wait between streams seems not work, force sync here.
   StreamSynchronize(context_->device->GetH2DStream());
-#endif
-}
-
-// Prepare cumulative sequence length arrays for both flash (prefill) and paged (decode) inputs
-void ModelInput::PrepareCuSeqLen(input_info& input, bool is_paged) {
-  if (!model_config_.use_dsa) {
-    return;
-  }
-  PROFILE_EVENT_SCOPE(PrepareCuSeqLen, "PrepareCuSeqLen", rank_);
-  std::vector<int> cur_seq_len_start_host(input.total_dp_input_ids_len);
-  std::vector<int> cur_seq_len_end_host(input.total_dp_input_ids_len);
-  const size_t batch_size = input.dp_reqs.size();
-
-  int token_idx = 0;
-  int cumulative_seq_lens = 0;
-  for (size_t b = 0; b < batch_size; ++b) {
-    const auto& req = input.dp_reqs[b];
-    const size_t input_length = req->forwarding_tokens->size();
-    // Skip prefix token(include flexible cache token)
-    const size_t skip_token_num = std::max(req->kv_cached_token_num, req->prefix_cache_len);
-    const size_t input_ids_len = input_length - skip_token_num;
-    for (size_t i = 0; i < input_ids_len; ++i) {
-      if (is_paged) {
-        cur_seq_len_start_host[token_idx] = 0;
-        cur_seq_len_end_host[token_idx] = skip_token_num + i + 1;
-      } else {
-        cur_seq_len_start_host[token_idx] = cumulative_seq_lens;
-        cur_seq_len_end_host[token_idx] = cumulative_seq_lens + skip_token_num + i + 1;
-      }
-      token_idx++;
-    }
-    cumulative_seq_lens += input_length;
-  }
-  // Set tensor shapes and copy data to device
-  input.cur_seq_len_start = cur_seq_len_start.GetView({cur_seq_len_start_host.size()}, cur_seq_len_start.shape[0]);
-  cur_seq_len_start.shape[0] += input.cur_seq_len_start.GetElementNumber();
-  MemcpyAsync(input.cur_seq_len_start.GetPtr<void>(), cur_seq_len_start_host.data(),
-              cur_seq_len_start_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-
-  input.cur_seq_len_end = cur_seq_len_end.GetView({cur_seq_len_end_host.size()}, cur_seq_len_end.shape[0]);
-  cur_seq_len_end.shape[0] += input.cur_seq_len_end.GetElementNumber();
-  MemcpyAsync(input.cur_seq_len_end.GetPtr<void>(), cur_seq_len_end_host.data(),
-              cur_seq_len_end_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetH2DStream());
 #endif
 }
 

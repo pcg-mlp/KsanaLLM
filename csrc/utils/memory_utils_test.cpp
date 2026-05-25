@@ -29,4 +29,13 @@ TEST(AlignedMemoryQueueTest, AllocateAndAlignCorrectlyAllocatesMemory) {
   EXPECT_TRUE(reinterpret_cast<uintptr_t>(ptr2) % 16 == 0);
 }
 
+TEST(MemoryUtilsTest, ComputeIndexerMaxQChunkSize) {
+  // chunk = 4GB / (RoundUp(256, 256) * sizeof(float)) ≈ 4M, capped by max_step_token_num.
+  EXPECT_EQ(128u, ComputeIndexerMaxQChunkSize(256, 128));
+  // Value rounded up to nearest 4 for kSeqLenAlignment.
+  EXPECT_EQ(4u, ComputeIndexerMaxQChunkSize(256, 3));
+  // computed_q_chunk = 2^30 / (1<<28) = 4, smaller than max_step_token_num, capped by computed value.
+  EXPECT_EQ(4u, ComputeIndexerMaxQChunkSize(1u << 28, 128));
+}
+
 }  // namespace ksana_llm

@@ -238,10 +238,9 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
       if (model_config.rope_scaling_factor_config.type == "dynamic" && rope_scaling_setting.contains("alpha")) {
         model_config.rope_scaling_factor_config.has_alpha = true;
         model_config.rope_scaling_factor_config.scaling_alpha = rope_scaling_setting.value("alpha", 1.0f);
-      } else if (model_config.rope_scaling_factor_config.type != "yarn") {
-        // yarn already uses original_max_position_embeddings directly; skip factor scaling
-        derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
       }
+      // All types should multiply the scaling
+      derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
     }
 
     // arc-hunyuan-video with xdrope

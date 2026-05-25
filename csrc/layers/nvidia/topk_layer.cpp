@@ -43,7 +43,7 @@ Status TopKLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<
 // Radix path (topk.cuh / topk_1024.cuh / InvokeFastTopK)
 // ---------------------------------------------------------------------------
 Status TopKLayer::ForwardRadix(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // Inputs:  [0]=scores [1]=row_starts [2]=row_ends [3]=page_table [4]=extend_lens(optional)
+  // Inputs:  [0]=scores [1]=row_starts [2]=row_ends [3]=page_table [4]=batch_indices(optional)
   // Outputs: [0]=page_indices
   const auto& scores = input_tensors[0];
   const int32_t* row_starts_ptr = input_tensors[1].GetPtr<int32_t>();
@@ -70,11 +70,11 @@ Status TopKLayer::ForwardRadix(const std::vector<Tensor>& input_tensors, std::ve
                                                               static_cast<int64_t>(1),          // stride1
                                                               stream));
   } else {
-    const int32_t* extend_lens_ptr = nullptr;
+    const int32_t* batch_indices_ptr = nullptr;
     uint32_t extend_len;
     if (input_tensors.size() > 4) {
-      // Prefill path: extend_lens array tells per-batch work count
-      extend_lens_ptr = input_tensors[4].GetPtr<int32_t>();
+      // Prefill path: batch_indices array gives per-token batch index
+      batch_indices_ptr = input_tensors[4].GetPtr<int32_t>();
       extend_len = 0;
     } else {
       extend_len = num_works / num_batches;
@@ -91,9 +91,8 @@ Status TopKLayer::ForwardRadix(const std::vector<Tensor>& input_tensors, std::ve
                                                 page_table_stride,               // page_table_stride
                                                 num_works,                       // num_works
                                                 page_bits_,                      // page_bits
-                                                extend_lens_ptr,                 // extend_lens
+                                                batch_indices_ptr,               // batch_indices
                                                 extend_len,                      // extend_len
-                                                num_batches,                     // num_batches
                                                 stream);                         // stream
     } else {
       // k_ == kTopK1024
@@ -107,9 +106,8 @@ Status TopKLayer::ForwardRadix(const std::vector<Tensor>& input_tensors, std::ve
                                                  page_table_stride,               // page_table_stride
                                                  num_works,                       // num_works
                                                  page_bits_,                      // page_bits
-                                                 extend_lens_ptr,                 // extend_lens
+                                                 batch_indices_ptr,               // batch_indices
                                                  extend_len,                      // extend_len
-                                                 num_batches,                     // num_batches
                                                  stream);                         // stream
     }
   }

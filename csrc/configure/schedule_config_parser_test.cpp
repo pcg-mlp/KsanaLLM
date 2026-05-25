@@ -132,7 +132,9 @@ class ScheduleConfigParserTest : public ::testing::Test {
 
   // Helper function to create a temporary YAML configuration file
   std::string CreateTempYamlConfig(bool enable_prefix_caching = false, size_t split_fuse_token_num = 0,
-                                   bool use_flashinfer_for_decode = false) {
+                                   bool use_flashinfer_for_decode = false, size_t max_chunked_kv_tokens = 0,
+                                   size_t max_step_tokens = 4096,
+                                   bool enable_blocked_multi_token_forwarding_kv = false) {
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
     std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
     std::filesystem::path temp_file_path = temp_dir / filename;
@@ -160,15 +162,20 @@ class ScheduleConfigParserTest : public ::testing::Test {
     file << "  batch_scheduler:\n";
     file << "    max_waiting_queue_len: 100\n";
     file << "    max_token_len: 4096\n";
-    file << "    max_step_tokens: 4096\n";
+    file << "    max_step_tokens: " << max_step_tokens << "\n";
     file << "    max_batch_size: 32\n";
     file << "    enable_auto_prefix_cache: " << (enable_prefix_caching ? "true" : "false") << "\n";
     file << "    split_fuse_token_num: " << split_fuse_token_num << "\n";
+    if (max_chunked_kv_tokens > 0) {
+      file << "    max_chunked_kv_tokens: " << max_chunked_kv_tokens << "\n";
+    }
     file << "  block_manager:\n";
     file << "    block_token_num: 16\n";
     file << "    reserved_device_memory_ratio: 0.01\n";
     file << "  attn_backend:\n";
     file << "    use_flashinfer_for_decode: " << (use_flashinfer_for_decode ? "true" : "false") << "\n";
+    file << "    enable_blocked_multi_token_forwarding_kv: "
+         << (enable_blocked_multi_token_forwarding_kv ? "true" : "false") << "\n";
     file << "model_spec:\n";
     file << "  base_model:\n";
     file << "    model_dir: \"" << model_dir.string() << "\"\n";
@@ -1103,6 +1110,59 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitZeroCorrectedToDefault)
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
       << "swa_block_num_ratio=0 in YAML should be corrected to the default 0.5";
+}
+
+// max_chunked_kv_tokens 设置逻辑: 默认→max_step_token_num, 显式设置→保留, 小于 max_token_len→clamp.
+TEST_F(ScheduleConfigParserTest, MaxChunkedKvTokensConfig) {
+  auto run = [this](size_t yaml_value, size_t expected) {
+    std::string yaml_path = CreateTempYamlConfig(false, 0, false, yaml_value);
+    EXPECT_FALSE(yaml_path.empty());
+    YamlReader yaml_reader;
+    EXPECT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+    std::string model_dir =
+        yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+    ModelConfig model_config;
+    model_config.num_key_value_heads = 1;      // bypass TP divisibility check
+    model_config.max_training_seq_len = 4096;  // prevent max_token_len from being reduced to 0
+    EXPECT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+    EXPECT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+    BatchSchedulerConfig batch_config;
+    parser_->GetBatchSchedulerConfig(batch_config);
+    RuntimeConfig runtime_config;
+    EXPECT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+    EXPECT_EQ(batch_config.max_chunked_kv_tokens, expected);
+    EXPECT_EQ(runtime_config.max_chunked_kv_tokens, expected);
+  };
+
+  run(0, 4096u);     // 未设置→回退为 max_step_token_num
+  run(8192, 8192u);  // >= max_token_len→保留原值
+  run(256, 4096u);   // < max_token_len→clamp
+}
+
+// max_step_token_num is reset to max_token_len when split-fuse is disabled or
+// blocked multi-token forwarding KV is not supported, and max_step < max_token.
+TEST_F(ScheduleConfigParserTest, MaxStepTokenNumResetToMaxTokenLen) {
+  auto run = [this](size_t split_fuse, size_t max_step_tokens, bool enable_blocked_mtkv, size_t expected) {
+    std::string yaml_path = CreateTempYamlConfig(true, split_fuse, false, 0, max_step_tokens, enable_blocked_mtkv);
+    EXPECT_FALSE(yaml_path.empty());
+    YamlReader yaml_reader;
+    EXPECT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+    std::string model_dir =
+        yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+    ModelConfig model_config;
+    model_config.num_key_value_heads = 1;      // bypass TP divisibility check
+    model_config.max_training_seq_len = 4096;  // prevent max_token_len from being reduced to 0
+    EXPECT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+    EXPECT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+    BatchSchedulerConfig batch_config;
+    parser_->GetBatchSchedulerConfig(batch_config);
+    EXPECT_EQ(batch_config.max_step_token_num, expected);
+  };
+
+  run(0, 2048, false, 4096u);    // split_fuse=0 → reset to max_token_len
+  run(256, 2048, false, 4096u);  // blocked_mtkv=false → reset
+  run(256, 2048, true, 2048u);   // both enabled → stays
+  run(0, 4096, false, 4096u);    // max_step >= max_token → stays
 }
 
 }  // namespace ksana_llm

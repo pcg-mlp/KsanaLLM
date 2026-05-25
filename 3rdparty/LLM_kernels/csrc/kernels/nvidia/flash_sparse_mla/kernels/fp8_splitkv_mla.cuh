@@ -106,8 +106,8 @@ template <typename TMAParams>
 __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnDecodeParams& params,
                                                                const TMAParams& tma_params) {
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 900)) || (defined(__CLION_IDE__) || defined(__VSCODE_IDE__))
-  const int head_block_idx = NUM_M_BLOCKS == 1 ? 0 : blockIdx.x;
-  const int s_q_idx = blockIdx.y;
+  const int s_q_idx = blockIdx.x;
+  const int head_block_idx = NUM_M_BLOCKS == 1 ? 0 : blockIdx.y;
   const int partition_idx = blockIdx.z;
   // const int idx_in_cluster = CLUSTER_SIZE == 1 ? 0 : head_block_idx % 2;
   // For FP8 version: CLUSTER_SIZE is 1
@@ -875,7 +875,7 @@ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::run(const SparseAttnDecodeParams& pa
   mla_kernel_attributes[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
   mla_kernel_attributes[0].val.programmaticStreamSerializationAllowed = 0;
   // The FP8 version does not require dequantization, thus eliminating the need for clusters and reducing overhead
-  cudaLaunchConfig_t mla_kernel_config = {dim3(NUM_M_BLOCKS, params.s_q, params.num_sm_parts),
+  cudaLaunchConfig_t mla_kernel_config = {dim3(params.s_q, NUM_M_BLOCKS, params.num_sm_parts),
                                           dim3(NUM_THREADS, 1, 1),
                                           smem_size,
                                           params.stream,

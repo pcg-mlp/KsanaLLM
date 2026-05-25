@@ -108,7 +108,10 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
   }
 
   // Calculate token counts
-  const auto model_input = forwarding_context.GetModelInput();
+  const auto& model_input = forwarding_context.GetModelInput();
+  const auto& indexer_meta = model_input->indexer_meta_;
+  // Temporarily reuse some meta from model_input
+  KLLM_CHECK(indexer_meta->page_inputs.size() == model_input->page_inputs.size());
   const size_t dp_context_tokens = model_input->dp_context_tokens;
   const size_t dp_decode_tokens = model_input->dp_decode_tokens;
 
@@ -161,11 +164,11 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     std::vector<Tensor> context_output_tensors = {topk_indices.GetView({dp_context_tokens, index_topk_})};
     STATUS_CHECK_RETURN(flash_sparse_mla_indexer_layer_->Forward(
         {context_q_indexer, context_k_indexer, context_weights, quant_workspace,
-         model_input->flash_input.rotary_embedding_pos,
-         model_input->flash_input.store_out_loc, /*unused*/ model_input->flash_input.input_length,
+         model_input->flash_input.rotary_embedding_pos, model_input->flash_input.store_out_loc,
          model_input->dp_input_offset_uint64_tensor, model_input->flash_input.block_table,
-         model_input->flash_input.cur_seq_len_start, model_input->flash_input.cur_seq_len_end,
-         model_input->layer_indexer_kv_cache_ptr, attn_ctx.forward_shape},
+         indexer_meta->flash_input.cu_seq_len_start_tensor, indexer_meta->flash_input.cu_seq_len_end_tensor,
+         indexer_meta->flash_input.batch_indices_tensor, model_input->layer_indexer_kv_cache_ptr,
+         indexer_meta->chunk_token_starts_host, indexer_meta->chunk_kv_token_ranges_host, attn_ctx.forward_shape},
         context_output_tensors));
   }
 
@@ -174,8 +177,8 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     // Process page_dual and page_single sequentially
     // Page_dual is placed before page_single, since requests are sorted by token_num in descending order
     size_t skip_tokens = 0;
-    for (auto& page_input : model_input->page_inputs) {
-      const size_t current_tokens = page_input.total_dp_input_ids_len;
+    for (size_t i = 0; i < indexer_meta->page_inputs.size(); i++) {
+      const size_t current_tokens = indexer_meta->page_inputs[i].total_dp_input_ids_len;
       // Offset tensors by `dp_context_tokens + skip_tokens`
       const size_t total_offset = dp_context_tokens + skip_tokens;
 
@@ -189,12 +192,14 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
           topk_indices.GetView({current_tokens, index_topk_}, total_offset * index_topk_)};
 
       STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
-          {current_q_indexer, current_k_indexer, current_weights, quant_workspace, page_input.rotary_embedding_pos,
-           page_input.store_out_loc, page_input.input_length, page_input.expanded_input_length, page_input.block_table,
-           page_input.expanded_block_table, page_input.cur_seq_len_start, page_input.cur_seq_len_end,
-           model_input->layer_indexer_kv_cache_ptr, page_input.paged_schedule_meta},
+          {current_q_indexer, current_k_indexer, current_weights, quant_workspace,
+           model_input->page_inputs[i].rotary_embedding_pos, model_input->page_inputs[i].store_out_loc,
+           model_input->page_inputs[i].input_length, model_input->page_inputs[i].expanded_input_length,
+           model_input->page_inputs[i].block_table, model_input->page_inputs[i].expanded_block_table,
+           indexer_meta->page_inputs[i].cu_seq_len_start_tensor, indexer_meta->page_inputs[i].cu_seq_len_end_tensor,
+           model_input->layer_indexer_kv_cache_ptr, model_input->page_inputs[i].paged_schedule_meta},
           current_output_tensors));
-      page_input.paged_schedule_meta.shape[2] = 1;  // Mark meta as initialized
+      model_input->page_inputs[i].paged_schedule_meta.shape[2] = 1;  // Mark meta as initialized
 
       skip_tokens += current_tokens;
     }

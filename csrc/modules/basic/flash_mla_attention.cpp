@@ -96,8 +96,7 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
                                   const AttentionForwardContext& attn_ctx, std::vector<Tensor>& k_buffer,
                                   std::vector<Tensor>& v_buffer, Tensor& context_q_nope_rope_tensor,
                                   Tensor& context_q_nope_tensor, Tensor& context_q_rope_tensor,
-                                  Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
-                                  Tensor& prefix_kv_buffer_tensor, Tensor& indices_tensor,
+                                  Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor, Tensor& indices_tensor,
                                   std::vector<Tensor>& output_tensors) {
   // When indices tensor is present, use DSA; otherwise, use MHA
   if (indices_tensor.GetElementNumber() > 0) {
@@ -121,11 +120,14 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
     }
 
     return flash_mla_attention_layer_->Forward({model_input->dp_input_offset_uint64_tensor,
-                                                model_input->dp_input_offset_int32_tensor,
+                                                model_input->dp_input_offset_uint64_host,
                                                 model_input->flash_input.kv_list,
                                                 model_input->dp_input_prefix_uint64_tensor,
                                                 model_input->dp_prefill_q_offset_uint64_tensor,
-                                                model_input->dp_prefill_q_offset_int32_tensor,
+                                                model_input->dp_prefill_q_offset_uint64_host,
+                                                model_input->mla_meta_->chunk_kv_batch_starts_host,
+                                                model_input->mla_meta_->chunk_kv_cu_extend_lens_tensor,
+                                                model_input->mla_meta_->chunk_kv_cu_seq_lens_tensor,
                                                 model_input->flash_input.kv_cache_offset,
                                                 model_input->flash_input.rotary_embedding_pos,
                                                 model_input->flash_input.rotary_embedding_mask,
@@ -138,14 +140,11 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
                                                 model_input->dp_src_flexible_token_idx_tensor,
                                                 model_input->dp_flexible_offset_uint64_tensor,
                                                 attn_ctx.forward_shape,
-                                                model_input->layer_kv_cache_ptr,
-                                                model_input->flash_input.block_table,
                                                 context_q_nope_rope_tensor,
                                                 kv_buffer_tensor,
                                                 k_rope_buffer_tensor,
                                                 kv_b_nope_proj_weight_,
                                                 v_head_proj_weight_,
-                                                prefix_kv_buffer_tensor,
                                                 k_buffer[0],
                                                 v_buffer[0]},
                                                output_tensors);

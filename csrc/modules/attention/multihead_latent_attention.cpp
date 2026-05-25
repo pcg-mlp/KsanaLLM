@@ -23,12 +23,13 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
   use_dsa_ = attn_config.model_config.use_dsa;
   // DSA is not always beneficial. Adaptive fallback to MHA for context tokens
   // when input length < context_dsa_threshold_
-  // Without data parallelism, DSA is slower, so a higher threshold (128000 vs 20480) is used
+  // Without data parallelism, DSA is slower, so a higher threshold (256k vs 20k) is used
   // The threshold can be adjusted by setting env CONTEXT_DSA_THRESHOLD (aimed at debugging)
   context_dsa_threshold_ = GetEnvAsPositiveInt(
       "CONTEXT_DSA_THRESHOLD",
-      creation_context.runtime_config.parallel_basic_config.attn_data_parallel_size == tensor_parallel_size_ ? 20480
-                                                                                                             : 128000);
+      creation_context.runtime_config.parallel_basic_config.attn_data_parallel_size == tensor_parallel_size_
+          ? 20 * 1024
+          : 256 * 1024);
   o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
   use_q_lora_ = (attn_config.model_config.mla_config.q_lora_rank != 0);
 
@@ -136,11 +137,6 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
       attn_config.model_config.use_dsa ? max_token_num * attn_config.model_config.dsa_config.index_topk : 0;
   mla_buffers.topk_indices_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.topk_indices_buffer", {topk_indices_buffer_size}, TYPE_INT32);
-
-  const size_t prefix_kv_buffer_size =
-      runtime_config.enable_prefix_caching ? max_token_num * (kv_lora_rank_ + qk_rope_head_dim_) : 0;
-  mla_buffers.shared_prefix_kv_buffer =
-      buffer_mgr->CreateBufferTensor("mla_buffers.shared_prefix_kv_buffer", {prefix_kv_buffer_size}, weight_type);
   return Status();
 }
 
@@ -290,7 +286,6 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
 
   if (dp_context_tokens > 0) {
     PROFILE_EVENT_SCOPE(FlashAttentionForward, "FlashAttentionForward", forwarding_context.GetCurrentRank());
-    CREATE_BUFFER_SCOPE(prefix_kv_buffer_tensors, mla_buffers_.shared_prefix_kv_buffer);
 
     // Prepare tensors for context forward
     Tensor context_q_nope_rope =
@@ -314,8 +309,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     STATUS_CHECK_RETURN(flash_mla_attention_layers_->Forward(
         forwarding_context.GetModelInput(), forwarding_context.GetAttentionForwardContext(),
         /*k_buffer*/ hidden_buffer_tensors_1, /*v_buffer*/ workspace_tensors, context_q_nope_rope, context_q_nope,
-        context_q_rope, kv_buffer_tensors[0], k_rope_buffer_tensors[0], prefix_kv_buffer_tensors[0],
-        context_indices_tensor, attn_output_tensors));
+        context_q_rope, kv_buffer_tensors[0], k_rope_buffer_tensors[0], context_indices_tensor, attn_output_tensors));
   }
 
   if (dp_decode_tokens > 0) {

@@ -13,6 +13,8 @@
 #include "models/base/forward_meta/c4_indexer_meta.h"
 #include "models/base/forward_meta/compressor_meta.h"
 #include "models/base/forward_meta/dsv4_mqa_meta.h"
+#include "models/base/forward_meta/indexer_meta.h"
+#include "models/base/forward_meta/mla_meta.h"
 #include "runtime/forward_request.h"
 #include "runtime/infer_stage.h"
 #include "utils/tensor.h"
@@ -94,7 +96,6 @@ class ModelInput {
   // Whether to use kv cache.
   bool use_cache = true;
 
-  std::vector<size_t> dp_input_offset_list_uint64;
   std::vector<size_t> dp_input_prefix_list_uint64;
   std::vector<size_t> input_offset_list_uint64;
   std::vector<size_t> input_prefix_list_uint64;
@@ -109,15 +110,15 @@ class ModelInput {
 
   // The ids offset tensor, uint64
   Tensor input_offset_uint64_tensor;
+  Tensor dp_input_offset_uint64_host;
   Tensor dp_input_offset_uint64_tensor;
-  Tensor dp_input_offset_int32_tensor;
 
   // The input's prefix length
   Tensor input_prefix_uint64_tensor;
   Tensor dp_input_prefix_uint64_tensor;
 
+  Tensor dp_prefill_q_offset_uint64_host;
   Tensor dp_prefill_q_offset_uint64_tensor;
-  Tensor dp_prefill_q_offset_int32_tensor;
 
   // Due to the optimization of PrefixCaching for computation reuse, incorporating the effects of flexible caching, a
   // mask is used during the flexible rotary_embedding computation to avoid multiple executions of flexible
@@ -284,8 +285,6 @@ class ModelInput {
   Tensor expanded_block_table;                   // block_table after expansion of q_seq_len
   std::vector<Tensor> tile_scheduler_metadatas;  // only for flash mla of page
   Tensor num_splits;                             // only for flash mla of page
-  Tensor cur_seq_len_start;                      // 每个token可以看到的开始位置的token索引
-  Tensor cur_seq_len_end;                        // 每个token可以看到的结束位置的token索引
   std::vector<Tensor> paged_schedule_metas;      // for paged sparse mla indexer
   Tensor store_out_loc;                          // used to store indexer kv cache
 
@@ -318,8 +317,6 @@ class ModelInput {
     Tensor expanded_block_table;
     Tensor tile_scheduler_metadata;
     Tensor num_splits;
-    Tensor cur_seq_len_start;    // 每个token可以看到的开始位置的token索引
-    Tensor cur_seq_len_end;      // 每个token可以看到的结束位置的token索引
     Tensor paged_schedule_meta;  // for paged sparse mla indexer
     Tensor store_out_loc;
 
@@ -342,6 +339,8 @@ class ModelInput {
   std::unique_ptr<CompressorMeta> compressor_meta_;  // meta for compress module
   std::unique_ptr<C4IndexerMeta> c4_indexer_meta_;   // meta for c4 indexer module
   std::unique_ptr<Dsv4MqaMeta> dsv4_mqa_meta_;       // meta for dsv4 mqa attention module
+  std::unique_ptr<MlaMeta> mla_meta_;                // meta for mla module
+  std::unique_ptr<IndexerMeta> indexer_meta_;        // meta for indexer module
 
   // Divide the forward requests into two categories: flash, page (with different lengths)
   void PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs);

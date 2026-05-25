@@ -29,7 +29,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 // -----------------------------------------------------------------------------
 // fused_store_indexer_cache
 // -----------------------------------------------------------------------------
@@ -65,7 +64,7 @@ template <typename Float, typename IndicesT, uint32_t kPageBits>
 void fused_gather_indexer_cache(void* k_fp8, void* k_scale, const void* cache, const void* block_table,
                                 const size_t* seq_len_offset, uint32_t batch_size, uint32_t total_tokens,
                                 int64_t page_stride, int32_t max_num_blocks_per_seq, int32_t compress_ratio,
-                                cudaStream_t stream);
+                                int32_t gather_offset, cudaStream_t stream);
 
 #define DISPATCH_STORE_BY_PAGE_BITS(page_bits, func, ...)              \
   switch (page_bits) {                                                 \

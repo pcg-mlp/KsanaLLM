@@ -123,6 +123,10 @@ struct BatchSchedulerConfig {
 
   bool enable_xgrammar = false;
 
+  // Max total kv tokens per chunk when chunked KV is enabled. Must be >= max_seq_len
+  // so that any single request's tokens can always fit in one chunk
+  size_t max_chunked_kv_tokens = 0;
+
   // ADP Balance Strategy configuration
   AttentionDPGroupBalanceConfig attention_dp_lb_config;
 
@@ -395,8 +399,9 @@ struct RuntimeConfig {
   // Schedule related. determined by schedule configs and cache related configs.
   size_t max_pp_batch_num{1};  // max number of batchs in pipeline parallel.
   int max_batch_size;
-  size_t max_seq_len;         // The max token number of a sequence
-  size_t max_step_token_num;  //  The max token number of step
+  size_t max_seq_len;            // The max token number of a sequence
+  size_t max_step_token_num;     // The max token number of step
+  size_t max_chunked_kv_tokens;  // The max total kv tokens per chunk when chunked KV is enabled
 
   size_t mtp_step_num = 0;
 

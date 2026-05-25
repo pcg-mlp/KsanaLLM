@@ -20,14 +20,14 @@
 namespace {
 
 void InitializeRuntime() {
- const char* env_path_str = std::getenv("DEEPGEMM_INCLUDE_DIR");
+  const char* env_path_str = std::getenv("DEEPGEMM_INCLUDE_DIR");
   if (env_path_str == nullptr || *env_path_str == '\0') {
     deep_gemm::Compiler::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH, DEEPGEMM_CUDA_HOME);
   } else {
     std::filesystem::path deepseek_deepgemm_path(env_path_str);
     deepseek_deepgemm_path /= "deepseek_deep_gemm";
     deep_gemm::Compiler::prepare_init(deepseek_deepgemm_path, DEEPGEMM_CUDA_HOME);
-  }     	
+  }
   deep_gemm::KernelRuntime::prepare_init(DEEPGEMM_CUDA_HOME);
 }
 
@@ -54,15 +54,11 @@ void InitializeDeepGemm(int num_sms) { InitializeRuntimeWithDevice(num_sms); }
 void SmxxFp8MqaLogits(const torch::Tensor& q, const torch::Tensor& kv, const torch::Tensor& kv_scales,
                       const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                       const torch::Tensor& cu_seq_len_k_end, const torch::Tensor& logits, int seq_len, int seq_len_kv,
-                      int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int seq_len_alignment,
-                      bool enable_clean) {
+                      int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int seq_len_alignment) {
   deep_gemm::smxx_fp8_mqa_logits(q, kv, kv_scales, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, seq_len,
                                  seq_len_kv, max_seqlen_k, stride_logits, num_heads, head_dim, seq_len_alignment);
-
-  if (enable_clean) {
-    deep_gemm::smxx_clean_logits(logits, std::make_optional(cu_seq_len_k_start), cu_seq_len_k_end, 1, seq_len,
-                                 seq_len_kv, static_cast<uint64_t>(stride_logits));
-  }
+  // clean_logits not required: compressed logits (max_seqlen_k > 0) writes from position 0 compactly,
+  // no invalid gaps exist between valid data, and DeepGEMM asserts `not clean_logits` in this mode.
 }
 
 void SmxxFp8PagedMqaLogits(const torch::Tensor& q, const torch::Tensor& kv_cache, const torch::Tensor& kv_cache_scales,
@@ -105,7 +101,7 @@ void InitializeDeepGemmOnce() {}
 void SetDeepGemmNumSms(int) {}
 void SmxxFp8MqaLogits(const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
                       const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, int, int, int, int, int, int,
-                      bool) {}
+                      int) {}
 void SmxxFp8PagedMqaLogits(const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
                            const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, int,
                            int, int, int, int, int, int, int, int, int, int, bool, int) {}

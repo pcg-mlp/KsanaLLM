@@ -31,8 +31,8 @@ struct PagedMlaInputData {
   const Tensor& expanded_input_length_tensor;
   const Tensor* block_table_tensor;
   const Tensor* expanded_block_table_tensor;
-  const Tensor* cur_seq_len_start_tensor;
-  const Tensor* cur_seq_len_end_tensor;
+  const Tensor* cu_seq_len_start_tensor;
+  const Tensor* cu_seq_len_end_tensor;
   const Tensor* layer_indexer_kv_cache_ptr_tensor;
   const Tensor& schedule_meta_tensor;
 
@@ -66,8 +66,8 @@ Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   KLLM_CHECK_WITH_INFO(index_topk_ == 512 || index_topk_ == 1024 || index_topk_ == 2048,
                        "PagedSparseMlaIndexerLayer requires index_topk in {512, 1024, 2048}");
   block_size_ = std::any_cast<int>(parameters[param_idx++]);
-  quant_block_size_ = std::any_cast<int>(parameters[param_idx++]);
-  KLLM_CHECK_WITH_INFO(quant_block_size_ == 128, "PagedSparseMlaIndexerLayer requires quant_block_size == 128");
+  const int quant_block_size = std::any_cast<int>(parameters[param_idx++]);
+  KLLM_CHECK_WITH_INFO(quant_block_size == 128, "PagedSparseMlaIndexerLayer requires quant_block_size == 128");
 
   n_heads_inv_sqrt_ = 1.0f / std::sqrt(static_cast<float>(n_heads_));
   softmax_scale_ = 1.0f / std::sqrt(static_cast<float>(head_dim_));
@@ -137,8 +137,8 @@ static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
   const Tensor& expanded_input_length_tensor = *input_iter++;          // expanded_input_length
   const Tensor* block_table_tensor = &(*input_iter++);                 // block_table
   const Tensor* expanded_block_table_tensor = &(*input_iter++);        // expanded_block_table
-  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // cur_seq_len_start
-  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // cur_seq_len_end
+  const Tensor* cu_seq_len_start_tensor = &(*input_iter++);            // cu_seq_len_start
+  const Tensor* cu_seq_len_end_tensor = &(*input_iter++);              // cu_seq_len_end
   const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // layer_indexer_kv_cache_ptr
   const Tensor& schedule_meta_tensor = *input_iter++;                  // schedule_meta
 
@@ -153,8 +153,8 @@ static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
                                    .expanded_input_length_tensor = expanded_input_length_tensor,
                                    .block_table_tensor = block_table_tensor,
                                    .expanded_block_table_tensor = expanded_block_table_tensor,
-                                   .cur_seq_len_start_tensor = cur_seq_len_start_tensor,
-                                   .cur_seq_len_end_tensor = cur_seq_len_end_tensor,
+                                   .cu_seq_len_start_tensor = cu_seq_len_start_tensor,
+                                   .cu_seq_len_end_tensor = cu_seq_len_end_tensor,
                                    .layer_indexer_kv_cache_ptr_tensor = layer_indexer_kv_cache_ptr_tensor,
                                    .schedule_meta_tensor = schedule_meta_tensor,
                                    .total_q_tokens = q_tensor.shape[0],
@@ -166,8 +166,8 @@ static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
 }
 
 static void PrepareQuantWorkspace(size_t total_q_tokens, PagedQuantWorkspace& workspace, uint8_t* quant_workspace_ptr,
-                                  float* logits_workspace_ptr, int n_heads, int head_dim, int quant_block_size,
-                                  int max_seq_len, int block_size) {
+                                  float* logits_workspace_ptr, int n_heads, int head_dim, int max_seq_len,
+                                  int block_size) {
   // Calculate FP8 quantization buffer sizes
   size_t q_fp8_bytes = total_q_tokens * n_heads * head_dim;
 
@@ -277,9 +277,9 @@ static Status SelectTopK(BaseLayer* topk_layer, const PagedMlaInputData<SCALAR_T
                 {input_data.total_q_tokens, workspace.aligned_max_seq_len}, workspace.logits_ptr);
 
   std::vector<Tensor> outputs = {topk_indices};
-  return topk_layer->Forward({scores, *input_data.cur_seq_len_start_tensor, *input_data.cur_seq_len_end_tensor,
-                              *input_data.block_table_tensor},
-                             outputs);
+  return topk_layer->Forward(
+      {scores, *input_data.cu_seq_len_start_tensor, *input_data.cu_seq_len_end_tensor, *input_data.block_table_tensor},
+      outputs);
 }
 
 template <typename SCALAR_T>
@@ -292,8 +292,7 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
   // Step 2: Prepare workspace
   PagedQuantWorkspace workspace;
   PrepareQuantWorkspace(input_data.total_q_tokens, workspace, input_data.quant_workspace_ptr,
-                        workspace_buffer_->GetPtr<float>(), n_heads_, head_dim_, quant_block_size_, max_seq_len_,
-                        block_size_);
+                        workspace_buffer_->GetPtr<float>(), n_heads_, head_dim_, max_seq_len_, block_size_);
 
   if (compress_ratio_ == 1) {
     // DSA indexer path: additionally apply RoPE to K and store to KV cache.

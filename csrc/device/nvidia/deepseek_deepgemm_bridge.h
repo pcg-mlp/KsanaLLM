@@ -12,8 +12,7 @@ void InitializeDeepGemm(int num_sms);
 void SmxxFp8MqaLogits(const torch::Tensor& q, const torch::Tensor& kv, const torch::Tensor& kv_scales,
                       const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                       const torch::Tensor& cu_seq_len_k_end, const torch::Tensor& logits, int seq_len, int seq_len_kv,
-                      int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int seq_len_alignment,
-                      bool enable_clean);
+                      int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int seq_len_alignment);
 
 void SmxxFp8PagedMqaLogits(const torch::Tensor& q, const torch::Tensor& kv_cache, const torch::Tensor& kv_cache_scales,
                            const torch::Tensor& weights, const torch::Tensor& context_lens, const torch::Tensor& logits,

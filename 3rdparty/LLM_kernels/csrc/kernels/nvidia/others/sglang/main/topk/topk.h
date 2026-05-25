@@ -26,8 +26,8 @@ namespace topk {
 // the supplied page_table. Equivalent (numerically and layout-wise) to calling
 // SGLang's `TopK512Kernel<kUsePDL>::transform(...)` on the same tensors.
 //
-//   scores           : [batch_size, score_stride]  float   (device)
-//                      per-batch row b uses the [row_starts[b], row_ends[b]) slice.
+//   scores           : [num_works, score_stride]   float   (device)
+//                      per-work row uses the [row_starts[w], row_ends[w]) slice.
 //   row_starts       : [num_works]                int32_t  (device)
 //   row_ends         : [num_works]                int32_t  (device)
 //   page_table       : [num_batches, page_table_stride] int32_t (device)
@@ -38,19 +38,17 @@ namespace topk {
 //   score_stride     : row stride (in elements) of `scores`
 //   page_table_stride: row stride (in elements) of `page_table`
 //   num_works        : total number of work items (grid size).
-//   page_size        : must be a power of two (checked at runtime).
-//   extend_lens      : [num_batches] int32_t (device), work count per batch (prefill).
+//   page_bits        : log2(page_size), must be power of two.
+//   batch_indices    : [num_works] int32_t (device), precomputed per-token batch index.
+//                      Prefill path: batch_indices[work_id] = batch_id (direct O(1) lookup).
 //                      Pass nullptr for decode path.
 //   extend_len       : scalar, uniform work count per batch (decode).
-//                      Ignored when extend_lens != nullptr.
-//   num_batches      : total number of batches.
+//                      Ignored when batch_indices != nullptr.
 //   stream           : CUDA stream on which to launch.
-//
-// Throws std::invalid_argument if `page_size` is not a power of two.
 void launch_topk512(const float* scores, const int32_t* row_starts, const int32_t* row_ends, const int32_t* page_table,
                     int32_t* page_indices_out, int32_t* raw_indices_out, int64_t score_stride,
-                    int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* extend_lens,
-                    uint32_t extend_len, uint32_t num_batches, cudaStream_t stream);
+                    int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* batch_indices,
+                    uint32_t extend_len, cudaStream_t stream);
 
 // -----------------------------------------------------------------------------
 // launch_topk1024
@@ -59,8 +57,8 @@ void launch_topk512(const float* scores, const int32_t* row_starts, const int32_
 // last dim of both output tensors must therefore be 1024.
 void launch_topk1024(const float* scores, const int32_t* row_starts, const int32_t* row_ends, const int32_t* page_table,
                      int32_t* page_indices_out, int32_t* raw_indices_out, int64_t score_stride,
-                     int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* extend_lens,
-                     uint32_t extend_len, uint32_t num_batches, cudaStream_t stream);
+                     int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* batch_indices,
+                     uint32_t extend_len, cudaStream_t stream);
 
 // -----------------------------------------------------------------------------
 // Compile-time constants exposed for callers that need to size output tensors.

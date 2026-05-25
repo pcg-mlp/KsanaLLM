@@ -112,19 +112,20 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCanCompute) {
   kv_fp8 = kv_fp8.to(device_);
   kv_scales = kv_scales.to(device_);
 
-  // Allocate output tensor with proper alignment
+  // Allocate output tensor with proper alignment for compressed logits
   constexpr int block_kv = 256;
-  const int stride_logits = ((seq_len_kv + block_kv + 3) / 4) * 4;
+  const int max_seqlen_k = seq_len_kv;  // single request, max_seqlen_k = seq_len_kv
+  const int stride_logits = ((max_seqlen_k + block_kv - 1) / block_kv) * block_kv;
   const int aligned_seq_len = ((seq_len + 3) / 4) * 4;
   auto logits = torch::zeros({aligned_seq_len, stride_logits}, torch::kFloat32).to(device_);
 
   // Run the kernel - should not throw
   EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits, at::cuda::getCurrentCUDAStream().stream(), true));
+                                        logits, max_seqlen_k, at::cuda::getCurrentCUDAStream().stream()));
   cudaDeviceSynchronize();
 
   // Verify output contains finite values in valid region
-  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, seq_len_kv).to(torch::kCPU);
+  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, max_seqlen_k).to(torch::kCPU);
   bool has_finite = false;
   for (int i = 0; i < std::min(seq_len, 100) && !has_finite; ++i) {
     int start = 0;
@@ -172,16 +173,17 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsWithContextParallelism) {
   kv_scales = kv_scales.to(device_);
 
   constexpr int block_kv = 256;
-  const int stride_logits = ((seq_len_kv + block_kv + 3) / 4) * 4;
+  const int max_seqlen_k = seq_len_kv;  // upper bound for any token's visible KV range
+  const int stride_logits = ((max_seqlen_k + block_kv - 1) / block_kv) * block_kv;
   const int aligned_seq_len = ((seq_len + 3) / 4) * 4;
   auto logits = torch::zeros({aligned_seq_len, stride_logits}, torch::kFloat32).to(device_);
 
   EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits, at::cuda::getCurrentCUDAStream().stream(), true));
+                                        logits, max_seqlen_k, at::cuda::getCurrentCUDAStream().stream()));
   cudaDeviceSynchronize();
 
   // Verify output is produced
-  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, seq_len_kv).to(torch::kCPU);
+  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, max_seqlen_k).to(torch::kCPU);
   EXPECT_GT(logits_cpu.numel(), 0) << "Fp8MqaLogits with CP should produce output";
 }
 
@@ -290,7 +292,7 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8PagedMqaLogitsCanCompute) {
   EXPECT_GT(finite_count, 0) << "Fp8PagedMqaLogits should produce some finite values";
 }
 
-TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCleanLogitsFlag) {
+TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCompressedLogits) {
   auto wrapper = DeepSeekDeepGEMMWrapper::GetInstance();
 
   // Use parameters matching DeepGEMM constraints
@@ -303,7 +305,7 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCleanLogitsFlag) {
   auto kv_bf16 = torch::randn({seq_len_kv, head_dim}, torch::kBFloat16).to(device_);
   auto weights = torch::randn({seq_len, num_heads}, torch::kFloat32).to(device_);
 
-  // Set up boundaries so that only first half of kv is valid
+  // Set up boundaries: start=0, end=seq_len_kv/2 (compressed/relative format)
   auto cu_seq_len_k_start = torch::zeros({seq_len}, torch::kInt32).to(device_);
   auto cu_seq_len_k_end = torch::full({seq_len}, seq_len_kv / 2, torch::kInt32).to(device_);
 
@@ -313,28 +315,27 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCleanLogitsFlag) {
   kv_scales = kv_scales.to(device_);
 
   constexpr int block_kv = 256;
-  const int stride_logits = ((seq_len_kv + block_kv + 3) / 4) * 4;
+  const int max_seqlen_k = seq_len_kv / 2;  // compressed: max visible range
+  const int stride_logits = ((max_seqlen_k + block_kv - 1) / block_kv) * block_kv;
   const int aligned_seq_len = ((seq_len + 3) / 4) * 4;
 
-  // Test with clean_logits = true
-  auto logits_clean = torch::full({aligned_seq_len, stride_logits}, 999.0f, torch::kFloat32).to(device_);
+  // Test compressed logits mode
+  auto logits = torch::full({aligned_seq_len, stride_logits}, 999.0f, torch::kFloat32).to(device_);
   EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits_clean, at::cuda::getCurrentCUDAStream().stream(), true));
+                                        logits, max_seqlen_k, at::cuda::getCurrentCUDAStream().stream()));
   cudaDeviceSynchronize();
 
-  // Test with clean_logits = false
-  auto logits_no_clean = torch::full({aligned_seq_len, stride_logits}, 999.0f, torch::kFloat32).to(device_);
-  EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits_no_clean, at::cuda::getCurrentCUDAStream().stream(), false));
-  cudaDeviceSynchronize();
-
-  auto logits_clean_cpu = logits_clean.narrow(0, 0, seq_len).narrow(1, 0, seq_len_kv).to(torch::kCPU);
-
-  // With clean_logits=true, masked positions should be -inf
-  int masked_pos = seq_len_kv - 1;  // This position should be masked (>= seq_len_kv/2)
-  float clean_val = logits_clean_cpu[0][masked_pos].item<float>();
-  EXPECT_EQ(clean_val, -std::numeric_limits<float>::infinity())
-      << "With clean_logits=true, masked position should be -inf";
+  // Verify logits are written in compressed format [0, max_seqlen_k)
+  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, max_seqlen_k).to(torch::kCPU);
+  bool has_finite = false;
+  for (int i = 0; i < std::min(seq_len, 100) && !has_finite; ++i) {
+    for (int j = 0; j < max_seqlen_k && !has_finite; ++j) {
+      if (std::isfinite(logits_cpu[i][j].item<float>())) {
+        has_finite = true;
+      }
+    }
+  }
+  EXPECT_TRUE(has_finite) << "Compressed logits should produce finite values in [0, max_seqlen_k) range";
 }
 
 TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsLargeScale) {
@@ -359,16 +360,17 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsLargeScale) {
   kv_scales = kv_scales.to(device_);
 
   constexpr int block_kv = 256;
-  const int stride_logits = ((seq_len_kv + block_kv + 3) / 4) * 4;
+  const int max_seqlen_k = seq_len_kv;  // single request, max_seqlen_k = seq_len_kv
+  const int stride_logits = ((max_seqlen_k + block_kv - 1) / block_kv) * block_kv;
   const int aligned_seq_len = ((seq_len + 3) / 4) * 4;
   auto logits = torch::zeros({aligned_seq_len, stride_logits}, torch::kFloat32).to(device_);
 
   EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
-                                        logits, at::cuda::getCurrentCUDAStream().stream(), true));
+                                        logits, max_seqlen_k, at::cuda::getCurrentCUDAStream().stream()));
   cudaDeviceSynchronize();
 
   // Verify computation completed
-  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, seq_len_kv).to(torch::kCPU);
+  auto logits_cpu = logits.narrow(0, 0, seq_len).narrow(1, 0, max_seqlen_k).to(torch::kCPU);
   EXPECT_GT(logits_cpu.numel(), 0) << "Large scale Fp8MqaLogits should produce output";
 }
 

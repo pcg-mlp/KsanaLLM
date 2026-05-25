@@ -62,6 +62,9 @@ setting:
     max_batch_size: 128
     # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
     max_token_len: 2048
+    # 单个chunk能容纳的KV token上限，需大于等于max_token_len，默认等于max(max_token_len，max_step_tokens)
+    # 增大该值可减少chunk数，降低TTFT，但会增加buffer开销
+    max_chunked_kv_tokens: 0
     # 单个请求可用blck小于该值触发换出
     swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入

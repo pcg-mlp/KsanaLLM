@@ -8,6 +8,7 @@
 
 #include "configure/context.h"
 #include "configure/environment.h"
+#include "models/base/forward_meta/indexer_meta.h"
 #include "runtime/forward_request.h"
 #include "utils/tensor.h"
 
@@ -19,41 +20,28 @@ class C4IndexerMeta {
 
   void Prepare(const std::vector<ForwardRequest>& forward_reqs);
 
-  struct input_info {
-    std::vector<const ForwardRequest*> dp_reqs;
-
-    // Tensors in input_info are views of the above shared tensors
-    // Their shape is used to locate the offset of each input_info in the shared tensors
+  struct input_info : public IndexerMeta::input_info {
+    // C4-specific tensors (views of shared tensors)
     Tensor c4_seq_lens_tensor;
     Tensor expanded_c4_seq_lens_tensor;  // seq_lens after expansion of q_seq_len
     Tensor extend_lens_tensor;
-    Tensor cur_seq_len_start_tensor;
-    Tensor cur_seq_len_end_tensor;
 
-    // Persistent host vectors to prevent destruction during MemcpyAsync
+    // C4-specific host vectors
     std::vector<int> c4_seq_lens_host;
     std::vector<int> expanded_c4_seq_lens_host;
     std::vector<int> extend_lens_host;
-    std::vector<int> cur_seq_len_start_host;
-    std::vector<int> cur_seq_len_end_host;
 
-    size_t q_seq_len = 0;
     size_t expanded_q_seq_len = 0;
     size_t expanded_batch_size = 1;
-    size_t total_dp_input_ids_len = 0;
     size_t total_dp_compressed_input_ids_len = 0;
 
     void Reset() {
-      dp_reqs.clear();
+      IndexerMeta::input_info::Reset();
       c4_seq_lens_host.clear();
       expanded_c4_seq_lens_host.clear();
       extend_lens_host.clear();
-      cur_seq_len_start_host.clear();
-      cur_seq_len_end_host.clear();
-      q_seq_len = 0;
       expanded_q_seq_len = 0;
       expanded_batch_size = 1;
-      total_dp_input_ids_len = 0;
       total_dp_compressed_input_ids_len = 0;
     }
   };
@@ -78,7 +66,6 @@ class C4IndexerMeta {
                         size_t expanded_q_seq_len, size_t expanded_batch_size);
   void PrepareExtendLens(std::vector<int>& host, const ForwardRequest& req);
   void PrepareBlockTable(input_info& input);
-  void PrepareCurSeqLen(input_info& input, bool is_paged = false);
 
   std::shared_ptr<Context> context_;
 
@@ -90,8 +77,6 @@ class C4IndexerMeta {
   Tensor c4_seq_lens_tensor;
   Tensor expanded_c4_seq_lens_tensor;
   Tensor extend_lens_tensor;
-  Tensor cur_seq_len_start_tensor;
-  Tensor cur_seq_len_end_tensor;
 
  public:
   // Number of dp tokens in context/decode phase
@@ -102,6 +87,9 @@ class C4IndexerMeta {
   // Dummy tensor for indexer interface,
   // but the module parses input tensors positionally so we need a valid placeholder
   Tensor gathered_c4_out_loc_tensor;
+
+  // Internal IndexerMeta (compress_ratio-aware)
+  std::unique_ptr<IndexerMeta> indexer_meta;
 };
 
 }  // namespace ksana_llm

@@ -8,6 +8,7 @@
 
 #include "configure/environment.h"
 #include "device/device_utils.h"
+#include "models/base/forward_meta/common.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
 
@@ -110,17 +111,6 @@ CompressorMeta::CompressorMeta(const ModelConfig& model_config, const RuntimeCon
   }
 }
 
-// Upload input's persistent host vector to a device tensor view, updating shared tensor offset.
-#define HOST_TO_DEVICE(name, input)                                                                           \
-  do {                                                                                                        \
-    KLLM_LOG_DEBUG << #name "_host: " << (input).name##_host;                                                 \
-    (input).name##_tensor = name##_tensor.GetView({(input).name##_host.size()}, name##_tensor.shape[0]);      \
-    name##_tensor.shape[0] += (input).name##_tensor.GetElementNumber();                                       \
-    MemcpyAsync((input).name##_tensor.GetPtr<void>(), (input).name##_host.data(),                             \
-                (input).name##_host.size() * sizeof(std::decay_t<decltype((input).name##_host)>::value_type), \
-                MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());                                     \
-  } while (0)
-
 void CompressorMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   // Reset the offsets of shared tensors
   c4_indices_tensor.shape = {0};
@@ -216,8 +206,8 @@ void CompressorMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
       PrepareSeqLens(flash_input.seq_lens_host, *req);
       PrepareExtendLens(flash_input.extend_lens_host, *req);
     }
-    HOST_TO_DEVICE(seq_lens, flash_input);
-    HOST_TO_DEVICE(extend_lens, flash_input);
+    HOST_TO_SHARED_DEVICE(seq_lens, flash_input);
+    HOST_TO_SHARED_DEVICE(extend_lens, flash_input);
 
     // Compute exact compress_num and write_num for plan tensors
     PreparePrefillPlan(flash_input);
@@ -228,7 +218,7 @@ void CompressorMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
     for (const auto* req : page_input.dp_reqs) {
       PrepareSeqLens(page_input.seq_lens_host, *req);
     }
-    HOST_TO_DEVICE(seq_lens, page_input);
+    HOST_TO_SHARED_DEVICE(seq_lens, page_input);
   }
 }
 
@@ -306,16 +296,8 @@ void CompressorMeta::PrepareTailIndices(const std::vector<ForwardRequest>& reqs,
   }
 
   // Upload tail-read tensors
-  KLLM_LOG_DEBUG << "tail_read_block_host: " << tail_read_block_host;
-  KLLM_LOG_DEBUG << "tail_target_indices_host: " << tail_target_indices_host;
-  tail_read_block_tensor.shape = {tail_read_block_host.size()};
-  tail_target_indices_tensor.shape = {tail_target_indices_host.size()};
-  MemcpyAsync(tail_read_block_tensor.GetPtr<void>(), tail_read_block_host.data(),
-              tail_read_block_host.size() * sizeof(decltype(tail_read_block_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
-  MemcpyAsync(tail_target_indices_tensor.GetPtr<void>(), tail_target_indices_host.data(),
-              tail_target_indices_host.size() * sizeof(decltype(tail_target_indices_host)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
+  HOST_TO_DEVICE(tail_read_block_host, tail_read_block_tensor);
+  HOST_TO_DEVICE(tail_target_indices_host, tail_target_indices_tensor);
 
   // ===== Tail-write 索引 (per-token) =====
   // 每个 KV block 内最后 kTailTokens 个 token 是被持久化到 tail 区的"源 token"。
@@ -351,11 +333,7 @@ void CompressorMeta::PrepareTailIndices(const std::vector<ForwardRequest>& reqs,
   }
 
   // Upload tail-write tensors
-  KLLM_LOG_DEBUG << "tail_write_indices_host: " << tail_write_indices_host;
-  tail_write_indices_tensor.shape = {tail_write_indices_host.size()};
-  MemcpyAsync(tail_write_indices_tensor.GetPtr<void>(), tail_write_indices_host.data(),
-              tail_write_indices_host.size() * sizeof(decltype(tail_write_indices_host)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
+  HOST_TO_DEVICE(tail_write_indices_host, tail_write_indices_tensor);
 }
 
 void CompressorMeta::PrepareIndices(input_info& input, bool is_paged) {
@@ -402,13 +380,13 @@ void CompressorMeta::PrepareIndices(input_info& input, bool is_paged) {
     }
   }
 
-  HOST_TO_DEVICE(c4_indices, input);
-  HOST_TO_DEVICE(c128_indices, input);
+  HOST_TO_SHARED_DEVICE(c4_indices, input);
+  HOST_TO_SHARED_DEVICE(c128_indices, input);
   if (!is_paged) {
-    HOST_TO_DEVICE(c4_indices_bundle, input);
-    HOST_TO_DEVICE(c128_load_indices, input);
+    HOST_TO_SHARED_DEVICE(c4_indices_bundle, input);
+    HOST_TO_SHARED_DEVICE(c128_load_indices, input);
   } else {
-    HOST_TO_DEVICE(c4_indices_prev, input);
+    HOST_TO_SHARED_DEVICE(c4_indices_prev, input);
   }
 }
 
@@ -449,8 +427,8 @@ void CompressorMeta::PrepareOutLoc(input_info& input) {
       }
     }
   }
-  HOST_TO_DEVICE(c4_out_loc, input);
-  HOST_TO_DEVICE(c128_out_loc, input);
+  HOST_TO_SHARED_DEVICE(c4_out_loc, input);
+  HOST_TO_SHARED_DEVICE(c128_out_loc, input);
 }
 
 void CompressorMeta::PrepareSeqLens(std::vector<int>& host, const ForwardRequest& req) {
@@ -460,7 +438,5 @@ void CompressorMeta::PrepareSeqLens(std::vector<int>& host, const ForwardRequest
 void CompressorMeta::PrepareExtendLens(std::vector<int>& host, const ForwardRequest& req) {
   host.push_back(static_cast<int>(req.GetInputIdsLength()));
 }
-
-#undef HOST_TO_DEVICE
 
 }  // namespace ksana_llm

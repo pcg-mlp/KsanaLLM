@@ -37,7 +37,6 @@ class PagedSparseMlaIndexerLayer : public BaseLayer {
   int index_topk_;                 // top-k value
   int block_size_;                 // kv block size: number of tokens in one block
   int page_bits_;                  // log2(block_size)
-  int quant_block_size_;           // quantization block size: number of tokens sharing one quantization parameter
   float n_heads_inv_sqrt_;         // n_heads ** -0.5
   float softmax_scale_;            // head_dim ** -0.5
   int max_batch_size_;             // max batch size

@@ -27,8 +27,8 @@ class DeepSeekDeepGEMMWrapper {
   // MQA attention functions using DeepSeek's DeepGEMM
   void Fp8MqaLogits(const torch::Tensor& q_fp8, const std::pair<torch::Tensor, torch::Tensor>& kv_fp8,
                     const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
-                    const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits, cudaStream_t stream,
-                    bool clean_logits = true);
+                    const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits, int max_seqlen_k,
+                    cudaStream_t stream);
 
   void Fp8PagedMqaLogits(const torch::Tensor& q_fp8, const torch::Tensor& fused_kv_cache, const torch::Tensor& weights,
                          const torch::Tensor& context_lens, const torch::Tensor& block_table,

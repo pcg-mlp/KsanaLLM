@@ -31,7 +31,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 using deepseek_v4::fp8::pack_fp8;
 using namespace llm_kernels::utils;
 
@@ -129,6 +128,7 @@ struct FusedGatherCacheParam {
   int64_t page_stride;    // bytes between consecutive blocks
   int32_t max_num_blocks_per_seq;
   int32_t compress_ratio;
+  int32_t gather_offset;  // global compressed entry offset for this chunk
 };
 
 template <typename IndicesT, uint32_t kPageBits, bool kUsePDL>
@@ -137,7 +137,7 @@ __global__ void fused_gather_indexer_cache_kernel(const __grid_constant__ FusedG
 
   // Each warp handles one output entry (128 FP8 bytes + 1 float32 scale)
   const auto& [k_fp8, k_scale, cache, block_table, seq_len_offset, batch_size, total_tokens, page_stride,
-               max_num_blocks_per_seq, compress_ratio] = param;
+               max_num_blocks_per_seq, compress_ratio, gather_offset] = param;
   const auto global_tid = blockIdx.x * blockDim.x + threadIdx.x;
   const auto global_wid = global_tid / 32;
   const auto lane_id = threadIdx.x % 32;
@@ -146,13 +146,14 @@ __global__ void fused_gather_indexer_cache_kernel(const __grid_constant__ FusedG
 
   PDLWaitPrimary<kUsePDL>();
 
-  // Determine which batch this entry belongs to.
-  // seq_len_offset is in uncompressed token units; divide by compress_ratio to get compressed bounds.
-  const IndicesT entry_idx = global_wid;
+  // Map local entry to global entry using gather_offset
+  const IndicesT global_entry = gather_offset + global_wid;
+
+  // Determine which batch this entry belongs to via linear search on global entry.
   uint32_t batch_idx;
   for (batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
     const IndicesT compressed_end = static_cast<IndicesT>(seq_len_offset[batch_idx + 1]) / compress_ratio;
-    if (entry_idx < compressed_end) {
+    if (global_entry < compressed_end) {
       break;
     }
   }
@@ -160,7 +161,7 @@ __global__ void fused_gather_indexer_cache_kernel(const __grid_constant__ FusedG
     return;
 
   const IndicesT compressed_start = static_cast<IndicesT>(seq_len_offset[batch_idx]) / compress_ratio;
-  const IndicesT entry_offset_in_req = entry_idx - compressed_start;
+  const IndicesT entry_offset_in_req = global_entry - compressed_start;
 
   // Map to physical page and offset within page
   const IndicesT block_idx_in_req = entry_offset_in_req >> kPageBits;
@@ -202,11 +203,11 @@ template <typename Float, typename IndicesT, uint32_t kPageBits>
 inline void fused_gather_indexer_cache(void* k_fp8, void* k_scale, const void* cache, const void* block_table,
                                        const size_t* seq_len_offset, uint32_t batch_size, uint32_t total_tokens,
                                        int64_t page_stride, int32_t max_num_blocks_per_seq, int32_t compress_ratio,
-                                       cudaStream_t stream) {
-  const FusedGatherCacheParam params{k_fp8,         k_scale,        cache,
-                                     block_table,   seq_len_offset, batch_size,
-                                     total_tokens,  page_stride,    max_num_blocks_per_seq,
-                                     compress_ratio};
+                                       int32_t gather_offset, cudaStream_t stream) {
+  const FusedGatherCacheParam params{k_fp8,          k_scale,        cache,
+                                     block_table,    seq_len_offset, batch_size,
+                                     total_tokens,   page_stride,    max_num_blocks_per_seq,
+                                     compress_ratio, gather_offset};
   constexpr uint32_t kBlockSize = 128;
   const uint32_t num_blocks = device::div_ceil(total_tokens * 32u, kBlockSize);
   constexpr auto kernel = fused_gather_indexer_cache_kernel<IndicesT, kPageBits, /*kUsePDL=*/true>;
@@ -221,7 +222,7 @@ inline void fused_gather_indexer_cache(void* k_fp8, void* k_scale, const void* c
                                                                       int64_t, cudaStream_t);                      \
   template void fused_gather_indexer_cache<Float, IndicesT, kPageBits>(void*, void*, const void*, const void*,     \
                                                                        const size_t*, uint32_t, uint32_t, int64_t, \
-                                                                       int32_t, int32_t, cudaStream_t)
+                                                                       int32_t, int32_t, int32_t, cudaStream_t)
 INSTANTIATE_STORE(__nv_bfloat16, int32_t, 1);
 INSTANTIATE_STORE(__nv_bfloat16, int32_t, 6);
 INSTANTIATE_STORE(__nv_bfloat16, int32_t, 8);

@@ -9,6 +9,7 @@
 #  include "csrc/kernels/nvidia/flash_sparse_mla/flash_sparse_mla.h"
 #endif
 #include "device/device_utils.h"
+#include "models/base/forward_meta/common.h"
 #include "utils/memory_utils.h"
 
 namespace ksana_llm {
@@ -111,17 +112,6 @@ Dsv4MqaMeta::Dsv4MqaMeta(const ModelConfig& model_config, const RuntimeConfig& r
   c128_num_splits_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {num_splits_size});
 #endif
 }
-
-// Upload input's persistent host vector to a device tensor view, updating shared tensor offset.
-#define HOST_TO_DEVICE(name, input)                                                                           \
-  do {                                                                                                        \
-    KLLM_LOG_DEBUG << #name "_host: " << (input).name##_host;                                                 \
-    (input).name##_tensor = name##_tensor.GetView({(input).name##_host.size()}, name##_tensor.shape[0]);      \
-    name##_tensor.shape[0] += (input).name##_tensor.GetElementNumber();                                       \
-    MemcpyAsync((input).name##_tensor.GetPtr<void>(), (input).name##_host.data(),                             \
-                (input).name##_host.size() * sizeof(std::decay_t<decltype((input).name##_host)>::value_type), \
-                MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());                                     \
-  } while (0)
 
 void Dsv4MqaMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   // Reset the offsets of shared tensors
@@ -260,7 +250,7 @@ void Dsv4MqaMeta::PrepareOutLoc(input_info& input) {
     }
   }
 
-  HOST_TO_DEVICE(raw_out_loc, input);
+  HOST_TO_SHARED_DEVICE(raw_out_loc, input);
 }
 
 void Dsv4MqaMeta::PrepareBlockIndices(input_info& input) {
@@ -300,8 +290,8 @@ void Dsv4MqaMeta::PrepareBlockIndices(input_info& input) {
     }
   }
 
-  HOST_TO_DEVICE(swa_block_indices, input);
-  HOST_TO_DEVICE(c128_block_indices, input);
+  HOST_TO_SHARED_DEVICE(swa_block_indices, input);
+  HOST_TO_SHARED_DEVICE(c128_block_indices, input);
   // Correctly set the 2D shape
   input.swa_block_indices_tensor.shape = {input.total_dp_input_ids_len, kSwaSize};
   input.c128_block_indices_tensor.shape = {input.total_dp_input_ids_len,
@@ -318,9 +308,7 @@ void Dsv4MqaMeta::PrepareTopkLengths(input_info& input) {
     }
   }
 
-  HOST_TO_DEVICE(c128_topk_lengths, input);
+  HOST_TO_SHARED_DEVICE(c128_topk_lengths, input);
 }
-
-#undef HOST_TO_DEVICE
 
 }  // namespace ksana_llm

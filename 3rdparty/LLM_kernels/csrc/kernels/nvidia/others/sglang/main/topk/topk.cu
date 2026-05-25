@@ -61,11 +61,10 @@ struct TopK512Params {
   const int64_t page_table_stride;
   uint32_t page_bits;
   // For batch_id computation:
-  //   Prefill (kIsPrefill=true):  extend_lens[i] = number of works in batch i; scan to find batch_id.
+  //   Prefill (kIsPrefill=true):  batch_indices[work_id] = batch_id (direct O(1) lookup).
   //   Decode  (kIsPrefill=false): extend_len = works per batch; batch_id = work_id / extend_len.
-  const int32_t* __restrict__ extend_lens;  // [num_batches], used in prefill
-  uint32_t extend_len;                      // scalar, used in decode
-  uint32_t num_batches;                     // total number of batches (for prefill loop bound)
+  const int32_t* __restrict__ batch_indices;  // [num_works], used in prefill
+  uint32_t extend_len;                        // scalar, used in decode
 };
 
 __device__ __forceinline__ uint8_t convert_to_uint8(float x) {
@@ -267,23 +266,15 @@ template <bool kUsePDL, bool kIsPrefill>
 __global__ void topk_512_transform(const __grid_constant__ TopK512Params params) {
   const auto& [scores, row_starts, row_ends, page_table, page_indices, raw_indices,  // pointers
                score_stride, page_table_stride, page_bits,                           // sizes
-               extend_lens, extend_len, num_batches                                  // batch dispatch
+               batch_indices, extend_len                                             // batch dispatch
   ] = params;
   const uint32_t work_id = blockIdx.x;
 
   // Compute batch_id from work_id
   uint32_t batch_id;
   if constexpr (kIsPrefill) {
-    // Prefill: extend_lens[i] is the work count for batch i; scan to find owner.
-    uint32_t acc = 0;
-    batch_id = 0;
-    for (uint32_t i = 0; i < num_batches; ++i) {
-      acc += static_cast<uint32_t>(extend_lens[i]);
-      if (work_id < acc) {
-        batch_id = i;
-        break;
-      }
-    }
+    // Prefill: direct O(1) lookup from precomputed batch_indices.
+    batch_id = static_cast<uint32_t>(batch_indices[work_id]);
   } else {
     // Decode: uniform work count per batch.
     batch_id = work_id / extend_len;
@@ -332,13 +323,13 @@ inline void setup_kernel_smem_once() {
 // ---------------------------------------------------------------------------
 // Host-side launcher (Ksana-local rewrite of SGLang's TopK512Kernel::transform)
 //
-// Prefill: pass extend_lens (device array [num_batches]) and set extend_len=0.
-// Decode:  pass extend_lens=nullptr and set extend_len to the uniform work count per batch.
+// Prefill: pass batch_indices (device array [num_works]) and set extend_len=0.
+// Decode:  pass batch_indices=nullptr and set extend_len to the uniform work count per batch.
 // ---------------------------------------------------------------------------
 void launch_topk512(const float* scores, const int32_t* row_starts, const int32_t* row_ends, const int32_t* page_table,
                     int32_t* page_indices_out, int32_t* raw_indices_out, int64_t score_stride,
-                    int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* extend_lens,
-                    uint32_t extend_len, uint32_t num_batches, cudaStream_t stream) {
+                    int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* batch_indices,
+                    uint32_t extend_len, cudaStream_t stream) {
   const k512::TopK512Params params{
       /*.scores=*/scores,
       /*.row_starts=*/row_starts,
@@ -349,14 +340,13 @@ void launch_topk512(const float* scores, const int32_t* row_starts, const int32_
       /*.score_stride=*/score_stride,
       /*.page_table_stride=*/page_table_stride,
       /*.page_bits=*/page_bits,
-      /*.extend_lens=*/extend_lens,
+      /*.batch_indices=*/batch_indices,
       /*.extend_len=*/extend_len,
-      /*.num_batches=*/num_batches,
   };
   constexpr auto kSMEM_ = k512::kSMEM + sizeof(int32_t);  // align up a little
 
-  if (extend_lens != nullptr) {
-    // Prefill path
+  if (batch_indices != nullptr) {
+    // Prefill path: use precomputed batch_indices
     constexpr auto kernel = k512::topk_512_transform</*kUsePDL*/ true, /*kIsPrefill*/ true>;
     k512::setup_kernel_smem_once<kernel, kSMEM_>();
     LAUNCH_KERNEL_WITH_PDL(kernel, num_works, k512::kTopKBlockSize, kSMEM_, stream, params);

@@ -31,24 +31,24 @@ class FlashSparseMlaIndexerLayer : public BaseLayer {
 
  private:
   // Model parameters
-  int n_heads_;                // number of index heads
-  int head_dim_;               // index head dimension
-  int rope_head_dim_;          // rope head dimension
-  int index_topk_;             // top-k value
-  int block_size_;             // kv block size: number of tokens in one block
-  int page_bits_;              // log2(block_size)
-  int quant_block_size_;       // quantization block size: number of tokens sharing one quantization parameter
-  float n_heads_inv_sqrt_;     // n_heads ** -0.5
-  float softmax_scale_;        // head_dim ** -0.5
-  int max_seq_len_;            // max sequence length
-  int layer_index_;            // layer index
-  int layer_num_;              // number of layers on this node
-  size_t max_step_token_num_;  // max step token num from runtime_config
-  size_t chunk_size_;          // chunk size for logits computation to avoid a large logits buffer
-  bool scale_ue8m0_;           // use ue8m0 format for fp8 scales
-  bool is_neox_;               // true: NeoX style rotary, false: GPT-J interleaved style
-  size_t compress_ratio_;      // for indexer using compressor
-  int block_stride_;           // stride of kv block
+  int n_heads_;                   // number of index heads
+  int head_dim_;                  // index head dimension
+  int rope_head_dim_;             // rope head dimension
+  int index_topk_;                // top-k value
+  int block_size_;                // kv block size: number of tokens in one block
+  int page_bits_;                 // log2(block_size)
+  float n_heads_inv_sqrt_;        // n_heads ** -0.5
+  float softmax_scale_;           // head_dim ** -0.5
+  int max_seq_len_;               // max sequence length
+  int layer_index_;               // layer index
+  int layer_num_;                 // number of layers on this node
+  size_t max_step_token_num_;     // max step token num from runtime_config
+  size_t max_chunked_q_tokens_;   // max Q tokens per logits chunk
+  size_t max_chunked_kv_tokens_;  // max KV tokens per chunk
+  bool scale_ue8m0_;              // use ue8m0 format for fp8 scales
+  bool is_neox_;                  // true: NeoX style rotary, false: GPT-J interleaved style
+  size_t compress_ratio_;         // for indexer using compressor
+  int block_stride_;              // stride of kv block
 
   std::unique_ptr<BaseLayer> topk_layer_;  // shared topk dispatch logic
 

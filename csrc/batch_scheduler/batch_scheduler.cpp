@@ -36,10 +36,6 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
     : batch_scheduler_config_(batch_scheduler_config),
       dp_num_(runtime_config.parallel_basic_config.attn_data_parallel_size),
       schedule_output_pool_(schedule_output_pool) {
-  // Config validation.
-  KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_token_num >= batch_scheduler_config_.max_token_len,
-                       FormatStr("The max_step_token_num must larger or equal than max_token_len, %d vs %d.",
-                                 batch_scheduler_config_.max_step_token_num, batch_scheduler_config_.max_token_len));
   pp_batch_num_ = batch_scheduler_config_.max_pp_batch_num > 0 ? batch_scheduler_config_.max_pp_batch_num : 1;
 
   // max_waiting_queue_len is for each strategy
@@ -99,13 +95,9 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   current_qps_ = 0.0;
 }
 
-BatchScheduler::~BatchScheduler() {
-  threadpool_->Stop();
-}
+BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
 
-void BatchScheduler::Stop() {
-  terminating_ = true;
-}
+void BatchScheduler::Stop() { terminating_ = true; }
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int dp_idx) {
   KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
@@ -137,7 +129,7 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
 
   if (CheckRequestExceedLength(infer_request)) {
     KLLM_LOG_ERROR << "req_id: " << infer_request->req_id
-                   << "input len or logits_custom_length is too long inference failed.";
+                   << " input len or logits_custom_length is too long inference failed.";
 
     const auto finish_status =
         Status(RET_INPUT_LENGTH_EXCEEDED, "input length or logits_custom_length exceeds the limit.");
@@ -221,7 +213,6 @@ Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<Inf
 
 inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
   return req->input_tokens.size() > batch_scheduler_config_.max_token_len ||
-         req->input_tokens.size() > batch_scheduler_config_.max_step_token_num ||
          req->logits_custom_length > std::min(req->input_tokens.size(), batch_scheduler_config_.max_batch_size);
 }
 

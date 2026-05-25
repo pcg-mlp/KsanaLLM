@@ -66,7 +66,7 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
                                            const std::pair<torch::Tensor, torch::Tensor>& kv_fp8,
                                            const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                                            const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits,
-                                           cudaStream_t stream, bool clean_logits) {
+                                           int max_seqlen_k, cudaStream_t stream) {
 #if ENABLE_DEEPSEEK_DEEPGEMM
   // Save current torch CUDA stream and set to the passed-in stream
   auto original_stream = at::cuda::getCurrentCUDAStream();
@@ -107,14 +107,13 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
   KLLM_CHECK_WITH_INFO(cu_seq_len_k_start.scalar_type() == torch::kInt, "cu_seq_len_k_start tensor must be int32");
   KLLM_CHECK_WITH_INFO(cu_seq_len_k_end.scalar_type() == torch::kInt, "cu_seq_len_k_end tensor must be int32");
 
+  KLLM_CHECK_WITH_INFO(max_seqlen_k > 0, "max_seqlen_k must be positive for compressed logits mode");
+
   constexpr int seq_len_alignment = 4;
   constexpr int block_kv = 256;
   const int aligned_seq_len = RoundUp(seq_len, seq_len_alignment);
+  const int stride_logits = RoundUp(max_seqlen_k, block_kv);
 
-  // NOTE(jinxcwu) max_seqlen_k用于控制压缩
-  // https://github.com/deepseek-ai/DeepGEMM/pull/231/files#diff-59e30829961e1b429bc12115673562f6f15d2ed347cac8d27a879bf101e977cbL105
-  const int max_seqlen_k = 0;
-  const int stride_logits = RoundUp(seq_len_kv + block_kv, 4);
   KLLM_CHECK_WITH_INFO(logits.device() == q_fp8.device(), "logits tensor must be on the same device as q");
   KLLM_CHECK_WITH_INFO(logits.scalar_type() == torch::kFloat, "logits tensor must be float32");
   KLLM_CHECK_WITH_INFO(logits.dim() == 2, "logits tensor must have rank 2");
@@ -123,10 +122,11 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
   KLLM_CHECK_WITH_INFO(static_cast<int>(logits.size(1)) >= stride_logits,
                        "logits cols must be at least the aligned kv length");
   KLLM_CHECK_WITH_INFO(logits.stride(1) == 1, "logits tensor must be contiguous on the last dimension");
-  logits = logits.narrow(0, 0, seq_len).narrow(1, 0, seq_len_kv);
-  CUDA_CHECK_LAST_ERROR(deepseek::SmxxFp8MqaLogits(
-      q_fp8, kv_fp8.first, kv_fp8.second, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, seq_len, seq_len_kv,
-      max_seqlen_k, stride_logits, num_heads, head_dim, seq_len_alignment, clean_logits));
+  // Narrow to actual data range [seq_len, max_seqlen_k]; underlying stride remains stride_logits (aligned to block_kv).
+  logits = logits.narrow(0, 0, seq_len).narrow(1, 0, max_seqlen_k);
+  CUDA_CHECK_LAST_ERROR(deepseek::SmxxFp8MqaLogits(q_fp8, kv_fp8.first, kv_fp8.second, weights, cu_seq_len_k_start,
+                                                   cu_seq_len_k_end, logits, seq_len, seq_len_kv, max_seqlen_k,
+                                                   stride_logits, num_heads, head_dim, seq_len_alignment));
 
   // Restore original CUDA stream
   at::cuda::setCurrentCUDAStream(original_stream);

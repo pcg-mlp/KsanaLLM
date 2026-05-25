@@ -12,6 +12,7 @@
 
 #include "device/device_types.h"
 #include "utils/status.h"
+#include "utils/utils.h"
 
 namespace ksana_llm {
 
@@ -133,5 +134,21 @@ typedef void (*WorkSpaceFunc)(size_t, void**);
 
 // Get the workspace function.
 WorkSpaceFunc GetWorkSpaceFunc();
+
+// Compute the maximum Q-token chunk size that fits within the 4GB logits buffer constraint.
+// Respects env var KSANA_INDEXER_MAX_Q_CHUNK_SIZE override if set.
+//   max_seq_len: maximum KV sequence length (after compression if applicable).
+//   max_step_token_num: upper bound on total tokens per step.
+inline size_t ComputeIndexerMaxQChunkSize(size_t max_seq_len, size_t max_step_token_num) {
+  constexpr size_t kSeqLenAlignment = 4;
+  if (const int env_val = GetEnvAsPositiveInt("KLLM_INDEXER_MAX_CHUNKED_Q_SIZE", 0); env_val > 0) {
+    return RoundUp(static_cast<size_t>(env_val), kSeqLenAlignment);
+  }
+  constexpr size_t kMaxLogitsBytes = 4ul << 30;  // 4 GB
+  constexpr size_t kBlockKV = 256;
+  const size_t aligned_seq_len_kv = RoundUp(max_seq_len, kBlockKV);
+  const size_t computed_q_chunk = kMaxLogitsBytes / (aligned_seq_len_kv * sizeof(float));
+  return RoundUp(std::min(max_step_token_num, computed_q_chunk), kSeqLenAlignment);
+}
 
 }  // namespace ksana_llm

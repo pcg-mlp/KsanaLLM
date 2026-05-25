@@ -372,13 +372,11 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     const auto &req = *it;
     // TODO(robertyuan): replace with step_token_num. They should be same in all case, check later
     const size_t not_kv_cached_token_num = req->GetPlanningQueryLen();
-    // In Forward(), attention kernel use buffer with all tokens when step_token_num> threshold.
-    // TODO(robertyuan): Adjust this after kernel problem fixed.
-    size_t req_token_num = not_kv_cached_token_num <= GetDecodeTokenNumThreshold() ? not_kv_cached_token_num
-                                                                                   : req->GetPlanningSequenceLen();
+    size_t req_token_num = runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv
+                               ? not_kv_cached_token_num
+                               : req->GetPlanningSequenceLen();
     if (batch_scheduler_config_.ptp_step_num > 0) {
       // When using Parallel-Token-Predict, we used not_kv_cached_token_num to raise max_batch_size
-      // TODO(zezhao): 除特殊场景外，应尽可能开放该逻辑
       req_token_num = not_kv_cached_token_num;
     }
     KLLM_LOG_DEBUG << fmt::format("Request {} req_token_num: {}, not_kv_cached_token_num: {}", req->req_id,
@@ -744,14 +742,15 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << " find shared_block_num=" << shared_block_num
                            << ", shared_token_num=" << shared_token_num;
       }
+      REPORT_METRIC("prefix_cache_hit_ratio",
+                    static_cast<double>(shared_token_num) / req->GetPrefillingTokens().size());
+      if (req->req_ctx && shared_token_num > 0) {
+        (*req->req_ctx)["prefix_cache_hit_tokens"] = std::to_string(shared_token_num);
+      }
     } else {
       // Last task is chunked prefill task, previous tokens are sharable
       is_first_prefill_step = false;
       shared_token_num = planning_workload.prefill_start_offset;
-    }
-    REPORT_METRIC("prefix_cache_hit_ratio", static_cast<double>(shared_token_num) / req->GetPrefillingTokens().size());
-    if (req->req_ctx && shared_token_num > 0) {
-      (*req->req_ctx)["prefix_cache_hit_tokens"] = std::to_string(shared_token_num);
     }
     // If splitfuse is enabled, and token number to be processed is larger than split_fuse_token_num,
     // adjust planning workload
@@ -791,12 +790,15 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
     // Get usable block number every time, the blocks matched by req are not reusable here.
     const size_t total_free_block_num = cache_manager_->GetRequestUsableBlockNumber(req->req_id);
+    const size_t req_token_num = runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv
+                                     ? req_step_token_num
+                                     : seq_token_num;
     if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
-        per_dp_batch_size < per_dp_max_batch_size_ && step_token_num + seq_token_num <= dp_max_step_token_num_ &&
+        per_dp_batch_size < per_dp_max_batch_size_ && step_token_num + req_token_num <= dp_max_step_token_num_ &&
         req_step_block_num + launch_block_threshold <= total_free_block_num) {
       // Assume we could succ, so that the AllocateRequestBlocks is not blocked.
       scheduler_shared_counter_->step_batch_size.Increase(1);
-      scheduler_shared_counter_->step_token_num.Increase(seq_token_num);
+      scheduler_shared_counter_->step_token_num.Increase(req_token_num);
       scheduler_shared_counter_->step_logits_num.Increase(req->sampling_token_num);
       per_dp_batch_size++;
       scheduler_ticktok_->Unlock();
@@ -863,7 +865,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       } else {
         // decrease counter if failed, thread-safe, no timing-control needed.
         scheduler_shared_counter_->step_batch_size.Decrease(1);
-        scheduler_shared_counter_->step_token_num.Decrease(seq_token_num);
+        scheduler_shared_counter_->step_token_num.Decrease(req_token_num);
         scheduler_shared_counter_->step_logits_num.Decrease(req->sampling_token_num);
 
         KLLM_LOG_ERROR << "Allocate blocks error, waiting req can not be launched, " << req->ScheduleStateToStr()

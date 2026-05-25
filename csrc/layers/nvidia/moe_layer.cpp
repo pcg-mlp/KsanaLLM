@@ -227,7 +227,15 @@ size_t MoeLayer::GetWorkspaceSizeT() {
           batched_intermediate_output_size, batched_silu_output_size, a1_q_size, a1_scale_size, max_ws_bytes_);
     } else {
       // Normal模式：需要fused_id_buffer和intermediate_cache
-      max_fused_id_buffer_size = 2 * m * expert_topk_ * sizeof(int32_t);
+      // fused_id_buffer layout (matching moe_kernel_wrapper.cpp InvokeFusedMoe):
+      //   [fill_info(4)] [sorted_ids(max_num_tokens_padded)] [expert_ids(max_num_m_blocks)]
+      //   [num_tokens_post_pad(1)] [cumsum(num_experts+1)]
+      constexpr int max_block_size_m = 64;
+      size_t numel = m * expert_topk_;
+      size_t max_num_tokens_padded = numel + expert_num_per_node_ * (max_block_size_m - 1);
+      size_t max_num_m_blocks = (max_num_tokens_padded + max_block_size_m - 1) / max_block_size_m;
+      max_fused_id_buffer_size =
+          AlignAddress((4 + max_num_tokens_padded + max_num_m_blocks + 1 + expert_num_per_node_ + 1) * sizeof(int32_t));
       intermediate_cache1_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * 2 * sizeof(T));
       // When T is __nv_fp8e4m3, we fuse silu_mul into group quant,
       // and intermediate_cache2 is not needed

@@ -20,7 +20,8 @@ class FlashMlaAttentionLayer : public AttentionLayer {
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
  private:
-  size_t max_token_num_ = 0;
+  size_t max_step_token_num_ = 0;
+  size_t max_chunked_kv_tokens_ = 0;
 };
 
 }  // namespace ksana_llm

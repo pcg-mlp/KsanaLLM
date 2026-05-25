@@ -126,14 +126,14 @@ TEST_F(TopKTestSuit, DispatchSmokeK512AndK1024) {
           reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr),
           reinterpret_cast<const int32_t*>(page_table.data_ptr), reinterpret_cast<int32_t*>(page_indices.data_ptr),
           /*raw_indices_out=*/nullptr, score_stride, page_table_stride, num_works, page_bits,
-          /*extend_lens=*/nullptr, extend_len, batch_size, stream);
+          /*batch_indices=*/nullptr, extend_len, stream);
     } else {
       launch_topk1024(
           reinterpret_cast<const float*>(scores.data_ptr), reinterpret_cast<const int32_t*>(row_starts_buf.data_ptr),
           reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr),
           reinterpret_cast<const int32_t*>(page_table.data_ptr), reinterpret_cast<int32_t*>(page_indices.data_ptr),
           /*raw_indices_out=*/nullptr, score_stride, page_table_stride, num_works, page_bits,
-          /*extend_lens=*/nullptr, extend_len, batch_size, stream);
+          /*batch_indices=*/nullptr, extend_len, stream);
     }
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     EXPECT_EQ(cudaGetLastError(), cudaSuccess);
@@ -209,7 +209,7 @@ TEST_F(TopKTestSuit, ForwardNumericalMatchesHostRefK512) {
       reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr), reinterpret_cast<const int32_t*>(page_table.data_ptr),
       reinterpret_cast<int32_t*>(page_indices.data_ptr), reinterpret_cast<int32_t*>(raw_indices.data_ptr),
       /*score_stride=*/seq_len, /*page_table_stride=*/static_cast<int64_t>(page_table_h.size()), num_works, page_bits,
-      /*extend_lens=*/nullptr, extend_len, batch_size, stream);
+      /*batch_indices=*/nullptr, extend_len, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   ASSERT_EQ(cudaGetLastError(), cudaSuccess);
 
@@ -290,7 +290,7 @@ TEST_F(TopKTestSuit, SingleWorkItemIsValid) {
       reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr), reinterpret_cast<const int32_t*>(page_table.data_ptr),
       reinterpret_cast<int32_t*>(page_indices_512.data_ptr), nullptr, score_stride, page_table_stride,
       /*num_works=*/1, page_bits,
-      /*extend_lens=*/nullptr, /*extend_len=*/1, /*num_batches=*/1, stream);
+      /*batch_indices=*/nullptr, /*extend_len=*/1, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 
@@ -299,7 +299,7 @@ TEST_F(TopKTestSuit, SingleWorkItemIsValid) {
       reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr), reinterpret_cast<const int32_t*>(page_table.data_ptr),
       reinterpret_cast<int32_t*>(page_indices_1024.data_ptr), nullptr, score_stride, page_table_stride,
       /*num_works=*/1, page_bits,
-      /*extend_lens=*/nullptr, /*extend_len=*/1, /*num_batches=*/1, stream);
+      /*batch_indices=*/nullptr, /*extend_len=*/1, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 

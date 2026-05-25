@@ -4,6 +4,7 @@
 #include "models/base/forward_meta/c4_indexer_meta.h"
 
 #include "device/device_utils.h"
+#include "models/base/forward_meta/common.h"
 #include "utils/logger.h"
 
 namespace ksana_llm {
@@ -28,21 +29,9 @@ C4IndexerMeta::C4IndexerMeta(const RuntimeConfig& runtime_config, int rank, std:
     expanded_c4_seq_lens_tensor =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * GetDecodeTokenNumThreshold()});
   }
-  const size_t max_token_num = runtime_config.max_step_token_num;
-  cur_seq_len_start_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-  cur_seq_len_end_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-}
 
-// Upload input's persistent host vector to a device tensor view, updating shared tensor offset.
-#define HOST_TO_DEVICE(name, input)                                                                           \
-  do {                                                                                                        \
-    KLLM_LOG_DEBUG << #name "_host: " << (input).name##_host;                                                 \
-    (input).name##_tensor = name##_tensor.GetView({(input).name##_host.size()}, name##_tensor.shape[0]);      \
-    name##_tensor.shape[0] += (input).name##_tensor.GetElementNumber();                                       \
-    MemcpyAsync((input).name##_tensor.GetPtr<void>(), (input).name##_host.data(),                             \
-                (input).name##_host.size() * sizeof(std::decay_t<decltype((input).name##_host)>::value_type), \
-                MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());                                     \
-  } while (0)
+  indexer_meta = std::make_unique<IndexerMeta>(runtime_config, rank, context, kC4Ratio);
+}
 
 void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   // Reset the offsets of shared tensors
@@ -51,8 +40,9 @@ void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
     expanded_c4_seq_lens_tensor.shape = {0};
   }
   extend_lens_tensor.shape = {0};
-  cur_seq_len_start_tensor.shape = {0};
-  cur_seq_len_end_tensor.shape = {0};
+  indexer_meta->cu_seq_len_start_tensor.shape = {0};
+  indexer_meta->cu_seq_len_end_tensor.shape = {0};
+  indexer_meta->batch_indices_tensor.shape = {0};
 
   // Reset meta
   flash_input.Reset();
@@ -100,21 +90,28 @@ void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   }
 
   if (!flash_input.dp_reqs.empty()) {
-    PrepareCurSeqLen(flash_input);
+    // Delegate flash chunking to internal IndexerMeta (compress_ratio-aware)
+    indexer_meta->PrepareChunk(flash_input);
+    indexer_meta->PrepareCuSeqLen(flash_input);
+    indexer_meta->PrepareBatchIndices(flash_input);
+
     for (const auto* req : flash_input.dp_reqs) {
       PrepareExtendLens(flash_input.extend_lens_host, *req);
     }
-    HOST_TO_DEVICE(extend_lens, flash_input);
+    HOST_TO_SHARED_DEVICE(extend_lens, flash_input);
   }
+
   for (auto& page_input : page_inputs) {
-    PrepareCurSeqLen(page_input, /*is_paged*/ true);
+    // Delegate paged cu_seq_len to IndexerMeta
+    indexer_meta->PrepareCuSeqLen(page_input, /*is_paged=*/true);
+
     for (const auto* req : page_input.dp_reqs) {
       PrepareC4SeqLens(page_input.c4_seq_lens_host, page_input.expanded_c4_seq_lens_host, *req,
                        page_input.expanded_q_seq_len, page_input.expanded_batch_size);
     }
-    HOST_TO_DEVICE(c4_seq_lens, page_input);
+    HOST_TO_SHARED_DEVICE(c4_seq_lens, page_input);
     if (!expanded_c4_seq_lens_tensor.shape.empty()) {
-      HOST_TO_DEVICE(expanded_c4_seq_lens, page_input);
+      HOST_TO_SHARED_DEVICE(expanded_c4_seq_lens, page_input);
     }
   }
 }
@@ -134,29 +131,5 @@ void C4IndexerMeta::PrepareC4SeqLens(std::vector<int>& host, std::vector<int>& e
 void C4IndexerMeta::PrepareExtendLens(std::vector<int>& host, const ForwardRequest& req) {
   host.push_back(static_cast<int>(req.GetInputIdsLength()));
 }
-
-void C4IndexerMeta::PrepareCurSeqLen(input_info& input, bool is_paged) {
-  int cumulative_c4_seq_len = 0;
-  for (const auto* req : input.dp_reqs) {
-    const int seq_len = req->forwarding_tokens->size();
-    const int extend_len = req->GetInputIdsLength();
-    const int prefix_len = seq_len - extend_len;
-    for (int i = 1; i <= extend_len; ++i) {
-      if (is_paged) {
-        input.cur_seq_len_start_host.push_back(0);
-        input.cur_seq_len_end_host.push_back((prefix_len + i) / kC4Ratio);
-      } else {
-        input.cur_seq_len_start_host.push_back(cumulative_c4_seq_len);
-        input.cur_seq_len_end_host.push_back(cumulative_c4_seq_len + (prefix_len + i) / kC4Ratio);
-      }
-    }
-    cumulative_c4_seq_len += seq_len / kC4Ratio;
-  }
-
-  HOST_TO_DEVICE(cur_seq_len_start, input);
-  HOST_TO_DEVICE(cur_seq_len_end, input);
-}
-
-#undef HOST_TO_DEVICE
 
 }  // namespace ksana_llm

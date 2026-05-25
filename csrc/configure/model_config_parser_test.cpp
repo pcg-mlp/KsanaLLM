@@ -110,7 +110,7 @@ TEST_F(ModelConfigParserTest, ParseRopeScalingLinearFactor) {
 }
 
 // ---------------------------------------------------------------------------
-// rope_scaling with yarn type uses original_max_position_embeddings
+// rope_scaling with yarn type uses original_max_position_embeddings * factor
 // ---------------------------------------------------------------------------
 TEST_F(ModelConfigParserTest, ParseRopeScalingYarn) {
   nlohmann::json cfg = BuildMinimalLlamaConfig();
@@ -120,7 +120,7 @@ TEST_F(ModelConfigParserTest, ParseRopeScalingYarn) {
   Status status = RunParse(cfg, model_config);
 
   EXPECT_TRUE(status.OK()) << status.GetMessage();
-  EXPECT_EQ(model_config.max_training_seq_len, 32768u);
+  EXPECT_EQ(model_config.max_training_seq_len, 131072u);
   EXPECT_EQ(model_config.rope_scaling_factor_config.type, "yarn");
   EXPECT_EQ(model_config.rope_scaling_factor_config.original_max_position_embeddings, 32768);
 }

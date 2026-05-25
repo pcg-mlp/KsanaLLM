@@ -21,8 +21,7 @@ class FlashMlaAttention {
   Status Forward(const std::shared_ptr<ModelInput>& model_input, const AttentionForwardContext& attn_ctx,
                  std::vector<Tensor>& k_buffer, std::vector<Tensor>& v_buffer, Tensor& context_q_nope_rope_tensor,
                  Tensor& context_q_nope_tensor, Tensor& context_q_rope_tensor, Tensor& kv_buffer_tensor,
-                 Tensor& k_rope_buffer_tensor, Tensor& prefix_kv_buffer_tensor, Tensor& indices_tensor,
-                 std::vector<Tensor>& output_tensors);
+                 Tensor& k_rope_buffer_tensor, Tensor& indices_tensor, std::vector<Tensor>& output_tensors);
 
  protected:
   std::shared_ptr<Linear> kv_b_nope_proj_;

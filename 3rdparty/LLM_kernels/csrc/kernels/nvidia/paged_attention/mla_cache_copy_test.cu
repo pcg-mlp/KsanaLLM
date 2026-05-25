@@ -655,6 +655,28 @@ TEST_F(MlaPagedAttentionTestSuit, MlaGetFromCompressedCacheTest) {
     }
   }
 
+  // Chunked re-run with token_offset must match the full-range result.
+  std::vector<float> host_latent_full = host_latent_buffer;
+  std::vector<float> host_rope_full = host_rope_buffer;
+
+  cudaMemsetAsync(dev_latent_buffer, 0, host_latent_buffer.size() * sizeof(float), stream);
+  cudaMemsetAsync(dev_rope_buffer, 0, host_rope_buffer.size() * sizeof(float), stream);
+
+  for (auto [start, end] : std::vector<std::pair<int, int>>{{0, total_len / 2}, {total_len / 2, total_len}}) {
+    MlaGetFromCompressedCache<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+        dev_rope_buffer + start * qk_rope_head_dim_, dev_latent_buffer + start * kv_lora_rank_, dev_k_list_,
+        end - start, dev_input_offsets_, dev_block_offsets_, block_size_, qk_rope_head_dim_, kv_lora_rank_, stream,
+        /*token_offset=*/start);
+  }
+  cudaMemcpyAsync(host_latent_buffer.data(), dev_latent_buffer, host_latent_buffer.size() * sizeof(float),
+                  cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(host_rope_buffer.data(), dev_rope_buffer, host_rope_buffer.size() * sizeof(float),
+                  cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
+
+  EXPECT_EQ(host_latent_buffer, host_latent_full);
+  EXPECT_EQ(host_rope_buffer, host_rope_full);
+
   // 释放临时分配的内存
   cudaFree(dev_latent_buffer);
   cudaFree(dev_rope_buffer);
@@ -749,6 +771,35 @@ TEST_F(MlaPagedAttentionTestSuit, MlaReverseFlashKVCacheCopyTest) {
       }
     }
   }
+
+  // Chunked re-run: prefix kernel over with-prefix space (token_offset + shifted dst),
+  // without-prefix kernel over q space (q_token_offset, token_offset=0 so dst writes land globally).
+  std::vector<float> host_latent_full = host_latent_buffer;
+  std::vector<float> host_rope_full = host_rope_buffer;
+
+  cudaMemsetAsync(dev_latent_buffer, 0, host_latent_buffer.size() * sizeof(float), stream);
+  cudaMemsetAsync(dev_rope_buffer, 0, host_rope_buffer.size() * sizeof(float), stream);
+
+  for (auto [start, end] : std::vector<std::pair<int, int>>{{0, total_len / 2}, {total_len / 2, total_len}}) {
+    MlaFlashPrefixKVReverseCacheCopy<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+        dev_rope_buffer + start * qk_rope_head_dim_, dev_latent_buffer + start * kv_lora_rank_, dev_k_list_,
+        dev_prefix_offsets_, dev_input_offsets_, dev_block_offsets_, block_size_, end - start, qk_rope_head_dim_,
+        kv_lora_rank_, k_scale_, v_scale_, stream, /*token_offset=*/start);
+  }
+  for (auto [start, end] : std::vector<std::pair<int, int>>{{0, total_q_len / 2}, {total_q_len / 2, total_q_len}}) {
+    MlaFlashWithoutPrefixKVCopy<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+        dev_rope_buffer, dev_latent_buffer, dev_v_src_ + start * qk_rope_head_dim_, dev_k_src_ + start * kv_lora_rank_,
+        dev_prefix_offsets_, dev_without_prefix_offsets_, end - start, qk_rope_head_dim_, kv_lora_rank_, stream,
+        /*q_token_offset=*/start, /*token_offset=*/0);
+  }
+  cudaMemcpyAsync(host_latent_buffer.data(), dev_latent_buffer, host_latent_buffer.size() * sizeof(float),
+                  cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(host_rope_buffer.data(), dev_rope_buffer, host_rope_buffer.size() * sizeof(float),
+                  cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
+
+  EXPECT_EQ(host_latent_buffer, host_latent_full);
+  EXPECT_EQ(host_rope_buffer, host_rope_full);
 
   // 释放临时分配的内存
   cudaFree(dev_latent_buffer);
@@ -916,6 +967,37 @@ TEST_F(MlaPagedAttentionTestSuit, MlaFlashFlexibleKCacheCopyTest) {
           EXPECT_FLOAT_EQ(host_rope_buffer[k_total_idx], host_k_dst[k_total_dst_idx]);
         }
         ++k_total_idx;
+      }
+    }
+  }
+
+  // Chunked re-run with token_offset must produce identical cache blocks in the flexible region.
+  std::vector<float> host_k_dst_full = host_k_dst;
+  for (int i = 0; i < host_block_offsets_.back(); i++) {
+    cudaMemsetAsync(host_k_list_ptrs_[i], 0, block_bytes_, stream);
+  }
+
+  for (auto [start, end] : std::vector<std::pair<int, int>>{{0, total_len / 2}, {total_len / 2, total_len}}) {
+    MlaFlashFlexibleKCacheCopy<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+        dev_rope_buffer + start * qk_rope_head_dim_, dev_k_list_, dev_flexible_offset, dev_prefix_offsets_,
+        dev_input_offsets_, dev_block_offsets_, block_size_, batch_size_, end - start, qk_rope_head_dim_, kv_lora_rank_,
+        k_scale_, stream, /*token_offset=*/start);
+  }
+  cudaStreamSynchronize(stream);
+
+  std::vector<float> host_k_dst_chunked;
+  CopyDeviceBlocksToHost(host_k_dst_chunked);
+
+  for (size_t batch_idx = 0; batch_idx < batch_size_; ++batch_idx) {
+    size_t prefix_len = input_prefix_len_[batch_idx];
+    size_t flexible_len = input_flexible_len[batch_idx];
+    for (int token_idx = 0; token_idx < input_token_num_[batch_idx]; ++token_idx) {
+      if (static_cast<size_t>(token_idx) < flexible_len || static_cast<size_t>(token_idx) >= prefix_len) continue;
+      for (int k_idx = 0; k_idx < qk_rope_head_dim_; ++k_idx) {
+        size_t k_total_dst_idx = host_block_offsets_[batch_idx] * block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) +
+                                 token_idx * (kv_lora_rank_ + qk_rope_head_dim_) + (kv_lora_rank_ + k_idx);
+        EXPECT_FLOAT_EQ(host_k_dst_chunked[k_total_dst_idx], host_k_dst_full[k_total_dst_idx])
+            << "flexible k mismatch at batch " << batch_idx << " token " << token_idx << " k_idx " << k_idx;
       }
     }
   }

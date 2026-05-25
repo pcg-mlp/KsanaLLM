@@ -21,7 +21,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-
 static constexpr int kHeadDim = 128;
 static constexpr int kScaleBytes = 4;
 static constexpr float FP8_E4M3_MAX = 448.0f;
@@ -144,7 +143,7 @@ class FusedGatherIndexerCacheTest : public NvidiaTestSuitBase {
     fused_gather_indexer_cache<__nv_bfloat16, int32_t, kPageBits>(
         d_k_fp8.data_ptr, d_k_scale.data_ptr, d_cache.data_ptr, d_block_table.data_ptr,
         reinterpret_cast<size_t*>(d_seq_len_offset.data_ptr), batch_size, num_tokens, page_stride,
-        setup.max_num_blocks_per_seq, compress_ratio, stream);
+        setup.max_num_blocks_per_seq, compress_ratio, /*gather_offset=*/0, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // Verify against CPU reference
@@ -245,7 +244,7 @@ TEST_F(FusedGatherIndexerCacheTest, DISABLED_PerfTest) {
       fused_gather_indexer_cache<__nv_bfloat16, int32_t, 6>(
           d_k_fp8.data_ptr, d_k_scale.data_ptr, d_cache.data_ptr, d_block_table.data_ptr,
           reinterpret_cast<size_t*>(d_seq_len_offset.data_ptr), batch_size, num_tokens, page_stride,
-          setup.max_num_blocks_per_seq, compress_ratio, stream);
+          setup.max_num_blocks_per_seq, compress_ratio, /*gather_offset=*/0, stream);
     };
     float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
 

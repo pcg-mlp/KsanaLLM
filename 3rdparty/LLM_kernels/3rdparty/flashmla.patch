@@ -41,3 +41,27 @@ index 4433e8d..8e6fa8a 100644
  
      float* __restrict__ lse_accum;  // [num_splits, s_q, h_q]
      float* __restrict__ o_accum;    // [num_splits, s_q, h_q, d_v]
+diff --git a/csrc/sm90/decode/sparse_fp8/splitkv_mla.cuh b/csrc/sm90/decode/sparse_fp8/splitkv_mla.cuh
+index 9994568..0366576 100644
+--- a/csrc/sm90/decode/sparse_fp8/splitkv_mla.cuh
++++ b/csrc/sm90/decode/sparse_fp8/splitkv_mla.cuh
+@@ -87,8 +87,8 @@ template<ModelType MODEL_TYPE, int NUM_HEADS>
+ template<typename TMAParams>
+ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnDecodeParams &params, const TMAParams &tma_params) {
+ #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 900)) || (defined(__CLION_IDE__) || defined(__VSCODE_IDE__))
+-    const int head_block_idx = NUM_M_BLOCKS == 1 ? 0 : blockIdx.x;
+-    const int s_q_idx = blockIdx.y;
++    const int s_q_idx = blockIdx.x;
++    const int head_block_idx = NUM_M_BLOCKS == 1 ? 0 : blockIdx.y;
+     const int partition_idx = blockIdx.z;
+     const int idx_in_cluster = CLUSTER_SIZE == 1 ? 0 : head_block_idx % 2;
+     const int warpgroup_idx = cutlass::canonical_warp_group_idx();
+@@ -767,7 +767,7 @@ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::run(const SparseAttnDecodeParams &pa
+     // };
+     // cudaLaunchKernelEx(&mla_kernel_config, mla_kernel, params, tma_params);
+     cutlass::ClusterLaunchParams launch_params = {
+-        dim3(NUM_M_BLOCKS, params.s_q, params.num_sm_parts),
++        dim3(params.s_q, NUM_M_BLOCKS, params.num_sm_parts),
+         dim3(NUM_THREADS, 1, 1),
+         dim3(CLUSTER_SIZE, 1, 1),
+         smem_size,
