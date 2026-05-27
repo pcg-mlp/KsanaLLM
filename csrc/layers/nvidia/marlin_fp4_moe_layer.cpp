@@ -15,8 +15,10 @@ namespace ksana_llm {
 
 #define MARLIN_FP4_MOE_CHUNK_SIZE ((size_t)(32 * 1024))
 
-// Minimum MOE block size for workspace pre-allocation (worst-case padding)
-static constexpr int64_t kMarlinFp4MoeMinBlockSize = 8;
+// Maximum MOE block size for workspace pre-allocation.  SelectMoeBlockSize can return
+// up to 64 at high token density, so the workspace must be sized for the worst case.
+// Must be >= the largest value in SelectMoeBlockSize's kBlockSizes[] (currently 64).
+static constexpr int64_t kMarlinFp4MoeMaxBlockSize = 64;
 
 // Dynamically select moe_block_size based on token density per expert.
 // Matches sglang's heuristic: iterate [8, 16, 32, 48, 64] and pick the first
@@ -148,8 +150,8 @@ size_t MarlinFp4MoeLayer::GetWorkspaceSizeT() {
 
   // fused_id_buffer: fill_info_vec(4) + sorted_ids + expert_ids + num_tokens_post_pad + cumsum
   size_t numel = m * expert_topk_;
-  size_t max_num_tokens_padded = numel + expert_num_per_node_ * (kMarlinFp4MoeMinBlockSize - 1);
-  size_t max_num_m_blocks = (max_num_tokens_padded + kMarlinFp4MoeMinBlockSize - 1) / kMarlinFp4MoeMinBlockSize;
+  size_t max_num_tokens_padded = numel + expert_num_per_node_ * (kMarlinFp4MoeMaxBlockSize - 1);
+  size_t max_num_m_blocks = (max_num_tokens_padded + kMarlinFp4MoeMaxBlockSize - 1) / kMarlinFp4MoeMaxBlockSize;
   // fill_info(4) + sorted_ids(max_num_tokens_padded) + expert_ids(max_num_m_blocks) + num_tokens_post_pad(1) +
   // cumsum(expert_num_per_node+1)
   max_fused_id_buffer_size = AlignAddress(
@@ -171,14 +173,14 @@ size_t MarlinFp4MoeLayer::GetWorkspaceSizeT() {
   // Use min block size for worst-case workspace allocation
   int64_t max_n = std::max(expert_inter_size_ * 2, expert_hidden_size_);
   marlin_workspace_size = AlignAddress(llm_kernels::nvidia::marlin_moe_wna16::get_workspace_size(
-                                           max_n, max_num_tokens_padded, kMarlinFp4MoeMinBlockSize) *
+                                           max_n, max_num_tokens_padded, kMarlinFp4MoeMaxBlockSize) *
                                        sizeof(int));
 
   // c_tmp buffer for fp32 global reduce (P1 optimization)
   // Matches sglang: use_fp32_reduce=true requires a fp32 temp buffer for cross-SM reduction
   c_tmp_size =
       AlignAddress(llm_kernels::nvidia::marlin_moe_wna16::get_c_tmp_size(
-                       max_n, max_num_tokens_padded, kMarlinFp4MoeMinBlockSize, ::marlin_moe_wna16::kFE2M1f.id()) *
+                       max_n, max_num_tokens_padded, kMarlinFp4MoeMaxBlockSize, ::marlin_moe_wna16::kFE2M1f.id()) *
                    sizeof(float));
 
   const size_t softplus_sqrt_ws_aligned = use_topk_softplus_sqrt_ ? AlignAddress(softplus_sqrt_workspace_size_) : 0;

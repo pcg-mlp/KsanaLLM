@@ -74,7 +74,7 @@ class PyAsyncStreamingIterator:
             )
             # 累加输出 token 数（每次迭代返回的是新增的 token）
             if hasattr(ksana_python_output, 'output_tokens') and ksana_python_output.output_tokens:
-                self._output_tokens = len(ksana_python_output.output_tokens)
+                self._output_tokens += len(ksana_python_output.output_tokens)
             return ksana_python_output
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
             # If the iteration has finished, log completion and raise StopAsyncIteration
