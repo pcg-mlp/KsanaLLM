@@ -129,13 +129,13 @@ endif()
 
 # ========== Mooncake 依赖 (版本检查 + 自动拉取) ==========
 if(USE_MOONCAKE_REAL_STORE)
-    include(${PROJECT_ROOT}/cmake/external/mooncake.cmake)
+    include(${CONNECTOR_SRC_DIR}/third_party/mooncake.cmake)
 endif()
 
 # ========== 插件库: libmooncake_connector.so ==========
 # 仅在 USE_MOONCAKE_REAL_STORE=ON 时编译，包含真实 Mooncake 后端。
 # 运行时由 factory 通过 dlopen 加载。
-# MOONCAKE_SOURCE_ROOT / MOONCAKE_BUILD_ROOT 由 mooncake.cmake 设置。
+# MOONCAKE_SOURCE_ROOT / MOONCAKE_BUILD_ROOT 由 third_party/mooncake.cmake 设置。
 
 if(USE_MOONCAKE_REAL_STORE)
     message(STATUS "Mooncake real store backend enabled — building libmooncake_connector.so")

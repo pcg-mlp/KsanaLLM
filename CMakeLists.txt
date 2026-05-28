@@ -398,10 +398,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 add_subdirectory(3rdparty)
 add_subdirectory(examples)
 
-# Mooncake real store 后端：自动拉取或使用用户提供的 Mooncake 源码
+# Mooncake real store 后端：由 csrc/global_cache_connector 自包含管理
+# 源 cmake 文件位于 csrc/global_cache_connector/third_party/mooncake.cmake
 option(USE_MOONCAKE_REAL_STORE "Enable Mooncake real store backend" OFF)
-if(USE_MOONCAKE_REAL_STORE)
-  include(external/mooncake)
-endif()
 
 add_subdirectory(csrc)
