@@ -123,30 +123,34 @@ Status HummingFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const 
                                ? llm_kernels::nvidia::humming::ComputeDtype::FP8
                                : llm_kernels::nvidia::humming::ComputeDtype::BF16;
 
-  // Initialize JIT compiler (lazy singleton with mutex)
+  // Initialize JIT compiler (lazy singleton with mutex).
+  // W4A16 and W4A8 share the same compiler but need different compute_dtype kernels.
+  // The first Init creates the compiler; subsequent Inits add their own kernels.
   {
     std::lock_guard<std::mutex> lock(jit_mutex_);
     if (!jit_compiler_) {
       jit_compiler_ = std::make_shared<llm_kernels::nvidia::humming::HummingJitCompiler>();
-
-      // Query H20 heuristic for optimal kernel configs per GEMM shape (once for all layers)
-      int64_t n1 = expert_inter_size_ * 2, k1 = expert_hidden_size_;  // w1: gate+up
-      int64_t n2 = expert_hidden_size_, k2 = expert_inter_size_;      // w2: down
-      auto gemm_type = llm_kernels::nvidia::humming::GemmType::INDEXED;
-
-      auto configs_w1 = jit_compiler_->QueryH20Configs(n1, k1, static_cast<int64_t>(expert_num_per_node_),
-                                                       humming_compute_dtype_, gemm_type);
-      auto configs_w2 = jit_compiler_->QueryH20Configs(n2, k2, static_cast<int64_t>(expert_num_per_node_),
-                                                       humming_compute_dtype_, gemm_type);
-
-      std::vector<llm_kernels::nvidia::humming::HummingJitCompiler::KernelConfig> configs;
-      configs.insert(configs.end(), configs_w1.begin(), configs_w1.end());
-      configs.insert(configs.end(), configs_w2.begin(), configs_w2.end());
-      jit_compiler_->CompileKernels(configs);
-
       // Register the JIT compiler with the ops dispatch layer so humming_moe_gemm can find compiled kernels
       llm_kernels::nvidia::humming::SetJitCompiler(jit_compiler_.get());
     }
+  }
+  {
+    std::lock_guard<std::mutex> lock(jit_mutex_);
+    // Always compile for our compute_dtype. CacheKey includes compute_dtype, so
+    // already-compiled configs (e.g. BF16 from W4A16 Init) are skipped via CacheExists.
+    int64_t n1 = expert_inter_size_ * 2, k1 = expert_hidden_size_;  // w1: gate+up
+    int64_t n2 = expert_hidden_size_, k2 = expert_inter_size_;      // w2: down
+    auto gemm_type = llm_kernels::nvidia::humming::GemmType::INDEXED;
+
+    auto configs_w1 = jit_compiler_->QueryH20Configs(n1, k1, static_cast<int64_t>(expert_num_per_node_),
+                                                     humming_compute_dtype_, gemm_type);
+    auto configs_w2 = jit_compiler_->QueryH20Configs(n2, k2, static_cast<int64_t>(expert_num_per_node_),
+                                                     humming_compute_dtype_, gemm_type);
+
+    std::vector<llm_kernels::nvidia::humming::HummingJitCompiler::KernelConfig> configs;
+    configs.insert(configs.end(), configs_w1.begin(), configs_w1.end());
+    configs.insert(configs.end(), configs_w2.begin(), configs_w2.end());
+    jit_compiler_->CompileKernels(configs);
   }
 
   KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer Init", rank_);
