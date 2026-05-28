@@ -101,6 +101,16 @@ bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_out
 
 Status StreamingIterator::GetNext(ksana_llm::KsanaPythonOutput& ksana_python_output) {
   while (true) {
+    if (request_->aborted) {
+      // Do NOT set all_finished=true here. The ~StreamingIterator() dying_request
+      // keep-alive flow (streaming_iterator.cpp:17-62) only runs when
+      // !all_finished. Without it, ksana_python_input_ is destroyed immediately,
+      // but Request holds bare references into it (logprobs, output_tokens,
+      // request_target, etc — see request.h). The scheduler's ModelDriver thread
+      // is still processing the request and will UAF on those references
+      // (model_driver.cpp:483 logprobs.insert observed in coredump).
+      return Status(RET_REQUEST_TERMINATED, "client aborted");
+    }
     if (all_finished) {
       // failure, no token generated.
       if (!request_->finish_status.OK()) {
@@ -131,6 +141,20 @@ Status StreamingIterator::GetNext(ksana_llm::KsanaPythonOutput& ksana_python_out
     return Status();
   }
   return Status();
+}
+
+void StreamingIterator::Abort() {
+  // Idempotent: safe to call multiple times. Wakes step_waiter so any in-flight
+  // GetNext() returns immediately with RET_REQUEST_TERMINATED. Setting `aborted`
+  // also makes the scheduler StopRequest the request on its next sweep
+  // (continuous_batching.cpp running/waiting/swapped checks).
+  if (all_finished) {
+    return;
+  }
+  request_->aborted = true;
+  if (request_->step_waiter) {
+    request_->step_waiter->Stop();
+  }
 }
 
 }  // namespace ksana_llm

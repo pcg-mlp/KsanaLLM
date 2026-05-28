@@ -201,6 +201,12 @@ class LLMService:
                     }
                 }
                 yield orjson.dumps(error_ret) + b"\0"
+            finally:
+                # Whether the generator exits via normal completion, exception,
+                # GeneratorExit (client disconnect → Starlette aclose), or
+                # CancelledError, force the C++ StreamingIterator to wake up so
+                # KV blocks of an abandoned request are released promptly.
+                ksana_python_output_iterator.abort()
 
         # Return the asynchronous generator
         return stream_results()

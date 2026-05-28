@@ -111,8 +111,8 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
       // req should never be nullptr here; otherwise the state machine is broken.
       KLLM_CHECK(req != nullptr);
 
-      // If request is already stopped/aborted before state update, do nothing.
-      if (req->IsStopped() || req->aborted) {
+      // If request is already stopped, do nothing.
+      if (req->IsStopped()) {
         continue;
       }
 
@@ -120,13 +120,26 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
                          << ", generated_tokens=" << Vector2Str(req->generated_tokens);
 
       // For non-stopped requests, inflight task must exist here; otherwise the state machine is broken.
+      // We must call ResetInflightTask() BEFORE handling the abort branch — otherwise HasInflightTask()
+      // stays true and ProcessDelayedBackendEvents (event_driven_schedule_processor.cpp:325) skips the
+      // queued kStopRequest event forever, leaving aborted reqs running with KV blocks held.
       KLLM_CHECK(req->HasInflightTask());
       req->UpdateAfterInflightTaskFinished();
       req->ResetInflightTask();
       req->flexible_cached_copy_tasks.clear();
 
       // Request may become stopped after UpdateAfterInflightTaskFinished(); emit stop event immediately.
-      if (req->IsStopped() || req->aborted) {
+      if (req->IsStopped()) {
+        continue;
+      }
+      // If client aborted (e.g. disconnected mid-stream), emit a stop event so HandleStopRequest releases
+      // KV blocks and calls req->Notify(), which signals abort_waiter and wakes the dying_request thread
+      // parked in ~StreamingIterator() (streaming_iterator.cpp:46).
+      if (req->aborted) {
+        KLLM_LOG_WARNING << "client aborted in UpdateWithGenerationResult, emit stop: req_id=" << req->req_id
+                         << " dp_idx=" << dp_idx;
+        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
+                      Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
         continue;
       }
 
@@ -183,6 +196,18 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
 
     for (const auto& req : dp_state.decoding_reqs) {
       KLLM_CHECK(req != nullptr && !req->IsStopped());
+
+      // Catch reqs aborted while sitting in the decoding queue — must emit
+      // kStopRequest so HandleStopRequest releases blocks and notifies
+      // abort_waiter (otherwise the dying_request thread parked in
+      // ~StreamingIterator() blocks forever).
+      if (req->aborted) {
+        KLLM_LOG_WARNING << "client aborted in decoding queue, emit stop: req_id=" << req->req_id
+                         << " dp_idx=" << dp_idx;
+        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
+                      Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
+        continue;
+      }
 
       if (IsDpBatchFull(dp_batch, batch_scheduler_config_)) {
         KLLM_LOG_SCHEDULER << "Skip adding decoding req because batch is full. dp_idx=" << dp_idx
@@ -301,6 +326,13 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       }
 
       if (req == nullptr || req->IsStopped()) {
+        continue;
+      }
+      if (req->aborted) {
+        KLLM_LOG_WARNING << "client aborted in prefilling queue, emit stop: req_id=" << req->req_id
+                         << " dp_idx=" << dp_idx;
+        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
+                      Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
         continue;
       }
       if (dp_batch.IsInBatch(req->req_id)) {
@@ -458,6 +490,13 @@ void ContinuousBatchingBackend::ProcessSwappedQueue(const ScheduleContext& conte
 
     for (const auto& req : dp_state.swapped_reqs) {
       if (req == nullptr || req->IsStopped()) {
+        continue;
+      }
+      if (req->aborted) {
+        KLLM_LOG_WARNING << "client aborted in swapped queue, emit stop: req_id=" << req->req_id
+                         << " dp_idx=" << dp_idx;
+        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
+                      Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
         continue;
       }
 

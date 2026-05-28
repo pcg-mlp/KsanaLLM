@@ -56,6 +56,19 @@ class PyAsyncStreamingIterator:
     def __aiter__(self):
         return self
 
+    def abort(self):
+        """Abort the underlying C++ streaming iterator.
+
+        Idempotent and safe to call from any thread / from a finally block.
+        Wakes any pending GetNext() so the C++ shared_ptr can be released and
+        ~StreamingIterator() can run, which is what releases KV blocks held by
+        a request whose client disconnected mid-stream.
+        """
+        try:
+            self._serving_iterator.Abort()
+        except Exception:  # pylint: disable=broad-except
+            pass
+
     # Define an asynchronous iterator method
     async def __anext__(self):
         # Get the current event loop

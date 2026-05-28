@@ -214,12 +214,17 @@ PYBIND11_MODULE(libtorch_serving, m) {
   // Export `StreamingIterator` to python.
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")
       .def(pybind11::init<>())
-      .def("GetNext", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
+      .def("GetNext",
+           [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
+             pybind11::gil_scoped_release release;
+             ksana_llm::KsanaPythonOutput ksana_python_output;
+             ksana_llm::Status status = self->GetNext(ksana_python_output);
+             pybind11::gil_scoped_acquire acquire;
+             return std::make_tuple(status, std::move(ksana_python_output));
+           })
+      .def("Abort", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
         pybind11::gil_scoped_release release;
-        ksana_llm::KsanaPythonOutput ksana_python_output;
-        ksana_llm::Status status = self->GetNext(ksana_python_output);
-        pybind11::gil_scoped_acquire acquire;
-        return std::make_tuple(status, std::move(ksana_python_output));
+        self->Abort();
       });
 
   // Export `EndpointType` to python, only export the values used in python.

@@ -22,8 +22,12 @@ class StreamingIterator {
  public:
   StreamingIterator() {}
   StreamingIterator(const std::shared_ptr<Request> request, const std::shared_ptr<KsanaPythonInput> &ksana_python_input)
-      : request_(request), all_finished(false), ksana_python_input_(ksana_python_input), total_token_nums_(0),
-        prefix_cache_hit_tokens_read_(false), prefix_cache_hit_tokens_(0) {
+      : request_(request),
+        all_finished(false),
+        ksana_python_input_(ksana_python_input),
+        total_token_nums_(0),
+        prefix_cache_hit_tokens_read_(false),
+        prefix_cache_hit_tokens_(0) {
     return_logprobs_ = ksana_python_input_->sampling_config.logprobs_num > 0;
   }
   ~StreamingIterator();
@@ -31,6 +35,13 @@ class StreamingIterator {
   // Get the next token id, blocked if no token
   Status GetNext(ksana_llm::KsanaPythonOutput &ksana_python_output);
   bool AddOutput(ksana_llm::KsanaPythonOutput &ksana_python_output);
+
+  // Mark request aborted and unblock any in-flight GetNext.
+  // Why: ~StreamingIterator is the only abort hook today, but it cannot fire
+  // while GetNext is blocked in step_waiter->Wait() inside a thread-pool worker
+  // (the worker holds a reference to the shared_ptr). Calling Abort from the
+  // event loop forces GetNext to return so the destructor can run.
+  void Abort();
 
  private:
   // The user request.
