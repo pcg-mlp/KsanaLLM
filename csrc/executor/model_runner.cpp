@@ -303,8 +303,6 @@ Status ModelRunner::HandlePostprocess() {
       PROFILE_EVENT_SCOPE(postprocess_gen_draft, "Exec.HandlePostprocess.GenerateDraft");
       for (auto& req : model_output->schedule_output->executor_running_reqs) {
         generation_controller->GenerateDraft(req);
-        size_t draft_token_num = req->draft_tokens.size();
-        req->sampling_token_num = kStepGenerateTokenNum + draft_token_num;
       }
     }
 

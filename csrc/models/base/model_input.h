@@ -277,7 +277,6 @@ class ModelInput {
   Tensor input_length;           // only for page, forwarding_tokens.size()
   Tensor expanded_input_length;  // input_length after expansion of q_seq_len
   Tensor kv_list;                // for core attention
-  Tensor indexer_kv_list;        // for optional indexer
   Tensor kv_cache_offset;
   Tensor rotary_embedding_pos;
   Tensor rotary_embedding_mask;
@@ -309,7 +308,6 @@ class ModelInput {
     Tensor input_length;
     Tensor expanded_input_length;
     Tensor kv_list;
-    Tensor indexer_kv_list;
     Tensor kv_cache_offset;
     Tensor rotary_embedding_pos;
     Tensor rotary_embedding_mask;

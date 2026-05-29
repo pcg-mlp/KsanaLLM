@@ -37,10 +37,6 @@ constexpr int kWarpSize = 32;
 constexpr int kElemsPerLane = kHeadDim / kWarpSize;  // = 16
 constexpr int kWarpsPerBlock = 8;
 constexpr int kBlockSize = kWarpsPerBlock * kWarpSize;  // = 256
-constexpr int kNumQuantBlocks = 7;                      // groups 0-6 are FP8, group 7 is bf16
-
-// Cache layout
-constexpr int kTokenDataBytes = 576;  // 448 FP8 + 128 bf16
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kernel parameters (passed via __grid_constant__)
@@ -48,7 +44,7 @@ constexpr int kTokenDataBytes = 576;  // 448 FP8 + 128 bf16
 struct FusedQNormRopeKVInsertParam {
   const __nv_bfloat16* __restrict__ q_in;           // [N, num_heads_q, 512]
   const __nv_bfloat16* __restrict__ kv_in;          // [N, 512]
-  __nv_bfloat16* __restrict__ expanded_q_out;       // [N, 64, 512]
+  void* __restrict__ q_out;                         // [N, 64, 512] (bf16 for kFp8DsMla, fp8 for kFp8E4M3)
   void* __restrict__ swa_kv_cache;                  // paged cache
   const int64_t* __restrict__ positions;            // [N]
   const __nv_bfloat16* __restrict__ cos_sin_cache;  // [max_pos, 64]
@@ -99,6 +95,16 @@ __device__ __forceinline__ void store_fp32_as_bf16(__nv_bfloat16* ptr, const flo
   vec_ptr2[0] = reinterpret_cast<const uint4*>(tmp + 8)[0];
 }
 
+// Store 16 fp32 elements as fp8_e4m3 to global memory (vectorized, 16 bytes)
+__device__ __forceinline__ void store_fp32_as_fp8_e4m3(__nv_fp8_e4m3* ptr, const float* in, float inv_scale) {
+  uint8_t tmp[kElemsPerLane];
+#pragma unroll
+  for (int i = 0; i < kElemsPerLane; ++i) {
+    tmp[i] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(in[i] * inv_scale, __NV_SATFINITE, __NV_E4M3));
+  }
+  *reinterpret_cast<uint4*>(ptr) = *reinterpret_cast<const uint4*>(tmp);
+}
+
 // GPT-J style RoPE on dims [448, 512). Only lanes 28-31 participate.
 // Each lane loads 8 cos + 8 sin via two uint4 vectorized loads, then applies:
 //   x_new[2i]   = x[2i] * cos[i] - x[2i+1] * sin[i]
@@ -143,31 +149,44 @@ __device__ __forceinline__ void apply_rope_gptj(float* elements, int dim_base, c
 //
 // Per-lane data: each lane owns 16 contiguous bf16 elements (512 / 32 = 16).
 //
-// Q branch (per head):
-//   1. Load 512 bf16 → fp32
-//   2. Per-head no-weight RMSNorm: variance = warp_reduce_sum(x²) / 512
-//   3. GPT-J RoPE on dims [448, 512): pairs (x[2i], x[2i+1]) as complex mul
-//   4. Store to expanded_q_out with stride = kMinNumHeads(64) × 512
+// Q branch (per head), controlled by KV_DTYPE:
+//   kFp8E4M3:
+//     1. Load 512 bf16 → fp32
+//     2. Per-head no-weight RMSNorm
+//     3. GPT-J RoPE on dims [448, 512)
+//     4. Direct fp32→fp8 cast (no scaling), write to q_out
+//   kFp8DsMla (or other):
+//     1. Load 512 bf16 → fp32
+//     2. Per-head no-weight RMSNorm
+//     3. GPT-J RoPE on dims [448, 512)
+//     4. Store to q_out with stride = kMinNumHeads(64) × 512
 //
 // KV branch (single head):
 //   1. Load 512 bf16 → fp32
 //   2. GPT-J RoPE on dims [448, 512)
 //   3. FP8 quantize dims [0, 448): per-64-element UE8M0 scale (4-lane reduction)
-//   4. Store FP8 + bf16(rope dims) + scales to paged SWA cache
+//   4. Store to paged SWA cache (format depends on KV_DTYPE)
 //
-// Cache layout per slot (576 bytes data + 8 bytes scale):
+// Cache layout per slot (kFp8DsMla: 576 bytes data + 8 bytes scale):
 //   [0,   448)  : FP8-E4M3  (7 groups × 64 elems × 1 byte)
 //   [448, 576)  : bf16      (64 elems × 2 bytes, RoPE dims)
 //   scale region: 7 UE8M0 bytes + 1 padding, at page_ptr + 576*page_size + offset*8
 //
-template <uint32_t kPageBits, bool kUsePDL>
+// Cache layout per slot (kFp8E4M3: 512 bytes data, no scales):
+//   [0,   448)  : FP8-E4M3  (7 groups × 64 elems × 1 byte, nope dims)
+//   [448, 512)  : FP8-E4M3  (1 group  × 64 elems × 1 byte, rope dims)
+//
+template <uint32_t kPageBits, llm_kernels::utils::KVCacheType KV_DTYPE, bool kUsePDL>
 __global__ void fused_qnorm_rope_kv_insert_kernel(const __grid_constant__ FusedQNormRopeKVInsertParam param) {
   using namespace device;
   using deepseek_v4::fp8::cast_to_ue8m0;
   using deepseek_v4::fp8::inv_scale_ue8m0;
 
-  const auto& [q_in, kv_in, expanded_q_out, swa_kv_cache, positions, cos_sin_cache, raw_out_loc, eps, num_tokens,
-               num_heads_q, page_stride] = param;
+  const auto& [q_in, kv_in, q_out, swa_kv_cache, positions, cos_sin_cache, raw_out_loc, eps, num_tokens, num_heads_q,
+               page_stride] = param;
+
+  // KV_DTYPE-dependent compile-time constant
+  constexpr int kTokenDataBytes = (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) ? 512 : 576;
 
   const int warp_id = threadIdx.x / kWarpSize;
   const int lane_id = threadIdx.x % kWarpSize;
@@ -191,7 +210,7 @@ __global__ void fused_qnorm_rope_kv_insert_kernel(const __grid_constant__ FusedQ
 
   if (slot_idx < num_heads_q) {
     // ═══════════════════════════════════════════════════════════════════════
-    // Q BRANCH: RMSNorm + RoPE + Write to expanded_q
+    // Q BRANCH: RMSNorm + RoPE + Write (FP8 dense out-of-place or bf16 expand)
     // ═══════════════════════════════════════════════════════════════════════
 
     // Load 16 bf16 elements from q_in[token_idx, head_idx, lane_id*16 .. lane_id*16+15]
@@ -215,11 +234,18 @@ __global__ void fused_qnorm_rope_kv_insert_kernel(const __grid_constant__ FusedQ
     // ── Step 2: Apply RoPE (GPT-J style) on dims [448, 512) ──────────────
     apply_rope_gptj(elements, dim_base, cos_sin_cache, pos);
 
-    // ── Step 3: Write to expanded_q_out with stride kMinNumHeads * kHeadDim ──
-    // expanded_q_out layout: [N, kMinNumHeads, kHeadDim]
-    __nv_bfloat16* out_ptr =
-        expanded_q_out + (static_cast<int64_t>(token_idx) * kMinNumHeads + slot_idx) * kHeadDim + dim_base;
-    store_fp32_as_bf16(out_ptr, elements);
+    // ── Step 3: Write output ─────────────────────────────────────────────
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      // Dense fp32→fp8 write to q_out (no scaling, downstream kernel reads dense fp8)
+      __nv_fp8_e4m3* fp8_out = reinterpret_cast<__nv_fp8_e4m3*>(q_out) +
+                               (static_cast<int64_t>(token_idx) * num_heads_q + slot_idx) * kHeadDim + dim_base;
+      store_fp32_as_fp8_e4m3(fp8_out, elements, /*inv_scale=*/1.0f);
+    } else {
+      // Expand Q to [N, kMinNumHeads, kHeadDim] bf16 (FlashMLA)
+      __nv_bfloat16* out_ptr = reinterpret_cast<__nv_bfloat16*>(q_out) +
+                               (static_cast<int64_t>(token_idx) * kMinNumHeads + slot_idx) * kHeadDim + dim_base;
+      store_fp32_as_bf16(out_ptr, elements);
+    }
   } else {
     // ═══════════════════════════════════════════════════════════════════════
     // KV BRANCH: RoPE + FP8 Quantize + Paged SWA Cache Insert
@@ -247,67 +273,70 @@ __global__ void fused_qnorm_rope_kv_insert_kernel(const __grid_constant__ FusedQ
     // Determine which scale group this thread belongs to
     // Thread lane_id handles elements [lane_id*16, lane_id*16+16)
     // Group i handles elements [i*64, (i+1)*64), threads [i*4, i*4+4)
-    const int group_id = lane_id >> 2;  // 0..7
 
-    if (group_id < kNumQuantBlocks) {
-      // ── FP8 path (groups 0-6, elements 0-447) ──────────────────────────
-      // Compute local abs max
-      float local_max = 0.0f;
-#pragma unroll
-      for (int i = 0; i < kElemsPerLane; ++i) {
-        local_max = fmaxf(local_max, fabsf(elements[i]));
-      }
-
-      // 4-thread sub-warp reduction for per-group abs_max
-      // Threads within same group are at lanes {g*4, g*4+1, g*4+2, g*4+3}
-      // Shuffles with delta 1 and 2 stay within group boundaries.
-      // Use mask 0x0FFFFFFF (lanes 0-27 only) since lanes 28-31 take the else branch.
-      constexpr uint32_t kFp8LanesMask = 0x0FFFFFFFu;
-      local_max = fmaxf(local_max, __shfl_xor_sync(kFp8LanesMask, local_max, 1));
-      local_max = fmaxf(local_max, __shfl_xor_sync(kFp8LanesMask, local_max, 2));
-
-      // Compute UE8M0 scale
-      const float scale_raw = fmaxf(1e-4f, local_max) / math::FP8_E4M3_MAX;
-      const int32_t scale_ue8m0 = cast_to_ue8m0(scale_raw);
-      const float inv_scale = inv_scale_ue8m0(scale_ue8m0);
-
-      // Quantize to FP8 and store with one 16-byte vectorized write
-      uint8_t out_bytes[kElemsPerLane];
-#pragma unroll
-      for (int i = 0; i < kElemsPerLane; ++i) {
-        float scaled = elements[i] * inv_scale;
-        out_bytes[i] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3));
-      }
-      // One 16-byte STG per lane.
-      auto* fp8_dst = reinterpret_cast<uint4*>(pointer::offset(value_ptr, dim_base));
-      *fp8_dst = *reinterpret_cast<const uint4*>(out_bytes);
-
-      // Store scale: gather all 7 group scales to lane 0 via shuffles, write as one 8-byte store
-      int32_t s0 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 0);
-      int32_t s1 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 4);
-      int32_t s2 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 8);
-      int32_t s3 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 12);
-      int32_t s4 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 16);
-      int32_t s5 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 20);
-      int32_t s6 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 24);
-      if (lane_id == 0) {
-        void* scale_ptr = pointer::offset(page_ptr, kTokenDataBytes << kPageBits, offset * 8);
-        uint64_t packed = static_cast<uint64_t>(static_cast<uint8_t>(s0)) |
-                          (static_cast<uint64_t>(static_cast<uint8_t>(s1)) << 8) |
-                          (static_cast<uint64_t>(static_cast<uint8_t>(s2)) << 16) |
-                          (static_cast<uint64_t>(static_cast<uint8_t>(s3)) << 24) |
-                          (static_cast<uint64_t>(static_cast<uint8_t>(s4)) << 32) |
-                          (static_cast<uint64_t>(static_cast<uint8_t>(s5)) << 40) |
-                          (static_cast<uint64_t>(static_cast<uint8_t>(s6)) << 48);
-        // byte 7 = 0 (padding), already zero from uint64_t shift pattern
-        *static_cast<uint64_t*>(scale_ptr) = packed;
-      }
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      // ── kFp8E4M3: direct fp32→fp8 cast, no scales ───────────────────────
+      // All 512 bytes stored as FP8: [0,448) nope, [448,512) rope
+      __nv_fp8_e4m3* fp8_dst = reinterpret_cast<__nv_fp8_e4m3*>(pointer::offset(value_ptr, dim_base));
+      store_fp32_as_fp8_e4m3(fp8_dst, elements, /*inv_scale=*/1.0f);
     } else {
-      // ── bf16 path (group 7, elements 448-511 = RoPE dims) ──────────────
-      // Store as bf16 directly at offset 448 within the slot
-      __nv_bfloat16* bf16_dst = reinterpret_cast<__nv_bfloat16*>(
-          pointer::offset(value_ptr, kNopeDim + (dim_base - kNopeDim) * sizeof(__nv_bfloat16)));
-      store_fp32_as_bf16(bf16_dst, elements);
+      // ── kFp8DsMla: per-group FP8 (nope) + bf16 (rope) + UE8M0 scales ───
+      constexpr uint32_t kFp8LanesMask = 0x0FFFFFFFu;  // lanes 0-27 only, 28-31 take bf16 path
+      const int group_id = lane_id >> 2;               // 0..7
+
+      if (group_id < 7) {
+        // FP8 path (groups 0-6, nope dims 0-447)
+        float local_max = 0.0f;
+#pragma unroll
+        for (int i = 0; i < kElemsPerLane; ++i) {
+          local_max = fmaxf(local_max, fabsf(elements[i]));
+        }
+
+        // 4-thread sub-warp reduction for per-group abs_max
+        local_max = fmaxf(local_max, __shfl_xor_sync(kFp8LanesMask, local_max, 1));
+        local_max = fmaxf(local_max, __shfl_xor_sync(kFp8LanesMask, local_max, 2));
+
+        // Compute UE8M0 scale
+        const float scale_raw = fmaxf(1e-4f, local_max) / math::FP8_E4M3_MAX;
+        const int32_t scale_ue8m0 = cast_to_ue8m0(scale_raw);
+        const float inv_scale = inv_scale_ue8m0(scale_ue8m0);
+
+        // Quantize to FP8 and store
+        uint8_t out_bytes[kElemsPerLane];
+#pragma unroll
+        for (int i = 0; i < kElemsPerLane; ++i) {
+          float scaled = elements[i] * inv_scale;
+          out_bytes[i] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3));
+        }
+        auto* fp8_dst = reinterpret_cast<uint4*>(pointer::offset(value_ptr, dim_base));
+        *fp8_dst = *reinterpret_cast<const uint4*>(out_bytes);
+
+        // Gather scales from all 7 groups to lane 0, write as one 8-byte store
+        int32_t s0 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 0);
+        int32_t s1 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 4);
+        int32_t s2 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 8);
+        int32_t s3 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 12);
+        int32_t s4 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 16);
+        int32_t s5 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 20);
+        int32_t s6 = __shfl_sync(kFp8LanesMask, scale_ue8m0, 24);
+        if (lane_id == 0) {
+          void* scale_ptr = pointer::offset(page_ptr, kTokenDataBytes << kPageBits, offset * 8);
+          uint64_t packed = static_cast<uint64_t>(static_cast<uint8_t>(s0)) |
+                            (static_cast<uint64_t>(static_cast<uint8_t>(s1)) << 8) |
+                            (static_cast<uint64_t>(static_cast<uint8_t>(s2)) << 16) |
+                            (static_cast<uint64_t>(static_cast<uint8_t>(s3)) << 24) |
+                            (static_cast<uint64_t>(static_cast<uint8_t>(s4)) << 32) |
+                            (static_cast<uint64_t>(static_cast<uint8_t>(s5)) << 40) |
+                            (static_cast<uint64_t>(static_cast<uint8_t>(s6)) << 48);
+          // byte 7 = 0 (padding)
+          *static_cast<uint64_t*>(scale_ptr) = packed;
+        }
+      } else {
+        // bf16 path (group 7, rope dims 448-511)
+        __nv_bfloat16* bf16_dst = reinterpret_cast<__nv_bfloat16*>(
+            pointer::offset(value_ptr, kNopeDim + (dim_base - kNopeDim) * sizeof(__nv_bfloat16)));
+        store_fp32_as_bf16(bf16_dst, elements);
+      }
     }
   }
 
@@ -315,16 +344,16 @@ __global__ void fused_qnorm_rope_kv_insert_kernel(const __grid_constant__ FusedQ
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Launcher (templated on page_bits)
+// Launcher (templated on page_bits and KV_DTYPE)
 // ─────────────────────────────────────────────────────────────────────────────
-template <uint32_t kPageBits>
+template <uint32_t kPageBits, llm_kernels::utils::KVCacheType KV_DTYPE>
 inline void LaunchFusedQNormRopeKVInsert(const FusedQNormRopeKVInsertParam& param, cudaStream_t stream) {
   const int total_warps = param.num_tokens * (param.num_heads_q + /*num_heads_k*/ 1);  // Each warp handles one head dim
   const int num_blocks = (total_warps + kWarpsPerBlock - 1) / kWarpsPerBlock;
 
   if (num_blocks == 0) return;
 
-  constexpr auto kernel = fused_qnorm_rope_kv_insert_kernel<kPageBits, /*kUsePDL=*/true>;
+  constexpr auto kernel = fused_qnorm_rope_kv_insert_kernel<kPageBits, KV_DTYPE, /*kUsePDL=*/true>;
   LAUNCH_KERNEL_WITH_PDL(kernel, num_blocks, kBlockSize, 0, stream, param);
 }
 
@@ -333,29 +362,40 @@ inline void LaunchFusedQNormRopeKVInsert(const FusedQNormRopeKVInsertParam& para
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
-void InvokeFusedQNormRopeKVInsert(const __nv_bfloat16* q_in, const __nv_bfloat16* kv_in, __nv_bfloat16* expanded_q_out,
+template <llm_kernels::utils::KVCacheType KV_DTYPE>
+void InvokeFusedQNormRopeKVInsert(const __nv_bfloat16* q_in, const __nv_bfloat16* kv_in, void* q_out,
                                   void* swa_kv_cache, const int64_t* positions, const __nv_bfloat16* cos_sin_cache,
                                   const int32_t* raw_out_loc, float eps, int num_tokens, int num_heads_q,
                                   int64_t page_stride, int page_bits, cudaStream_t stream) {
   const FusedQNormRopeKVInsertParam param{
-      q_in,        kv_in, expanded_q_out, swa_kv_cache, positions,   cos_sin_cache,
-      raw_out_loc, eps,   num_tokens,     num_heads_q,  page_stride,
+      q_in,        kv_in, q_out,      swa_kv_cache, positions,   cos_sin_cache,
+      raw_out_loc, eps,   num_tokens, num_heads_q,  page_stride,
   };
 
   switch (page_bits) {
     case 1:
-      LaunchFusedQNormRopeKVInsert<1>(param, stream);
+      LaunchFusedQNormRopeKVInsert<1, KV_DTYPE>(param, stream);
       break;
     case 6:
-      LaunchFusedQNormRopeKVInsert<6>(param, stream);
+      LaunchFusedQNormRopeKVInsert<6, KV_DTYPE>(param, stream);
       break;
     case 8:
-      LaunchFusedQNormRopeKVInsert<8>(param, stream);
+      LaunchFusedQNormRopeKVInsert<8, KV_DTYPE>(param, stream);
       break;
     default:
       KLLM_KERNEL_THROW("InvokeFusedQNormRopeKVInsert: unsupported page_bits %d (expected 1, 6, or 8)", page_bits);
   }
 }
+
+// Explicit instantiations
+#define INVOKE_FUSED_DSV4_QNORM_ROPE_KV_INSERT_DECLARATION(KV_DTYPE)                                       \
+  template void InvokeFusedQNormRopeKVInsert<KV_DTYPE>(                                                    \
+      const __nv_bfloat16* q_in, const __nv_bfloat16* kv_in, void* q_out, void* swa_kv_cache,              \
+      const int64_t* positions, const __nv_bfloat16* cos_sin_cache, const int32_t* raw_out_loc, float eps, \
+      int num_tokens, int num_heads_q, int64_t page_stride, int page_bits, cudaStream_t stream);
+INVOKE_FUSED_DSV4_QNORM_ROPE_KV_INSERT_DECLARATION(llm_kernels::utils::KVCacheType::kFp8DsMla);
+INVOKE_FUSED_DSV4_QNORM_ROPE_KV_INSERT_DECLARATION(llm_kernels::utils::KVCacheType::kFp8E4M3);
+#undef INVOKE_FUSED_DSV4_QNORM_ROPE_KV_INSERT_DECLARATION
 
 }  // namespace nvidia
 }  // namespace llm_kernels

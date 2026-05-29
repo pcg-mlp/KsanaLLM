@@ -51,6 +51,8 @@ namespace deepseek {
 // 全局初始化只执行一次，设备初始化可以在不同设备上多次调用
 void InitializeDeepGemm(int num_sms) { InitializeRuntimeWithDevice(num_sms); }
 
+void FinalizeDeepGemm() { deep_gemm::device_runtime.reset(); }
+
 void SmxxFp8MqaLogits(const torch::Tensor& q, const torch::Tensor& kv, const torch::Tensor& kv_scales,
                       const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                       const torch::Tensor& cu_seq_len_k_end, const torch::Tensor& logits, int seq_len, int seq_len_kv,
@@ -98,6 +100,7 @@ void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const
 namespace deepseek {
 
 void InitializeDeepGemmOnce() {}
+void FinalizeDeepGemm() {}
 void SetDeepGemmNumSms(int) {}
 void SmxxFp8MqaLogits(const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
                       const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, int, int, int, int, int, int,

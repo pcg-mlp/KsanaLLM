@@ -196,10 +196,9 @@ class FusedQNormRopeKVInsertTest : public NvidiaTestSuitBase {
     // ── Launch kernel ──
     InvokeFusedQNormRopeKVInsert(
         reinterpret_cast<__nv_bfloat16*>(d_q.data_ptr), reinterpret_cast<__nv_bfloat16*>(d_kv.data_ptr),
-        reinterpret_cast<__nv_bfloat16*>(d_expanded_q.data_ptr), d_cache.data_ptr,
-        reinterpret_cast<int64_t*>(d_positions.data_ptr), reinterpret_cast<__nv_bfloat16*>(d_cos_sin.data_ptr),
-        reinterpret_cast<int32_t*>(d_raw_out_loc.data_ptr), eps, num_tokens, num_heads_q, kPageStride, kPageBits,
-        stream);
+        d_expanded_q.data_ptr, d_cache.data_ptr, reinterpret_cast<int64_t*>(d_positions.data_ptr),
+        reinterpret_cast<__nv_bfloat16*>(d_cos_sin.data_ptr), reinterpret_cast<int32_t*>(d_raw_out_loc.data_ptr), eps,
+        num_tokens, num_heads_q, kPageStride, kPageBits, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // ── Copy results back ──
@@ -323,10 +322,9 @@ TEST_F(FusedQNormRopeKVInsertTest, DISABLED_PerfTest) {
     auto cuda_run = [&]() {
       InvokeFusedQNormRopeKVInsert(
           reinterpret_cast<__nv_bfloat16*>(d_q.data_ptr), reinterpret_cast<__nv_bfloat16*>(d_kv.data_ptr),
-          reinterpret_cast<__nv_bfloat16*>(d_expanded_q.data_ptr), d_cache.data_ptr,
-          reinterpret_cast<int64_t*>(d_positions.data_ptr), reinterpret_cast<__nv_bfloat16*>(d_cos_sin.data_ptr),
-          reinterpret_cast<int32_t*>(d_raw_out_loc.data_ptr), eps, num_tokens, num_heads_q, page_stride, page_bits,
-          stream);
+          d_expanded_q.data_ptr, d_cache.data_ptr, reinterpret_cast<int64_t*>(d_positions.data_ptr),
+          reinterpret_cast<__nv_bfloat16*>(d_cos_sin.data_ptr), reinterpret_cast<int32_t*>(d_raw_out_loc.data_ptr), eps,
+          num_tokens, num_heads_q, page_stride, page_bits, stream);
     };
     float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
     std::cout << "Tokens: " << num_tokens << ", Heads: " << num_heads_q << ", Time: " << elapsed_ms << " ms"

@@ -31,9 +31,6 @@ class CommonAttention {
   Tensor key_layernorm_weight_;
 
   std::shared_ptr<Linear> attn_o_projs_;
-#ifdef ENABLE_CUDA
-  std::shared_ptr<BaseLayer> set_torch_stream_layer_;
-#endif
-};  // namespace ksana_llm
+};
 
 }  // namespace ksana_llm

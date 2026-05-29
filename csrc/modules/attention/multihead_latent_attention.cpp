@@ -6,6 +6,9 @@
 
 #include "profiler/profile_event.h"
 #include "utils/tensor.h"
+#ifdef ENABLE_CUDA
+#  include "layers/set_torch_stream_layer.h"
+#endif
 
 namespace ksana_llm {
 
@@ -118,11 +121,13 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   mla_buffers.kv_lora_or_q_nope_rope_buffer = buffer_mgr->CreateBufferTensor(
       "mla_buffers.kv_lora_or_q_nope_rope_buffer", {kv_lora_or_q_nope_rope_buffer_size}, weight_type);
 
-  const size_t q_nope_buffer_size = max_decode_tokens * head_num_per_atp_ * kv_lora_rank_;
+  const size_t q_nope_buffer_size =
+      attn_config.model_config.use_dsa ? 0 : max_decode_tokens * head_num_per_atp_ * kv_lora_rank_;
   mla_buffers.q_nope_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.q_nope_buffer", {q_nope_buffer_size}, weight_type);
 
-  const size_t q_rope_buffer_size = max_decode_tokens * head_num_per_atp_ * qk_rope_head_dim_;
+  const size_t q_rope_buffer_size =
+      attn_config.model_config.use_dsa ? 0 : max_decode_tokens * head_num_per_atp_ * qk_rope_head_dim_;
   mla_buffers.q_rope_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.q_rope_buffer", {q_rope_buffer_size}, weight_type);
 
@@ -187,10 +192,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
   CREATE_BUFFER_SCOPE(indices_tensors, mla_buffers_.topk_indices_buffer);
   auto& indices_tensor = indices_tensors[0];
-  if (context_use_dsa) {
-    // Reshape `hidden_buffer_tensors_0`
-    // to avoid memory checker error in the following `GetView`
-    hidden_buffer_tensors_0[0].shape = {dp_total_tokens, head_num_per_atp_ * kv_lora_rank_};
+  if (use_dsa_) {
     q_nope_tensors[0] = hidden_buffer_tensors_0[0].GetView({dp_absorb_tokens, head_num_per_atp_ * kv_lora_rank_});
     q_rope_tensors[0] = hidden_buffer_tensors_0[0].GetView({dp_absorb_tokens, head_num_per_atp_ * qk_rope_head_dim_},
                                                            q_nope_tensors[0].GetElementNumber());
@@ -315,9 +317,6 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   if (dp_decode_tokens > 0) {
     PROFILE_EVENT_SCOPE(PagedAttentionForward, "PagedAttentionForward", forwarding_context.GetCurrentRank());
 
-    // Reshape `reduce_buffer_tensors`
-    // to avoid memory checker error in the following `GetView`
-    reduce_buffer_tensors[0].shape = {dp_decode_tokens, head_num_per_atp_ * kv_lora_rank_};
     // Swap the usage of output_tensors and workspace_buffer for absorb tokens
     // to ensure the result of bmm can be placed in output_tensors
     Tensor attn_output_tensor =
@@ -394,13 +393,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }
-    // `hidden_buffer_tensors_0` is able to hold this space,
-    // reshape to avoid memory checker error in the following `GetView`
-    hidden_buffer_tensors_0[0].shape = {total_tokens, o_proj_k_dim_};
     Tensor o_input = hidden_buffer_tensors_0[0].GetView({dp_total_tokens, o_proj_k_dim_});
-    // `hidden_buffer_tensors_1` is able to hold this space,
-    // reshape to avoid memory checker error in the following `GetView`
-    hidden_buffer_tensors_1[0].shape = {total_tokens, hidden_units};
     // Only output tokens assigned to the current dp group
     std::vector<Tensor> o_outputs = {
         hidden_buffer_tensors_1[0].GetView({dp_total_tokens, hidden_units}, dp_token_offset * hidden_units)};

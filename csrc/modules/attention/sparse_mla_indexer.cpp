@@ -143,7 +143,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     } else if (dp_decode_tokens > 0) {
       Tensor decode_qr = qr.GetView({dp_decode_tokens, qr.shape[1]}, dp_context_tokens * qr.shape[1]);
       std::vector<Tensor> decode_q_indexer_tensors = {q_indexer_tensors[0].GetView(
-          {dp_decode_tokens, n_heads_, head_dim_}, dp_context_tokens * n_heads_ * head_dim_)};
+          {dp_decode_tokens, n_heads_ * head_dim_}, dp_context_tokens * n_heads_ * head_dim_)};
       STATUS_CHECK_RETURN(wq_b_->Forward(decode_qr, decode_q_indexer_tensors));
       q_indexer_tensors[0].shape = decode_q_indexer_tensors[0].shape;
     }
@@ -174,22 +174,18 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
 
   if (dp_decode_tokens > 0) {
     // Paged attention for decode tokens (after dp_context_tokens)
-    // Process page_dual and page_single sequentially
-    // Page_dual is placed before page_single, since requests are sorted by token_num in descending order
-    size_t skip_tokens = 0;
+    size_t skip_tokens = dp_context_tokens;
     for (size_t i = 0; i < indexer_meta->page_inputs.size(); i++) {
       const size_t current_tokens = indexer_meta->page_inputs[i].total_dp_input_ids_len;
-      // Offset tensors by `dp_context_tokens + skip_tokens`
-      const size_t total_offset = dp_context_tokens + skip_tokens;
 
       Tensor current_q_indexer =
-          q_indexer_tensors[0].GetView({current_tokens, n_heads_, head_dim_}, total_offset * n_heads_ * head_dim_);
-      Tensor current_k_indexer = k_indexer_tensors[0].GetView({current_tokens, head_dim_}, total_offset * head_dim_);
-      Tensor current_weights = weights_tensors[0].GetView({current_tokens, n_heads_}, total_offset * n_heads_);
+          q_indexer_tensors[0].GetView({current_tokens, n_heads_, head_dim_}, skip_tokens * n_heads_ * head_dim_);
+      Tensor current_k_indexer = k_indexer_tensors[0].GetView({current_tokens, head_dim_}, skip_tokens * head_dim_);
+      Tensor current_weights = weights_tensors[0].GetView({current_tokens, n_heads_}, skip_tokens * n_heads_);
 
       // Offset output tensor for current page
       std::vector<Tensor> current_output_tensors = {
-          topk_indices.GetView({current_tokens, index_topk_}, total_offset * index_topk_)};
+          topk_indices.GetView({current_tokens, index_topk_}, skip_tokens * index_topk_)};
 
       STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
           {current_q_indexer, current_k_indexer, current_weights, quant_workspace,

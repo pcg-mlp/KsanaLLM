@@ -33,20 +33,21 @@ Status FlashDsv4AttentionLayer::Init(const std::vector<std::any>& parameters, co
 }
 
 size_t FlashDsv4AttentionLayer::GetWorkspaceSize() {
-  // V4 uses flash_mla_with_kvcache which needs:
-  //   - lse buffer: [max_token_num, num_heads] * sizeof(float)
-  //   - lse_accum: [num_sms, num_heads] * sizeof(float)
-  //   - o_accum: [num_sms, num_heads, head_dim] * sizeof(float)
   constexpr int kMinNumHeads = 64;
   const size_t num_sms = llm_kernels::utils::GetSMCount();
   const size_t workspace_size = (/*lse*/ max_token_num_ * kMinNumHeads + /*lse_accum*/ num_sms * kMinNumHeads +
                                  /*o_accum*/ num_sms * kMinNumHeads * head_size_) *
                                 sizeof(float);
   if (kv_cache_dtype_ == TYPE_FP8_DS_MLA && num_heads_ < kMinNumHeads) {
-    // [expanded_q][expanded_out][workspace]
+    // [expanded_q (bf16)] [expanded_out (bf16)] [float workspace]
     const size_t expanded_q_size = max_token_num_ * kMinNumHeads * head_size_ * GetTypeSize(inter_data_type_);
     const size_t expanded_out_size = max_token_num_ * kMinNumHeads * head_size_ * GetTypeSize(inter_data_type_);
     return expanded_q_size + expanded_out_size + workspace_size;
+  }
+  if (kv_cache_dtype_ == TYPE_FP8_E4M3) {
+    // [q_out (fp8)] [float workspace]
+    const size_t q_out_size = max_token_num_ * kMinNumHeads * head_size_;  // fp8 = 1 byte/elem
+    return q_out_size + workspace_size;
   }
   return workspace_size;
 }
@@ -57,6 +58,8 @@ Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors
   switch (kv_cache_dtype) {                                                                                   \
     case TYPE_FP8_DS_MLA:                                                                                     \
       return func<dtype, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla>(__VA_ARGS__);                   \
+    case TYPE_FP8_E4M3:                                                                                       \
+      return func<dtype, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(__VA_ARGS__);                    \
     default:                                                                                                  \
       KLLM_THROW(fmt::format("{}: Unsupported KVCacheDtype type: {}.", __PRETTY_FUNCTION__, kv_cache_dtype)); \
   }
@@ -125,25 +128,31 @@ Status FlashDsv4AttentionLayer::ForwardT(const std::vector<Tensor>& input_tensor
   // ── Fused Q-Norm + RoPE + KV Store + Q Expand ────────────────────────────
   constexpr int kMinNumHeads = 64;  // flashmla (fp8_ds_mla) only supports num_heads >= 64
   KLLM_CHECK_WITH_INFO(this->num_heads_ <= kMinNumHeads, "num_heads of dsv4 must be <= 64");
-  const int num_heads = kMinNumHeads;
+  int num_heads = this->num_heads_;
 
   uint8_t* workspace_ptr = workspace_buffer_->GetPtr<uint8_t>();
   void* expanded_q_ptr = q_ptr;
   SCALAR_T* expanded_out_ptr = out_ptr;
-  if (this->num_heads_ < kMinNumHeads) {
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
     expanded_q_ptr = workspace_ptr;
-    const size_t expanded_q_bytes = token_num * kMinNumHeads * this->head_size_ * sizeof(SCALAR_T);
+    const size_t expanded_q_bytes = token_num * kMinNumHeads * this->head_size_;  // fp8 = 1 byte/elem
     workspace_ptr += expanded_q_bytes;
-    expanded_out_ptr = reinterpret_cast<SCALAR_T*>(workspace_ptr);
-    workspace_ptr += expanded_q_bytes;  // expanded_out_bytes == expanded_q_bytes
+  } else {
+    if (this->num_heads_ < kMinNumHeads) {
+      num_heads = kMinNumHeads;
+      expanded_q_ptr = workspace_ptr;
+      const size_t expanded_q_bytes = token_num * kMinNumHeads * this->head_size_ * sizeof(SCALAR_T);
+      workspace_ptr += expanded_q_bytes;
+      expanded_out_ptr = reinterpret_cast<SCALAR_T*>(workspace_ptr);
+      workspace_ptr += expanded_q_bytes;  // expanded_out_bytes == expanded_q_bytes
+    }
   }
 
   KLLM_CHECK_WITH_INFO(this->rotary_embedding_cuda_.has_value(), "rotary_embedding_cuda must be set!");
-  llm_kernels::nvidia::InvokeFusedQNormRopeKVInsert(
-      reinterpret_cast<const SCALAR_T*>(q_ptr), reinterpret_cast<const SCALAR_T*>(kv_ptr),
-      reinterpret_cast<SCALAR_T*>(expanded_q_ptr), kcache_ptr, rotary_embedding_pos_ptr,
-      reinterpret_cast<const SCALAR_T*>(this->rotary_embedding_cuda_->cos_sin_cache_), raw_out_loc_ptr,
-      this->layernorm_eps_, token_num, this->num_heads_, swa_block_size, this->page_bits_, stream);
+  llm_kernels::nvidia::InvokeFusedQNormRopeKVInsert<KV_DTYPE>(
+      reinterpret_cast<const SCALAR_T*>(q_ptr), reinterpret_cast<const SCALAR_T*>(kv_ptr), expanded_q_ptr, kcache_ptr,
+      rotary_embedding_pos_ptr, reinterpret_cast<const SCALAR_T*>(this->rotary_embedding_cuda_->cos_sin_cache_),
+      raw_out_loc_ptr, this->layernorm_eps_, token_num, this->num_heads_, swa_block_size, this->page_bits_, stream);
 
   // Invoke sparse mla kernel to compute the output [token_num, num_heads_q, head_dim]
   // primary stride = swa_block_size (SWA pool); extra stride = main KV block_size_ (compressed KV in main pool)
@@ -157,12 +166,14 @@ Status FlashDsv4AttentionLayer::ForwardT(const std::vector<Tensor>& input_tensor
       /*topk_length_ptr*/ nullptr, attn_sink_ptr, extra_kcache_ptr, extra_indices_ptr, extra_topk_length_ptr,
       extra_num_blocks, this->compressed_block_token_num_, extra_topk,
       /*extra_kcache_batch_stride*/ this->block_size_));
-  if (this->num_heads_ < kMinNumHeads) {
-    const size_t dst_pitch = this->num_heads_ * this->head_size_ * sizeof(SCALAR_T);
-    const size_t src_pitch = kMinNumHeads * this->head_size_ * sizeof(SCALAR_T);
-    // Squeeze expanded_out_ptr to out_ptr
-    Memcpy2DAsync(out_ptr, dst_pitch, expanded_out_ptr, src_pitch, dst_pitch, token_num, MEMCPY_DEVICE_TO_DEVICE,
-                  this->context_->device->GetPrimaryComputeStream());
+  if constexpr (KV_DTYPE != llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    if (this->num_heads_ < kMinNumHeads) {
+      const size_t dst_pitch = this->num_heads_ * this->head_size_ * sizeof(SCALAR_T);
+      const size_t src_pitch = kMinNumHeads * this->head_size_ * sizeof(SCALAR_T);
+      // Squeeze expanded_out_ptr to out_ptr
+      Memcpy2DAsync(out_ptr, dst_pitch, expanded_out_ptr, src_pitch, dst_pitch, token_num, MEMCPY_DEVICE_TO_DEVICE,
+                    this->context_->device->GetPrimaryComputeStream());
+    }
   }
 
   // out_ptr [token_num, num_heads, head_dim], apply **inverse** RoPE on [..., -qk_rope_head_dim:]

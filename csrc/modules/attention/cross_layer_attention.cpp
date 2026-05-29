@@ -4,6 +4,10 @@
 
 #include "modules/attention/cross_layer_attention.h"
 
+#ifdef ENABLE_CUDA
+#  include "layers/set_torch_stream_layer.h"
+#endif
+
 namespace ksana_llm {
 
 CrossLayerAttention::CrossLayerAttention(int layer_idx, int cla_share_factor, ClaBuffers& cla_buffers,

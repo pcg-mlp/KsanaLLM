@@ -1,0 +1,15 @@
+diff --git a/csrc/utils/lazy_init.hpp b/csrc/utils/lazy_init.hpp
+index 386b1b4..7d04a76 100644
+--- a/csrc/utils/lazy_init.hpp
++++ b/csrc/utils/lazy_init.hpp
+@@ -19,6 +19,10 @@ public:
+         return ptr.get();
+     }
+ 
++    void reset() {
++        ptr.reset();
++    }
++
+ private:
+     std::shared_ptr<T> ptr;
+     std::function<std::shared_ptr<T>()> factory;

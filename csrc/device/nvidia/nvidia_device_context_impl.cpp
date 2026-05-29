@@ -7,6 +7,7 @@
 #include <csignal>
 
 #include "3rdparty/LLM_kernels/csrc/utils/nvidia/cuda_utils.h"
+#include "device/nvidia/deepseek_deepgemm_bridge.h"
 
 namespace ksana_llm {
 
@@ -156,6 +157,9 @@ template <int T>
 void NvidiaDeviceContextExtension<T>::Destroy() {
   // wait nccl async init finish
   GetNCCLParam();
+
+  // Finalize DeepGEMM runtime before destroying other resources
+  deepseek::FinalizeDeepGemm();
 
   CUDA_CHECK(cublasDestroy(cublas_handle_));
   CUDA_CHECK(cublasLtDestroy(cublaslt_handle_));

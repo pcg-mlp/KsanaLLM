@@ -17,6 +17,21 @@ using llm_kernels::nvidia::PrefillPlan;
 using Wrapper = CompressorWrapper<float, __nv_bfloat16>;
 using RopeWrapper = CompressorWrapper<__nv_bfloat16, __nv_bfloat16>;
 
+// Dispatch CompressFusedNormRopeStore by kv_cache_dtype
+#define DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype, head_dim, ...)                                        \
+  switch (kv_cache_dtype) {                                                                                     \
+    case TYPE_FP8_DS_MLA:                                                                                       \
+      RopeWrapper::template CompressFusedNormRopeStore<head_dim, llm_kernels::utils::KVCacheType::kFp8DsMla>(   \
+          __VA_ARGS__);                                                                                         \
+      break;                                                                                                    \
+    case TYPE_FP8_E4M3:                                                                                         \
+      RopeWrapper::template CompressFusedNormRopeStore<head_dim, llm_kernels::utils::KVCacheType::kFp8E4M3>(    \
+          __VA_ARGS__);                                                                                         \
+      break;                                                                                                    \
+    default:                                                                                                    \
+      KLLM_THROW(fmt::format("CompressorLayer: unsupported kv_cache_dtype {}", GetTypeString(kv_cache_dtype))); \
+  }
+
 // =============================================================================
 // Init
 // =============================================================================
@@ -62,6 +77,7 @@ Status CompressorLayer::Init(const std::vector<std::any>& parameters, const Runt
   KLLM_CHECK_WITH_INFO(compressed_page_bits_ == 1 || compressed_page_bits_ == 6 || compressed_page_bits_ == 8,
                        "CompressorLayer: compressed_page_bits must be in {1, 6, 8}");
   page_stride_ = std::any_cast<int64_t>(parameters[param_idx++]);
+  kv_cache_dtype_ = std::any_cast<DataType>(parameters[param_idx++]);
 
   DISPATCH_BY_2_DTYPE(inter_data_type_, InitYarnRotaryEmbedding, rotary_embedding_cuda_, rope_scaling_factor_config,
                       freqs_cis_, compress_rope_theta, rope_head_dim, max_position_embeddings, head_dim_, n_heads,
@@ -141,9 +157,10 @@ Status CompressorLayer::ForwardPrefillC4(const std::vector<Tensor>& input_tensor
   const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
   void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
   if (head_dim_ == 512) {
-    RopeWrapper::template CompressFusedNormRopeStore<512>(
-        kv_compressed_output, norm_weight, compress_plan, freqs_cis_, num_compress, ForwardMode::CompressExtend,
-        rms_norm_eps_, compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+    DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, compress_plan,
+                                      freqs_cis_, num_compress, ForwardMode::CompressExtend, rms_norm_eps_,
+                                      compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_,
+                                      stream);
   } else {
     RopeWrapper::template IndexerFusedNormRopeStore<128>(
         kv_compressed_output, norm_weight, compress_plan, freqs_cis_, num_compress, ForwardMode::CompressExtend,
@@ -197,9 +214,9 @@ Status CompressorLayer::ForwardPrefillC128(const std::vector<Tensor>& input_tens
   const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
   const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
   void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
-  RopeWrapper::template CompressFusedNormRopeStore<512>(
-      kv_compressed_output, norm_weight, compress_plan, freqs_cis_, num_compress, ForwardMode::CompressExtend,
-      rms_norm_eps_, compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+  DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, compress_plan, freqs_cis_,
+                                    num_compress, ForwardMode::CompressExtend, rms_norm_eps_, compress_ratio_, cache,
+                                    compressed_out_loc, page_stride_, compressed_page_bits_, stream);
 
   return Status();
 }
@@ -237,9 +254,9 @@ Status CompressorLayer::ForwardDecodeC4(const std::vector<Tensor>& input_tensors
   const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
   void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
   if (head_dim_ == 512) {
-    RopeWrapper::template CompressFusedNormRopeStore<512>(
-        kv_compressed_output, norm_weight, seq_lens, freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_,
-        compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+    DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, seq_lens, freqs_cis_,
+                                      batch_size, ForwardMode::CompressDecode, rms_norm_eps_, compress_ratio_, cache,
+                                      compressed_out_loc, page_stride_, compressed_page_bits_, stream);
   } else {
     RopeWrapper::template IndexerFusedNormRopeStore<128>(
         kv_compressed_output, norm_weight, seq_lens, freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_,
@@ -276,9 +293,9 @@ Status CompressorLayer::ForwardDecodeC128(const std::vector<Tensor>& input_tenso
   const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
   const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
   void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
-  RopeWrapper::template CompressFusedNormRopeStore<512>(
-      kv_compressed_output, norm_weight, seq_lens, freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_,
-      compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+  DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, seq_lens, freqs_cis_,
+                                    batch_size, ForwardMode::CompressDecode, rms_norm_eps_, compress_ratio_, cache,
+                                    compressed_out_loc, page_stride_, compressed_page_bits_, stream);
 
   return Status();
 }

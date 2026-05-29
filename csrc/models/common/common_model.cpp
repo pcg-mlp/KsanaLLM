@@ -104,11 +104,6 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   input_refit_layer_ = std::make_shared<InputRefitLayer>();
   input_refit_layer_->Init({}, runtime_config_, context_, rank_);
 
-#ifdef ENABLE_CUDA
-  set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
-  set_torch_stream_layer_->Init({}, runtime_config_, context_, rank_);
-#endif
-
   if (runtime_config_.embed_tokens_use_cpu) {
     DataType input_data_type = TYPE_INT32;
     size_t max_token_num = runtime_config_.max_step_token_num;
@@ -403,14 +398,16 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::Begin);
 
-  // save hidden result if enable MTP model
+  // save unnormed hidden result if enable MTP model
   if (runtime_config_.mtp_step_num > 0) {
-    auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
-    mtp_hidden_tensor.shape = residual_buffer[0].shape;
-    mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
-    MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
-                residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
-                context_->device->GetPrimaryComputeStream());
+    if (model_run_config_.return_hidden_states_before_norm) {
+      auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
+      mtp_hidden_tensor.shape = residual_buffer[0].shape;
+      mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
+      MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
+                  residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                  context_->device->GetPrimaryComputeStream());
+    }
   }
 
   // Squeeze residual_buffer from [t, hc, d] to [t, d]
@@ -437,6 +434,18 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     nextn_shared_head_norm_->Forward(residual_buffer, residual_buffer);
   } else if (lm_head_prenorm_) {
     lm_head_prenorm_->Forward(residual_buffer, residual_buffer);
+  }
+
+  // save normed hidden result if enable MTP model
+  if (runtime_config_.mtp_step_num > 0) {
+    if (!model_run_config_.return_hidden_states_before_norm) {
+      auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
+      mtp_hidden_tensor.shape = residual_buffer[0].shape;
+      mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
+      MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
+                  residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                  context_->device->GetPrimaryComputeStream());
+    }
   }
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
@@ -498,7 +507,9 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   STATUS_CHECK_RETURN(cast_layer_->Forward(
       {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
 
+#ifndef ENABLE_CUDA
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
+#endif
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::End);
   input_refit_layer_->Clear();
   return Status();

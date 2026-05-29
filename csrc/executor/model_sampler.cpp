@@ -21,11 +21,23 @@ ModelSampler::ModelSampler(std::shared_ptr<Environment> env, std::shared_ptr<Con
   vocab_size_ = env_->GetVocabSize();
   bitmask_stride_ = (vocab_size_ + kBitsPerInt - 1) / kBitsPerInt;
 
+  if (batch_scheduler_config.enable_xgrammar) {
+    const size_t device_bitmask_capacity = batch_scheduler_config.max_batch_size * bitmask_stride_ * sizeof(int32_t);
+    Malloc(&device_bitmask_, device_bitmask_capacity);
+  }
+
   // Cache the model-level embedding flag once at construction.
   // This replaces per-request is_embedding_request checks and per-call request_target traversals.
   ModelConfig model_config;
   if (env_->GetModelConfig(model_config).OK()) {
     is_embedding_model_ = model_config.is_embedding_model;
+  }
+}
+
+ModelSampler::~ModelSampler() {
+  if (device_bitmask_) {
+    Free(device_bitmask_);
+    device_bitmask_ = nullptr;
   }
 }
 
@@ -95,20 +107,12 @@ Status ModelSampler::GenerateAndApplyBitmask(std::vector<std::shared_ptr<Executo
   // Apply bitmask if we have any
   if (!logits_offsets.empty() && !combined_bitmask.empty()) {
     float* device_logits = sampling_reqs[0].logits_buf;
-    // Allocate device memory and copy bitmask
     size_t bitmask_size = combined_bitmask.size() * sizeof(int32_t);
-    void* device_bitmask = nullptr;
-    Malloc(&device_bitmask, bitmask_size);
-    MemcpyAsync(device_bitmask, combined_bitmask.data(), bitmask_size, MEMCPY_HOST_TO_DEVICE,
-                context_->device->GetH2DStream());
-    StreamSynchronize(context_->device->GetH2DStream());
+    MemcpyAsync(device_bitmask_, combined_bitmask.data(), bitmask_size, MEMCPY_HOST_TO_DEVICE,
+                context_->device->GetPrimaryComputeStream());
 
-    // Apply bitmask to logits
-    sampler_->ApplyTokenBitmaskSelective(device_logits, device_bitmask, vocab_size_, logits_offsets,
+    sampler_->ApplyTokenBitmaskSelective(device_logits, device_bitmask_, vocab_size_, logits_offsets,
                                          context_->device->GetPrimaryComputeStream());
-    // Synchronize and free device memory
-    StreamSynchronize(context_->device->GetPrimaryComputeStream());
-    Free(device_bitmask);
   }
   return Status();
 }

@@ -147,6 +147,23 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
             message(WARNING "Failed to checkout DeepGEMM to 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51, using current branch.")
         endif()
 
+        message(STATUS "Applying DeepGEMM patch...")
+        set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm.patch)
+        if(EXISTS ${DEEPGEMM_PATCH_FILE})
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} apply ${DEEPGEMM_PATCH_FILE}
+                WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
+                RESULT_VARIABLE GIT_APPLY_RESULT
+            )
+            if(NOT GIT_APPLY_RESULT EQUAL 0)
+                message(WARNING "Failed to apply DeepGEMM patch, continuing anyway.")
+            else()
+                message(STATUS "DeepGEMM patch applied successfully.")
+            endif()
+        else()
+            message(WARNING "DeepGEMM patch file not found at ${DEEPGEMM_PATCH_FILE}, skipping patch.")
+        endif()
+
         message(STATUS "Building and installing DeepGEMM...")
         # Set DG_USE_LOCAL_VERSION=0 to skip git clean check in setup.py
         set(ENV{DG_USE_LOCAL_VERSION} "0")

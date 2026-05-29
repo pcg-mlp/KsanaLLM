@@ -25,10 +25,10 @@
 
 #include "csrc/kernels/nvidia/others/sglang/main/deepseek_v4/forward_mode.h"
 #include "csrc/kernels/nvidia/others/sglang/main/deepseek_v4/plan.h"
+#include "csrc/utils/quant_type.h"
 
 namespace llm_kernels {
 namespace nvidia {
-
 
 // -----------------------------------------------------------------------------
 // CompressorWrapper<InT, OutT>
@@ -105,8 +105,9 @@ class CompressorWrapper {
   //
   // Only supports kHeadDim=512.
   // page_bits is a runtime parameter; supported values: 1, 6, 8.
+  // KV_DTYPE controls kv cache format (kFp8DsMla: scales + bf16 rope, kFp8E4M3: direct fp8)
   // ---------------------------------------------------------------------------
-  template <int64_t kHeadDim>
+  template <int64_t kHeadDim, llm_kernels::utils::KVCacheType KV_DTYPE = llm_kernels::utils::KVCacheType::kFp8DsMla>
   static void CompressFusedNormRopeStore(const void* input, const void* weight, const void* handle,
                                          const void* freqs_cis, uint32_t num_works, ForwardMode mode, float eps,
                                          uint32_t compress_ratio, void* cache, const int32_t* indices,

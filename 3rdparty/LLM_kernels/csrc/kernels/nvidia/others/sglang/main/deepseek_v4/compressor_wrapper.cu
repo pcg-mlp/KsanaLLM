@@ -19,7 +19,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 // =============================================================================
 // PlanPrefillCompress
 // =============================================================================
@@ -103,14 +102,15 @@ void CompressorWrapper<InT, OutT>::CompressFusedNormRopeInplace(void* input, con
 // CompressFusedNormRopeStore  (only InT is used as the element type)
 // =============================================================================
 template <typename InT, typename OutT>
-template <int64_t kHeadDim>
+template <int64_t kHeadDim, llm_kernels::utils::KVCacheType KV_DTYPE>
 void CompressorWrapper<InT, OutT>::CompressFusedNormRopeStore(const void* input, const void* weight, const void* handle,
                                                               const void* freqs_cis, uint32_t num_works,
                                                               ForwardMode mode, float eps, uint32_t compress_ratio,
                                                               void* cache, const int32_t* indices, int64_t page_stride,
                                                               uint32_t page_bits, cudaStream_t stream) {
-  compress_fused_norm_rope_store<InT, kHeadDim>(input, weight, handle, freqs_cis, num_works, mode, eps, compress_ratio,
-                                                cache, indices, page_stride, page_bits, stream);
+  compress_fused_norm_rope_store<InT, kHeadDim, KV_DTYPE>(input, weight, handle, freqs_cis, num_works, mode, eps,
+                                                          compress_ratio, cache, indices, page_stride, page_bits,
+                                                          stream);
 }
 
 // =============================================================================
@@ -155,11 +155,12 @@ INSTANTIATE_HD_MEMBERS(float, __nv_bfloat16, 128);
 INSTANTIATE_HD_MEMBERS(float, __nv_bfloat16, 512);
 #undef INSTANTIATE_HD_MEMBERS
 
-#define INSTANTIATE_HD_MEMBERS(IN_T, OUT_T, HD)                                                          \
-  template void CompressorWrapper<OUT_T, OUT_T>::CompressFusedNormRopeStore<HD>(                         \
+#define INSTANTIATE_HD_MEMBERS(IN_T, OUT_T, HD, KV_DTYPE)                                                \
+  template void CompressorWrapper<OUT_T, OUT_T>::CompressFusedNormRopeStore<HD, KV_DTYPE>(               \
       const void*, const void*, const void*, const void*, uint32_t, ForwardMode, float, uint32_t, void*, \
       const int32_t*, int64_t, uint32_t, cudaStream_t)
-INSTANTIATE_HD_MEMBERS(float, __nv_bfloat16, 512);
+INSTANTIATE_HD_MEMBERS(float, __nv_bfloat16, 512, llm_kernels::utils::KVCacheType::kFp8DsMla);
+INSTANTIATE_HD_MEMBERS(float, __nv_bfloat16, 512, llm_kernels::utils::KVCacheType::kFp8E4M3);
 #undef INSTANTIATE_HD_MEMBERS
 
 #define INSTANTIATE_HD_MEMBERS(IN_T, OUT_T, HD)                                                          \

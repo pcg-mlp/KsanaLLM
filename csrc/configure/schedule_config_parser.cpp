@@ -604,12 +604,10 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
   // Update dtype of kv cache
   auto &kv_cache_dtype_str = runtime_config_.attn_backend_config.kv_cache_dtype_str;
   if (model_config.use_dsa) {
+    // If fp8_e4m3 is not specified,
     // DSA/DSV4 prefers the custom fp8 format (Better precision,
     // but larger block size, and computation uses BF16)
-    if (model_config.use_dsv4_attn) {
-      kv_cache_dtype_str = "fp8_ds_mla";
-    } else if (kv_cache_dtype_str != "fp8_e4m3") {
-      // DSA also supports standard FP8 format with FP8 compute
+    if (kv_cache_dtype_str != "fp8_e4m3") {
       kv_cache_dtype_str = "fp8_ds_mla";
     }
   } else {

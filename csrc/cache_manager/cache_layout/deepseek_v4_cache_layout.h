@@ -35,9 +35,11 @@ inline void ComputeIndexerCacheSize(const ModelConfig& model_config, size_t bloc
 
 // Compute the total MLA attention cache size (in bytes) for a single layer token block.
 // TYPE_FP8_DS_MLA path:
-//   block_token_num x (kv_lora_rank<fp8 quant> + kv_lora_rank / 128<fp32 scale> + qk_rope_head_dim<weight dtype>)
+//   block_token_num x (qk_nope_head_dim<fp8_e4m3 quant> +
+//                      (qk_nope_head_dim / 64 + 1)<ue8m0 scale> +
+//                      qk_rope_head_dim<weight dtype>)
 // Default path:
-//   block_token_num x (kv_lora_rank + qk_rope_head_dim) * sizeof(kv_cache_dtype)
+//   block_token_num x size_per_head x sizeof(kv_cache_dtype)
 // The caller is responsible for dividing by compress_ratio to obtain the compressed size.
 inline size_t ComputeKeyValueHeadBytes(const ModelConfig& model_config, const DataType& mla_kv_cache_dtype,
                                        size_t block_token_num) {

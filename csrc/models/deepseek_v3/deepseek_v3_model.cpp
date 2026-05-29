@@ -289,6 +289,9 @@ DeepSeekV3Model::DeepSeekV3Model(const ModelConfig& model_config, const RuntimeC
       first_k_dense_replace_(model_config.moe_config.first_k_dense_replace) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
+  if (model_config.type == "glm_moe_dsa") {
+    model_run_config.return_hidden_states_before_norm = false;
+  }
 
   CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
 }
@@ -320,6 +323,13 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
           std::make_shared<DeepSeekV3MtpLayer>(layer_idx, creation_context, model_creation_config, layers_[layer_idx]);
     }
     nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
+
+    // Create MTP-specific shared_head.norm (shared across all MTP steps)
+    if (context_->global->IsSamplingNode()) {
+      nextn_shared_head_norm_ = std::make_unique<Layernorm>(
+          fmt::format("model.layers.{}.shared_head.norm.weight", pipeline_config_.lower_nextn_layer_idx),
+          model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+    }
   }
   return Status();
 }

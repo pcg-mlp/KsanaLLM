@@ -97,20 +97,17 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(env->GetBlockManagerConfig(block_manager_config));
 
-  size_t device_total, device_free;
-  Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
-  if (status.OK()) {
-    const size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
-    // The max number of blocks that can actually appear in the system.
-    const size_t max_block_num = (device_free - reserved_memory_size) / runtime_config_.attn_backend_config.block_size;
-    max_table_block_num = std::min(max_table_block_num, max_block_num);
-  }
-
-  // For prefix caching, the token will be used multiple times, reset it to max possible value.
-  if (runtime_config.enable_prefix_caching) {
-    max_table_block_num = ((max_seq_len + runtime_config.attn_backend_config.block_token_num - 1) /
-                           runtime_config.attn_backend_config.block_token_num) *
-                          max_batch_size;
+  // For prefix caching, the token will be used multiple times, keep the max possible value.
+  if (runtime_config_.attn_backend_config.block_size > 0 && !runtime_config.enable_prefix_caching) {
+    size_t device_total, device_free;
+    Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
+    if (status.OK()) {
+      const size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
+      // The max number of blocks that can actually appear in the system.
+      const size_t max_block_num =
+          (device_free - reserved_memory_size) / runtime_config_.attn_backend_config.block_size;
+      max_table_block_num = std::min(max_table_block_num, max_block_num);
+    }
   }
   KLLM_LOG_INFO << "max_table_block_num: " << max_table_block_num;
 
@@ -142,9 +139,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_table_block_num});
   if (model_config.use_dsa) {
     store_out_loc = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-    // kv cache meta for the indexer module
-    indexer_kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
-                             {static_cast<size_t>(layer_num_on_node_), max_table_block_num, 2});
     layer_indexer_kv_cache_ptr =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)});
     int num_sms = 0;
@@ -222,7 +216,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size});
     dp_src_flexible_token_idx_tensor =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size});
-  } else if (!enable_blocked_multi_token_forwarding_kv_ || model_config_.use_mla) {
+  } else if (!enable_blocked_multi_token_forwarding_kv_) {
     // Reserve space for configuration that supports flexible caching, even though flexible caching is disabled.
     dp_flexible_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
   }
@@ -341,7 +335,6 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
   input_length.shape = {0};
   expanded_input_length.shape = {0};
   kv_list.shape = {0};
-  indexer_kv_list.shape = {0};
   kv_cache_offset.shape = {0};
   rotary_embedding_pos.shape = {0};
   rotary_embedding_mask.shape = {0};
@@ -1080,6 +1073,10 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
       true;  // ASCEND already fills all layers on host.
 #endif
   for (const auto& kv_cache_type : kv_cache_types_) {
+    if (kv_cache_type != "attention") {
+      continue;
+    }
+
     const size_t kv_list_layer_count =
 #ifdef ENABLE_CUDA
         host_fill_all_layers ? static_cast<size_t>(layer_num_on_node_) : 1;
@@ -1101,15 +1098,8 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
       }
     }
 
-    Tensor* current_info_kv_list;
-    Tensor* current_kv_list;
-    if (kv_cache_type == "attention") {
-      current_info_kv_list = &info.kv_list;
-      current_kv_list = &kv_list;
-    } else {  // kv_cache_type == "indexer"
-      current_info_kv_list = &info.indexer_kv_list;
-      current_kv_list = &indexer_kv_list;
-    }
+    Tensor* current_info_kv_list = &info.kv_list;
+    Tensor* current_kv_list = &kv_list;
     KLLM_LOG_DEBUG << kv_cache_type << " kv_list_host " << kv_list_host;
     *current_info_kv_list = current_kv_list->GetView(
         {static_cast<size_t>(layer_num_on_node_), static_cast<size_t>(total_block_num * 2)}, current_kv_list->shape[0]);
@@ -1399,17 +1389,14 @@ void ModelInput::PreparePrefill() {
     PrepareFlexibleCache(flash_input);
     PrepareKVCacheBlocks(flash_input);
     PrepareKVCacheBlockTable(flash_input);
+    PrepareStoreOutLoc(flash_input);
   }
   PrepareFlashRotary(flash_input);
-  PrepareStoreOutLoc(flash_input);
 }
 
 void ModelInput::PrepareDecode() {
   PROFILE_EVENT_SCOPE(PrepareDecode, "PrepareDecode", rank_);
   for (auto& page_input : page_inputs) {
-    if (page_input.dp_reqs.empty()) {
-      continue;
-    }
     PrepareInputLength(page_input);
     PrepareKVCacheBlocks(page_input);
     PrepareKVCacheBlockTable(page_input);
@@ -1422,8 +1409,7 @@ void ModelInput::PrepareDecode() {
 void ModelInput::PrepareFlexibleCache(input_info& input) {
   // Flexible cache supported scope: dense model with paged attn layout, deepseek model
   // Flexible cache not supported scope: dense model with flash attn layout
-  const bool is_dense_model_flash_layout = !model_config_.use_mla && enable_blocked_multi_token_forwarding_kv_;
-  if (!runtime_config_.enable_flexible_caching && is_dense_model_flash_layout) {
+  if (!runtime_config_.enable_flexible_caching && enable_blocked_multi_token_forwarding_kv_) {
     return;
   }
 
@@ -1453,8 +1439,7 @@ void ModelInput::PrepareFlexibleCache(input_info& input) {
               flexible_offset_uint64_cpu.size() * sizeof(decltype(flexible_offset_uint64_cpu)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 
-  if (dst_flexible_kv_cache_id_cpu.empty() ||
-      (!runtime_config_.enable_flexible_caching && !is_dense_model_flash_layout)) {
+  if (dst_flexible_kv_cache_id_cpu.empty() || !runtime_config_.enable_flexible_caching) {
     dp_dst_flexible_kv_cache_tensor.shape = {0};
     return;
   }

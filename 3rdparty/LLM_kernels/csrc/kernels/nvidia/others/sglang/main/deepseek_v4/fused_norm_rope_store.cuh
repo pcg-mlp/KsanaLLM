@@ -12,10 +12,10 @@
 #include "csrc/kernels/nvidia/others/sglang/main/deepseek_v4/fused_norm_rope.cuh"
 #include "csrc/kernels/nvidia/others/sglang/main/include/sgl_kernel/deepseek_v4/fp8_utils.cuh"
 #include "csrc/utils/nvidia/assert.h"
+#include "csrc/utils/quant_type.h"
 
 namespace llm_kernels {
 namespace nvidia {
-
 
 struct FusedNormRopeStoreParams {
   const void* __restrict__ input;   // [num_works, kHeadDim] DType (read-only)
@@ -33,12 +33,15 @@ struct FusedNormRopeStoreParams {
 
 constexpr int kNopeDim = 448;  // qk_nope_head_dim = kHeadDim - kRopeDim
 
-// Compressor cache layout constants (per token slot):
-//   576 bytes data = 448 FP8 (nope dims, 7 groups x 64) + 128 bf16 (rope dims)
-//   8 bytes scale  = 7 x ue8m0 (one per FP8 group) + 1 padding byte
-// Page layout: [value_region: 576 * page_size] [scale_region: 8 * page_size]
-constexpr int kTokenDataBytes = 576;  // 448 FP8 + 128 bf16
-constexpr int kNumQuantBlocks = 7;    // groups 0-6 are FP8, group 7 is bf16
+// Compressor cache layout constants (per token slot), depends on KV_DTYPE:
+//   kFp8DsMla: 576 bytes data + 8 bytes scale
+//     [0,   448)  : FP8-E4M3  (7 groups × 64 elems)
+//     [448, 576)  : bf16      (64 elems, RoPE dims)
+//     scale region: 7 UE8M0 bytes + 1 padding
+//   kFp8E4M3: 512 bytes data, no scales
+//     [0,   448)  : FP8-E4M3  (7 groups × 64 elems, nope dims)
+//     [448, 512)  : FP8-E4M3  (1 group  × 64 elems, rope dims)
+// Page layout: [value_region: kTokenDataBytes * page_size] [scale_region: 8 * page_size] (kFp8DsMla only)
 constexpr int kLanesPerGroup = 8;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,7 +66,8 @@ constexpr int kLanesPerGroup = 8;
 //   Group 6: lanes 16-23 (vec[1])
 //   Group 7: lanes 24-31 (vec[1]) -> bf16, RoPE region
 //
-template <typename DType, int64_t kHeadDim, int64_t kRopeDim, ForwardMode kMode, uint32_t kPageBits, bool kUsePDL>
+template <typename DType, int64_t kHeadDim, int64_t kRopeDim, ForwardMode kMode, uint32_t kPageBits,
+          llm_kernels::utils::KVCacheType KV_DTYPE, bool kUsePDL>
 __global__ void fused_norm_rope_store_kernel(const __grid_constant__ FusedNormRopeStoreParams params) {
   using namespace device;
   using deepseek_v4::fp8::cast_to_ue8m0;
@@ -202,75 +206,107 @@ __global__ void fused_norm_rope_store_kernel(const __grid_constant__ FusedNormRo
   }
 
   // ── Part 3: FP8 Quantize + Store to paged cache ──────────────────────────
+  constexpr int kTokenDataBytes = (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) ? 512 : 576;
+
   const int32_t page = index >> kPageBits;
   const int32_t offset = index & ((1 << kPageBits) - 1);
   void* page_ptr = pointer::offset(cache, page * page_stride);
   void* value_ptr = pointer::offset(page_ptr, offset * kTokenDataBytes);
-  void* scale_ptr = pointer::offset(page_ptr, kTokenDataBytes << kPageBits, offset * 8);
 
-  // ── vec[0]: all 32 lanes -> FP8 groups 0-3 ──────────────────────────────
-  {
-    float local_max = 0.0f;
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    // ── kFp8E4M3: direct fp32→fp8 cast, no scales ──────────────────────────
+    // vec[0]: all 32 lanes → FP8 at [lane_id*8, lane_id*8+8) = [0, 256)
+    {
+      uint8_t out_bytes[kVecSize];
 #pragma unroll
-    for (int j = 0; j < kVecSize; ++j) {
-      local_max = fmaxf(local_max, fabsf(cast<float>(input_vec[0][j])));
+      for (int j = 0; j < kVecSize; ++j) {
+        out_bytes[j] =
+            static_cast<uint8_t>(__nv_cvt_float_to_fp8(cast<float>(input_vec[0][j]), __NV_SATFINITE, __NV_E4M3));
+      }
+      *reinterpret_cast<uint2*>(pointer::offset(value_ptr, lane_id * kVecSize)) =
+          *reinterpret_cast<const uint2*>(out_bytes);
     }
-    local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 1));
-    local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 2));
-    local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 4));
 
-    const float scale_raw = fmaxf(1e-4f, local_max) / math::FP8_E4M3_MAX;
-    const int32_t scale_ue8m0 = cast_to_ue8m0(scale_raw);
-    const float inv_scale = inv_scale_ue8m0(scale_ue8m0);
-
-    uint8_t out_bytes[kVecSize];
+    // vec[1]: all 32 lanes → FP8 at [256 + lane_id*8, 256 + lane_id*8+8) = [256, 512)
+    {
+      uint8_t out_bytes[kVecSize];
 #pragma unroll
-    for (int j = 0; j < kVecSize; ++j) {
-      float scaled = cast<float>(input_vec[0][j]) * inv_scale;
-      out_bytes[j] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3));
-    }
-    *reinterpret_cast<uint2*>(pointer::offset(value_ptr, lane_id * kVecSize)) =
-        *reinterpret_cast<const uint2*>(out_bytes);
-
-    if (lane_id % kLanesPerGroup == 0) {
-      static_cast<uint8_t*>(scale_ptr)[lane_id / kLanesPerGroup] = static_cast<uint8_t>(scale_ue8m0);
-    }
-  }
-
-  // ── vec[1] lanes 0-23: FP8 groups 4-6 ──────────────────────────────────
-  if (lane_id < kNopeSize) {
-    float local_max = 0.0f;
-#pragma unroll
-    for (int j = 0; j < kVecSize; ++j) {
-      local_max = fmaxf(local_max, fabsf(cast<float>(input_vec[1][j])));
-    }
-    local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 1));
-    local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 2));
-    local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 4));
-
-    const float scale_raw = fmaxf(1e-4f, local_max) / math::FP8_E4M3_MAX;
-    const int32_t scale_ue8m0 = cast_to_ue8m0(scale_raw);
-    const float inv_scale = inv_scale_ue8m0(scale_ue8m0);
-
-    uint8_t out_bytes[kVecSize];
-#pragma unroll
-    for (int j = 0; j < kVecSize; ++j) {
-      float scaled = cast<float>(input_vec[1][j]) * inv_scale;
-      out_bytes[j] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3));
-    }
-    *reinterpret_cast<uint2*>(pointer::offset(value_ptr, kWarpThreads * kVecSize + lane_id * kVecSize)) =
-        *reinterpret_cast<const uint2*>(out_bytes);
-
-    if (lane_id % kLanesPerGroup == 0) {
-      static_cast<uint8_t*>(scale_ptr)[kWarpThreads / kLanesPerGroup + lane_id / kLanesPerGroup] =
-          static_cast<uint8_t>(scale_ue8m0);
+      for (int j = 0; j < kVecSize; ++j) {
+        out_bytes[j] =
+            static_cast<uint8_t>(__nv_cvt_float_to_fp8(cast<float>(input_vec[1][j]), __NV_SATFINITE, __NV_E4M3));
+      }
+      *reinterpret_cast<uint2*>(pointer::offset(value_ptr, kWarpThreads * kVecSize + lane_id * kVecSize)) =
+          *reinterpret_cast<const uint2*>(out_bytes);
     }
   } else {
-    // ── vec[1] lanes 24-31: bf16 store (group 7, RoPE dims) ────────────────
-    const int bf16_byte_offset = kNopeDim + (lane_id - kNopeSize) * static_cast<int>(kVecSize * sizeof(DType));
-    store_as<uint4>(pointer::offset(value_ptr, bf16_byte_offset), reinterpret_cast<const uint4&>(input_vec[1]));
-    if (lane_id == kNopeSize) {
-      static_cast<uint8_t*>(scale_ptr)[kNumQuantBlocks] = 0;
+    // ── kFp8DsMla: per-group FP8 (nope) + bf16 (rope) + UE8M0 scales ───────
+    constexpr int kNumQuantBlocks = 7;  // groups 0-6 FP8, group 7 bf16
+    void* scale_ptr = pointer::offset(page_ptr, kTokenDataBytes << kPageBits, offset * 8);
+
+    // ── vec[0]: all 32 lanes -> FP8 groups 0-3 ──────────────────────────────
+    {
+      float local_max = 0.0f;
+#pragma unroll
+      for (int j = 0; j < kVecSize; ++j) {
+        local_max = fmaxf(local_max, fabsf(cast<float>(input_vec[0][j])));
+      }
+      local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 1));
+      local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 2));
+      local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 4));
+
+      const float scale_raw = fmaxf(1e-4f, local_max) / math::FP8_E4M3_MAX;
+      const int32_t scale_ue8m0 = cast_to_ue8m0(scale_raw);
+      const float inv_scale = inv_scale_ue8m0(scale_ue8m0);
+
+      uint8_t out_bytes[kVecSize];
+#pragma unroll
+      for (int j = 0; j < kVecSize; ++j) {
+        float scaled = cast<float>(input_vec[0][j]) * inv_scale;
+        out_bytes[j] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3));
+      }
+      *reinterpret_cast<uint2*>(pointer::offset(value_ptr, lane_id * kVecSize)) =
+          *reinterpret_cast<const uint2*>(out_bytes);
+
+      if (lane_id % kLanesPerGroup == 0) {
+        static_cast<uint8_t*>(scale_ptr)[lane_id / kLanesPerGroup] = static_cast<uint8_t>(scale_ue8m0);
+      }
+    }
+
+    // ── vec[1] lanes 0-23: FP8 groups 4-6 ──────────────────────────────────
+    if (lane_id < kNopeSize) {
+      float local_max = 0.0f;
+#pragma unroll
+      for (int j = 0; j < kVecSize; ++j) {
+        local_max = fmaxf(local_max, fabsf(cast<float>(input_vec[1][j])));
+      }
+      local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 1));
+      local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 2));
+      local_max = fmaxf(local_max, __shfl_xor_sync(warp::kFullMask, local_max, 4));
+
+      const float scale_raw = fmaxf(1e-4f, local_max) / math::FP8_E4M3_MAX;
+      const int32_t scale_ue8m0 = cast_to_ue8m0(scale_raw);
+      const float inv_scale = inv_scale_ue8m0(scale_ue8m0);
+
+      uint8_t out_bytes[kVecSize];
+#pragma unroll
+      for (int j = 0; j < kVecSize; ++j) {
+        float scaled = cast<float>(input_vec[1][j]) * inv_scale;
+        out_bytes[j] = static_cast<uint8_t>(__nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3));
+      }
+      *reinterpret_cast<uint2*>(pointer::offset(value_ptr, kWarpThreads * kVecSize + lane_id * kVecSize)) =
+          *reinterpret_cast<const uint2*>(out_bytes);
+
+      if (lane_id % kLanesPerGroup == 0) {
+        static_cast<uint8_t*>(scale_ptr)[kWarpThreads / kLanesPerGroup + lane_id / kLanesPerGroup] =
+            static_cast<uint8_t>(scale_ue8m0);
+      }
+    } else {
+      // ── vec[1] lanes 24-31: bf16 store (group 7, RoPE dims) ────────────────
+      const int bf16_byte_offset = kNopeDim + (lane_id - kNopeSize) * static_cast<int>(kVecSize * sizeof(DType));
+      store_as<uint4>(pointer::offset(value_ptr, bf16_byte_offset), reinterpret_cast<const uint4&>(input_vec[1]));
+      if (lane_id == kNopeSize) {
+        static_cast<uint8_t*>(scale_ptr)[kNumQuantBlocks] = 0;
+      }
     }
   }
 
@@ -292,35 +328,34 @@ __global__ void fused_norm_rope_store_kernel(const __grid_constant__ FusedNormRo
 // `cache`       : paged FP8 cache base pointer (FlashMLA format).
 // `indices`     : [num_works] int32 cache slot indices (-1 = skip store).
 // `page_stride` : bytes per page in cache.
-template <typename DType, int64_t kHeadDim, int64_t kRopeDim, uint32_t kPageBits>
+template <typename DType, int64_t kHeadDim, int64_t kRopeDim, uint32_t kPageBits,
+          llm_kernels::utils::KVCacheType KV_DTYPE>
 inline void dispatch_norm_rope_store_mode(const FusedNormRopeStoreParams& params, uint32_t num_blocks, ForwardMode mode,
                                           cudaStream_t stream) {
   switch (mode) {
     case ForwardMode::CompressExtend: {
-      constexpr auto kernel =
-          fused_norm_rope_store_kernel<DType, kHeadDim, kRopeDim, ForwardMode::CompressExtend, kPageBits,
-                                       /*kUsePDL=*/true>;
+      constexpr auto kernel = fused_norm_rope_store_kernel<DType, kHeadDim, kRopeDim, ForwardMode::CompressExtend,
+                                                           kPageBits, KV_DTYPE, /*kUsePDL=*/true>;
       LAUNCH_KERNEL_WITH_PDL(kernel, num_blocks, kFNRBlockSize, 0, stream, params);
       break;
     }
     case ForwardMode::CompressDecode: {
-      constexpr auto kernel =
-          fused_norm_rope_store_kernel<DType, kHeadDim, kRopeDim, ForwardMode::CompressDecode, kPageBits,
-                                       /*kUsePDL=*/true>;
+      constexpr auto kernel = fused_norm_rope_store_kernel<DType, kHeadDim, kRopeDim, ForwardMode::CompressDecode,
+                                                           kPageBits, KV_DTYPE, /*kUsePDL=*/true>;
       LAUNCH_KERNEL_WITH_PDL(kernel, num_blocks, kFNRBlockSize, 0, stream, params);
       break;
     }
     case ForwardMode::DefaultForward: {
-      constexpr auto kernel =
-          fused_norm_rope_store_kernel<DType, kHeadDim, kRopeDim, ForwardMode::DefaultForward, kPageBits,
-                                       /*kUsePDL=*/true>;
+      constexpr auto kernel = fused_norm_rope_store_kernel<DType, kHeadDim, kRopeDim, ForwardMode::DefaultForward,
+                                                           kPageBits, KV_DTYPE, /*kUsePDL=*/true>;
       LAUNCH_KERNEL_WITH_PDL(kernel, num_blocks, kFNRBlockSize, 0, stream, params);
       break;
     }
   }
 }
 
-template <typename DType, int64_t kHeadDim, int64_t kRopeDim = 64>
+template <typename DType, int64_t kHeadDim,
+          llm_kernels::utils::KVCacheType KV_DTYPE = llm_kernels::utils::KVCacheType::kFp8DsMla, int64_t kRopeDim = 64>
 inline void compress_fused_norm_rope_store(const void* input, const void* weight, const void* handle,
                                            const void* freqs_cis, uint32_t num_works, ForwardMode mode, float eps,
                                            uint32_t compress_ratio, void* cache, const int32_t* indices,
@@ -333,13 +368,13 @@ inline void compress_fused_norm_rope_store(const void* input, const void* weight
 
   switch (page_bits) {
     case 1:
-      dispatch_norm_rope_store_mode<DType, kHeadDim, kRopeDim, 1>(params, num_blocks, mode, stream);
+      dispatch_norm_rope_store_mode<DType, kHeadDim, kRopeDim, 1, KV_DTYPE>(params, num_blocks, mode, stream);
       break;
     case 6:
-      dispatch_norm_rope_store_mode<DType, kHeadDim, kRopeDim, 6>(params, num_blocks, mode, stream);
+      dispatch_norm_rope_store_mode<DType, kHeadDim, kRopeDim, 6, KV_DTYPE>(params, num_blocks, mode, stream);
       break;
     case 8:
-      dispatch_norm_rope_store_mode<DType, kHeadDim, kRopeDim, 8>(params, num_blocks, mode, stream);
+      dispatch_norm_rope_store_mode<DType, kHeadDim, kRopeDim, 8, KV_DTYPE>(params, num_blocks, mode, stream);
       break;
     default:
       KLLM_KERNEL_THROW("compress_fused_norm_rope_store: unsupported page_bits %d (expected 1, 6, or 8)", page_bits);
@@ -347,11 +382,12 @@ inline void compress_fused_norm_rope_store(const void* input, const void* weight
 }
 
 // Explicit instantiations (only kHeadDim=512, bf16)
-#define INSTANTIATE_FNR_STORE(DType, kHeadDim)                                                                      \
-  template void compress_fused_norm_rope_store<DType, kHeadDim>(const void*, const void*, const void*, const void*, \
-                                                                uint32_t, ForwardMode, float, uint32_t, void*,      \
-                                                                const int32_t*, int64_t, uint32_t, cudaStream_t);
-INSTANTIATE_FNR_STORE(__nv_bfloat16, 512)
+#define INSTANTIATE_FNR_STORE(DType, kHeadDim, KV_DTYPE)                                                 \
+  template void compress_fused_norm_rope_store<DType, kHeadDim, KV_DTYPE>(                               \
+      const void*, const void*, const void*, const void*, uint32_t, ForwardMode, float, uint32_t, void*, \
+      const int32_t*, int64_t, uint32_t, cudaStream_t);
+INSTANTIATE_FNR_STORE(__nv_bfloat16, 512, llm_kernels::utils::KVCacheType::kFp8DsMla)
+INSTANTIATE_FNR_STORE(__nv_bfloat16, 512, llm_kernels::utils::KVCacheType::kFp8E4M3)
 #undef INSTANTIATE_FNR_STORE
 
 }  // namespace nvidia

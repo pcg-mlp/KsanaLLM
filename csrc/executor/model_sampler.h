@@ -16,6 +16,7 @@ namespace ksana_llm {
 class ModelSampler {
  public:
   ModelSampler(std::shared_ptr<Environment> env, std::shared_ptr<Context> context);
+  ~ModelSampler();
 
   Status Sampling(std::shared_ptr<NewModelOutput> model_output, std::shared_ptr<SamplingOutput> sampling_output);
 
@@ -38,6 +39,9 @@ class ModelSampler {
   // vocab size for bitmask generation
   size_t vocab_size_ = 0;
   size_t bitmask_stride_ = 0;
+
+  // Pre-allocated device buffer for bitmask.
+  void* device_bitmask_ = nullptr;
 
   // Model-level flag: when true, skip the entire sampling pipeline (ArgMax, token generation).
   // Embedding models produce normalized hidden states (not logits), so sampling is meaningless.

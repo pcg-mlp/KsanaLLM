@@ -7,15 +7,19 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+#include "csrc/utils/quant_type.h"
+
 namespace llm_kernels {
 namespace nvidia {
 
 /**
- * @brief Fused Q per-head RMSNorm + RoPE + KV RoPE + KV FP8 paged-cache insert + Q expand.
+ * @brief Fused Q per-head RMSNorm + RoPE + KV RoPE + KV FP8 paged-cache insert + Q expand/quant.
  *
  * Combines per-head (no-weight) RMSNorm on Q, GPT-J style RoPE on both Q and KV,
- * FP8-E4M3 quantization of KV with paged cache insertion (SWA), and strided Q
- * copy from [N, num_heads_q, 512] into [N, 64, 512] (expanded for FlashMLA).
+ * FP8-E4M3 quantization of KV with paged cache insertion (SWA), and Q output
+ * controlled by KV_DTYPE template parameter:
+ *   - kFp8DsMla (default): expand Q from [N, num_heads_q, 512] to [N, 64, 512] bf16 (FlashMLA).
+ *   - kFp8E4M3: quantize Q to FP8 E4M3, writing dense fp8 to q_out.
  *
  * Dimensions:
  *   head_dim         = 512
@@ -23,10 +27,11 @@ namespace nvidia {
  *   qk_rope_head_dim = 64
  *   rotary_dim       = 64 (= qk_rope_head_dim)
  *
- * @param q_in           [num_tokens, num_heads_q * 512]  bf16, input Q (from wq_b)
+ * @param q_in           [num_tokens, num_heads_q * 512]  bf16, input Q (from wq_b).
  * @param kv_in          [num_tokens, 512]                bf16, input KV (normed kv_a)
- * @param expanded_q_out [num_tokens, 64 * 512]           bf16, output Q with stride=64*512
- *                       Only the first num_heads_q heads are valid.
+ * @param q_out          [num_tokens, 64 * 512]           Output Q buffer:
+ *                       - kFp8DsMla: bf16 expanded Q with stride=64*512
+ *                       - kFp8E4M3: fp8_e4m3 dense Q with stride=64*512
  * @param swa_kv_cache   Paged KV cache byte array (FP8_DS_MLA format)
  * @param positions      [num_tokens]                     int64, position ids for cos/sin lookup
  * @param cos_sin_cache  [max_pos, 64]                    bf16, layout [cos(32), sin(32)] per position
@@ -40,7 +45,8 @@ namespace nvidia {
  * @param page_bits      log2(page_size): 1, 6, or 8
  * @param stream         CUDA stream
  */
-void InvokeFusedQNormRopeKVInsert(const __nv_bfloat16* q_in, const __nv_bfloat16* kv_in, __nv_bfloat16* expanded_q_out,
+template <llm_kernels::utils::KVCacheType KV_DTYPE = llm_kernels::utils::KVCacheType::kFp8DsMla>
+void InvokeFusedQNormRopeKVInsert(const __nv_bfloat16* q_in, const __nv_bfloat16* kv_in, void* q_out,
                                   void* swa_kv_cache, const int64_t* positions, const __nv_bfloat16* cos_sin_cache,
                                   const int32_t* raw_out_loc, float eps, int num_tokens, int num_heads_q,
                                   int64_t page_stride, int page_bits, cudaStream_t stream);

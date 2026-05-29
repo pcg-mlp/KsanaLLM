@@ -537,17 +537,17 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
       MainloopArgs args = get_cur_req_info(batch_idx);
       int* gIndices =
           params.indices + batch_idx * params.stride_indices_b + s_q_idx * params.stride_indices_s_q;  // (topk) : (1)
-      // int* gExtraIndices = params.extra_indices + batch_idx * params.stride_extra_indices_b +
-      //                     s_q_idx * params.stride_extra_indices_s_q;  // (extra_topk) : (1)
+      int* gExtraIndices = params.extra_indices + batch_idx * params.stride_extra_indices_b +
+                           s_q_idx * params.stride_extra_indices_s_q;  // (extra_topk) : (1)
 
       int nxt_token_indexs[NUM_TOKENS_PER_THREAD];
       CUTE_UNROLL
       for (int round = 0; round < NUM_TOKENS_PER_THREAD; ++round) {
-        /*if (MODEL_TYPE == ModelType::V32 || args.start_block_idx < args.num_orig_kv_blocks)
-          nxt_token_indexs[round] =
+        if (MODEL_TYPE == ModelType::V32 || args.start_block_idx < args.num_orig_kv_blocks)
+          /*nxt_token_indexs[round] =
               __ldg(gIndices + args.start_block_idx * TOPK_BLOCK_SIZE + idx_in_cluster * (TOPK_BLOCK_SIZE / 2) +
                     round * NUM_TOKENS_PER_ROUND + my_token_idx_base);*/
-        nxt_token_indexs[round] = __ldg(gIndices + args.start_block_idx * TOPK_BLOCK_SIZE + my_token_idx_base);
+          nxt_token_indexs[round] = __ldg(gIndices + args.start_block_idx * TOPK_BLOCK_SIZE + my_token_idx_base);
       }
 
       struct IsOrigBlock {};
@@ -559,8 +559,6 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
         static constexpr bool IS_EXTRA_BLOCK = std::is_same_v<decltype(is_extra_block_t), IsExtraBlock>;
         static constexpr bool IS_FIRST_EXTRA_BLOCK =
             std::is_same_v<decltype(is_first_extra_block_t), IsFirstExtraBlock>;
-        // For FP8 version: No extra block
-        static_assert(!IS_EXTRA_BLOCK && !IS_FIRST_EXTRA_BLOCK);
         int buf_idx = (block_idx - args.start_block_idx) % NUM_K_BUFS;
 
         // For FP8 version: Used to get the real index after layout and swizzle transformation
@@ -576,16 +574,16 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
           k_block_stride = params.stride_kv_block;
           k_row_stride = params.stride_kv_row;
           k_ptr = (fp8*)params.kv;
-        } /* else {
-           indices_base = gExtraIndices + (block_idx - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE;
-           page_block_size = params.extra_page_block_size;
-           k_block_stride = params.stride_extra_kv_block;
-           k_row_stride = params.stride_extra_kv_row;
-           k_ptr = (fp8*)params.extra_kv;
-         }
+        } else {
+          indices_base = gExtraIndices + (block_idx - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE;
+          page_block_size = params.extra_page_block_size;
+          k_block_stride = params.stride_extra_kv_block;
+          k_row_stride = params.stride_extra_kv_row;
+          k_ptr = (fp8*)params.extra_kv;
+        }
         [[maybe_unused]] int topk_length = IS_EXTRA_BLOCK ? args.extra_topk_length : args.topk_length;
         [[maybe_unused]] int rel_block_idx = IS_EXTRA_BLOCK ? (block_idx - args.num_orig_kv_blocks) : block_idx;
-        transac_bar_t* peer_bar_k_remote_ready = get_peer_addr(&(plan.bar_k_remote_ready[buf_idx]));*/
+        // transac_bar_t* peer_bar_k_remote_ready = get_peer_addr(&(plan.bar_k_remote_ready[buf_idx]));
 
         CUTE_UNROLL
         for (int round = 0; round < NUM_TOKENS_PER_THREAD; ++round) {
@@ -599,31 +597,34 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
           int token_index;
           if constexpr (!IS_EXTRA_BLOCK) {
             token_index = nxt_token_indexs[round];
-            /*if (block_idx + 1 != (MODEL_TYPE == ModelType::V32 ? args.end_block_idx : args.num_orig_kv_blocks))
-              nxt_token_indexs[round] = __ldg(gIndices + (block_idx + 1) * TOPK_BLOCK_SIZE +
+            if (block_idx + 1 != (MODEL_TYPE == ModelType::V32 ? args.end_block_idx : args.num_orig_kv_blocks))
+              /*nxt_token_indexs[round] = __ldg(gIndices + (block_idx + 1) * TOPK_BLOCK_SIZE +
                                               idx_in_cluster * (TOPK_BLOCK_SIZE / 2) + my_token_idx);*/
-            if (block_idx + 1 != args.end_block_idx)
               nxt_token_indexs[round] = __ldg(gIndices + (block_idx + 1) * TOPK_BLOCK_SIZE + my_token_idx);
-          } /* else {
-             if constexpr (IS_FIRST_EXTRA_BLOCK) {
-               token_index = __ldg(gExtraIndices + (block_idx - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE +
-                                   idx_in_cluster * (TOPK_BLOCK_SIZE / 2) + my_token_idx);
-             } else {
-               token_index = nxt_token_indexs[round];
-             }
-             if (block_idx + 1 != args.end_block_idx)
-               nxt_token_indexs[round] =
-                   __ldg(gExtraIndices + (block_idx + 1 - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE +
-                         idx_in_cluster * (TOPK_BLOCK_SIZE / 2) + my_token_idx);
-           }*/
+          } else {
+            if constexpr (IS_FIRST_EXTRA_BLOCK) {
+              /*token_index = __ldg(gExtraIndices + (block_idx - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE +
+                                  idx_in_cluster * (TOPK_BLOCK_SIZE / 2) + my_token_idx);*/
+              token_index =
+                  __ldg(gExtraIndices + (block_idx - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE + my_token_idx);
+            } else {
+              token_index = nxt_token_indexs[round];
+            }
+            if (block_idx + 1 != args.end_block_idx)
+              /*nxt_token_indexs[round] =
+                  __ldg(gExtraIndices + (block_idx + 1 - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE +
+                        idx_in_cluster * (TOPK_BLOCK_SIZE / 2) + my_token_idx);*/
+              nxt_token_indexs[round] =
+                  __ldg(gExtraIndices + (block_idx + 1 - args.num_orig_kv_blocks) * TOPK_BLOCK_SIZE + my_token_idx);
+          }
 
-          /*if constexpr (MODEL_TYPE == ModelType::MODEL1) {
+          if constexpr (MODEL_TYPE == ModelType::MODEL1) {
             // For MODEL1, we need to check whether the token_index is within topk_length
-            if (rel_block_idx * TOPK_BLOCK_SIZE + idx_in_cluster * (TOPK_BLOCK_SIZE / 2) + my_token_idx >=
+            if (rel_block_idx * TOPK_BLOCK_SIZE + /*idx_in_cluster * (TOPK_BLOCK_SIZE / 2)*/ my_token_idx >=
                 topk_length) {
               token_index = -1;  // To prevent IMA when we have invalid (e.g. INT_MAX) topk indexes outside topk_length
             }
-          }*/
+          }
 
           int block_index =
               token_index == -1
@@ -635,19 +636,19 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
               (uint32_t)page_block_size;  // NOTE When token_index is -1 (UINT_MAX), UINT_MAX%page_block_size <
                                           // page_block_size, so there will be no illegal-memory-access error
 
-          fp8* gK_base;
+          /*fp8* gK_base;
           // bf16 scales[NUM_SCALES];
           if constexpr (MODEL_TYPE == ModelType::V32) {
             static_assert(NUM_SCALES == 4);
             gK_base = k_ptr + block_index * k_block_stride + rel_idx_in_block * k_row_stride;
-            /*float scales_float[NUM_SCALES];
+            float scales_float[NUM_SCALES];
             *(float4*)(scales_float) = load_128b_from_gmem<float4, L1CacheHint::EVICT_LAST, L2PrefetchHint::B128>(
                 (float*)(gK_base + HEAD_DIM_NOPE));
             CUTE_UNROLL
             for (int i = 0; i < NUM_SCALES; ++i) {
               scales[i] = (bf16)scales_float[i];
-            }*/
-          } /*else {
+            }
+          } else {
             static_assert(NUM_SCALES == 8);
             gK_base = k_ptr + block_index * k_block_stride +
                       rel_idx_in_block * (HEAD_DIM_NOPE + HEAD_DIM_ROPE * sizeof(bf16));
@@ -662,6 +663,7 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
                   __nv_cvt_e8m0x2_to_bf162raw(*(__nv_fp8x2_storage_t*)(scales_e8m0 + i));
             }
           }*/
+          fp8* const gK_base = k_ptr + block_index * k_block_stride + rel_idx_in_block * k_row_stride;
 
           // Wait for the nope buffer to be available
           if (round == 0) {
@@ -749,12 +751,11 @@ __device__ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::devfunc(const SparseAttnD
         if (idx_in_warpgroup < 32) {
           // We put this after fence_view_async_shared() since this won't be read by async proxy
           auto is_index_valid = [&](int index, int offset_within_thread) -> bool {
-            /*if constexpr (MODEL_TYPE == ModelType::V32) {
+            if constexpr (MODEL_TYPE == ModelType::V32) {
               return index != -1;
             } else {
               return index != -1 && rel_block_idx * TOPK_BLOCK_SIZE + lane_idx * 2 + offset_within_thread < topk_length;
-            }*/
-            return index != -1;
+            }
           };
           int2 indices = __ldg((int2*)(indices_base + lane_idx * 2));
           *(char2*)(&plan.is_kv_valid[buf_idx][lane_idx * 2]) = {is_index_valid(indices.x, 0),
@@ -812,12 +813,23 @@ void KernelTemplate<MODEL_TYPE, NUM_HEADS>::run(const SparseAttnDecodeParams& pa
   KU_ASSERT(params.topk % TOPK_BLOCK_SIZE == 0);
   KU_ASSERT(params.d_qk == HEAD_DIM_K);
   KU_ASSERT(params.d_v == HEAD_DIM_V);
+  // Not needed for the FP8 version
   // KU_ASSERT(params.h_q % BLOCK_M == 0);
-  static_assert(MODEL_TYPE == ModelType::V32);
-  KU_ASSERT(params.extra_kv == nullptr, "V3.2 does not support extra KV cache");
-  KU_ASSERT(params.topk_length == nullptr, "V3.2 does not support dynamic topk length");
-  // KU_ASSERT(params.stride_kv_row == 656);  // number of bytes per token (512 fp8 + 4 float32 + 64 bfloat16)
-  KU_ASSERT(params.stride_kv_row == 576);  // number of bytes per token (512 fp8 + 64 fp8)
+  constexpr int BYTES_PER_TOKEN = HEAD_DIM_NOPE + HEAD_DIM_ROPE;  // fp8 nope + fp8 rope
+  if constexpr (MODEL_TYPE == ModelType::MODEL1) {
+    // Each block must be contiguous
+    KU_ASSERT(params.stride_kv_row == BYTES_PER_TOKEN,
+              "Each page block in KV cache must be contiguous for head64 sparse fp8 decoding attention in MODEL1");
+    if (params.extra_kv != nullptr) {
+      KU_ASSERT(params.stride_extra_kv_row == BYTES_PER_TOKEN,
+                "Each page block in extra KV cache must be contiguous for head64 sparse fp8 decoding attention in "
+                "MODEL1");
+    }
+  } else {
+    KU_ASSERT(params.extra_kv == nullptr, "V3.2 does not support extra KV cache");
+    KU_ASSERT(params.topk_length == nullptr, "V3.2 does not support dynamic topk length");
+    KU_ASSERT(params.stride_kv_row == BYTES_PER_TOKEN);  // number of bytes per token (512 fp8 + 64 fp8)
+  }
 
   auto shape_Q = make_shape(params.h_q, params.d_qk, params.s_q, params.b);
   auto tma_Q = cute::make_tma_copy(

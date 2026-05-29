@@ -19,9 +19,6 @@
 #include "layers/silu_mul_layer.h"
 #include "runtime/hidden_unit_buffer.h"
 #include "runtime/infer_stage.h"
-#ifdef ENABLE_CUDA
-#  include "layers/set_torch_stream_layer.h"
-#endif
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/context.h"
 #include "configure/environment.h"
@@ -64,6 +61,8 @@ struct ModelRunConfig {
   float emb_scale = 1.f;
   // Scaling the hidden states of residual connections.
   float scale_depth = 1.f;
+  // Whether to return hidden states before the final layer normalization.
+  bool return_hidden_states_before_norm = true;
 };
 
 // A common implement
@@ -136,9 +135,6 @@ class CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> assemble_tokens_hidden_layer_;
   std::shared_ptr<BaseLayer> cast_layer_;
   std::shared_ptr<BaseLayer> input_refit_layer_;
-#ifdef ENABLE_CUDA
-  std::shared_ptr<BaseLayer> set_torch_stream_layer_;
-#endif
 
   std::shared_ptr<Linear> lm_head_;
   std::shared_ptr<Layernorm> lm_head_prenorm_{nullptr};

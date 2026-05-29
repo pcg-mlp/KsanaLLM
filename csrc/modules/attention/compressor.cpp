@@ -23,8 +23,8 @@ int ComputeLocalLayerIdx(int global_layer_idx, const PipelineConfig& pipeline_co
   int local_layer_idx = global_layer_idx - pipeline_config.lower_layer_idx;
   if (global_layer_idx >= num_layer) {
     // MTP / next-N layer: place after the main layers on this node.
-    local_layer_idx = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + global_layer_idx -
-                      num_layer + 1;
+    local_layer_idx =
+        pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + global_layer_idx - num_layer + 1;
   }
   return local_layer_idx;
 }
@@ -93,6 +93,7 @@ Compressor::Compressor(int layer_idx, bool is_in_indexer, const LayerCreationCon
   params.push_back(attn_config.max_position_embeddings);                                   // max_position_embeddings
   params.push_back(static_cast<int>(runtime_config.attn_backend_config.block_token_num));  // block_token_num
   params.push_back(static_cast<int64_t>(runtime_config.attn_backend_config.block_size));   // page_stride
+  params.push_back(attn_config.kv_cache_dtype);                                            // kv_cache_dtype (extra)
 
   compressor_layer_->Init(params, runtime_config, creation_context.context, creation_context.rank);
 }

@@ -19,7 +19,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants matching the kernel
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,7 +216,7 @@ class FusedNormRopeStoreTest : public NvidiaTestSuitBase {
         cudaMemcpy(d_indices.data_ptr, h_indices.data(), num_works * sizeof(int32_t), cudaMemcpyHostToDevice));
 
     // ── Launch kernel ──
-    compress_fused_norm_rope_store<__nv_bfloat16, kHeadDim, kRopeDim>(
+    compress_fused_norm_rope_store<__nv_bfloat16, kHeadDim>(
         d_input.data_ptr, d_weight.data_ptr, d_positions.data_ptr, d_freqs.data_ptr, num_works,
         ForwardMode::DefaultForward, eps, /*compress_ratio=*/4u, d_cache.data_ptr,
         reinterpret_cast<int32_t*>(d_indices.data_ptr), page_stride, page_bits, stream);
@@ -335,7 +334,7 @@ TEST_F(FusedNormRopeStoreTest, DISABLED_PerfTest) {
     const int warmups = 5;
     const int iterations = 20;
     auto cuda_run = [&]() {
-      compress_fused_norm_rope_store<__nv_bfloat16, kHeadDim, kRopeDim>(
+      compress_fused_norm_rope_store<__nv_bfloat16, kHeadDim>(
           d_input.data_ptr, d_weight.data_ptr, d_positions.data_ptr, d_freqs.data_ptr, num_works,
           ForwardMode::DefaultForward, eps, /*compress_ratio=*/4u, d_cache.data_ptr,
           reinterpret_cast<int32_t*>(d_indices.data_ptr), page_stride, page_bits, stream);

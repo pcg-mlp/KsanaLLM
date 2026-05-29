@@ -9,6 +9,8 @@ namespace deepseek {
 
 void InitializeDeepGemm(int num_sms);
 
+void FinalizeDeepGemm();
+
 void SmxxFp8MqaLogits(const torch::Tensor& q, const torch::Tensor& kv, const torch::Tensor& kv_scales,
                       const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                       const torch::Tensor& cu_seq_len_k_end, const torch::Tensor& logits, int seq_len, int seq_len_kv,

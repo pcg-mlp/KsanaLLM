@@ -128,10 +128,11 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
     }
   } else if (head_size_k == 512 && head_size_v == 512) {
     // MODEL1 style
-    if constexpr (KV_DTYPE != llm_kernels::utils::KVCacheType::kFp8DsMla) {
-      KLLM_KERNEL_THROW("Only fp8_ds_mla is supported for model1 sparse decoding");
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8DsMla) {
+      bytes_per_token = 448 + 64 * 2 + (448 / 64) * 1 + 1;
+    } else {
+      bytes_per_token = head_size_k;
     }
-    bytes_per_token = 448 + 64 * 2 + (448 / 64) * 1 + 1;
   } else {
     KLLM_KERNEL_THROW("Unsupported head sizes for is_fp8_kvcache == True");
   }
@@ -214,60 +215,31 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
   workspace_ptr += AlignSize(lse_shape[0] * lse_stride[0]);
 
   SparseAttnDecodeParams params = {
-      batch_size,
-      seqlen_q,
-      num_heads_q,
-      num_heads_k,
-      head_size_k,
-      head_size_v,
-      softmax_scale,
-      softmax_scale * LOG_2_E,
-      num_blocks,
-      block_size,
-      topk,
-      model_type,
+      batch_size, seqlen_q, num_heads_q, num_heads_k, head_size_k, head_size_v, softmax_scale, softmax_scale * LOG_2_E,
+      num_blocks, block_size, topk, model_type,
 
-      reinterpret_cast<bf16*>(q_ptr),
-      reinterpret_cast<bf16*>(kcache_ptr),
-      indices_ptr,
-      topk_length_ptr,
-      attn_sink_ptr,
-      lse_ptr,
-      reinterpret_cast<bf16*>(out_ptr),
+      reinterpret_cast<bf16*>(q_ptr), reinterpret_cast<bf16*>(kcache_ptr), indices_ptr, topk_length_ptr, attn_sink_ptr,
+      lse_ptr, reinterpret_cast<bf16*>(out_ptr),
 
-      extra_num_blocks,
-      extra_block_size,
-      extra_topk,
-      reinterpret_cast<bf16*>(extra_kcache_ptr),
-      extra_indices_ptr,
+      extra_num_blocks, extra_block_size, extra_topk, reinterpret_cast<bf16*>(extra_kcache_ptr), extra_indices_ptr,
       extra_topk_length_ptr,
 
-      q_stride[0],
-      q_stride[1],
-      q_stride[2],
+      q_stride[0], q_stride[1], q_stride[2],
       kcache_batch_stride > 0 ? kcache_batch_stride
                               : kcache_stride[0],  // kcache_batch_stride can be larger than kcache_stride[0]
-      kcache_stride[1],
-      indices_stride[0],
-      indices_stride[1],
-      lse_stride[0],
-      lse_stride[1],
-      out_stride[0],
-      out_stride[1],
-      out_stride[2],
+      kcache_stride[1], indices_stride[0], indices_stride[1], lse_stride[0], lse_stride[1], out_stride[0],
+      out_stride[1], out_stride[2],
 
       // extra_kcache 在 dim 0 上的 byte stride, 选择优先级:
       //   1) caller 显式传入的 extra_kcache_batch_stride (primary 与 extra pool 的 per-block 大小不同时必填);
       //   2) primary 的 kcache_batch_stride (primary 与 extra 共池布局);
       //   3) 按 shape 计算的 extra_kcache_stride[0] 兜底。
-      have_extra_kcache ? (extra_kcache_batch_stride > 0
-                               ? extra_kcache_batch_stride
-                               : (kcache_batch_stride > 0 ? kcache_batch_stride : extra_kcache_stride[0]))
-                        : 0,
-      have_extra_kcache ? extra_kcache_stride[1] : 0,
-      have_extra_kcache ? extra_indices_stride[0] : 0,
-      have_extra_kcache ? extra_indices_stride[1] : 0,
-      stream};
+      have_extra_kcache
+          ? (extra_kcache_batch_stride > 0 ? extra_kcache_batch_stride
+                                           : (kcache_batch_stride > 0 ? kcache_batch_stride : extra_kcache_stride[0]))
+          : 0,
+      have_extra_kcache ? extra_kcache_stride[1] : 0, have_extra_kcache ? extra_indices_stride[0] : 0,
+      have_extra_kcache ? extra_indices_stride[1] : 0, stream};
 
   // Get MLA metadata if necessary
   if (!sched_meta_initialized) {
@@ -314,8 +286,12 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
   if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8DsMla) {
     impl->run(params, features);
   } else {
-#  define LAUNCH_KERNEL_BY_NUM_HEADS(NUM_HEADS) \
-    llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_kernel<ModelType::V32, NUM_HEADS>(params)
+#  define LAUNCH_KERNEL_BY_NUM_HEADS(NUM_HEADS)                                                           \
+    if (model_type == ModelType::V32) {                                                                   \
+      llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_kernel<ModelType::V32, NUM_HEADS>(params);    \
+    } else {                                                                                              \
+      llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_kernel<ModelType::MODEL1, NUM_HEADS>(params); \
+    }
     // Supported num_heads must be instantiated under kernels/instantiations
     switch (params.h_q) {
       case 8:  // GLM-5 TP8
