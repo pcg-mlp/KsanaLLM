@@ -181,10 +181,11 @@ Status Dsv4Mqa::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreation
 Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                         ForwardingContext& forwarding_context) {
   const int rank = forwarding_context.GetCurrentRank();
-  PROFILE_EVENT_SCOPE(dsv4_mqa_forward, "dsv4_mqa_forward", rank);
-
   const auto& x_tensors = hidden_buffer_tensors_0;  // [T, hidden_size]
   const size_t total_tokens = x_tensors[0].shape[0];
+
+  PROFILE_EVENT_SCOPE(dsv4_mqa_forward, fmt::format("dsv4_mqa_layer_seq_{}_hidden_units_{}", total_tokens, head_dim_),
+                      rank);
 
   // ── Step 1: Q path + KV path ──────────────────────────────────────────
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);

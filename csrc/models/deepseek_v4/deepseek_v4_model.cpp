@@ -66,6 +66,8 @@ DeepSeekV4DecoderLayer::DeepSeekV4DecoderLayer(int layer_idx, bool is_moe, Layer
 
 Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
                                        ForwardingContext& forwarding_context) {
+  PROFILE_EVENT_SCOPE(decoder_layer_forward,
+                      fmt::format("dsv4_decoder_layer{}_seq{}", layer_idx_, residual_buffer[0].shape[0]), rank_);
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
@@ -96,13 +98,17 @@ Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   const size_t token_hidden_stat_bytes = residual_buffer[0].GetTotalBytes() / org_token_size;
   const size_t dp_bytes_offset = dp_token_offset * token_hidden_stat_bytes;
   const size_t dp_bytes = dp_token_size * token_hidden_stat_bytes;
+
   KLLM_LOG_DEBUG << fmt::format(
       "rank: {}, dp_group_id: {}, dp_token_offset: {}, dp_context_tokens: {}, dp_decode_tokens: {}, dp_token_size: {}, "
       "dp_bytes_offset: {}, dp_bytes: {}",
       forwarding_context.GetCurrentRank(), dp_group_id, dp_token_offset, dp_context_tokens, dp_decode_tokens,
       dp_token_size, dp_bytes_offset, dp_bytes);
+
   const bool ep_dp_memcpy_active = forwarding_context.GetModelCommunicator() && enable_full_shared_expert_;
   if (ep_dp_memcpy_active) {
+    PROFILE_EVENT_SCOPE(Dsv4LayerForward, fmt::format("Dsv4LayerForward_Memcpy_seq{}", residual_buffer[0].shape[0]),
+                        rank_);
     std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
     Stream& stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
     MemcpyAsync(hidden_buffer_tensors_0[0].GetPtr<void>(), reduce_buffer_tensors[0].GetPtr<void>() + dp_bytes_offset,
@@ -119,6 +125,8 @@ Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   // Since under EP, the MOE portion only computes the current DP data, so the data needs to be restored to the complete
   // length when MOE computation is finished.
   if (ep_dp_memcpy_active) {
+    PROFILE_EVENT_SCOPE(Dsv4LayerForward, fmt::format("Dsv4LayerForward_Memcpy_seq{}", residual_buffer[0].shape[0]),
+                        rank_);
     std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
     Stream& stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
     MemcpyAsync(hidden_buffer_tensors_0[0].GetPtr<void>() + dp_bytes_offset, reduce_buffer_tensors[0].GetPtr<void>(),
@@ -155,8 +163,10 @@ Status DeepSeekV4DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
     CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
     auto& gated_buffer_ = moe_buffer_tensors;
 
-    PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
-    STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+    {
+      PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
+      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+    }
 
     {
       PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
@@ -210,6 +220,8 @@ DeepSeekV4MtpLayer::DeepSeekV4MtpLayer(const int layer_idx, LayerCreationContext
 }
 
 Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
+  PROFILE_EVENT_SCOPE(DeepSeekV4MtpLayer, fmt::format("DeepSeekV4MtpLayer_Forward_seq{}", residual_buffer[0].shape[0]),
+                      forwarding_context.GetCurrentRank());
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
   auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors;

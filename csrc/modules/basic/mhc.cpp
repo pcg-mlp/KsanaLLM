@@ -44,6 +44,7 @@ Status Mhc::PreForward(const std::vector<Tensor>& input_tensors, std::vector<Ten
   KLLM_CHECK(input_tensors.size() == 1);
   KLLM_CHECK(output_tensors.size() == 1);
 
+  PROFILE_EVENT_SCOPE(PreForward, fmt::format("Mhc_PreForward_seq{}", input_tensors[0].shape[0]));
   CREATE_BUFFER_SCOPE(mix_h_buffer_tensors, mhc_buffers_.mix_h_buffer);
   CREATE_BUFFER_SCOPE(norm_buffer_tensors, mhc_buffers_.norm_buffer);
   CREATE_BUFFER_SCOPE(h_post_buffer_tensors, mhc_buffers_.h_post_buffer);
@@ -60,6 +61,7 @@ Status Mhc::PreForward(const std::vector<Tensor>& input_tensors, std::vector<Ten
 Status Mhc::PreForwardWithNorm(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_CHECK(input_tensors.size() == 1);
   KLLM_CHECK(output_tensors.size() == 1);
+  PROFILE_EVENT_SCOPE(Mhc, fmt::format("Mhc_PreForwardWithNorm_seq{}", input_tensors[0].shape[0]));
 
   CREATE_BUFFER_SCOPE(mix_h_buffer_tensors, mhc_buffers_.mix_h_buffer);
   CREATE_BUFFER_SCOPE(norm_buffer_tensors, mhc_buffers_.norm_buffer);
@@ -78,6 +80,8 @@ Status Mhc::PreForwardWithNorm(const std::vector<Tensor>& input_tensors, std::ve
 Status Mhc::PostForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_CHECK(input_tensors.size() == 1);
   KLLM_CHECK(output_tensors.size() == 1);
+
+  PROFILE_EVENT_SCOPE(PostForward, fmt::format("Mhc_PostForward_seq{}", input_tensors[0].shape[0]));
 
   CREATE_BUFFER_SCOPE(h_post_buffer_tensors, mhc_buffers_.h_post_buffer);
   CREATE_BUFFER_SCOPE(h_res_buffer_tensors, mhc_buffers_.h_res_buffer);

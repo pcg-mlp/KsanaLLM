@@ -4,6 +4,10 @@
 
 #include "modules/ffn/two_layered_ffn.h"
 
+#include <fmt/core.h>
+
+#include "profiler/profile_event.h"
+
 namespace ksana_llm {
 
 TwoLayeredFFN::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
@@ -74,6 +78,9 @@ void TwoLayeredFFN::InitLayers(int layer_idx, LayerCreationContext& creation_con
 
 Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                               const bool is_multi_token_forward, ForwardingContext& forwarding_context) {
+  PROFILE_EVENT_SCOPE(two_layered_ffn_forward,
+                      fmt::format("two_layered_ffn_seq{}", hidden_buffer_tensors_0[0].shape[0]),
+                      forwarding_context.GetCurrentRank());
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (fuse_gate_up_proj_) {
     // Mlp gate_up_proj MatMul

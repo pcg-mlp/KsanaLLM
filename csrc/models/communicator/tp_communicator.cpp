@@ -13,6 +13,7 @@ Status TpCommunicator::AllReduce(std::vector<Tensor>& reduce_buffer_tensors,
                                  ForwardingContext& forwarding_context) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  PROFILE_EVENT_SCOPE(AllReduce, fmt::format("TpCommunicator_AllReduce_seq{}", reduce_buffer_tensors[0].shape[0]));
   if (!forwarding_context.GetContext()->global->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(forwarding_context.GetModelOutput()->compute_ready_event,
                 forwarding_context.GetContext()->device->GetPrimaryComputeStream());
