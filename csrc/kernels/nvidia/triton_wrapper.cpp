@@ -311,6 +311,11 @@ void TritonWrapper::InvokeFusedMoeGptqAwqKernel(
     bool has_zp, int weight_bits, int group_size, std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_gptq_awq_kernel";
 
+  // Triton >= 3.x appends two implicit CUdeviceptr params at the tail of the
+  // compiled kernel's parameter list. The kernel does not reference them, so
+  // NULL scratch buffers are sufficient.
+  CUdeviceptr global_scratch = 0;
+  CUdeviceptr profile_scratch = 0;
   void* args[] = {
       &a,
       &b,
@@ -325,6 +330,8 @@ void TritonWrapper::InvokeFusedMoeGptqAwqKernel(
       &k,
       &max_num_tokens_padded,
       &numel,
+      &global_scratch,
+      &profile_scratch,
   };
   std::unordered_map<std::string, std::string> map = {{"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
                                                       {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},
@@ -362,6 +369,11 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
   std::string kernel_name = "fused_moe_gptq_int4_fp8_kernel";
   (void)num_experts;
 
+  // Triton >= 3.x appends two implicit CUdeviceptr params at the tail of the
+  // compiled kernel's parameter list. The kernel does not reference them, so
+  // NULL scratch buffers are sufficient.
+  CUdeviceptr global_scratch = 0;
+  CUdeviceptr profile_scratch = 0;
   void* args[] = {
       &a,
       &b,
@@ -376,6 +388,8 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
       &k,
       &max_num_tokens_padded,
       &numel,
+      &global_scratch,
+      &profile_scratch,
   };
   std::unordered_map<std::string, std::string> map = {{"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
                                                       {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},

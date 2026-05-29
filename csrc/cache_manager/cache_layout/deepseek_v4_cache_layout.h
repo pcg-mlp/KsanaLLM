@@ -270,7 +270,7 @@ class DeepSeekV4SwaWithTailCacheLayout : public BaseBlockCacheLayout {
   }
 
   // SWA layout 不参与 model_input.cpp 的 PrepareKVCacheBlocks 循环
-  // (Dsv4MqaMeta 直接通过 forward_req.swa_block_base_addr + 静态 layout offset 路径访问)，
+  // (MqaSharedAttentionMeta 直接通过 forward_req.swa_block_base_addr + 静态 layout offset 路径访问)，
   // 所以 GetActiveKvCacheTypes 返回空表，避免 model_input 把 swa/tail 当成主 KV 插入 kv_list。
   virtual std::vector<std::string> GetActiveKvCacheTypes() override { return {}; }
 

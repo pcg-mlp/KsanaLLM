@@ -65,6 +65,12 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
     forwarding_context_->Init(context_, rank_, model_config_, runtime_config_, pipeline_config_,
                               model_buffers_.buffers_.get(), GetBufferManager(), block_cache_layout);
     KLLM_LOG_DEBUG << "Initialized forwarding context buffer.";
+
+    // Allow model subclasses to inject a model-specific AttentionMetaCreator.
+    auto custom_creator = CreateCustomAttentionMetaCreator(forwarding_context_->GetModelInput()->GetCreatorConfig());
+    if (custom_creator) {
+      forwarding_context_->GetModelInput()->ReplaceAttentionMetaCreator(std::move(custom_creator));
+    }
   }
 
   int layer_num_on_node = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
@@ -189,7 +195,7 @@ Status CommonModel::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContex
     STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
         {forwarding_context.GetModelInput()->input_ids, forwarding_context.GetModelInput()->input_offset_uint64_tensor,
          forwarding_context.GetModelInput()->input_prefix_uint64_tensor, embedding_weight,
-         forwarding_context.GetModelInput()->flash_input.rotary_embedding_pos},
+         forwarding_context.GetModelInput()->flash_meta->rotary_embedding_pos},
         residual_buffer));
     KLLM_LOG_DEBUG << "CommonModel::EmbedTokensUseGpu after emb residual_buffer.shape:"
                    << Vector2Str(residual_buffer[0].shape);

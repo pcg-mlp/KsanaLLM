@@ -72,7 +72,7 @@ class IndexerMetaTest : public testing::Test {
   }
 
   void BuildFlashInput(const std::vector<int>& extend_lens, const std::vector<int>& prefix_lens) {
-    indexer_meta_->flash_input.Reset();
+    indexer_meta_->flash_meta.Reset();
     reqs_.clear();
 
     for (size_t i = 0; i < extend_lens.size(); ++i) {
@@ -85,8 +85,8 @@ class IndexerMetaTest : public testing::Test {
     }
 
     for (size_t i = 0; i < reqs_.size(); ++i) {
-      indexer_meta_->flash_input.dp_reqs.push_back(&reqs_[i]);
-      indexer_meta_->flash_input.total_dp_input_ids_len += extend_lens[i];
+      indexer_meta_->flash_meta.dp_reqs.push_back(&reqs_[i]);
+      indexer_meta_->flash_meta.total_dp_input_ids_len += extend_lens[i];
     }
   }
 
@@ -102,7 +102,7 @@ TEST_F(IndexerMetaTest, PrepareChunk) {
 
   // Single req, no prefix → one chunk.
   BuildFlashInput(/*extend_lens=*/{5}, /*prefix_lens=*/{0});
-  indexer_meta_->PrepareChunk(indexer_meta_->flash_input);
+  indexer_meta_->PrepareChunk(indexer_meta_->flash_meta);
   token_starts = indexer_meta_->chunk_token_starts_host.GetPtr<int>();
   kv_ranges = indexer_meta_->chunk_kv_token_ranges_host.GetPtr<int>();
 
@@ -115,7 +115,7 @@ TEST_F(IndexerMetaTest, PrepareChunk) {
 
   // Two reqs, no prefix → single chunk covering both.
   BuildFlashInput(/*extend_lens=*/{5, 3}, /*prefix_lens=*/{0, 0});
-  indexer_meta_->PrepareChunk(indexer_meta_->flash_input);
+  indexer_meta_->PrepareChunk(indexer_meta_->flash_meta);
   token_starts = indexer_meta_->chunk_token_starts_host.GetPtr<int>();
   kv_ranges = indexer_meta_->chunk_kv_token_ranges_host.GetPtr<int>();
 
@@ -131,7 +131,7 @@ TEST_F(IndexerMetaTest, PrepareChunk) {
   CreateIndexerMeta(/*compress_ratio=*/1);
   // req0: extend=5, prefix=0 → KV=5. req1: extend=3, prefix=6 → prefix=6 + req0 KV=5 = 11 ≥ 10 → split.
   BuildFlashInput(/*extend_lens=*/{5, 3}, /*prefix_lens=*/{0, 6});
-  indexer_meta_->PrepareChunk(indexer_meta_->flash_input);
+  indexer_meta_->PrepareChunk(indexer_meta_->flash_meta);
   token_starts = indexer_meta_->chunk_token_starts_host.GetPtr<int>();
   kv_ranges = indexer_meta_->chunk_kv_token_ranges_host.GetPtr<int>();
 
@@ -152,7 +152,7 @@ TEST_F(IndexerMetaTest, PrepareChunk) {
   CreateIndexerMeta(/*compress_ratio=*/1);
   // One request with 20 tokens, max Q per chunk = 12 → split into two chunks.
   BuildFlashInput(/*extend_lens=*/{20}, /*prefix_lens=*/{0});
-  indexer_meta_->PrepareChunk(indexer_meta_->flash_input);
+  indexer_meta_->PrepareChunk(indexer_meta_->flash_meta);
   token_starts = indexer_meta_->chunk_token_starts_host.GetPtr<int>();
   kv_ranges = indexer_meta_->chunk_kv_token_ranges_host.GetPtr<int>();
 
@@ -173,9 +173,9 @@ TEST_F(IndexerMetaTest, PrepareBatchIndices) {
 
   // Single request → batch_indices are all 0.
   BuildFlashInput(/*extend_lens=*/{5}, /*prefix_lens=*/{0});
-  indexer_meta_->PrepareBatchIndices(indexer_meta_->flash_input);
+  indexer_meta_->PrepareBatchIndices(indexer_meta_->flash_meta);
 
-  const auto& batch_indices = indexer_meta_->flash_input.batch_indices_host;
+  const auto& batch_indices = indexer_meta_->flash_meta.batch_indices_host;
   ASSERT_EQ(batch_indices.size(), 5);
   for (size_t i = 0; i < 5; ++i) {
     EXPECT_EQ(batch_indices[i], 0);
@@ -183,7 +183,7 @@ TEST_F(IndexerMetaTest, PrepareBatchIndices) {
 
   // Multiple requests → batch_indices match each token's owning request.
   BuildFlashInput(/*extend_lens=*/{3, 2, 4}, /*prefix_lens=*/{0, 0, 0});
-  indexer_meta_->PrepareBatchIndices(indexer_meta_->flash_input);
+  indexer_meta_->PrepareBatchIndices(indexer_meta_->flash_meta);
 
   ASSERT_EQ(batch_indices.size(), 9);
   EXPECT_EQ(batch_indices[0], 0);
@@ -203,11 +203,11 @@ TEST_F(IndexerMetaTest, PrepareCuSeqLen) {
     indexer_meta_->cu_seq_len_start_tensor.shape = {0};
     indexer_meta_->cu_seq_len_end_tensor.shape = {0};
     BuildFlashInput(/*extend_lens=*/{3, 2}, /*prefix_lens=*/{0, 0});
-    indexer_meta_->PrepareChunk(indexer_meta_->flash_input);
-    indexer_meta_->PrepareCuSeqLen(indexer_meta_->flash_input);
+    indexer_meta_->PrepareChunk(indexer_meta_->flash_meta);
+    indexer_meta_->PrepareCuSeqLen(indexer_meta_->flash_meta);
 
-    const auto& start = indexer_meta_->flash_input.cu_seq_len_start_host;
-    const auto& end = indexer_meta_->flash_input.cu_seq_len_end_host;
+    const auto& start = indexer_meta_->flash_meta.cu_seq_len_start_host;
+    const auto& end = indexer_meta_->flash_meta.cu_seq_len_end_host;
     ASSERT_EQ(start.size(), 5);
     ASSERT_EQ(end.size(), 5);
     std::vector<int> expected_end = {1, 2, 3, 1, 2};
@@ -225,11 +225,11 @@ TEST_F(IndexerMetaTest, PrepareCuSeqLen) {
     indexer_meta_->cu_seq_len_end_tensor.shape = {0};
     // req0: extend=3, prefix=0 → KV=3. req1: extend=2, prefix=8 → prefix alone (8) + req0 KV (3) = 11 > 10 → split.
     BuildFlashInput(/*extend_lens=*/{3, 2}, /*prefix_lens=*/{0, 8});
-    indexer_meta_->PrepareChunk(indexer_meta_->flash_input);
-    indexer_meta_->PrepareCuSeqLen(indexer_meta_->flash_input);
+    indexer_meta_->PrepareChunk(indexer_meta_->flash_meta);
+    indexer_meta_->PrepareCuSeqLen(indexer_meta_->flash_meta);
 
-    const auto& start = indexer_meta_->flash_input.cu_seq_len_start_host;
-    const auto& end = indexer_meta_->flash_input.cu_seq_len_end_host;
+    const auto& start = indexer_meta_->flash_meta.cu_seq_len_start_host;
+    const auto& end = indexer_meta_->flash_meta.cu_seq_len_end_host;
     ASSERT_EQ(start.size(), 5);
     ASSERT_EQ(end.size(), 5);
     std::vector<int> expected_end = {1, 2, 3, 9, 10};
@@ -249,14 +249,14 @@ TEST_F(IndexerMetaTest, PrepareCuSeqLen) {
     req1.kv_cached_token_num = 7;
     req1.prefix_cache_len = 7;
 
-    IndexerMeta::input_info page_input;
-    page_input.dp_reqs = {&req0, &req1};
-    page_input.total_dp_input_ids_len = 5;
+    IndexerMeta::input_meta page_meta;
+    page_meta.dp_reqs = {&req0, &req1};
+    page_meta.total_dp_input_ids_len = 5;
 
-    indexer_meta_->PrepareCuSeqLen(page_input, /*is_paged=*/true);
+    indexer_meta_->PrepareCuSeqLen(page_meta, /*is_paged=*/true);
 
-    const auto& paged_start = page_input.cu_seq_len_start_host;
-    const auto& paged_end = page_input.cu_seq_len_end_host;
+    const auto& paged_start = page_meta.cu_seq_len_start_host;
+    const auto& paged_end = page_meta.cu_seq_len_end_host;
     ASSERT_EQ(paged_start.size(), 5);
     ASSERT_EQ(paged_end.size(), 5);
     std::vector<int> expected_paged_end = {4, 5, 8, 9, 10};

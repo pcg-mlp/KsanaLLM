@@ -39,8 +39,8 @@ void IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   batch_indices_tensor.shape = {0};
 
   // Reset meta
-  flash_input.Reset();
-  page_inputs.clear();
+  flash_meta.Reset();
+  page_metas.clear();
   dp_context_tokens = 0;
   dp_decode_tokens = 0;
 
@@ -49,32 +49,32 @@ void IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
     if (req.attn_dp_group_id == attn_dp_group_id_) {
       const size_t extend_len = req.GetInputIdsLength();
       if (GetForwardRequestType(req) == ForwardRequestType::kFlash) {
-        flash_input.dp_reqs.emplace_back(&req);
-        flash_input.total_dp_input_ids_len += extend_len;
+        flash_meta.dp_reqs.emplace_back(&req);
+        flash_meta.total_dp_input_ids_len += extend_len;
         dp_context_tokens += extend_len;
       } else {
-        if (page_inputs.empty() || page_inputs.back().q_seq_len != extend_len) {
-          page_inputs.emplace_back().q_seq_len = extend_len;
+        if (page_metas.empty() || page_metas.back().q_seq_len != extend_len) {
+          page_metas.emplace_back().q_seq_len = extend_len;
         }
-        auto& page_input = page_inputs.back();
-        page_input.dp_reqs.emplace_back(&req);
-        page_input.total_dp_input_ids_len += extend_len;
+        auto& page_meta = page_metas.back();
+        page_meta.dp_reqs.emplace_back(&req);
+        page_meta.total_dp_input_ids_len += extend_len;
         dp_decode_tokens += extend_len;
       }
     }
   }
 
-  if (!flash_input.dp_reqs.empty()) {
-    PrepareChunk(flash_input);
-    PrepareCuSeqLen(flash_input);
-    PrepareBatchIndices(flash_input);
+  if (!flash_meta.dp_reqs.empty()) {
+    PrepareChunk(flash_meta);
+    PrepareCuSeqLen(flash_meta);
+    PrepareBatchIndices(flash_meta);
   }
-  for (auto& page_input : page_inputs) {
-    PrepareCuSeqLen(page_input, /*is_paged=*/true);
+  for (auto& page_meta : page_metas) {
+    PrepareCuSeqLen(page_meta, /*is_paged=*/true);
   }
 }
 
-void IndexerMeta::PrepareChunk(input_info& input) {
+void IndexerMeta::PrepareChunk(input_meta& input) {
   const auto& reqs = input.dp_reqs;
   const int batch_size = reqs.size();
 
@@ -159,7 +159,7 @@ void IndexerMeta::PrepareChunk(input_info& input) {
   chunk_kv_token_ranges_host.shape[0] = 2 * (num_chunks - 1);
 }
 
-void IndexerMeta::PrepareCuSeqLen(input_info& input, bool is_paged) {
+void IndexerMeta::PrepareCuSeqLen(input_meta& input, bool is_paged) {
   input.cu_seq_len_start_host.clear();
   input.cu_seq_len_end_host.clear();
 
@@ -224,7 +224,7 @@ void IndexerMeta::PrepareCuSeqLen(input_info& input, bool is_paged) {
   HOST_TO_SHARED_DEVICE(cu_seq_len_end, input);
 }
 
-void IndexerMeta::PrepareBatchIndices(input_info& input) {
+void IndexerMeta::PrepareBatchIndices(input_meta& input) {
   // Build per-token batch index array.
   // batch_indices[token_i] = batch_id (i.e., the request index).
   const auto& reqs = input.dp_reqs;

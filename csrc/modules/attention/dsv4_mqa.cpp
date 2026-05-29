@@ -9,6 +9,8 @@
 
 #include "layers/flash_dsv4_attention_layer.h"
 #include "layers/paged_dsv4_attention_layer.h"
+#include "models/base/attention_meta/attention_meta.h"
+#include "models/base/attention_meta/attention_meta_builder.h"
 #include "profiler/profile_event.h"
 
 namespace ksana_llm {
@@ -211,10 +213,10 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   // Now hidden_buffer_tensors_1 is free
 
   const auto& model_input = forwarding_context.GetModelInput();
-  const auto& dsv4_mqa_meta = model_input->dsv4_mqa_meta_;
+  auto& mqa_shared = *model_input->shared_attention_meta->GetMqa();
 
   // ── C4 Indexer (compress_ratio == 4) ─────────────────────────────────────
-  auto& topk_indices_tensor = dsv4_mqa_meta->c4_block_indices_tensor;
+  auto& topk_indices_tensor = mqa_shared.c4_block_indices_tensor;
   if (c4_indexer_) {
     // Pass x [T, hidden_size] and q_a [T, q_lora_rank] (after normed) to c4_indexer.
     // Use hidden_buffer_tensors_1[0] as workspace for c4_indexer intermediates.
@@ -248,90 +250,31 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   // ── Step 2: DSV4 MQA attention ─────────────────────────────────────────────
   // DSV4 attention layers handle RoPE, KV cache store, and sparse MQA internally.
   Tensor& attn_output = hidden_buffer_tensors_0[0];
-  // Temporarily reuse some meta from model_input
-  KLLM_CHECK(dsv4_mqa_meta->page_inputs.size() == model_input->page_inputs.size());
-  const size_t dp_context_tokens = dsv4_mqa_meta->dp_context_tokens;
-  const size_t dp_decode_tokens = dsv4_mqa_meta->dp_decode_tokens;
+  const size_t dp_context_tokens = model_input->dp_context_tokens;
+  const size_t dp_decode_tokens = model_input->dp_decode_tokens;
   const size_t q_stride = n_local_heads_ * head_dim_;
   const size_t kv_stride = head_dim_;
 
   if (dp_context_tokens > 0) {
-    Tensor context_q = q_tensors[0].GetView({dp_context_tokens, q_stride});
-    Tensor context_kv = kv_a_tensor.GetView({dp_context_tokens, kv_stride});
-    std::vector<Tensor> context_output = {attn_output.GetView({dp_context_tokens, q_stride})};
-
-    Tensor& flash_tile_sched_meta = compress_ratio_ == 0   ? model_input->flash_input.tile_scheduler_metadata
-                                    : compress_ratio_ == 4 ? dsv4_mqa_meta->flash_input.c4_tile_scheduler_metadata
-                                                           : dsv4_mqa_meta->flash_input.c128_tile_scheduler_metadata;
-    Tensor& flash_num_splits = compress_ratio_ == 0   ? model_input->flash_input.num_splits
-                               : compress_ratio_ == 4 ? dsv4_mqa_meta->flash_input.c4_num_splits
-                                                      : dsv4_mqa_meta->flash_input.c128_num_splits;
-    std::vector<Tensor> flash_inputs = {
-        model_input->flash_input.rotary_embedding_pos,        // rotary_embedding_pos
-        context_q,                                            // q
-        context_kv,                                           // kv
-        dsv4_mqa_meta->layer_swa_kv_cache_ptr_tensor,         // layer_swa_kv_cache_ptr
-        flash_tile_sched_meta,                                // tile_scheduler_metadata
-        flash_num_splits,                                     // num_splits
-        attn_sink_weight_,                                    // attn_sink
-        dsv4_mqa_meta->flash_input.raw_out_loc_tensor,        // raw_out_loc
-        dsv4_mqa_meta->flash_input.swa_block_indices_tensor,  // swa_indices
-    };
-    if (compress_ratio_ > 0) {
-      flash_inputs.push_back(model_input->layer_kv_cache_ptr);  // layer_extra_kv_cache_ptr
-      if (compress_ratio_ == 4) {
-        flash_inputs.push_back(
-            topk_indices_tensor.GetView({dp_context_tokens, topk_indices_tensor.shape[1]}));  // extra_indices
-      } else {
-        flash_inputs.push_back(dsv4_mqa_meta->flash_input.c128_block_indices_tensor);  // extra_indices
-        flash_inputs.push_back(dsv4_mqa_meta->flash_input.c128_topk_lengths_tensor);   // extra_topk_length
-      }
-    }
-    STATUS_CHECK_RETURN(flash_dsv4_attention_layer_->Forward(flash_inputs, context_output));
-    flash_tile_sched_meta.shape[2] = 1;  // Mark tile_scheduler_metadata as initialized
+    auto& flash_mqa = static_cast<DeepSeekV4FlashAttentionMeta&>(*model_input->flash_meta).mqa;
+    STATUS_CHECK_RETURN(RunDsv4Attention(flash_dsv4_attention_layer_.get(), *model_input->flash_meta, flash_mqa,
+                                         q_tensors[0], kv_a_tensor, attn_output, topk_indices_tensor,
+                                         model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+                                         mqa_shared.layer_swa_kv_cache_ptr_tensor, dp_context_tokens,
+                                         /*token_offset*/ 0, q_stride, kv_stride));
   }
 
   if (dp_decode_tokens > 0) {
     size_t skip_tokens = dp_context_tokens;
 
-    for (size_t i = 0; i < dsv4_mqa_meta->page_inputs.size(); i++) {
-      const size_t current_tokens = dsv4_mqa_meta->page_inputs[i].total_dp_input_ids_len;
+    for (size_t i = 0; i < model_input->page_metas.size(); i++) {
+      auto& paged_mqa = static_cast<DeepSeekV4PagedAttentionMeta&>(*model_input->page_metas[i]).mqa;
+      const size_t current_tokens = model_input->page_metas[i]->total_dp_input_ids_len;
 
-      Tensor current_q = q_tensors[0].GetView({current_tokens, q_stride}, skip_tokens * q_stride);
-      Tensor current_kv = kv_a_tensor.GetView({current_tokens, kv_stride}, skip_tokens * kv_stride);
-      std::vector<Tensor> current_output = {attn_output.GetView({current_tokens, q_stride}, skip_tokens * q_stride)};
-
-      Tensor& page_tile_sched_meta = compress_ratio_ == 0 ? model_input->page_inputs[i].tile_scheduler_metadata
-                                     : compress_ratio_ == 4
-                                         ? dsv4_mqa_meta->page_inputs[i].c4_tile_scheduler_metadata
-                                         : dsv4_mqa_meta->page_inputs[i].c128_tile_scheduler_metadata;
-      Tensor& page_num_splits = compress_ratio_ == 0   ? model_input->page_inputs[i].num_splits
-                                : compress_ratio_ == 4 ? dsv4_mqa_meta->page_inputs[i].c4_num_splits
-                                                       : dsv4_mqa_meta->page_inputs[i].c128_num_splits;
-      std::vector<Tensor> paged_inputs = {
-          model_input->page_inputs[i].rotary_embedding_pos,        // rotary_embedding_pos
-          current_q,                                               // q
-          current_kv,                                              // kv
-          dsv4_mqa_meta->layer_swa_kv_cache_ptr_tensor,            // layer_swa_kv_cache_ptr
-          page_tile_sched_meta,                                    // tile_scheduler_metadata
-          page_num_splits,                                         // num_splits
-          attn_sink_weight_,                                       // attn_sink
-          dsv4_mqa_meta->page_inputs[i].raw_out_loc_tensor,        // raw_out_loc
-          dsv4_mqa_meta->page_inputs[i].swa_block_indices_tensor,  // swa_indices
-      };
-      if (compress_ratio_ > 0) {
-        paged_inputs.push_back(model_input->layer_kv_cache_ptr);  // layer_extra_kv_cache_ptr
-        if (compress_ratio_ == 4) {
-          paged_inputs.push_back(
-              topk_indices_tensor.GetView({current_tokens, topk_indices_tensor.shape[1]},
-                                          skip_tokens * topk_indices_tensor.shape[1]));     // extra_indices
-        } else {                                                                            // compress_ratio_ == 128
-          paged_inputs.push_back(dsv4_mqa_meta->page_inputs[i].c128_block_indices_tensor);  // extra_indices
-          paged_inputs.push_back(dsv4_mqa_meta->page_inputs[i].c128_topk_lengths_tensor);   // extra_topk_length
-        }
-      }
-      STATUS_CHECK_RETURN(paged_dsv4_attention_layer_->Forward(paged_inputs, current_output));
-      page_tile_sched_meta.shape[2] = 1;  // Mark tile_scheduler_metadata as initialized
+      STATUS_CHECK_RETURN(RunDsv4Attention(
+          paged_dsv4_attention_layer_.get(), *model_input->page_metas[i], paged_mqa, q_tensors[0], kv_a_tensor,
+          attn_output, topk_indices_tensor, model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+          mqa_shared.layer_swa_kv_cache_ptr_tensor, current_tokens, skip_tokens, q_stride, kv_stride));
 
       skip_tokens += current_tokens;
     }
@@ -359,6 +302,50 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   } else {
     STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1, hidden_buffer_tensors_0));
   }
+
+  return Status();
+}
+
+Status Dsv4Mqa::RunDsv4Attention(BaseLayer* attention_layer, StandardAttentionMeta& model_input_info,
+                                 MqaAttentionMeta& mqa_input_info, Tensor& q_tensor, Tensor& kv_tensor,
+                                 Tensor& attn_output, Tensor& topk_indices_tensor, Tensor& layer_kv_cache_ptr,
+                                 Tensor& layer_swa_kv_cache_ptr_tensor, size_t token_count, size_t token_offset,
+                                 size_t q_stride, size_t kv_stride) {
+  Tensor current_q = q_tensor.GetView({token_count, q_stride}, token_offset * q_stride);
+  Tensor current_kv = kv_tensor.GetView({token_count, kv_stride}, token_offset * kv_stride);
+  std::vector<Tensor> current_output = {attn_output.GetView({token_count, q_stride}, token_offset * q_stride)};
+
+  auto& model_mla = *model_input_info.GetMLA();
+  Tensor& tile_sched_meta = compress_ratio_ == 0   ? model_mla.tile_scheduler_metadata
+                            : compress_ratio_ == 4 ? mqa_input_info.c4_tile_scheduler_metadata
+                                                   : mqa_input_info.c128_tile_scheduler_metadata;
+  Tensor& num_splits = compress_ratio_ == 0   ? model_mla.num_splits
+                       : compress_ratio_ == 4 ? mqa_input_info.c4_num_splits
+                                              : mqa_input_info.c128_num_splits;
+  std::vector<Tensor> attention_inputs = {
+      model_input_info.rotary_embedding_pos,    // rotary_embedding_pos
+      current_q,                                // q
+      current_kv,                               // kv
+      layer_swa_kv_cache_ptr_tensor,            // layer_swa_kv_cache_ptr
+      tile_sched_meta,                          // tile_scheduler_metadata
+      num_splits,                               // num_splits
+      attn_sink_weight_,                        // attn_sink
+      mqa_input_info.raw_out_loc_tensor,        // raw_out_loc
+      mqa_input_info.swa_block_indices_tensor,  // swa_indices
+  };
+  if (compress_ratio_ > 0) {
+    attention_inputs.push_back(layer_kv_cache_ptr);  // layer_extra_kv_cache_ptr
+    if (compress_ratio_ == 4) {
+      attention_inputs.push_back(
+          topk_indices_tensor.GetView({token_count, topk_indices_tensor.shape[1]},
+                                      token_offset * topk_indices_tensor.shape[1]));  // extra_indices
+    } else {                                                                          // compress_ratio_ == 128
+      attention_inputs.push_back(mqa_input_info.c128_block_indices_tensor);           // extra_indices
+      attention_inputs.push_back(mqa_input_info.c128_topk_lengths_tensor);            // extra_topk_length
+    }
+  }
+  STATUS_CHECK_RETURN(attention_layer->Forward(attention_inputs, current_output));
+  tile_sched_meta.shape[2] = 1;  // Mark tile_scheduler_metadata as initialized
 
   return Status();
 }

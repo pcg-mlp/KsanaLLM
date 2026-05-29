@@ -21,7 +21,7 @@ class IndexerMeta {
 
   void Prepare(const std::vector<ForwardRequest>& forward_reqs);
 
-  struct input_info {
+  struct input_meta {
     std::vector<const ForwardRequest*> dp_reqs;
 
     Tensor cu_seq_len_start_tensor;
@@ -48,8 +48,8 @@ class IndexerMeta {
   };
 
   // Category is tightly coupled to underlying kernel
-  input_info flash_input;               // extend_len is non-specialized, use flash attention
-  std::vector<input_info> page_inputs;  // extend_len is fixed (`[1, decode_token_num_threshold]`), use page attention
+  input_meta flash_meta;               // extend_len is non-specialized, use flash attention
+  std::vector<input_meta> page_metas;  // extend_len is fixed (`[1, decode_token_num_threshold]`), use page attention
 
   // Number of dp tokens in context/decode phase
   size_t dp_context_tokens = 0;
@@ -72,11 +72,11 @@ class IndexerMeta {
 
   // Split flash reqs into chunks bounded by both `max_chunked_q_tokens_` and `max_chunked_kv_tokens_`,
   // taking the tighter constraint, and build per-chunk offset tensors.
-  void PrepareChunk(input_info& input);
+  void PrepareChunk(input_meta& input);
   // Build per-token batch index array for the given input (replaces extend_lens scan in topk kernel).
-  void PrepareBatchIndices(input_info& input);
+  void PrepareBatchIndices(input_meta& input);
   // Build per Q-token KV start/end. Flash path uses chunk boundaries; paged path uses per-request isolation.
-  void PrepareCuSeqLen(input_info& input, bool is_paged = false);
+  void PrepareCuSeqLen(input_meta& input, bool is_paged = false);
 
   std::shared_ptr<Context> context_;
 
@@ -87,7 +87,7 @@ class IndexerMeta {
   int max_chunked_kv_tokens_ = 0;  // From runtime config
   int compress_ratio_ = 1;         // KV compression ratio: 1 for DSA, 4 for C4
 
-  // Tensors shared by all input_infos
+  // Tensors shared by all input_metas
   // Per Q-token KV range: [start[t], end[t]) defines the KV window for token t.
   Tensor cu_seq_len_start_tensor;  // DEVICE, INT32, [max_token_num]
   Tensor cu_seq_len_end_tensor;    // DEVICE, INT32, [max_token_num]

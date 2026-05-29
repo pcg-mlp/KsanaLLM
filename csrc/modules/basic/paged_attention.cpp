@@ -5,6 +5,7 @@
 #include "modules/basic/paged_attention.h"
 
 #include "layers/paged_attention_layer.h"
+#include "models/base/attention_meta/attention_meta_builder.h"
 
 namespace ksana_llm {
 
@@ -68,24 +69,24 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
                                Tensor& kv_cache_buffer_tensor, const AttentionForwardContext& forward_context,
                                Tensor query_layernorm_weight, Tensor key_layernorm_weight) {
   // normal page attention only has one input
-  // It must be placed at the end of `page_inputs`, since they are sorted in descending order by token number
-  auto& input_info = model_input->page_inputs.back();
+  // It must be placed at the end of `page_metas`, since they are sorted in descending order by token number
+  auto& input_meta = *model_input->page_metas.back();
 
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(paged_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0], input_info.input_length, input_info.kv_list, input_info.kv_cache_offset,
-       input_info.rotary_embedding_pos, input_info.rotary_embedding_mask, kv_cache_buffer_tensor,
+      {hidden_buffer_tensors_0[0], input_meta.input_length, input_meta.kv_list, input_meta.kv_cache_offset,
+       input_meta.rotary_embedding_pos, input_meta.rotary_embedding_mask, kv_cache_buffer_tensor,
        forward_context.forward_shape, paged_buffer_tensors[0], /* workspace */
        query_layernorm_weight,                                 /* for use_qk_norm */
        key_layernorm_weight,                                   /* for use_qk_norm */
        // blocked_multi_token_forwarding_kv
-       model_input->layer_kv_cache_ptr, input_info.block_table},
+       model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr, input_meta.block_table},
       hidden_buffer_tensors_1));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 #elif defined(ENABLE_ACL)
   // inference on NPU with ATB
   STATUS_CHECK_RETURN(paged_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0], input_info.rotary_embedding_pos, model_input->layers_slot_mapping,
+      {hidden_buffer_tensors_0[0], input_meta.rotary_embedding_pos, model_input->layers_slot_mapping,
        model_input->layers_block_table, model_input->k_cache_blocks_base, model_input->v_cache_blocks_base,
        model_input->seq_len_host, forward_context.forward_shape, model_input->atb_attention_attr},
       hidden_buffer_tensors_1));

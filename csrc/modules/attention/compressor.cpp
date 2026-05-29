@@ -9,6 +9,8 @@
 #include "layers/cast_layer.h"
 #include "layers/compressor_layer.h"
 #include "layers/nvidia/dsv4_tail_copy.h"
+#include "models/base/attention_meta/attention_meta_builder.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
 #include "profiler/profile_event.h"
 #include "utils/logger.h"
 
@@ -129,29 +131,45 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
 
   // Step 3: kv_compressed_output = compress_layer_(kv_score_input)
   // Input: kv_score_input [T, 2 * coff * head_dim] FP32, Output: kv_compressed_output [T, head_dim]
-  const auto& compressor_meta = forwarding_context.GetModelInput()->compressor_meta_;
   const auto& model_input = forwarding_context.GetModelInput();
-  const size_t dp_context_tokens = compressor_meta->dp_context_tokens;
-  const size_t dp_decode_tokens = compressor_meta->dp_decode_tokens;
+  const size_t dp_context_tokens = model_input->dp_context_tokens;
+  const size_t dp_decode_tokens = model_input->dp_decode_tokens;
+
+  // Retrieve DSV4-specific shared and per-batch compressor data from the attention info hierarchy.
+  auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(*model_input->shared_attention_meta);
+  auto& dsv4_flash_meta = static_cast<DeepSeekV4FlashAttentionMeta&>(*model_input->flash_meta);
+  CompressorSharedAttentionMeta& compressor_shared = dsv4_shared.compressor;
+  CompressorAttentionMeta& flash_compressor = dsv4_flash_meta.compressor;
+
+  // Find the single-token decode page_meta (q_seq_len == 1) for the paged compressor path.
+  // In MTP scenarios there may be higher-q_seq_len buckets before it.
+  DeepSeekV4PagedAttentionMeta* dsv4_paged_ptr = nullptr;
+  for (auto& pi : model_input->page_metas) {
+    if (pi->q_seq_len == 1) {
+      dsv4_paged_ptr = dynamic_cast<DeepSeekV4PagedAttentionMeta*>(pi.get());
+      break;
+    }
+  }
 
   // Prefix cache tail read-copy: 把 prefix 末 block 的 tail kv_score 复制到 state buffer。
   if (compress_ratio_ == 4) {
-    if (const int num_req = static_cast<int>(compressor_meta->tail_read_block_tensor.GetElementNumber()); num_req > 0) {
-      const auto& dsv4_mqa_meta = forwarding_context.GetModelInput()->dsv4_mqa_meta_;
-      Tensor* tail_layer_base_tensor = is_in_indexer_ ? &dsv4_mqa_meta->layer_tail_indexer_cache_ptr_tensor
-                                                      : &dsv4_mqa_meta->layer_tail_attn_cache_ptr_tensor;
+    if (const int num_req = static_cast<int>(compressor_shared.tail_read_block_tensor.GetElementNumber());
+        num_req > 0) {
+      auto& mqa_shared = *model_input->shared_attention_meta->GetMqa();
+      Tensor* tail_layer_base_tensor = is_in_indexer_ ? &mqa_shared.layer_tail_indexer_cache_ptr_tensor
+                                                      : &mqa_shared.layer_tail_attn_cache_ptr_tensor;
       void* const tail_layer_base = tail_layer_base_tensor->GetPtr<void*>()[1 + local_layer_idx_];
-      Tensor& state_layer_ptr_tensor = is_in_indexer_ ? compressor_meta->layer_c4_indexer_state_ptr_tensor
-                                                      : compressor_meta->layer_c4_state_ptr_tensor;
+      Tensor& state_layer_ptr_tensor = is_in_indexer_ ? compressor_shared.layer_c4_indexer_state_ptr_tensor
+                                                      : compressor_shared.layer_c4_state_ptr_tensor;
       void* const state_layer_base = state_layer_ptr_tensor.GetPtr<void*>()[local_layer_idx_];
       const int per_token_bytes = static_cast<int>(2 * coff_ * head_dim_ * sizeof(float));
-      const int64_t block_cache_size = static_cast<int64_t>(dsv4_mqa_meta->GetSwaBlockSize());
+      const int64_t block_cache_size = static_cast<int64_t>(mqa_shared.swa_block_size);
       constexpr int kTailTokens = 4;
       KLLM_LOG_DEBUG << fmt::format(
           "tail read-copy: layer={} is_in_indexer={} num_req={} per_token_bytes={} block_cache_size={}", layer_idx_,
           is_in_indexer_, num_req, per_token_bytes, block_cache_size);
-      CopyTailToState(state_layer_base, tail_layer_base, compressor_meta->tail_read_block_tensor.GetPtr<int32_t>(),
-                      compressor_meta->tail_target_indices_tensor.GetPtr<int32_t>(), num_req, block_cache_size,
+      CopyTailToState(state_layer_base, tail_layer_base, compressor_shared.tail_read_block_tensor.GetPtr<int32_t>(),
+                      compressor_shared.tail_target_indices_tensor.GetPtr<int32_t>(), num_req, block_cache_size,
                       per_token_bytes, kTailTokens,
                       forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
     }
@@ -162,96 +180,99 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
     std::vector<Tensor> context_outputs = {kv_compressed_output.GetView({dp_context_tokens, head_dim_})};
     if (compress_ratio_ == 4) {
       // ForwardPrefillC4
-      compressor_layer_->Forward({is_in_indexer_ ? compressor_meta->layer_c4_indexer_state_ptr_tensor
-                                                 : compressor_meta->layer_c4_state_ptr_tensor,  // kv_score_buffer
-                                  context_kv_score_input,                                       // kv_score_input
-                                  ape_weight_,                                                  // score_bias
-                                  compressor_meta->flash_input.c4_indices_tensor,               // indices
-                                  compressor_meta->flash_input.c4_indices_bundle_tensor,        // extra
-                                  compressor_meta->c4_compress_plan_tensor,                     // compress_plan
-                                  compressor_meta->c4_write_plan_tensor,                        // write_plan
-                                  compressor_meta->flash_input.seq_lens_tensor,                 // seq_lens
-                                  compressor_meta->flash_input.extend_lens_tensor,              // extend_lens
-                                  norm_weight_,                                                 // norm_weight
-                                  is_in_indexer_ ? model_input->layer_indexer_kv_cache_ptr
-                                                 : model_input->layer_kv_cache_ptr,  // layer_kv_cache_ptr
-                                  compressor_meta->flash_input.c4_out_loc_tensor},   // compressed_out_loc
-                                 context_outputs);
-      compressor_meta->c4_compress_plan_tensor.shape[2] = 1;  // Mark meta as initialized
-      compressor_meta->c4_write_plan_tensor.shape[2] = 1;     // Mark meta as initialized
+      compressor_layer_->Forward(
+          {is_in_indexer_ ? compressor_shared.layer_c4_indexer_state_ptr_tensor
+                          : compressor_shared.layer_c4_state_ptr_tensor,  // kv_score_buffer
+           context_kv_score_input,                                        // kv_score_input
+           ape_weight_,                                                   // score_bias
+           flash_compressor.c4_indices_tensor,                            // indices
+           flash_compressor.c4_indices_bundle_tensor,                     // extra
+           compressor_shared.c4_compress_plan_tensor,                     // compress_plan
+           compressor_shared.c4_write_plan_tensor,                        // write_plan
+           flash_compressor.seq_lens_tensor,                              // seq_lens
+           flash_compressor.extend_lens_tensor,                           // extend_lens
+           norm_weight_,                                                  // norm_weight
+           is_in_indexer_ ? model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr
+                          : model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+           flash_compressor.c4_out_loc_tensor},  // compressed_out_loc
+          context_outputs);
+      compressor_shared.c4_compress_plan_tensor.shape[2] = 1;  // Mark meta as initialized
+      compressor_shared.c4_write_plan_tensor.shape[2] = 1;     // Mark meta as initialized
     } else {
       // ForwardPrefillC128 (is_in_indexer_ never true for C128)
-      compressor_layer_->Forward({compressor_meta->layer_c128_state_ptr_tensor,           // kv_score_buffer
-                                  context_kv_score_input,                                 // kv_score_input
-                                  ape_weight_,                                            // score_bias
-                                  compressor_meta->flash_input.c128_indices_tensor,       // indices
-                                  compressor_meta->flash_input.c128_load_indices_tensor,  // load_indices
-                                  compressor_meta->c128_compress_plan_tensor,             // compress_plan
-                                  compressor_meta->c128_write_plan_tensor,                // write_plan
-                                  compressor_meta->flash_input.seq_lens_tensor,           // seq_lens
-                                  compressor_meta->flash_input.extend_lens_tensor,        // extend_lens
-                                  norm_weight_,                                           // norm_weight
-                                  model_input->layer_kv_cache_ptr,                        // layer_kv_cache_ptr
-                                  compressor_meta->flash_input.c128_out_loc_tensor},      // compressed_out_loc
+      compressor_layer_->Forward({compressor_shared.layer_c128_state_ptr_tensor,  // kv_score_buffer
+                                  context_kv_score_input,                         // kv_score_input
+                                  ape_weight_,                                    // score_bias
+                                  flash_compressor.c128_indices_tensor,           // indices
+                                  flash_compressor.c128_load_indices_tensor,      // load_indices
+                                  compressor_shared.c128_compress_plan_tensor,    // compress_plan
+                                  compressor_shared.c128_write_plan_tensor,       // write_plan
+                                  flash_compressor.seq_lens_tensor,               // seq_lens
+                                  flash_compressor.extend_lens_tensor,            // extend_lens
+                                  norm_weight_,                                   // norm_weight
+                                  model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+                                  flash_compressor.c128_out_loc_tensor},  // compressed_out_loc
                                  context_outputs);
-      compressor_meta->c128_compress_plan_tensor.shape[2] = 1;  // Mark meta as initialized
-      compressor_meta->c128_write_plan_tensor.shape[2] = 1;     // Mark meta as initialized
+      compressor_shared.c128_compress_plan_tensor.shape[2] = 1;  // Mark meta as initialized
+      compressor_shared.c128_write_plan_tensor.shape[2] = 1;     // Mark meta as initialized
     }
   }
 
-  if (dp_decode_tokens > 0) {
+  if (dp_decode_tokens > 0 && dsv4_paged_ptr != nullptr) {
+    CompressorAttentionMeta& paged_compressor = dsv4_paged_ptr->compressor;
     Tensor decode_kv_score_input = kv_score_input.GetView({dp_decode_tokens, kv_score_input.shape[1]},
                                                           dp_context_tokens * kv_score_input.shape[1]);
     std::vector<Tensor> decode_outputs = {
         kv_compressed_output.GetView({dp_decode_tokens, head_dim_}, dp_context_tokens * head_dim_)};
     if (compress_ratio_ == 4) {
       // ForwardDecodeC4
-      compressor_layer_->Forward({is_in_indexer_ ? compressor_meta->layer_c4_indexer_state_ptr_tensor
-                                                 : compressor_meta->layer_c4_state_ptr_tensor,  // kv_score_buffer
-                                  decode_kv_score_input,                                        // kv_score_input
-                                  ape_weight_,                                                  // score_bias
-                                  compressor_meta->page_input.c4_indices_tensor,                // indices
-                                  compressor_meta->page_input.seq_lens_tensor,                  // seq_lens
-                                  compressor_meta->page_input.c4_indices_prev_tensor,           // extra (prev_indices)
-                                  norm_weight_,                                                 // norm_weight
-                                  is_in_indexer_ ? model_input->layer_indexer_kv_cache_ptr
-                                                 : model_input->layer_kv_cache_ptr,  // layer_kv_cache_ptr
-                                  compressor_meta->page_input.c4_out_loc_tensor},    // compressed_out_loc
-                                 decode_outputs);
+      compressor_layer_->Forward(
+          {is_in_indexer_ ? compressor_shared.layer_c4_indexer_state_ptr_tensor
+                          : compressor_shared.layer_c4_state_ptr_tensor,  // kv_score_buffer
+           decode_kv_score_input,                                         // kv_score_input
+           ape_weight_,                                                   // score_bias
+           paged_compressor.c4_indices_tensor,                            // indices
+           paged_compressor.seq_lens_tensor,                              // seq_lens
+           paged_compressor.c4_indices_prev_tensor,                       // extra (prev_indices)
+           norm_weight_,                                                  // norm_weight
+           is_in_indexer_ ? model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr
+                          : model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+           paged_compressor.c4_out_loc_tensor},  // compressed_out_loc
+          decode_outputs);
     } else {
       // ForwardDecodeC128 (is_in_indexer_ never true for C128)
-      compressor_layer_->Forward({compressor_meta->layer_c128_state_ptr_tensor,      // kv_score_buffer
-                                  decode_kv_score_input,                             // kv_score_input
-                                  ape_weight_,                                       // score_bias
-                                  compressor_meta->page_input.c128_indices_tensor,   // indices
-                                  compressor_meta->page_input.seq_lens_tensor,       // seq_lens
-                                  norm_weight_,                                      // norm_weight
-                                  model_input->layer_kv_cache_ptr,                   // layer_kv_cache_ptr
-                                  compressor_meta->page_input.c128_out_loc_tensor},  // compressed_out_loc
+      compressor_layer_->Forward({compressor_shared.layer_c128_state_ptr_tensor,  // kv_score_buffer
+                                  decode_kv_score_input,                          // kv_score_input
+                                  ape_weight_,                                    // score_bias
+                                  paged_compressor.c128_indices_tensor,           // indices
+                                  paged_compressor.seq_lens_tensor,               // seq_lens
+                                  norm_weight_,                                   // norm_weight
+                                  model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+                                  paged_compressor.c128_out_loc_tensor},  // compressed_out_loc
                                  decode_outputs);
     }
   }
 
   // Prefix cache write-copy: 把 c4 层当前 step 的 kv_score 持久化到 tail 区，供下个请求复用。
   if (compress_ratio_ == 4) {
-    if (const size_t num_tokens = compressor_meta->tail_write_indices_tensor.GetElementNumber(); num_tokens > 0) {
+    if (const size_t num_tokens = compressor_shared.tail_write_indices_tensor.GetElementNumber(); num_tokens > 0) {
       KLLM_CHECK(num_tokens == total_tokens);
-      const auto& dsv4_mqa_meta = forwarding_context.GetModelInput()->dsv4_mqa_meta_;
-      Tensor* tail_layer_base_tensor = is_in_indexer_ ? &dsv4_mqa_meta->layer_tail_indexer_cache_ptr_tensor
-                                                      : &dsv4_mqa_meta->layer_tail_attn_cache_ptr_tensor;
+      auto& mqa_shared = *model_input->shared_attention_meta->GetMqa();
+      Tensor* tail_layer_base_tensor = is_in_indexer_ ? &mqa_shared.layer_tail_indexer_cache_ptr_tensor
+                                                      : &mqa_shared.layer_tail_attn_cache_ptr_tensor;
       // layer_tail_*_cache_ptr_tensor layout: [block_num(int64) | layer_0_base | layer_1_base | ...]
       // Slots 1..N correspond to local layer 0..N-1, so local_layer_idx_ must be used here.
       void* const tail_layer_base = tail_layer_base_tensor->GetPtr<void*>()[1 + local_layer_idx_];
       // Per-token bytes match a single row of kv_score_input.
       const int per_token_bytes = static_cast<int>(2 * coff_ * head_dim_ * sizeof(float));
       // tail 写入的目标位于 SWA pool, stride 使用 SWA pool 的 block_size。
-      const int64_t block_cache_size = static_cast<int64_t>(dsv4_mqa_meta->GetSwaBlockSize());
+      const int64_t block_cache_size = static_cast<int64_t>(mqa_shared.swa_block_size);
       KLLM_LOG_DEBUG << fmt::format(
           "tail write-copy: layer={} is_in_indexer={} num_tokens={} per_token_bytes={} block_cache_size={}", layer_idx_,
           is_in_indexer_, num_tokens, per_token_bytes, block_cache_size);
       CopyKvScoreToTail(tail_layer_base,
                         kv_score_input.GetPtr<void>(),  // FP32 [total_tokens, 2*coff*head_dim]
-                        compressor_meta->tail_write_indices_tensor.GetPtr<int32_t>(), static_cast<int>(num_tokens),
+                        compressor_shared.tail_write_indices_tensor.GetPtr<int32_t>(), static_cast<int>(num_tokens),
                         block_cache_size, per_token_bytes,
                         forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
     }

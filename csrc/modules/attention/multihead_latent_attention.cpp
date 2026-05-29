@@ -323,11 +323,11 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
         reduce_buffer_tensors[0].GetView({dp_decode_tokens, head_num_per_atp_ * kv_lora_rank_},
                                          (dp_absorb_tokens - dp_decode_tokens) * head_num_per_atp_ * kv_lora_rank_);
 
-    // Process each page_input sequentially
+    // Process each page_meta sequentially
     // Page_inputs are ordered by token_num in descending order, align with the order of forward requests
     size_t skip_tokens = dp_context_tokens;
-    for (auto& page_input : forwarding_context.GetModelInput()->page_inputs) {
-      const size_t current_tokens = page_input.total_dp_input_ids_len;
+    for (auto& page_meta : forwarding_context.GetModelInput()->page_metas) {
+      const size_t current_tokens = page_meta->total_dp_input_ids_len;
 
       // Offset tensors by `skip_tokens` or `skip_tokens - dp_context_tokens`
       Tensor current_q_nope_tensor = q_nope_tensors[0].GetView(
@@ -348,7 +348,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
                                      (skip_tokens - dp_context_tokens) * attn_output_tensor.shape[1])};
 
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
-          forwarding_context.GetModelInput(), page_input, forwarding_context.GetAttentionForwardContext(),
+          forwarding_context.GetModelInput(), *page_meta, forwarding_context.GetAttentionForwardContext(),
           hidden_buffer_tensors_1, current_q_nope_tensor, current_q_rope_tensor, current_kv_buffer_tensor,
           current_k_rope_buffer_tensor, current_indices_tensor, current_output_tensors));
 

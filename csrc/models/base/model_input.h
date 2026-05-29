@@ -3,18 +3,20 @@
 ==============================================================================*/
 #pragma once
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/environment.h"
+#include "models/base/attention_meta/attention_meta.h"
+#include "models/base/attention_meta/attention_meta_creator.h"
+#include "models/base/attention_meta/flash_attention_meta_builder.h"
+#include "models/base/attention_meta/paged_attention_meta_builder.h"
 #include "models/base/base_model.h"
 #include "models/base/forward_meta/c4_indexer_meta.h"
-#include "models/base/forward_meta/compressor_meta.h"
-#include "models/base/forward_meta/dsv4_mqa_meta.h"
 #include "models/base/forward_meta/indexer_meta.h"
-#include "models/base/forward_meta/mla_meta.h"
 #include "runtime/forward_request.h"
 #include "runtime/infer_stage.h"
 #include "utils/tensor.h"
@@ -120,18 +122,6 @@ class ModelInput {
   Tensor dp_prefill_q_offset_uint64_host;
   Tensor dp_prefill_q_offset_uint64_tensor;
 
-  // Due to the optimization of PrefixCaching for computation reuse, incorporating the effects of flexible caching, a
-  // mask is used during the flexible rotary_embedding computation to avoid multiple executions of flexible
-  // rotary_embedding on the prefix block.
-  Tensor dp_flexible_rotary_embedding_mask;
-
-  // Indicate the corresponding index position of the input during the flexible rotary_embedding kernel computation,
-  // considering the impact of flexible cache optimization.
-  // Stores pos information of src, used for all models to reverse rope
-  Tensor dp_src_flexible_rotary_embedding_pos;
-  // Stores pos information of dst, used for deepseek models to embed correct rope
-  Tensor dp_dst_flexible_rotary_embedding_pos;
-
   // The 3-dimentional index position for multimodal rotarty embedding.
   Tensor dp_mrotary_embedding_pos;
   // The 4-dimentional index position for xd rotarty embedding.
@@ -143,12 +133,6 @@ class ModelInput {
   Tensor logits_idx_uint64_tensor;
 
   Tensor nextn_hidden_idx_uint64_tensor;
-
-  Tensor dp_dst_flexible_kv_cache_tensor;
-  Tensor dp_src_flexible_kv_cache_tensor;
-  Tensor dp_dst_flexible_token_idx_tensor;
-  Tensor dp_src_flexible_token_idx_tensor;
-  Tensor dp_flexible_offset_uint64_tensor;
 
   // Tensors to hold pairs(pos, data_length) and embeddings ptr of positions for input_refit on the CPU.
   struct {
@@ -220,9 +204,8 @@ class ModelInput {
   std::vector<void*> kv_cache_ptrs;
   Tensor kv_cache_ptrs_tensor;
 #endif
-  // Record the number of kv cache blocks and the addresses of kv cache lists for each layer on the host
-  Tensor layer_kv_cache_ptr;          // for core attention
-  Tensor layer_indexer_kv_cache_ptr;  // for optional indexer
+  // Shared attention tensors, flexible-cache tensors, and lazy-initialized kv-cache pointer state.
+  std::unique_ptr<SharedAttentionMeta> shared_attention_meta;
 
   size_t dp_max_forwarding_tokens = 0;
 
@@ -270,75 +253,36 @@ class ModelInput {
   // for nextn layer(MTP), record each req's first token index in hidden output
   std::unordered_map<size_t, size_t> mtp_req_id_to_pos_;
 
-  // `layer_kv_cache_ptr`/`layer_indexer_kv_cache_ptr` only needs to be initialized once
-  bool layer_kv_cache_ptr_initialized_ = false;
-
-  // Tensors shared by all input_infos
-  Tensor input_length;           // only for page, forwarding_tokens.size()
-  Tensor expanded_input_length;  // input_length after expansion of q_seq_len
-  Tensor kv_list;                // for core attention
-  Tensor kv_cache_offset;
-  Tensor rotary_embedding_pos;
-  Tensor rotary_embedding_mask;
-  Tensor block_table;
-  Tensor expanded_block_table;                   // block_table after expansion of q_seq_len
-  std::vector<Tensor> tile_scheduler_metadatas;  // only for flash mla of page
-  Tensor num_splits;                             // only for flash mla of page
-  std::vector<Tensor> paged_schedule_metas;      // for paged sparse mla indexer
-  Tensor store_out_loc;                          // used to store indexer kv cache
-
-  // Reused vectors during model_input preparation,
-  // avoid destruction during MemcpyAsync
-  std::vector<int> input_length_host_;
-  std::vector<int> expanded_input_length_host_;
+  // Builders that construct flash_meta / page_metas for each forward step.
+  // Initialized in the constructor with the standard implementations;
+  // can be replaced (e.g., via a setter) to swap in alternative backends.
+  std::unique_ptr<AttentionMetaCreator> attention_meta_creator_;
+  std::unique_ptr<FlashAttentionMetaBuilder> flash_builder_;
+  std::unique_ptr<PagedAttentionMetaBuilder> paged_builder_;
 
  public:
-  struct input_info {
-    input_info() = default;
-    input_info(input_info&&) = default;
-    input_info& operator=(input_info&&) = default;
-    // Disable the time-consuming copy
-    input_info(const input_info&) = delete;
-    input_info& operator=(const input_info&) = delete;
+  // input_ids length is non-specialized, use flash attention
+  std::unique_ptr<FlashAttentionMeta> flash_meta;
+  // input_ids length is fixed (`[1, decode_token_num_threshold]`), use paged attention.
+  // Only entries with non-empty `dp_reqs` are maintained.
+  std::vector<std::unique_ptr<PagedAttentionMeta>> page_metas;
 
-    std::vector<ForwardRequest*> dp_reqs;
+  // Typed accessors for use by attention modules.
+  FlashAttentionMeta& GetFlashMeta() { return *flash_meta; }
+  const FlashAttentionMeta& GetFlashMeta() const { return *flash_meta; }
+  std::vector<std::unique_ptr<PagedAttentionMeta>>& GetPagedMetas() { return page_metas; }
+  const std::vector<std::unique_ptr<PagedAttentionMeta>>& GetPagedMetas() const { return page_metas; }
 
-    // Tensors in input_info are views of the above shared tensors
-    // Their shape is used to locate the offset of each input_info in the shared tensors
-    Tensor input_length;
-    Tensor expanded_input_length;
-    Tensor kv_list;
-    Tensor kv_cache_offset;
-    Tensor rotary_embedding_pos;
-    Tensor rotary_embedding_mask;
-    Tensor block_table;
-    Tensor expanded_block_table;
-    Tensor tile_scheduler_metadata;
-    Tensor num_splits;
-    Tensor paged_schedule_meta;  // for paged sparse mla indexer
-    Tensor store_out_loc;
+  std::unique_ptr<C4IndexerMeta> c4_indexer_meta_;  // meta for c4 indexer module
+  std::unique_ptr<IndexerMeta> indexer_meta_;       // meta for indexer module
 
-    size_t q_seq_len = 0;
-    size_t expanded_batch_size = 1;
-    size_t total_dp_input_ids_len = 0;
+  // Return the config used to construct the current AttentionMetaCreator.
+  // Useful when replacing the creator with a model-specific subclass.
+  const AttentionMetaCreator::Config& GetCreatorConfig() const;
 
-    void Reset() {
-      dp_reqs.clear();
-      q_seq_len = 0;
-      expanded_batch_size = 1;
-      total_dp_input_ids_len = 0;
-    }
-  };
-
-  input_info flash_input;               // input_ids length is non-specialized, use flash attention
-  std::vector<input_info> page_inputs;  // input_ids length is fixed (`[1, decode_token_num_threshold]`), use page
-                                        // attention, maintain only `page_input` with non-empty `dp_reqs`
-
-  std::unique_ptr<CompressorMeta> compressor_meta_;  // meta for compress module
-  std::unique_ptr<C4IndexerMeta> c4_indexer_meta_;   // meta for c4 indexer module
-  std::unique_ptr<Dsv4MqaMeta> dsv4_mqa_meta_;       // meta for dsv4 mqa attention module
-  std::unique_ptr<MlaMeta> mla_meta_;                // meta for mla module
-  std::unique_ptr<IndexerMeta> indexer_meta_;        // meta for indexer module
+  // Replace the attention info creator and rebuild shared_attention_meta / flash_meta.
+  // Called during model initialization to swap in a model-specific creator.
+  void ReplaceAttentionMetaCreator(std::unique_ptr<AttentionMetaCreator> creator);
 
   // Divide the forward requests into two categories: flash, page (with different lengths)
   void PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs);
@@ -347,18 +291,6 @@ class ModelInput {
 
   void PreparePrefill();
   void PrepareDecode();
-
-  // Determine whether to use cache for the current batch of multi token requests
-  void PrepareUseCache(input_info& input);
-  void PrepareInputLength(input_info& input);
-  void PrepareKVCacheBlocks(input_info& info);
-  void PrepareKVCacheBlockTable(input_info& info);
-  void PrepareDecodeRotary(input_info& input);
-  void PrepareFlashMla(input_info& input);
-  void PrepareFlashRotary(input_info& input);
-  void PrepareFlexibleCache(input_info& input);
-  void PrepareCuSeqLen(input_info& input, bool is_paged);
-  void PrepareStoreOutLoc(input_info& input);
 };
 
 }  // namespace ksana_llm

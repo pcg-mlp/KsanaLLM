@@ -21,6 +21,7 @@
 #include "utils/memory_allocator.h"
 #include "utils/search_path.h"
 #include "utils/singleton.h"
+#include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 
 using namespace ksana_llm;
 
@@ -135,6 +136,14 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
   }
 
   ~MultiHeadLatentAttentionTestModel() {}
+
+  std::unique_ptr<AttentionMetaCreator> CreateCustomAttentionMetaCreator(
+      const AttentionMetaCreator::Config& config) override {
+    if (model_config_.use_mla) {
+      return std::make_unique<DeepSeekV3AttentionMetaCreator>(config);
+    }
+    return nullptr;
+  }
 
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
     MultiHeadLatentAttention::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,

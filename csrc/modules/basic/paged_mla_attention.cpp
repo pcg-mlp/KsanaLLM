@@ -6,6 +6,8 @@
 
 #include "layers/paged_mla_attention_layer.h"
 #include "layers/paged_sparse_mla_attention_layer.h"
+#include "models/base/attention_meta/attention_meta.h"
+#include "models/base/attention_meta/attention_meta_builder.h"
 
 namespace ksana_llm {
 
@@ -73,27 +75,29 @@ PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, const
       creation_context.workspace_mgr->GetWorkspace(paged_mla_attention_layer_->GetWorkspaceSize()));
 }
 
-Status PagedMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input, ModelInput::input_info& page_input,
+Status PagedMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input, PagedAttentionMeta& page_meta,
                                   const AttentionForwardContext& attn_ctx, std::vector<Tensor>& hidden_buffer_tensors_1,
                                   Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
                                   Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor, Tensor& indices_tensor,
                                   std::vector<Tensor>& output_tensors) {
+  auto& page_mla = *page_meta.GetMLA();
+  auto& standard_shared = *model_input->shared_attention_meta->GetStandard();
   if (indices_tensor.GetElementNumber() > 0) {
     STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward(
-        {page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, q_rope_buffer_tensor, k_rope_buffer_tensor,
-         decode_q_buffer_tensor, /*q_ptr*/ hidden_buffer_tensors_1[0], kv_buffer_tensor, page_input.kv_list,
-         page_input.input_length, page_input.kv_cache_offset, model_input->layer_kv_cache_ptr, page_input.block_table,
-         page_input.tile_scheduler_metadata, page_input.num_splits, indices_tensor},
+        {page_meta.rotary_embedding_pos, page_meta.rotary_embedding_mask, q_rope_buffer_tensor, k_rope_buffer_tensor,
+         decode_q_buffer_tensor, /*q_ptr*/ hidden_buffer_tensors_1[0], kv_buffer_tensor, page_meta.kv_list,
+         page_meta.input_length, page_meta.kv_cache_offset, standard_shared.layer_kv_cache_ptr, page_meta.block_table,
+         page_mla.tile_scheduler_metadata, page_mla.num_splits, indices_tensor},
         output_tensors));
   } else {
     STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward(
-        {hidden_buffer_tensors_1[0], page_input.input_length, page_input.kv_list, page_input.kv_cache_offset,
-         page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, model_input->layer_kv_cache_ptr,
-         page_input.block_table, decode_q_buffer_tensor, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor,
-         page_input.tile_scheduler_metadata, page_input.num_splits},
+        {hidden_buffer_tensors_1[0], page_meta.input_length, page_meta.kv_list, page_meta.kv_cache_offset,
+         page_meta.rotary_embedding_pos, page_meta.rotary_embedding_mask, standard_shared.layer_kv_cache_ptr,
+         page_meta.block_table, decode_q_buffer_tensor, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor,
+         page_mla.tile_scheduler_metadata, page_mla.num_splits},
         output_tensors));
   }
-  page_input.tile_scheduler_metadata.shape[2] = 1;  // Mark meta as initialized
+  page_mla.tile_scheduler_metadata.shape[2] = 1;
   return Status();
 }
 

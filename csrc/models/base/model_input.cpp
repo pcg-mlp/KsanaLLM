@@ -6,28 +6,18 @@
 
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/torch.h>
+#include "models/base/attention_meta/flash_attention_meta_builder.h"
+#include "models/base/attention_meta/paged_attention_meta_builder.h"
 
-#ifdef ENABLE_CUDA
-#  include "csrc/kernels/nvidia/deepseek_deepgemm_wrapper.h"
-#  include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
-#  include "csrc/kernels/nvidia/flash_mla/kernels/params.h"
-#  include "csrc/kernels/nvidia/flash_sparse_mla/flash_sparse_mla.h"
-#  include "csrc/utils/nvidia/cuda_utils.h"
-#  include "kernels/nvidia/kernel_wrapper.h"
-#endif
 #include "cache_manager/block_allocator/block_allocator_interface.h"
 #include "configure/environment.h"
 #include "device/device_types.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_builder.h"
 #include "profiler/profile_event.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {
-
-#ifdef ENABLE_CUDA
-using ksana_llm::nvidia::kDeepGemmMaxQSeqLen;
-#else
-constexpr int kDeepGemmMaxQSeqLen = 2;
-#endif
 
 ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                        std::shared_ptr<Context> context, std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
@@ -36,6 +26,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
       rank_(rank),
       context_(context),
       block_cache_layout_(block_cache_layout) {
+  // AttentionMetaCreator is constructed later, after all Config parameters (e.g. max_table_block_num) are known.
+
   auto env = Singleton<Environment>::GetInstance();
   env->GetConnectorConfigs(connector_config_);
   PipelineConfig pipeline_config;
@@ -80,16 +72,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
 
-  // When enable_prefix_caching is disabled:
-  //   Represents the maximum number of blocks that can actually appear in the system.
-  //   This value is constrained by:
-  //     (max_seq_len + block_num - 1) / block_num * max_batch_size
-  //     and
-  //     reserved_memory_size / block_size.
-  //
-  // When enable_prefix_caching is enabled:
-  //   Physical blocks can be reused.
-  //   Therefore, max_table_block_num is reset to the max possible value.
   size_t max_table_block_num = ((max_seq_len + runtime_config.attn_backend_config.block_token_num - 1) /
                                 runtime_config.attn_backend_config.block_token_num) *
                                max_batch_size;
@@ -127,122 +109,46 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num});
 
-  input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
-  kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
-                   {static_cast<size_t>(layer_num_on_node_), max_table_block_num, 2});
-  layer_kv_cache_ptr =
-      Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)});
-  kv_cache_offset =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()});
-  rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
-  rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
-  block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_table_block_num});
-  if (model_config.use_dsa) {
-    store_out_loc = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-    layer_indexer_kv_cache_ptr =
-        Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)});
-    int num_sms = 0;
-#ifdef ENABLE_CUDA
-    num_sms = llm_kernels::utils::GetSMCount();
-#endif
-    for (size_t q_len = 1; q_len <= GetDecodeTokenNumThreshold(); q_len++) {
-      // Hack shape[2] as init flag (0/1), to avoid duplicate init
-      paged_schedule_metas.emplace_back(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-                                        std::vector<size_t>{static_cast<size_t>(num_sms + 1), 2, 1});
-    }
-    // DeepGEMM fp8_paged_mqa_logits kernel only supports q_seq_len in {1, 2}.
-    // For MTP > 2, we "fold" the query sequence dimension into the batch dimension:
-    // - Original: batch_size=B, q_seq_len=N (where N > 2)
-    // - Expanded: batch_size=B*N, q_seq_len=1 (if N is odd)
-    //          OR batch_size=B*N/2, q_seq_len=2 (if N is even)
-    // This requires expanding input_length and block_table tensors accordingly.
-    if (GetDecodeTokenNumThreshold() > kDeepGemmMaxQSeqLen) {
-      expanded_input_length =
-          Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * GetDecodeTokenNumThreshold()});
-      expanded_block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-                                    {max_batch_size * max_table_block_num * GetDecodeTokenNumThreshold()});
-    }
-  }
-#ifdef ENABLE_CUDA
-  // Only for flashmla
-  if (model_config_.use_mla) {
-    num_splits =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()});
-    const size_t head_num_per_tp =
-        model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
-    for (size_t q_len = 1; q_len <= GetDecodeTokenNumThreshold(); q_len++) {
-      if (model_config_.use_dsa) {
-        // Hack shape[2] as init flag (0/1), to avoid duplicate init
-        tile_scheduler_metadatas.emplace_back(
-            MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-            std::vector<size_t>{static_cast<size_t>(llm_kernels::nvidia::GetNumSmParts(head_num_per_tp, q_len)),
-                                static_cast<size_t>(llm_kernels::nvidia::GetDecodingSchedMetaSize() / sizeof(int)), 1});
-      } else {
-        llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-        llm_kernels::nvidia::GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, /*num_heads_k*/ 1, rank_);
-        tile_scheduler_metadatas.emplace_back(
-            MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-            std::vector<size_t>{static_cast<size_t>(flash_mla_workspace_map.num_sm_parts),
-                                llm_kernels::nvidia::TileSchedulerMetaDataSize});
-      }
-    }
-    if (model_config_.use_dsa) {
-      // DeepSeek Sparse MLA also uses flashmla for prefill tokens
-      // Set `q_len = 1` since `num_sm_parts` is inversely proportional to `q_len`
-      // Hack shape[2] as init flag (0/1), to avoid duplicate init
-      tile_scheduler_metadatas.emplace_back(
-          MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-          std::vector<size_t>{static_cast<size_t>(llm_kernels::nvidia::GetNumSmParts(head_num_per_tp, 1)),
-                              static_cast<size_t>(llm_kernels::nvidia::GetDecodingSchedMetaSize() / sizeof(int)), 1});
-    }
-  }
-#endif
+  attention_meta_creator_ = std::make_unique<AttentionMetaCreator>(AttentionMetaCreator::Config{
+      model_config_, runtime_config_, layer_num_on_node_, max_table_block_num, max_token_num,
+      GetDecodeTokenNumThreshold(), enable_blocked_multi_token_forwarding_kv_, rank_, pipeline_config.lower_layer_idx,
+      block_cache_layout_});
+  flash_meta = attention_meta_creator_->CreateFlashAttentionMeta();
+  shared_attention_meta = attention_meta_creator_->CreateSharedAttentionMeta();
 
   cpu_input_refit_tensor.pos_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {input_ids.shape[0]});
-
-  if (runtime_config_.enable_flexible_caching) {
-    dp_flexible_rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
-    dp_src_flexible_rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
-    if (model_config_.use_mla) {
-      dp_dst_flexible_rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
-    }
-    dp_flexible_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-
-    dp_dst_flexible_kv_cache_tensor =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_token_num * max_batch_size});
-    dp_src_flexible_kv_cache_tensor =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_token_num * max_batch_size});
-    dp_dst_flexible_token_idx_tensor =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size});
-    dp_src_flexible_token_idx_tensor =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size});
-  } else if (!enable_blocked_multi_token_forwarding_kv_) {
-    // Reserve space for configuration that supports flexible caching, even though flexible caching is disabled.
-    dp_flexible_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  }
 
   CreateVLTensors();
 
   // Create optional meta if needed
   if (model_config_.use_dsv4_attn) {
-    int layer_start_on_node = pipeline_config.lower_layer_idx;
-    compressor_meta_ = std::make_unique<CompressorMeta>(model_config_, runtime_config_, layer_num_on_node_,
-                                                        layer_start_on_node, rank_, context_, block_cache_layout);
     c4_indexer_meta_ = std::make_unique<C4IndexerMeta>(runtime_config_, rank_, context_);
-    dsv4_mqa_meta_ = std::make_unique<Dsv4MqaMeta>(model_config_, runtime_config_, layer_num_on_node_, rank_, context_,
-                                                   block_cache_layout);
   } else {
     if (model_config_.use_dsa) {
       indexer_meta_ = std::make_unique<IndexerMeta>(runtime_config_, rank_, context_, /*compress_ratio=*/1);
-    }
-    if (model_config_.use_mla) {
-      mla_meta_ = std::make_unique<MlaMeta>(runtime_config_, rank_, context_);
     }
   }
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&input_ids_event, EVENT_DISABLE_TIMING);
+
+  AttentionBuilderConfig builder_config{model_config_,
+                                        runtime_config_,
+                                        enable_blocked_multi_token_forwarding_kv_,
+                                        use_flashinfer_for_decode_,
+                                        rank_,
+                                        layer_num_on_node_,
+                                        block_size_,
+                                        kv_cache_types_,
+                                        kv_cache_layer_offsets_,
+                                        attn_dp_group_id_,
+                                        attn_dp_rank_id_,
+                                        context_,
+                                        kvcache_offset_event,
+                                        rotary_embedding_event};
+  flash_builder_ = attention_meta_creator_->CreateFlashBuilder(builder_config);
+  paged_builder_ = attention_meta_creator_->CreatePagedBuilder(builder_config);
 
 #if defined(ENABLE_ACL)
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
@@ -296,6 +202,33 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 #endif
 }
 
+const AttentionMetaCreator::Config& ModelInput::GetCreatorConfig() const {
+  return attention_meta_creator_->GetConfig();
+}
+
+void ModelInput::ReplaceAttentionMetaCreator(std::unique_ptr<AttentionMetaCreator> creator) {
+  attention_meta_creator_ = std::move(creator);
+  flash_meta = attention_meta_creator_->CreateFlashAttentionMeta();
+  shared_attention_meta = attention_meta_creator_->CreateSharedAttentionMeta();
+
+  AttentionBuilderConfig builder_config{model_config_,
+                                        runtime_config_,
+                                        enable_blocked_multi_token_forwarding_kv_,
+                                        use_flashinfer_for_decode_,
+                                        rank_,
+                                        layer_num_on_node_,
+                                        block_size_,
+                                        kv_cache_types_,
+                                        kv_cache_layer_offsets_,
+                                        attn_dp_group_id_,
+                                        attn_dp_rank_id_,
+                                        context_,
+                                        kvcache_offset_event,
+                                        rotary_embedding_event};
+  flash_builder_ = attention_meta_creator_->CreateFlashBuilder(builder_config);
+  paged_builder_ = attention_meta_creator_->CreatePagedBuilder(builder_config);
+}
+
 ModelInput::~ModelInput() {
   EventDestroy(kvcache_offset_event);
   EventDestroy(rotary_embedding_event);
@@ -331,21 +264,37 @@ void ModelInput::CreateVLTensors() {
 }
 
 void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs) {
-  // Reset the offsets of shared tensors
-  input_length.shape = {0};
-  expanded_input_length.shape = {0};
-  kv_list.shape = {0};
-  kv_cache_offset.shape = {0};
-  rotary_embedding_pos.shape = {0};
-  rotary_embedding_mask.shape = {0};
-  block_table.shape = {0};
-  expanded_block_table.shape = {0};
-  num_splits.shape = {0};
-  store_out_loc.shape = {0};
+  auto& shared_attention_meta = static_cast<StandardSharedAttentionMeta&>(*this->shared_attention_meta);
+  auto& flash_meta = *this->flash_meta;
 
-  // Reset the input_infos
-  flash_input.Reset();
-  page_inputs.clear();
+  shared_attention_meta.input_length.shape = {0};
+  shared_attention_meta.kv_list.shape = {0};
+  shared_attention_meta.kv_cache_offset.shape = {0};
+  shared_attention_meta.rotary_embedding_pos.shape = {0};
+  shared_attention_meta.rotary_embedding_mask.shape = {0};
+  shared_attention_meta.block_table.shape = {0};
+  if (model_config_.use_dsa) {
+    auto& dsa_shared = *shared_attention_meta.GetDSA();
+    dsa_shared.expanded_input_length.shape = {0};
+    dsa_shared.expanded_block_table.shape = {0};
+    dsa_shared.store_out_loc.shape = {0};
+  }
+  if (model_config_.use_mla) {
+    shared_attention_meta.GetMLA()->num_splits.shape = {0};
+  }
+  if (model_config_.use_dsv4_attn) {
+    auto& mqa_shared = *shared_attention_meta.GetMqa();
+    mqa_shared.raw_out_loc_tensor.shape = {0};
+    mqa_shared.swa_block_indices_tensor.shape = {0};
+    mqa_shared.c128_block_indices_tensor.shape = {0};
+    mqa_shared.c128_topk_lengths_tensor.shape = {0};
+    mqa_shared.c4_num_splits_tensor.shape = {0};
+    mqa_shared.c128_num_splits_tensor.shape = {0};
+  }
+
+  // Reset the input_metas
+  flash_meta.Reset();
+  page_metas.clear();
 
   multi_token_request_num = 0;
   dp_multi_token_request_num = 0;
@@ -356,23 +305,24 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
       ++multi_token_request_num;
       if (req.attn_dp_group_id == attn_dp_group_id_) {
         ++dp_multi_token_request_num;
-        flash_input.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+        flash_meta.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
       }
     } else {  // req.GetType() == ForwardRequestType::kPage
       ++single_token_request_num;
       if (req.attn_dp_group_id == attn_dp_group_id_) {
         ++dp_single_token_request_num;
         if (const size_t input_ids_len = req.GetInputIdsLength();
-            page_inputs.empty() || page_inputs.back().q_seq_len != input_ids_len) {
-          // `page_inputs.back().q_seq_len` should be greater than `input_ids_len`,
+            page_metas.empty() || page_metas.back()->q_seq_len != input_ids_len) {
+          // `page_metas.back()->q_seq_len` should be greater than `input_ids_len`,
           // since requests in the same dp group are sorted in descending order by their token numbers
-          page_inputs.emplace_back().q_seq_len = input_ids_len;
+          page_metas.emplace_back(attention_meta_creator_->CreatePagedAttentionMeta());
+          page_metas.back()->q_seq_len = input_ids_len;
           // For odd q_seq_len, fold into q_seq_len batches with q_seq_len=1
           // For even q_seq_len, fold into q_seqlen/2 batches with q_seq_len=2
-          page_inputs.back().expanded_batch_size = (input_ids_len & 1 ? input_ids_len : input_ids_len >> 1);
+          page_metas.back()->expanded_batch_size = (input_ids_len & 1 ? input_ids_len : input_ids_len >> 1);
         }
-        auto& page_input = page_inputs.back();
-        page_input.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+        auto& page_meta = *page_metas.back();
+        page_meta.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
       }
     }
   }
@@ -420,9 +370,9 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 
   KLLM_LOG_DEBUG << fmt::format(
       "run_mode: {}, dp_multi_token_request_num: {}, dp_context_tokens: {}, dp_single_token_request_num: {}, "
-      "dp_decode_tokens: {}, dp_total_prefix_len: {}, page_inputs.size(): {}",
+      "dp_decode_tokens: {}, dp_total_prefix_len: {}, page_metas.size(): {}",
       (run_mode == RunMode::kMain ? "main" : "next"), dp_multi_token_request_num, dp_context_tokens,
-      dp_single_token_request_num, dp_decode_tokens, dp_total_prefix_len, page_inputs.size());
+      dp_single_token_request_num, dp_decode_tokens, dp_total_prefix_len, page_metas.size());
 
   PrepareInputIds(forward_reqs);
   PrepareVLInputRefit(forward_reqs);
@@ -432,21 +382,36 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareCutoffLayer(forward_reqs);
   PrepareNextNGatherIdx(forward_reqs, run_mode);
 
-  // Prepare optional meta if needed
-  if (compressor_meta_) {
-    compressor_meta_->Prepare(forward_reqs);
+  // Prepare compressor metadata if use_dsv4_attn is enabled.
+  if (model_config_.use_dsv4_attn) {
+    auto* dsv4_shared = dynamic_cast<DeepSeekV4SharedAttentionMeta*>(shared_attention_meta.get());
+    auto* dsv4_flash_meta = dsv4_shared ? dynamic_cast<DeepSeekV4FlashAttentionMeta*>(flash_meta.get()) : nullptr;
+    if (dsv4_shared && dsv4_flash_meta) {
+      // Find the single-token decode bucket (q_seq_len == 1) for the paged compressor path.
+      // In MTP scenarios there may be higher-q_seq_len buckets before it.
+      DeepSeekV4PagedAttentionMeta* dsv4_paged_meta = nullptr;
+      for (auto& pi : page_metas) {
+        if (pi->q_seq_len == 1) {
+          dsv4_paged_meta = dynamic_cast<DeepSeekV4PagedAttentionMeta*>(pi.get());
+          break;
+        }
+      }
+      if (dsv4_paged_meta) {
+        PrepareCompressor(forward_reqs, dsv4_shared->compressor, dsv4_flash_meta->compressor,
+                          dsv4_paged_meta->compressor, context_);
+      } else {
+        // Pure prefill batch (no single-token decode requests): sink paged output into a temporary.
+        DeepSeekV4PagedAttentionMeta tmp_paged_meta;
+        PrepareCompressor(forward_reqs, dsv4_shared->compressor, dsv4_flash_meta->compressor, tmp_paged_meta.compressor,
+                          context_);
+      }
+    }
   }
   if (c4_indexer_meta_) {
     c4_indexer_meta_->Prepare(forward_reqs);
   }
-  if (dsv4_mqa_meta_) {
-    dsv4_mqa_meta_->Prepare(forward_reqs);
-  }
   if (indexer_meta_) {
     indexer_meta_->Prepare(forward_reqs);
-  }
-  if (mla_meta_) {
-    mla_meta_->Prepare(forward_reqs);
   }
 
   PreparePrefill();
@@ -957,26 +922,6 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
 }
 #endif
 
-// If the batch of multi token requests all require the next token (`max_new_tokens = 1`),
-// and all the caching optimizations are disabled, then the kv cache is unnecessary.
-void ModelInput::PrepareUseCache(input_info& input) {
-  use_cache = runtime_config_.enable_prefix_caching || runtime_config_.enable_flexible_caching ||
-              runtime_config_.separate_prefill_decode;
-  if (enable_blocked_multi_token_forwarding_kv_ || use_flashinfer_for_decode_) {
-    use_cache = true;
-  }
-  if (use_cache) {
-    return;
-  }
-
-  for (const ForwardRequest* dp_req : input.dp_reqs) {
-    if (dp_req->sampling_config == nullptr || dp_req->sampling_config->max_new_tokens != 1) {
-      use_cache = true;
-      return;
-    }
-  }
-}
-
 #ifdef ENABLE_CUDA
 template <typename T>
 void ModelInput::PrepareImgMask(size_t pos_num) {
@@ -1004,467 +949,24 @@ void ModelInput::PrepareImgMask(size_t pos_num) {
 }
 #endif
 
-void ModelInput::PrepareInputLength(input_info& input) {
-  PROFILE_EVENT_SCOPE(PrepareInputLength, "PrepareInputLength", rank_);
-  const auto& reqs = input.dp_reqs;
-
-  input_length_host_.resize(reqs.size());
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    input_length_host_[i] = reqs[i]->forwarding_tokens->size();
-  }
-
-  KLLM_LOG_DEBUG << "input_length_host " << input_length_host_;
-  input.input_length = input_length.GetView({input_length_host_.size()}, input_length.shape[0]);
-  input_length.shape[0] += input.input_length.GetElementNumber();
-  MemcpyAsync(input.input_length.GetPtr<void>(), input_length_host_.data(),
-              input_length_host_.size() * sizeof(decltype(input_length_host_)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
-
-  // Prepare expanded version for dsa with mtp_step_num > 1
-  if (model_config_.use_dsa && input.q_seq_len > kDeepGemmMaxQSeqLen) {
-    expanded_input_length_host_.clear();
-    expanded_input_length_host_.reserve(reqs.size() * input.expanded_batch_size);
-    // Fold odd length to 1 and even length to 2
-    const int expanded_q_seq_len = (input.q_seq_len & 1 ? 1 : 2);
-    for (size_t i = 0; i < reqs.size(); ++i) {
-      for (size_t j = 1; j <= input.expanded_batch_size; ++j) {
-        expanded_input_length_host_.push_back(reqs[i]->kv_cached_token_num + j * expanded_q_seq_len);
-      }
-    }
-
-    KLLM_LOG_DEBUG << "expanded_input_length_host " << expanded_input_length_host_;
-    input.expanded_input_length =
-        expanded_input_length.GetView({expanded_input_length_host_.size()}, expanded_input_length.shape[0]);
-    expanded_input_length.shape[0] += input.expanded_input_length.GetElementNumber();
-    MemcpyAsync(input.expanded_input_length.GetPtr<void>(), expanded_input_length_host_.data(),
-                expanded_input_length_host_.size() * sizeof(decltype(expanded_input_length_host_)::value_type),
-                MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-  }
-}
-
-void ModelInput::PrepareKVCacheBlocks(input_info& info) {
-  PROFILE_EVENT_SCOPE(PrepareKVCacheBlocks, "PrepareKVCacheBlocks", rank_);
-  const auto& reqs = info.dp_reqs;
-
-  std::vector<int> kv_cache_offset_host(reqs.size() + 1);
-  kv_cache_offset_host[0] = 0;  // first is 0
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    kv_cache_offset_host[i + 1] = reqs[i]->kv_cache_ptrs.size() + kv_cache_offset_host[i];
-  }
-
-  KLLM_LOG_DEBUG << "kv_cache_offset_host " << kv_cache_offset_host;
-
-  info.kv_cache_offset = kv_cache_offset.GetView({kv_cache_offset_host.size()}, kv_cache_offset.shape[0]);
-  kv_cache_offset.shape[0] += info.kv_cache_offset.GetElementNumber();
-  MemcpyAsync(info.kv_cache_offset.GetPtr<void>(), kv_cache_offset_host.data(),
-              kv_cache_offset_host.size() * sizeof(decltype(kv_cache_offset_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetD2HStream());
-
-  const int total_block_num = kv_cache_offset_host.back();
-  // DeepSeek-V4 has heterogeneous per-layer cache_size (c4/c128 + indexer/attn/swa/tail),
-  // so InvokeProcessKvList's assumption of a uniform `block_size / layer_num` stride
-  // does not hold. Fill kv_list on the host with the real per-layer offsets and skip
-  // the device-side expansion. Other models keep the fast path "host fills layer 0,
-  // then ProcessKvList extends to the rest".
-  const bool host_fill_all_layers =
-#ifdef ENABLE_CUDA
-      model_config_.use_dsv4_attn;
-#else
-      true;  // ASCEND already fills all layers on host.
-#endif
-  for (const auto& kv_cache_type : kv_cache_types_) {
-    if (kv_cache_type != "attention") {
-      continue;
-    }
-
-    const size_t kv_list_layer_count =
-#ifdef ENABLE_CUDA
-        host_fill_all_layers ? static_cast<size_t>(layer_num_on_node_) : 1;
-#else
-        static_cast<size_t>(layer_num_on_node_);
-#endif
-    std::vector<void*> kv_list_host(kv_list_layer_count * total_block_num * 2);
-    const auto& cached_layer_offsets = kv_cache_layer_offsets_.at(kv_cache_type);
-    for (size_t layer_i = 0; layer_i < kv_list_layer_count; ++layer_i) {
-      // Per-layer offsets are already absolute within one block, no extra layer base needed.
-      const auto& layer_offsets = cached_layer_offsets[layer_i];
-      void** k_ptr = kv_list_host.data() + layer_i * total_block_num * 2;
-      void** v_ptr = kv_list_host.data() + layer_i * total_block_num * 2 + total_block_num;
-      for (size_t req_i = 0; req_i < reqs.size(); ++req_i) {
-        for (const auto& cache_ptr : reqs[req_i]->kv_cache_ptrs) {
-          *k_ptr++ = cache_ptr + layer_offsets.k_offset;
-          *v_ptr++ = cache_ptr + layer_offsets.v_offset;
-        }
-      }
-    }
-
-    Tensor* current_info_kv_list = &info.kv_list;
-    Tensor* current_kv_list = &kv_list;
-    KLLM_LOG_DEBUG << kv_cache_type << " kv_list_host " << kv_list_host;
-    *current_info_kv_list = current_kv_list->GetView(
-        {static_cast<size_t>(layer_num_on_node_), static_cast<size_t>(total_block_num * 2)}, current_kv_list->shape[0]);
-    current_kv_list->shape[0] += current_info_kv_list->GetElementNumber();
-    MemcpyAsync(current_info_kv_list->GetPtr<void>(), kv_list_host.data(),
-                kv_list_host.size() * sizeof(decltype(kv_list_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-                context_->device->GetD2HStream());
-
-#ifdef ENABLE_CUDA
-    // Only extend on device when host populated layer 0 alone.
-    if (!host_fill_all_layers && total_block_num > 0 && layer_num_on_node_ > 1) {
-      InvokeProcessKvList(current_info_kv_list->GetPtr<void*>(), layer_num_on_node_, total_block_num * 2, block_size_,
-                          context_->device->GetD2HStream().Get());
-    }
-#endif
-  }
-
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->device->GetD2HStream());
-#endif
-  EventRecord(kvcache_offset_event, context_->device->GetD2HStream());
-}
-
-void ModelInput::PrepareDecodeRotary(input_info& input) {
-  PROFILE_EVENT_SCOPE(PrepareDecodeRotary, "PrepareDecodeRotary", rank_);
-  size_t total_input_len = 0;
-  for (const auto& req : input.dp_reqs) {
-    total_input_len += req->forwarding_tokens->size() - req->kv_cached_token_num;
-  }
-  input.total_dp_input_ids_len = total_input_len;
-
-  // prepare mask
-  std::vector<int64_t> rotary_mask_host(total_input_len, 1);
-  input.rotary_embedding_mask =
-      rotary_embedding_mask.GetView({rotary_mask_host.size()}, rotary_embedding_mask.shape[0]);
-  rotary_embedding_mask.shape[0] += input.rotary_embedding_mask.GetElementNumber();
-  MemcpyAsync(input.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
-              sizeof(decltype(rotary_mask_host)::value_type) * rotary_mask_host.size(), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetD2HStream());
-
-  // prepare pos
-  std::vector<int64_t> rotary_pos_host(total_input_len, 1);
-  size_t rotary_data_offset = 0;
-  for (const auto& req : input.dp_reqs) {
-    const size_t input_len = req->forwarding_tokens->size() - req->kv_cached_token_num;
-    auto pos_offset =
-        !model_config_.rope_scaling_factor_config.mrope_section.empty() ? *req->mrotary_embedding_pos_offset : 0;
-    pos_offset = model_config_.type == "arc_hunyuan_video" ? *req->xdrotary_embedding_pos_offset : pos_offset;
-    std::iota(rotary_pos_host.begin() + rotary_data_offset, rotary_pos_host.begin() + rotary_data_offset + input_len,
-              req->kv_cached_token_num + pos_offset);
-    rotary_data_offset += input_len;
-  }
-  KLLM_LOG_DEBUG << "rotary_pos_host " << rotary_pos_host;
-  input.rotary_embedding_pos = rotary_embedding_pos.GetView({rotary_pos_host.size()}, rotary_embedding_pos.shape[0]);
-  rotary_embedding_pos.shape[0] += input.rotary_embedding_pos.GetElementNumber();
-  MemcpyAsync(input.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
-              sizeof(decltype(rotary_pos_host)::value_type) * rotary_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetD2HStream());
-
-  EventRecord(rotary_embedding_event, context_->device->GetD2HStream());
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->device->GetD2HStream());
-#endif
-}
-
-void ModelInput::PrepareFlashRotary(input_info& input) {
-  size_t total_input_len = 0;
-  for (const auto& req : input.dp_reqs) {
-    total_input_len += req->forwarding_tokens->size();
-  }
-  input.total_dp_input_ids_len = total_input_len - dp_total_prefix_len;
-
-  const size_t rotary_host_size =
-      enable_blocked_multi_token_forwarding_kv_ ? input.total_dp_input_ids_len : total_input_len;
-  std::vector<int64_t> rotary_mask_host(rotary_host_size, 1);
-  std::vector<int64_t> rotary_pos_host(rotary_host_size);
-
-  size_t rotary_host_idx = 0;
-  for (const auto& req : input.dp_reqs) {
-    if (enable_blocked_multi_token_forwarding_kv_) {
-      std::iota(rotary_pos_host.begin() + rotary_host_idx,
-                rotary_pos_host.begin() + rotary_host_idx + req->forwarding_tokens->size() - req->prefix_cache_len,
-                req->prefix_cache_len);
-      rotary_host_idx += req->forwarding_tokens->size() - req->prefix_cache_len;
-    } else {
-      // mask real prefix(exclude flexible cache), now equals kv_cached_token_num
-      std::fill_n(rotary_mask_host.begin() + rotary_host_idx, req->kv_cached_token_num, 0);
-      // Assign rotary positional values
-      std::iota(rotary_pos_host.begin() + rotary_host_idx,
-                rotary_pos_host.begin() + rotary_host_idx + req->forwarding_tokens->size(), 0);
-      rotary_host_idx += req->forwarding_tokens->size();
-    }
-  }
-
-  input.rotary_embedding_pos = rotary_embedding_pos.GetView({rotary_pos_host.size()}, rotary_embedding_pos.shape[0]);
-  rotary_embedding_pos.shape[0] += input.rotary_embedding_pos.GetElementNumber();
-  MemcpyAsync(input.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
-              sizeof(decltype(rotary_pos_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetD2HStream());
-  input.rotary_embedding_mask =
-      rotary_embedding_mask.GetView({rotary_mask_host.size()}, rotary_embedding_mask.shape[0]);
-  rotary_embedding_mask.shape[0] += input.rotary_embedding_mask.GetElementNumber();
-  MemcpyAsync(input.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
-              sizeof(decltype(rotary_mask_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetD2HStream());
-
-  // For DeepSeek model, rope of flexible cached tokens and forwarding new tokens cannot be fused
-  // because q&k buffers differ in total_tokens when there is prefix
-  // If q&k forwarding parts is processed together, k flexible part must be handled separately
-  if (dp_dst_flexible_kv_cache_tensor.shape[0] != 0) {
-    // rotary_mask_host can be shared for rotary_pos_host and mla_dst_flexible_rotary_pos_host
-    rotary_mask_host.assign(total_input_len, 0);
-    // rotary_pos_host stores reverse rope information of flexible cached tokens
-    rotary_pos_host.assign(total_input_len, 0);
-    // mla_dst_flexible_rotary_pos_host stores correct rope information of flexible cached tokens
-    std::vector<int64_t> mla_dst_flexible_rotary_pos_host(total_input_len, 0);
-
-    size_t flexible_rotary_idx = 0;
-    for (const auto& req : input.dp_reqs) {
-      if (req->flexible_cache_len > 0) {
-        std::fill(rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len - req->flexible_cache_len,
-                  rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len, 1);
-        for (auto& task : *req->flexible_cached_copy_tasks) {
-          // Reverse rope information stores src_token_idx_ to clear existing rope information
-          rotary_pos_host[flexible_rotary_idx + task.dst_token_idx_] = task.src_token_idx_;
-          // For DeepSeek model, prepare correct rope information of flexible part
-          if (model_config_.use_mla) {
-            // Correct rope information stores dst_token_idx_ to embed correct rope information
-            mla_dst_flexible_rotary_pos_host[flexible_rotary_idx + task.dst_token_idx_] = task.dst_token_idx_;
-          }
-        }
-      }
-      flexible_rotary_idx += req->forwarding_tokens->size();
-    }
-    MemcpyAsync(dp_flexible_rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
-                sizeof(decltype(rotary_mask_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                context_->device->GetD2HStream());
-    MemcpyAsync(dp_src_flexible_rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
-                sizeof(decltype(rotary_pos_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                context_->device->GetD2HStream());
-    if (model_config_.use_mla) {
-      MemcpyAsync(dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(), mla_dst_flexible_rotary_pos_host.data(),
-                  sizeof(decltype(mla_dst_flexible_rotary_pos_host)::value_type) * flexible_rotary_idx,
-                  MEMCPY_HOST_TO_DEVICE, context_->device->GetD2HStream());
-    }
-  }
-  EventRecord(rotary_embedding_event, context_->device->GetD2HStream());
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->device->GetD2HStream());
-#endif
-}
-
-void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
-  // FlashInfer also needs block table
-  PROFILE_EVENT_SCOPE(PrepareKVCacheBlockTable, "PrepareKVCacheBlockTable", rank_);
-  if (!enable_blocked_multi_token_forwarding_kv_ && !use_flashinfer_for_decode_) {
-    return;
-  }
-
-  const auto& reqs = info.dp_reqs;
-
-  // Initialize layer_kv_cache_ptr once
-  if (!layer_kv_cache_ptr_initialized_) {
-    layer_kv_cache_ptr_initialized_ = true;
-
-    const auto block_allocator_manager = reqs.front()->block_allocator_manager;
-    const auto block_allocator_group = block_allocator_manager->GetBlockAllocatorGroup(attn_dp_group_id_);
-    const auto device_allocator = block_allocator_group->GetDeviceBlockAllocator(attn_dp_rank_id_);
-
-    for (const auto& kv_cache_type : kv_cache_types_) {
-      void** current_layer_kv_cache_ptr;
-      if (kv_cache_type == "attention") {
-        current_layer_kv_cache_ptr = layer_kv_cache_ptr.GetPtr<void*>();
-      } else {  // kv_cache_type == "indexer"
-        current_layer_kv_cache_ptr = layer_indexer_kv_cache_ptr.GetPtr<void*>();
-      }
-      *reinterpret_cast<int64_t*>(current_layer_kv_cache_ptr) =
-          block_allocator_group->GetBlockAllocatorGroupConfig().device_block_num *
-          (model_config_.use_dsa ? 1 : layer_num_on_node_) *
-          (model_config_.use_mla ? 1 : 2);  // Refer to ModelBuilder::BuildFlatKVCacheBlkIds
-      ++current_layer_kv_cache_ptr;
-
-      // Get each layer's raw pointer of k_cache and v_cache tensor from
-      // kv_cache[num_blocks, num_layers, 2, block_size, num_kv_heads, head_size]
-      // block_size is [num_layers, 2, block_size, num_kv_heads, head_size]
-      void* const blocks_base_ptr = device_allocator->GetBlocksBasePtr();
-      const auto& cached_layer_offsets = kv_cache_layer_offsets_.at(kv_cache_type);
-      for (int layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
-        const auto& layer_offsets = cached_layer_offsets[layer_idx];
-        *current_layer_kv_cache_ptr++ = blocks_base_ptr + layer_offsets.k_offset;
-        *current_layer_kv_cache_ptr++ = blocks_base_ptr + layer_offsets.v_offset;
-      }
-    }
-  }
-
-  size_t max_num_blocks_per_query = 0;
-  for (const auto& req : reqs) {
-    max_num_blocks_per_query =
-        std::max(max_num_blocks_per_query, req->atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size());
-  }
-
-  std::vector<int32_t> block_table_host(reqs.size() * max_num_blocks_per_query, -1);
-  // The pointer has already been offset by layer_idx, so all layers can use the same block_table.
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    const auto& block_ids = reqs[i]->atb_kv_cache_base_blk_ids[attn_dp_rank_id_];
-    for (size_t base_block_idx = 0; base_block_idx < block_ids.size(); ++base_block_idx) {
-      block_table_host[i * max_num_blocks_per_query + base_block_idx] = block_ids[base_block_idx];
-    }
-  }
-  KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
-  info.block_table = block_table.GetView({reqs.size(), max_num_blocks_per_query}, block_table.shape[0]);
-  block_table.shape[0] += info.block_table.GetElementNumber();
-  MemcpyAsync(info.block_table.GetPtr<void>(), block_table_host.data(),
-              block_table_host.size() * sizeof(decltype(block_table_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
-
-  // Prepare expanded version for dsa with mtp_step_num > 1
-  if (model_config_.use_dsa && info.q_seq_len > kDeepGemmMaxQSeqLen) {
-    std::vector<int32_t> expanded_block_table_host(reqs.size() * info.expanded_batch_size * max_num_blocks_per_query,
-                                                   -1);
-    // The pointer has already been offset by layer_idx, so all layers can use the same block_table.
-    for (size_t i = 0; i < reqs.size(); ++i) {
-      const auto& block_ids = reqs[i]->atb_kv_cache_base_blk_ids[attn_dp_rank_id_];
-      for (size_t j = 0; j < info.expanded_batch_size; ++j) {
-        for (size_t base_block_idx = 0; base_block_idx < block_ids.size(); ++base_block_idx) {
-          expanded_block_table_host[(i * info.expanded_batch_size + j) * max_num_blocks_per_query + base_block_idx] =
-              block_ids[base_block_idx];
-        }
-      }
-    }
-    KLLM_LOG_DEBUG << "expanded_block_table_host " << expanded_block_table_host;
-    info.expanded_block_table = expanded_block_table.GetView(
-        {reqs.size() * info.expanded_batch_size, max_num_blocks_per_query}, expanded_block_table.shape[0]);
-    expanded_block_table.shape[0] += info.expanded_block_table.GetElementNumber();
-    MemcpyAsync(info.expanded_block_table.GetPtr<void>(), expanded_block_table_host.data(),
-                expanded_block_table_host.size() * sizeof(decltype(expanded_block_table_host)::value_type),
-                MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-  }
-
-#ifdef ENABLE_ACL
-  StreamSynchronize(context_->device->GetD2HStream());
-#endif
-  EventRecord(kvcache_offset_event, context_->device->GetD2HStream());
-}
-
-void ModelInput::PrepareFlashMla(input_info& input) {
-#ifdef ENABLE_CUDA
-  if (!model_config_.use_mla || input.dp_reqs.empty()) {
-    return;
-  }
-  PROFILE_EVENT_SCOPE(PrepareFlashMla, "PrepareFlashMla", rank_);
-  const size_t batch_size = input.q_seq_len == 0 ? 1 : input.dp_reqs.size();
-  input.tile_scheduler_metadata =
-      tile_scheduler_metadatas[input.q_seq_len == 0 ? GetDecodeTokenNumThreshold() : input.q_seq_len - 1];
-  input.num_splits = num_splits.GetView({batch_size + 1}, num_splits.shape[0]);
-  num_splits.shape[0] += input.num_splits.GetElementNumber();
-  if (!model_config_.use_dsa) {
-    llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-    flash_mla_workspace_map.num_sm_parts = input.tile_scheduler_metadata.shape[0];
-    flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
-    flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
-    llm_kernels::nvidia::InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, batch_size,
-                                              context_->device->GetH2DStream().Get());
-  } else {
-    input.tile_scheduler_metadata.shape[2] = 0;  // mark meta as uninitialized
-    if (input.q_seq_len > 0) {
-      input.paged_schedule_meta = paged_schedule_metas[input.q_seq_len - 1];
-      input.paged_schedule_meta.shape[2] = 0;  // mark meta as uninitialized
-    }
-  }
-#endif
-}
-
 void ModelInput::PreparePrefill() {
-  dp_dst_flexible_kv_cache_tensor.shape = {0};
-  if (flash_input.dp_reqs.empty()) {
+  auto& shared_attention_meta = *this->shared_attention_meta->GetStandard();
+  auto& flash_meta = *this->flash_meta;
+
+  shared_attention_meta.dp_dst_flexible_kv_cache_tensor.shape = {0};
+  if (flash_meta.dp_reqs.empty()) {
     return;
   }
 
   PROFILE_EVENT_SCOPE(PreparePrefill, "PreparePrefill", rank_);
-
-  if (model_config_.use_dsa) {
-    PrepareFlashMla(flash_input);
-  }
-  PrepareUseCache(flash_input);
-  if (use_cache) {
-    PrepareFlexibleCache(flash_input);
-    PrepareKVCacheBlocks(flash_input);
-    PrepareKVCacheBlockTable(flash_input);
-    PrepareStoreOutLoc(flash_input);
-  }
-  PrepareFlashRotary(flash_input);
+  use_cache = flash_builder_->Build(flash_meta, shared_attention_meta, dp_total_prefix_len);
 }
 
 void ModelInput::PrepareDecode() {
   PROFILE_EVENT_SCOPE(PrepareDecode, "PrepareDecode", rank_);
-  for (auto& page_input : page_inputs) {
-    PrepareInputLength(page_input);
-    PrepareKVCacheBlocks(page_input);
-    PrepareKVCacheBlockTable(page_input);
-    PrepareDecodeRotary(page_input);
-    PrepareFlashMla(page_input);
-    PrepareStoreOutLoc(page_input);
+  for (auto& page_meta : page_metas) {
+    paged_builder_->Build(*page_meta, *shared_attention_meta);
   }
-}
-
-void ModelInput::PrepareFlexibleCache(input_info& input) {
-  // Flexible cache supported scope: dense model with paged attn layout, deepseek model
-  // Flexible cache not supported scope: dense model with flash attn layout
-  if (!runtime_config_.enable_flexible_caching && enable_blocked_multi_token_forwarding_kv_) {
-    return;
-  }
-
-  std::vector<int> dst_flexible_kv_cache_id_cpu;
-  std::vector<int> src_flexible_kv_cache_id_cpu;
-  std::vector<int> dst_flexible_token_idx_cpu;
-  std::vector<int> src_flexible_token_idx_cpu;
-  std::vector<uint64_t> flexible_offset_uint64_cpu = {0};
-
-  for (const auto& req : input.dp_reqs) {
-    if (req->attn_dp_group_id != attn_dp_group_id_) {
-      continue;
-    }
-
-    flexible_offset_uint64_cpu.emplace_back(flexible_offset_uint64_cpu.back() + req->prefix_cache_len -
-                                            req->flexible_cache_len);
-    for (const auto& task : *req->flexible_cached_copy_tasks) {
-      dst_flexible_kv_cache_id_cpu.emplace_back(task.dst_block_id_);
-      src_flexible_kv_cache_id_cpu.emplace_back(task.src_block_id_);
-      dst_flexible_token_idx_cpu.emplace_back(task.dst_token_idx_);
-      src_flexible_token_idx_cpu.emplace_back(task.src_token_idx_);
-    }
-  }
-
-  dp_flexible_offset_uint64_tensor.shape = {flexible_offset_uint64_cpu.size()};
-  MemcpyAsync(dp_flexible_offset_uint64_tensor.GetPtr<void>(), flexible_offset_uint64_cpu.data(),
-              flexible_offset_uint64_cpu.size() * sizeof(decltype(flexible_offset_uint64_cpu)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-
-  if (dst_flexible_kv_cache_id_cpu.empty() || !runtime_config_.enable_flexible_caching) {
-    dp_dst_flexible_kv_cache_tensor.shape = {0};
-    return;
-  }
-
-  std::vector<void*> dst_flexible_kv_cache_cpu(dst_flexible_kv_cache_id_cpu.size());
-  std::vector<void*> src_flexible_kv_cache_cpu(src_flexible_kv_cache_id_cpu.size());
-  const auto block_allocator_manager = input.dp_reqs.front()->block_allocator_manager;
-  auto device_allocator =
-      block_allocator_manager->GetBlockAllocatorGroup(attn_dp_group_id_)->GetDeviceBlockAllocator(attn_dp_rank_id_);
-  device_allocator->GetBlockPtrs(dst_flexible_kv_cache_id_cpu, dst_flexible_kv_cache_cpu);
-  device_allocator->GetBlockPtrs(src_flexible_kv_cache_id_cpu, src_flexible_kv_cache_cpu);
-
-  dp_dst_flexible_kv_cache_tensor.shape = {dst_flexible_kv_cache_cpu.size()};
-  MemcpyAsync(dp_dst_flexible_kv_cache_tensor.GetPtr<void>(), dst_flexible_kv_cache_cpu.data(),
-              dst_flexible_kv_cache_cpu.size() * sizeof(decltype(dst_flexible_kv_cache_cpu)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-  MemcpyAsync(dp_src_flexible_kv_cache_tensor.GetPtr<void>(), src_flexible_kv_cache_cpu.data(),
-              src_flexible_kv_cache_cpu.size() * sizeof(decltype(src_flexible_kv_cache_cpu)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-  MemcpyAsync(dp_dst_flexible_token_idx_tensor.GetPtr<void>(), dst_flexible_token_idx_cpu.data(),
-              dst_flexible_token_idx_cpu.size() * sizeof(decltype(dst_flexible_token_idx_cpu)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
-  MemcpyAsync(dp_src_flexible_token_idx_tensor.GetPtr<void>(), src_flexible_token_idx_cpu.data(),
-              src_flexible_token_idx_cpu.size() * sizeof(decltype(src_flexible_token_idx_cpu)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 }
 
 void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs) {
@@ -1605,31 +1107,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   // Event wait between streams seems not work, force sync here.
   StreamSynchronize(context_->device->GetH2DStream());
 #endif
-}
-
-void ModelInput::PrepareStoreOutLoc(input_info& input) {
-  if (!model_config_.use_dsa) {
-    return;
-  }
-  PROFILE_EVENT_SCOPE(PrepareStoreOutLoc, "PrepareStoreOutLoc", rank_);
-
-  const int block_token_num = runtime_config_.attn_backend_config.block_token_num;
-  std::vector<int> store_out_loc_host;
-  store_out_loc_host.reserve(input.total_dp_input_ids_len);
-  for (const auto* req : input.dp_reqs) {
-    const int seq_len = req->forwarding_tokens->size();
-    const int extend_len = req->GetInputIdsLength();
-    const int prefix_len = seq_len - extend_len;
-    const auto& block_ids = req->atb_kv_cache_base_blk_ids[attn_dp_rank_id_];
-    for (int i = prefix_len; i < seq_len; ++i) {
-      store_out_loc_host.push_back(block_ids[i / block_token_num] * block_token_num + i % block_token_num);
-    }
-  }
-
-  input.store_out_loc = store_out_loc.GetView({store_out_loc_host.size()}, store_out_loc.shape[0]);
-  store_out_loc.shape[0] += input.store_out_loc.GetElementNumber();
-  MemcpyAsync(input.store_out_loc.GetPtr<void>(), store_out_loc_host.data(), store_out_loc_host.size() * sizeof(int),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 }
 
 }  // namespace ksana_llm

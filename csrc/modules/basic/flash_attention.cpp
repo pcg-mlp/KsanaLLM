@@ -4,6 +4,7 @@
 
 #include "modules/basic/flash_attention.h"
 #include "layers/flash_attention_layer.h"
+#include "models/base/attention_meta/attention_meta_builder.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {
@@ -83,32 +84,32 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
   STATUS_CHECK_RETURN(flash_attention_layer_->Forward(
       {hidden_buffer_tensors_0[0],
        model_input->dp_input_offset_uint64_tensor,
-       model_input->flash_input.kv_list,
+       model_input->flash_meta->kv_list,
        model_input->dp_input_prefix_uint64_tensor,
-       model_input->flash_input.kv_cache_offset,
+       model_input->flash_meta->kv_cache_offset,
        use_mrotary_
            ? model_input->dp_mrotary_embedding_pos
-           : (use_xdrotary_ ? model_input->dp_xdrotary_embedding_pos : model_input->flash_input.rotary_embedding_pos),
-       model_input->flash_input.rotary_embedding_mask,
-       model_input->dp_src_flexible_rotary_embedding_pos,
-       model_input->dp_flexible_rotary_embedding_mask,
-       model_input->dp_dst_flexible_kv_cache_tensor,
-       model_input->dp_src_flexible_kv_cache_tensor,
-       model_input->dp_dst_flexible_token_idx_tensor,
-       model_input->dp_src_flexible_token_idx_tensor,
-       model_input->dp_flexible_offset_uint64_tensor,
+           : (use_xdrotary_ ? model_input->dp_xdrotary_embedding_pos : model_input->flash_meta->rotary_embedding_pos),
+       model_input->flash_meta->rotary_embedding_mask,
+       model_input->shared_attention_meta->GetStandard()->dp_src_flexible_rotary_embedding_pos,
+       model_input->shared_attention_meta->GetStandard()->dp_flexible_rotary_embedding_mask,
+       model_input->shared_attention_meta->GetStandard()->dp_dst_flexible_kv_cache_tensor,
+       model_input->shared_attention_meta->GetStandard()->dp_src_flexible_kv_cache_tensor,
+       model_input->shared_attention_meta->GetStandard()->dp_dst_flexible_token_idx_tensor,
+       model_input->shared_attention_meta->GetStandard()->dp_src_flexible_token_idx_tensor,
+       model_input->shared_attention_meta->GetStandard()->dp_flexible_offset_uint64_tensor,
        forward_context.forward_shape,
        query_layernorm_weight, /* for use_qk_norm */
        key_layernorm_weight,   /* for use_qk_norm */
        forward_context.flag_tensor,
-       model_input->layer_kv_cache_ptr,
-       model_input->flash_input.block_table,
+       model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+       model_input->flash_meta->block_table,
        model_input->dp_prefill_q_offset_uint64_tensor},
       hidden_buffer_tensors_1));
 #elif defined(ENABLE_ACL)
   // inference on NPU with ATB
   STATUS_CHECK_RETURN(flash_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0], model_input->flash_input.rotary_embedding_pos, model_input->layers_slot_mapping,
+      {hidden_buffer_tensors_0[0], model_input->flash_meta->rotary_embedding_pos, model_input->layers_slot_mapping,
        model_input->k_cache_blocks_base, model_input->v_cache_blocks_base, model_input->seq_len_host,
        forward_context.forward_shape, model_input->atb_attention_attr},
       hidden_buffer_tensors_1));

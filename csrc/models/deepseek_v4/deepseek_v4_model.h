@@ -3,7 +3,9 @@
 ==============================================================================*/
 #pragma once
 
+#include "models/base/attention_meta/attention_meta_creator.h"
 #include "models/common/common_model.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
 #include "modules/attention/dsv4_mqa.h"
 #include "modules/basic/add.h"
 #include "modules/basic/layernorm.h"
@@ -88,6 +90,11 @@ class DeepSeekV4Model : public CommonModel {
  protected:
   using CommonModel::GetHiddenUnitBufferTensors;
   using CommonModel::mhc_buffers_;
+
+  std::unique_ptr<AttentionMetaCreator> CreateCustomAttentionMetaCreator(
+      const AttentionMetaCreator::Config& config) override {
+    return std::make_unique<DeepSeekV4AttentionMetaCreator>(config);
+  }
 
   std::unordered_map<int, std::shared_ptr<DeepSeekV4DecoderLayer>> layers_;
   std::unordered_map<int, std::shared_ptr<DeepSeekV4MtpLayer>> nextn_layers_;

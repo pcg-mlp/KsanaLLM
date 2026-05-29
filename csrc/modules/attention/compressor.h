@@ -36,7 +36,7 @@ class Compressor {
   const int layer_idx_;
   // Local layer index on the current node (= layer_idx_ - lower_layer_idx for main layers,
   // or main_layer_num_on_node + nextn_offset for MTP layers). Required for indexing
-  // dsv4_mqa_meta / compressor_meta per-layer tensors which are populated by local index.
+  // mqa_shared / compressor_shared per-layer tensors which are populated by local index.
   // See dsv4_mqa.cpp:34-39 for the same formula used by attn_config.idx.
   const int local_layer_idx_;
   const bool is_in_indexer_;

@@ -17,6 +17,7 @@
 #include "utils/attention_backend/attention_backend_manager.h"
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
 
 using namespace ksana_llm;
 
@@ -40,6 +41,11 @@ class Dsv4MqaTestModel : public CommonModel {
   }
 
   ~Dsv4MqaTestModel() = default;
+
+  std::unique_ptr<AttentionMetaCreator> CreateCustomAttentionMetaCreator(
+      const AttentionMetaCreator::Config& config) override {
+    return std::make_unique<DeepSeekV4AttentionMetaCreator>(config);
+  }
 
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
     Dsv4Mqa::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,

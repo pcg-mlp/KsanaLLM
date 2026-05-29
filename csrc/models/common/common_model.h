@@ -163,6 +163,14 @@ class CommonModel : public BaseModel {
  protected:
   bool IsPrefixCachingComputationReuse();
 
+  // Override to return a model-specific AttentionMetaCreator.
+  // Called once in InitRunConfig() right after ForwardingContext is initialized.
+  // The default implementation returns nullptr (keep the standard creator built in ModelInput).
+  virtual std::unique_ptr<AttentionMetaCreator> CreateCustomAttentionMetaCreator(
+      const AttentionMetaCreator::Config& config) {
+    return nullptr;
+  }
+
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
                            ForwardingContext& forwarding_context);
 

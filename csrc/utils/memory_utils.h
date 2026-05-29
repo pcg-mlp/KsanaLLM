@@ -11,10 +11,15 @@
 #include <vector>
 
 #include "device/device_types.h"
+#include "device/device_utils.h"
 #include "utils/status.h"
 #include "utils/utils.h"
 
 namespace ksana_llm {
+
+// Forward declaration — Tensor lives in utils/tensor.h which itself depends on memory_utils.h,
+// so we keep the relationship one-directional by exposing only an opaque class name here.
+class Tensor;
 
 struct WorkspaceMeta {
   void* space_ptr = nullptr;
@@ -150,5 +155,20 @@ inline size_t ComputeIndexerMaxQChunkSize(size_t max_seq_len, size_t max_step_to
   const size_t computed_q_chunk = kMaxLogitsBytes / (aligned_seq_len_kv * sizeof(float));
   return RoundUp(std::min(max_step_token_num, computed_q_chunk), kSeqLenAlignment);
 }
+
+// Batched device-to-device copy with per-call layer offsets. For each i in [0, N), copies
+// `block_size` bytes from
+//     src_i = reinterpret_cast<uint8_t*>(src_offset) + src_addr_list[i]
+//     dst_i = reinterpret_cast<uint8_t*>(dst_offset) + dst_addr_list[i]
+// where N == src_addr_list.shape[0] == dst_addr_list.shape[0]. All copies share a single
+// kernel launch on `stream`, eliminating the per-block launch overhead of looped MemcpyAsync.
+//
+// src_addr_list / dst_addr_list are 1-D device tensors of element type uint64_t holding
+// per-pair (layer-invariant) byte addresses or offsets. They are intended to be built once
+// per forward step; subsequent per-layer invocations reuse the same tensors and only vary
+// (src_offset, dst_offset) to fold in the layer-specific base pointer. Empty lists
+// (N == 0) are a no-op.
+void BatchMemoryD2D(const Tensor& src_addr_list, const Tensor& dst_addr_list, size_t src_offset, size_t dst_offset,
+                    size_t block_size, Stream& stream);
 
 }  // namespace ksana_llm

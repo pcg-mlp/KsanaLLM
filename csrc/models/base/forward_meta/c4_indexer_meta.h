@@ -20,7 +20,7 @@ class C4IndexerMeta {
 
   void Prepare(const std::vector<ForwardRequest>& forward_reqs);
 
-  struct input_info : public IndexerMeta::input_info {
+  struct input_meta : public IndexerMeta::input_meta {
     // C4-specific tensors (views of shared tensors)
     Tensor c4_seq_lens_tensor;
     Tensor expanded_c4_seq_lens_tensor;  // seq_lens after expansion of q_seq_len
@@ -36,7 +36,7 @@ class C4IndexerMeta {
     size_t total_dp_compressed_input_ids_len = 0;
 
     void Reset() {
-      IndexerMeta::input_info::Reset();
+      IndexerMeta::input_meta::Reset();
       c4_seq_lens_host.clear();
       expanded_c4_seq_lens_host.clear();
       extend_lens_host.clear();
@@ -47,8 +47,8 @@ class C4IndexerMeta {
   };
 
   // Category is tightly coupled to underlying kernel
-  input_info flash_input;               // extend_len is non-specialized, use flash attention
-  std::vector<input_info> page_inputs;  // extend_len is fixed (`[1, decode_token_num_threshold]`), use page attention
+  input_meta flash_meta;               // extend_len is non-specialized, use flash attention
+  std::vector<input_meta> page_metas;  // extend_len is fixed (`[1, decode_token_num_threshold]`), use page attention
 
  private:
   // Indexer kernel supports q_seq_len = 1/2 in decode phase
@@ -65,7 +65,7 @@ class C4IndexerMeta {
   void PrepareC4SeqLens(std::vector<int>& host, std::vector<int>& expanded_host, const ForwardRequest& req,
                         size_t expanded_q_seq_len, size_t expanded_batch_size);
   void PrepareExtendLens(std::vector<int>& host, const ForwardRequest& req);
-  void PrepareBlockTable(input_info& input);
+  void PrepareBlockTable(input_meta& input);
 
   std::shared_ptr<Context> context_;
 
@@ -73,7 +73,7 @@ class C4IndexerMeta {
 
   static constexpr size_t kC4Ratio = 4;
 
-  // Tensors shared by all input_infos
+  // Tensors shared by all input_metas
   Tensor c4_seq_lens_tensor;
   Tensor expanded_c4_seq_lens_tensor;
   Tensor extend_lens_tensor;

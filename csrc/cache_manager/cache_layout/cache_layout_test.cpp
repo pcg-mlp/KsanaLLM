@@ -638,7 +638,7 @@ TEST_F(DeepSeekV4SwaWithTailCacheLayoutTest, MtpLayersAddSwaAndTail) {
 }
 
 TEST_F(DeepSeekV4SwaWithTailCacheLayoutTest, GetActiveKvCacheTypesIsEmpty) {
-  // SWA pool 不参与 model_input.cpp 的 PrepareKVCacheBlocks 循环 (Dsv4MqaMeta 自己处理),
+  // SWA pool 不参与 model_input.cpp 的 PrepareKVCacheBlocks 循环 (MqaSharedAttentionMeta 自己处理),
   // GetActiveKvCacheTypes 必须返回空。
   std::vector<uint32_t> ratios = {4u, 128u};
   auto model_cfg = MakeDsv4ModelConfig(2, ratios, 512, 64, 256);

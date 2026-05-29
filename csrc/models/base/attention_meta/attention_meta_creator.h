@@ -1,0 +1,61 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+#pragma once
+
+#include <cstddef>
+#include <memory>
+
+#include "models/base/attention_meta/attention_meta_builder.h"
+#include "models/base/attention_meta/flash_attention_meta_builder.h"
+#include "models/base/attention_meta/paged_attention_meta_builder.h"
+
+namespace ksana_llm {
+
+// Factory interface for attention input meta objects owned by ModelInput.
+// All construction parameters are injected once at construction time via Config;
+// the factory methods themselves take no arguments.
+// Concrete attention backends can provide derived creators that return model-specific
+// meta objects and cast from these base pointers in their own implementation.
+class AttentionMetaCreator {
+ public:
+  // All parameters needed to allocate shared / flash / paged attention meta tensors.
+  struct Config {
+    const ModelConfig& model_config;
+    const RuntimeConfig& runtime_config;
+    int layer_num_on_node;
+    size_t max_table_block_num;
+    size_t max_token_num;
+    size_t decode_token_num_threshold;
+    bool enable_blocked_multi_token_forwarding_kv;
+    int rank;
+    // Index of the first layer on this node (pipeline parallelism offset).
+    // Used by model-specific creators (e.g. DeepSeekV4) to map per-layer cache offsets.
+    int layer_start_on_node = 0;
+    // KV cache layout; used by model-specific creators that need block-level offset information.
+    std::shared_ptr<BaseModelCacheLayout> block_cache_layout = nullptr;
+  };
+
+  explicit AttentionMetaCreator(const Config& config) : config_(config) {}
+  virtual ~AttentionMetaCreator() = default;
+
+  virtual std::unique_ptr<SharedAttentionMeta> CreateSharedAttentionMeta();
+  virtual std::unique_ptr<FlashAttentionMeta> CreateFlashAttentionMeta();
+  virtual std::unique_ptr<PagedAttentionMeta> CreatePagedAttentionMeta();
+
+  // Builder factories: return the model-specific builder for the flash / paged attention paths.
+  // The default implementations return Standard*Builder; model-specific creators override these
+  // to return their own derived builders (e.g. DeepSeekV3FlashAttentionMetaBuilder).
+  virtual std::unique_ptr<FlashAttentionMetaBuilder> CreateFlashBuilder(const AttentionBuilderConfig& config);
+  virtual std::unique_ptr<PagedAttentionMetaBuilder> CreatePagedBuilder(const AttentionBuilderConfig& config);
+
+  // Expose the stored configuration so derived creators or ModelInput can access it.
+  const Config& GetConfig() const { return config_; }
+
+ protected:
+  void InitStandardSharedAttentionMeta(StandardSharedAttentionMeta& shared_meta);
+
+  Config config_;
+};
+
+}  // namespace ksana_llm

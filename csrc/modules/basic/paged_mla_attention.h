@@ -16,7 +16,7 @@ class PagedMlaAttention {
 
   ~PagedMlaAttention() = default;
 
-  Status Forward(const std::shared_ptr<ModelInput>& model_input, ModelInput::input_info& page_input,
+  Status Forward(const std::shared_ptr<ModelInput>& model_input, PagedAttentionMeta& page_meta,
                  const AttentionForwardContext& attn_ctx, std::vector<Tensor>& hidden_buffer_tensors_1,
                  Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
                  Tensor& k_rope_buffer_tensor, Tensor& indices_tensor, std::vector<Tensor>& output_tensors);

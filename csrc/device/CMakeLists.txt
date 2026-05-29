@@ -18,6 +18,8 @@ if(WITH_CUDA)
   file(GLOB_RECURSE device_nvidia_SRCS
     ${PROJECT_SOURCE_DIR}/csrc/device/nvidia/*.cpp
     ${PROJECT_SOURCE_DIR}/csrc/device/nvidia/*.cu)
+  list(FILTER device_nvidia_SRCS EXCLUDE REGEX ".*test\\.cpp")
+  list(FILTER device_nvidia_SRCS EXCLUDE REGEX ".*test\\.cu")
   list(APPEND device_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublasLt -lcublas)
 endif()
 
@@ -55,4 +57,10 @@ if(WITH_CUDA)
       DEEPGEMM_LIBRARY_ROOT_PATH="${DEEPGEMM_LIBRARY_ROOT_PATH}"
       DEEPGEMM_CUDA_HOME="${CUDA_TOOLKIT_ROOT_DIR}")
   endif()
+endif()
+
+# for test
+if(WITH_CUDA)
+  file(GLOB_RECURSE device_test_SRCS ${PROJECT_SOURCE_DIR}/csrc/device/nvidia/*test.cpp)
+  cpp_test(device_test SRCS ${device_test_SRCS} DEPS device utils)
 endif()

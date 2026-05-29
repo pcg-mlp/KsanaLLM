@@ -4,7 +4,9 @@
 #pragma once
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
+#include "models/base/attention_meta/attention_meta_creator.h"
 #include "models/common/common_model.h"
+#include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 #include "modules/attention/multihead_latent_attention.h"
 #include "modules/attention/sparse_mla_indexer.h"
 #include "modules/basic/add_norm.h"
@@ -96,6 +98,11 @@ class DeepSeekV3Model : public CommonModel {
 
  protected:
   using CommonModel::GetHiddenUnitBufferTensors;
+
+  std::unique_ptr<AttentionMetaCreator> CreateCustomAttentionMetaCreator(
+      const AttentionMetaCreator::Config& config) override {
+    return std::make_unique<DeepSeekV3AttentionMetaCreator>(config);
+  }
 
   std::unordered_map<int, std::shared_ptr<DeepSeekV3DecoderLayer>> layers_;
   std::unordered_map<int, std::shared_ptr<DeepSeekV3MtpLayer>> nextn_layers_;

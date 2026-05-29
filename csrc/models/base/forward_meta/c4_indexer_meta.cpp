@@ -45,8 +45,8 @@ void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   indexer_meta->batch_indices_tensor.shape = {0};
 
   // Reset meta
-  flash_input.Reset();
-  page_inputs.clear();
+  flash_meta.Reset();
+  page_metas.clear();
   dp_context_tokens = 0;
   dp_decode_tokens = 0;
   dp_context_kv_tokens = 0;
@@ -59,59 +59,59 @@ void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
       const size_t prefix_len = seq_len - extend_len;
       const size_t compressed_extend_len = seq_len / kC4Ratio - prefix_len / kC4Ratio;
       if (GetForwardRequestType(req) == ForwardRequestType::kFlash) {
-        flash_input.dp_reqs.emplace_back(&req);
-        flash_input.total_dp_input_ids_len += extend_len;
-        flash_input.total_dp_compressed_input_ids_len += compressed_extend_len;
+        flash_meta.dp_reqs.emplace_back(&req);
+        flash_meta.total_dp_input_ids_len += extend_len;
+        flash_meta.total_dp_compressed_input_ids_len += compressed_extend_len;
         dp_context_tokens += extend_len;
         dp_context_kv_tokens += compressed_extend_len;
       } else {  // GetForwardRequestType(req) == ForwardRequestType::kPage
-        if (page_inputs.empty() || page_inputs.back().q_seq_len != extend_len) {
-          // `page_inputs.back().q_seq_len` should be greater than `extend_len`,
+        if (page_metas.empty() || page_metas.back().q_seq_len != extend_len) {
+          // `page_metas.back().q_seq_len` should be greater than `extend_len`,
           // since requests in the same dp group are sorted in descending order by their token numbers
-          page_inputs.emplace_back().q_seq_len = extend_len;
+          page_metas.emplace_back().q_seq_len = extend_len;
           // For odd q_seq_len, fold into q_seq_len batches with q_seq_len=1
           // For even q_seq_len, fold into q_seqlen/2 batches with q_seq_len=2
-          auto& page_input = page_inputs.back();
+          auto& page_meta = page_metas.back();
           if (extend_len & 1) {
-            page_input.expanded_q_seq_len = 1;
-            page_input.expanded_batch_size = extend_len;
+            page_meta.expanded_q_seq_len = 1;
+            page_meta.expanded_batch_size = extend_len;
           } else {
-            page_input.expanded_q_seq_len = 2;
-            page_input.expanded_batch_size = extend_len >> 1;
+            page_meta.expanded_q_seq_len = 2;
+            page_meta.expanded_batch_size = extend_len >> 1;
           }
         }
-        auto& page_input = page_inputs.back();
-        page_input.dp_reqs.emplace_back(&req);
-        page_input.total_dp_input_ids_len += extend_len;
-        page_input.total_dp_compressed_input_ids_len += compressed_extend_len;
+        auto& page_meta = page_metas.back();
+        page_meta.dp_reqs.emplace_back(&req);
+        page_meta.total_dp_input_ids_len += extend_len;
+        page_meta.total_dp_compressed_input_ids_len += compressed_extend_len;
         dp_decode_tokens += extend_len;
       }
     }
   }
 
-  if (!flash_input.dp_reqs.empty()) {
+  if (!flash_meta.dp_reqs.empty()) {
     // Delegate flash chunking to internal IndexerMeta (compress_ratio-aware)
-    indexer_meta->PrepareChunk(flash_input);
-    indexer_meta->PrepareCuSeqLen(flash_input);
-    indexer_meta->PrepareBatchIndices(flash_input);
+    indexer_meta->PrepareChunk(flash_meta);
+    indexer_meta->PrepareCuSeqLen(flash_meta);
+    indexer_meta->PrepareBatchIndices(flash_meta);
 
-    for (const auto* req : flash_input.dp_reqs) {
-      PrepareExtendLens(flash_input.extend_lens_host, *req);
+    for (const auto* req : flash_meta.dp_reqs) {
+      PrepareExtendLens(flash_meta.extend_lens_host, *req);
     }
-    HOST_TO_SHARED_DEVICE(extend_lens, flash_input);
+    HOST_TO_SHARED_DEVICE(extend_lens, flash_meta);
   }
 
-  for (auto& page_input : page_inputs) {
+  for (auto& page_meta : page_metas) {
     // Delegate paged cu_seq_len to IndexerMeta
-    indexer_meta->PrepareCuSeqLen(page_input, /*is_paged=*/true);
+    indexer_meta->PrepareCuSeqLen(page_meta, /*is_paged=*/true);
 
-    for (const auto* req : page_input.dp_reqs) {
-      PrepareC4SeqLens(page_input.c4_seq_lens_host, page_input.expanded_c4_seq_lens_host, *req,
-                       page_input.expanded_q_seq_len, page_input.expanded_batch_size);
+    for (const auto* req : page_meta.dp_reqs) {
+      PrepareC4SeqLens(page_meta.c4_seq_lens_host, page_meta.expanded_c4_seq_lens_host, *req,
+                       page_meta.expanded_q_seq_len, page_meta.expanded_batch_size);
     }
-    HOST_TO_SHARED_DEVICE(c4_seq_lens, page_input);
+    HOST_TO_SHARED_DEVICE(c4_seq_lens, page_meta);
     if (!expanded_c4_seq_lens_tensor.shape.empty()) {
-      HOST_TO_SHARED_DEVICE(expanded_c4_seq_lens, page_input);
+      HOST_TO_SHARED_DEVICE(expanded_c4_seq_lens, page_meta);
     }
   }
 }

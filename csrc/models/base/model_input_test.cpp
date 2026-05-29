@@ -17,7 +17,12 @@
 #include "configure/global_context.h"
 #include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
+#include "models/base/attention_meta/flash_attention_meta_builder.h"
+#include "models/base/attention_meta/mla_attention_meta_builder.h"
+#include "models/base/attention_meta/paged_attention_meta_builder.h"
 #include "models/base/model_input.h"
+#include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta.h"
+#include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 #include "tests/test.h"
 #include "utils/singleton.h"
 
@@ -89,11 +94,36 @@ class ModelInputTest : public testing::Test {
     // Initialize the model input object.
     model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context, block_cache_layout);
 
+    // When the model uses MLA / DSA, inject the DeepSeekV3-specific creator so that the
+    // corresponding shared attention tensors (tile_scheduler_metadatas, num_splits, etc.)
+    // are properly allocated for the tests.
+    if (model_config.use_mla || model_config.use_dsa) {
+      model_input->ReplaceAttentionMetaCreator(
+          std::make_unique<DeepSeekV3AttentionMetaCreator>(model_input->GetCreatorConfig()));
+    }
+
     // Initialize the random seed with 0.
     std::srand(0);
   }
 
   void TearDown() override {}
+
+  AttentionBuilderConfig MakeAttentionBuilderConfig() {
+    return {model_input->model_config_,
+            model_input->runtime_config_,
+            model_input->enable_blocked_multi_token_forwarding_kv_,
+            model_input->use_flashinfer_for_decode_,
+            model_input->rank_,
+            model_input->layer_num_on_node_,
+            model_input->block_size_,
+            model_input->kv_cache_types_,
+            model_input->kv_cache_layer_offsets_,
+            model_input->attn_dp_group_id_,
+            model_input->attn_dp_rank_id_,
+            model_input->context_,
+            model_input->kvcache_offset_event,
+            model_input->rotary_embedding_event};
+  }
 
  protected:
   std::unique_ptr<ModelInput> model_input;
@@ -233,18 +263,20 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   CacheManagerConfig cache_manager_config;
   env->GetCacheManagerConfig(cache_manager_config);
 
+  auto* flash_builder = static_cast<StandardFlashAttentionMetaBuilder*>(model_input->flash_builder_.get());
+
   // Test case 1: All the caching is disabled and all the requests only require the next token.
   RuntimeConfig runtime_config;
   env->GetRuntimeConfig(runtime_config);
   EXPECT_FALSE(runtime_config.enable_prefix_caching);
   EXPECT_FALSE(runtime_config.enable_flexible_caching);
   model_input->PrepareInputInfo({forward_req1});
-  model_input->PrepareUseCache(model_input->flash_input);
+  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
   EXPECT_FALSE(model_input->use_cache);
 
   // Test case 2: All the caching is disabled but some requests require more than one token.
   model_input->PrepareInputInfo({forward_req1, forward_req2});
-  model_input->PrepareUseCache(model_input->flash_input);
+  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
   EXPECT_TRUE(model_input->use_cache);
 
   // Test case 3: Prefix caching is enabled.
@@ -257,7 +289,7 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
 
   model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
   model_input->PrepareInputInfo({forward_req1});
-  model_input->PrepareUseCache(model_input->flash_input);
+  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
   EXPECT_TRUE(model_input->use_cache);
 
   // Test case 4: Flexible caching is enabled.
@@ -271,7 +303,7 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
 
   model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
   model_input->PrepareInputInfo({forward_req1});
-  model_input->PrepareUseCache(model_input->flash_input);
+  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
   EXPECT_TRUE(model_input->use_cache);
 }
 
@@ -330,36 +362,39 @@ TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {
   // 确保所有 flexible caching 相关的 tensor 都有正确分配的内存
   // 这些 tensor 在 ModelInput 构造函数中只有当 runtime_config_.enable_flexible_caching 为 true 时才会被创建
   // 但由于构造函数从环境中重新获取配置，可能导致这些 tensor 没有被正确初始化
-  if (model_input->dp_dst_flexible_kv_cache_tensor.GetPtr<void>(false) == nullptr && total_flexible_len > 0) {
-    model_input->dp_dst_flexible_kv_cache_tensor.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
-                                                                  {total_flexible_len});
+  auto& test_shared = *model_input->shared_attention_meta->GetStandard();
+  if (test_shared.dp_dst_flexible_kv_cache_tensor.GetPtr<void>(false) == nullptr && total_flexible_len > 0) {
+    test_shared.dp_dst_flexible_kv_cache_tensor.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
+                                                                 {total_flexible_len});
   }
   // 设置 shape 以触发 PrepareFlashRotary 中的 flexible cache 处理逻辑
-  model_input->dp_dst_flexible_kv_cache_tensor.shape = {total_flexible_len};
+  test_shared.dp_dst_flexible_kv_cache_tensor.shape = {total_flexible_len};
 
   // 确保 dp_flexible_rotary_embedding_mask 有正确分配的内存
-  if (model_input->dp_flexible_rotary_embedding_mask.GetPtr<void>(false) == nullptr && total_tokens > 0) {
-    model_input->dp_flexible_rotary_embedding_mask.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_INT64,
-                                                                    {total_tokens});
+  if (test_shared.dp_flexible_rotary_embedding_mask.GetPtr<void>(false) == nullptr && total_tokens > 0) {
+    test_shared.dp_flexible_rotary_embedding_mask.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_INT64,
+                                                                   {total_tokens});
   }
 
   // 确保 dp_src_flexible_rotary_embedding_pos 有正确分配的内存
-  if (model_input->dp_src_flexible_rotary_embedding_pos.GetPtr<void>(false) == nullptr && total_tokens > 0) {
-    model_input->dp_src_flexible_rotary_embedding_pos.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_INT64,
-                                                                       {total_tokens});
+  if (test_shared.dp_src_flexible_rotary_embedding_pos.GetPtr<void>(false) == nullptr && total_tokens > 0) {
+    test_shared.dp_src_flexible_rotary_embedding_pos.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_INT64,
+                                                                      {total_tokens});
   }
 
   // 确保 dp_dst_flexible_rotary_embedding_pos 有正确分配的内存 (仅当 use_mla 为 true 时需要)
   if (model_input->model_config_.use_mla &&
-      model_input->dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(false) == nullptr && total_tokens > 0) {
-    model_input->dp_dst_flexible_rotary_embedding_pos.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_INT64,
-                                                                       {total_tokens});
+      test_shared.dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(false) == nullptr && total_tokens > 0) {
+    test_shared.dp_dst_flexible_rotary_embedding_pos.ReallocateMemory(MemoryLocation::LOCATION_DEVICE, TYPE_INT64,
+                                                                      {total_tokens});
   }
 
   model_input->runtime_config_ = runtime_config;
   model_input->PrepareInputInfo(forward_reqs);
-  EXPECT_EQ(model_input->flash_input.dp_reqs.size(), forward_reqs.size());
-  model_input->PrepareFlashRotary(model_input->flash_input);
+  EXPECT_EQ(model_input->flash_meta->dp_reqs.size(), forward_reqs.size());
+  auto* flash_builder = static_cast<StandardFlashAttentionMetaBuilder*>(model_input->flash_builder_.get());
+  auto& shared_meta = *model_input->shared_attention_meta;
+  flash_builder->PrepareFlashRotary(*model_input->flash_meta, shared_meta, model_input->dp_total_prefix_len);
 
   // verify rotary_embedding_pos and rotary_embedding_mask
   std::vector<int64_t> host_rotary_embedding_pos(total_tokens - total_prefix_len);
@@ -368,17 +403,15 @@ TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {
   std::vector<int64_t> host_dst_flexible_rotary_embedding_pos(total_tokens);
   std::vector<int64_t> host_flexible_rotary_embedding_mask(total_tokens);
 
-  Memcpy(host_rotary_embedding_pos.data(), model_input->flash_input.rotary_embedding_pos.GetPtr<void>(),
+  Memcpy(host_rotary_embedding_pos.data(), model_input->flash_meta->rotary_embedding_pos.GetPtr<void>(),
          (total_tokens - total_prefix_len) * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
-  Memcpy(host_rotary_embedding_mask.data(), model_input->flash_input.rotary_embedding_mask.GetPtr<void>(),
+  Memcpy(host_rotary_embedding_mask.data(), model_input->flash_meta->rotary_embedding_mask.GetPtr<void>(),
          (total_tokens - total_prefix_len) * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
-  Memcpy(host_src_flexible_rotary_embedding_pos.data(),
-         model_input->dp_src_flexible_rotary_embedding_pos.GetPtr<void>(), total_tokens * sizeof(int64_t),
-         MEMCPY_DEVICE_TO_HOST);
-  Memcpy(host_dst_flexible_rotary_embedding_pos.data(),
-         model_input->dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(), total_tokens * sizeof(int64_t),
-         MEMCPY_DEVICE_TO_HOST);
-  Memcpy(host_flexible_rotary_embedding_mask.data(), model_input->dp_flexible_rotary_embedding_mask.GetPtr<void>(),
+  Memcpy(host_src_flexible_rotary_embedding_pos.data(), test_shared.dp_src_flexible_rotary_embedding_pos.GetPtr<void>(),
+         total_tokens * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
+  Memcpy(host_dst_flexible_rotary_embedding_pos.data(), test_shared.dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(),
+         total_tokens * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
+  Memcpy(host_flexible_rotary_embedding_mask.data(), test_shared.dp_flexible_rotary_embedding_mask.GetPtr<void>(),
          total_tokens * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
 
   int rope_idx = 0;
@@ -412,49 +445,48 @@ TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {
 
 #ifdef ENABLE_CUDA
 TEST_F(ModelInputTest, PrepareFlashMlaTest) {
-  model_input->page_inputs.clear();
-  auto& page_input = model_input->page_inputs.emplace_back();
-  page_input.q_seq_len = 1;
-  // Init shared_tensors in page_input
-  page_input.input_length = model_input->input_length;
-  model_input->num_splits.shape = {0};
+  model_input->page_metas.clear();
+  model_input->page_metas.emplace_back(model_input->attention_meta_creator_->CreatePagedAttentionMeta());
+  // Creator is DeepSeekV3AttentionMetaCreator (injected in SetUp when use_mla=true),
+  // so page_meta is actually a DeepSeekV3PagedAttentionMeta.
+  auto& page_meta = static_cast<DeepSeekV3PagedAttentionMeta&>(*model_input->page_metas.back());
+  page_meta.q_seq_len = 1;
 
-  // 测试用例1: 当model_config_.use_mla为false时，PrepareFlashMla应该直接返回
-  model_input->model_config_.use_mla = false;
-  model_input->single_token_request_num = 5;
-  model_input->PrepareFlashMla(page_input);
-  // 由于方法直接返回，没有明确的状态变化可以验证，这里我们只是确保方法不会崩溃
+  auto& shared_meta = *model_input->shared_attention_meta;
+  auto& standard_shared = *shared_meta.GetStandard();
+  auto& mla_shared = *shared_meta.GetMLA();
+  auto& dsa_shared = *shared_meta.GetDSA();
+  page_meta.input_length = standard_shared.input_length;
+  mla_shared.num_splits.shape = {0};
 
-  // 测试用例2: 当page_input.dp_reqs为空时，PrepareFlashMla应该直接返回
   model_input->model_config_.use_mla = true;
-  model_input->PrepareFlashMla(page_input);
-  // 同样，这里我们只是确保方法不会崩溃
+  auto builder_config = MakeAttentionBuilderConfig();
 
-  // 测试用例3: 当所有条件满足时，PrepareFlashMla应该执行相应操作
-  // 准备测试数据
-  model_input->model_config_.use_mla = true;
+  // 测试用例1: 当 dp_reqs 为空时，PrepareFlashMla 应该直接返回（空指针保护）
+  ASSERT_TRUE(page_meta.dp_reqs.empty());
+  PrepareFlashMla(page_meta.mla, page_meta.dsa, mla_shared, dsa_shared, static_cast<StandardAttentionMeta&>(page_meta),
+                  builder_config);
+  // 确保不崩溃，num_splits 未被修改
+  EXPECT_EQ(mla_shared.num_splits.shape[0], 0u);
+
+  // 测试用例2: 当所有条件满足时，PrepareFlashMla 应该填充 mla_meta
   model_input->model_config_.head_num = 16;
   model_input->runtime_config_.parallel_basic_config.tensor_parallel_size = 1;
-  page_input.dp_reqs.resize(4);
+  page_meta.dp_reqs.resize(4);
 
-  // 创建输入长度张量
   std::vector<int> input_lengths = {0, 20, 30, 40, 50};
-  MemcpyAsync(page_input.input_length.GetPtr<void>(), input_lengths.data(), input_lengths.size() * sizeof(int),
+  MemcpyAsync(page_meta.input_length.GetPtr<void>(), input_lengths.data(), input_lengths.size() * sizeof(int),
               MEMCPY_HOST_TO_DEVICE, model_input->context_->device->GetH2DStream());
 
-  // 执行PrepareFlashMla
-  model_input->PrepareFlashMla(page_input);
+  PrepareFlashMla(page_meta.mla, page_meta.dsa, mla_shared, dsa_shared, static_cast<StandardAttentionMeta&>(page_meta),
+                  builder_config);
 
-  // 从GPU复制数据回CPU并打印
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
   llm_kernels::nvidia::GetNumSmParts(flash_mla_workspace_map, 16, 1, 0);
   if (flash_mla_workspace_map.num_sm_parts > 1) {
     int num_splits_cpu;
-
-    MemcpyAsync(&num_splits_cpu, page_input.num_splits.GetPtr<void>(), sizeof(int), MEMCPY_DEVICE_TO_HOST,
+    MemcpyAsync(&num_splits_cpu, page_meta.mla.num_splits.GetPtr<void>(), sizeof(int), MEMCPY_DEVICE_TO_HOST,
                 model_input->context_->device->GetH2DStream());
-
-    // 同步流以确保复制完成
     StreamSynchronize(model_input->context_->device->GetH2DStream());
     EXPECT_EQ(num_splits_cpu, 0);
   }
@@ -790,41 +822,46 @@ TEST_F(ModelInputTest, PrepareInputLengthTest) {
   forward_req1->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens1);
   forward_req2->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens2);
 
-  auto& page_input = model_input->page_inputs.emplace_back();
-  page_input.dp_reqs.push_back(forward_req1.get());
-  page_input.dp_reqs.push_back(forward_req2.get());
-  const size_t batch_size = page_input.dp_reqs.size();
+  model_input->page_metas.emplace_back(model_input->attention_meta_creator_->CreatePagedAttentionMeta());
+  auto& page_meta = *model_input->page_metas.back();
+  page_meta.dp_reqs.push_back(forward_req1.get());
+  page_meta.dp_reqs.push_back(forward_req2.get());
+  const size_t batch_size = page_meta.dp_reqs.size();
+
+  auto* paged_builder = static_cast<StandardPagedAttentionMetaBuilder*>(model_input->paged_builder_.get());
 
   // Normal case
-  page_input.q_seq_len = 1;
-  forward_req1->kv_cached_token_num = forward_req1->forwarding_tokens->size() - page_input.q_seq_len;
-  forward_req2->kv_cached_token_num = forward_req2->forwarding_tokens->size() - page_input.q_seq_len;
-  model_input->input_length.shape = {0};
-  model_input->PrepareInputLength(page_input);
+  page_meta.q_seq_len = 1;
+  forward_req1->kv_cached_token_num = forward_req1->forwarding_tokens->size() - page_meta.q_seq_len;
+  forward_req2->kv_cached_token_num = forward_req2->forwarding_tokens->size() - page_meta.q_seq_len;
+  auto& mtp_shared = *model_input->shared_attention_meta->GetStandard();
+  mtp_shared.input_length.shape = {0};
+  paged_builder->PrepareInputLength(page_meta, mtp_shared);
   // Check result
   std::vector<int> input_length(batch_size);
-  EXPECT_EQ(page_input.input_length.GetTotalBytes(), input_length.size() * sizeof(decltype(input_length)::value_type));
-  MemcpyAsync(input_length.data(), page_input.input_length.GetPtr<void>(), page_input.input_length.GetTotalBytes(),
+  EXPECT_EQ(page_meta.input_length.GetTotalBytes(), input_length.size() * sizeof(decltype(input_length)::value_type));
+  MemcpyAsync(input_length.data(), page_meta.input_length.GetPtr<void>(), page_meta.input_length.GetTotalBytes(),
               MEMCPY_DEVICE_TO_HOST, model_input->context_->device->GetH2DStream());
   StreamSynchronize(model_input->context_->device->GetH2DStream());
   EXPECT_EQ(input_length[0], forwarding_tokens1.size());
   EXPECT_EQ(input_length[1], forwarding_tokens2.size());
 
   // MTP case
-  model_input->expanded_input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {batch_size * 3});
-  page_input.q_seq_len = 3;
-  page_input.expanded_batch_size = 3;
-  forward_req1->kv_cached_token_num = forward_req1->forwarding_tokens->size() - page_input.q_seq_len;
-  forward_req2->kv_cached_token_num = forward_req2->forwarding_tokens->size() - page_input.q_seq_len;
-  model_input->input_length.shape = {0};
-  model_input->expanded_input_length.shape = {0};
-  model_input->PrepareInputLength(page_input);
+  mtp_shared.GetDSA()->expanded_input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {batch_size * 3});
+  page_meta.q_seq_len = 3;
+  page_meta.expanded_batch_size = 3;
+  forward_req1->kv_cached_token_num = forward_req1->forwarding_tokens->size() - page_meta.q_seq_len;
+  forward_req2->kv_cached_token_num = forward_req2->forwarding_tokens->size() - page_meta.q_seq_len;
+  mtp_shared.input_length.shape = {0};
+  mtp_shared.GetDSA()->expanded_input_length.shape = {0};
+  paged_builder->PrepareInputLength(page_meta, mtp_shared);
   // Check result
-  std::vector<int> expanded_input_length(batch_size * page_input.expanded_batch_size);
-  EXPECT_EQ(page_input.expanded_input_length.GetTotalBytes(),
+  std::vector<int> expanded_input_length(batch_size * page_meta.expanded_batch_size);
+  auto& page_dsa = *page_meta.GetDSA();
+  EXPECT_EQ(page_dsa.expanded_input_length.GetTotalBytes(),
             expanded_input_length.size() * sizeof(decltype(expanded_input_length)::value_type));
-  MemcpyAsync(expanded_input_length.data(), page_input.expanded_input_length.GetPtr<void>(),
-              page_input.expanded_input_length.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
+  MemcpyAsync(expanded_input_length.data(), page_dsa.expanded_input_length.GetPtr<void>(),
+              page_dsa.expanded_input_length.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
               model_input->context_->device->GetH2DStream());
   StreamSynchronize(model_input->context_->device->GetH2DStream());
   // First expanded batch should see tokens [0:q_seq_len=3), so length is 3 (i.e. 5-2)

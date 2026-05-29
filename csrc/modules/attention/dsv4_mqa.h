@@ -11,6 +11,7 @@
 #include "models/base/buffer_manager.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/layer_creation_context.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
 #include "modules/attention/c4_indexer.h"
 #include "modules/attention/compressor.h"
 #include "modules/basic/bmm.h"
@@ -67,6 +68,12 @@ class Dsv4Mqa {
                               const RuntimeConfig& runtime_config, Dsv4AttnBuffer& dsv4_attn_buffer);
 
  private:
+  Status RunDsv4Attention(BaseLayer* attention_layer, StandardAttentionMeta& model_input_info,
+                          MqaAttentionMeta& mqa_input_info, Tensor& q_tensor, Tensor& kv_tensor, Tensor& attn_output,
+                          Tensor& topk_indices_tensor, Tensor& layer_kv_cache_ptr,
+                          Tensor& layer_swa_kv_cache_ptr_tensor, size_t token_count, size_t token_offset,
+                          size_t q_stride, size_t kv_stride);
+
   // ── Q path ──────────────────────────────────────────────────────────────────
   // wqkv_a: [hidden_size → q_lora_rank + head_dim], replicated
   std::unique_ptr<Linear> wqkv_a_proj_;
