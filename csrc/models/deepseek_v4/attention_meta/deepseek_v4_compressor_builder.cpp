@@ -300,31 +300,29 @@ void PrepareCompressor(const std::vector<ForwardRequest>& forward_reqs,
   }
 
   // Free slots for requests no longer in flight
-  std::unordered_set<int64_t> inflight_reqs;
-  for (const auto& req : forward_reqs) {
-    if (req.attn_dp_group_id == compressor_shared.attn_dp_group_id) {
-      inflight_reqs.insert(req.req_id);
-    }
-  }
-  for (auto it = compressor_shared.req_to_slot.begin(); it != compressor_shared.req_to_slot.end();) {
-    if (inflight_reqs.find(it->first) == inflight_reqs.end()) {
-      compressor_shared.free_slot.push(it->second);
-      it = compressor_shared.req_to_slot.erase(it);
-    } else {
-      ++it;
-    }
-  }
+  // NOTE: Slot eviction is intentionally NOT done here. Under max_pp_batch_num > 1, two PP batches
+  // share this CompressorSharedAttentionMeta but each call only sees its own subset of running
+  // requests, so evicting based on "not in current batch" would wrongly release slots that the
+  // other PP batch is still using. Eviction is driven by EvictFinishedRequests(), invoked when
+  // finish/recompute notifications arrive from the scheduler.
 
   // Allocate slots for new requests
   std::unordered_set<int64_t> new_req_ids;
   for (const auto& req : forward_reqs) {
     if (req.attn_dp_group_id != compressor_shared.attn_dp_group_id) continue;
-    if (compressor_shared.req_to_slot.find(req.req_id) == compressor_shared.req_to_slot.end()) {
-      KLLM_CHECK_WITH_INFO(!compressor_shared.free_slot.empty(), "free_slot should not be empty");
-      compressor_shared.req_to_slot.emplace(req.req_id, compressor_shared.free_slot.front());
-      compressor_shared.free_slot.pop();
-      new_req_ids.insert(req.req_id);
+    if (compressor_shared.req_to_slot.find(req.req_id) != compressor_shared.req_to_slot.end()) {
+      continue;
     }
+    KLLM_CHECK_WITH_INFO(
+        !compressor_shared.free_slot.empty(),
+        fmt::format("CompressorSharedAttentionMeta: free_slot pool exhausted (in-flight={}). "
+                    "Total concurrent compressor requests across all PP batches exceeded the slot pool "
+                    "size (max_batch_size * max_pp_batch_num). This usually means EvictFinishedRequests "
+                    "was not called for some finished/recomputed requests.",
+                    compressor_shared.req_to_slot.size()));
+    compressor_shared.req_to_slot.emplace(req.req_id, compressor_shared.free_slot.front());
+    compressor_shared.free_slot.pop();
+    new_req_ids.insert(req.req_id);
   }
 
   PrepareTailIndices(forward_reqs, new_req_ids, compressor_shared, context);
@@ -378,6 +376,18 @@ void PrepareCompressor(const std::vector<ForwardRequest>& forward_reqs,
       paged_compressor.seq_lens_host.push_back(static_cast<int>(req->forwarding_tokens->size()));
     }
     HOST_TO_SHARED_DEVICE(seq_lens, paged_compressor);
+  }
+}
+
+void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids,
+                           CompressorSharedAttentionMeta& compressor_shared) {
+  for (int64_t req_id : finished_req_ids) {
+    auto it = compressor_shared.req_to_slot.find(req_id);
+    if (it == compressor_shared.req_to_slot.end()) {
+      continue;
+    }
+    compressor_shared.free_slot.push(it->second);
+    compressor_shared.req_to_slot.erase(it);
   }
 }
 

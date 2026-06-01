@@ -31,6 +31,12 @@ class MixtralTest : public testing::Test {
     const std::string test_name = test_info->name();
     std::string model_path = "/model/Mixtral-8x7B-v0_1-13980/";
     std::string yaml_path = "../../../examples/llama7b/ksana_llm.yaml";
+
+    const char* skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
+    if (skip_env != nullptr && std::string(skip_env) == "1" && !std::filesystem::exists(model_path)) {
+      GTEST_SKIP() << "Model path " << model_path << " not found, skipping test.";
+    }
+
     std::filesystem::path config_json_path = std::filesystem::path(model_path) / "config.json";
     config_json_path_str = config_json_path.string();
 

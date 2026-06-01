@@ -83,6 +83,10 @@ class CommonModel : public BaseModel {
   Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
                  HiddenUnitDeviceBuffer* hidden_unit, const RunMode run_mode = RunMode::kMain) override;
 
+  // Forwarder to ForwardingContext::EvictFinishedRequests. Drives release of compressor slots
+  // when the scheduler notifies finish/recompute events.
+  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) override;
+
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
 
@@ -145,8 +149,18 @@ class CommonModel : public BaseModel {
   LayerCreationContext layer_creation_context_;
 
   ModelBuffers model_buffers_;
-  // Buffer of forwarding contexts for parallel batch processing
+  // Single forwarding context shared by all Forward() callers on this rank.
+  // Mutated state inside (ModelInput, *_meta, ForwardingBuffers, ModelOutput) is NOT thread-safe,
+  // so concurrent Forward() invocations must be serialized via forward_mutex_ below.
   std::unique_ptr<ForwardingContext> forwarding_context_ = nullptr;
+
+  // Serializes CommonModel::Forward(). On the sampling rank both ModelRunner::HandleExecute (main
+  // forward) and ModelRunner::HandlePostprocess -> ExecutorRuntime::MtpForward (MTP forward) can
+  // drive Forward() against the same forwarding_context_; under max_pp_batch_num >= 2 those calls
+  // overlap and race on the shared host vectors / TensorBuffer in-use flags. This mutex enforces
+  // the single-writer invariant the rest of the model layer assumes. Non-sampling ranks acquire it
+  // unconditionally but are uncontended.
+  std::mutex forward_mutex_;
 
   // Be a replacement of residual_buffer_, for distributed mode only.
   std::vector<Tensor> distributed_device_buffer_;

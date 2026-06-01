@@ -327,6 +327,12 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
   }
 }
 
+void ForwardingContext::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
+  if (model_input_) {
+    model_input_->EvictFinishedRequests(finished_req_ids);
+  }
+}
+
 void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
 

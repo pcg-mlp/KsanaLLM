@@ -67,6 +67,10 @@ class GlobalContext {
 
   size_t GetMtpStepNum() const;
 
+  // The maximum number of pipeline-parallel batches that can be in-flight concurrently.
+  // Read from BatchSchedulerConfig::max_pp_batch_num.
+  size_t GetMaxPpBatchNum() const;
+
  private:
   // The environments.
   std::shared_ptr<Environment> env_ = nullptr;

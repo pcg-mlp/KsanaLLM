@@ -17,6 +17,7 @@
 #include "batch_scheduler/full_cache_hit_handler.h"
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "configure/schedule_config_parser.h"
+#include "profiler/reporter.h"
 #include "runtime/schedule_output.h"
 #include "utils/ret_code.h"
 
@@ -132,14 +133,17 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
       if (req->IsStopped()) {
         continue;
       }
+
       // If client aborted (e.g. disconnected mid-stream), emit a stop event so HandleStopRequest releases
       // KV blocks and calls req->Notify(), which signals abort_waiter and wakes the dying_request thread
       // parked in ~StreamingIterator() (streaming_iterator.cpp:46).
       if (req->aborted) {
         KLLM_LOG_WARNING << "client aborted in UpdateWithGenerationResult, emit stop: req_id=" << req->req_id
                          << " dp_idx=" << dp_idx;
-        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
-                      Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
+        req->finish_status = Status(RET_REQUEST_TERMINATED, "req aborted in running.");
+        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req, req->finish_status, events,
+                      emitted_event_keys);
+        REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
         continue;
       }
 

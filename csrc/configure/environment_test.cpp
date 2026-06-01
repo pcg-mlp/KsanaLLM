@@ -1796,4 +1796,168 @@ TEST_F(EnvironmentTest, JsonModelOverrideArgsTypeMismatchSkipped) {
   CleanupJsonOverrideTestYaml(yaml_path, suffix);
 }
 
+// Helper: write a minimal YAML + dsv4 config.json pair for testing the
+// realignment of compress_ratios after json_model_override_args.
+//
+// Layout of the test config.json:
+//   num_hidden_layers = 8,
+//   num_nextn_predict_layers = 1,
+//   compress_ratios     = [128, 128, 4, 128, 4, 128, 4, 128, 0]   (size = 9 = 8 + 1)
+// The last entry (0) is the *true* MTP compress_ratio that should survive after
+// override; entries 0..n-1 are kept main-layer ratios.
+static std::string CreateDsv4JsonOverrideTestYaml(const std::string& unique_suffix) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::filesystem::path model_dir = temp_dir / ("ksana_dsv4_json_override_" + unique_suffix);
+  std::filesystem::path yaml_path = temp_dir / ("ksana_dsv4_json_override_" + unique_suffix + ".yaml");
+
+  try {
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    {
+      std::ofstream f(yaml_path);
+      f << "setting:\n"
+        << "  global:\n"
+        << "    tensor_para_size: 1\n"
+        << "    pipeline_para_size: 1\n"
+        << "  batch_scheduler:\n"
+        << "    max_waiting_queue_len: 100\n"
+        << "    max_token_len: 4096\n"
+        << "    max_step_tokens: 4096\n"
+        << "    max_batch_size: 32\n"
+        << "  block_manager:\n"
+        << "    block_token_num: 64\n"
+        << "    reserved_device_memory_ratio: 0.01\n"
+        << "model_spec:\n"
+        << "  base_model:\n"
+        << "    model_dir: \"" << model_dir.string() << "\"\n";
+    }
+
+    {
+      std::ofstream f(model_dir / "config.json");
+      f << R"({
+        "architectures": ["DeepseekV4ForCausalLM"],
+        "model_type": "deepseek_v4",
+        "torch_dtype": "bfloat16",
+        "vocab_size": 1024,
+        "hidden_size": 256,
+        "intermediate_size": 1024,
+        "moe_intermediate_size": 256,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 1,
+        "num_hidden_layers": 8,
+        "num_nextn_predict_layers": 1,
+        "max_position_embeddings": 4096,
+        "rope_theta": 10000.0,
+        "compress_rope_theta": 160000.0,
+        "compress_ratios": [128, 128, 4, 128, 4, 128, 4, 128, 0],
+        "head_dim": 256,
+        "qk_rope_head_dim": 64,
+        "qk_nope_head_dim": 128,
+        "kv_lora_rank": 256,
+        "v_head_dim": 128,
+        "o_groups": 8,
+        "o_lora_rank": 256,
+        "q_lora_rank": 256,
+        "sliding_window": 128,
+        "index_head_dim": 128,
+        "index_n_heads": 8,
+        "index_topk": 64,
+        "n_routed_experts": 16,
+        "num_experts_per_tok": 2,
+        "first_k_dense_replace": 0,
+        "num_hash_layers": 0,
+        "hc_mult": 4,
+        "hc_sinkhorn_iters": 4,
+        "hc_eps": 0.000001,
+        "rms_norm_eps": 0.000001,
+        "bos_token_id": 1,
+        "eos_token_id": 2
+      })";
+    }
+
+    return yaml_path.string();
+  } catch (const std::exception&) {
+    return "";
+  }
+}
+
+static void CleanupDsv4JsonOverrideTestYaml(const std::string& yaml_path, const std::string& unique_suffix) {
+  try {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::filesystem::path model_dir = temp_dir / ("ksana_dsv4_json_override_" + unique_suffix);
+    if (std::filesystem::exists(yaml_path)) {
+      std::filesystem::remove(yaml_path);
+    }
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+  } catch (...) {
+  }
+}
+
+// Case 7 (dsv4): num_layer override 后，compress_ratios 应被重排为
+//   [前 num_layer 项 main] + [原数组末 num_nextn_predict_layers 项 MTP]。
+TEST_F(EnvironmentTest, JsonModelOverrideArgsRealignDsv4CompressRatios) {
+  const std::string suffix = "dsv4_realign";
+  std::string yaml_path = CreateDsv4JsonOverrideTestYaml(suffix);
+  ASSERT_FALSE(yaml_path.empty());
+
+  Environment test_env;
+  ASSERT_TRUE(test_env.ParseConfig(yaml_path, "", "config.json", R"({"num_layer":2})").OK());
+
+  ModelConfig cfg;
+  ASSERT_TRUE(test_env.GetModelConfig(cfg).OK());
+  EXPECT_EQ(cfg.num_layer, 2u);
+  EXPECT_TRUE(cfg.use_dsv4_attn);
+  // After realignment, size must equal num_layer + num_nextn_predict_layers.
+  ASSERT_EQ(cfg.dsv4_attn_config.compress_ratios.size(), 3u);
+  // First num_layer entries inherited from the original main slice.
+  EXPECT_EQ(cfg.dsv4_attn_config.compress_ratios[0], 128u);
+  EXPECT_EQ(cfg.dsv4_attn_config.compress_ratios[1], 128u);
+  // Last num_nextn_predict_layers entries are the true MTP entries
+  // (from the tail of the original array), not the next main entry (which would be 4).
+  EXPECT_EQ(cfg.dsv4_attn_config.compress_ratios[2], 0u);
+
+  CleanupDsv4JsonOverrideTestYaml(yaml_path, suffix);
+}
+
+// Case 8 (dsv4): 未做 num_layer override 时，compress_ratios 保持原状不被改动。
+TEST_F(EnvironmentTest, JsonModelOverrideArgsDsv4CompressRatiosUnchangedWhenNoOverride) {
+  const std::string suffix = "dsv4_noop";
+  std::string yaml_path = CreateDsv4JsonOverrideTestYaml(suffix);
+  ASSERT_FALSE(yaml_path.empty());
+
+  Environment test_env;
+  ASSERT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+  ModelConfig cfg;
+  ASSERT_TRUE(test_env.GetModelConfig(cfg).OK());
+  EXPECT_EQ(cfg.num_layer, 8u);
+  ASSERT_EQ(cfg.dsv4_attn_config.compress_ratios.size(), 9u);
+  EXPECT_EQ(cfg.dsv4_attn_config.compress_ratios.back(), 0u);
+
+  CleanupDsv4JsonOverrideTestYaml(yaml_path, suffix);
+}
+
+// Case 9 (dsv4): override 了 num_layer 但实际等于原值时，compress_ratios 保持原状（no-op）。
+TEST_F(EnvironmentTest, JsonModelOverrideArgsDsv4CompressRatiosUnchangedWhenSameValue) {
+  const std::string suffix = "dsv4_same";
+  std::string yaml_path = CreateDsv4JsonOverrideTestYaml(suffix);
+  ASSERT_FALSE(yaml_path.empty());
+
+  Environment test_env;
+  ASSERT_TRUE(test_env.ParseConfig(yaml_path, "", "config.json", R"({"num_layer":8})").OK());
+
+  ModelConfig cfg;
+  ASSERT_TRUE(test_env.GetModelConfig(cfg).OK());
+  EXPECT_EQ(cfg.num_layer, 8u);
+  ASSERT_EQ(cfg.dsv4_attn_config.compress_ratios.size(), 9u);
+  EXPECT_EQ(cfg.dsv4_attn_config.compress_ratios.back(), 0u);
+
+  CleanupDsv4JsonOverrideTestYaml(yaml_path, suffix);
+}
+
 }  // namespace ksana_llm

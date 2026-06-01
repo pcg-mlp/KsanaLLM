@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <atomic>
 
 #include "cache_manager/cache_manager_interface.h"
 #include "runtime/draft_generator/draft_tokens.h"
@@ -206,7 +207,7 @@ class InferRequest {
   bool &finished;
 
   // whether the request is aborted.
-  bool &aborted;
+  std::atomic<bool> &aborted;
 
   // Whether the req is mock.
   bool is_mock_req = 0;

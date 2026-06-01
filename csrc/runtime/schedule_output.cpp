@@ -718,6 +718,9 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
     // finish_req_ids
     SerializeVectorOfVector(schedule_output->finish_req_ids, ptr, *bytes);
 
+    // recompute_req_ids（必须在 finish_req_ids 之后，反序列化顺序需保持一致）
+    SerializeVectorOfVector<int64_t>(schedule_output->recompute_req_ids, ptr, *bytes);
+
     // merged swapout/swapin req ids
     SerializeVectorOfVector<int64_t>(schedule_output->merged_swapout_req_ids, ptr, *bytes);
     SerializeVectorOfVector<int64_t>(schedule_output->merged_swapin_req_ids, ptr, *bytes);
@@ -755,6 +758,9 @@ Status ScheduleOutputParser::DeserializeScheduleOutput(const void* ptr, Schedule
 
   // finish_req_ids
   DeserializeVectorOfVector(schedule_output->finish_req_ids, ptr, offset);
+
+  // recompute_req_ids（与序列化顺序保持一致）
+  DeserializeVectorOfVector<int64_t>(schedule_output->recompute_req_ids, ptr, offset);
 
   // merged swapout/swapin req ids
   DeserializeVectorOfVector<int64_t>(schedule_output->merged_swapout_req_ids, ptr, offset);

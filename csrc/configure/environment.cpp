@@ -29,6 +29,50 @@ DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
 DEFINE_int32(port, 8080, "HTTP service port, default is 8080");
 namespace ksana_llm {
 
+namespace {
+
+// 把 dsv4_attn_config.compress_ratios 按 override 后的 num_layer 重新对齐:
+//   原数组布局: [main(0..N-1), mtp(N..N+M-1)], 其中 N = 原 num_hidden_layers,
+//               M = num_nextn_predict_layers。
+//   重排后布局: [main(0..n-1), mtp(N..N+M-1)], 其中 n = override 后的 num_layer。
+// 这样, 重排后 compress_ratios[i] 对所有 global layer index i 都与运行时实际语义一致:
+//   * 0 .. num_layer-1: 截断后的 main 层
+//   * num_layer .. num_layer+num_nextn_predict_layers-1: 原始模型尾部的真实 MTP 项
+// 仅在 json_model_override_args 实际改小了 num_layer (compress_ratios.size() > num_layer + M)
+// 时才会触发重排; 其它情况 (数组长度已对齐, 或无 MTP) 保持原值不变。
+void RealignDsv4CompressRatiosAfterOverride(ModelConfig &model_config) {
+  auto &compress_ratios = model_config.dsv4_attn_config.compress_ratios;
+  const size_t mtp_count = static_cast<size_t>(model_config.num_nextn_predict_layers);
+  const size_t target_size = static_cast<size_t>(model_config.num_layer) + mtp_count;
+
+  if (compress_ratios.size() == target_size) {
+    return;
+  }
+  if (compress_ratios.size() < target_size) {
+    KLLM_LOG_WARNING << fmt::format(
+        "dsv4 compress_ratios size {} smaller than expected num_layer+num_nextn_predict_layers={} "
+        "after json_model_override_args; skip realignment.",
+        compress_ratios.size(), target_size);
+    return;
+  }
+  if (mtp_count > compress_ratios.size()) {
+    KLLM_LOG_WARNING << fmt::format(
+        "dsv4 compress_ratios size {} smaller than num_nextn_predict_layers={}; skip realignment.",
+        compress_ratios.size(), mtp_count);
+    return;
+  }
+
+  std::vector<uint32_t> aligned_compress_ratios;
+  aligned_compress_ratios.reserve(target_size);
+  aligned_compress_ratios.insert(aligned_compress_ratios.end(), compress_ratios.begin(),
+                                 compress_ratios.begin() + model_config.num_layer);
+  aligned_compress_ratios.insert(aligned_compress_ratios.end(), compress_ratios.end() - mtp_count,
+                                 compress_ratios.end());
+  compress_ratios = std::move(aligned_compress_ratios);
+}
+
+}  // namespace
+
 size_t GetDecodeTokenNumThreshold() {
   static size_t decode_token_num_threshold = 0;
   if (decode_token_num_threshold == 0) {
@@ -165,6 +209,13 @@ Status Environment::ParseModelAndScheduleConfig(YamlReader &yaml_reader, const s
       ApplyJsonModelOverride(override_json, model_config_);
     } catch (const std::exception &e) {
       KLLM_LOG_WARNING << "json_model_override_args: failed to parse JSON, skipping override: " << e.what();
+    }
+
+    // num_layer 可能在上面被改小。对 dsv4 而言, compress_ratios 是按"原始模型"读的, 需要
+    // 立即重排, 否则后续 cache layout / Compressor / Dsv4Mqa / CompressorMeta 等都会按
+    // 错位的 ratio 来初始化 MTP 槽位, 最终触发异步 CUDA 越界。
+    if (model_config_.use_dsv4_attn) {
+      RealignDsv4CompressRatiosAfterOverride(model_config_);
     }
   }
 

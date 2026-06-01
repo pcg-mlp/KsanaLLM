@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 
@@ -39,6 +40,16 @@ static std::vector<std::string>& GetEarlyLogBuffer() {
   return buffer;
 }
 static std::mutex s_early_log_mutex;
+
+static std::string GetLogBasename() {
+  const char* world_size_env = std::getenv("WORLD_SIZE");
+  const char* node_rank = std::getenv("NODE_RANK");
+  if (world_size_env != nullptr && world_size_env[0] != '\0' && std::stoi(world_size_env) > 1 &&
+      node_rank != nullptr && node_rank[0] != '\0') {
+    return std::string("ksana_llm_rank") + node_rank;
+  }
+  return "ksana_llm";
+}
 
 // 打开或重新打开日志文件
 static void OpenLogFile() {
@@ -176,7 +187,7 @@ void SetLogFile(const std::string& postfix) {
   // 使用配置的日志目录，默认 "log/"
   std::string log_dir = s_log_config_set.load(std::memory_order_acquire) ? s_log_config.log_dir : "log/";
 
-  // 根据 postfix 生成日志文件名
+  // 根据 postfix 生成日志文件名，固定使用 "ksana" 前缀
   std::string log_name;
   if (postfix.empty() || postfix == "_python") {
     log_name = "ksana_python.log";
@@ -196,7 +207,7 @@ std::string GetLogFile() {
     return storage;
   }
   std::string log_dir = s_log_config_set.load(std::memory_order_acquire) ? s_log_config.log_dir : "log/";
-  return log_dir + "ksana_llm.log";
+  return log_dir + GetLogBasename() + ".log";
 }
 
 size_t GetLogMaxFileSize() {

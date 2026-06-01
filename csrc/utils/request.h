@@ -250,7 +250,7 @@ class Request {
   bool& finished;
 
   // Whether the request hve been aborted by client.
-  bool aborted = false;
+  std::atomic<bool> aborted{false};
 
   // The hits nums of prefix caching.
   int prefix_cache_hit_tokens;

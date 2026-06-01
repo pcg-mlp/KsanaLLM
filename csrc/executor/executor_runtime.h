@@ -17,6 +17,7 @@
 #include "runtime/structured_generation/structured_generator_interface.h"
 #include "utils/logger.h"
 #include "utils/ret_code.h"
+#include "utils/waiter.h"
 
 namespace ksana_llm {
 
@@ -56,6 +57,17 @@ class ExecutorRuntime {
   // Apply incremental patch, get full schedule_output again.
   void RebuildScheduleOutput(std::shared_ptr<ScheduleOutput> schedule_output);
 
+  // Release per-request state held by optional forward-meta modules (currently CompressorMeta for
+  // DSv4) for requests that have finished or are being recomputed in `schedule_output`. Must be
+  // invoked from the execute thread (in lock-step with Forward), not from the preprocess thread —
+  // see the implementation comment for details on the pipelining hazard.
+  void EvictCompletedCompressorSlots(const std::shared_ptr<ScheduleOutput>& schedule_output);
+
+  // Wake any thread blocked inside Forward()'s prev_mtp_done_->Wait(). Must be called by the owner
+  // (ModelRunner::Stop) after the input/output queues have been stopped, so that the execute thread
+  // is not stuck waiting on an MTP Notify that will never come during shutdown.
+  void Shutdown();
+
  private:
   Status InitializeStructuredGeneratorFactory();
 
@@ -86,6 +98,20 @@ class ExecutorRuntime {
 
   // Prevent concurrent modification of infer_request by MTPForward and UpdateInferRequest
   std::mutex infer_req_mutex_;
+
+  // True when this runtime instance must serialize the main forward (HandleExecute thread,
+  // RunMode::kMain) against the immediately preceding MTP forward (HandlePostprocess thread,
+  // RunMode::kNextN) on the same rank. Required to avoid the cross-TP-rank deadlock in
+  // CommonModel::forward_mutex_ when TP > 1 and the same TrtAllReduce/AllReduce kernel is launched
+  // for two different RunModes in inconsistent order on different TP ranks. Computed once at
+  // construction from (IsSamplingNode && mtp_step_num > 0 && max_pp_batch_num > 1).
+  const bool serialize_main_mtp_{false};
+
+  // Used only when serialize_main_mtp_ is true: HandleExecute path (Forward) waits on this before
+  // launching the next main forward; HandlePostprocess path (MtpForward) notifies it at the end.
+  // Initialized to a "ready" state so the first main Forward proceeds immediately. Internally
+  // backed by std::mutex + std::condition_variable; we use Waiter to keep that out of this header.
+  std::shared_ptr<Waiter> prev_mtp_done_;
 };
 
 }  // namespace ksana_llm

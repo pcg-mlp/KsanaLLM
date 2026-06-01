@@ -380,15 +380,22 @@ class DeepSeekV4CompressorStateLayout : public BaseBlockCacheLayout {
     size_t layer_base_offset = 0;
     for (size_t layer_index = pipeline_config.lower_layer_idx;
          layer_index < (pipeline_config.lower_layer_idx + node_layer_num); ++layer_index) {
-      layer_offsets_.push_back(layer_base_offset);
-
       // Determine whether this layer is active for the given block_compress_ratio.
       const uint32_t layer_compress_ratio = compress_ratios[layer_index];
       const bool layer_active = (layer_compress_ratio == block_compress_ratio);
 
       if (layer_active) {
+        // 活跃层：push 当前累积偏移，然后向前推进。
+        layer_offsets_.push_back(layer_base_offset);
         // Multiply by 2 for kv [head_dim] FP32 and score [head_dim] FP32
         layer_base_offset += layer_compress_ratio * 2 * coff * head_dim * GetTypeSize(TYPE_FP32);
+      } else {
+        // 非活跃层（如 C4-state layout 中的 C128 层）：不占用该 state buffer 的空间。
+        // 赋值 0 而非当前累积偏移，避免在所有活跃层都处理完毕后，最后一个非活跃层
+        // 的偏移值恰好等于 block_cache_size_，从而指向下一个 slot 的起始地址（越界）。
+        // 注意：非活跃层对应的 compressor 永远不会访问本 state buffer（由 compress_ratio
+        // 守卫），offset 0 仅作为安全占位符，不影响正确性。
+        layer_offsets_.push_back(0);
       }
     }
     block_cache_size_ = layer_base_offset;

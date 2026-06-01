@@ -28,6 +28,13 @@ DeepSeekV4WeightLoader::DeepSeekV4WeightLoader(std::shared_ptr<BaseModelConfig> 
 
 DeepSeekV4WeightLoader::~DeepSeekV4WeightLoader() {}
 
+// Returns true if the raw weight name belongs to an MTP layer.
+// DSv4 raw weight maps emit MTP weights with prefix "mtp." (no "model." prefix);
+// also accept "model.mtp." in case the weight name has already been remapped (defensive).
+static bool IsRawMtpWeightName(const std::string& weight_name) {
+  return weight_name.rfind("mtp.", 0) == 0 || weight_name.find("model.mtp.") != std::string::npos;
+}
+
 Status DeepSeekV4WeightLoader::FilterWeightNames(std::vector<std::string>& weight_names) {
   const std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq", "vision_tower.", "mm_projector."};
 
@@ -46,22 +53,39 @@ Status DeepSeekV4WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
     }
 
     // Skip some layers in distributed mode.
+    //
+    // 关键: 必须把"原始主干权重 layers.N"和"MTP 权重 mtp.K"分开来分别判定。
+    // 否则当 json_model_override_args 把 num_layer 改小到 N == lower_nextn_layer_idx 时,
+    // 原始 layers.N (主干) 会因为 layer_idx 落入 nextn range 而被错误保留, 最终与 mtp.K
+    // (rename 后 effective_idx == N) 冲突。
     if (lower_layer_idx >= 0 && upper_layer_idx >= 0) {
-      int layer_idx = GetLayerIdxFromName(*it);
-      if (layer_idx >= 0 && (*it).find("mtp.") != std::string::npos) {
-        layer_idx += deepseek_v4_config_->num_layer;
-      }
-      if (layer_idx >= 0 && ((layer_idx < lower_layer_idx || layer_idx > upper_layer_idx) &&
-                             (layer_idx < lower_nextn_layer_idx || layer_idx > upper_nextn_layer_idx))) {
-        KLLM_LOG_DEBUG << fmt::format("V4: Skip layer: {}", *it);
-        it = weight_names.erase(it);
-        continue;
-      }
-      // Skip nextn layer in distributed non-sampling node
-      if (layer_idx >= 0 && !context_->global->IsSamplingNode() &&
-          (layer_idx >= lower_nextn_layer_idx && layer_idx <= upper_nextn_layer_idx)) {
-        it = weight_names.erase(it);
-        continue;
+      const int raw_layer_idx = GetLayerIdxFromName(*it);
+      if (raw_layer_idx >= 0) {
+        const bool is_mtp_weight = IsRawMtpWeightName(*it);
+
+        bool should_keep = false;
+        if (is_mtp_weight) {
+          // MTP 权重在 ProcessModelWeights 阶段会被 rename 到 layers.<num_layer + mtp_idx>,
+          // 因此只能落到 [lower_nextn, upper_nextn] 槽位。
+          const int effective_idx = raw_layer_idx + static_cast<int>(deepseek_v4_config_->num_layer);
+          should_keep = (lower_nextn_layer_idx >= 0 && effective_idx >= lower_nextn_layer_idx &&
+                         effective_idx <= upper_nextn_layer_idx);
+          // 仅 sampling node 真正承载 MTP 层的权重。
+          if (should_keep && !context_->global->IsSamplingNode()) {
+            should_keep = false;
+          }
+        } else {
+          // 原始主干权重必须严格落入主干 range。即便 raw_layer_idx 因为 num_layer override
+          // 同时落入 nextn range, 也必须 skip —— 它不是 MTP 权重, 绝不能被错误地装到 MTP 槽位。
+          should_keep = (raw_layer_idx >= lower_layer_idx && raw_layer_idx <= upper_layer_idx);
+        }
+
+        if (!should_keep) {
+          KLLM_LOG_DEBUG << fmt::format("V4: Skip layer (is_mtp={}, raw_layer_idx={}): {}", is_mtp_weight,
+                                         raw_layer_idx, *it);
+          it = weight_names.erase(it);
+          continue;
+        }
       }
     }
 

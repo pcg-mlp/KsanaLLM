@@ -758,7 +758,8 @@ TEST_F(DeepSeekV4CompressorStateLayoutTest, KvShareSameOffsetMlaProperty) {
 }
 
 TEST_F(DeepSeekV4CompressorStateLayoutTest, InactiveLayerOffsetEqualsActiveLayerBase) {
-  // An inactive layer's offset must equal the cumulative base of the preceding active layers.
+  // Inactive layers use offset 0 as a safe placeholder (they are never accessed by the compressor).
+  // Active layers get monotonically increasing offsets based on preceding active layers.
   const uint32_t num_layer = 4;
   std::vector<uint32_t> ratios = {0u, 4u, 128u, 4u};
   const uint32_t kv_lora_rank = 512;
@@ -775,14 +776,15 @@ TEST_F(DeepSeekV4CompressorStateLayoutTest, InactiveLayerOffsetEqualsActiveLayer
   // coff=2, per active layer: 2 * 4 * 2 * (kv_lora_rank + qk_rope_head_dim) * sizeof(fp32)
   const size_t head_dim = kv_lora_rank + qk_rope_head_dim;
   const size_t per_layer = 2u * 4u * 2u * head_dim * GetTypeSize(TYPE_FP32);
+  (void)per_layer;
 
-  // Layer 0 (inactive): offset == 0
+  // Layer 0 (inactive): offset == 0 (safe placeholder, not accessed)
   EXPECT_EQ(layout.GetKvCacheLayerOffsets(0, "attention").k_offset, 0u);
   // Layer 1 (active): offset == 0 (first active layer)
   EXPECT_EQ(layout.GetKvCacheLayerOffsets(1, "attention").k_offset, 0u);
-  // Layer 2 (inactive): offset == per_layer (after layer 1's allocation)
-  EXPECT_EQ(layout.GetKvCacheLayerOffsets(2, "attention").k_offset, per_layer);
-  // Layer 3 (active): offset == per_layer (same base as layer 2, which is inactive)
+  // Layer 2 (inactive): offset == 0 (safe placeholder, not accessed)
+  EXPECT_EQ(layout.GetKvCacheLayerOffsets(2, "attention").k_offset, 0u);
+  // Layer 3 (active): offset == per_layer (second active layer)
   EXPECT_EQ(layout.GetKvCacheLayerOffsets(3, "attention").k_offset, per_layer);
 }
 
@@ -930,9 +932,9 @@ TEST_F(DeepSeekV4CompressorIndexerStateLayoutTest, OffsetLayoutMatchesManualCalc
   // ratios = {0, 4, 128, 4}
   // coff=2 (block_compress_ratio==4), head_dim=index_head_dim=256
   // Per active layer: 2 * 4 * 2 * 256 * 4 = 16384 bytes
-  //   Layer 0 (ratio=0):   inactive; offset=0
+  //   Layer 0 (ratio=0):   inactive; offset=0 (safe placeholder)
   //   Layer 1 (ratio=4):   active;   offset=0; next_base = 16384
-  //   Layer 2 (ratio=128): inactive; offset=16384
+  //   Layer 2 (ratio=128): inactive; offset=0 (safe placeholder)
   //   Layer 3 (ratio=4):   active;   offset=16384
   const uint32_t num_layer = 4;
   std::vector<uint32_t> ratios = {0u, 4u, 128u, 4u};
@@ -947,25 +949,25 @@ TEST_F(DeepSeekV4CompressorIndexerStateLayoutTest, OffsetLayoutMatchesManualCalc
 
   const size_t per_active_layer = 2u * 4u * 2u * index_head_dim * GetTypeSize(TYPE_FP32);
 
-  // Layer 0 (inactive)
+  // Layer 0 (inactive): offset=0 (safe placeholder, never accessed)
   {
     auto off = layout.GetKvCacheLayerOffsets(0, "attention");
     EXPECT_EQ(off.k_offset, 0u);
     EXPECT_EQ(off.v_offset, 0u);
   }
-  // Layer 1 (active, first)
+  // Layer 1 (active, first): offset=0
   {
     auto off = layout.GetKvCacheLayerOffsets(1, "attention");
     EXPECT_EQ(off.k_offset, 0u);
     EXPECT_EQ(off.v_offset, 0u);
   }
-  // Layer 2 (inactive, base = per_active_layer)
+  // Layer 2 (inactive): offset=0 (safe placeholder, never accessed)
   {
     auto off = layout.GetKvCacheLayerOffsets(2, "attention");
-    EXPECT_EQ(off.k_offset, per_active_layer);
-    EXPECT_EQ(off.v_offset, per_active_layer);
+    EXPECT_EQ(off.k_offset, 0u);
+    EXPECT_EQ(off.v_offset, 0u);
   }
-  // Layer 3 (active, second)
+  // Layer 3 (active, second): offset=per_active_layer
   {
     auto off = layout.GetKvCacheLayerOffsets(3, "attention");
     EXPECT_EQ(off.k_offset, per_active_layer);

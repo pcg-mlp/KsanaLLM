@@ -19,6 +19,10 @@ TEST_F(DeepSeekV3Test, ForwardFP8BlockWiseTest) {
 
 TEST_F(DeepSeekV3Test, ForwardGPTQInt4Test) {
 #ifdef ENABLE_CUDA
+  const char* skip_env = std::getenv("SKIP_TEST_IF_INVALID_TRITON_VERSION");
+  if (skip_env != nullptr && std::string(skip_env) == "1") {
+    GTEST_SKIP() << "Skipping test due to Triton version incompatibility (SKIP_TEST_IF_INVALID_TRITON_VERSION=1).";
+  }
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
   runtime_config.inter_data_type = model_config.weight_data_type;

@@ -5,6 +5,7 @@
 #include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
 
 #include <fmt/core.h>
+#include <algorithm>
 
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/flash_sparse_mla/flash_sparse_mla.h"
@@ -31,6 +32,11 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
 
   const size_t max_batch_size = runtime_config.max_batch_size;
   const size_t max_token_num = runtime_config.max_step_token_num;
+  // The slot pool must hold every concurrently in-flight request across all PP batches.
+  // Under max_pp_batch_num > 1, the same CompressorSharedAttentionMeta is shared between PP
+  // batches, and slots cannot be reclaimed until EvictFinishedRequests() is called.
+  const size_t max_pp_batch_num = std::max<size_t>(runtime_config.max_pp_batch_num, 1);
+  const size_t slot_pool_capacity = max_batch_size * max_pp_batch_num;
 
   c4_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
   c128_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
@@ -104,21 +110,24 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
     ++c128_slot_num;
   }
 
-  c4_state_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BYTES,
-                           {max_batch_size, static_cast<size_t>(c4_slot_num), c4_state_layout->GetBlockCacheSize()});
+  c4_state_buffer =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BYTES,
+             {slot_pool_capacity, static_cast<size_t>(c4_slot_num), c4_state_layout->GetBlockCacheSize()});
   c4_indexer_state_buffer =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BYTES,
-             {max_batch_size, static_cast<size_t>(c4_slot_num), c4_indexer_state_layout->GetBlockCacheSize()});
+             {slot_pool_capacity, static_cast<size_t>(c4_slot_num), c4_indexer_state_layout->GetBlockCacheSize()});
   c128_state_buffer =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BYTES,
-             {max_batch_size, static_cast<size_t>(c128_slot_num), c128_state_layout->GetBlockCacheSize()});
+             {slot_pool_capacity, static_cast<size_t>(c128_slot_num), c128_state_layout->GetBlockCacheSize()});
 
   KLLM_LOG_INFO << fmt::format(
       "CompressorSharedAttentionMeta init: c4_layer_num_on_node={} c4_slot_num={} "
-      "c128_layer_num_on_node={} c128_slot_num={}",
-      c4_layer_num_on_node, c4_slot_num, c128_layer_num_on_node, c128_slot_num);
+      "c128_layer_num_on_node={} c128_slot_num={} "
+      "slot_pool_capacity={} (= max_batch_size={} * max_pp_batch_num={})",
+      c4_layer_num_on_node, c4_slot_num, c128_layer_num_on_node, c128_slot_num, slot_pool_capacity, max_batch_size,
+      max_pp_batch_num);
 
-  for (int i = 0; i < static_cast<int>(max_batch_size); ++i) {
+  for (int i = 0; i < static_cast<int>(slot_pool_capacity); ++i) {
     free_slot.push(i);
   }
 }

@@ -2,6 +2,9 @@
  * Copyright 2025 Tencent Inc.  All rights reserved.
  */
 
+#include <mutex>
+#include <unordered_map>
+
 #include "csrc/kernels/nvidia/assemble_tokens_hidden/assemble_tokens_hidden.h"
 #include "csrc/kernels/nvidia/common/vec_dtypes.cuh"
 
@@ -125,6 +128,64 @@ __global__ void AssembleTokensHiddenKernelVectorized(const T* input, const size_
   }
 }
 
+namespace {
+
+// TODO(perf): The AssembleTokensHiddenKernel{SharedMem,Vectorized} kernels above declare
+// dynamic shared memory of size hidden_units_num * sizeof(T) but use it only as a
+// per-thread passthrough -- each thread loads its own slots into SMEM and immediately
+// reads them back, with no inter-thread reuse, so the __syncthreads() is effectively a
+// no-op and the SMEM provides no bandwidth or latency benefit. A cleaner long-term fix
+// is to rewrite the kernels to copy directly from global to global, which would also
+// remove the per-block dynamic SMEM ceiling that the helpers below have to work around.
+// The opt-in helpers here are the minimal patch needed to unblock large hidden_units_num
+// cases such as DeepSeek-V4-Pro MTP gather, where hidden_units_num = hc_mult * hidden_size
+// = 28672 in bf16 needs 56 KB per block, above the 48 KB default per-block dynamic SMEM
+// limit -- without opt-in, the kernel launch fails with cudaErrorInvalidValue.
+
+// Returns the current device's per-block dynamic SMEM opt-in cap, cached per device id.
+int GetMaxDynamicSmemPerBlockOptIn(int device_id) {
+  static std::mutex cache_mu;
+  static std::unordered_map<int, int> per_device_cap;
+  {
+    std::lock_guard<std::mutex> lock(cache_mu);
+    auto it = per_device_cap.find(device_id);
+    if (it != per_device_cap.end()) {
+      return it->second;
+    }
+  }
+
+  int max_smem = 0;
+  if (cudaDeviceGetAttribute(&max_smem, cudaDevAttrMaxSharedMemoryPerBlockOptin, device_id) != cudaSuccess) {
+    return 0;
+  }
+
+  std::lock_guard<std::mutex> lock(cache_mu);
+  per_device_cap[device_id] = max_smem;
+  return max_smem;
+}
+
+// Opt-in the given kernel to use up to the device's max dynamic SMEM per block.
+// Idempotent and cheap (CUDA driver tracks state per (kernel, device)); safe to call
+// before every launch. On query / set failure this is a silent no-op -- the launch
+// itself will then surface any actual error via the caller's existing CUDA error check,
+// preserving the original error path.
+template <typename KernelFn>
+void EnsureMaxDynamicSmemOptIn(KernelFn kernel_fn) {
+  int device_id = 0;
+  if (cudaGetDevice(&device_id) != cudaSuccess) {
+    return;
+  }
+
+  const int max_smem = GetMaxDynamicSmemPerBlockOptIn(device_id);
+  if (max_smem <= 0) {
+    return;
+  }
+
+  cudaFuncSetAttribute(kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, max_smem);
+}
+
+}  // namespace
+
 template <typename T>
 void AssembleTokensHidden(const T* input, const size_t* accepted_tokens_idx, const int32_t accepted_tokens_size,
                        const int32_t hidden_units_num, T* output, cudaStream_t& stream) {
@@ -142,18 +203,22 @@ void AssembleTokensHidden(const T* input, const size_t* accepted_tokens_idx, con
   // NOTE(karlluo): Choose appropriate kernel and vectorization size based on hidden_units_num
   if (hidden_units_num >= 1024 && hidden_units_num % 4 == 0) {
     // For larger hidden_units_num divisible by 4, use vectorized kernel
+    EnsureMaxDynamicSmemOptIn(AssembleTokensHiddenKernelVectorized<T, 4>);
     AssembleTokensHiddenKernelVectorized<T, 4><<<grid, block, shared_mem_size, stream>>>(
         input, accepted_tokens_idx, accepted_tokens_size, hidden_units_num, output);
   } else if (hidden_units_num <= 1024) {
     // For smaller hidden_units_num, each thread processes 4 elements
+    EnsureMaxDynamicSmemOptIn(AssembleTokensHiddenKernelSharedMem<T, BLOCK_SIZE, 4>);
     AssembleTokensHiddenKernelSharedMem<T, BLOCK_SIZE, 4><<<grid, block, shared_mem_size, stream>>>(
         input, accepted_tokens_idx, accepted_tokens_size, hidden_units_num, output);
   } else if (hidden_units_num <= 4096) {
     // For medium-sized hidden_units_num, each thread processes 8 elements
+    EnsureMaxDynamicSmemOptIn(AssembleTokensHiddenKernelSharedMem<T, BLOCK_SIZE, 8>);
     AssembleTokensHiddenKernelSharedMem<T, BLOCK_SIZE, 8><<<grid, block, shared_mem_size, stream>>>(
         input, accepted_tokens_idx, accepted_tokens_size, hidden_units_num, output);
   } else {
     // For larger hidden_units_num, each thread processes 16 elements
+    EnsureMaxDynamicSmemOptIn(AssembleTokensHiddenKernelSharedMem<T, BLOCK_SIZE, 16>);
     AssembleTokensHiddenKernelSharedMem<T, BLOCK_SIZE, 16><<<grid, block, shared_mem_size, stream>>>(
         input, accepted_tokens_idx, accepted_tokens_size, hidden_units_num, output);
   }

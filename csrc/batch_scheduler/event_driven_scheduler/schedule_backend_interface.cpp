@@ -7,6 +7,7 @@
 
 #include <unordered_set>
 
+#include "profiler/reporter.h"
 #include "profiler/timer.h"
 
 namespace ksana_llm {
@@ -67,6 +68,42 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
 
     for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
       collect_timeout_req(running_kv.second);
+    }
+
+    // Scan all queues for aborted requests and emit kStopRequest events, mirroring the timeout pattern.
+    // This ensures aborted requests are cleaned up promptly regardless of which queue they reside in.
+    std::unordered_set<int64_t> aborted_req_ids_seen;
+    auto collect_aborted_req = [&events, dp_idx, &aborted_req_ids_seen,
+                                 &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
+      if (req == nullptr || req->IsStopped()) return;
+      if (!req->aborted) return;
+      if (aborted_req_ids_seen.insert(req->req_id).second) {
+        ScheduleBackendEvent abort_event;
+        abort_event.type = ScheduleBackendEventType::kStopRequest;
+        abort_event.dp_idx = dp_idx;
+        abort_event.req_ptr = req;
+        abort_event.status = Status(RET_REQUEST_TERMINATED, "req aborted in queue.");
+        events.push_back(std::move(abort_event));
+        in_plan_ops.stop_req_ids.insert(req->req_id);
+        KLLM_LOG_WARNING << "req aborted in queue, dp_idx=" << dp_idx << ", req_id=" << req->req_id;
+        REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
+      }
+    };
+
+    for (const auto& req_kv : dp_state.preprocessing_reqs) {
+      collect_aborted_req(req_kv.second);
+    }
+    for (const auto& req : dp_state.prefilling_reqs) {
+      collect_aborted_req(req);
+    }
+    for (const auto& req : dp_state.decoding_reqs) {
+      collect_aborted_req(req);
+    }
+    for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
+      collect_aborted_req(running_kv.second);
+    }
+    for (const auto& req : dp_state.swapped_reqs) {
+      collect_aborted_req(req);
     }
   }
 }

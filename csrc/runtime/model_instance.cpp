@@ -170,4 +170,11 @@ Status ModelInstance::Forward(std::shared_ptr<BaseWeight> weight, InferStage sta
   return model_instance_->Forward(weight, forward_reqs, hidden_unit, run_mode);
 }
 
+void ModelInstance::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
+  if (finished_req_ids.empty() || !model_instance_) {
+    return;
+  }
+  model_instance_->EvictFinishedRequests(finished_req_ids);
+}
+
 }  // namespace ksana_llm

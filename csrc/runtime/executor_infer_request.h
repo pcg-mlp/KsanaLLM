@@ -119,7 +119,7 @@ class ExecutorInferRequest {
   bool finished;
 
   // whether the request is aborted.
-  bool aborted;
+  std::atomic<bool> aborted{false};
 
   // Whether the req is mock.
   bool is_mock_req = 0;

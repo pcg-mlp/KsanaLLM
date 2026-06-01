@@ -169,9 +169,12 @@ Status InferenceEngine::Initialize() {
   InitProcessProfiler(profiler_config);
 
   // Create batch scheduler.
+  // NOTE: BatchSchedulerConfig is also needed on distributed workers (e.g. rank1 in PP mode) to
+  // correctly detect flags like enable_xgrammar, otherwise the vocab info loading below would be
+  // skipped on workers and the executor process would fail with "Vocab info not initialized".
   BatchSchedulerConfig batch_scheduler_config;
+  STATUS_CHECK_RETURN(env_->GetBatchSchedulerConfig(batch_scheduler_config));
   if (!context_->global->IsDistributedWorker()) {
-    STATUS_CHECK_RETURN(env_->GetBatchSchedulerConfig(batch_scheduler_config));
     batch_scheduler_config.max_batch_size = runtime_config.max_batch_size;
     batch_scheduler_config.max_vocab_size = model_config.vocab_size;
     KLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size= " << batch_scheduler_config.max_batch_size

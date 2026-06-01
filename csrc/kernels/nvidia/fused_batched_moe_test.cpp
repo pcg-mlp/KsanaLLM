@@ -42,6 +42,10 @@ class FusedBatchedMoeTest : public testing::Test {
 
 // 零输入 smoke test: 全零 input/weight → 输出应全零
 TEST_F(FusedBatchedMoeTest, ZeroInputProducesZeroOutput) {
+  const char* skip_env = std::getenv("SKIP_TEST_IF_INVALID_TRITON_VERSION");
+  if (skip_env != nullptr && std::string(skip_env) == "1") {
+    GTEST_SKIP() << "Skipping test due to Triton version incompatibility (SKIP_TEST_IF_INVALID_TRITON_VERSION=1).";
+  }
   constexpr int num_experts = 8;
   constexpr int max_num_tokens = 4;
   constexpr int hidden_size = 128;

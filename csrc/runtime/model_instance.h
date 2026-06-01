@@ -50,6 +50,11 @@ class ModelInstance {
   Status Forward(std::shared_ptr<BaseWeight> weight, InferStage stage, std::vector<ForwardRequest>& forward_reqs,
                  HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode);
 
+  // Release per-request state held by optional forward-meta modules (currently CompressorMeta) for
+  // requests that have finished or are being recomputed. No-op when no underlying model is loaded
+  // or when the model does not maintain such state.
+  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
+
   // Get  the data type.
   DataType GetWeightDataType() { return model_config_.weight_data_type; }
 

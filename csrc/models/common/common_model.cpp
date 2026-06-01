@@ -167,6 +167,12 @@ float* CommonModel::GetLogitsPtr() {
   return forwarding_context_->GetModelOutput()->logits_tensor.template GetPtr<float>(false);
 }
 
+void CommonModel::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
+  if (forwarding_context_) {
+    forwarding_context_->EvictFinishedRequests(finished_req_ids);
+  }
+}
+
 Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
                                       ForwardingContext& forwarding_context) {
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
@@ -312,6 +318,16 @@ void CommonModel::SetHiddenUnitBufferTensors(HiddenUnitDeviceBuffer* const hidde
 Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                             std::vector<ForwardRequest>& forward_reqs, HiddenUnitDeviceBuffer* hidden_unit,
                             const RunMode run_mode) {
+  // Serialize against concurrent Forward() invocations on the same CommonModel instance.
+  // Required on the sampling rank where HandleExecute (main, RunMode::kMain) and
+  // HandlePostprocess -> MtpForward (RunMode::kNextN) can otherwise overlap under
+  // max_pp_batch_num >= 2 and race on the shared forwarding_context_ state
+  // (ModelInput / *_meta host vectors, ForwardingBuffers TensorBuffer in-use flags).
+  // Released on function return, after all device kernels have been launched; H2D copies from the
+  // host vectors are issued synchronously w.r.t. the host (pageable memory is staged inside
+  // cudaMemcpyAsync before return), so the lock does not need to span StreamSynchronize.
+  std::lock_guard<std::mutex> forward_lock(forward_mutex_);
+
   SetHiddenUnitBufferTensors(hidden_unit);
 
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();

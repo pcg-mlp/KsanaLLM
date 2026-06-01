@@ -7,11 +7,23 @@
 
 namespace ksana_llm {
 
-ExecutorRuntime::ExecutorRuntime(std::shared_ptr<Environment> env, std::shared_ptr<Context> context) {
+ExecutorRuntime::ExecutorRuntime(std::shared_ptr<Environment> env, std::shared_ptr<Context> context)
+    : serialize_main_mtp_(context->global->IsSamplingNode() && context->global->GetMtpStepNum() > 0 &&
+                          context->global->GetMaxPpBatchNum() > 1) {
   env_ = env;
   context_ = context;
   executor_request_manager_ = std::make_shared<ExecutorRequestManager>();
   generation_controller_ = std::make_shared<GenerationController>(nullptr);
+
+  // Waiter starts in the "ready" state (num_wait == 0) so that the very first main Forward()
+  // returns from Wait() immediately without needing a paired Notify(). Subsequent iterations are
+  // armed by Reset(1) inside Forward() and released by Notify() at the end of MtpForward().
+  prev_mtp_done_ = std::make_shared<Waiter>(0);
+
+  KLLM_LOG_INFO << "ExecutorRuntime serialize_main_mtp=" << serialize_main_mtp_
+                << " (IsSamplingNode=" << context_->global->IsSamplingNode()
+                << ", mtp_step_num=" << context_->global->GetMtpStepNum()
+                << ", max_pp_batch_num=" << context_->global->GetMaxPpBatchNum() << ")";
 }
 
 void ExecutorRuntime::SetModelInstance(std::shared_ptr<ModelInstance> model_instance) {
@@ -110,6 +122,30 @@ void ExecutorRuntime::UpdateCachedRequests(std::shared_ptr<ScheduleOutput> sched
   }
 }
 
+void ExecutorRuntime::EvictCompletedCompressorSlots(const std::shared_ptr<ScheduleOutput>& schedule_output) {
+  // IMPORTANT: This must be called from the execute thread (in lock-step with Forward), NOT from
+  // the preprocess thread. Reason: HandlePreprocess and HandleExecute are pipelined threads; the
+  // preprocess thread can race ahead and queue several model_inputs while the execute thread is
+  // still forwarding earlier ones. If we evicted here in the preprocess path, a later SO's
+  // finish_req_ids could release a request's compressor slot before the execute thread reaches an
+  // earlier SO's Forward (which still needs that slot for Prepare()) — producing a spurious
+  // "req appears without a slot but kv > 0" assertion.
+  if (!model_instance_) {
+    return;
+  }
+  std::vector<int64_t> evicted_req_ids;
+  for (const auto& vec : schedule_output->finish_req_ids) {
+    evicted_req_ids.insert(evicted_req_ids.end(), vec.begin(), vec.end());
+  }
+  for (const auto& vec : schedule_output->recompute_req_ids) {
+    evicted_req_ids.insert(evicted_req_ids.end(), vec.begin(), vec.end());
+  }
+  if (evicted_req_ids.empty()) {
+    return;
+  }
+  model_instance_->EvictFinishedRequests(evicted_req_ids);
+}
+
 void ExecutorRuntime::RebuildScheduleOutput(std::shared_ptr<ScheduleOutput> schedule_output) {
   for (auto& req_patch : schedule_output->running_req_patches) {
     std::shared_ptr<ExecutorInferRequest> req = executor_request_manager_->GetInferRequest(req_patch->req_id);
@@ -127,6 +163,17 @@ Status ExecutorRuntime::BuildModelInput(std::shared_ptr<ScheduleOutput> schedule
 
 Status ExecutorRuntime::Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                                 std::shared_ptr<NewModelOutput> model_output) {
+  // Serialize the main forward (RunMode::kMain) against the previous iteration's MtpForward
+  // (RunMode::kNextN). Without this gate, on a sampling rank with TP > 1 and max_pp_batch_num >= 2
+  // the per-rank CommonModel::forward_mutex_ can be acquired in different order on different TP
+  // ranks (kMain on one rank vs. kNextN on its peer), causing both ranks to enter different
+  // TrtAllReduce collectives and deadlock. See common_model.cpp:328 / trt_all_reduce_sum_layer.cpp.
+  // Wait order: first wait for prior Notify() (no-op on the first iteration since the Waiter starts
+  // at zero), then arm the Waiter for the upcoming MtpForward by Reset(1).
+  if (serialize_main_mtp_) {
+    prev_mtp_done_->Wait();
+    prev_mtp_done_->Reset(1);
+  }
   return model_executor_->Forward(model_input, hidden_unit, model_output);
 }
 
@@ -189,7 +236,19 @@ Status ExecutorRuntime::MtpForward(const size_t mtp_step_num, std::vector<std::s
     req->prefix_cache_len = req->kv_cached_token_num;
   }
 
+  // Release the next main Forward() that has been waiting on prev_mtp_done_. Paired with the
+  // Wait()/Reset(1) at the top of Forward(); see the comment there for the deadlock context.
+  if (serialize_main_mtp_) {
+    prev_mtp_done_->Notify();
+  }
+
   return Status();
+}
+
+void ExecutorRuntime::Shutdown() {
+  if (prev_mtp_done_) {
+    prev_mtp_done_->Stop();
+  }
 }
 
 }  // namespace ksana_llm

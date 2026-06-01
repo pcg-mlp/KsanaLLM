@@ -1067,6 +1067,16 @@ Status ScheduleConfigParser::ResetPipelineBlockNumber() {
   block_manager_config_.device_allocator_config.blocks_num = device_blocks_num;
   block_manager_config_.host_allocator_config.blocks_num = host_block_num;
 
+  // PP sync only updates main KV block count; SWA pool size must be re-derived from the synced
+  // main block count so engine cache manager and executor SWA allocators stay consistent.
+  const float swa_block_num_ratio = batch_scheduler_config_.swa_block_num_ratio;
+  const size_t swa_block_size = block_manager_config_.swa_device_allocator_config.block_size;
+  if (swa_block_num_ratio > 0.0f && swa_block_size > 0) {
+    block_manager_config_.swa_device_allocator_config.blocks_num =
+        static_cast<size_t>(static_cast<float>(device_blocks_num) * swa_block_num_ratio);
+    KLLM_LOG_INFO << "Reset SWA device block num: " << block_manager_config_.swa_device_allocator_config.blocks_num;
+  }
+
   return Status();
 }
 

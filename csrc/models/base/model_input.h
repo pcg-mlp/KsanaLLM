@@ -33,6 +33,11 @@ class ModelInput {
   // Parse forward request.
   void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
+  // Release the per-request state held by optional meta modules (currently only CompressorMeta) for
+  // requests that have finished or are being recomputed. Safe to call with an empty list or with
+  // req_ids unknown to this rank.
+  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
+
  private:
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_reqs);

@@ -17,7 +17,7 @@ from typing import Optional, cast
 
 # 日志配置（可从 YAML 读取）
 KSANA_LOG_DIR = "log/"
-KSANA_LOG_FILE = "log/ksana_python.log"
+KSANA_LOG_FILE = "log/ksana_llm_python.log"
 KSANA_LOG_MAX_SIZE = 536870912  # 512MB
 KSANA_LOG_BACKUP_COUNT = 2
 
@@ -236,7 +236,7 @@ def update_log_config(log_dir: str = None,
         KSANA_LOG_DIR = log_dir
         if not KSANA_LOG_DIR.endswith('/'):
             KSANA_LOG_DIR += '/'
-        KSANA_LOG_FILE = KSANA_LOG_DIR + "ksana_python.log"
+        KSANA_LOG_FILE = KSANA_LOG_DIR + "ksana_llm_python.log"
     
     if max_file_size is not None:
         KSANA_LOG_MAX_SIZE = max_file_size

@@ -35,7 +35,14 @@ class HummingJitTest : public ::testing::Test {
     if (src_dir) {
       base_dir_ = std::string(src_dir);
     } else {
-      base_dir_ = "../3rdparty/LLM_kernels/csrc/kernels/nvidia/others/humming";
+      // Derive humming root from this file's compile-time path: tests/../
+      std::string this_file = __FILE__;
+      auto pos = this_file.rfind("/tests/");
+      if (pos != std::string::npos) {
+        base_dir_ = this_file.substr(0, pos);
+      } else {
+        base_dir_ = "..";
+      }
     }
     script_dir_ = base_dir_ + "/jit";
     cache_dir_ = "/tmp/humming_test_cache_" + std::to_string(getpid());

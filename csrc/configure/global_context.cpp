@@ -50,6 +50,12 @@ size_t GlobalContext::GetMtpStepNum() const {
   return config.mtp_step_num;
 }
 
+size_t GlobalContext::GetMaxPpBatchNum() const {
+  BatchSchedulerConfig config;
+  env_->GetBatchSchedulerConfig(config);
+  return config.max_pp_batch_num;
+}
+
 void GlobalContext::SetEngineProcess(bool is_engine) { is_engine_ = is_engine; }
 
 bool GlobalContext::IsEngine() const { return is_engine_; }

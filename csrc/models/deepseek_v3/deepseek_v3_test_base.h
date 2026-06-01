@@ -47,6 +47,11 @@ class DeepSeekV3Test : public testing::Test {
       expected_tokens = {{5306, 13245, 15354}, /*without fastmath*/ {5306, 13245, 536}, {28570, 27932, 4180}};
     }
 
+    const char* skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
+    if (skip_env != nullptr && std::string(skip_env) == "1" && !std::filesystem::exists(model_path)) {
+      GTEST_SKIP() << "Model path " << model_path << " not found, skipping test.";
+    }
+
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -154,6 +159,10 @@ class DeepSeekV3Test : public testing::Test {
 #endif
     std::filesystem::path model_path(model_config.path);
     if (!std::filesystem::exists(model_path)) {
+      const char* skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
+      if (skip_env != nullptr && std::string(skip_env) == "1") {
+        GTEST_SKIP() << "Model path " << model_config.path << " not found, skipping test.";
+      }
       KLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
       EXPECT_TRUE(std::filesystem::exists(model_path));
       return;

@@ -34,6 +34,11 @@ class BaseModel {
   // The output logits pointer on device, used by sampler to avoid memory copy.
   virtual float* GetLogitsPtr() = 0;
 
+  // Release the per-request state held by the model's optional forward-meta modules (currently
+  // CompressorMeta for DSv4). Default is a no-op for models that do not maintain such state.
+  // Called by the scheduler when a request finishes or is recomputed.
+  virtual void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {}
+
   BufferManager* GetBufferManager() { return &buffer_mgr_; }
 
  protected:

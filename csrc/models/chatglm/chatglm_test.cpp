@@ -50,6 +50,11 @@ class ChatglmTest : public testing::Test {
     std::string model_path = "/model/GLM-4-9B-Chat";
     std::string yaml_path = "../../../examples/llama7b/ksana_llm.yaml";
 
+    const char* skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
+    if (skip_env != nullptr && std::string(skip_env) == "1" && !std::filesystem::exists(model_path)) {
+      GTEST_SKIP() << "Model path " << model_path << " not found, skipping test.";
+    }
+
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / yaml_path;

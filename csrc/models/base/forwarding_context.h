@@ -95,6 +95,10 @@ class ForwardingContext {
 
   void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
 
+  // Forwarder to ModelInput::EvictFinishedRequests; releases compressor slots for finished or
+  // recomputed requests. Safe for ranks that do not use CompressorMeta.
+  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
+
  public:
   ForwardingBuffers* GetForwardingBuffers() { return buffers_; }
 

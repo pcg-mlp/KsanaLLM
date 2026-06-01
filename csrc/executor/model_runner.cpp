@@ -91,6 +91,13 @@ Status ModelRunner::Stop() {
   model_input_queue_->Stop();
   model_output_queue_->Stop();
 
+  // Wake the execute thread if it is currently parked inside ExecutorRuntime::Forward()'s wait for
+  // the previous MtpForward Notify(); without this the join below could hang on a Notify that
+  // HandlePostprocess will never deliver after the queues have been stopped.
+  if (executor_runtime_) {
+    executor_runtime_->Shutdown();
+  }
+
   if (preprocess_thread_.joinable()) {
     preprocess_thread_.join();
   }
@@ -222,6 +229,24 @@ Status ModelRunner::HandleExecute() {
     hidden_unit->tensor.dtype = GetHiddenDataType();
 
     {
+      // Compressor slot eviction is intentionally done BEFORE Forward (i.e. before any Prepare()
+      // call inside the model) so that when a single schedule_output carries BOTH new running_reqs
+      // AND accumulated finish_req_ids / recompute_req_ids from prior steps, the freed slots are
+      // available for the upcoming Prepare() to consume. Doing this in the reverse order can
+      // exhaust the per-rank CompressorMeta slot pool whenever the master coalesces "finish a
+      // batch + start a new batch" into a single dispatch (the dominant failure mode after mass
+      // client aborts: running_reqs goes empty for one or more schedule rounds, finish_req_ids
+      // stays buffered in batch_state, and the next non-empty schedule round dispatches them
+      // together).
+      // Applied uniformly on sampling and non-sampling ranks; MTP on the sampling rank operates
+      // on executor_running_reqs of the same schedule_output, which never overlap with
+      // finish_req_ids of that schedule_output (a req cannot be simultaneously "forwarded this
+      // step" and "already finished in a prior step"), so MTP does not need a separate evict point.
+      PROFILE_EVENT_SCOPE(execute_evict_compressor, "Exec.HandleExecute.EvictCompressorSlots");
+      executor_runtime_->EvictCompletedCompressorSlots(model_input->schedule_output);
+    }
+
+    {
       PROFILE_EVENT_SCOPE(execute_forward_launch, "Exec.HandleExecute.ForwardLaunch");
       executor_runtime_->Forward(model_input, hidden_unit, model_output);
     }
@@ -313,6 +338,14 @@ Status ModelRunner::HandlePostprocess() {
       executor_runtime_->MtpForward(mtp_step_num_, model_output->schedule_output->executor_running_reqs, hidden_unit,
                                     model_output->schedule_output);
     }
+
+    // Compressor slot eviction has been moved to the start of HandleExecute (before the main
+    // Forward), uniformly on both sampling and non-sampling ranks. See the comment there for the
+    // rationale: doing evict before Prepare lets a single schedule_output carry finish_req_ids and
+    // new running_reqs together without exhausting the slot pool. MTP on this rank only Prepare()s
+    // for executor_running_reqs of the same schedule_output, which never overlap with that SO's
+    // finish_req_ids, so MTP does not require a dedicated evict point here.
+
     {
       PROFILE_EVENT_SCOPE(postprocess_free_buffer, "Exec.HandlePostprocess.FreeHiddenBuffer");
       hidden_unit_buffer_pool_->FreeBuffer(hidden_unit);
