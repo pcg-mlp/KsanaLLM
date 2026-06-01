@@ -133,9 +133,15 @@ struct IndexerSharedAttentionMeta {};
 // Each tensor is a view sliced from CompressorSharedAttentionMeta's backing tensors.
 struct CompressorAttentionMeta {
   // Requests handled by this path (flash or paged) for this dp group.
-  // Populated by PrepareCompressor(); does NOT duplicate FlashAttentionMeta::dp_reqs
-  // since CompressorAttentionMeta is embedded in Dsv4*AttentionMeta directly.
+  // Populated by PrepareCompressor(); uses its own IsPaged routing, which differs from
+  // FlashAttentionMeta::dp_reqs (standard kFlash routing). MTP decode requests
+  // (q_seq_len > 1, kv_cached > 0) belong to flash_compressor but are kPage in standard routing.
   std::vector<const ForwardRequest*> dp_reqs;
+
+  // Total input token count for this compressor path, i.e. sum of GetInputIdsLength()
+  // over dp_reqs. Populated by PrepareCompressor(); used by compressor.cpp as the kv_score
+  // slice boundary instead of model_input->dp_context_tokens / dp_decode_tokens.
+  size_t dp_tokens = 0;
 
   // Tensor views of the shared backing tensors
   Tensor c4_indices_tensor;
@@ -161,6 +167,7 @@ struct CompressorAttentionMeta {
 
   void Reset() {
     dp_reqs.clear();
+    dp_tokens = 0;
     c4_indices_host.clear();
     c128_indices_host.clear();
     c4_indices_bundle_host.clear();

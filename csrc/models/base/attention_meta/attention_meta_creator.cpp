@@ -66,6 +66,41 @@ std::unique_ptr<PagedAttentionMeta> AttentionMetaCreator::CreatePagedAttentionMe
   return std::make_unique<PagedAttentionMeta>();
 }
 
+AttentionMetaCreator::MetaArrays AttentionMetaCreator::BuildAttentionMetas(
+    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
+    SharedAttentionMeta& /*shared_meta*/) {
+  MetaArrays result;
+  result.flash_meta = CreateFlashAttentionMeta();
+  auto& flash_meta = *result.flash_meta;
+
+  for (const auto& req : forward_reqs) {
+    if (req.GetType() == ForwardRequestType::kFlash) {
+      ++result.multi_token_request_num;
+      if (req.attn_dp_group_id == attn_dp_group_id) {
+        ++result.dp_multi_token_request_num;
+        flash_meta.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+      }
+    } else {  // ForwardRequestType::kPage
+      ++result.single_token_request_num;
+      if (req.attn_dp_group_id == attn_dp_group_id) {
+        ++result.dp_single_token_request_num;
+        const size_t input_ids_len = req.GetInputIdsLength();
+        if (result.page_metas.empty() || result.page_metas.back()->q_seq_len != input_ids_len) {
+          // Requests in the same dp group are sorted in descending order by token count,
+          // so a new bucket is always created when q_seq_len decreases.
+          result.page_metas.emplace_back(CreatePagedAttentionMeta());
+          result.page_metas.back()->q_seq_len = input_ids_len;
+          // For odd q_seq_len, fold into q_seq_len batches with q_seq_len=1.
+          // For even q_seq_len, fold into q_seq_len/2 batches with q_seq_len=2.
+          result.page_metas.back()->expanded_batch_size = (input_ids_len & 1 ? input_ids_len : input_ids_len >> 1);
+        }
+        result.page_metas.back()->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+      }
+    }
+  }
+  return result;
+}
+
 std::unique_ptr<FlashAttentionMetaBuilder> AttentionMetaCreator::CreateFlashBuilder(
     const AttentionBuilderConfig& config) {
   return std::make_unique<StandardFlashAttentionMetaBuilder>(config);

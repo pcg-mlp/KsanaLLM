@@ -5,10 +5,12 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "models/base/attention_meta/flash_attention_meta_builder.h"
 #include "models/base/attention_meta/paged_attention_meta_builder.h"
+#include "runtime/forward_request.h"
 
 namespace ksana_llm {
 
@@ -34,6 +36,19 @@ class AttentionMetaCreator {
     int layer_start_on_node = 0;
     // KV cache layout; used by model-specific creators that need block-level offset information.
     std::shared_ptr<BaseModelCacheLayout> block_cache_layout = nullptr;
+    // Execution context; used by model-specific creators that need it in BuildAttentionMetas
+    // (e.g. DeepSeekV4 for PrepareCompressor).
+    std::shared_ptr<Context> context = nullptr;
+  };
+
+  // Per-batch routing result returned by BuildAttentionMetas.
+  struct MetaArrays {
+    std::unique_ptr<FlashAttentionMeta> flash_meta;
+    std::vector<std::unique_ptr<PagedAttentionMeta>> page_metas;
+    size_t multi_token_request_num = 0;
+    size_t dp_multi_token_request_num = 0;
+    size_t single_token_request_num = 0;
+    size_t dp_single_token_request_num = 0;
   };
 
   explicit AttentionMetaCreator(const Config& config) : config_(config) {}
@@ -42,6 +57,15 @@ class AttentionMetaCreator {
   virtual std::unique_ptr<SharedAttentionMeta> CreateSharedAttentionMeta();
   virtual std::unique_ptr<FlashAttentionMeta> CreateFlashAttentionMeta();
   virtual std::unique_ptr<PagedAttentionMeta> CreatePagedAttentionMeta();
+
+  // Routes forward_reqs into flash / paged meta objects and returns them with request-count stats.
+  // Default implementation uses ForwardRequestType (kFlash → flash, kPage → paged by q_seq_len).
+  // Override in model-specific creators to apply a different routing policy
+  // (e.g. Compressor: q_seq_len == 1 → paged, others → flash).
+  // shared_meta is the current batch's shared attention meta; model-specific overrides may use
+  // it to prepare embedded sub-metas (e.g. CompressorAttentionMeta) alongside routing.
+  virtual MetaArrays BuildAttentionMetas(const std::vector<ForwardRequest>& forward_reqs,
+                                         uint32_t attn_dp_group_id, SharedAttentionMeta& shared_meta);
 
   // Builder factories: return the model-specific builder for the flash / paged attention paths.
   // The default implementations return Standard*Builder; model-specific creators override these

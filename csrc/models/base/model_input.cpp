@@ -12,8 +12,6 @@
 #include "cache_manager/block_allocator/block_allocator_interface.h"
 #include "configure/environment.h"
 #include "device/device_types.h"
-#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
-#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_builder.h"
 #include "profiler/profile_event.h"
 #include "utils/singleton.h"
 
@@ -112,7 +110,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   attention_meta_creator_ = std::make_unique<AttentionMetaCreator>(AttentionMetaCreator::Config{
       model_config_, runtime_config_, layer_num_on_node_, max_table_block_num, max_token_num,
       GetDecodeTokenNumThreshold(), enable_blocked_multi_token_forwarding_kv_, rank_, pipeline_config.lower_layer_idx,
-      block_cache_layout_});
+      block_cache_layout_, context_});
   flash_meta = attention_meta_creator_->CreateFlashAttentionMeta();
   shared_attention_meta = attention_meta_creator_->CreateSharedAttentionMeta();
 
@@ -265,7 +263,6 @@ void ModelInput::CreateVLTensors() {
 
 void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs) {
   auto& shared_attention_meta = static_cast<StandardSharedAttentionMeta&>(*this->shared_attention_meta);
-  auto& flash_meta = *this->flash_meta;
 
   shared_attention_meta.input_length.shape = {0};
   shared_attention_meta.kv_list.shape = {0};
@@ -282,50 +279,17 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
   if (model_config_.use_mla) {
     shared_attention_meta.GetMLA()->num_splits.shape = {0};
   }
-  if (model_config_.use_dsv4_attn) {
-    auto& mqa_shared = *shared_attention_meta.GetMqa();
-    mqa_shared.raw_out_loc_tensor.shape = {0};
-    mqa_shared.swa_block_indices_tensor.shape = {0};
-    mqa_shared.c128_block_indices_tensor.shape = {0};
-    mqa_shared.c128_topk_lengths_tensor.shape = {0};
-    mqa_shared.c4_num_splits_tensor.shape = {0};
-    mqa_shared.c128_num_splits_tensor.shape = {0};
-  }
 
-  // Reset the input_metas
-  flash_meta.Reset();
-  page_metas.clear();
-
-  multi_token_request_num = 0;
-  dp_multi_token_request_num = 0;
-  single_token_request_num = 0;
-  dp_single_token_request_num = 0;
-  for (const auto& req : forward_reqs) {
-    if (req.GetType() == ForwardRequestType::kFlash) {
-      ++multi_token_request_num;
-      if (req.attn_dp_group_id == attn_dp_group_id_) {
-        ++dp_multi_token_request_num;
-        flash_meta.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
-      }
-    } else {  // req.GetType() == ForwardRequestType::kPage
-      ++single_token_request_num;
-      if (req.attn_dp_group_id == attn_dp_group_id_) {
-        ++dp_single_token_request_num;
-        if (const size_t input_ids_len = req.GetInputIdsLength();
-            page_metas.empty() || page_metas.back()->q_seq_len != input_ids_len) {
-          // `page_metas.back()->q_seq_len` should be greater than `input_ids_len`,
-          // since requests in the same dp group are sorted in descending order by their token numbers
-          page_metas.emplace_back(attention_meta_creator_->CreatePagedAttentionMeta());
-          page_metas.back()->q_seq_len = input_ids_len;
-          // For odd q_seq_len, fold into q_seq_len batches with q_seq_len=1
-          // For even q_seq_len, fold into q_seqlen/2 batches with q_seq_len=2
-          page_metas.back()->expanded_batch_size = (input_ids_len & 1 ? input_ids_len : input_ids_len >> 1);
-        }
-        auto& page_meta = *page_metas.back();
-        page_meta.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
-      }
-    }
-  }
+  // Delegate request routing to creator; flash_meta / page_metas are replaced each step.
+  // Model-specific shared-meta resets (e.g. MQA tensors) are performed inside BuildAttentionMetas.
+  auto arrays = attention_meta_creator_->BuildAttentionMetas(forward_reqs, attn_dp_group_id_,
+                                                             *this->shared_attention_meta);
+  flash_meta = std::move(arrays.flash_meta);
+  page_metas = std::move(arrays.page_metas);
+  multi_token_request_num    = arrays.multi_token_request_num;
+  dp_multi_token_request_num = arrays.dp_multi_token_request_num;
+  single_token_request_num   = arrays.single_token_request_num;
+  dp_single_token_request_num = arrays.dp_single_token_request_num;
   dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 }
 
@@ -382,31 +346,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareCutoffLayer(forward_reqs);
   PrepareNextNGatherIdx(forward_reqs, run_mode);
 
-  // Prepare compressor metadata if use_dsv4_attn is enabled.
-  if (model_config_.use_dsv4_attn) {
-    auto* dsv4_shared = dynamic_cast<DeepSeekV4SharedAttentionMeta*>(shared_attention_meta.get());
-    auto* dsv4_flash_meta = dsv4_shared ? dynamic_cast<DeepSeekV4FlashAttentionMeta*>(flash_meta.get()) : nullptr;
-    if (dsv4_shared && dsv4_flash_meta) {
-      // Find the single-token decode bucket (q_seq_len == 1) for the paged compressor path.
-      // In MTP scenarios there may be higher-q_seq_len buckets before it.
-      DeepSeekV4PagedAttentionMeta* dsv4_paged_meta = nullptr;
-      for (auto& pi : page_metas) {
-        if (pi->q_seq_len == 1) {
-          dsv4_paged_meta = dynamic_cast<DeepSeekV4PagedAttentionMeta*>(pi.get());
-          break;
-        }
-      }
-      if (dsv4_paged_meta) {
-        PrepareCompressor(forward_reqs, dsv4_shared->compressor, dsv4_flash_meta->compressor,
-                          dsv4_paged_meta->compressor, context_);
-      } else {
-        // Pure prefill batch (no single-token decode requests): sink paged output into a temporary.
-        DeepSeekV4PagedAttentionMeta tmp_paged_meta;
-        PrepareCompressor(forward_reqs, dsv4_shared->compressor, dsv4_flash_meta->compressor, tmp_paged_meta.compressor,
-                          context_);
-      }
-    }
-  }
   if (c4_indexer_meta_) {
     c4_indexer_meta_->Prepare(forward_reqs);
   }

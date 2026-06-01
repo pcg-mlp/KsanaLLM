@@ -333,14 +333,25 @@ void PrepareCompressor(const std::vector<ForwardRequest>& forward_reqs,
   flash_compressor.Reset();
   paged_compressor.Reset();
 
-  // Categorise requests and accumulate dp_reqs lists
+  // Categorise requests, accumulate dp_reqs / dp_tokens, and assert ordering.
+  // Correctness of kv_score slicing in compressor.cpp depends on all !IsPaged requests
+  // appearing before IsPaged requests within the same dp group (guaranteed by model_builder's
+  // decode-descending sort: MTP decode token_num > 1 before std decode token_num == 1).
+  bool seen_paged = false;
   for (const auto& req : forward_reqs) {
-    if (req.attn_dp_group_id == compressor_shared.attn_dp_group_id) {
-      if (!IsPaged(req)) {
-        flash_compressor.dp_reqs.emplace_back(&req);
-      } else {
-        paged_compressor.dp_reqs.emplace_back(&req);
-      }
+    if (req.attn_dp_group_id != compressor_shared.attn_dp_group_id) continue;
+    if (!IsPaged(req)) {
+      KLLM_CHECK_WITH_INFO(!seen_paged,
+                           fmt::format("Compressor requires all flash (non-IsPaged) requests to appear before "
+                                       "paged (IsPaged) requests in forward_reqs for a given dp group. "
+                                       "Detected out-of-order request (req_id={}).",
+                                       req.req_id));
+      flash_compressor.dp_reqs.emplace_back(&req);
+      flash_compressor.dp_tokens += req.GetInputIdsLength();
+    } else {
+      seen_paged = true;
+      paged_compressor.dp_reqs.emplace_back(&req);
+      paged_compressor.dp_tokens += req.GetInputIdsLength();
     }
   }
 

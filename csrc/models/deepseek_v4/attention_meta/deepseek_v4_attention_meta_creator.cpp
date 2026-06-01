@@ -42,6 +42,50 @@ std::unique_ptr<PagedAttentionMeta> DeepSeekV4AttentionMetaCreator::CreatePagedA
   return std::make_unique<DeepSeekV4PagedAttentionMeta>();
 }
 
+AttentionMetaCreator::MetaArrays DeepSeekV4AttentionMetaCreator::BuildAttentionMetas(
+    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
+    SharedAttentionMeta& shared_meta) {
+  // Reset MQA shared tensor shapes; must happen before the builders inspect them.
+  auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(shared_meta);
+  dsv4_shared.mqa.raw_out_loc_tensor.shape = {0};
+  dsv4_shared.mqa.swa_block_indices_tensor.shape = {0};
+  dsv4_shared.mqa.c128_block_indices_tensor.shape = {0};
+  dsv4_shared.mqa.c128_topk_lengths_tensor.shape = {0};
+  dsv4_shared.mqa.c4_num_splits_tensor.shape = {0};
+  dsv4_shared.mqa.c128_num_splits_tensor.shape = {0};
+
+  // Use standard routing (ForwardRequestType::kFlash / kPage) for flash_meta / page_metas.
+  // C4IndexerMeta, MQA and other modules all depend on page_metas following standard bucketing.
+  // Compressor has its own internal IsPaged policy (q_seq_len==1) handled by PrepareCompressor below.
+  MetaArrays result = AttentionMetaCreator::BuildAttentionMetas(forward_reqs, attn_dp_group_id, shared_meta);
+
+  // Prepare compressor metadata. PrepareCompressor independently applies its own IsPaged routing
+  // (q_seq_len==1 && kv_cached → paged compressor, others → flash compressor), which may differ
+  // from the standard kFlash/kPage bucketing above.
+  auto& dsv4_flash = static_cast<DeepSeekV4FlashAttentionMeta&>(*result.flash_meta);
+
+  // Find the q_seq_len==1 paged bucket for the paged compressor path.
+  DeepSeekV4PagedAttentionMeta* dsv4_paged = nullptr;
+  for (auto& pi : result.page_metas) {
+    if (pi->q_seq_len == 1) {
+      dsv4_paged = static_cast<DeepSeekV4PagedAttentionMeta*>(pi.get());
+      break;
+    }
+  }
+
+  if (dsv4_paged) {
+    PrepareCompressor(forward_reqs, dsv4_shared.compressor, dsv4_flash.compressor, dsv4_paged->compressor,
+                      config_.context);
+  } else {
+    // Pure prefill batch: no q_seq_len==1 decode requests; sink paged output into a temporary.
+    DeepSeekV4PagedAttentionMeta tmp_paged;
+    PrepareCompressor(forward_reqs, dsv4_shared.compressor, dsv4_flash.compressor, tmp_paged.compressor,
+                      config_.context);
+  }
+
+  return result;
+}
+
 std::unique_ptr<FlashAttentionMetaBuilder> DeepSeekV4AttentionMetaCreator::CreateFlashBuilder(
     const AttentionBuilderConfig& config) {
   return std::make_unique<DeepSeekV4FlashAttentionMetaBuilder>(config);

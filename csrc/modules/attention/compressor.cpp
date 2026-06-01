@@ -132,8 +132,6 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
   // Step 3: kv_compressed_output = compress_layer_(kv_score_input)
   // Input: kv_score_input [T, 2 * coff * head_dim] FP32, Output: kv_compressed_output [T, head_dim]
   const auto& model_input = forwarding_context.GetModelInput();
-  const size_t dp_context_tokens = model_input->dp_context_tokens;
-  const size_t dp_decode_tokens = model_input->dp_decode_tokens;
 
   // Retrieve DSV4-specific shared and per-batch compressor data from the attention info hierarchy.
   auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(*model_input->shared_attention_meta);
@@ -150,6 +148,12 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
       break;
     }
   }
+
+  // Use the compressor's own token counts rather than model_input->dp_context/decode_tokens.
+  // flash_tokens = prefill + MTP decode (all !IsPaged reqs); paged_tokens = std decode (IsPaged reqs).
+  // model_input->dp_context_tokens only counts kFlash reqs (prefill), missing MTP decode.
+  const size_t flash_tokens = flash_compressor.dp_tokens;
+  const size_t paged_tokens = dsv4_paged_ptr ? dsv4_paged_ptr->compressor.dp_tokens : 0;
 
   // Prefix cache tail read-copy: 把 prefix 末 block 的 tail kv_score 复制到 state buffer。
   if (compress_ratio_ == 4) {
@@ -175,9 +179,9 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
     }
   }
 
-  if (dp_context_tokens > 0) {
-    Tensor context_kv_score_input = kv_score_input.GetView({dp_context_tokens, kv_score_input.shape[1]});
-    std::vector<Tensor> context_outputs = {kv_compressed_output.GetView({dp_context_tokens, head_dim_})};
+  if (flash_tokens > 0) {
+    Tensor context_kv_score_input = kv_score_input.GetView({flash_tokens, kv_score_input.shape[1]});
+    std::vector<Tensor> context_outputs = {kv_compressed_output.GetView({flash_tokens, head_dim_})};
     if (compress_ratio_ == 4) {
       // ForwardPrefillC4
       compressor_layer_->Forward(
@@ -218,12 +222,12 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
     }
   }
 
-  if (dp_decode_tokens > 0 && dsv4_paged_ptr != nullptr) {
+  if (paged_tokens > 0 && dsv4_paged_ptr != nullptr) {
     CompressorAttentionMeta& paged_compressor = dsv4_paged_ptr->compressor;
-    Tensor decode_kv_score_input = kv_score_input.GetView({dp_decode_tokens, kv_score_input.shape[1]},
-                                                          dp_context_tokens * kv_score_input.shape[1]);
+    Tensor decode_kv_score_input = kv_score_input.GetView({paged_tokens, kv_score_input.shape[1]},
+                                                          flash_tokens * kv_score_input.shape[1]);
     std::vector<Tensor> decode_outputs = {
-        kv_compressed_output.GetView({dp_decode_tokens, head_dim_}, dp_context_tokens * head_dim_)};
+        kv_compressed_output.GetView({paged_tokens, head_dim_}, flash_tokens * head_dim_)};
     if (compress_ratio_ == 4) {
       // ForwardDecodeC4
       compressor_layer_->Forward(
