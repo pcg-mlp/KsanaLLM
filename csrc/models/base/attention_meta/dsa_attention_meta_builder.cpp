@@ -41,31 +41,6 @@ void PrepareStoreOutLoc(DSAAttentionMeta& dsa_meta, DSASharedAttentionMeta& dsa_
               MEMCPY_HOST_TO_DEVICE, config.context->device->GetH2DStream());
 }
 
-void PrepareDSAExpandedInputLength(DSAAttentionMeta& dsa_meta, DSASharedAttentionMeta& dsa_shared,
-                                   const AttentionMeta& input, const AttentionBuilderConfig& config) {
-  if (input.q_seq_len <= static_cast<size_t>(kDeepGemmMaxQSeqLen)) {
-    return;
-  }
-  PROFILE_EVENT_SCOPE(PrepareDSAExpandedInputLength, "PrepareDSAExpandedInputLength", config.rank);
-  const auto& reqs = input.dp_reqs;
-  dsa_shared.expanded_input_length_host.clear();
-  dsa_shared.expanded_input_length_host.reserve(reqs.size() * input.expanded_batch_size);
-  const int expanded_q_seq_len = (input.q_seq_len & 1 ? 1 : 2);
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    for (size_t j = 1; j <= input.expanded_batch_size; ++j) {
-      dsa_shared.expanded_input_length_host.push_back(reqs[i]->kv_cached_token_num + j * expanded_q_seq_len);
-    }
-  }
-  KLLM_LOG_DEBUG << "expanded_input_length_host " << dsa_shared.expanded_input_length_host;
-  dsa_meta.expanded_input_length = dsa_shared.expanded_input_length.GetView(
-      {dsa_shared.expanded_input_length_host.size()}, dsa_shared.expanded_input_length.shape[0]);
-  dsa_shared.expanded_input_length.shape[0] += dsa_meta.expanded_input_length.GetElementNumber();
-  MemcpyAsync(dsa_meta.expanded_input_length.GetPtr<void>(), dsa_shared.expanded_input_length_host.data(),
-              dsa_shared.expanded_input_length_host.size() *
-                  sizeof(decltype(dsa_shared.expanded_input_length_host)::value_type),
-              MEMCPY_HOST_TO_DEVICE, config.context->device->GetH2DStream());
-}
-
 void PrepareDSAExpandedBlockTable(DSAAttentionMeta& dsa_meta, DSASharedAttentionMeta& dsa_shared,
                                   const AttentionMeta& input, const AttentionBuilderConfig& config) {
   if (!config.enable_blocked_multi_token_forwarding_kv && !config.use_flashinfer_for_decode) {

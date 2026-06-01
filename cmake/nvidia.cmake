@@ -90,17 +90,13 @@ if(${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
 endif()
 
 # DeepGEMM support - only for SM90/SM90a
-set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 0)
 if(HAS_SM90 OR HAS_SM90A)
   set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 1)
-endif()
-
-if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
   message(STATUS "DeepGEMM support enabled (SM90/90a detected).")
 else()
+  set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 0)
   message(STATUS "DeepGEMM support disabled (requires SM90/90a).")
 endif()
-
 add_compile_definitions(ENABLE_DEEPSEEK_DEEPGEMM=${ENABLE_DEEPSEEK_DEEPGEMM_FLAG})
 set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG ${ENABLE_DEEPSEEK_DEEPGEMM_FLAG} CACHE INTERNAL "Toggle DeepSeek DeepGEMM kernels" FORCE)
 
@@ -137,19 +133,19 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         if(NOT GIT_SUBMODULE_RESULT EQUAL 0)
             message(WARNING "Failed to update DeepGEMM submodules.")
         endif()
-        message(STATUS "Checking out DeepGEMM to commit 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51")
+        message(STATUS "Checking out DeepGEMM to commit 714dd1a4a980f7937a74343d19a8eba4fe321480")
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} checkout 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51
+            COMMAND ${GIT_EXECUTABLE} checkout 714dd1a4a980f7937a74343d19a8eba4fe321480
             WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
             RESULT_VARIABLE GIT_CHECKOUT_RESULT
         )
         if(NOT GIT_CHECKOUT_RESULT EQUAL 0)
-            message(WARNING "Failed to checkout DeepGEMM to 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51, using current branch.")
+            message(WARNING "Failed to checkout DeepGEMM to 714dd1a4a980f7937a74343d19a8eba4fe321480, using current branch.")
         endif()
 
-        message(STATUS "Applying DeepGEMM patch...")
         set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm.patch)
         if(EXISTS ${DEEPGEMM_PATCH_FILE})
+            message(STATUS "Applying DeepGEMM patch...")
             execute_process(
                 COMMAND ${GIT_EXECUTABLE} apply ${DEEPGEMM_PATCH_FILE}
                 WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
@@ -167,7 +163,6 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         message(STATUS "Building and installing DeepGEMM...")
         # Set DG_USE_LOCAL_VERSION=0 to skip git clean check in setup.py
         set(ENV{DG_USE_LOCAL_VERSION} "0")
-        message(STATUS "Creating scripts/__init__.py for DeepGEMM...")
         file(WRITE ${DEEPGEMM_SOURCE_DIR}/scripts/__init__.py "")
         execute_process(
             COMMAND bash develop.sh

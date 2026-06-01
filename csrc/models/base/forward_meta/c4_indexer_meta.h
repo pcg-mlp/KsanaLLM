@@ -31,8 +31,6 @@ class C4IndexerMeta {
     std::vector<int> expanded_c4_seq_lens_host;
     std::vector<int> extend_lens_host;
 
-    size_t expanded_q_seq_len = 0;
-    size_t expanded_batch_size = 1;
     size_t total_dp_compressed_input_ids_len = 0;
 
     void Reset() {
@@ -40,8 +38,6 @@ class C4IndexerMeta {
       c4_seq_lens_host.clear();
       expanded_c4_seq_lens_host.clear();
       extend_lens_host.clear();
-      expanded_q_seq_len = 0;
-      expanded_batch_size = 1;
       total_dp_compressed_input_ids_len = 0;
     }
   };
@@ -62,8 +58,7 @@ class C4IndexerMeta {
     }
   }
 
-  void PrepareC4SeqLens(std::vector<int>& host, std::vector<int>& expanded_host, const ForwardRequest& req,
-                        size_t expanded_q_seq_len, size_t expanded_batch_size);
+  void PrepareC4SeqLens(input_meta& input);
   void PrepareExtendLens(std::vector<int>& host, const ForwardRequest& req);
   void PrepareBlockTable(input_meta& input);
 

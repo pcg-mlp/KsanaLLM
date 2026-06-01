@@ -33,7 +33,7 @@ class DeepSeekDeepGEMMWrapper {
   void Fp8PagedMqaLogits(const torch::Tensor& q_fp8, const torch::Tensor& fused_kv_cache, const torch::Tensor& weights,
                          const torch::Tensor& context_lens, const torch::Tensor& block_table,
                          const torch::Tensor& schedule_meta, torch::Tensor& logits, int max_context_len,
-                         cudaStream_t stream, bool clean_logits = false);
+                         cudaStream_t stream);
 
   // Generate schedule metadata for paged MQA
   void PagedMqaLogitsMetadata(const torch::Tensor& context_lens, torch::Tensor& schedule_metadata, int batch_size,

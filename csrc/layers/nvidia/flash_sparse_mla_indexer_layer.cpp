@@ -189,16 +189,17 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, size_t max_chunked_kv_t
   workspace.k_scale_ptr = reinterpret_cast<float*>(layer_base + k_fp8_bytes);
   workspace.logits_ptr = reinterpret_cast<float*>(layer_base + k_fp8_bytes + k_scale_bytes);
 
-  constexpr size_t block_kv = 256;
-  workspace.aligned_seq_len_kv = RoundUp(max_seq_len, block_kv);
+  constexpr size_t kBlockKV = 256;
+  workspace.aligned_seq_len_kv = RoundUp(max_seq_len, kBlockKV);
 }
 
 template <typename SCALAR_T>
 static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, FlashQuantWorkspace& workspace, int rank,
                                int n_heads, int head_dim, size_t chunk_start, size_t chunk_size,
                                int64_t chunk_kv_size) {
-  constexpr int64_t seq_len_alignment = 4;
-  const int64_t aligned_seq_len = RoundUp(chunk_size, seq_len_alignment);
+  constexpr int kBlockQH = 128;
+  const int block_q = kBlockQH / n_heads;
+  const int64_t aligned_seq_len = RoundUp(chunk_size, block_q);
   const int64_t seq_len_kv = chunk_kv_size;
 
   const auto device = torch::Device(torch::kCUDA, rank);
@@ -359,11 +360,12 @@ size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
   size_t k_scale_bytes = max_chunked_kv_tokens_ * sizeof(float);
 
   // Logits buffer: [aligned_q_chunk, aligned_seq_len_kv] * sizeof(float)
-  constexpr size_t kSeqLenAlignment = 4;
+  constexpr int kBlockQH = 128;
+  const int block_q = kBlockQH / n_heads_;
   constexpr size_t kBlockKV = 256;
   // Compute max_chunked_q_tokens_ via shared utility (respects env override).
   max_chunked_q_tokens_ = ComputeIndexerMaxQChunkSize(static_cast<size_t>(max_seq_len_), max_step_token_num_);
-  const size_t aligned_seq_len = RoundUp(max_chunked_q_tokens_, kSeqLenAlignment);
+  const size_t aligned_seq_len = RoundUp(max_chunked_q_tokens_, block_q);
   const size_t aligned_seq_len_kv = RoundUp(static_cast<size_t>(max_seq_len_), kBlockKV);
   const size_t logits_bytes = aligned_seq_len * aligned_seq_len_kv * sizeof(float);
 

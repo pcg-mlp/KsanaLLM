@@ -18,16 +18,9 @@ C4IndexerMeta::C4IndexerMeta(const RuntimeConfig& runtime_config, int rank, std:
   const size_t max_batch_size = runtime_config.max_batch_size;
   c4_seq_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
   extend_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
-  // DeepGEMM fp8_paged_mqa_logits kernel only supports q_seq_len in {1, 2}.
-  // For MTP > 2, we "fold" the query sequence dimension into the batch dimension:
-  // - Original: batch_size=B, q_seq_len=N (where N > 2)
-  // - Expanded: batch_size=B*N, q_seq_len=1 (if N is odd)
-  //          OR batch_size=B*N/2, q_seq_len=2 (if N is even)
-  // This requires expanding input_length tensors accordingly.
-  constexpr size_t kDeepGemmMaxQSeqLen = 2;
-  if (GetDecodeTokenNumThreshold() > kDeepGemmMaxQSeqLen) {
+  if (GetDecodeTokenNumThreshold() > 1) {
     expanded_c4_seq_lens_tensor =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * GetDecodeTokenNumThreshold()});
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size, GetDecodeTokenNumThreshold()});
   }
 
   indexer_meta = std::make_unique<IndexerMeta>(runtime_config, rank, context, kC4Ratio);
@@ -66,19 +59,7 @@ void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
         dp_context_kv_tokens += compressed_extend_len;
       } else {  // GetForwardRequestType(req) == ForwardRequestType::kPage
         if (page_metas.empty() || page_metas.back().q_seq_len != extend_len) {
-          // `page_metas.back().q_seq_len` should be greater than `extend_len`,
-          // since requests in the same dp group are sorted in descending order by their token numbers
           page_metas.emplace_back().q_seq_len = extend_len;
-          // For odd q_seq_len, fold into q_seq_len batches with q_seq_len=1
-          // For even q_seq_len, fold into q_seqlen/2 batches with q_seq_len=2
-          auto& page_meta = page_metas.back();
-          if (extend_len & 1) {
-            page_meta.expanded_q_seq_len = 1;
-            page_meta.expanded_batch_size = extend_len;
-          } else {
-            page_meta.expanded_q_seq_len = 2;
-            page_meta.expanded_batch_size = extend_len >> 1;
-          }
         }
         auto& page_meta = page_metas.back();
         page_meta.dp_reqs.emplace_back(&req);
@@ -105,26 +86,28 @@ void C4IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
     // Delegate paged cu_seq_len to IndexerMeta
     indexer_meta->PrepareCuSeqLen(page_meta, /*is_paged=*/true);
 
-    for (const auto* req : page_meta.dp_reqs) {
-      PrepareC4SeqLens(page_meta.c4_seq_lens_host, page_meta.expanded_c4_seq_lens_host, *req,
-                       page_meta.expanded_q_seq_len, page_meta.expanded_batch_size);
-    }
-    HOST_TO_SHARED_DEVICE(c4_seq_lens, page_meta);
-    if (!expanded_c4_seq_lens_tensor.shape.empty()) {
-      HOST_TO_SHARED_DEVICE(expanded_c4_seq_lens, page_meta);
-    }
+    PrepareC4SeqLens(page_meta);
   }
 }
 
-void C4IndexerMeta::PrepareC4SeqLens(std::vector<int>& host, std::vector<int>& expanded_host, const ForwardRequest& req,
-                                     size_t expanded_q_seq_len, size_t expanded_batch_size) {
-  host.push_back(static_cast<int>(req.forwarding_tokens->size() / kC4Ratio));
+void C4IndexerMeta::PrepareC4SeqLens(input_meta& input) {
+  // Build c4_seq_lens and expanded_c4_seq_lens for all requests in this page_input.
+  // Shape: c4_seq_lens [reqs.size()], expanded_c4_seq_lens [reqs.size() * q_seq_len].
+  const auto& reqs = input.dp_reqs;
+  const size_t q_seq_len = input.q_seq_len;
 
-  // Prepare expanded version if needed
-  if (!expanded_c4_seq_lens_tensor.shape.empty()) {
-    for (size_t i = 1; i <= expanded_batch_size; ++i) {
-      expanded_host.push_back((req.kv_cached_token_num + i * expanded_q_seq_len) / kC4Ratio);
+  for (const auto* req : reqs) {
+    input.c4_seq_lens_host.push_back(static_cast<int>(req->forwarding_tokens->size() / kC4Ratio));
+    if (q_seq_len > 1) {
+      for (size_t i = 1; i <= q_seq_len; ++i) {
+        input.expanded_c4_seq_lens_host.push_back((req->kv_cached_token_num + i) / kC4Ratio);
+      }
     }
+  }
+
+  HOST_TO_SHARED_DEVICE(c4_seq_lens, input);
+  if (q_seq_len > 1) {
+    HOST_TO_SHARED_DEVICE(expanded_c4_seq_lens, input);
   }
 }
 

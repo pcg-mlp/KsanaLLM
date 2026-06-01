@@ -107,11 +107,12 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
   KLLM_CHECK_WITH_INFO(cu_seq_len_k_start.scalar_type() == torch::kInt, "cu_seq_len_k_start tensor must be int32");
   KLLM_CHECK_WITH_INFO(cu_seq_len_k_end.scalar_type() == torch::kInt, "cu_seq_len_k_end tensor must be int32");
 
-  KLLM_CHECK_WITH_INFO(max_seqlen_k > 0, "max_seqlen_k must be positive for compressed logits mode");
-
-  constexpr int seq_len_alignment = 4;
+  constexpr int block_qh = 128;
   constexpr int block_kv = 256;
-  const int aligned_seq_len = RoundUp(seq_len, seq_len_alignment);
+  const int block_q = block_qh / num_heads;
+  KLLM_CHECK_WITH_INFO(block_qh % num_heads == 0, "block_qh must be divisible by num_heads");
+  const int aligned_seq_len = RoundUp(seq_len, block_q);
+  KLLM_CHECK_WITH_INFO(max_seqlen_k > 0, "max_seqlen_k must be positive for compressed logits mode");
   const int stride_logits = RoundUp(max_seqlen_k, block_kv);
 
   KLLM_CHECK_WITH_INFO(logits.device() == q_fp8.device(), "logits tensor must be on the same device as q");
@@ -126,7 +127,7 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
   logits = logits.narrow(0, 0, seq_len).narrow(1, 0, max_seqlen_k);
   CUDA_CHECK_LAST_ERROR(deepseek::SmxxFp8MqaLogits(q_fp8, kv_fp8.first, kv_fp8.second, weights, cu_seq_len_k_start,
                                                    cu_seq_len_k_end, logits, seq_len, seq_len_kv, max_seqlen_k,
-                                                   stride_logits, num_heads, head_dim, seq_len_alignment));
+                                                   stride_logits, num_heads, head_dim, block_q, block_kv));
 
   // Restore original CUDA stream
   at::cuda::setCurrentCUDAStream(original_stream);
@@ -138,8 +139,7 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
 void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, const torch::Tensor& fused_kv_cache,
                                                 const torch::Tensor& weights, const torch::Tensor& context_lens,
                                                 const torch::Tensor& block_table, const torch::Tensor& schedule_meta,
-                                                torch::Tensor& logits, int max_context_len, cudaStream_t stream,
-                                                bool clean_logits) {
+                                                torch::Tensor& logits, int max_context_len, cudaStream_t stream) {
 #if ENABLE_DEEPSEEK_DEEPGEMM
   // Save current torch CUDA stream and set to the passed-in stream
   auto original_stream = at::cuda::getCurrentCUDAStream();
@@ -148,9 +148,8 @@ void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, cons
   KLLM_CHECK_WITH_INFO(q_fp8.dim() == 4, "Expect q tensor of shape [batch_size, next_n, num_heads, head_dim]");
   KLLM_CHECK_WITH_INFO(fused_kv_cache.dim() == 4, "Expect fused_kv_cache tensor of rank 4");
   KLLM_CHECK_WITH_INFO(weights.dim() == 2, "Expect weights tensor of rank 2");
-  // NOTE(jinxcwu)
-  // https://github.com/deepseek-ai/DeepGEMM/pull/231/files#diff-59e30829961e1b429bc12115673562f6f15d2ed347cac8d27a879bf101e977cbL160
-  const bool is_context_lens_2d = context_lens.dim() == 2;
+  KLLM_CHECK_WITH_INFO(context_lens.dim() == 2, "Expect context_lens tensor of rank 2");
+  const bool is_context_lens_2d = true;
   KLLM_CHECK_WITH_INFO(block_table.dim() == 2, "Expect block_table tensor of rank 2");
   KLLM_CHECK_WITH_INFO(schedule_meta.dim() == 2, "Expect schedule_meta tensor of rank 2");
 
@@ -168,7 +167,9 @@ void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, cons
                        "weights first dimension must equal batch_size * next_n");
   KLLM_CHECK_WITH_INFO(static_cast<int>(weights.size(1)) == num_heads, "weights second dimension must equal num_heads");
   KLLM_CHECK_WITH_INFO(static_cast<int>(context_lens.size(0)) == batch_size,
-                       "context_lens length must equal batch_size");
+                       "context_lens first dimension must equal batch_size");
+  KLLM_CHECK_WITH_INFO(static_cast<int>(context_lens.size(1)) == next_n,
+                       "context_lens second dimension must equal next_n");
   KLLM_CHECK_WITH_INFO(static_cast<int>(block_table.size(0)) == batch_size,
                        "block_table first dimension must equal batch_size");
   KLLM_CHECK_WITH_INFO(num_heads_kv == 1, "Expect num_heads_kv == 1 in fused_kv_cache");
@@ -192,32 +193,26 @@ void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, cons
   KLLM_CHECK_WITH_INFO(block_table.scalar_type() == torch::kInt, "block_table tensor must be int32");
   KLLM_CHECK_WITH_INFO(schedule_meta.scalar_type() == torch::kInt, "schedule_meta tensor must be int32");
 
-  const int kv_cache_stride_bytes = static_cast<int>(fused_kv_cache.stride(0));
-  const int block_table_stride = static_cast<int>(block_table.stride(0));
-
   KLLM_CHECK_WITH_INFO(fused_kv_cache.stride(1) == head_dim_with_sf,
                        "fused_kv_cache stride(1) must equal head_dim + sizeof(float)");
   KLLM_CHECK_WITH_INFO(fused_kv_cache.stride(2) == head_dim_with_sf,
                        "fused_kv_cache stride(2) must equal head_dim + sizeof(float)");
   KLLM_CHECK_WITH_INFO(fused_kv_cache.stride(3) == 1, "fused_kv_cache stride(3) must equal 1");
   KLLM_CHECK_WITH_INFO(block_table.stride(1) == 1, "block_table stride(1) must equal 1");
-  KLLM_CHECK_WITH_INFO(kv_cache_stride_bytes % static_cast<int>(sizeof(float)) == 0,
-                       "kv cache stride must be divisible by sizeof(float), kv_cache_stride_bytes");
 
   const auto device = fused_kv_cache.device();
   const auto fp8_options = torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(device);
   const auto f32_options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
 
-  auto kv_cache =
-      torch::from_blob(fused_kv_cache.data_ptr(), {num_kv_blocks, block_kv, head_dim},
-                       {static_cast<int64_t>(kv_cache_stride_bytes), static_cast<int64_t>(head_dim), 1}, fp8_options);
-
+  const int64_t kv_cache_stride_bytes = fused_kv_cache.stride(0);
+  auto kv_cache = torch::from_blob(fused_kv_cache.data_ptr(), {num_kv_blocks, block_kv, head_dim},
+                                   {kv_cache_stride_bytes, static_cast<int64_t>(head_dim), 1}, fp8_options);
   auto kv_cache_scales =
       torch::from_blob(fused_kv_cache.data_ptr<uint8_t>() + block_kv * head_dim, {num_kv_blocks, block_kv},
-                       {static_cast<int64_t>(kv_cache_stride_bytes / static_cast<int>(sizeof(float))), 1}, f32_options);
+                       {kv_cache_stride_bytes / static_cast<int64_t>(sizeof(float)), 1}, f32_options);
 
-  // NOTE(jinxcwu)
-  // https://github.com/deepseek-ai/DeepGEMM/pull/280/files#diff-59e30829961e1b429bc12115673562f6f15d2ed347cac8d27a879bf101e977cbR233
+  const int block_table_stride = static_cast<int>(block_table.stride(0));
+
   constexpr int split_kv = 256;
   const int aligned_max_context_len = RoundUp(max_context_len, split_kv);
 
@@ -232,8 +227,8 @@ void DeepSeekDeepGEMMWrapper::Fp8PagedMqaLogits(const torch::Tensor& q_fp8, cons
   logits = logits.narrow(-1, 0, max_context_len);
   CUDA_CHECK_LAST_ERROR(deepseek::SmxxFp8PagedMqaLogits(
       q_fp8, kv_cache, kv_cache_scales, weights, context_lens, logits, block_table, schedule_meta, batch_size, next_n,
-      num_heads, head_dim, num_kv_blocks, block_kv, is_context_lens_2d, kv_cache_stride_bytes, aligned_max_context_len,
-      block_table_stride, num_sms, split_kv, clean_logits, max_context_len));
+      num_heads, head_dim, num_kv_blocks, block_kv, is_context_lens_2d, aligned_max_context_len, block_table_stride,
+      num_sms, split_kv));
 
   // Restore original CUDA stream
   at::cuda::setCurrentCUDAStream(original_stream);

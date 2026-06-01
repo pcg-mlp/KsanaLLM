@@ -195,7 +195,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
       STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
           {current_q_indexer, current_k_indexer, current_weights, quant_workspace,
            model_input->page_metas[i]->rotary_embedding_pos, page_dsa.store_out_loc,
-           model_input->page_metas[i]->input_length, page_dsa.expanded_input_length,
+           model_input->page_metas[i]->input_length, indexer_meta->page_metas[i].expanded_seq_len_tensor,
            model_input->page_metas[i]->block_table, page_dsa.expanded_block_table,
            indexer_meta->page_metas[i].cu_seq_len_start_tensor, indexer_meta->page_metas[i].cu_seq_len_end_tensor,
            model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta},

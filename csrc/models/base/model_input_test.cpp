@@ -814,65 +814,6 @@ TEST_F(ModelInputTest, PrepareXDRopePosTest) {
   }
 }
 
-TEST_F(ModelInputTest, PrepareInputLengthTest) {
-  auto forward_req1 = std::make_unique<ForwardRequest>();
-  auto forward_req2 = std::make_unique<ForwardRequest>();
-  std::vector<int> forwarding_tokens1{1, 2, 3, 4, 5};
-  std::vector<int> forwarding_tokens2{6, 7, 8, 9};
-  forward_req1->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens1);
-  forward_req2->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens2);
-
-  model_input->page_metas.emplace_back(model_input->attention_meta_creator_->CreatePagedAttentionMeta());
-  auto& page_meta = *model_input->page_metas.back();
-  page_meta.dp_reqs.push_back(forward_req1.get());
-  page_meta.dp_reqs.push_back(forward_req2.get());
-  const size_t batch_size = page_meta.dp_reqs.size();
-
-  auto* paged_builder = static_cast<StandardPagedAttentionMetaBuilder*>(model_input->paged_builder_.get());
-
-  // Normal case
-  page_meta.q_seq_len = 1;
-  forward_req1->kv_cached_token_num = forward_req1->forwarding_tokens->size() - page_meta.q_seq_len;
-  forward_req2->kv_cached_token_num = forward_req2->forwarding_tokens->size() - page_meta.q_seq_len;
-  auto& mtp_shared = *model_input->shared_attention_meta->GetStandard();
-  mtp_shared.input_length.shape = {0};
-  paged_builder->PrepareInputLength(page_meta, mtp_shared);
-  // Check result
-  std::vector<int> input_length(batch_size);
-  EXPECT_EQ(page_meta.input_length.GetTotalBytes(), input_length.size() * sizeof(decltype(input_length)::value_type));
-  MemcpyAsync(input_length.data(), page_meta.input_length.GetPtr<void>(), page_meta.input_length.GetTotalBytes(),
-              MEMCPY_DEVICE_TO_HOST, model_input->context_->device->GetH2DStream());
-  StreamSynchronize(model_input->context_->device->GetH2DStream());
-  EXPECT_EQ(input_length[0], forwarding_tokens1.size());
-  EXPECT_EQ(input_length[1], forwarding_tokens2.size());
-
-  // MTP case
-  mtp_shared.GetDSA()->expanded_input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {batch_size * 3});
-  page_meta.q_seq_len = 3;
-  page_meta.expanded_batch_size = 3;
-  forward_req1->kv_cached_token_num = forward_req1->forwarding_tokens->size() - page_meta.q_seq_len;
-  forward_req2->kv_cached_token_num = forward_req2->forwarding_tokens->size() - page_meta.q_seq_len;
-  mtp_shared.input_length.shape = {0};
-  mtp_shared.GetDSA()->expanded_input_length.shape = {0};
-  paged_builder->PrepareInputLength(page_meta, mtp_shared);
-  // Check result
-  std::vector<int> expanded_input_length(batch_size * page_meta.expanded_batch_size);
-  auto& page_dsa = *page_meta.GetDSA();
-  EXPECT_EQ(page_dsa.expanded_input_length.GetTotalBytes(),
-            expanded_input_length.size() * sizeof(decltype(expanded_input_length)::value_type));
-  MemcpyAsync(expanded_input_length.data(), page_dsa.expanded_input_length.GetPtr<void>(),
-              page_dsa.expanded_input_length.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
-              model_input->context_->device->GetH2DStream());
-  StreamSynchronize(model_input->context_->device->GetH2DStream());
-  // First expanded batch should see tokens [0:q_seq_len=3), so length is 3 (i.e. 5-2)
-  EXPECT_EQ(expanded_input_length[0], forwarding_tokens1.size() - 2);
-  EXPECT_EQ(expanded_input_length[1], forwarding_tokens1.size() - 1);
-  EXPECT_EQ(expanded_input_length[2], forwarding_tokens1.size());
-  EXPECT_EQ(expanded_input_length[3], forwarding_tokens2.size() - 2);
-  EXPECT_EQ(expanded_input_length[4], forwarding_tokens2.size() - 1);
-  EXPECT_EQ(expanded_input_length[5], forwarding_tokens2.size());
-}
-
 TEST_F(ModelInputTest, PrepareDeepstackTest) {
   // Configure model as qwen3_vl with DeepStack.
   constexpr int kNumDeepstackLayers = 2;

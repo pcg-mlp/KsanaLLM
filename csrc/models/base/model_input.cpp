@@ -6,12 +6,12 @@
 
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/torch.h>
-#include "models/base/attention_meta/flash_attention_meta_builder.h"
-#include "models/base/attention_meta/paged_attention_meta_builder.h"
 
 #include "cache_manager/block_allocator/block_allocator_interface.h"
 #include "configure/environment.h"
 #include "device/device_types.h"
+#include "models/base/attention_meta/flash_attention_meta_builder.h"
+#include "models/base/attention_meta/paged_attention_meta_builder.h"
 #include "profiler/profile_event.h"
 #include "utils/singleton.h"
 
@@ -272,7 +272,6 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
   shared_attention_meta.block_table.shape = {0};
   if (model_config_.use_dsa) {
     auto& dsa_shared = *shared_attention_meta.GetDSA();
-    dsa_shared.expanded_input_length.shape = {0};
     dsa_shared.expanded_block_table.shape = {0};
     dsa_shared.store_out_loc.shape = {0};
   }
@@ -282,13 +281,13 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
 
   // Delegate request routing to creator; flash_meta / page_metas are replaced each step.
   // Model-specific shared-meta resets (e.g. MQA tensors) are performed inside BuildAttentionMetas.
-  auto arrays = attention_meta_creator_->BuildAttentionMetas(forward_reqs, attn_dp_group_id_,
-                                                             *this->shared_attention_meta);
+  auto arrays =
+      attention_meta_creator_->BuildAttentionMetas(forward_reqs, attn_dp_group_id_, *this->shared_attention_meta);
   flash_meta = std::move(arrays.flash_meta);
   page_metas = std::move(arrays.page_metas);
-  multi_token_request_num    = arrays.multi_token_request_num;
+  multi_token_request_num = arrays.multi_token_request_num;
   dp_multi_token_request_num = arrays.dp_multi_token_request_num;
-  single_token_request_num   = arrays.single_token_request_num;
+  single_token_request_num = arrays.single_token_request_num;
   dp_single_token_request_num = arrays.dp_single_token_request_num;
   dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 }

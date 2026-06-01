@@ -58,17 +58,8 @@ void DeepSeekV4PagedAttentionMetaBuilder::OnPrepareKVCacheBlockTable(StandardAtt
   PrepareKVCacheBlockTable(meta, shared_meta, config_, layer_factor, kv_factor);
 }
 
-void DeepSeekV4PagedAttentionMetaBuilder::OnPrepareExpandedInputLength(PagedAttentionMeta& meta,
-                                                                       SharedAttentionMeta& shared_meta) {
-  if (!config_.model_config.use_dsa) {
-    return;
-  }
-  auto& dsv4_meta = static_cast<DeepSeekV4PagedAttentionMeta&>(meta);
-  PrepareDSAExpandedInputLength(dsv4_meta.dsa, *shared_meta.GetDSA(), meta, config_);
-}
-
 void DeepSeekV4PagedAttentionMetaBuilder::Build(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta) {
-  // super::Build() calls OnPrepareKVCacheBlockTable() and OnPrepareExpandedInputLength() virtually.
+  // super::Build() calls OnPrepareKVCacheBlockTable() virtually.
   StandardPagedAttentionMetaBuilder::Build(meta, shared_meta);
 
   auto& dsv4_meta = static_cast<DeepSeekV4PagedAttentionMeta&>(meta);

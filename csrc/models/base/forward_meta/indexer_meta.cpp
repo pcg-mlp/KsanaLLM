@@ -30,6 +30,10 @@ IndexerMeta::IndexerMeta(const RuntimeConfig& runtime_config, int rank, std::sha
   cu_seq_len_start_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
   cu_seq_len_end_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
   batch_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
+  if (GetDecodeTokenNumThreshold() > 1) {
+    expanded_seq_len_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size, GetDecodeTokenNumThreshold()});
+  }
 }
 
 void IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
@@ -37,6 +41,9 @@ void IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
   cu_seq_len_start_tensor.shape = {0};
   cu_seq_len_end_tensor.shape = {0};
   batch_indices_tensor.shape = {0};
+  if (!expanded_seq_len_tensor.shape.empty()) {
+    expanded_seq_len_tensor.shape = {0};
+  }
 
   // Reset meta
   flash_meta.Reset();
@@ -70,6 +77,9 @@ void IndexerMeta::Prepare(const std::vector<ForwardRequest>& forward_reqs) {
     PrepareBatchIndices(flash_meta);
   }
   for (auto& page_meta : page_metas) {
+    if (page_meta.q_seq_len > 1) {
+      PrepareSeqLen(page_meta);
+    }
     PrepareCuSeqLen(page_meta, /*is_paged=*/true);
   }
 }
@@ -241,6 +251,24 @@ void IndexerMeta::PrepareBatchIndices(input_meta& input) {
   }
 
   HOST_TO_SHARED_DEVICE(batch_indices, input);
+}
+
+void IndexerMeta::PrepareSeqLen(input_meta& input) {
+  // Build expanded context length for DeepGEMM paged path (q_seq_len > 1).
+  // each element = context_len at that position.
+  const auto& reqs = input.dp_reqs;
+  const size_t q_seq_len = input.q_seq_len;
+
+  input.expanded_seq_len_host.clear();
+  input.expanded_seq_len_host.reserve(reqs.size() * q_seq_len);
+
+  for (const auto* req : reqs) {
+    for (size_t j = 1; j <= q_seq_len; ++j) {
+      input.expanded_seq_len_host.push_back(req->kv_cached_token_num + j);
+    }
+  }
+
+  HOST_TO_SHARED_DEVICE(expanded_seq_len, input);
 }
 
 }  // namespace ksana_llm

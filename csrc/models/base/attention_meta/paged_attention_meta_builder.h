@@ -31,12 +31,8 @@ class StandardPagedAttentionMetaBuilder : public PagedAttentionMetaBuilder {
   // Default: standard capacity (layer_num_on_node × 2).
   virtual void OnPrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta);
 
-  // Called at the end of PrepareInputLength to upload DSA expanded_input_length.
-  // Default: no-op (standard models have no expanded_input_length).
-  virtual void OnPrepareExpandedInputLength(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta);
-
  private:
-  // Prepare input_length tensor and call OnPrepareExpandedInputLength hook.
+  // Prepare input_length tensor.
   void PrepareInputLength(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta);
 
   // Prepare rotary embedding position and mask tensors for the decode (paged) path.

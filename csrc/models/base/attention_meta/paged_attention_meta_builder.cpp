@@ -29,9 +29,6 @@ void StandardPagedAttentionMetaBuilder::OnPrepareKVCacheBlockTable(StandardAtten
   PrepareKVCacheBlockTable(meta, shared_meta, config_, config_.layer_num_on_node, 2);
 }
 
-void StandardPagedAttentionMetaBuilder::OnPrepareExpandedInputLength(PagedAttentionMeta& /*meta*/,
-                                                                     SharedAttentionMeta& /*shared_meta*/) {}
-
 void StandardPagedAttentionMetaBuilder::PrepareInputLength(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta) {
   PROFILE_EVENT_SCOPE(PrepareInputLength, "PrepareInputLength", config_.rank);
   const auto& reqs = meta.dp_reqs;
@@ -50,8 +47,6 @@ void StandardPagedAttentionMetaBuilder::PrepareInputLength(PagedAttentionMeta& m
       meta.input_length.GetPtr<void>(), standard_shared.input_length_host.data(),
       standard_shared.input_length_host.size() * sizeof(decltype(standard_shared.input_length_host)::value_type),
       MEMCPY_HOST_TO_DEVICE, config_.context->device->GetH2DStream());
-
-  OnPrepareExpandedInputLength(meta, shared_meta);
 }
 
 void StandardPagedAttentionMetaBuilder::PrepareDecodeRotary(PagedAttentionMeta& meta,

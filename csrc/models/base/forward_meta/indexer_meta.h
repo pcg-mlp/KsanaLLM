@@ -26,13 +26,14 @@ class IndexerMeta {
 
     Tensor cu_seq_len_start_tensor;
     Tensor cu_seq_len_end_tensor;
-    // Per-token batch index: batch_indices[t] = which request (batch) token t belongs to.
     Tensor batch_indices_tensor;
+    Tensor expanded_seq_len_tensor;
 
     // Persistent host vectors to prevent destruction during MemcpyAsync
     std::vector<int> cu_seq_len_start_host;
     std::vector<int> cu_seq_len_end_host;
     std::vector<int> batch_indices_host;
+    std::vector<int> expanded_seq_len_host;
 
     size_t q_seq_len = 0;
     size_t total_dp_input_ids_len = 0;
@@ -42,6 +43,7 @@ class IndexerMeta {
       cu_seq_len_start_host.clear();
       cu_seq_len_end_host.clear();
       batch_indices_host.clear();
+      expanded_seq_len_host.clear();
       q_seq_len = 0;
       total_dp_input_ids_len = 0;
     }
@@ -77,6 +79,8 @@ class IndexerMeta {
   void PrepareBatchIndices(input_meta& input);
   // Build per Q-token KV start/end. Flash path uses chunk boundaries; paged path uses per-request isolation.
   void PrepareCuSeqLen(input_meta& input, bool is_paged = false);
+  // Build expanded context length for DeepGEMM paged path (q_seq_len > 1).
+  void PrepareSeqLen(input_meta& input);
 
   std::shared_ptr<Context> context_;
 
@@ -93,6 +97,8 @@ class IndexerMeta {
   Tensor cu_seq_len_end_tensor;    // DEVICE, INT32, [max_token_num]
   // Per-token batch index: batch_indices[t] = which request (batch) token t belongs to.
   Tensor batch_indices_tensor;  // DEVICE, INT32, [max_token_num]
+  // Expanded context length for DeepGEMM
+  Tensor expanded_seq_len_tensor;  // DEVICE, INT32, [max_batch_size, decode_token_num_threshold]
 };
 
 }  // namespace ksana_llm

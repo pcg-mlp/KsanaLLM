@@ -35,9 +35,6 @@ class DeepSeekV3PagedAttentionMetaBuilder : public StandardPagedAttentionMetaBui
  protected:
   // Use DSA/MLA-specific capacity factors for layer_kv_cache_ptr initialisation.
   void OnPrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta) override;
-
-  // Upload expanded_input_length for the DSA MTP decode path.
-  void OnPrepareExpandedInputLength(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta) override;
 };
 
 }  // namespace ksana_llm

@@ -60,7 +60,6 @@ struct MLAAttentionMeta {
 struct DSAAttentionMeta {
   Tensor paged_schedule_meta;
   Tensor store_out_loc;
-  Tensor expanded_input_length;
   Tensor expanded_block_table;
 };
 

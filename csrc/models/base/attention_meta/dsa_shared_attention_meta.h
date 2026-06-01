@@ -16,9 +16,7 @@ struct DSASharedAttentionMeta {
   Tensor store_out_loc;
   Tensor layer_indexer_kv_cache_ptr;
   std::vector<Tensor> paged_schedule_metas;
-  Tensor expanded_input_length;
   Tensor expanded_block_table;
-  std::vector<int> expanded_input_length_host;
 
   // Allocates DSA tensors based on model/runtime config. No-op when use_dsa is false.
   void Init(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int layer_num_on_node,

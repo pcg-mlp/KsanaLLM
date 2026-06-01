@@ -10,12 +10,12 @@
 
 #  include "jit/compiler.hpp"
 #  include "jit/device_runtime.hpp"
+#  include "jit/include_parser.hpp"
 #  include "jit/kernel_runtime.hpp"
 
 #  include "jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp"
-#  include "jit_kernels/impls/smxx_clean_logits.hpp"
-#  include "jit_kernels/impls/smxx_fp8_mqa_logits.hpp"
-#  include "jit_kernels/impls/smxx_fp8_paged_mqa_logits.hpp"
+#  include "jit_kernels/impls/smxx_fp8_fp4_mqa_logits.hpp"
+#  include "jit_kernels/impls/smxx_fp8_fp4_paged_mqa_logits.hpp"
 
 namespace {
 
@@ -23,10 +23,12 @@ void InitializeRuntime() {
   const char* env_path_str = std::getenv("DEEPGEMM_INCLUDE_DIR");
   if (env_path_str == nullptr || *env_path_str == '\0') {
     deep_gemm::Compiler::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH, DEEPGEMM_CUDA_HOME);
+    deep_gemm::IncludeParser::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH);
   } else {
     std::filesystem::path deepseek_deepgemm_path(env_path_str);
     deepseek_deepgemm_path /= "deepseek_deep_gemm";
     deep_gemm::Compiler::prepare_init(deepseek_deepgemm_path, DEEPGEMM_CUDA_HOME);
+    deep_gemm::IncludeParser::prepare_init(deepseek_deepgemm_path);
   }
   deep_gemm::KernelRuntime::prepare_init(DEEPGEMM_CUDA_HOME);
 }
@@ -56,35 +58,28 @@ void FinalizeDeepGemm() { deep_gemm::device_runtime.reset(); }
 void SmxxFp8MqaLogits(const torch::Tensor& q, const torch::Tensor& kv, const torch::Tensor& kv_scales,
                       const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                       const torch::Tensor& cu_seq_len_k_end, const torch::Tensor& logits, int seq_len, int seq_len_kv,
-                      int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int seq_len_alignment) {
-  deep_gemm::smxx_fp8_mqa_logits(q, kv, kv_scales, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits, seq_len,
-                                 seq_len_kv, max_seqlen_k, stride_logits, num_heads, head_dim, seq_len_alignment);
-  // clean_logits not required: compressed logits (max_seqlen_k > 0) writes from position 0 compactly,
-  // no invalid gaps exist between valid data, and DeepGEMM asserts `not clean_logits` in this mode.
+                      int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int block_q, int block_kv) {
+  deep_gemm::smxx_fp8_mqa_logits(q, kv, kv_scales, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits,
+                                 logits.scalar_type(), seq_len, seq_len_kv, max_seqlen_k, stride_logits, num_heads,
+                                 head_dim, block_q, block_kv);
 }
 
 void SmxxFp8PagedMqaLogits(const torch::Tensor& q, const torch::Tensor& kv_cache, const torch::Tensor& kv_cache_scales,
                            const torch::Tensor& weights, const torch::Tensor& context_lens, const torch::Tensor& logits,
                            const torch::Tensor& block_table, const torch::Tensor& schedule_meta, int batch_size,
                            int next_n, int num_heads, int head_dim, int num_kv_blocks, int block_kv,
-                           bool is_context_lens_2d, int kv_cache_stride_bytes, int logits_stride,
-                           int block_table_stride, int num_sms, int split_kv, bool enable_clean,
-                           int clean_max_context_len) {
+                           bool is_context_lens_2d, int logits_stride, int block_table_stride, int num_sms,
+                           int split_kv) {
   deep_gemm::smxx_fp8_paged_mqa_logits(q, kv_cache, kv_cache_scales, weights, context_lens, logits, block_table,
-                                       schedule_meta, batch_size, next_n, num_heads, head_dim, num_kv_blocks, block_kv,
-                                       is_context_lens_2d, kv_cache_stride_bytes, logits_stride, block_table_stride,
-                                       num_sms, split_kv);
-
-  if (enable_clean) {
-    deep_gemm::smxx_clean_logits(logits, std::nullopt, context_lens, next_n, batch_size * next_n, clean_max_context_len,
-                                 static_cast<uint64_t>(logits_stride));
-  }
+                                       /*indices=*/torch::Tensor(), schedule_meta, logits.scalar_type(), batch_size,
+                                       next_n, num_heads, head_dim, num_kv_blocks, block_kv, is_context_lens_2d,
+                                       /*is_varlen=*/false, logits_stride, block_table_stride, num_sms, split_kv);
 }
 
 void SmxxPagedMqaLogitsMetadata(const torch::Tensor& context_lens, const torch::Tensor& schedule_metadata,
                                 int batch_size, int next_n, int block_kv, int num_sms, bool is_context_lens_2d) {
   deep_gemm::smxx_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms,
-                                            is_context_lens_2d);
+                                            is_context_lens_2d, /*is_varlen=*/false, /*indices_ptr=*/nullptr);
 }
 
 void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const torch::Tensor& d,

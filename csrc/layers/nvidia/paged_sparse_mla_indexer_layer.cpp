@@ -201,21 +201,20 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
                                int n_heads, int head_dim, int block_size, int block_stride, int layer_index,
                                int max_seq_len) {
   const int next_n = input_data.total_q_tokens / input_data.batch_size;
-  const Tensor& input_length_tensor = next_n > ksana_llm::nvidia::kDeepGemmMaxQSeqLen
-                                          ? input_data.expanded_input_length_tensor
-                                          : input_data.input_length_tensor;
+  const Tensor& input_length_tensor =
+      next_n > 1 ? input_data.expanded_input_length_tensor : input_data.input_length_tensor;
   const Tensor* block_table_tensor = next_n > ksana_llm::nvidia::kDeepGemmMaxQSeqLen
                                          ? input_data.expanded_block_table_tensor
                                          : input_data.block_table_tensor;
-  const int64_t expanded_batch_size = input_length_tensor.shape[0];
+  const int64_t expanded_batch_size = block_table_tensor->shape[0];
   const int64_t expanded_next_n = input_data.total_q_tokens / expanded_batch_size;
 
-  // Prepare context_lens tensor
-  auto context_lens_torch =
-      torch::from_blob(const_cast<void*>(input_length_tensor.template GetPtr<void>()), {expanded_batch_size},
-                       torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
+  // Prepare 2D context_lens tensor
+  auto context_lens_torch = torch::from_blob(const_cast<void*>(input_length_tensor.template GetPtr<void>()),
+                                             {expanded_batch_size, expanded_next_n},
+                                             torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
 
-  // Use schedule_meta tensor from input_data (already computed in ModelInput)
+  // Prepare schedule_meta tensor
   auto schedule_meta_torch =
       torch::from_blob(const_cast<void*>(input_data.schedule_meta_tensor.template GetPtr<void>()),
                        {static_cast<int64_t>(input_data.schedule_meta_tensor.shape[0]),
@@ -243,10 +242,9 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
                        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, rank));
 
   // Prepare block_table tensor
-  auto block_table_torch = torch::from_blob(
-      block_table_tensor->template GetPtr<int>(),
-      {static_cast<int64_t>(block_table_tensor->shape[0]), static_cast<int64_t>(block_table_tensor->shape[1])},
-      torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
+  auto block_table_torch = torch::from_blob(block_table_tensor->template GetPtr<int>(),
+                                            {expanded_batch_size, static_cast<int64_t>(block_table_tensor->shape[1])},
+                                            torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
 
   // Prepare logits tensor
   auto logits_torch = torch::from_blob(
@@ -265,7 +263,7 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
   // Call DeepGEMM MQA
   deepseek_deepgemm_wrapper->Fp8PagedMqaLogits(q_torch, fused_kv_cache_torch, weights_torch, context_lens_torch,
                                                block_table_torch, schedule_meta_torch, logits_torch, max_seq_len,
-                                               input_data.stream, /*clean_logits=*/false);
+                                               input_data.stream);
 
   return Status();
 }

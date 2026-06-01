@@ -40,8 +40,6 @@ void DSASharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
   }
 
   if (decode_token_num_threshold > kDeepGemmMaxQSeqLen) {
-    expanded_input_length =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * decode_token_num_threshold});
     expanded_block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
                                   {max_batch_size * max_table_block_num * decode_token_num_threshold});
   }

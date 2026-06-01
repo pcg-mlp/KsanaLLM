@@ -34,8 +34,6 @@ class DeepSeekV4PagedAttentionMetaBuilder : public StandardPagedAttentionMetaBui
 
  protected:
   void OnPrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta) override;
-
-  void OnPrepareExpandedInputLength(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta) override;
 };
 
 }  // namespace ksana_llm

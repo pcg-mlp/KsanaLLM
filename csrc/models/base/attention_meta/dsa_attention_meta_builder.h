@@ -17,12 +17,6 @@ namespace ksana_llm {
 void PrepareStoreOutLoc(DSAAttentionMeta& dsa_meta, DSASharedAttentionMeta& dsa_shared, const AttentionMeta& input,
                         const AttentionBuilderConfig& config);
 
-// Build and upload expanded_input_length for the DSA MTP decode path.
-// Only active when input.q_seq_len > kDeepGemmMaxQSeqLen; returns immediately otherwise.
-// Caller must ensure config.model_config.use_dsa is true before calling.
-void PrepareDSAExpandedInputLength(DSAAttentionMeta& dsa_meta, DSASharedAttentionMeta& dsa_shared,
-                                   const AttentionMeta& input, const AttentionBuilderConfig& config);
-
 // Build and upload expanded_block_table for the DSA MTP decode path.
 // Only active when input.q_seq_len > kDeepGemmMaxQSeqLen; returns immediately otherwise.
 // max_num_blocks_per_query is derived internally from input.dp_reqs.
