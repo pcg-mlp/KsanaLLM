@@ -15,7 +15,7 @@ add_library(cache_manager STATIC ${cache_manager_SRCS})
 target_link_libraries(cache_manager PUBLIC utils)
 
 # cache_manager_test
-file(GLOB_RECURSE cache_manager_test_SRCS
+file(GLOB cache_manager_test_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/cache_manager/*test.cpp)
 
 message(STATUS "cache_manager_test_SRCS: ${cache_manager_test_SRCS}")

@@ -1165,4 +1165,31 @@ TEST_F(ScheduleConfigParserTest, MaxStepTokenNumResetToMaxTokenLen) {
   run(0, 4096, false, 4096u);    // max_step >= max_token → stays
 }
 
+// compressor_config.state_dtype 设置逻辑:
+//   - use_dsv4_attn=true 时, UpdateMembers 自动设为 TYPE_BF16 (env KLLM_USE_FP32_COMPRESSOR
+//     未设置的默认分支)。
+//   - use_dsv4_attn=false 时分支不进入, 保持结构体默认值 TYPE_BF16。
+TEST_F(ScheduleConfigParserTest, CompressorStateDtypeConfig) {
+  auto run = [this](bool use_dsv4_attn, DataType expected) {
+    std::string yaml_path = CreateTempYamlConfig(false, 0, false);
+    EXPECT_FALSE(yaml_path.empty());
+    YamlReader yaml_reader;
+    EXPECT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+    std::string model_dir =
+        yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+    ModelConfig model_config = LoadModelConfig(model_dir, false);
+    model_config.weight_data_type = TYPE_FP16;
+    model_config.use_mla = use_dsv4_attn;
+    model_config.use_dsv4_attn = use_dsv4_attn;
+    EXPECT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+    EXPECT_NO_THROW(parser_->UpdateMembers(model_dir, model_config));
+    RuntimeConfig runtime_config;
+    EXPECT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+    EXPECT_EQ(runtime_config.compressor_config.state_dtype, expected);
+  };
+
+  run(true, TYPE_BF16);   // DSv4 → 自动设为 BF16
+  run(false, TYPE_BF16);  // 非 DSv4 → 不改写, 保持结构体默认 BF16
+}
+
 }  // namespace ksana_llm

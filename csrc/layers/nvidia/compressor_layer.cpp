@@ -14,18 +14,30 @@ namespace ksana_llm {
 using llm_kernels::nvidia::CompressorWrapper;
 using llm_kernels::nvidia::ForwardMode;
 using llm_kernels::nvidia::PrefillPlan;
-using Wrapper = CompressorWrapper<float, __nv_bfloat16>;
-using RopeWrapper = CompressorWrapper<__nv_bfloat16, __nv_bfloat16>;
+using Fp32Wrapper = CompressorWrapper<float, __nv_bfloat16>;
+using Bf16Wrapper = CompressorWrapper<__nv_bfloat16, __nv_bfloat16>;
 
+// Dispatch flash C4/C128 operations by compressor_dtype
+#define DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(compressor_dtype, ...)                                                   \
+  switch (compressor_dtype) {                                                                                       \
+    case TYPE_BF16:                                                                                                 \
+      Bf16Wrapper::__VA_ARGS__;                                                                                     \
+      break;                                                                                                        \
+    case TYPE_FP32:                                                                                                 \
+      Fp32Wrapper::__VA_ARGS__;                                                                                     \
+      break;                                                                                                        \
+    default:                                                                                                        \
+      KLLM_THROW(fmt::format("CompressorLayer: unsupported compressor_dtype {}", GetTypeString(compressor_dtype))); \
+  }
 // Dispatch CompressFusedNormRopeStore by kv_cache_dtype
 #define DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype, head_dim, ...)                                        \
   switch (kv_cache_dtype) {                                                                                     \
     case TYPE_FP8_DS_MLA:                                                                                       \
-      RopeWrapper::template CompressFusedNormRopeStore<head_dim, llm_kernels::utils::KVCacheType::kFp8DsMla>(   \
+      Bf16Wrapper::template CompressFusedNormRopeStore<head_dim, llm_kernels::utils::KVCacheType::kFp8DsMla>(   \
           __VA_ARGS__);                                                                                         \
       break;                                                                                                    \
     case TYPE_FP8_E4M3:                                                                                         \
-      RopeWrapper::template CompressFusedNormRopeStore<head_dim, llm_kernels::utils::KVCacheType::kFp8E4M3>(    \
+      Bf16Wrapper::template CompressFusedNormRopeStore<head_dim, llm_kernels::utils::KVCacheType::kFp8E4M3>(    \
           __VA_ARGS__);                                                                                         \
       break;                                                                                                    \
     default:                                                                                                    \
@@ -78,6 +90,7 @@ Status CompressorLayer::Init(const std::vector<std::any>& parameters, const Runt
                        "CompressorLayer: compressed_page_bits must be in {1, 6, 8}");
   page_stride_ = std::any_cast<int64_t>(parameters[param_idx++]);
   kv_cache_dtype_ = std::any_cast<DataType>(parameters[param_idx++]);
+  compressor_dtype_ = std::any_cast<DataType>(parameters[param_idx++]);
 
   DISPATCH_BY_2_DTYPE(inter_data_type_, InitYarnRotaryEmbedding, rotary_embedding_cuda_, rope_scaling_factor_config,
                       freqs_cis_, compress_rope_theta, rope_head_dim, max_position_embeddings, head_dim_, n_heads,
@@ -90,7 +103,8 @@ Status CompressorLayer::Init(const std::vector<std::any>& parameters, const Runt
 Status CompressorLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
                          const LayerExecContext& exec_ctx) {
   const auto& kv_scale_input = input_tensors[1];
-  KLLM_CHECK_WITH_INFO(kv_scale_input.dtype == DataType::TYPE_FP32, "kv_score_input must be float type");
+  KLLM_CHECK_WITH_INFO(kv_scale_input.dtype == compressor_dtype_,
+                       "kv_score_input dtype must be aligned with compressor dtype");
 
   const bool is_prefill = (input_tensors.size() >= 10);
   if (is_prefill) {
@@ -137,19 +151,24 @@ Status CompressorLayer::ForwardPrefillC4(const std::vector<Tensor>& input_tensor
   // Step 1: build plan if needed
   if (compress_plan_tensor.shape[2] == 0) {
     const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
-    Wrapper::PlanPrefillCompress(compress_plan, write_plan, seq_lens, extend_lens, batch_size, num_tokens,
-                                 compress_ratio_, is_overlap_, stream);
+    DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+        compressor_dtype_, PlanPrefillCompress(compress_plan, write_plan, seq_lens, extend_lens, batch_size, num_tokens,
+                                               compress_ratio_, is_overlap_, stream));
   }
 
   // Step 2: prefill compression
   const uint32_t num_compress = static_cast<uint32_t>(compress_plan_tensor.shape[0]);
   const uint32_t num_write = static_cast<uint32_t>(write_plan_tensor.shape[0]);
   if (head_dim_ == 512) {
-    Wrapper::template FlashC4Prefill<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                          compress_plan, write_plan, extra, num_compress, num_write, stream);
+    DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+        compressor_dtype_,
+        template FlashC4Prefill<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
+                                     compress_plan, write_plan, extra, num_compress, num_write, stream));
   } else {
-    Wrapper::template FlashC4Prefill<128>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                          compress_plan, write_plan, extra, num_compress, num_write, stream);
+    DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+        compressor_dtype_,
+        template FlashC4Prefill<128>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
+                                     compress_plan, write_plan, extra, num_compress, num_write, stream));
   }
 
   // Step 3: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache
@@ -163,7 +182,7 @@ Status CompressorLayer::ForwardPrefillC4(const std::vector<Tensor>& input_tensor
                                       compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_,
                                       stream);
   } else {
-    RopeWrapper::template IndexerFusedNormRopeStore<128>(
+    Bf16Wrapper::template IndexerFusedNormRopeStore<128>(
         kv_compressed_output, norm_weight, compress_plan, freqs_cis_, num_compress, ForwardMode::CompressExtend,
         rms_norm_eps_, compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
   }
@@ -200,15 +219,18 @@ Status CompressorLayer::ForwardPrefillC128(const std::vector<Tensor>& input_tens
   // Step 1: build plan if needed
   if (compress_plan_tensor.shape[2] == 0) {
     const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
-    Wrapper::PlanPrefillCompress(compress_plan, write_plan, seq_lens, extend_lens, batch_size, num_tokens,
-                                 compress_ratio_, is_overlap_, stream);
+    DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+        compressor_dtype_, PlanPrefillCompress(compress_plan, write_plan, seq_lens, extend_lens, batch_size, num_tokens,
+                                               compress_ratio_, is_overlap_, stream));
   }
 
   // Step 2: prefill compression (C128 always has head_dim=512)
   const uint32_t num_compress = static_cast<uint32_t>(compress_plan_tensor.shape[0]);
   const uint32_t num_write = static_cast<uint32_t>(write_plan_tensor.shape[0]);
-  Wrapper::template FlashC128Prefill<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                          load_indices, compress_plan, write_plan, num_compress, num_write, stream);
+  DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+      compressor_dtype_,
+      template FlashC128Prefill<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
+                                     load_indices, compress_plan, write_plan, num_compress, num_write, stream));
 
   // Step 3: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache (C128 always head_dim=512)
   const void* norm_weight = (input_iter++)->GetPtr<void>();
@@ -242,11 +264,13 @@ Status CompressorLayer::ForwardDecodeC4(const std::vector<Tensor>& input_tensors
   // Step 1: decode compression
   const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
   if (head_dim_ == 512) {
-    Wrapper::template FlashC4Decode<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                         seq_lens, extra, batch_size, stream);
+    DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+        compressor_dtype_, template FlashC4Decode<512>(kv_score_buffer, kv_score_input, kv_compressed_output,
+                                                       score_bias, indices, seq_lens, extra, batch_size, stream));
   } else {
-    Wrapper::template FlashC4Decode<128>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                         seq_lens, extra, batch_size, stream);
+    DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+        compressor_dtype_, template FlashC4Decode<128>(kv_score_buffer, kv_score_input, kv_compressed_output,
+                                                       score_bias, indices, seq_lens, extra, batch_size, stream));
   }
 
   // Step 2: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache
@@ -259,7 +283,7 @@ Status CompressorLayer::ForwardDecodeC4(const std::vector<Tensor>& input_tensors
                                       batch_size, ForwardMode::CompressDecode, rms_norm_eps_, compress_ratio_, cache,
                                       compressed_out_loc, page_stride_, compressed_page_bits_, stream);
   } else {
-    RopeWrapper::template IndexerFusedNormRopeStore<128>(
+    Bf16Wrapper::template IndexerFusedNormRopeStore<128>(
         kv_compressed_output, norm_weight, seq_lens, freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_,
         compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
   }
@@ -286,8 +310,9 @@ Status CompressorLayer::ForwardDecodeC128(const std::vector<Tensor>& input_tenso
 
   // Step 1: decode compression (C128 always has head_dim=512)
   const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
-  Wrapper::template FlashC128Decode<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                         seq_lens, batch_size, stream);
+  DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
+      compressor_dtype_, template FlashC128Decode<512>(kv_score_buffer, kv_score_input, kv_compressed_output,
+                                                       score_bias, indices, seq_lens, batch_size, stream));
 
   // Step 2: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache (C128 always head_dim=512)
   const void* norm_weight = (input_iter++)->GetPtr<void>();
@@ -300,5 +325,8 @@ Status CompressorLayer::ForwardDecodeC128(const std::vector<Tensor>& input_tenso
 
   return Status();
 }
+
+#undef DISPATCH_FLASH_BY_COMPRESSOR_DTYPE
+#undef DISPATCH_COMPRESS_STORE_BY_KVTYPE
 
 }  // namespace ksana_llm

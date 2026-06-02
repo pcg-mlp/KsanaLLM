@@ -41,9 +41,12 @@ class Compressor {
   const int local_layer_idx_;
   const bool is_in_indexer_;
 
+  DataType compressor_dtype_;  // internal state dtype (TYPE_FP32 or TYPE_BF16)
+
   uint32_t compress_ratio_;  // 4 or 128
   uint32_t head_dim_;
-  uint32_t coff_;  // for ratio=4: coff=2, for ratio=128: coff=1.
+  uint32_t coff_;        // for ratio=4: coff=2, for ratio=128: coff=1.
+  int per_token_bytes_;  // state bytes of one token
 
   // Compute wkv and wgate proj
   std::unique_ptr<Linear> wkv_gate_proj_;

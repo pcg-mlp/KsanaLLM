@@ -647,6 +647,18 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
     kv_cache_dtype = model_config.weight_data_type;
   }
 
+  // Update state_dtype of compressor
+  if (model_config.use_dsv4_attn) {
+    // Use BF16 by default
+    if (std::getenv("KLLM_USE_FP32_COMPRESSOR")) {
+      runtime_config_.compressor_config.state_dtype = TYPE_FP32;
+    } else {
+      runtime_config_.compressor_config.state_dtype = TYPE_BF16;
+    }
+    KLLM_LOG_INFO << "Automatically adjust state.dtype of compressor to "
+                  << GetTypeString(runtime_config_.compressor_config.state_dtype);
+  }
+
   // Update reserved memory
   if (model_config.is_quant == true && model_config.quant_config.method == QUANT_FP8_E4M3 &&
       model_config.quant_config.is_checkpoint_fp8_serialized == false) {

@@ -38,7 +38,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 using namespace llm_kernels::utils;
 
 /// \brief Each thread will handle this many elements (split along head_dim)
@@ -138,7 +137,7 @@ SGL_DEVICE void c4_write(T* kv_score_buf, const T* kv_score_src, const int64_t h
 
 template <bool kPaged, typename InFloat, typename OutFloat>
 SGL_DEVICE void c4_forward(const InFloat* kv_score_buf, const InFloat* kv_score_src, OutFloat* kv_out,
-                           const InFloat* score_bias, const int64_t head_dim, const IndicesT seq_len,
+                           const float* score_bias, const int64_t head_dim, const IndicesT seq_len,
                            const int32_t window_len, [[maybe_unused]] const InFloat* kv_score_overlap_buf = nullptr) {
   using namespace device;
 
@@ -148,14 +147,16 @@ SGL_DEVICE void c4_forward(const InFloat* kv_score_buf, const InFloat* kv_score_
 
   /// NOTE: part 1: load kv + score
   using StorageIn = AlignedVector<InFloat, kC4TileElements>;
+  using StorageBias = AlignedVector<float, kC4TileElements>;
   const auto gmem_in = tile::Memory<StorageIn>::warp();
+  const auto gmem_bias = tile::Memory<StorageBias>::warp();
   StorageIn kv[8];
   StorageIn score[8];
-  StorageIn bias[8];
+  StorageBias bias[8];
 
 #pragma unroll
   for (int32_t i = 0; i < 8; ++i) {
-    bias[i] = gmem_in.load(score_bias + i * head_dim);
+    bias[i] = gmem_bias.load(score_bias + i * head_dim);
   }
 
 #pragma unroll
@@ -204,7 +205,7 @@ SGL_DEVICE void c4_forward(const InFloat* kv_score_buf, const InFloat* kv_score_
 
 #pragma unroll
     for (int32_t j = 0; j < 8; ++j) {
-      score_fp32[j] = cast<float>(score[j][i]) + cast<float>(bias[j][i]);
+      score_fp32[j] = cast<float>(score[j][i]) + bias[j][i];
     }
 
     float max_value = score_fp32[0];
@@ -262,7 +263,7 @@ C4_KERNEL void flash_c4_decode_kernel(const __grid_constant__ Compress4DecodePar
   auto* kv_compressed_output = static_cast<OutFloat*>(params.kv_compressed_output);
   auto* kv_out = kv_compressed_output + global_bid * kHeadDim + split_offset;
 
-  const auto* score_bias = static_cast<const InFloat*>(params.score_bias) + split_offset;
+  const auto* score_bias = static_cast<const float*>(params.score_bias) + split_offset;
 
   PDLWaitPrimary</*kUsePDL*/ true>();
 
@@ -328,7 +329,7 @@ C4_KERNEL void flash_c4_prefill_kernel(const __grid_constant__ Compress4PrefillP
   if (ragged_id == 0xFFFFFFFFu) [[unlikely]]
     return;
 
-  const auto* score_bias = static_cast<const InFloat*>(params.score_bias) + split_offset;
+  const auto* score_bias = static_cast<const float*>(params.score_bias) + split_offset;
   const int32_t seq_len = static_cast<int32_t>(position) + 1;
   const int32_t index = params.indices[global_bid];
 
@@ -466,6 +467,8 @@ inline void flash_c4_prefill(void* kv_score_buffer, const void* kv_score_input, 
 
 INSTANTIATE_C4(float, __nv_bfloat16, 128)
 INSTANTIATE_C4(float, __nv_bfloat16, 512)
+INSTANTIATE_C4(__nv_bfloat16, __nv_bfloat16, 128)
+INSTANTIATE_C4(__nv_bfloat16, __nv_bfloat16, 512)
 
 #undef INSTANTIATE_C4
 

@@ -47,9 +47,10 @@ class CompressorLayer : public BaseLayer {
   uint32_t compress_ratio_;  // 4 or 128
   int head_dim_;             // head dimension (128 or 512)
   float rms_norm_eps_;
-  int layer_idx_;            // local layer index
-  bool is_overlap_;          // true when compress_ratio_ == 4
-  DataType kv_cache_dtype_;  // for mla extra cache
+  int layer_idx_;              // local layer index
+  bool is_overlap_;            // true when compress_ratio_ == 4
+  DataType kv_cache_dtype_;    // for mla extra cache
+  DataType compressor_dtype_;  // internal state dtype (TYPE_FP32 or TYPE_BF16)
 
   // Fused store config (only when head_dim_==512)
   uint32_t compressed_page_bits_{0};  // log2(block_token_num / compress_ratio)

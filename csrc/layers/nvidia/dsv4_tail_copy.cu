@@ -6,12 +6,16 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+#include "csrc/utils/nvidia/cuda_utils.h"
+
 namespace ksana_llm {
 
 namespace {
 
-// 单线程一次拷贝 16B (uint4)。per_token_bytes = 16 * head_dim (head_dim ∈ {128, 512})，
-// 必为 16 字节对齐，由调用方保证。
+// 单线程一次拷贝 16B (uint4)。per_token_bytes 随 compressor_dtype 变化:
+//   FP32: per_token_bytes = 2*coff*head_dim*4; c4→16*head_dim, c128→8*head_dim
+//   BF16: per_token_bytes = 2*coff*head_dim*2; c4→ 8*head_dim, c128→4*head_dim
+// head_dim ∈ {128, 512} 保证始终 16 字节对齐，由调用方保证。
 constexpr int kVecBytes = 16;
 
 constexpr int kC4Ratio = 4;
@@ -38,6 +42,9 @@ __global__ void CopyTailToStateKernel(uint8_t* __restrict__ state_layer_base,
                  slot_idx * per_token_bytes;
 
   const int num_vecs = per_token_bytes / kVecBytes;
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   for (int v = threadIdx.x; v < num_vecs; v += blockDim.x) {
     reinterpret_cast<uint4*>(dst)[v] = reinterpret_cast<const uint4*>(src)[v];
   }
@@ -58,6 +65,9 @@ __global__ void CopyKvScoreToTailKernel(uint8_t* __restrict__ tail_layer_base, c
   uint8_t* dst = tail_layer_base + static_cast<int64_t>(block_id) * block_cache_size + slot_idx * per_token_bytes;
 
   const int num_vecs = per_token_bytes / kVecBytes;
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   for (int v = threadIdx.x; v < num_vecs; v += blockDim.x) {
     reinterpret_cast<uint4*>(dst)[v] = reinterpret_cast<const uint4*>(src)[v];
   }
@@ -71,20 +81,22 @@ void CopyTailToState(void* state_layer_base, const void* tail_layer_base, const 
   if (num_req <= 0 || tail_tokens <= 0 || per_token_bytes <= 0) return;
   // per_token_bytes 须是 16 字节对齐 (caller-enforced)。
   const int num_blocks = num_req * tail_tokens;
-  // 64 threads/block: num_vecs = per_token_bytes/16 ∈ {128, 512}, 每线程循环 2~8 次。
+  // 64 threads/block: num_vecs = per_token_bytes/16, 每线程循环 1~8 次。
   constexpr int kThreadsPerBlock = 64;
-  CopyTailToStateKernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-      reinterpret_cast<uint8_t*>(state_layer_base), reinterpret_cast<const uint8_t*>(tail_layer_base), tail_read_block,
-      tail_target_indices, num_req, block_cache_size, per_token_bytes, tail_tokens);
+  constexpr auto kernel = CopyTailToStateKernel;
+  LAUNCH_KERNEL_WITH_PDL(kernel, num_blocks, kThreadsPerBlock, 0, stream, reinterpret_cast<uint8_t*>(state_layer_base),
+                         reinterpret_cast<const uint8_t*>(tail_layer_base), tail_read_block, tail_target_indices,
+                         num_req, block_cache_size, per_token_bytes, tail_tokens);
 }
 
 void CopyKvScoreToTail(void* tail_layer_base, const void* kv_score, const int32_t* tail_write_indices, int total_tokens,
                        int64_t block_cache_size, int per_token_bytes, cudaStream_t stream) {
   if (total_tokens <= 0 || per_token_bytes <= 0) return;
   constexpr int kThreadsPerBlock = 64;
-  CopyKvScoreToTailKernel<<<total_tokens, kThreadsPerBlock, 0, stream>>>(
-      reinterpret_cast<uint8_t*>(tail_layer_base), reinterpret_cast<const uint8_t*>(kv_score), tail_write_indices,
-      total_tokens, block_cache_size, per_token_bytes);
+  constexpr auto kernel = CopyKvScoreToTailKernel;
+  LAUNCH_KERNEL_WITH_PDL(kernel, total_tokens, kThreadsPerBlock, 0, stream, reinterpret_cast<uint8_t*>(tail_layer_base),
+                         reinterpret_cast<const uint8_t*>(kv_score), tail_write_indices, total_tokens, block_cache_size,
+                         per_token_bytes);
 }
 
 }  // namespace ksana_llm

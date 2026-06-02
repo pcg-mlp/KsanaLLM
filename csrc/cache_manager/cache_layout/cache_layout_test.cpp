@@ -272,12 +272,12 @@ TEST_F(DsaCacheLayoutTest, LayerOffsetsAreContiguous) {
 // deepseek_v4_cache_layout.h 中的常量保持一致, 供主 KV / SWA 两套测试复用。
 //   kTailTokens  = 4   (一个 c4 group 的 token 数)
 //   kCoffMax     = 2   (c4 overlap window 系数)
-//   kKvScorePair = 2   (kv FP32 + score FP32)
+//   kKvScorePair = 2   (kv BF16 + score BF16 by default)
 inline size_t ExpectedTailAttnSize(uint32_t size_per_head) {
-  return 4u * 2u * 2u * size_per_head * GetTypeSize(TYPE_FP32);  // 64 * size_per_head bytes
+  return 4u * 2u * 2u * size_per_head * GetTypeSize(TYPE_BF16);  // 32 * size_per_head bytes
 }
 inline size_t ExpectedTailIndexerSize(uint32_t index_head_dim) {
-  return 4u * 2u * 2u * index_head_dim * GetTypeSize(TYPE_FP32);  // 64 * index_head_dim bytes
+  return 4u * 2u * 2u * index_head_dim * GetTypeSize(TYPE_BF16);  // 32 * index_head_dim bytes
 }
 inline size_t ExpectedTailPerLayer(uint32_t size_per_head, uint32_t index_head_dim) {
   return ExpectedTailAttnSize(size_per_head) + ExpectedTailIndexerSize(index_head_dim);
@@ -671,7 +671,7 @@ class DeepSeekV4CompressorStateLayoutTest : public ::testing::Test {};
 
 TEST_F(DeepSeekV4CompressorStateLayoutTest, BlockCompressRatio0GivesZeroForRatio0Layers) {
   // block_compress_ratio == 0: layers with layer_compress_ratio == 0 match, but their
-  // contribution is coff * 0 * 2 * head_dim * sizeof(fp32) = 0.
+  // contribution is coff * 0 * 2 * head_dim * sizeof(bf16) = 0.
   const uint32_t num_layer = 4;
   std::vector<uint32_t> ratios = {0u, 4u, 128u, 0u};
 
@@ -700,9 +700,9 @@ TEST_F(DeepSeekV4CompressorStateLayoutTest, BlockCompressRatio4OnlyActivatesRati
   DeepSeekV4CompressorStateLayout layout(model_cfg, pipeline_cfg, runtime_cfg, /*block_compress_ratio=*/4u, false);
 
   // Layers 1 and 3 have ratio==4; layers 0 and 2 are inactive.
-  // coff = 1 + (4==4) = 2; per active layer: 2 * 4 * 2 * head_dim * sizeof(fp32)
+  // coff = 1 + (4==4) = 2; per active layer: 2 * 4 * 2 * head_dim * sizeof(bf16)
   const size_t head_dim = kv_lora_rank + qk_rope_head_dim;
-  const size_t per_layer = 2u * 4u * 2u * head_dim * GetTypeSize(TYPE_FP32);
+  const size_t per_layer = 2u * 4u * 2u * head_dim * GetTypeSize(TYPE_BF16);
   EXPECT_EQ(layout.GetBlockCacheSize(), per_layer * 2);
 }
 
@@ -721,9 +721,9 @@ TEST_F(DeepSeekV4CompressorStateLayoutTest, BlockCompressRatio128OnlyActivatesRa
   DeepSeekV4CompressorStateLayout layout(model_cfg, pipeline_cfg, runtime_cfg, /*block_compress_ratio=*/128u, false);
 
   // Layers 0 and 2 have ratio==128; layers 1 and 3 are inactive.
-  // coff = 1 + (128==4) = 1; per active layer: 1 * 128 * 2 * head_dim * sizeof(fp32)
+  // coff = 1 + (128==4) = 1; per active layer: 1 * 128 * 2 * head_dim * sizeof(bf16)
   const size_t head_dim = kv_lora_rank + qk_rope_head_dim;
-  const size_t per_layer = 1u * 128u * 2u * head_dim * GetTypeSize(TYPE_FP32);
+  const size_t per_layer = 1u * 128u * 2u * head_dim * GetTypeSize(TYPE_BF16);
   EXPECT_EQ(layout.GetBlockCacheSize(), per_layer * 2);
 }
 
@@ -775,8 +775,7 @@ TEST_F(DeepSeekV4CompressorStateLayoutTest, InactiveLayerOffsetEqualsActiveLayer
 
   // coff=2, per active layer: 2 * 4 * 2 * (kv_lora_rank + qk_rope_head_dim) * sizeof(fp32)
   const size_t head_dim = kv_lora_rank + qk_rope_head_dim;
-  const size_t per_layer = 2u * 4u * 2u * head_dim * GetTypeSize(TYPE_FP32);
-  (void)per_layer;
+  const size_t per_layer = 2u * 4u * 2u * head_dim * GetTypeSize(TYPE_BF16);
 
   // Layer 0 (inactive): offset == 0 (safe placeholder, not accessed)
   EXPECT_EQ(layout.GetKvCacheLayerOffsets(0, "attention").k_offset, 0u);
@@ -874,8 +873,8 @@ TEST_F(DeepSeekV4CompressorIndexerStateLayoutTest, OnlyRatio4LayersAllocateIndex
   DeepSeekV4CompressorStateLayout layout(model_cfg, pipeline_cfg, runtime_cfg, 4u, true);
 
   // coff = 2 (since block_compress_ratio==4), compress_ratio=4, head_dim=index_head_dim
-  // Per active layer: coff * compress_ratio * 2 * head_dim * sizeof(fp32) = 2 * 4 * 2 * 256 * 4 = 16384
-  const size_t per_active_layer = 2u * 4u * 2u * index_head_dim * GetTypeSize(TYPE_FP32);
+  // Per active layer: coff * compress_ratio * 2 * head_dim * sizeof(bf16) = 2 * 4 * 2 * 256 * 2 = 8192
+  const size_t per_active_layer = 2u * 4u * 2u * index_head_dim * GetTypeSize(TYPE_BF16);
   // Layers 1 and 3 are active (ratio==4), so total = per_active_layer * 2
   EXPECT_EQ(layout.GetBlockCacheSize(), per_active_layer * 2);
 }
@@ -931,11 +930,11 @@ TEST_F(DeepSeekV4CompressorIndexerStateLayoutTest, OffsetLayoutMatchesManualCalc
   // Verify exact offset values for a mixed-ratio configuration.
   // ratios = {0, 4, 128, 4}
   // coff=2 (block_compress_ratio==4), head_dim=index_head_dim=256
-  // Per active layer: 2 * 4 * 2 * 256 * 4 = 16384 bytes
+  // Per active layer: 2 * 4 * 2 * 256 * 2 = 8192 bytes
   //   Layer 0 (ratio=0):   inactive; offset=0 (safe placeholder)
-  //   Layer 1 (ratio=4):   active;   offset=0; next_base = 16384
+  //   Layer 1 (ratio=4):   active;   offset=0; next_base = 8192
   //   Layer 2 (ratio=128): inactive; offset=0 (safe placeholder)
-  //   Layer 3 (ratio=4):   active;   offset=16384
+  //   Layer 3 (ratio=4):   active;   offset=8192
   const uint32_t num_layer = 4;
   std::vector<uint32_t> ratios = {0u, 4u, 128u, 4u};
   const uint32_t index_head_dim = 256;
@@ -947,7 +946,7 @@ TEST_F(DeepSeekV4CompressorIndexerStateLayoutTest, OffsetLayoutMatchesManualCalc
 
   DeepSeekV4CompressorStateLayout layout(model_cfg, pipeline_cfg, runtime_cfg, 4u, true);
 
-  const size_t per_active_layer = 2u * 4u * 2u * index_head_dim * GetTypeSize(TYPE_FP32);
+  const size_t per_active_layer = 2u * 4u * 2u * index_head_dim * GetTypeSize(TYPE_BF16);
 
   // Layer 0 (inactive): offset=0 (safe placeholder, never accessed)
   {

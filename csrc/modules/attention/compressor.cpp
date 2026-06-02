@@ -43,6 +43,10 @@ Compressor::Compressor(int layer_idx, bool is_in_indexer, const LayerCreationCon
   const auto& model_config = attn_config.model_config;
   const auto& runtime_config = creation_context.runtime_config;
 
+  compressor_dtype_ = runtime_config.compressor_config.state_dtype;
+  KLLM_CHECK_WITH_INFO(compressor_dtype_ == TYPE_FP32 || compressor_dtype_ == TYPE_BF16,
+                       "Compressor requires state_dtype to be either FP32 or BF16");
+
   KLLM_CHECK_WITH_INFO(
       layer_idx >= 0 && layer_idx < static_cast<int>(model_config.dsv4_attn_config.compress_ratios.size()),
       "layer_idx out of bounds for compress_ratios array");
@@ -53,6 +57,7 @@ Compressor::Compressor(int layer_idx, bool is_in_indexer, const LayerCreationCon
   const int n_heads = is_in_indexer ? model_config.dsa_config.index_n_heads
                                     : attn_config.head_num_per_tp;  // Required to be passed but not actually used
   head_dim_ = is_in_indexer ? model_config.dsa_config.index_head_dim : attn_config.size_per_head;
+  per_token_bytes_ = static_cast<int>(2 * coff_ * head_dim_ * GetTypeSize(compressor_dtype_));
 
   const std::string layer_prefix = is_in_indexer
                                        ? fmt::format("model.layers.{}.self_attn.indexer.compressor", layer_idx)
@@ -65,18 +70,22 @@ Compressor::Compressor(int layer_idx, bool is_in_indexer, const LayerCreationCon
   wkv_gate_proj_ =
       std::make_unique<Linear>(layer_prefix + ".wkv_gate.weight", creation_context, linear_compute_backend);
 
-  // ape: [ratio, coff * head_dim]
+  // ape: [ratio, coff * head_dim] — kernel always reads as FP32
   ape_weight_ = creation_context.base_weight->GetModelWeights(layer_prefix + ".ape");
+  KLLM_CHECK_WITH_INFO(ape_weight_.dtype == TYPE_FP32, "APE weight must be FP32");
 
   // norm weight tensor (passed directly to CompressorLayer::Forward as input)
   norm_weight_ = creation_context.base_weight->GetModelWeights(layer_prefix + ".norm.weight");
 
   // ── CastLayer initialisation (bf16 → fp32 for kv_score_input) ──────────
-  cast_layer_ = std::make_unique<CastLayer>();
-  cast_layer_->Init({}, runtime_config, creation_context.context, creation_context.rank);
-  // CastLayer expects input_tensors[1] as a shape tensor: {output_offset_bytes, vocab_size, vocab_size_pad}.
-  // For a simple element-wise cast with no offset or stride, use {0, 1, 1}.
-  cast_shape_tensor_.shape = {0, 1, 1};
+  // Only create the cast layer when the compressor uses FP32 internally.
+  if (compressor_dtype_ == TYPE_FP32) {
+    cast_layer_ = std::make_unique<CastLayer>();
+    cast_layer_->Init({}, runtime_config, creation_context.context, creation_context.rank);
+    // CastLayer expects input_tensors[1] as a shape tensor: {output_offset_bytes, vocab_size, vocab_size_pad}.
+    // For a simple element-wise cast with no offset or stride, use {0, 1, 1}.
+    cast_shape_tensor_.shape = {0, 1, 1};
+  }
 
   // ── CompressorLayer initialisation ───────────────────────────────────────────
   compressor_layer_ = std::make_unique<CompressorLayer>();
@@ -96,6 +105,7 @@ Compressor::Compressor(int layer_idx, bool is_in_indexer, const LayerCreationCon
   params.push_back(static_cast<int>(runtime_config.attn_backend_config.block_token_num));  // block_token_num
   params.push_back(static_cast<int64_t>(runtime_config.attn_backend_config.block_size));   // page_stride
   params.push_back(attn_config.kv_cache_dtype);                                            // kv_cache_dtype (extra)
+  params.push_back(compressor_dtype_);                                                     // compressor_dtype
 
   compressor_layer_->Init(params, runtime_config, creation_context.context, creation_context.rank);
 }
@@ -122,15 +132,17 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
   std::vector<Tensor> wkv_gate_proj_outputs = {kv_score_input};
   STATUS_CHECK_RETURN(wkv_gate_proj_->Forward(x, wkv_gate_proj_outputs));
 
-  // Step 2: Convert kv_score from bf16 to fp32
-  KLLM_CHECK(workspace.dtype == wkv_gate_proj_outputs[0].dtype);
-  std::vector<Tensor> fp32_cast_outputs = {
-      workspace.GetView({kv_score_input.GetElementNumber() * 2 /*for bf16 to fp32*/}, workspace_offset)};
-  STATUS_CHECK_RETURN(cast_layer_->Forward({wkv_gate_proj_outputs[0], cast_shape_tensor_}, fp32_cast_outputs));
-  kv_score_input = fp32_cast_outputs[0];
+  // Step 2: Convert kv_score from bf16 to fp32 (only when compressor uses FP32 internally)
+  if (compressor_dtype_ == TYPE_FP32) {
+    KLLM_CHECK(workspace.dtype == wkv_gate_proj_outputs[0].dtype);
+    std::vector<Tensor> fp32_cast_outputs = {
+        workspace.GetView({kv_score_input.GetElementNumber() * 2 /*for bf16 to fp32*/}, workspace_offset)};
+    STATUS_CHECK_RETURN(cast_layer_->Forward({wkv_gate_proj_outputs[0], cast_shape_tensor_}, fp32_cast_outputs));
+    kv_score_input = fp32_cast_outputs[0];
+  }
 
   // Step 3: kv_compressed_output = compress_layer_(kv_score_input)
-  // Input: kv_score_input [T, 2 * coff * head_dim] FP32, Output: kv_compressed_output [T, head_dim]
+  // Input: kv_score_input [T, 2 * coff * head_dim] (FP32 or BF16), Output: kv_compressed_output [T, head_dim]
   const auto& model_input = forwarding_context.GetModelInput();
 
   // Retrieve DSV4-specific shared and per-batch compressor data from the attention info hierarchy.
@@ -166,15 +178,14 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
       Tensor& state_layer_ptr_tensor = is_in_indexer_ ? compressor_shared.layer_c4_indexer_state_ptr_tensor
                                                       : compressor_shared.layer_c4_state_ptr_tensor;
       void* const state_layer_base = state_layer_ptr_tensor.GetPtr<void*>()[local_layer_idx_];
-      const int per_token_bytes = static_cast<int>(2 * coff_ * head_dim_ * sizeof(float));
       const int64_t block_cache_size = static_cast<int64_t>(mqa_shared.swa_block_size);
       constexpr int kTailTokens = 4;
       KLLM_LOG_DEBUG << fmt::format(
           "tail read-copy: layer={} is_in_indexer={} num_req={} per_token_bytes={} block_cache_size={}", layer_idx_,
-          is_in_indexer_, num_req, per_token_bytes, block_cache_size);
+          is_in_indexer_, num_req, per_token_bytes_, block_cache_size);
       CopyTailToState(state_layer_base, tail_layer_base, compressor_shared.tail_read_block_tensor.GetPtr<int32_t>(),
                       compressor_shared.tail_target_indices_tensor.GetPtr<int32_t>(), num_req, block_cache_size,
-                      per_token_bytes, kTailTokens,
+                      per_token_bytes_, kTailTokens,
                       forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
     }
   }
@@ -268,16 +279,15 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
       // Slots 1..N correspond to local layer 0..N-1, so local_layer_idx_ must be used here.
       void* const tail_layer_base = tail_layer_base_tensor->GetPtr<void*>()[1 + local_layer_idx_];
       // Per-token bytes match a single row of kv_score_input.
-      const int per_token_bytes = static_cast<int>(2 * coff_ * head_dim_ * sizeof(float));
       // tail 写入的目标位于 SWA pool, stride 使用 SWA pool 的 block_size。
       const int64_t block_cache_size = static_cast<int64_t>(mqa_shared.swa_block_size);
       KLLM_LOG_DEBUG << fmt::format(
           "tail write-copy: layer={} is_in_indexer={} num_tokens={} per_token_bytes={} block_cache_size={}", layer_idx_,
-          is_in_indexer_, num_tokens, per_token_bytes, block_cache_size);
+          is_in_indexer_, num_tokens, per_token_bytes_, block_cache_size);
       CopyKvScoreToTail(tail_layer_base,
                         kv_score_input.GetPtr<void>(),  // FP32 [total_tokens, 2*coff*head_dim]
                         compressor_shared.tail_write_indices_tensor.GetPtr<int32_t>(), static_cast<int>(num_tokens),
-                        block_cache_size, per_token_bytes,
+                        block_cache_size, per_token_bytes_,
                         forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
     }
   }

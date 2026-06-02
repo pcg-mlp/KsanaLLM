@@ -288,15 +288,16 @@ class DeepSeekV4SwaWithTailCacheLayout : public BaseBlockCacheLayout {
     const size_t swa_cache_size = ComputeKeyValueHeadBytes(model_config, mla_kv_cache_dtype, block_token_num);
 
     // c4 overlap tail: 容量固定 4 个 token (c4 overlap 窗口)。Per-token 字节数:
-    //   FP32 kv_score [2 (kv+score) * coff (=2 for c4 overlap) * head_dim] = 16 * head_dim
-    constexpr size_t kTailTokens = 4;   // tokens per c4 group
-    constexpr size_t kCoffMax = 2;      // c4 overlap window
-    constexpr size_t kKvScorePair = 2;  // kv FP32 + score FP32
-    const size_t per_token_attn_bytes = kKvScorePair * kCoffMax * model_config.size_per_head * GetTypeSize(TYPE_FP32);
-    const size_t per_token_idx_bytes =
-        kKvScorePair * kCoffMax * model_config.dsa_config.index_head_dim * GetTypeSize(TYPE_FP32);
+    //   kv_score [2 (kv+score) * coff (=2 for c4 overlap) * head_dim] = 16 * head_dim
+    constexpr size_t kTailTokens = 4;                                           // tokens per c4 group
+    constexpr size_t kCoffMax = 2;                                              // c4 overlap window
+    constexpr size_t kKvScorePair = 2;                                          // kv + score
+    const DataType state_dtype = runtime_config.compressor_config.state_dtype;  // compressor state dtype
+    const size_t per_token_attn_bytes = kKvScorePair * kCoffMax * model_config.size_per_head * GetTypeSize(state_dtype);
+    const size_t per_token_indexer_bytes =
+        kKvScorePair * kCoffMax * model_config.dsa_config.index_head_dim * GetTypeSize(state_dtype);
     const size_t tail_attn_size = kTailTokens * per_token_attn_bytes;
-    const size_t tail_indexer_size = kTailTokens * per_token_idx_bytes;
+    const size_t tail_indexer_size = kTailTokens * per_token_indexer_bytes;
 
     size_t layer_base_offset = 0;
     for (size_t layer_index = pipeline_config.lower_layer_idx;
@@ -377,6 +378,9 @@ class DeepSeekV4CompressorStateLayout : public BaseBlockCacheLayout {
 
     const auto& compress_ratios = model_config.dsv4_attn_config.compress_ratios;
 
+    // Use compressor internal dtype for state element size (FP32 or BF16).
+    const DataType state_dtype = runtime_config.compressor_config.state_dtype;
+
     size_t layer_base_offset = 0;
     for (size_t layer_index = pipeline_config.lower_layer_idx;
          layer_index < (pipeline_config.lower_layer_idx + node_layer_num); ++layer_index) {
@@ -387,8 +391,8 @@ class DeepSeekV4CompressorStateLayout : public BaseBlockCacheLayout {
       if (layer_active) {
         // 活跃层：push 当前累积偏移，然后向前推进。
         layer_offsets_.push_back(layer_base_offset);
-        // Multiply by 2 for kv [head_dim] FP32 and score [head_dim] FP32
-        layer_base_offset += layer_compress_ratio * 2 * coff * head_dim * GetTypeSize(TYPE_FP32);
+        // Multiply by 2 for kv [head_dim] and score [head_dim]
+        layer_base_offset += layer_compress_ratio * 2 * coff * head_dim * GetTypeSize(state_dtype);
       } else {
         // 非活跃层（如 C4-state layout 中的 C128 层）：不占用该 state buffer 的空间。
         // 赋值 0 而非当前累积偏移，避免在所有活跃层都处理完毕后，最后一个非活跃层

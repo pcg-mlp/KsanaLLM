@@ -7,19 +7,18 @@
 #include <filesystem>
 
 #include "cache_manager/prefix_cache_manager.h"
-#include "csrc/utils/nvidia/cuda_utils.h"
 #include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 #include "models/common/common_model.h"
 #include "models/common/common_weight.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
 #include "modules/attention/dsv4_mqa.h"
 #include "tests/test.h"
 #include "utils/attention_backend/attention_backend_manager.h"
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
-#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
 
-using namespace ksana_llm;
+namespace ksana_llm {
 
 class Dsv4MqaTestModel : public CommonModel {
  public:
@@ -66,16 +65,17 @@ class Dsv4MqaTestModel : public CommonModel {
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->buffers_->hidden_buffer_0);
 
     // Prepare input
-    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0],
-                                        model_config_.hidden_units};
+    const size_t hidden_units = model_config_.hidden_units;
+    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0], hidden_units};
     hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
+
     std::vector<bfloat16> input_bf16;
     input_bf16.reserve(hidden_buffer_tensors_0[0].GetElementNumber());
     size_t count = 0;
     for (const auto& req : forward_reqs) {
-      count += req.prefix_cache_len * model_config_.hidden_units;
+      count += req.prefix_cache_len * hidden_units;
       for (size_t i = 0; i < req.GetInputIdsLength(); i++) {
-        for (size_t j = 0; j < model_config_.hidden_units; j++) {
+        for (size_t j = 0; j < hidden_units; j++) {
           input_bf16.push_back(
               static_cast<bfloat16>(1.0f / (count % 97 * 0.1f + 1.0f) * ((count % 7) % 2 ? -1.0f : 1.0f)));
           ++count;
@@ -89,6 +89,11 @@ class Dsv4MqaTestModel : public CommonModel {
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context_->buffers_->shared_buffer);
     Status status = mqa_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, *forwarding_context_);
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
+
+    // Output shape sanity: [total_tokens, hidden_units]
+    EXPECT_EQ(hidden_buffer_tensors_0[0].shape.size(), 2u);
+    EXPECT_EQ(hidden_buffer_tensors_0[0].shape[0], forwarding_context_->model_input_->input_ids.shape[0]);
+    EXPECT_EQ(hidden_buffer_tensors_0[0].shape[1], hidden_units);
 
     // Verify output against reference values
     constexpr size_t kVerifyNum = 6;
@@ -304,27 +309,15 @@ class Dsv4MqaTest : public testing::Test {
     env->schedule_config_parser_.runtime_config_.inter_data_type = model_config.weight_data_type;
   }
 
-  void TestMqaForward(int device_id = 0) {
-    SetDevice(device_id);
-    auto base_weight = std::make_shared<Dsv4MqaWeight>(model_config, runtime_config, 0, context);
-    base_weight->AddDsv4MqaWeight(device_id);
-
-    std::shared_ptr<ksana_llm::BaseWeight> bs1 = base_weight;
-    auto test_model =
-        std::make_shared<Dsv4MqaTestModel>(model_config, runtime_config, 0, context, bs1, block_cache_layout_);
-
-    // Build request
+  // Build a forward request with a single block allocated and SWA pool wired up.
+  ForwardRequest MakeRequest(std::vector<int>& input_ids_storage, std::vector<FlexibleCachedCopyTask>& flex_tasks,
+                             EmbeddingSlice& embedding_slice) {
     ForwardRequest forward;
     forward.block_allocator_manager = executor_block_manager;
-    std::vector<int> input_ids = {233, 1681};
-    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
-    std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
-    forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-    std::vector<int> input_refit_pos;
-    std::vector<std::vector<float>> input_refit_embedding;
-    EmbeddingSlice embedding_slice;
-    embedding_slice.pos = input_refit_pos;
-    embedding_slice.embeddings = input_refit_embedding;
+    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids_storage);
+    forward.flexible_cached_copy_tasks = &flex_tasks;
+    embedding_slice.pos = {};
+    embedding_slice.embeddings = {};
     forward.input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
@@ -334,23 +327,38 @@ class Dsv4MqaTest : public testing::Test {
     BuildFlatKVCacheBlockIds(GetTotalLayerNum(model_config, pipeline_config), {block_ids},
                              forward.atb_kv_cache_base_blk_ids, executor_block_group->GetDeviceBlockAllocator(0));
 
-    // Set up SWA pool
     forward.swa_block_base_addr = swa_pool_base_;
     forward.swa_pool_block_num = swa_pool_block_num_;
     forward.swa_kv_cache_blocks = {0};
     forward.swa_kv_cache_block_idx_offsets = {0};
+    return forward;
+  }
 
-    // Test context
+  void TestMqaForward(int device_id = 0) {
+    SetDevice(device_id);
+    auto base_weight = std::make_shared<Dsv4MqaWeight>(model_config, runtime_config, 0, context);
+    base_weight->AddDsv4MqaWeight(device_id);
+
+    std::shared_ptr<ksana_llm::BaseWeight> bs1 = base_weight;
+    auto test_model =
+        std::make_shared<Dsv4MqaTestModel>(model_config, runtime_config, 0, context, bs1, block_cache_layout_);
+
+    std::vector<int> input_ids = {233, 1681};
+    std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
+    EmbeddingSlice embedding_slice;
+    ForwardRequest forward = MakeRequest(input_ids, flexible_cached_copy_tasks, embedding_slice);
+
+    // Prefill (context phase): two new tokens, no prefix cache.
     test_model->CommonAttention(0, bs1, true, {forward});
 
-    // Test prefix caching
+    // Prefill with prefix caching: append a token, mark first token as already cached.
     forward.forwarding_tokens->push_back(321);
     forward.prefix_cache_len = 1;
     forward.kv_cached_token_num = 1;
     test_model->CommonAttention(0, bs1, true, {forward});
     forward.forwarding_tokens->pop_back();
 
-    // Test decode
+    // Decode phase: append a token, mark prior two as cached so q_seq_len==1.
     forward.forwarding_tokens->push_back(321);
     forward.prefix_cache_len = 0;
     forward.kv_cached_token_num = 2;
@@ -358,20 +366,14 @@ class Dsv4MqaTest : public testing::Test {
   }
 };
 
-bool IsHopperSupported() { return llm_kernels::utils::GetSMVersion() >= 90; }
-
 TEST_F(Dsv4MqaTest, ForwardWithDsv4MqaKvFP8DsMlaTest) {
-  if (!IsHopperSupported()) {
-    GTEST_SKIP_("Test requires Hopper architecture (SM >= 9.0)");
-  }
   SetupBf16Config();
   TestMqaForward();
 }
 
 TEST_F(Dsv4MqaTest, ForwardWithDsv4MqaKvFP8E4M3Test) {
-  if (!IsHopperSupported()) {
-    GTEST_SKIP_("Test requires Hopper architecture (SM >= 9.0)");
-  }
   SetupBf16Config();
   TestMqaForward();
 }
+
+}  // namespace ksana_llm

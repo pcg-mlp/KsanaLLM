@@ -11,7 +11,8 @@ namespace ksana_llm {
 // DeepSeek V4 prefix cache 的 c4 compressor overlap tail 持久化拷贝。
 //
 // tail 区是每个 KV block 末尾的两段固定大小 region (main / indexer)，存放该 block
-// 最后 4 个 token 的 FP32 kv_score。一次 prefill 的数据流:
+// 最后 4 个 token 的 kv_score (FP32 或 BF16，取决于 compressor_dtype)。
+// 一次 prefill 的数据流:
 //
 //   KV pool tail  ──CopyTailToState──►  transient c4_state_buffer  ──►  compressor
 //                                                                       │
@@ -44,7 +45,7 @@ void CopyTailToState(void* state_layer_base, const void* tail_layer_base, const 
 //
 // Params:
 //   tail_layer_base          当前 layer 的 tail 区基址 (已加 layer 偏移)。
-//   kv_score                 FP32 [total_tokens, per_token_bytes/sizeof(float)]，连续。
+//   kv_score                 连续 [total_tokens, 类型为 FP32 或 BF16]。
 //   tail_write_indices[i]    packed (block_id, slot) for the i-th token.
 //                            Encoding: block_id * kTailTokens | slot  (slot uses lower 2 bits).
 //                            Value < 0 means skip (token not in a tail position).

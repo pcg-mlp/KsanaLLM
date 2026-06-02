@@ -25,7 +25,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-
 // -----------------------------------------------------------------------------
 // Small host-side helpers
 // -----------------------------------------------------------------------------
@@ -126,7 +125,8 @@ class CompressorC4TestSuit : public NvidiaTestSuitBase {
     BufferMeta buf = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)kv_buf_elem});
     BufferMeta in = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)in_elem}, /*random*/ true);
     BufferMeta out = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)out_elem});
-    BufferMeta bias = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)(8 * kHeadDim)}, /*random*/ true);
+    // score_bias is always FP32 in the kernel.
+    BufferMeta bias = CreateBuffer<float>(MemoryType::MEMORY_GPU, {(size_t)(8 * kHeadDim)}, /*random*/ true);
     BufferMeta indices = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {(size_t)batch_size});
     BufferMeta seq_lens = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {(size_t)batch_size});
 
@@ -199,26 +199,28 @@ TEST_F(CompressorC4TestSuit, DecodeRingBufferNumericalMatchesHostRef) {
   std::vector<float> in_f(static_cast<size_t>(kHeadDim) * 4);
   FillRandomBF16(&in_f, &rng);
 
-  // score_bias : [8, kHeadDim]
+  // score_bias : [8, kHeadDim] — kernel reads as FP32
   std::vector<float> bias_f(static_cast<size_t>(8) * kHeadDim);
-  FillRandomBF16(&bias_f, &rng);
+  {
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (auto& x : bias_f) x = dist(rng);
+  }
 
-  // ------ convert to bf16 and upload ------
-  std::vector<__nv_bfloat16> buf_h, in_h, bias_h;
+  // ------ convert bf16 inputs and upload ------
+  std::vector<__nv_bfloat16> buf_h, in_h;
   HostFloatToBF16(buf_f, &buf_h);
   HostFloatToBF16(in_f, &in_h);
-  HostFloatToBF16(bias_f, &bias_h);
 
   BufferMeta buf_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {buf_h.size()});
   BufferMeta in_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {in_h.size()});
-  BufferMeta bias_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {bias_h.size()});
+  BufferMeta bias_d = CreateBuffer<float>(MemoryType::MEMORY_GPU, {bias_f.size()});
   BufferMeta out_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)kHeadDim});
   CHECK_NVIDIA_CUDA_ERROR(
       cudaMemcpy(buf_d.data_ptr, buf_h.data(), buf_h.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
   CHECK_NVIDIA_CUDA_ERROR(
       cudaMemcpy(in_d.data_ptr, in_h.data(), in_h.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
   CHECK_NVIDIA_CUDA_ERROR(
-      cudaMemcpy(bias_d.data_ptr, bias_h.data(), bias_h.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
+      cudaMemcpy(bias_d.data_ptr, bias_f.data(), bias_f.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   BufferMeta idx_d = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {(size_t)batch_size});
   BufferMeta sl_d = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {(size_t)batch_size});
@@ -303,7 +305,7 @@ TEST_F(CompressorC4TestSuit, DecodeRingBufferSkipsForwardWhenNotAligned) {
 
   BufferMeta buf = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)kv_buf_elem}, /*random*/ true);
   BufferMeta in = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)(kHeadDim * 4)}, /*random*/ true);
-  BufferMeta bias = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)(8 * kHeadDim)}, /*random*/ true);
+  BufferMeta bias = CreateBuffer<float>(MemoryType::MEMORY_GPU, {(size_t)(8 * kHeadDim)}, /*random*/ true);
   BufferMeta out = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)kHeadDim});
   // Init output with sentinel so we can verify it stays unchanged.
   std::vector<__nv_bfloat16> sentinel(kHeadDim, __float2bfloat16(12345.0f));
@@ -379,7 +381,7 @@ TEST_F(CompressorC4TestSuit, PrefillSmokeWithPlanner) {
   BufferMeta buf_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)kv_buf_elem}, /*random*/ false);
   BufferMeta in_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)in_elem}, /*random*/ true);
   BufferMeta out_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)out_elem});
-  BufferMeta bias_d = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {(size_t)(8 * kHeadDim)}, /*random*/ true);
+  BufferMeta bias_d = CreateBuffer<float>(MemoryType::MEMORY_GPU, {(size_t)(8 * kHeadDim)}, /*random*/ true);
   BufferMeta idx_d = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {(size_t)batch_size});
   std::vector<int32_t> idx_h = {0, 1};
   CHECK_NVIDIA_CUDA_ERROR(

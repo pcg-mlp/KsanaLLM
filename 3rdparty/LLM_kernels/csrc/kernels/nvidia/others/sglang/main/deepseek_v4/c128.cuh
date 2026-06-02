@@ -39,7 +39,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 using namespace llm_kernels::utils;
 
 /// \brief Each thread will handle this many elements (split along head_dim)
@@ -133,7 +132,7 @@ SGL_DEVICE void c128_write(T* kv_score_buf,  //
 
 template <typename InFloat, typename OutFloat>
 SGL_DEVICE void c128_forward(const InFloat* kv_score_buf, const InFloat* kv_score_src, OutFloat* kv_out,
-                             const InFloat* score_bias, const int64_t head_dim, const int32_t window_len,
+                             const float* score_bias, const int64_t head_dim, const int32_t window_len,
                              const uint32_t warp_id, const uint32_t lane_id) {
   using namespace device;
 
@@ -142,16 +141,18 @@ SGL_DEVICE void c128_forward(const InFloat* kv_score_buf, const InFloat* kv_scor
 
   /// NOTE: part 1: load kv + score
   using StorageIn = AlignedVector<InFloat, kTileElements>;
+  using StorageBias = AlignedVector<float, kTileElements>;
   const auto gmem_in = tile::Memory<StorageIn>{lane_id, kWarpThreads};
+  const auto gmem_bias = tile::Memory<StorageBias>{lane_id, kWarpThreads};
   StorageIn kv[kElementsPerWarp];
   StorageIn score[kElementsPerWarp];
-  StorageIn bias[kElementsPerWarp];
+  StorageBias bias[kElementsPerWarp];
   const int32_t warp_offset = warp_id * kElementsPerWarp;
 
 #pragma unroll
   for (int32_t i = 0; i < 8; ++i) {
     const int32_t j = i + warp_offset;
-    bias[i] = gmem_in.load(score_bias + j * head_dim);
+    bias[i] = gmem_bias.load(score_bias + j * head_dim);
   }
 
 #pragma unroll
@@ -186,7 +187,7 @@ SGL_DEVICE void c128_forward(const InFloat* kv_score_buf, const InFloat* kv_scor
 
 #pragma unroll
     for (int32_t j = 0; j < kElementsPerWarp; ++j) {
-      score_fp32[j] = cast<float>(score[j][i]) + cast<float>(bias[j][i]);
+      score_fp32[j] = cast<float>(score[j][i]) + bias[j][i];
     }
 
     float max_value = score_fp32[0];
@@ -282,8 +283,8 @@ C128_KERNEL void flash_c128_decode_kernel(const __grid_constant__ Compress128Dec
   // kv output
   const auto kv_out = static_cast<OutFloat*>(params.kv_compressed_output) + global_bid * kHeadDim + split_offset;
 
-  // score bias (ape)
-  const auto score_bias = static_cast<const InFloat*>(params.score_bias) + split_offset;
+  // score bias (ape) — always FP32
+  const auto score_bias = static_cast<const float*>(params.score_bias) + split_offset;
 
   PDLWaitPrimary</*kUsePDL*/ true>();
 
@@ -340,8 +341,8 @@ C128_KERNEL void flash_c128_prefill_kernel(const __grid_constant__ Compress128Pr
   // kv output
   const auto kv_out = static_cast<OutFloat*>(params.kv_compressed_output) + ragged_id * kHeadDim + split_offset;
 
-  // score bias (ape)
-  const auto score_bias = static_cast<const InFloat*>(params.score_bias) + split_offset;
+  // score bias (ape) — always FP32
+  const auto score_bias = static_cast<const float*>(params.score_bias) + split_offset;
 
   if (ragged_id == 0xFFFFFFFF) [[unlikely]]
     return;
@@ -413,6 +414,8 @@ inline void flash_c128_prefill(void* kv_score_buffer, const void* kv_score_input
 
 INSTANTIATE_C128(float, __nv_bfloat16, 128)
 INSTANTIATE_C128(float, __nv_bfloat16, 512)
+INSTANTIATE_C128(__nv_bfloat16, __nv_bfloat16, 128)
+INSTANTIATE_C128(__nv_bfloat16, __nv_bfloat16, 512)
 
 #undef INSTANTIATE_C128
 

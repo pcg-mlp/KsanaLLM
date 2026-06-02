@@ -309,13 +309,9 @@ struct ExpertParallelConfig {
   DistributedCommunicationType expert_para_comm_type = DistributedCommunicationType::DEFAULT;
 };
 
-// The config of KV cache
-struct KVCacheConfig {
-  // Bytes occupied by a block
-  size_t block_bytes;
-  // Offset of key/value part within one block of a layer
-  size_t k_offset;
-  size_t v_offset;
+// The config of dsv4 compressor.
+struct CompressorConfig {
+  DataType state_dtype = TYPE_BF16;  // state storage type
 };
 
 // The config of attention backend.
@@ -371,6 +367,7 @@ struct RuntimeConfig {
   AttnBackendConfig attn_backend_config;
   bool enable_full_shared_expert = false;
   bool separate_prefill_decode = false;
+  CompressorConfig compressor_config;
 
   // True when this node is in PD-disagg DECODE role (no prefill computation on this node).
   // 用于 forwarding buffer 缩减：decode-only 节点的单 step token 数远小于 max_step_token_num，
