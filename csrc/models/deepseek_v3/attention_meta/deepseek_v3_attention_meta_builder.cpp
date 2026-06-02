@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_builder.h"
+#include "models/base/attention_meta/indexer_attention_meta_builder.h"
 
 namespace ksana_llm {
 
@@ -41,6 +42,9 @@ bool DeepSeekV3FlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, Shared
   if (config_.model_config.use_mla && !meta.dp_reqs.empty()) {
     PrepareChunkKV(*shared_meta.GetMLA(), meta, config_);
   }
+  if (config_.model_config.use_dsa && !meta.dp_reqs.empty()) {
+    PrepareFlashIndexer(dsv3_meta.indexer, *shared_meta.GetIndexer(), meta, config_);
+  }
 
   return use_cache;
 }
@@ -71,6 +75,9 @@ void DeepSeekV3PagedAttentionMetaBuilder::Build(PagedAttentionMeta& meta, Shared
   if (config_.model_config.use_dsa) {
     PrepareStoreOutLoc(dsv3_meta.dsa, *shared_meta.GetDSA(), meta, config_);
     PrepareDSAExpandedBlockTable(dsv3_meta.dsa, *shared_meta.GetDSA(), meta, config_);
+  }
+  if (config_.model_config.use_dsa && !meta.dp_reqs.empty()) {
+    PreparePagedIndexer(dsv3_meta.indexer, *shared_meta.GetIndexer(), meta, config_);
   }
 }
 

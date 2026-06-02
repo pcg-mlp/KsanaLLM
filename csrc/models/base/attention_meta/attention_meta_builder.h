@@ -21,6 +21,7 @@ namespace ksana_llm {
 
 struct StandardSharedAttentionMeta;  // forward declaration for SharedAttentionMeta::GetStandard()
 struct MqaSharedAttentionMeta;       // forward declaration for SharedAttentionMeta::GetMqa()
+struct IndexerSharedAttentionMeta;   // forward declaration for SharedAttentionMeta::GetIndexer()
 
 struct AttentionBuilderConfig {
   const ModelConfig& model_config;
@@ -55,6 +56,8 @@ struct SharedAttentionMeta {
   virtual const DSASharedAttentionMeta* GetDSA() const { return nullptr; }
   virtual MqaSharedAttentionMeta* GetMqa() { return nullptr; }
   virtual const MqaSharedAttentionMeta* GetMqa() const { return nullptr; }
+  virtual IndexerSharedAttentionMeta* GetIndexer() { return nullptr; }
+  virtual const IndexerSharedAttentionMeta* GetIndexer() const { return nullptr; }
 };
 
 // Shared attention tensors and reusable host scratch buffers owned by ModelInput.

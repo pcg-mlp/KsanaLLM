@@ -31,6 +31,10 @@ class DeepSeekV3AttentionMetaCreator : public AttentionMetaCreator {
   // Returns DeepSeekV3-specific builders that handle MLA / DSA prepare steps.
   std::unique_ptr<FlashAttentionMetaBuilder> CreateFlashBuilder(const AttentionBuilderConfig& config) override;
   std::unique_ptr<PagedAttentionMetaBuilder> CreatePagedBuilder(const AttentionBuilderConfig& config) override;
+
+  // Override to reset indexer shared tensor cursors before each batch.
+  MetaArrays BuildAttentionMetas(const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
+                                  SharedAttentionMeta& shared_meta) override;
 };
 
 }  // namespace ksana_llm

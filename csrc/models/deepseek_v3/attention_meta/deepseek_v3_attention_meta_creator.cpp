@@ -16,6 +16,7 @@ std::unique_ptr<SharedAttentionMeta> DeepSeekV3AttentionMetaCreator::CreateShare
   meta->dsa.Init(model_config, runtime_config, config_.layer_num_on_node, config_.max_table_block_num,
                  config_.max_token_num, config_.decode_token_num_threshold);
   meta->mla.Init(model_config, runtime_config, config_.decode_token_num_threshold, config_.rank);
+  meta->indexer.Init(model_config, runtime_config, config_.rank);
 
   if (runtime_config.enable_flexible_caching && model_config.use_mla) {
     meta->dp_dst_flexible_rotary_embedding_pos =
@@ -47,6 +48,23 @@ std::unique_ptr<FlashAttentionMetaBuilder> DeepSeekV3AttentionMetaCreator::Creat
 std::unique_ptr<PagedAttentionMetaBuilder> DeepSeekV3AttentionMetaCreator::CreatePagedBuilder(
     const AttentionBuilderConfig& config) {
   return std::make_unique<DeepSeekV3PagedAttentionMetaBuilder>(config);
+}
+
+AttentionMetaCreator::MetaArrays DeepSeekV3AttentionMetaCreator::BuildAttentionMetas(
+    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
+    SharedAttentionMeta& shared_meta) {
+  // Reset indexer shared tensor cursors and statistics before each batch.
+  auto& dsv3_shared = static_cast<DeepSeekV3SharedAttentionMeta&>(shared_meta);
+  dsv3_shared.indexer.cu_seq_len_start_tensor.shape = {0};
+  dsv3_shared.indexer.cu_seq_len_end_tensor.shape = {0};
+  dsv3_shared.indexer.batch_indices_tensor.shape = {0};
+  if (!dsv3_shared.indexer.expanded_seq_len_tensor.shape.empty()) {
+    dsv3_shared.indexer.expanded_seq_len_tensor.shape = {0};
+  }
+  dsv3_shared.indexer.dp_context_tokens = 0;
+  dsv3_shared.indexer.dp_decode_tokens = 0;
+
+  return AttentionMetaCreator::BuildAttentionMetas(forward_reqs, attn_dp_group_id, shared_meta);
 }
 
 }  // namespace ksana_llm

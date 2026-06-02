@@ -12,6 +12,7 @@ namespace ksana_llm {
 
 struct MLAAttentionMeta;
 struct DSAAttentionMeta;
+struct IndexerAttentionMeta;  // forward declaration for AttentionMeta::GetIndexer()
 
 // Minimal base class for all attention input types.
 // Holds only the per-batch control fields that every attention path shares.
@@ -35,6 +36,8 @@ struct AttentionMeta {
   virtual const MLAAttentionMeta* GetMLA() const { return nullptr; }
   virtual DSAAttentionMeta* GetDSA() { return nullptr; }
   virtual const DSAAttentionMeta* GetDSA() const { return nullptr; }
+  virtual IndexerAttentionMeta* GetIndexer() { return nullptr; }
+  virtual const IndexerAttentionMeta* GetIndexer() const { return nullptr; }
 
   std::vector<ForwardRequest*> dp_reqs;
 

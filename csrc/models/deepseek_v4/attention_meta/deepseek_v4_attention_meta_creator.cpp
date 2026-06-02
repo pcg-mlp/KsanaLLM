@@ -19,6 +19,7 @@ std::unique_ptr<SharedAttentionMeta> DeepSeekV4AttentionMetaCreator::CreateShare
   meta->compressor.Init(model_config, runtime_config, config_.layer_num_on_node, config_.layer_start_on_node,
                         config_.rank, config_.block_cache_layout);
   meta->mqa.Init(model_config, runtime_config, config_.layer_num_on_node, config_.rank, config_.block_cache_layout);
+  meta->c4_indexer.Init(model_config, runtime_config, config_.rank);
 
   if (runtime_config.enable_flexible_caching && model_config.use_mla) {
     meta->dp_dst_flexible_rotary_embedding_pos =
@@ -53,6 +54,22 @@ AttentionMetaCreator::MetaArrays DeepSeekV4AttentionMetaCreator::BuildAttentionM
   dsv4_shared.mqa.c128_topk_lengths_tensor.shape = {0};
   dsv4_shared.mqa.c4_num_splits_tensor.shape = {0};
   dsv4_shared.mqa.c128_num_splits_tensor.shape = {0};
+
+  // Reset C4 indexer shared tensor shapes and statistics.
+  dsv4_shared.c4_indexer.cu_seq_len_start_tensor.shape = {0};
+  dsv4_shared.c4_indexer.cu_seq_len_end_tensor.shape = {0};
+  dsv4_shared.c4_indexer.batch_indices_tensor.shape = {0};
+  if (!dsv4_shared.c4_indexer.expanded_seq_len_tensor.shape.empty()) {
+    dsv4_shared.c4_indexer.expanded_seq_len_tensor.shape = {0};
+  }
+  dsv4_shared.c4_indexer.c4_seq_lens_tensor.shape = {0};
+  dsv4_shared.c4_indexer.extend_lens_tensor.shape = {0};
+  if (!dsv4_shared.c4_indexer.expanded_c4_seq_lens_tensor.shape.empty()) {
+    dsv4_shared.c4_indexer.expanded_c4_seq_lens_tensor.shape = {0};
+  }
+  dsv4_shared.c4_indexer.dp_context_tokens = 0;
+  dsv4_shared.c4_indexer.dp_decode_tokens = 0;
+  dsv4_shared.c4_indexer.dp_context_kv_tokens = 0;
 
   // Use standard routing (ForwardRequestType::kFlash / kPage) for flash_meta / page_metas.
   // C4IndexerMeta, MQA and other modules all depend on page_metas following standard bucketing.

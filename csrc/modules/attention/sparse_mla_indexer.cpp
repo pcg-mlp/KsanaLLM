@@ -8,6 +8,8 @@
 #include "layers/paged_sparse_mla_indexer_layer.h"
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
+#include "models/base/attention_meta/indexer_attention_meta.h"
+#include "models/base/attention_meta/indexer_shared_attention_meta.h"
 #include "profiler/profile_event.h"
 #include "utils/logger.h"
 #include "utils/tensor.h"
@@ -111,9 +113,8 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
 
   // Calculate token counts
   const auto& model_input = forwarding_context.GetModelInput();
-  const auto& indexer_meta = model_input->indexer_meta_;
-  // Temporarily reuse some meta from model_input
-  KLLM_CHECK(indexer_meta->page_metas.size() == model_input->page_metas.size());
+  auto& flash_indexer = *model_input->flash_meta->GetIndexer();
+  auto& shared_indexer = *model_input->shared_attention_meta->GetIndexer();
   const size_t dp_context_tokens = model_input->dp_context_tokens;
   const size_t dp_decode_tokens = model_input->dp_decode_tokens;
 
@@ -169,18 +170,19 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
         {context_q_indexer, context_k_indexer, context_weights, quant_workspace,
          model_input->flash_meta->rotary_embedding_pos, flash_dsa.store_out_loc,
          model_input->dp_input_offset_uint64_tensor, model_input->flash_meta->block_table,
-         indexer_meta->flash_meta.cu_seq_len_start_tensor, indexer_meta->flash_meta.cu_seq_len_end_tensor,
-         indexer_meta->flash_meta.batch_indices_tensor,
+         flash_indexer.cu_seq_len_start_tensor, flash_indexer.cu_seq_len_end_tensor,
+         flash_indexer.batch_indices_tensor,
          model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
-         indexer_meta->chunk_token_starts_host, indexer_meta->chunk_kv_token_ranges_host, attn_ctx.forward_shape},
+         shared_indexer.chunk_token_starts_host, shared_indexer.chunk_kv_token_ranges_host, attn_ctx.forward_shape},
         context_output_tensors));
   }
 
   if (dp_decode_tokens > 0) {
     // Paged attention for decode tokens (after dp_context_tokens)
     size_t skip_tokens = dp_context_tokens;
-    for (size_t i = 0; i < indexer_meta->page_metas.size(); i++) {
-      const size_t current_tokens = indexer_meta->page_metas[i].total_dp_input_ids_len;
+    for (size_t i = 0; i < model_input->page_metas.size(); i++) {
+      auto& page_indexer = *model_input->page_metas[i]->GetIndexer();
+      const size_t current_tokens = page_indexer.total_dp_input_ids_len;
 
       Tensor current_q_indexer =
           q_indexer_tensors[0].GetView({current_tokens, n_heads_, head_dim_}, skip_tokens * n_heads_ * head_dim_);
@@ -195,9 +197,9 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
       STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
           {current_q_indexer, current_k_indexer, current_weights, quant_workspace,
            model_input->page_metas[i]->rotary_embedding_pos, page_dsa.store_out_loc,
-           model_input->page_metas[i]->input_length, indexer_meta->page_metas[i].expanded_seq_len_tensor,
+           model_input->page_metas[i]->input_length, page_indexer.expanded_seq_len_tensor,
            model_input->page_metas[i]->block_table, page_dsa.expanded_block_table,
-           indexer_meta->page_metas[i].cu_seq_len_start_tensor, indexer_meta->page_metas[i].cu_seq_len_end_tensor,
+           page_indexer.cu_seq_len_start_tensor, page_indexer.cu_seq_len_end_tensor,
            model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta},
           current_output_tensors));
       page_dsa.paged_schedule_meta.shape[2] = 1;

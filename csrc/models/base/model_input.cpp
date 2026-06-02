@@ -120,14 +120,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   CreateVLTensors();
 
-  // Create optional meta if needed
-  if (model_config_.use_dsv4_attn) {
-    c4_indexer_meta_ = std::make_unique<C4IndexerMeta>(runtime_config_, rank_, context_);
-  } else {
-    if (model_config_.use_dsa) {
-      indexer_meta_ = std::make_unique<IndexerMeta>(runtime_config_, rank_, context_, /*compress_ratio=*/1);
-    }
-  }
+  // Create optional meta if needed (IndexerMeta/C4IndexerMeta removed; now managed via
+  // IndexerSharedAttentionMeta/C4IndexerSharedAttentionMeta inside AttentionMetaCreator).
 
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
@@ -356,13 +350,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareVLRequest(forward_reqs);
   PrepareCutoffLayer(forward_reqs);
   PrepareNextNGatherIdx(forward_reqs, run_mode);
-
-  if (c4_indexer_meta_) {
-    c4_indexer_meta_->Prepare(forward_reqs);
-  }
-  if (indexer_meta_) {
-    indexer_meta_->Prepare(forward_reqs);
-  }
 
   PreparePrefill();
   PrepareDecode();

@@ -10,6 +10,8 @@
 #include "layers/paged_sparse_mla_indexer_layer.h"
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
+#include "models/base/attention_meta/c4_indexer_attention_meta.h"
+#include "models/base/attention_meta/c4_indexer_shared_attention_meta.h"
 #include "profiler/profile_event.h"
 #include "utils/logger.h"
 
@@ -121,13 +123,15 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
   Tensor quant_workspace = workspace.GetView({total_tokens * n_heads_ * head_dim_}, workspace_offset);
   auto& attn_ctx = forwarding_context.GetAttentionForwardContext();
   const auto& model_input = forwarding_context.GetModelInput();
-  const auto& c4_indexer_meta = model_input->c4_indexer_meta_;
 
-  // Temporarily reuse some meta from model_input
-  KLLM_CHECK(c4_indexer_meta->page_metas.size() == model_input->page_metas.size());
-  const size_t dp_context_tokens = c4_indexer_meta->dp_context_tokens;
-  const size_t dp_context_kv_tokens = c4_indexer_meta->dp_context_kv_tokens;
-  const size_t dp_decode_tokens = c4_indexer_meta->dp_decode_tokens;
+  auto& c4_shared_indexer =
+      static_cast<C4IndexerSharedAttentionMeta&>(*model_input->shared_attention_meta->GetIndexer());
+  auto& flash_c4_indexer =
+      static_cast<C4IndexerAttentionMeta&>(*model_input->flash_meta->GetIndexer());
+
+  const size_t dp_context_tokens = c4_shared_indexer.dp_context_tokens;
+  const size_t dp_context_kv_tokens = c4_shared_indexer.dp_context_kv_tokens;
+  const size_t dp_decode_tokens = c4_shared_indexer.dp_decode_tokens;
   const size_t q_stride = n_heads_ * head_dim_;
   const size_t k_stride = head_dim_;
 
@@ -144,16 +148,16 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
          context_weights,                                      // weights
          quant_workspace,                                      // quant_workspace
          model_input->flash_meta->rotary_embedding_pos,        // rotary_embedding_pos
-         c4_indexer_meta->gathered_c4_out_loc_tensor,          // store_out_loc (unused for C4)
+         c4_shared_indexer.gathered_c4_out_loc_tensor,         // store_out_loc (unused for C4)
          model_input->dp_input_offset_uint64_tensor,           // dp_input_offset
          model_input->flash_meta->block_table,                 // block_table
-         c4_indexer_meta->flash_meta.cu_seq_len_start_tensor,  // cu_seq_len_start
-         c4_indexer_meta->flash_meta.cu_seq_len_end_tensor,    // cu_seq_len_end
-         c4_indexer_meta->flash_meta.batch_indices_tensor,     // batch_indices
+         flash_c4_indexer.cu_seq_len_start_tensor,             // cu_seq_len_start
+         flash_c4_indexer.cu_seq_len_end_tensor,               // cu_seq_len_end
+         flash_c4_indexer.batch_indices_tensor,                // batch_indices
          model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
-         c4_indexer_meta->indexer_meta->chunk_token_starts_host,     // chunk_token_starts (HOST)
-         c4_indexer_meta->indexer_meta->chunk_kv_token_ranges_host,  // chunk_kv_token_ranges (HOST)
-         attn_ctx.forward_shape},                                    // forward_shape
+         c4_shared_indexer.chunk_token_starts_host,            // chunk_token_starts (HOST)
+         c4_shared_indexer.chunk_kv_token_ranges_host,         // chunk_kv_token_ranges (HOST)
+         attn_ctx.forward_shape},                              // forward_shape
         context_outputs));
   }
 
@@ -162,9 +166,11 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
     // Process page_dual and page_single sequentially, since requests are sorted by token_num in descending order
     size_t skip_tokens = dp_context_tokens;
     size_t skip_kv_tokens = dp_context_kv_tokens;
-    for (size_t i = 0; i < c4_indexer_meta->page_metas.size(); ++i) {
-      const size_t current_tokens = c4_indexer_meta->page_metas[i].total_dp_input_ids_len;
-      const size_t current_kv_tokens = c4_indexer_meta->page_metas[i].total_dp_compressed_input_ids_len;
+    for (size_t i = 0; i < model_input->page_metas.size(); ++i) {
+      auto& page_c4_indexer =
+          static_cast<C4IndexerAttentionMeta&>(*model_input->page_metas[i]->GetIndexer());
+      const size_t current_tokens = page_c4_indexer.total_dp_input_ids_len;
+      const size_t current_kv_tokens = page_c4_indexer.total_dp_compressed_input_ids_len;
 
       Tensor current_q_indexer = q_indexer_tensors[0].GetView({current_tokens, q_stride}, skip_tokens * q_stride);
       Tensor current_k_indexer = kv_compressed_output.GetView({current_kv_tokens, k_stride}, skip_kv_tokens * k_stride);
@@ -180,12 +186,13 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
            current_weights,                                             // weights
            quant_workspace,                                             // quant_workspace
            model_input->page_metas[i]->rotary_embedding_pos,            // rotary_embedding_pos
-           c4_indexer_meta->gathered_c4_out_loc_tensor,                 // store_out_loc (unused for C4)
-           c4_indexer_meta->page_metas[i].c4_seq_lens_tensor,           // c4_seq_lens
-           c4_indexer_meta->page_metas[i].expanded_c4_seq_lens_tensor,  // expanded_c4_seq_lens
+           c4_shared_indexer.gathered_c4_out_loc_tensor,                // store_out_loc (unused for C4)
+           page_c4_indexer.c4_seq_lens_tensor,                          // c4_seq_lens
+           page_c4_indexer.expanded_c4_seq_lens_tensor,                 // expanded_c4_seq_lens
            model_input->page_metas[i]->block_table,                     // block_table
            page_dsa.expanded_block_table,
-           c4_indexer_meta->page_metas[i].cu_seq_len_start_tensor, c4_indexer_meta->page_metas[i].cu_seq_len_end_tensor,
+           page_c4_indexer.cu_seq_len_start_tensor,
+           page_c4_indexer.cu_seq_len_end_tensor,
            model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta},
           current_outputs));
       page_dsa.paged_schedule_meta.shape[2] = 1;

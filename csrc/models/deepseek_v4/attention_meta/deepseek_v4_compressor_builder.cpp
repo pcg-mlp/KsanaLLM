@@ -9,7 +9,7 @@
 
 #include "configure/environment.h"
 #include "device/device_utils.h"
-#include "models/base/forward_meta/common.h"
+#include "models/base/attention_meta/common.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
 

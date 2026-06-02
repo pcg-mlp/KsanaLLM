@@ -11,6 +11,8 @@
 #include "configure/model_config.h"
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
+#include "models/base/attention_meta/c4_indexer_attention_meta.h"
+#include "models/base/attention_meta/c4_indexer_shared_attention_meta.h"
 #include "runtime/forward_request.h"
 
 namespace ksana_llm {
@@ -126,9 +128,6 @@ struct MqaSharedAttentionMeta {
             std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 };
 
-// Placeholder for Indexer-specific shared tensors. Fields are populated in a follow-up plan.
-struct IndexerSharedAttentionMeta {};
-
 // Compressor-specific per-batch attention input tensors.
 // Each tensor is a view sliced from CompressorSharedAttentionMeta's backing tensors.
 struct CompressorAttentionMeta {
@@ -211,16 +210,13 @@ struct MqaAttentionMeta {
   }
 };
 
-// Placeholder for Indexer-specific per-batch attention input tensors. Fields are populated in a follow-up plan.
-struct IndexerAttentionMeta {};
-
-// DeepSeekV4-specific shared attention tensors (standard + MLA/DSA/Compressor/MQA).
+// DeepSeekV4-specific shared attention tensors (standard + MLA/DSA/Compressor/MQA/C4Indexer).
 struct DeepSeekV4SharedAttentionMeta : public StandardSharedAttentionMeta {
   MLASharedAttentionMeta mla;
   DSASharedAttentionMeta dsa;
   CompressorSharedAttentionMeta compressor;
   MqaSharedAttentionMeta mqa;
-  IndexerSharedAttentionMeta indexer;
+  C4IndexerSharedAttentionMeta c4_indexer;
 
   // TODO(临时方案): 实现 SharedAttentionMeta 的临时 getter 接口，见基类注释。
   MLASharedAttentionMeta* GetMLA() override { return &mla; }
@@ -229,6 +225,8 @@ struct DeepSeekV4SharedAttentionMeta : public StandardSharedAttentionMeta {
   const DSASharedAttentionMeta* GetDSA() const override { return &dsa; }
   MqaSharedAttentionMeta* GetMqa() override { return &mqa; }
   const MqaSharedAttentionMeta* GetMqa() const override { return &mqa; }
+  IndexerSharedAttentionMeta* GetIndexer() override { return &c4_indexer; }
+  const IndexerSharedAttentionMeta* GetIndexer() const override { return &c4_indexer; }
 };
 
 // DeepSeekV4-specific flash (prefill) attention input.
@@ -237,13 +235,15 @@ struct DeepSeekV4FlashAttentionMeta : public FlashAttentionMeta {
   DSAAttentionMeta dsa;
   CompressorAttentionMeta compressor;
   MqaAttentionMeta mqa;
-  IndexerAttentionMeta indexer;
+  C4IndexerAttentionMeta c4_indexer;
 
   // TODO(临时方案): 实现 AttentionMeta 的临时 getter 接口，见基类注释。
   MLAAttentionMeta* GetMLA() override { return &mla; }
   const MLAAttentionMeta* GetMLA() const override { return &mla; }
   DSAAttentionMeta* GetDSA() override { return &dsa; }
   const DSAAttentionMeta* GetDSA() const override { return &dsa; }
+  IndexerAttentionMeta* GetIndexer() override { return &c4_indexer; }
+  const IndexerAttentionMeta* GetIndexer() const override { return &c4_indexer; }
 };
 
 // DeepSeekV4-specific paged (decode) attention input.
@@ -252,13 +252,15 @@ struct DeepSeekV4PagedAttentionMeta : public PagedAttentionMeta {
   DSAAttentionMeta dsa;
   CompressorAttentionMeta compressor;
   MqaAttentionMeta mqa;
-  IndexerAttentionMeta indexer;
+  C4IndexerAttentionMeta c4_indexer;
 
   // TODO(临时方案): 实现 AttentionMeta 的临时 getter 接口，见基类注释。
   MLAAttentionMeta* GetMLA() override { return &mla; }
   const MLAAttentionMeta* GetMLA() const override { return &mla; }
   DSAAttentionMeta* GetDSA() override { return &dsa; }
   const DSAAttentionMeta* GetDSA() const override { return &dsa; }
+  IndexerAttentionMeta* GetIndexer() override { return &c4_indexer; }
+  const IndexerAttentionMeta* GetIndexer() const override { return &c4_indexer; }
 };
 
 }  // namespace ksana_llm

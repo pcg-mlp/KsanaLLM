@@ -15,8 +15,6 @@
 #include "models/base/attention_meta/flash_attention_meta_builder.h"
 #include "models/base/attention_meta/paged_attention_meta_builder.h"
 #include "models/base/base_model.h"
-#include "models/base/forward_meta/c4_indexer_meta.h"
-#include "models/base/forward_meta/indexer_meta.h"
 #include "runtime/forward_request.h"
 #include "runtime/infer_stage.h"
 #include "utils/tensor.h"
@@ -277,9 +275,6 @@ class ModelInput {
   const FlashAttentionMeta& GetFlashMeta() const { return *flash_meta; }
   std::vector<std::unique_ptr<PagedAttentionMeta>>& GetPagedMetas() { return page_metas; }
   const std::vector<std::unique_ptr<PagedAttentionMeta>>& GetPagedMetas() const { return page_metas; }
-
-  std::unique_ptr<C4IndexerMeta> c4_indexer_meta_;  // meta for c4 indexer module
-  std::unique_ptr<IndexerMeta> indexer_meta_;       // meta for indexer module
 
   // Return the config used to construct the current AttentionMetaCreator.
   // Useful when replacing the creator with a model-specific subclass.

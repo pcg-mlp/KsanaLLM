@@ -4,6 +4,8 @@
 
 #include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_builder.h"
 
+#include "models/base/attention_meta/c4_indexer_attention_meta_builder.h"
+
 namespace ksana_llm {
 
 using namespace attention_meta_builder_detail;
@@ -42,6 +44,10 @@ bool DeepSeekV4FlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, Shared
   if (config_.model_config.use_dsv4_attn) {
     PrepareMqaFlash(dsv4_meta.mqa, *shared_meta.GetMqa(), meta, config_);
   }
+  if (config_.model_config.use_dsv4_attn && !meta.dp_reqs.empty()) {
+    auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(shared_meta);
+    PrepareFlashC4Indexer(dsv4_meta.c4_indexer, dsv4_shared.c4_indexer, meta, config_);
+  }
 
   return use_cache;
 }
@@ -74,6 +80,10 @@ void DeepSeekV4PagedAttentionMetaBuilder::Build(PagedAttentionMeta& meta, Shared
   }
   if (config_.model_config.use_dsv4_attn) {
     PrepareMqaPaged(dsv4_meta.mqa, *shared_meta.GetMqa(), meta, config_);
+  }
+  if (config_.model_config.use_dsv4_attn && !meta.dp_reqs.empty()) {
+    auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(shared_meta);
+    PreparePagedC4Indexer(dsv4_meta.c4_indexer, dsv4_shared.c4_indexer, meta, config_);
   }
 }
 
