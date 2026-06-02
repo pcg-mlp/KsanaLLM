@@ -13,7 +13,8 @@ Status FlashAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   return Status(RET_UNDEFINED_REFERENCE, "FlashAttentionLayer not supported.");
 }
 
-Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "FlashAttentionLayer not supported.");
 }
 

@@ -11,7 +11,8 @@ Status ActivationLayer::Init(const std::vector<std::any>& parameters, const Runt
   return Status(RET_UNDEFINED_REFERENCE, "ActivationLayer not supported.");
 }
 
-Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "ActivationLayer not supported.");
 }
 

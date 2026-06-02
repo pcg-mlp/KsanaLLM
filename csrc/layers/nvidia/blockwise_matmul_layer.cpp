@@ -238,12 +238,14 @@ size_t BlockwiseMatMulLayer::GetWorkspaceSizeT() {
   return workspace_size_;
 }
 
-Status BlockwiseMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+Status BlockwiseMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
 }
 
 template <typename T>
-Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                                      const LayerExecContext& exec_ctx) {
   if (workspace_size_ > workspace_buffer_->GetTotalBytes()) {
     KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size_, workspace_buffer_->GetTotalBytes()));
   }
@@ -257,7 +259,7 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
   void* a_q = workspace_buffer_->GetPtr<void>();
   void* a_s = a_q + GetTypeSize(TYPE_FP8_E4M3) * cur_m * k_;
 
-  cudaStream_t compute_stream = context_->device->GetPrimaryComputeStream().Get();
+  cudaStream_t compute_stream = GetComputeStream(exec_ctx);
   if (!skip_quant_) {
     InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, cur_m, k_, /*is_column_major*/ true, compute_stream, block_size_,
                                        PerTokenGroupQuantFusionParams{

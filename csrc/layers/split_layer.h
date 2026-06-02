@@ -13,7 +13,8 @@ class SplitLayer : public BaseLayer {
                       std::shared_ptr<Context> context, int rank) override;
 
   // Split a matrix into multiple matrices along the column dimension
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
   template <typename T>

@@ -149,7 +149,8 @@ int64_t FinegrainedMixedDtypeGemmLayer::GetBestTactic(const size_t& m) {
 }
 
 Status FinegrainedMixedDtypeGemmLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                               std::vector<Tensor>& output_tensors) {
+                                               std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   workspace_info_.SetPtr(workspace_buffer_->GetPtr<void>());
 
   const size_t m = input_tensors[0].shape[0];
@@ -176,7 +177,7 @@ Status FinegrainedMixedDtypeGemmLayer::Forward(const std::vector<Tensor>& input_
                                           context_->device->GetPrimaryComputeStream().Get());
   }
   const int64_t best_tactic = GetBestTactic(m);
-  wrapper_->Forward(context_->device->GetPrimaryComputeStream().Get(), output_kt, workspace_info_.kernel_workspace_ptr_,
+  wrapper_->Forward(GetComputeStream(exec_ctx), output_kt, workspace_info_.kernel_workspace_ptr_,
                     quantized_input_kt, weight_kt, weight_scale_kt, best_tactic, std::nullopt, std::nullopt, alpha);
   return Status();
 }

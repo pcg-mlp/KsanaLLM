@@ -19,7 +19,8 @@ class ActivationLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
   template <typename T>
@@ -31,7 +32,8 @@ class ActivationLayer : public BaseLayer {
 
 class SigmoidLayer : public BaseLayer {
  public:
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
   template <typename T>

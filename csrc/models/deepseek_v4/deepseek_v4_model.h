@@ -12,14 +12,19 @@
 #include "modules/basic/linear.h"
 #include "modules/basic/mhc.h"
 #include "modules/basic/moe.h"
+#include "modules/ffn/shared_expert_layer.h"
 #include "modules/ffn/two_layered_ffn.h"
 
 namespace ksana_llm {
 class DeepSeekV4DecoderLayer {
  public:
+  // dsv4_metadata: shared pre-allocated buffer from DeepSeekV4Model.
+  //   Passed down to DeepSeekV4MQA, which creates its own per-layer backend from it.
   DeepSeekV4DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                          ModelCreationConfig& model_creation_config, MhcBuffers& mhc_buffers,
-                         Dsv4AttnBuffer& dsv4_attn_buffer, TensorBuffer* moe_buffer);
+                         Dsv4AttnBuffer& dsv4_attn_buffer, TensorBuffer* moe_buffer,
+                         TensorBuffer* shared_expert_inter_buffer = nullptr,
+                         TensorBuffer* shared_expert_output_buffer = nullptr);
 
   ~DeepSeekV4DecoderLayer() = default;
 
@@ -46,7 +51,7 @@ class DeepSeekV4DecoderLayer {
   uint32_t num_hash_layers_ = 0;
 
   std::shared_ptr<TwoLayeredFFN> mlp_;
-  std::shared_ptr<TwoLayeredFFN> shared_mlp_;
+  std::shared_ptr<SharedExpertLayer> shared_expert_;
   std::shared_ptr<Linear> expert_gate_;
   std::shared_ptr<MoE> moe_;
 
@@ -107,5 +112,10 @@ class DeepSeekV4Model : public CommonModel {
   Dsv4AttnBuffer dsv4_attn_buffer_;
 
   TensorBuffer* moe_buffer_;
+
+  // Independent buffers for shared expert multi-stream parallel execution.
+  // Shared across all layers (layers execute sequentially).
+  TensorBuffer* shared_expert_inter_buffer_ = nullptr;
+  TensorBuffer* shared_expert_output_buffer_ = nullptr;
 };
 }  // namespace ksana_llm

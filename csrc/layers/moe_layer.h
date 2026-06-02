@@ -40,7 +40,8 @@ class MoeLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
   // Test-only observability: true iff Init picked the sqrt+softplus gate.
   bool IsUsingTopkSoftplusSqrt() const { return use_topk_softplus_sqrt_; }

@@ -27,7 +27,8 @@ Status HcclAllGatherLayer::Init(const std::vector<std::any>& parameters, const R
   return Status();
 }
 
-Status HcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status HcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   output_tensors[0].dtype = input_tensors[0].dtype;
   size_t tp_size = context_->GetTensorParallelSize();
   if (tp_size == 1) {

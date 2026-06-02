@@ -14,7 +14,8 @@ class BatchedMatMulLayer : public BaseLayer {
 
   virtual size_t GetWorkspaceSize() override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
 #ifdef ENABLE_CUDA
@@ -25,7 +26,8 @@ class BatchedMatMulLayer : public BaseLayer {
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                  const LayerExecContext& exec_ctx);
 };
 
 }  // namespace ksana_llm

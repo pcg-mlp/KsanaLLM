@@ -13,7 +13,8 @@ Status EcclAllGatherLayer<T>::Init(const std::vector<std::any>& parameters, std:
 }
 
 template <typename T>
-Status EcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status EcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "EcclAllGatherLayer not supported.");
 }
 

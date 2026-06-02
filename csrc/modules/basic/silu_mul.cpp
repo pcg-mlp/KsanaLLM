@@ -16,13 +16,14 @@ SiluMul::SiluMul(const LayerCreationContext& creation_context) {
 
 SiluMul::~SiluMul() {}
 
-Status SiluMul::Forward(Tensor bias, Tensor gated_bias, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(silu_mul_layer_->Forward({bias, gated_bias}, output_tensors));
+Status SiluMul::Forward(Tensor bias, Tensor gated_bias, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  STATUS_CHECK_RETURN(silu_mul_layer_->Forward({bias, gated_bias}, output_tensors, exec_ctx));
   return Status();
 }
 
-Status SiluMul::Forward(Tensor fused_tensor, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(silu_mul_layer_->Forward({fused_tensor}, output_tensors));
+Status SiluMul::Forward(Tensor fused_tensor, std::vector<Tensor>& output_tensors, const LayerExecContext& exec_ctx) {
+  STATUS_CHECK_RETURN(silu_mul_layer_->Forward({fused_tensor}, output_tensors, exec_ctx));
   return Status();
 }
 

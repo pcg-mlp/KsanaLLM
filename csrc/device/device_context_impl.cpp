@@ -21,6 +21,7 @@ DeviceContextT<T>::DeviceContextT(int node_device_num_) : node_device_num_(node_
 
 template <int T>
 DeviceContextT<T>::~DeviceContextT() {
+  EventDestroy(compute_sync_event_);
   DestroyExtension();
 }
 
@@ -37,6 +38,9 @@ void DeviceContextT<T>::InitStreams() {
   h2d_stream_ = std::make_shared<Stream>();
   d2h_stream_ = std::make_shared<Stream>();
   d2d_stream_ = std::make_shared<Stream>();
+
+  // Create event for multi-stream parallel synchronization.
+  EventCreateWithFlags(&compute_sync_event_, EVENT_DISABLE_TIMING);
 }
 
 template <int T>

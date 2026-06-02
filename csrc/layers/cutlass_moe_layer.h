@@ -28,7 +28,8 @@ class CutlassMoeLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
   inline Status ProcessChunks(const Tensor& input_tensor, Tensor& output_tensor, const size_t total_tokens,

@@ -343,7 +343,8 @@ size_t FlashMlaAttentionLayer::GetWorkspaceSize() {
   return workspace_size_;
 }
 
-Status FlashMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status FlashMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   if (kv_cache_dtype_ == TYPE_FP8_DS_MLA) {
     switch (inter_data_type_) {
       case DataType::TYPE_FP16:

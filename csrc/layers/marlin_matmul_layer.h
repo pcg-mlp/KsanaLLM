@@ -26,14 +26,16 @@ class MarlinMatMulLayer : public BaseLayer {
 
   virtual size_t GetWorkspaceSize() override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
   template <typename T>
   size_t GetWorkspaceSizeT();
 
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                  const LayerExecContext& exec_ctx);
 
  private:
   DataType weight_data_type_;

@@ -52,7 +52,8 @@ size_t FlashDsv4AttentionLayer::GetWorkspaceSize() {
   return workspace_size;
 }
 
-Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                                        const LayerExecContext& exec_ctx) {
 // Dispatch by inter_data_type_ and kv_cache_dtype_
 #define DISPATCH_FLASH_DSV4_ATTENTION_BY_KVTYPE(dtype, kv_cache_dtype, func, ...)                             \
   switch (kv_cache_dtype) {                                                                                   \
@@ -65,7 +66,8 @@ Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors
   }
   switch (inter_data_type_) {
     case DataType::TYPE_BF16:
-      DISPATCH_FLASH_DSV4_ATTENTION_BY_KVTYPE(bfloat16, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
+      DISPATCH_FLASH_DSV4_ATTENTION_BY_KVTYPE(bfloat16, kv_cache_dtype_, ForwardT, input_tensors, output_tensors,
+                                              exec_ctx);
     default:
       KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, inter_data_type_));
   }
@@ -73,8 +75,8 @@ Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashDsv4AttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
+Status FlashDsv4AttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                                         const LayerExecContext& exec_ctx) {
   auto input_iter = input_tensors.cbegin();
   // Parse input tensors
   int64_t* rotary_embedding_pos_ptr = (input_iter++)->GetPtr<int64_t>();

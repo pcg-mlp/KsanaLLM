@@ -21,8 +21,9 @@ Status CutlassMatMulLayer::Preprocess(const ModelConfig& model_config, const Run
   DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
 }
 
-Status CutlassMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+Status CutlassMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
 }
 
 template <typename T>
@@ -142,7 +143,8 @@ Status CutlassMatMulLayer::PreprocessT(const ModelConfig& model_config, const Ru
 }
 
 template <typename T>
-Status CutlassMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CutlassMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                             const LayerExecContext& exec_ctx) {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     const Tensor& weight_tensor = input_tensors[1];
     void* p_qweight_tensor = weight_tensor.GetPtr<void>();
@@ -156,7 +158,7 @@ Status CutlassMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     if (cutlass_use_gemv_cuda_core_ && m < 5) {
       InvokeFpAIntBGroupCudaGemm<T, llm_kernels::nvidia::WeightType::INT4>(
           output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
-          p_zeros_tensor, m, n, k, groupsize_, context_->device->GetPrimaryComputeStream().Get());
+          p_zeros_tensor, m, n, k, groupsize_, GetComputeStream(exec_ctx));
     } else {
       size_t best_config_index = 0;
       if (m < cutlass_config_map_.size()) {
@@ -165,7 +167,7 @@ Status CutlassMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
       InvokeFpAIntBGroupCutlassGemm<T, llm_kernels::nvidia::WeightType::INT4>(
           output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
           p_zeros_tensor, workspace_buffer_->GetPtr<void>(), m, n, k, groupsize_, best_config_index,
-          context_->device->GetPrimaryComputeStream().Get());
+          GetComputeStream(exec_ctx));
     }
 
     output_tensors[0].shape = {m, n};

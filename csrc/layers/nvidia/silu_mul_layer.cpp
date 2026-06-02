@@ -17,17 +17,19 @@ Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status();
 }
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
 }
 
 template <typename T>
-Status SiluMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SiluMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                              const LayerExecContext& exec_ctx) {
   if (input_tensors.size() == 1) {
     InvokeRowBasedGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
         reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), static_cast<int>(input_tensors[0].shape[0]),
         static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-        context_->device->GetPrimaryComputeStream().Get(), swiglu_limit_);
+        GetComputeStream(exec_ctx),  swiglu_limit_);
     output_tensors[0].shape = input_tensors[0].shape;
     output_tensors[0].shape[1] = output_tensors[0].shape[1] / 2;
     output_tensors[0].dtype = input_tensors[0].dtype;
@@ -36,7 +38,7 @@ Status SiluMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vec
         reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), /* bias */ nullptr,
         reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), /* gated_bias */ nullptr,
         static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[0].shape[1]),
-        output_tensors[0].GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());
+        output_tensors[0].GetPtr<void>(), GetComputeStream(exec_ctx));
     output_tensors[0].shape = input_tensors[0].shape;
     output_tensors[0].dtype = input_tensors[0].dtype;
   }

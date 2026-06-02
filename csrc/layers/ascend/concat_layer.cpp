@@ -13,7 +13,8 @@ Status ConcatLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status();
 }
 
-Status ConcatLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status ConcatLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   KLLM_THROW("ConcatLayer not implement in Ascend.");
   return Status(RET_INFER_FAILED);
 }

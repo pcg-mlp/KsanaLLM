@@ -62,7 +62,8 @@ size_t TopKSoftplusSqrtLayer::GetWorkspaceSize() {
   return static_cast<size_t>(params_.max_token_num) * params_.topk * sizeof(int32_t);
 }
 
-Status TopKSoftplusSqrtLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status TopKSoftplusSqrtLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   // Inputs:
   //   [0] router_logits [N, num_experts], fp32/fp16/bf16
   //   if use_hash:

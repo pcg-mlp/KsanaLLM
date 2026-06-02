@@ -26,7 +26,8 @@ Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
 
 size_t MatMulLayer::GetWorkspaceSize() { return 0; }
 
-Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   // TODO(karlluo): support bias
   int64_t m = input_tensors[0].shape[0];
   int64_t n = (GetACLFormat(input_tensors[1].data_format) == aclFormat::ACL_FORMAT_FRACTAL_NZ)

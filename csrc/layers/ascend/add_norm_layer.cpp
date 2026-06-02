@@ -17,7 +17,8 @@ Status AddNormLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status();
 }
 
-Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   std::vector<Tensor> add_output_tensors = {input_tensors[1]};
   STATUS_CHECK_RETURN(add_layer_->Forward({input_tensors[0], input_tensors[1]}, add_output_tensors));
   STATUS_CHECK_RETURN(layernorm_layer_->Forward({input_tensors[1], input_tensors[2]}, output_tensors));

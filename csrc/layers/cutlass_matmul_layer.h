@@ -31,7 +31,8 @@ class CutlassMatMulLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) override;
 
  private:
   template <typename T>
@@ -45,7 +46,8 @@ class CutlassMatMulLayer : public BaseLayer {
   Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);
 
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                  const LayerExecContext& exec_ctx);
 
  private:
   DataType weight_data_type_;

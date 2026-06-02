@@ -20,7 +20,8 @@ Status PagedSparseMlaAttentionLayer::Init(const std::vector<std::any>& parameter
 }
 
 Status PagedSparseMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                             std::vector<Tensor>& output_tensors) {
+                                             std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
 #define DISPATCH_PAGED_SPARSE_MLA_BY_KVTYPE(dtype, kv_cache_dtype, func, ...)                                 \
   switch (kv_cache_dtype) {                                                                                   \
     case TYPE_FP8_DS_MLA:                                                                                     \

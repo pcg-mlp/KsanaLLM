@@ -12,7 +12,8 @@ Status PagedMlaAttentionLayer::Init(const std::vector<std::any>& parameters, con
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-Status PagedMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status PagedMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   KLLM_THROW("PagedMlaAttentionLayer not implement in Ascend.");
   return Status();
 }

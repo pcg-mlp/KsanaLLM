@@ -33,7 +33,8 @@ std::vector<size_t> PermuteLayer<T>::FindPermutation(const std::vector<size_t>& 
 }
 
 template <typename T>
-Status PermuteLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status PermuteLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   KLLM_CHECK_WITH_INFO(input_tensors[0].shape.size() == output_tensors[0].shape.size(),
                        "Permute layer need have same size shape.");
   std::vector<size_t> permutation = FindPermutation(static_cast<std::vector<size_t>>(input_tensors[0].shape),

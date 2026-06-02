@@ -26,7 +26,8 @@ Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
 }
 

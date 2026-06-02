@@ -10,7 +10,8 @@
 
 namespace ksana_llm {
 
-Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = DataType::TYPE_FP32;
   atb::infer::ElewiseParam param;

@@ -25,7 +25,8 @@ Status EmbLookupLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   // weigth_shape = input_tensors[2].
   // input_tensors:
   //   0: input_ids

@@ -29,7 +29,8 @@ Status LayernormLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   void* lm_input_tensor_buf_ptr = input_tensors[0].GetPtr<void>();
   void* lm_weight_tensor_buf_ptr = input_tensors[1].GetPtr<void>();
   void* lm_output_tensor_buf_ptr = output_tensors[0].GetPtr<void>();

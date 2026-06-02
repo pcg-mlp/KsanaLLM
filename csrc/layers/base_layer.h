@@ -6,6 +6,7 @@
 #include <any>
 
 #include "configure/context.h"
+#include "layers/layer_exec_context.h"
 #include "utils/singleton.h"
 #include "utils/status.h"
 #include "utils/tensor.h"
@@ -58,7 +59,8 @@ class BaseLayer {
 
   virtual size_t GetWorkspaceSize() { return 0; }
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx = {}) = 0;
 
   virtual Status SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
     workspace_buffer_ = workspace_buffer;
@@ -70,6 +72,13 @@ class BaseLayer {
   virtual void Clear() {}
 
  protected:
+  // Helper: get the actual compute stream based on exec_ctx override.
+  // If exec_ctx has a stream override, use it; otherwise use the primary compute stream.
+  decltype(std::declval<Stream>().Get()) GetComputeStream(const LayerExecContext& exec_ctx) {
+    if (exec_ctx.HasStreamOverride()) return exec_ctx.stream->Get();
+    return context_->device->GetPrimaryComputeStream().Get();
+  }
+
   DataType inter_data_type_;
   int rank_;
   std::shared_ptr<Context> context_;

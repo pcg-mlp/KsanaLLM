@@ -32,6 +32,10 @@ class DeviceContextT {
   Stream& GetPrimaryComputeStream() { return *primary_compute_stream_; }
   Stream& GetSecondaryComputeStream() { return *secondary_compute_stream_; }
 
+  // Event for synchronization between primary and secondary compute streams.
+  // Used for multi-stream parallel execution (e.g., shared expert parallel with routed experts).
+  Event& GetComputeSyncEvent() { return compute_sync_event_; }
+
   Stream& GetH2DStream() { return *h2d_stream_; }
   Stream& GetD2HStream() { return *d2h_stream_; }
   Stream& GetD2DStream() { return *d2d_stream_; }
@@ -72,6 +76,9 @@ class DeviceContextT {
   // compute.
   std::shared_ptr<Stream> primary_compute_stream_ = nullptr;
   std::shared_ptr<Stream> secondary_compute_stream_ = nullptr;
+
+  // Synchronization event between compute streams for multi-stream parallel.
+  Event compute_sync_event_;
 
   // communication.
   std::shared_ptr<Stream> comm_stream_ = nullptr;

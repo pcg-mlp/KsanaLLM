@@ -33,8 +33,9 @@ Status MarlinMatMulLayer::Init(const std::vector<std::any>& parameters, const Ru
 
 size_t MarlinMatMulLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
-Status MarlinMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+Status MarlinMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
 }
 
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
@@ -63,7 +64,8 @@ size_t MarlinMatMulLayer::GetWorkspaceSizeT() {
 }
 
 template <typename T>
-Status MarlinMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MarlinMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                             const LayerExecContext& exec_ctx) {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     const Tensor& weight_tensor = input_tensors[1];
     void* p_qweight_tensor = weight_tensor.GetPtr<void>();
@@ -78,13 +80,13 @@ Status MarlinMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std
 
     const size_t num_group = weight_tensor.scales->shape[0];
     MemsetAsync(workspace_buffer_->GetPtr<void>() + marlin_workspace_offset_, 0, marlin_workspace_size_,
-                context_->device->GetPrimaryComputeStream());
+                exec_ctx.HasStreamOverride() ? *exec_ctx.stream : context_->device->GetPrimaryComputeStream());
     InvokeMarlinGemm<T>(input_tensors[0].GetPtr<void>(), workspace_buffer_->GetPtr<void>() + marlin_input_tmp_offset_,
                         p_qweight_tensor, p_scales_tensor, p_zeros_tensor, p_g_idx_tensor, p_perm_tensor,
                         workspace_buffer_->GetPtr<void>() + marlin_workspace_offset_, output_tensors[0].GetPtr<void>(),
                         workspace_buffer_->GetPtr<void>() + marlin_output_tmp_offset_, m, n, k, num_group, is_k_full_,
                         true, true, false, is_awq_, is_gptq_desc_, is_awq_, rank_,
-                        context_->device->GetPrimaryComputeStream().Get());
+                        GetComputeStream(exec_ctx));
 
     output_tensors[0].shape = {m, n};
     output_tensors[0].dtype = input_tensors[0].dtype;

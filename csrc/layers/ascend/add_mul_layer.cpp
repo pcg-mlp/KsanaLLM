@@ -11,7 +11,8 @@ Status AddMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status(RET_UNDEFINED_REFERENCE, "AddMul operation is not supported on Ascend backend");
 }
 
-Status AddMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   KLLM_THROW("AddMulLayer not implement in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "AddMulLayer not supported.");
 }

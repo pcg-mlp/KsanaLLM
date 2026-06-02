@@ -21,7 +21,8 @@ Status Fp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeCon
   DISPATCH_BY_2_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
 }
 
-Status Fp8MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status Fp8MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_2_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 

@@ -246,7 +246,8 @@ Status MacheteMatMulLayer::Preprocess(const ModelConfig& model_config_, const Ru
   }
 }
 
-Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     // 根据模板类型确定各类型
     vllm_dtype::ScalarType::Id activation_type_id;
@@ -277,7 +278,7 @@ Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std
 
     int64_t workspace_size = 0;  // 不等于-1即可
     InvokeMacheteGemm(
-        workspace_size, workspace_buffer_->GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get(), m, n, k,
+        workspace_size, workspace_buffer_->GetPtr<void>(), GetComputeStream(exec_ctx), m, n, k,
         input_tensors[0].GetPtr<void>(), p_qweight_tensor, output_tensors[0].GetPtr<void>(),
         vllm_dtype::ScalarType::from_id(activation_type_id), vllm_dtype::ScalarType::from_id(weight_type_id),
         p_scales_tensor, weight_tensor.scales->shape, vllm_dtype::ScalarType::from_id(scale_type_id),

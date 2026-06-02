@@ -21,7 +21,8 @@ Status AddLayer::Init(const std::vector<std::any>& parameters, const RuntimeConf
   return Status();
 }
 
-Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   const auto& a = input_tensors[0];
   const auto& b = input_tensors[1];
   auto& output = output_tensors[0];

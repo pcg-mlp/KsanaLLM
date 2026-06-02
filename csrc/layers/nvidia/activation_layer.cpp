@@ -23,7 +23,8 @@ Status ActivationLayer::Init(const std::vector<std::any>& parameters, const Runt
   return Status();
 }
 
-Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
@@ -67,7 +68,8 @@ Status ActivationLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::
   return Status();
 }
 
-Status SigmoidLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SigmoidLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 

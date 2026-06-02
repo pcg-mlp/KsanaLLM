@@ -121,7 +121,8 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
 }
 
 Status FlashSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+                                           std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return ForwardT<__nv_bfloat16>(input_tensors, output_tensors);
 }
 

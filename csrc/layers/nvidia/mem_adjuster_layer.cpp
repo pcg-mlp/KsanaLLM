@@ -14,7 +14,8 @@ Status MemAdjusterLayer::Init(const std::vector<std::any>& parameters, const Run
   return Status();
 }
 
-Status MemAdjusterLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MemAdjusterLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   KLLM_THROW("MemAdjusterLayer::Forward is not supported, please use other specific functions instead");
   return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer::Forward not supported.");
 }

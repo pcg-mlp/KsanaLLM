@@ -38,7 +38,8 @@ size_t MhcLayer::GetMhcPreNumSplits(int token_num, int hc_hidden_dim) {
   return *(--it);
 }
 
-Status MhcLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MhcLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   if (input_tensors.size() == 5 && output_tensors.size() == 5) {
     DISPATCH_BY_3_DTYPE(inter_data_type_, PreForwardWithNormT, input_tensors, output_tensors);
   } else if (input_tensors.size() == 4 && output_tensors.size() == 5) {

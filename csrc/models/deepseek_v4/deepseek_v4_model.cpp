@@ -12,9 +12,12 @@
 
 namespace ksana_llm {
 
+// 用于MLA层张量并行处理的同步屏障
 DeepSeekV4DecoderLayer::DeepSeekV4DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                                                ModelCreationConfig& model_creation_config, MhcBuffers& mhc_buffers,
-                                               Dsv4AttnBuffer& dsv4_attn_buffer, TensorBuffer* moe_buffer)
+                                               Dsv4AttnBuffer& dsv4_attn_buffer, TensorBuffer* moe_buffer,
+                                               TensorBuffer* shared_expert_inter_buffer,
+                                               TensorBuffer* shared_expert_output_buffer)
     : is_moe_(is_moe),
       enable_full_shared_expert_(creation_context.runtime_config.enable_full_shared_expert),
       layer_idx_(layer_idx),
@@ -34,8 +37,11 @@ DeepSeekV4DecoderLayer::DeepSeekV4DecoderLayer(int layer_idx, bool is_moe, Layer
   add_ = std::make_shared<Add>(creation_context);
 
   if (is_moe) {
-    shared_mlp_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config,
-                                                  ".mlp.shared_expert.{}.weight");
+    shared_expert_ = std::make_shared<SharedExpertLayer>(layer_idx, creation_context, model_creation_config,
+                                                         ".mlp.shared_expert.{}.weight");
+    if (shared_expert_inter_buffer && shared_expert_output_buffer) {
+      shared_expert_->SetParallelBuffers(shared_expert_inter_buffer, shared_expert_output_buffer);
+    }
     expert_gate_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
                                             model_creation_config.attn_config.model_config.quant_config.backend);
     const bool is_hash_layer = layer_idx < static_cast<int>(num_hash_layers_);
@@ -117,6 +123,12 @@ Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
     reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
   }
 
+  // Insert sync event to ensure that the data is ready for SharedExpert.
+  auto& primary_stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
+  auto& sync_event = forwarding_context.GetContext()->device->GetComputeSyncEvent();
+  // Record event: Gate+TopK done, input data ready for both branches.
+  EventRecord(sync_event, primary_stream);
+
   // FFN core — routed-expert gating + MoE + shared MLP + fusion add.
   STATUS_CHECK_RETURN(
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
@@ -163,31 +175,100 @@ Status DeepSeekV4DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
     CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
     auto& gated_buffer_ = moe_buffer_tensors;
 
+    // Check if multi-stream parallel is enabled for SharedExpert.
+    static const bool enable_shared_expert_parallel = (GetEnvAsPositiveInt("SHARED_EXPERT_PARALLEL", 0) != 0);
     {
       PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
       STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
     }
 
-    {
-      PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
-      const Tensor* input_ids_ptr =
-          layer_idx_ < static_cast<int>(num_hash_layers_) ? &forwarding_context.GetModelInput()->input_ids : nullptr;
-      STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0],
-                                        moe_buffer_tensors, input_ids_ptr));
-    }
+    if (enable_shared_expert_parallel) {
+      // ═══ Multi-stream parallel path ═══
+      auto& primary_stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
+      auto& secondary_stream = forwarding_context.GetContext()->device->GetSecondaryComputeStream();
+      auto& sync_event = forwarding_context.GetContext()->device->GetComputeSyncEvent();
 
-    {
-      PROFILE_EVENT_SCOPE(CommonShareMlp, "CommonShareMlp", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward,
-                                               forwarding_context));
-    }
+      const bool shared_expert_async = (hidden_buffer_tensors_0[0].shape[0] < 128);
 
-    if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
-      PROFILE_EVENT_SCOPE(add_layer, "add_layer_with_comm", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(add_->Forward(reduce_buffer_tensors[0], moe_buffer_tensors[0], reduce_buffer_tensors));
+      // ─── Step 1: launch expert_gate on primary stream FIRST ───
+      {
+        PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+      }
+
+      // ─── Step 2: launch SharedExpert on secondary (or primary) stream ───
+      {
+        PROFILE_EVENT_SCOPE(CommonShareMlp, shared_expert_async ? "CommonShareMlp_async" : "CommonShareMlp_sync",
+                            forwarding_context.GetCurrentRank());
+
+        if (shared_expert_async) {
+          // Wait for input ready on secondary stream (event recorded before CommonMlp).
+          StreamWaitEvent(secondary_stream, sync_event);
+
+          // Launch SharedExpert kernels on secondary stream (uses parallel buffers).
+          LayerExecContext shared_expert_ctx(secondary_stream);
+          STATUS_CHECK_RETURN(shared_expert_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors,
+                                                      is_multi_token_forward, forwarding_context, shared_expert_ctx));
+
+          // Record event: SharedExpert done on secondary stream.
+          EventRecord(sync_event, secondary_stream);
+        } else {
+          LayerExecContext shared_expert_ctx(primary_stream);
+          STATUS_CHECK_RETURN(shared_expert_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors,
+                                                      is_multi_token_forward, forwarding_context, shared_expert_ctx));
+        }
+      }
+
+      // ─── Step 3: launch MoE on primary stream ───
+      {
+        PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
+        const Tensor* input_ids_ptr =
+            layer_idx_ < static_cast<int>(num_hash_layers_) ? &forwarding_context.GetModelInput()->input_ids : nullptr;
+        STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0],
+                                          moe_buffer_tensors, input_ids_ptr));
+      }
+
+      // ─── Step 3: merge ───
+      if (shared_expert_async) {
+        StreamWaitEvent(primary_stream, sync_event);
+      }
+
+      CREATE_BUFFER_SCOPE(shared_expert_output, shared_expert_->GetParallelOutputBuffer());
+      if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
+        PROFILE_EVENT_SCOPE(add_layer, "add_layer_with_comm", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(add_->Forward(shared_expert_output[0], moe_buffer_tensors[0], reduce_buffer_tensors));
+      } else {
+        PROFILE_EVENT_SCOPE(add_layer, "add_layer", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(add_->Forward(shared_expert_output[0], moe_buffer_tensors[0], hidden_buffer_tensors_0));
+      }
+
     } else {
-      PROFILE_EVENT_SCOPE(add_layer, "add_layer", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], hidden_buffer_tensors_0));
+      // ═══ Serial path (original logic): expert_gate → MoE → SharedExpert → Add ═══
+      {
+        PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+      }
+      {
+        PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
+        const Tensor* input_ids_ptr =
+            layer_idx_ < static_cast<int>(num_hash_layers_) ? &forwarding_context.GetModelInput()->input_ids : nullptr;
+        STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0],
+                                          moe_buffer_tensors, input_ids_ptr));
+      }
+
+      {
+        PROFILE_EVENT_SCOPE(CommonShareMlp, "CommonShareMlp", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(shared_expert_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors,
+                                                    is_multi_token_forward, forwarding_context));
+      }
+
+      if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
+        PROFILE_EVENT_SCOPE(add_layer, "add_layer_with_comm", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(add_->Forward(reduce_buffer_tensors[0], moe_buffer_tensors[0], reduce_buffer_tensors));
+      } else {
+        PROFILE_EVENT_SCOPE(add_layer, "add_layer", forwarding_context.GetCurrentRank());
+        STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], hidden_buffer_tensors_0));
+      }
     }
   }
   return Status();
@@ -298,6 +379,29 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
                      creation_context.runtime_config, mhc_buffers_);
   moe_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
 
+  // Allocate independent buffers for shared expert multi-stream parallel execution.
+  // Only allocate when SHARED_EXPERT_PARALLEL is enabled to avoid wasting GPU memory.
+  static const bool enable_shared_expert_parallel = (GetEnvAsPositiveInt("SHARED_EXPERT_PARALLEL", 0) != 0);
+  if (enable_shared_expert_parallel) {
+    const size_t tp = creation_context.context->global->GetTensorParallelSize();
+    size_t shared_expert_inter_per_rank =
+        model_creation_config.attn_config.model_config.moe_config.shared_expert_inter_size;
+    if (!creation_context.runtime_config.enable_full_shared_expert) {
+      shared_expert_inter_per_rank /= tp;
+    }
+    const size_t hidden_units = model_creation_config.attn_config.model_config.hidden_units;
+    // intermediate buffer: gate_up_proj output shape [max_T, 2 * inter_size_per_rank]
+    shared_expert_inter_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor(
+        "shared_expert_inter_buffer", {max_token_num, 2 * shared_expert_inter_per_rank}, weight_type);
+    // output buffer: down_proj output shape [max_T, hidden_size]
+    shared_expert_output_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor(
+        "shared_expert_output_buffer", {max_token_num, hidden_units}, weight_type);
+    CREATE_BUFFER_SCOPE(shared_expert_inter_buffer, shared_expert_inter_buffer_);
+    CREATE_BUFFER_SCOPE(shared_expert_output_buffer, shared_expert_output_buffer_);
+    KLLM_LOG_INFO << "shared_expert_inter_buffer_: " << shared_expert_inter_buffer[0].shape
+                  << ", shared_expert_output_buffer_: " << shared_expert_output_buffer[0].shape << std::endl;
+  }
+
   // Pre-allocate the shared Dsv4AttnBuffer (kv_compressed_output, topk_indices).
   STATUS_CHECK_RETURN(Dsv4Mqa::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                              creation_context.runtime_config, dsv4_attn_buffer_));
@@ -307,7 +411,8 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
   for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
     const bool is_moe = layer_idx >= first_k_dense_replace_;
     layers_[layer_idx] = std::make_shared<DeepSeekV4DecoderLayer>(
-        layer_idx, is_moe, creation_context, model_creation_config, mhc_buffers_, dsv4_attn_buffer_, moe_buffer_);
+        layer_idx, is_moe, creation_context, model_creation_config, mhc_buffers_, dsv4_attn_buffer_, moe_buffer_,
+        shared_expert_inter_buffer_, shared_expert_output_buffer_);
   }
 
   if (context_->global->IsSamplingNode()) {
@@ -320,7 +425,8 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
          ++layer_idx) {
       const bool is_moe = layer_idx >= first_k_dense_replace_;
       layers_[layer_idx] = std::make_shared<DeepSeekV4DecoderLayer>(
-          layer_idx, is_moe, creation_context, model_creation_config, mhc_buffers_, dsv4_attn_buffer_, moe_buffer_);
+          layer_idx, is_moe, creation_context, model_creation_config, mhc_buffers_, dsv4_attn_buffer_, moe_buffer_,
+          shared_expert_inter_buffer_, shared_expert_output_buffer_);
       // create nextn layer, give decoder layer
       nextn_layers_[layer_idx] =
           std::make_shared<DeepSeekV4MtpLayer>(layer_idx, creation_context, model_creation_config, layers_[layer_idx]);

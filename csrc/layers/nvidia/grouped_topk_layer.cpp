@@ -23,7 +23,8 @@ Status GroupedTopkLayer::Init(const std::vector<std::any>& parameters, const Run
   return Status();
 }
 
-Status GroupedTopkLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status GroupedTopkLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 

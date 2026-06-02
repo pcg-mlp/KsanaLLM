@@ -199,7 +199,8 @@ Status MarlinFp4MoeLayer::Preprocess(const ModelConfig& model_config, const Runt
   return Status();
 }
 
-Status MarlinFp4MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MarlinFp4MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 

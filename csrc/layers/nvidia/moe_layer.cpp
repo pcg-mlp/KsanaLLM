@@ -31,7 +31,8 @@ Status MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig
   DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
 }
 
-Status MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
@@ -731,6 +732,7 @@ Status MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensor
 
   return Status();
 }
+
 
 Status MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // 调用 ExpertParallelManager 的 Dispatch 方法

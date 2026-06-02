@@ -11,7 +11,8 @@ Status AddLayer::Init(const std::vector<std::any>& parameters, const RuntimeConf
   return Status(RET_UNDEFINED_REFERENCE, "AddLayer not supported.");
 }
 
-Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "AddLayer not supported.");
 }
 

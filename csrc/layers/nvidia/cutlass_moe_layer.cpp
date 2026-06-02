@@ -287,7 +287,8 @@ inline std::vector<int64_t> CutlassMoeLayer::GetBestTactic(const size_t& num_row
   }
 }
 
-Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   // input_tensors:
   //  0: hidden_states
   //  1: gating_output

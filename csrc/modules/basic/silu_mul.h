@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "layers/layer_exec_context.h"
 #include "models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -17,11 +18,12 @@ class SiluMul {
   ~SiluMul();
 
   //  output_tensors = Silu(bias) * gated_bias
-  Status Forward(Tensor bias, Tensor gated_bias, std::vector<Tensor>& output_tensors);
+  Status Forward(Tensor bias, Tensor gated_bias, std::vector<Tensor>& output_tensors,
+                 const LayerExecContext& exec_ctx = {});
 
   // n = fused_tensor.shape[1]
   // output_tensors = Silu(fused_tensor[:, :n/2]) * fused_tensor[:, n/2:]
-  Status Forward(Tensor fused_tensor, std::vector<Tensor>& output_tensors);
+  Status Forward(Tensor fused_tensor, std::vector<Tensor>& output_tensors, const LayerExecContext& exec_ctx = {});
 
  protected:
   std::shared_ptr<BaseLayer> silu_mul_layer_;

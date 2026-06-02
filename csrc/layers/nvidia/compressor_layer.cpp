@@ -87,7 +87,8 @@ Status CompressorLayer::Init(const std::vector<std::any>& parameters, const Runt
 // =============================================================================
 // Forward
 // =============================================================================
-Status CompressorLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CompressorLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   const auto& kv_scale_input = input_tensors[1];
   KLLM_CHECK_WITH_INFO(kv_scale_input.dtype == DataType::TYPE_FP32, "kv_score_input must be float type");
 

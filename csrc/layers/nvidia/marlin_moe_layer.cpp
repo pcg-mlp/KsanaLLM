@@ -54,7 +54,8 @@ Status MarlinMoeLayer::Preprocess(const ModelConfig& model_config_, const Runtim
   return Status();
 }
 
-Status MarlinMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MarlinMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   if (input_tensors[0].dtype == TYPE_FP16) {
     half* output = static_cast<half*>(output_tensors[0].GetPtr<void>());
     half* input = static_cast<half*>(input_tensors[0].GetPtr<void>());

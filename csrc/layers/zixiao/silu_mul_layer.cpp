@@ -12,7 +12,8 @@ Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
 }
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
 }
 }  // namespace ksana_llm

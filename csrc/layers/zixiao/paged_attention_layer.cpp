@@ -11,7 +11,8 @@ Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   return Status(RET_UNDEFINED_REFERENCE, "PagedAttentionLayer not supported.");
 }
 
-Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "PagedAttentionLayer not supported.");
 }
 

@@ -22,7 +22,8 @@ Status NcclAllReduceSumLayer::Init(const std::vector<std::any>& parameters, cons
   return Status();
 }
 
-Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;

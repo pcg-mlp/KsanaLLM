@@ -23,12 +23,13 @@ Linear::Linear(const std::string& weight_name, const LayerCreationContext& creat
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
 }
 
-Status Linear::Forward(Tensor input_tensor, std::vector<Tensor>& output_tensors) {
-  return proj_layer_->Forward({input_tensor, weight_}, output_tensors);
+Status Linear::Forward(Tensor input_tensor, std::vector<Tensor>& output_tensors, const LayerExecContext& exec_ctx) {
+  return proj_layer_->Forward({input_tensor, weight_}, output_tensors, exec_ctx);
 }
 
-Status Linear::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  return Forward(input_tensors[0], output_tensors);
+Status Linear::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                       const LayerExecContext& exec_ctx) {
+  return Forward(input_tensors[0], output_tensors, exec_ctx);
 }
 
 }  // namespace ksana_llm

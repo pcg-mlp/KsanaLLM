@@ -18,7 +18,8 @@ size_t MatMulLayer<T>::GetWorkspaceSize() {
 }
 
 template <typename T>
-Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "MatMulLayer not supported.");
 }
 

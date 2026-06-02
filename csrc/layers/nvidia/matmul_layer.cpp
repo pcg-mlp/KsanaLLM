@@ -27,12 +27,14 @@ size_t MatMulLayer::GetWorkspaceSize() {
   return cublas_workspace_size_;
 }
 
-Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
 }
 
 template <typename T>
-Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                             const LayerExecContext& exec_ctx) {
   if (cublas_workspace_size_ > 0) {
     cublas_workspace_ptr_ = workspace_buffer_->GetPtr<void>();
   }
@@ -58,12 +60,13 @@ Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
     }
   }
 
+  cudaStream_t compute_stream = GetComputeStream(exec_ctx);
   InvokeMatMul<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(),
                   static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
                   static_cast<int>(input_tensors[0].shape[1]),
                   reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
                   reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
-                  context_->device->GetPrimaryComputeStream().Get(), cublas_workspace_ptr_, cublaslt_algo_ptr_,
+                  compute_stream, cublas_workspace_ptr_, cublaslt_algo_ptr_,
                   cublas_workspace_size_);
 
   output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};

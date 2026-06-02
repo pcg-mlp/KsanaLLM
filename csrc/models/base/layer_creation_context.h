@@ -17,6 +17,10 @@ struct LayerCreationContext {
   std::shared_ptr<MoeLayerFactory> moe_layer_factory;
   std::shared_ptr<LayerWorkspaceManager> workspace_mgr;
 
+  // Secondary stream workspace for layers that execute in parallel on SecondaryComputeStream.
+  // Symmetric with workspace_mgr: same type, same grow-only strategy, independent buffer.
+  std::shared_ptr<LayerWorkspaceManager> secondary_workspace_mgr;
+
   std::shared_ptr<Context> context;
   ModelConfig model_config;
   RuntimeConfig runtime_config;

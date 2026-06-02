@@ -26,7 +26,8 @@ Status FlashAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   return Status();
 }
 
-Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   // for ATB input_tensors:
   //   0: qkv_tensor shape [max_token_num, hidden_units * 3], type same as weight
   //   1: rotary_embedding_pos shape [max_token_num], type int64_t

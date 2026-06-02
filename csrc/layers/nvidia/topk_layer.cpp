@@ -32,7 +32,8 @@ Status TopKLayer::Init(const std::vector<std::any>& parameters, const RuntimeCon
   return Status();
 }
 
-Status TopKLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status TopKLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   if (use_v2_) {
     return ForwardV2(input_tensors, output_tensors);
   }

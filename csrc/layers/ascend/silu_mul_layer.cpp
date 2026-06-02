@@ -57,7 +57,8 @@ Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status();
 }
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   if (input_tensors.size() != 2) {
     KLLM_THROW(fmt::format("SiluMulLayer only support 2 input tensors, but got {}", input_tensors.size()));
   }

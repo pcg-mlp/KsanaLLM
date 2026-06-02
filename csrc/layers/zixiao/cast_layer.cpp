@@ -7,7 +7,8 @@
 namespace ksana_llm {
 
 template <typename SRC_DTYPE>
-Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "CastLayer not supported.");
 }
 template class CastLayer<float>;

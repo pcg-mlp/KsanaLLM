@@ -21,6 +21,7 @@ void LayerCreationContext::Init(std::shared_ptr<BaseWeight> base_weight_, std::s
     moe_layer_factory = std::make_shared<MoeLayerFactory>(model_config_, this->runtime_config, rank_, context_);
   }
   workspace_mgr = std::make_shared<LayerWorkspaceManager>(rank_);
+  secondary_workspace_mgr = std::make_shared<LayerWorkspaceManager>(rank_);
 
   context = context_;
   rank = rank_;

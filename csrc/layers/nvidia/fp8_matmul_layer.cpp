@@ -33,12 +33,14 @@ size_t Fp8MatMulLayer::GetWorkspaceSize() {
   return workspace_size;
 }
 
-Status Fp8MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+Status Fp8MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
 }
 
 template <typename T>
-Status Fp8MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status Fp8MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                             const LayerExecContext& exec_ctx) {
   int m = input_tensors[0].shape[0];
   int k = input_tensors[0].shape[1];
   int n = input_tensors[1].shape[0];
@@ -61,11 +63,11 @@ Status Fp8MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::v
   if (input_tensors[1].input_scales) {
     input_scale = static_cast<float*>(input_tensors[1].input_scales->GetPtr<void>());
     Fp8E4m3Quantize<T>(1, m * k, input, input_quant, input_scale, true,
-                       context_->device->GetPrimaryComputeStream().Get());
+                       GetComputeStream(exec_ctx));
   } else {
     input_scale = static_cast<float*>(input_quant + GetTypeSize(TYPE_FP8_E4M3) * m * k);
     Fp8E4m3Quantize<T>(1, m * k, input, input_quant, input_scale, false,
-                       context_->device->GetPrimaryComputeStream().Get());
+                       GetComputeStream(exec_ctx));
   }
 
   if (context_->device->ext->GetGPUGemmAlgoHelper().IsInit()) {
@@ -92,7 +94,7 @@ Status Fp8MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::v
 
   Fp8QuantizedMatMul<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(), m, n, k,
                         input_quant, input_scale, weight_quant, weight_scale, output,
-                        context_->device->GetPrimaryComputeStream().Get(), cublaslt_algo_ptr_, cublas_workspace,
+                        GetComputeStream(exec_ctx), cublaslt_algo_ptr_, cublas_workspace,
                         cublas_workspace_size_);
   cublaslt_algo_ptr_ = nullptr;
   return Status();

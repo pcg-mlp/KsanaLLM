@@ -11,7 +11,8 @@ Status EmbLookupLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status(RET_UNDEFINED_REFERENCE, "EmbLookupLayer not supported.");
 }
 
-Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "EmbLookupLayer not supported.");
 }
 }  // namespace ksana_llm

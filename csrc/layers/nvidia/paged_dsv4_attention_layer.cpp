@@ -31,7 +31,8 @@ Status PagedDsv4AttentionLayer::Init(const std::vector<std::any>& parameters, co
   return Status();
 }
 
-Status PagedDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status PagedDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         const LayerExecContext& exec_ctx) {
 // Dispatch by inter_data_type_ and kv_cache_dtype_
 #define DISPATCH_PAGED_DSV4_ATTENTION_BY_KVTYPE(dtype, kv_cache_dtype, func, ...)                             \
   switch (kv_cache_dtype) {                                                                                   \
