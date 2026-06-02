@@ -40,11 +40,11 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale
     llm_kernels_nvidia_kernel_logits_topk
     llm_kernels_nvidia_kernel_flashinfer_attention
-    llm_kernels_nvidia_kernel_sglang_marlin_moe_wna16
-    llm_kernels_nvidia_kernel_humming_ops
-    llm_kernels_nvidia_kernel_humming_jit
-    llm_kernels_nvidia_kernel_humming_launcher
-    llm_kernels_nvidia_kernel_humming_preprocess)
+    llm_kernels_nvidia_kernel_sglang_marlin_moe_wna16)
+
+  if(TARGET llm_kernels_nvidia_kernel_humming)
+    list(APPEND nvidia_kernels_LIBS llm_kernels_nvidia_kernel_humming)
+  endif()
 endif()
 
 

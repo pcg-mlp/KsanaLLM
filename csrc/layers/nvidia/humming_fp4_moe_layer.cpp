@@ -7,7 +7,6 @@
 #include "csrc/kernels/nvidia/others/humming/jit/humming_jit_compiler.h"
 #include "csrc/kernels/nvidia/others/humming/ops/ops.h"
 #include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
-#include "layers/grouped_topk_layer.h"
 #include "layers/topk_softplus_sqrt_layer.h"
 #include "utils/utils.h"
 
@@ -45,10 +44,10 @@ Status HummingFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const 
   expert_topk_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   tp_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   use_vllm_moe_ = std::any_cast<bool>(parameters[parameter_index++]);
-  num_expert_group_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  expert_groups_topk_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  [[maybe_unused]] uint32_t num_expert_group = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  [[maybe_unused]] uint32_t expert_groups_topk = std::any_cast<uint32_t>(parameters[parameter_index++]);
   scoring_func_ = std::any_cast<std::string>(parameters[parameter_index++]);
-  topk_method_ = std::any_cast<std::string>(parameters[parameter_index++]);
+  [[maybe_unused]] std::string topk_method = std::any_cast<std::string>(parameters[parameter_index++]);
   norm_topk_prob_ = std::any_cast<bool>(parameters[parameter_index++]);
   routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
   use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
@@ -71,36 +70,23 @@ Status HummingFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const 
                   runtime_config.parallel_basic_config.attn_data_parallel_size > 1 &&
                   runtime_config.parallel_basic_config.expert_parallel_size > 1;
 
-  use_topk_softplus_sqrt_ = (scoring_func_ == "sqrtsoftplus");
-  if (use_topk_softplus_sqrt_) {
-    use_hash_ = (layer_idx_ < static_cast<int>(num_hash_layers_));
-    TopKSoftplusSqrtLayerParameters softplus_sqrt_params{};
-    softplus_sqrt_params.topk = static_cast<uint32_t>(expert_topk_);
-    softplus_sqrt_params.num_experts = static_cast<uint32_t>(expert_num_per_node_ * global_expert_para_size_);
-    softplus_sqrt_params.max_token_num = static_cast<uint32_t>(max_token_num_);
-    softplus_sqrt_params.renormalize = norm_topk_prob_;
-    softplus_sqrt_params.routed_scaling_factor = routed_scaling_factor_;
-    softplus_sqrt_params.use_hash = use_hash_;
-    softplus_sqrt_params.use_correction_bias = !use_hash_ && use_e_score_correction_bias_;
-    softplus_sqrt_params.topk_ids_dtype = TYPE_INT32;
+  KLLM_CHECK_WITH_INFO(scoring_func_ == "sqrtsoftplus",
+                       fmt::format("HummingFp4MoeLayer requires scoring_func='sqrtsoftplus', got '{}'", scoring_func_));
 
-    topk_softplus_sqrt_layer_ = std::make_shared<TopKSoftplusSqrtLayer>();
-    topk_softplus_sqrt_layer_->Init({softplus_sqrt_params}, runtime_config, context, rank);
-    softplus_sqrt_workspace_size_ = topk_softplus_sqrt_layer_->GetWorkspaceSize();
-  } else {
-    // Initialize GroupedTopkLayer for V3/GLM4/Qwen3-MoE path
-    grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
-    float score_threshold = runtime_config.moe_topk_score_threshold;
-    GroupedTopkLayerParameters grouped_topk_params{.topk = expert_topk_,
-                                                   .renormalize = norm_topk_prob_,
-                                                   .num_expert_group = num_expert_group_,
-                                                   .topk_group = expert_groups_topk_,
-                                                   .scoring_func = scoring_func_,
-                                                   .routed_scaling_factor = routed_scaling_factor_,
-                                                   .use_e_score_correction_bias = use_e_score_correction_bias_,
-                                                   .score_threshold = score_threshold};
-    grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
-  }
+  use_hash_ = (layer_idx_ < static_cast<int>(num_hash_layers_));
+  TopKSoftplusSqrtLayerParameters softplus_sqrt_params{};
+  softplus_sqrt_params.topk = static_cast<uint32_t>(expert_topk_);
+  softplus_sqrt_params.num_experts = static_cast<uint32_t>(expert_num_per_node_ * global_expert_para_size_);
+  softplus_sqrt_params.max_token_num = static_cast<uint32_t>(max_token_num_);
+  softplus_sqrt_params.renormalize = norm_topk_prob_;
+  softplus_sqrt_params.routed_scaling_factor = routed_scaling_factor_;
+  softplus_sqrt_params.use_hash = use_hash_;
+  softplus_sqrt_params.use_correction_bias = !use_hash_ && use_e_score_correction_bias_;
+  softplus_sqrt_params.topk_ids_dtype = TYPE_INT32;
+
+  topk_softplus_sqrt_layer_ = std::make_shared<TopKSoftplusSqrtLayer>();
+  topk_softplus_sqrt_layer_->Init({softplus_sqrt_params}, runtime_config, context, rank);
+  softplus_sqrt_workspace_size_ = topk_softplus_sqrt_layer_->GetWorkspaceSize();
 
   // EPLB data dump configuration
   enable_dump_eplb_data_ = runtime_config.enable_dump_eplb_data;
@@ -134,24 +120,13 @@ Status HummingFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const 
       llm_kernels::nvidia::humming::SetJitCompiler(jit_compiler_.get());
     }
   }
-  {
-    std::lock_guard<std::mutex> lock(jit_mutex_);
-    // Always compile for our compute_dtype. CacheKey includes compute_dtype, so
-    // already-compiled configs (e.g. BF16 from W4A16 Init) are skipped via CacheExists.
-    int64_t n1 = expert_inter_size_ * 2, k1 = expert_hidden_size_;  // w1: gate+up
-    int64_t n2 = expert_hidden_size_, k2 = expert_inter_size_;      // w2: down
-    auto gemm_type = llm_kernels::nvidia::humming::GemmType::INDEXED;
+  // JIT compiler handles shape-level dedup internally — no layer-side flag needed.
+  int64_t n1 = expert_inter_size_ * 2, k1 = expert_hidden_size_;  // w1: gate+up
+  int64_t n2 = expert_hidden_size_, k2 = expert_inter_size_;      // w2: down
+  auto gemm_type = llm_kernels::nvidia::humming::GemmType::INDEXED;
 
-    auto configs_w1 = jit_compiler_->QueryH20Configs(n1, k1, static_cast<int64_t>(expert_num_per_node_),
-                                                     humming_compute_dtype_, gemm_type);
-    auto configs_w2 = jit_compiler_->QueryH20Configs(n2, k2, static_cast<int64_t>(expert_num_per_node_),
-                                                     humming_compute_dtype_, gemm_type);
-
-    std::vector<llm_kernels::nvidia::humming::HummingJitCompiler::KernelConfig> configs;
-    configs.insert(configs.end(), configs_w1.begin(), configs_w1.end());
-    configs.insert(configs.end(), configs_w2.begin(), configs_w2.end());
-    jit_compiler_->CompileKernels(configs);
-  }
+  jit_compiler_->CompileKernels(n1, k1, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type);
+  jit_compiler_->CompileKernels(n2, k2, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type);
 
   KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer Init", rank_);
   return Status();
@@ -211,7 +186,7 @@ size_t HummingFp4MoeLayer::GetWorkspaceSizeT() {
     fp8_scale_buffer_size_ = AlignAddress(static_cast<int64_t>(m * expert_topk_) * sizeof(float));
   }
 
-  const size_t softplus_sqrt_ws_aligned = use_topk_softplus_sqrt_ ? AlignAddress(softplus_sqrt_workspace_size_) : 0;
+  const size_t softplus_sqrt_ws_aligned = AlignAddress(softplus_sqrt_workspace_size_);
 
   // Total workspace: cache1 is shared with cache3, so we use max(cache1, cache3) instead of sum
   size_t cache13_size = std::max(intermediate_cache1_size_, intermediate_cache3_size_);
@@ -263,7 +238,7 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
           reinterpret_cast<float*>(reinterpret_cast<char*>(fp8_activation_buffer_) + fp8_activation_buffer_size_);
     }
 
-    if (use_topk_softplus_sqrt_ && softplus_sqrt_workspace_size_ > 0) {
+    if (softplus_sqrt_workspace_size_ > 0) {
       const size_t slice_offset = max_ws_bytes_ - AlignAddress(softplus_sqrt_workspace_size_);
       auto slice = std::make_shared<Tensor>(
           workspace_buffer_->location, TYPE_UINT8, std::vector<size_t>{softplus_sqrt_workspace_size_},
@@ -275,12 +250,8 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
   const size_t num_tokens = input_tensors[0].shape[0];
   const size_t hidden_size = input_tensors[0].shape[1];
 
-  // Execute TopK gating
-  if (use_topk_softplus_sqrt_) {
-    STATUS_CHECK_RETURN(ExecuteTopkSoftplusSqrt<T>(input_tensors, output_tensors));
-  } else {
-    STATUS_CHECK_RETURN(ExecuteGroupedTopk<T>(input_tensors, output_tensors));
-  }
+  // Execute TopK gating (sqrtsoftplus only)
+  STATUS_CHECK_RETURN(ExecuteTopkSoftplusSqrt<T>(input_tensors, output_tensors));
 
   // Get weight pointers
   void* w1 = input_tensors[2].GetPtr<void>();
@@ -536,60 +507,6 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
 
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
-  return Status();
-}
-
-template <typename T>
-Status HummingFp4MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors,
-                                              std::vector<Tensor>& output_tensors) {
-  std::vector<Tensor> grouped_topk_input_tensors;
-  std::vector<Tensor> grouped_topk_output_tensors;
-
-  size_t num_tokens = input_tensors[0].shape[0];
-
-  // Input: gating_output
-  grouped_topk_input_tensors.push_back(input_tensors[1]);
-
-  // Input: e_bias (optional)
-  if (input_tensors.size() > 5) {
-    grouped_topk_input_tensors.push_back(input_tensors[5]);
-  }
-
-  // Output: topk_weights
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
-  grouped_topk_output_tensors.push_back(topk_weights_tensor);
-
-  // Output: topk_ids
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
-  grouped_topk_output_tensors.push_back(topk_ids_tensor);
-
-  Status status = grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
-  if (!status.OK()) {
-    KLLM_LOG_ERROR << "HummingFp4MoeLayer::ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer";
-    return status;
-  }
-
-  if (enable_dump_eplb_data_) {
-    DumpEplbData(topk_ids_tensor);
-  }
-
-  if (enable_load_eplb_config_ && input_tensors[4].shape[0] > layer_idx_) {
-    size_t num_experts = input_tensors[4].shape[1];
-    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
-                                        reinterpret_cast<int32_t*>(layer_expert_ptr),
-                                        context_->device->GetPrimaryComputeStream().Get());
-  }
-
-  if (using_deepep_) {
-    // LCOV_EXCL_START
-    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor>& deepep_output_tensors = output_tensors;
-    Dispatch(deepep_input_tensors, deepep_output_tensors);
-    topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
-    topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
-    // LCOV_EXCL_STOP
-  }
   return Status();
 }
 

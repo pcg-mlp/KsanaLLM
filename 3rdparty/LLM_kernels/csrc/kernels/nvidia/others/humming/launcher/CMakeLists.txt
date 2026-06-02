@@ -3,7 +3,6 @@
 # Humming launcher — TMA descriptors + cuLaunchKernelEx.
 
 file(GLOB HUMMING_LAUNCHER_SRCS *.cu)
-list(FILTER HUMMING_LAUNCHER_SRCS EXCLUDE REGEX ".*reference.*")
 
 add_library(llm_kernels_nvidia_kernel_humming_launcher STATIC ${HUMMING_LAUNCHER_SRCS})
 set_property(TARGET llm_kernels_nvidia_kernel_humming_launcher PROPERTY POSITION_INDEPENDENT_CODE ON)

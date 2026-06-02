@@ -16,7 +16,6 @@
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_layer.h"
-#include "layers/grouped_topk_layer.h"
 #include "layers/topk_softplus_sqrt_layer.h"
 #include "models/base/base_weight.h"
 #include "models/common_moe/moe_config.h"
@@ -49,9 +48,6 @@ class HummingFp4MoeLayer : public BaseLayer {
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
   template <typename T>
-  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
-  template <typename T>
   Status ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
   Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
@@ -73,10 +69,7 @@ class HummingFp4MoeLayer : public BaseLayer {
   int tp_size_;
   int layer_idx_;
   bool use_vllm_moe_ = false;
-  uint32_t num_expert_group_ = 1;
-  uint32_t expert_groups_topk_ = 1;
-  std::string scoring_func_ = "softmax";
-  std::string topk_method_ = "greedy";
+  std::string scoring_func_;
   bool norm_topk_prob_ = false;
   float routed_scaling_factor_ = 1.0f;
   bool use_e_score_correction_bias_ = false;
@@ -109,26 +102,24 @@ class HummingFp4MoeLayer : public BaseLayer {
   size_t humming_workspace_size_ = 0;
 
   // W4A8 FP8 activation buffers (workspace pointers, assigned in ForwardT)
-  void* fp8_activation_buffer_ = nullptr;   // [max(M*K, M*topk*inter)] FP8 uint8
-  float* fp8_scale_buffer_ = nullptr;       // [M*topk] float per-token scale
+  void* fp8_activation_buffer_ = nullptr;  // [max(M*K, M*topk*inter)] FP8 uint8
+  float* fp8_scale_buffer_ = nullptr;      // [M*topk] float per-token scale
   size_t fp8_activation_buffer_size_ = 0;
   size_t fp8_scale_buffer_size_ = 0;
 
   // W4A8 per-expert global_scale (device memory, allocated during weight loading)
-  float* w1_global_scale_ = nullptr;        // [num_experts] float
-  float* w2_global_scale_ = nullptr;        // [num_experts] float
+  float* w1_global_scale_ = nullptr;  // [num_experts] float
+  float* w2_global_scale_ = nullptr;  // [num_experts] float
 
   // EP / EPLB
   size_t global_expert_para_size_;
   bool using_deepep_ = false;
 
-  std::shared_ptr<GroupedTopkLayer> grouped_topk_layer_;
-  bool use_topk_softplus_sqrt_ = false;
+  std::shared_ptr<TopKSoftplusSqrtLayer> topk_softplus_sqrt_layer_;
   bool use_hash_ = false;
   uint32_t num_hash_layers_ = 0;
   uint32_t vocab_size_ = 0;
   size_t softplus_sqrt_workspace_size_ = 0;
-  std::shared_ptr<TopKSoftplusSqrtLayer> topk_softplus_sqrt_layer_;
 
   bool enable_load_eplb_config_ = false;
   bool enable_dump_eplb_data_ = false;

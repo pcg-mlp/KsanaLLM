@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -24,6 +26,7 @@
 #include <map>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include "csrc/utils/nvidia/assert.h"
@@ -32,15 +35,31 @@ namespace llm_kernels {
 namespace nvidia {
 namespace humming {
 
+// ── Static dir-mutex map for intra-process mutual exclusion ─────────────────
+// flock() is process-level and does NOT block sibling threads within the same
+// process.  These per-directory mutexes provide thread-level exclusion so that
+// only one thread at a time enters the generate→compile→rename critical
+// section for a given cache directory.
+
+std::mutex HummingJitCompiler::dir_mutexes_mutex_;
+std::unordered_map<std::string, std::mutex*> HummingJitCompiler::dir_mutexes_;
+
+std::mutex* HummingJitCompiler::GetDirMutex(const std::string& dir) {
+  std::lock_guard<std::mutex> lg(dir_mutexes_mutex_);
+  auto& ptr = dir_mutexes_[dir];
+  if (!ptr) ptr = new std::mutex();
+  return ptr;
+}
+
 // ════════════════════════════════════════════════════════════════════════════════
 // ELF64 structures for cubin reading (self-contained, no external elf.h dependency)
 // ════════════════════════════════════════════════════════════════════════════════
 
 namespace {
 
-constexpr uint32_t kShtSymtab = 2;   // SHT_SYMTAB
-constexpr uint32_t kShtNobits = 8;   // SHT_NOBITS
-constexpr uint8_t kSttFunc = 2;      // STT_FUNC
+constexpr uint32_t kShtSymtab = 2;  // SHT_SYMTAB
+constexpr uint32_t kShtNobits = 8;  // SHT_NOBITS
+constexpr uint8_t kSttFunc = 2;     // STT_FUNC
 
 #pragma pack(push, 1)
 struct Elf64Ehdr {
@@ -106,15 +125,13 @@ class CubinElfReader {
 
     // Validate ELF magic
     KLLM_KERNEL_CHECK_WITH_INFO(
-        ehdr.e_ident[0] == 0x7f && ehdr.e_ident[1] == 'E' &&
-            ehdr.e_ident[2] == 'L' && ehdr.e_ident[3] == 'F',
+        ehdr.e_ident[0] == 0x7f && ehdr.e_ident[1] == 'E' && ehdr.e_ident[2] == 'L' && ehdr.e_ident[3] == 'F',
         "Not a valid ELF file: %s", path.c_str());
 
     // Read section headers
     std::vector<Elf64Shdr> shdrs(ehdr.e_shnum);
     fs.seekg(static_cast<std::streamoff>(ehdr.e_shoff));
-    fs.read(reinterpret_cast<char*>(shdrs.data()),
-            static_cast<std::streamsize>(sizeof(Elf64Shdr) * ehdr.e_shnum));
+    fs.read(reinterpret_cast<char*>(shdrs.data()), static_cast<std::streamsize>(sizeof(Elf64Shdr) * ehdr.e_shnum));
     KLLM_KERNEL_CHECK_WITH_INFO(fs.good(), "Failed to read section headers from: %s", path.c_str());
 
     // Find and read all symbol tables
@@ -128,9 +145,8 @@ class CubinElfReader {
   /// Read a uint32_t value from a named symbol.
   uint32_t GetUint32(const std::string& name) const {
     auto it = symbol_offsets_.find(name);
-    KLLM_KERNEL_CHECK_WITH_INFO(it != symbol_offsets_.end(),
-                                "Symbol '%s' not found in cubin: %s",
-                                name.c_str(), path_.c_str());
+    KLLM_KERNEL_CHECK_WITH_INFO(it != symbol_offsets_.end(), "Symbol '%s' not found in cubin: %s", name.c_str(),
+                                path_.c_str());
 
     // SHT_NOBITS section: value is 0
     if (it->second == 0ULL) return 0;
@@ -145,9 +161,7 @@ class CubinElfReader {
   }
 
   /// Read a boolean from a named symbol (uint32 > 0 → true).
-  bool GetBool(const std::string& name) const {
-    return GetUint32(name) > 0;
-  }
+  bool GetBool(const std::string& name) const { return GetUint32(name) > 0; }
 
   /// Find the first function symbol (STT_FUNC) whose name contains base_name.
   std::string FindFuncSymbol(const std::string& base_name) const {
@@ -165,8 +179,7 @@ class CubinElfReader {
   }
 
  private:
-  void ReadSymbolTable(std::ifstream& fs, const std::vector<Elf64Shdr>& shdrs,
-                       uint16_t sym_idx) {
+  void ReadSymbolTable(std::ifstream& fs, const std::vector<Elf64Shdr>& shdrs, uint16_t sym_idx) {
     const Elf64Shdr& symtab = shdrs[sym_idx];
     const Elf64Shdr& strtab = shdrs[symtab.sh_link];
 
@@ -179,8 +192,7 @@ class CubinElfReader {
     size_t count = symtab.sh_size / symtab.sh_entsize;
     std::vector<Elf64Sym> syms(count);
     fs.seekg(static_cast<std::streamoff>(symtab.sh_offset));
-    fs.read(reinterpret_cast<char*>(syms.data()),
-            static_cast<std::streamsize>(symtab.sh_size));
+    fs.read(reinterpret_cast<char*>(syms.data()), static_cast<std::streamsize>(symtab.sh_size));
 
     for (const auto& sym : syms) {
       if (sym.st_name == 0 || sym.st_name >= names.size()) continue;
@@ -254,6 +266,29 @@ std::string FindNvcc() {
   return "nvcc";
 }
 
+/// Resolve humming pip package include directory.
+/// 1. $HUMMING_INCLUDE_DIR env var (explicit override)
+/// 2. Auto-detect via python3 -c "import humming; ..."
+/// 3. Falls back to empty string (caller should handle)
+std::string ResolvePipIncludeDir() {
+  const char* env = std::getenv("HUMMING_INCLUDE_DIR");
+  if (env && env[0] != '\0') return env;
+
+  FILE* fp = popen(
+      "python3 -c \"import humming; import os; "
+      "print(os.path.join(os.path.dirname(humming.__file__), 'include'))\"",
+      "r");
+  if (fp) {
+    std::string path;
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), fp)) path += buf;
+    int rc = pclose(fp);
+    while (!path.empty() && (path.back() == '\n' || path.back() == '\r')) path.pop_back();
+    if (rc == 0 && !path.empty() && path != "None") return path;
+  }
+  return "";
+}
+
 }  // anonymous namespace
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -262,12 +297,8 @@ std::string FindNvcc() {
 
 std::string HummingJitCompiler::KernelConfig::CacheKey() const {
   std::ostringstream oss;
-  oss << "n" << size_n
-      << "_k" << size_k
-      << "_e" << num_experts
-      << "_bm" << block_m
-      << "_gt" << static_cast<int>(gemm_type)
-      << "_dt" << static_cast<int>(compute_dtype);
+  oss << "n" << size_n << "_k" << size_k << "_e" << num_experts << "_bm" << block_m << "_gt"
+      << static_cast<int>(gemm_type) << "_dt" << static_cast<int>(compute_dtype);
   return oss.str();
 }
 
@@ -275,9 +306,7 @@ std::string HummingJitCompiler::KernelConfig::CacheKey() const {
 // Constructor / Destructor
 // ════════════════════════════════════════════════════════════════════════════════
 
-HummingJitCompiler::HummingJitCompiler()
-    : nvcc_path_(FindNvcc()),
-      force_regenerate_(false) {
+HummingJitCompiler::HummingJitCompiler() : nvcc_path_(FindNvcc()), force_regenerate_(false) {
   // ── 1. Resolve base_dir: HUMMING_BASE_DIR env, or derive from CWD=build/ ──
   const char* base_env = std::getenv("HUMMING_BASE_DIR");
   if (base_env && base_env[0] != '\0') {
@@ -288,7 +317,14 @@ HummingJitCompiler::HummingJitCompiler()
   }
 
   // ── 2. Derived paths ──
-  include_dir_ = base_dir_ + "/include";
+  include_dir_ = ResolvePipIncludeDir();
+  if (include_dir_.empty()) {
+    // Detect failure is non-fatal here; CompileCubin will fail with clear nvcc error.
+    // User can set $HUMMING_INCLUDE_DIR to override.
+    fprintf(stderr,
+            "[HummingJitCompiler] WARNING: humming-kernels pip package not detected. "
+            "Set $HUMMING_INCLUDE_DIR or install: pip install humming-kernels\n");
+  }
   script_dir_ = base_dir_ + "/jit";
 
   // ── 3. Cache dir: KSANA_HUMMING_KERNEL_PATH env, or ~/.cache/KsanaLLM/humming_kernel_files ──
@@ -304,6 +340,12 @@ HummingJitCompiler::HummingJitCompiler()
   const char* regen_env = std::getenv("HUMMING_REGENERATE");
   if (regen_env && std::string(regen_env) == "1") {
     force_regenerate_ = true;
+  }
+
+  // ── 5. Check HUMMING_JIT_LOG ──
+  const char* log_env = std::getenv("HUMMING_JIT_LOG");
+  if (log_env && std::string(log_env) == "1") {
+    verbose_ = true;
   }
 
   // Ensure cache directory exists
@@ -326,43 +368,173 @@ HummingJitCompiler::~HummingJitCompiler() {
 // ════════════════════════════════════════════════════════════════════════════════
 
 void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs) {
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT] CompileKernels: " << configs.size() << " config(s)"
+              << (force_regenerate_ ? " (force regenerate)" : "") << std::endl;
+  }
+
+  // Phase 1: Separate cached vs. uncached configs
+  std::vector<const KernelConfig*> cached, uncached;
   for (const auto& config : configs) {
-    std::string dir = GetCacheDir(config);
-    std::string cubin_path = dir + "/kernel.cubin";
-
-    // Fast path: already cached and not forcing regen
     if (!force_regenerate_ && CacheExists(config)) {
-      LoadAndRegister(config, cubin_path);
-      continue;
+      cached.push_back(&config);
+    } else {
+      uncached.push_back(&config);
     }
+  }
 
-    // Acquire cross-process lock for this kernel variant
-    MkdirP(dir);
-    int lock_fd = AcquireLock(dir);
+  if (verbose_ && !cached.empty()) {
+    std::cout << "[HUMMING JIT]   " << cached.size() << " cached, " << uncached.size() << " to build" << std::endl;
+  }
 
-    // Double-check after acquiring lock (another process may have compiled it)
-    if (!force_regenerate_ && CacheExists(config)) {
-      ReleaseLock(lock_fd);
-      LoadAndRegister(config, cubin_path);
-      continue;
+  // Phase 2: Fast path — load already-cached cubins in main thread
+  for (const auto* config : cached) {
+    std::string key = config->CacheKey();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (loaded_keys_.count(key)) continue;  // already loaded from a prior CompileKernels call
     }
+    if (verbose_) {
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cout << "[HUMMING JIT]   [cache hit] " << key << std::endl;
+    }
+    std::string cubin_path = GetCacheDir(*config) + "/kernel.cubin";
+    LoadAndRegister(*config, cubin_path);
+    std::lock_guard<std::mutex> lock(mutex_);
+    loaded_keys_.insert(key);
+  }
 
-    // Step 1: Generate .cu source
-    std::string source_path = dir + "/kernel.cu";
-    GenerateSource(config, source_path);
+  if (uncached.empty()) return;
 
-    // Step 2: Compile .cu -> .cubin
-    CompileCubin(source_path, cubin_path, include_dir_);
+  // Phase 3: Generate + compile in parallel across threads.
+  // Each config gets its own cache dir and flock — no cross-config contention.
+  // Threads do NOT call LoadAndRegister: CUDA driver API is per-thread and
+  // spawned threads do not inherit the main thread's CUDA context.  Loading
+  // is deferred to Phase 4 in the main thread.
+  std::vector<std::thread> threads;
+  std::atomic<bool> has_error{false};
+  std::string error_msg;
+  std::mutex error_mutex;  // protects error_msg
+  std::atomic<int> active_count{static_cast<int>(uncached.size())};
 
-    ReleaseLock(lock_fd);
+  for (const auto* config : uncached) {
+    threads.emplace_back([this, config, &has_error, &error_msg, &error_mutex, &active_count]() {
+      try {
+        std::string dir = GetCacheDir(*config);
 
-    // Step 3: Load and register the kernel
-    LoadAndRegister(config, cubin_path);
+        if (verbose_) {
+          std::lock_guard<std::mutex> _ll(log_mutex_);
+          std::cout << "[HUMMING JIT]   [build] " << config->CacheKey() << std::endl;
+        }
+
+        // Intra-process lock: flock() does NOT block sibling threads in the
+        // same process, so we serialize per-cache-dir access with a mutex.
+        std::mutex* dir_mutex = GetDirMutex(dir);
+        std::lock_guard<std::mutex> intra_lock(*dir_mutex);
+
+        MkdirP(dir);
+        int lock_fd = AcquireLock(dir);
+
+        // Double-check after acquiring lock (another process/thread may have compiled it)
+        if (!force_regenerate_ && CacheExists(*config)) {
+          if (verbose_) {
+            std::lock_guard<std::mutex> _ll(log_mutex_);
+            std::cout << "[HUMMING JIT]     (already built by sibling process)" << std::endl;
+          }
+          ReleaseLock(lock_fd);
+          // Defer loading to Phase 4 (main thread has CUDA context)
+          --active_count;
+          return;
+        }
+
+        // Generate + Compile (the heavy work — benefits from parallelism)
+        std::string source_path = dir + "/kernel.cu";
+        std::string cubin_path = dir + "/kernel.cubin";
+        try {
+          GenerateSource(*config, source_path);
+          CompileCubin(source_path, cubin_path, include_dir_);
+        } catch (...) {
+          ReleaseLock(lock_fd);
+          throw;
+        }
+        ReleaseLock(lock_fd);
+        // Defer loading to Phase 4 (main thread has CUDA context)
+
+        if (verbose_) {
+          --active_count;
+          std::lock_guard<std::mutex> _ll(log_mutex_);
+          std::cout << "[HUMMING JIT]     compiled (" << active_count.load() << " remaining)" << std::endl;
+        }
+      } catch (const std::exception& e) {
+        if (!has_error.exchange(true)) {
+          std::lock_guard<std::mutex> lg(error_mutex);
+          error_msg = std::string(e.what()) + " (config: " + config->CacheKey() + ")";
+        }
+      } catch (...) {
+        if (!has_error.exchange(true)) {
+          std::lock_guard<std::mutex> lg(error_mutex);
+          error_msg = "Unknown exception (config: " + config->CacheKey() + ")";
+        }
+      }
+    });
+  }
+
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  KLLM_KERNEL_CHECK_WITH_INFO(!has_error.load(), "Parallel compilation failed: %s", error_msg.c_str());
+
+  // Phase 4: Load all cubins in the main thread.
+  // cuModuleLoad requires a CUDA context current on the calling thread.
+  // Spawned threads (Phase 3) do not inherit the main thread's CUDA context,
+  // so we load here where the context is guaranteed to be active.
+  for (const auto* config : uncached) {
+    std::string key = config->CacheKey();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (loaded_keys_.count(key)) continue;  // already loaded from a prior CompileKernels call
+    }
+    std::string cubin_path = GetCacheDir(*config) + "/kernel.cubin";
+    LoadAndRegister(*config, cubin_path);
+    std::lock_guard<std::mutex> lock(mutex_);
+    loaded_keys_.insert(key);
   }
 }
 
-const KernelMeta* HummingJitCompiler::SelectKernel(int64_t size_m, int64_t size_n,
-                                                   int64_t size_k, GemmType gemm_type,
+void HummingJitCompiler::CompileKernels(int64_t size_n, int64_t size_k, int64_t num_experts, ComputeDtype compute_dtype,
+                                        GemmType gemm_type) {
+  // Fast path: skip if this shape has already been compiled
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto key =
+        std::make_tuple(size_n, size_k, num_experts, static_cast<int>(compute_dtype), static_cast<int>(gemm_type));
+    if (compiled_shapes_.count(key)) return;
+  }
+
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT] CompileKernels(shape): N=" << size_n << " K=" << size_k << " E=" << num_experts
+              << " dt=" << static_cast<int>(compute_dtype) << std::endl;
+  }
+
+  // Query H20 heuristic (now private)
+  auto configs = QueryH20Configs(size_n, size_k, num_experts, compute_dtype, gemm_type);
+
+  // Compile all configs (vector overload — handles cache/load dedup internally)
+  CompileKernels(configs);
+
+  // Mark shape as compiled
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto key =
+        std::make_tuple(size_n, size_k, num_experts, static_cast<int>(compute_dtype), static_cast<int>(gemm_type));
+    compiled_shapes_.insert(key);
+  }
+}
+
+const KernelMeta* HummingJitCompiler::SelectKernel(int64_t size_m, int64_t size_n, int64_t size_k, GemmType gemm_type,
                                                    ComputeDtype compute_dtype) const {
   std::lock_guard<std::mutex> lock(mutex_);
 
@@ -403,34 +575,43 @@ const KernelMeta* HummingJitCompiler::SelectKernel(int64_t size_m, int64_t size_
 // Private: Generate / Compile / Load
 // ════════════════════════════════════════════════════════════════════════════════
 
-void HummingJitCompiler::GenerateSource(const KernelConfig& config,
-                                        const std::string& output_path) {
+void HummingJitCompiler::GenerateSource(const KernelConfig& config, const std::string& output_path) {
   std::string meta_path = output_path + ".meta.json";
 
   std::ostringstream cmd;
-  cmd << "python3 " << script_dir_ << "/generate_kernel.py"
-      << " --size_n " << config.size_n
-      << " --size_k " << config.size_k
-      << " --num_experts " << config.num_experts
-      << " --block_m " << config.block_m
-      << " --gemm_type " << static_cast<int>(config.gemm_type)
-      << " --compute_dtype " << static_cast<int>(config.compute_dtype)
-      << " --output " << output_path
-      << " --meta_output " << meta_path;
+  cmd << "python3 " << script_dir_ << "/humming_tool.py generate"
+      << " --size_n " << config.size_n << " --size_k " << config.size_k << " --num_experts " << config.num_experts
+      << " --block_m " << config.block_m << " --gemm_type " << static_cast<int>(config.gemm_type) << " --compute_dtype "
+      << static_cast<int>(config.compute_dtype) << " --output " << output_path << " --meta_output " << meta_path;
+
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT]     python: humming_tool.py generate"
+              << " N=" << config.size_n << " K=" << config.size_k << " E=" << config.num_experts
+              << " block_m=" << config.block_m << " gt=" << static_cast<int>(config.gemm_type)
+              << " dt=" << static_cast<int>(config.compute_dtype) << std::endl;
+  }
 
   std::string output;
   int ret = ExecuteCommand(cmd.str(), &output);
-  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0,
-                              "generate_kernel.py failed (exit=%d) for config %s.\nOutput: %s",
-                              ret, config.CacheKey().c_str(), output.c_str());
-  KLLM_KERNEL_CHECK_WITH_INFO(FileExists(output_path),
-                              "generate_kernel.py did not produce output file: %s",
+  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0, "humming_tool.py generate failed (exit=%d) for config %s.\nOutput: %s", ret,
+                              config.CacheKey().c_str(), output.c_str());
+  KLLM_KERNEL_CHECK_WITH_INFO(FileExists(output_path), "humming_tool.py generate did not produce output file: %s",
                               output_path.c_str());
 }
 
-void HummingJitCompiler::CompileCubin(const std::string& source_path,
-                                      const std::string& cubin_path,
+void HummingJitCompiler::CompileCubin(const std::string& source_path, const std::string& cubin_path,
                                       const std::string& include_dir) {
+  if (verbose_) {
+    std::lock_guard<std::mutex> lg(log_mutex_);
+    std::cout << "[HUMMING JIT]     nvcc: " << source_path << " -> " << cubin_path << std::endl;
+  }
+
+  // Write to temp file first, then atomically rename.  This prevents sibling
+  // threads in the same process (which share the same flock) from seeing a
+  // partially-written cubin when double-checking the cache.
+  std::string tmp_path = cubin_path + ".tmp";
+
   // nvcc flags from humming's NVCCCompiler.get_flags():
   // -cubin -std=c++17 -O3 --use_fast_math
   // --ptxas-options=--register-usage-level=10
@@ -439,10 +620,7 @@ void HummingJitCompiler::CompileCubin(const std::string& source_path,
   // --compiler-options=-fPIC,-O3,-Wno-deprecated-declarations,-Wno-abi
   // --diag-suppress=39,161,174,177,940
   std::ostringstream cmd;
-  cmd << nvcc_path_
-      << " " << source_path
-      << " -o " << cubin_path
-      << " -cubin"
+  cmd << nvcc_path_ << " " << source_path << " -o " << tmp_path << " -cubin"
       << " -std=c++17"
       << " -O3"
       << " --use_fast_math"
@@ -456,38 +634,57 @@ void HummingJitCompiler::CompileCubin(const std::string& source_path,
 
   std::string output;
   int ret = ExecuteCommand(cmd.str(), &output);
-  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0,
-                              "nvcc compilation failed (exit=%d) for %s.\nCommand: %s\nOutput: %s",
-                              ret, source_path.c_str(), cmd.str().c_str(), output.c_str());
-  KLLM_KERNEL_CHECK_WITH_INFO(FileExists(cubin_path),
-                              "nvcc did not produce cubin file: %s", cubin_path.c_str());
+  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0, "nvcc compilation failed (exit=%d) for %s.\nCommand: %s\nOutput: %s", ret,
+                              source_path.c_str(), cmd.str().c_str(), output.c_str());
+  KLLM_KERNEL_CHECK_WITH_INFO(FileExists(tmp_path), "nvcc did not produce cubin file: %s", tmp_path.c_str());
+
+  // Atomically rename temp → final.  Only after this point can other threads
+  // or processes see the cubin via CacheExists().
+  if (rename(tmp_path.c_str(), cubin_path.c_str()) != 0) {
+    KLLM_KERNEL_CHECK_WITH_INFO(false, "Failed to rename %s -> %s (errno=%d)", tmp_path.c_str(), cubin_path.c_str(),
+                                errno);
+  }
 }
 
-void HummingJitCompiler::LoadAndRegister(const KernelConfig& config,
-                                         const std::string& cubin_path) {
+void HummingJitCompiler::LoadAndRegister(const KernelConfig& config, const std::string& cubin_path) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   // Step 1: Load the cubin as a CUDA module
   CUmodule module = nullptr;
   CUresult cu_ret = cuModuleLoad(&module, cubin_path.c_str());
-  KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS,
-                              "cuModuleLoad failed (CUresult=%d) for: %s",
+
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT]     cuModuleLoad: " << cubin_path << std::endl;
+  }
+
+  // CUDA_ERROR_INVALID_IMAGE (201) usually means the cubin was corrupted by a
+  // prior buggy parallel compilation.  Delete it so the next run regenerates.
+  if (cu_ret == 201) {
+    std::cerr << "[HUMMING JIT] WARNING: Corrupted cubin detected (CUresult=201), "
+              << "deleting: " << cubin_path << std::endl;
+    std::cerr << "[HUMMING JIT] This was likely caused by a prior race condition. "
+              << "Please re-run to regenerate." << std::endl;
+    // Delete the cached files for this config so next run regenerates them
+    std::string dir = cubin_path.substr(0, cubin_path.rfind('/'));
+    std::string rm_cmd = "rm -rf \"" + dir + "\" 2>/dev/null";
+    ExecuteCommand(rm_cmd);
+  }
+
+  KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS, "cuModuleLoad failed (CUresult=%d) for: %s",
                               static_cast<int>(cu_ret), cubin_path.c_str());
   modules_.push_back(module);
 
   // Step 2: Find the kernel function symbol from ELF
   std::string kernel_symbol = FindKernelSymbol(cubin_path, "humming");
-  KLLM_KERNEL_CHECK_WITH_INFO(!kernel_symbol.empty(),
-                              "No kernel function symbol containing 'humming' found in: %s",
+  KLLM_KERNEL_CHECK_WITH_INFO(!kernel_symbol.empty(), "No kernel function symbol containing 'humming' found in: %s",
                               cubin_path.c_str());
 
   // Step 3: Get the kernel function handle
   CUfunction func = nullptr;
   cu_ret = cuModuleGetFunction(&func, module, kernel_symbol.c_str());
-  KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS,
-                              "cuModuleGetFunction failed (CUresult=%d) for symbol '%s' in: %s",
-                              static_cast<int>(cu_ret), kernel_symbol.c_str(),
-                              cubin_path.c_str());
+  KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS, "cuModuleGetFunction failed (CUresult=%d) for symbol '%s' in: %s",
+                              static_cast<int>(cu_ret), kernel_symbol.c_str(), cubin_path.c_str());
 
   // Step 4: Read all metadata from the cubin ELF __constant__ symbols
   KernelMeta meta;
@@ -515,10 +712,8 @@ void HummingJitCompiler::LoadAndRegister(const KernelConfig& config,
   meta.compute_dtype = config.compute_dtype;
 
   // Step 5: Set shared memory attribute
-  cu_ret = cuFuncSetAttribute(func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-                              meta.smem_size);
-  KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS,
-                              "cuFuncSetAttribute (smem=%d) failed (CUresult=%d) for: %s",
+  cu_ret = cuFuncSetAttribute(func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, meta.smem_size);
+  KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS, "cuFuncSetAttribute (smem=%d) failed (CUresult=%d) for: %s",
                               meta.smem_size, static_cast<int>(cu_ret), cubin_path.c_str());
 
   // Store the shape_m range from the config (H20 heuristic range metadata)
@@ -526,23 +721,36 @@ void HummingJitCompiler::LoadAndRegister(const KernelConfig& config,
   meta.max_shape_m = config.max_shape_m;
 
   kernel_table_.push_back(meta);
+
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT]     loaded: " << kernel_symbol << " smem=" << meta.smem_size
+              << " threads=" << meta.num_threads << " N=" << meta.size_n << " K=" << meta.size_k << " block=("
+              << meta.block_m << "," << meta.block_n << "," << meta.block_k << ")"
+              << " ctas=" << meta.num_ctas_per_sm << " sk=" << meta.use_stream_k << " ws=" << meta.use_warp_spec
+              << " tma=(" << meta.use_tma_a << meta.use_tma_b << meta.use_tma_c << meta.use_tma_bs << ")" << std::endl;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
 // Public: QueryH20Configs
 // ════════════════════════════════════════════════════════════════════════════════
 
-std::vector<HummingJitCompiler::KernelConfig>
-HummingJitCompiler::QueryH20Configs(int64_t size_n, int64_t size_k,
-                                     int64_t num_experts, ComputeDtype compute_dtype,
-                                     GemmType gemm_type) {
+std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryH20Configs(int64_t size_n, int64_t size_k,
+                                                                                  int64_t num_experts,
+                                                                                  ComputeDtype compute_dtype,
+                                                                                  GemmType gemm_type) {
   // Call Python script to query humming H20 heuristic
   std::ostringstream cmd;
-  cmd << "python3 " << script_dir_ << "/get_h20_configs.py"
-      << " --size_n " << size_n
-      << " --size_k " << size_k
-      << " --num_experts " << num_experts
-      << " --compute_dtype " << static_cast<int>(compute_dtype);
+  cmd << "python3 " << script_dir_ << "/humming_tool.py query-configs"
+      << " --size_n " << size_n << " --size_k " << size_k << " --num_experts " << num_experts << " --compute_dtype "
+      << static_cast<int>(compute_dtype);
+
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT] QueryH20Configs: N=" << size_n << " K=" << size_k << " E=" << num_experts
+              << " dt=" << static_cast<int>(compute_dtype) << std::endl;
+  }
 
   std::string output;
   int ret = ExecuteCommand(cmd.str(), &output);
@@ -560,7 +768,7 @@ HummingJitCompiler::QueryH20Configs(int64_t size_n, int64_t size_k,
   // Simple JSON parsing (no external dependency)
   size_t pos = 0;
   while ((pos = output.find("\"shape_m_representative\"", pos)) != std::string::npos) {
-    // Extract shape_m_representative (used as --block_m in generate_kernel.py)
+    // Extract shape_m_representative (used as --block_m in humming_tool.py generate)
     size_t colon = output.find(':', pos);
     size_t comma = output.find_first_of(",}", colon);
     std::string val_str = output.substr(colon + 1, comma - colon - 1);
@@ -594,8 +802,15 @@ HummingJitCompiler::QueryH20Configs(int64_t size_n, int64_t size_k,
 
   if (configs.empty()) {
     // Fallback
+    if (verbose_) {
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cout << "[HUMMING JIT]   H20 query returned empty, using fallback configs" << std::endl;
+    }
     configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 1, 64});
     configs.push_back({size_n, size_k, num_experts, 128, gemm_type, compute_dtype, 65, INT64_MAX});
+  } else if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT]   H20 returned " << configs.size() << " config(s)" << std::endl;
   }
 
   return configs;
@@ -640,20 +855,17 @@ void HummingJitCompiler::ReleaseLock(int fd) {
 // Static: ELF/Cubin reader utilities
 // ════════════════════════════════════════════════════════════════════════════════
 
-uint32_t HummingJitCompiler::ReadCubinUint32(const std::string& cubin_path,
-                                             const std::string& symbol_name) {
+uint32_t HummingJitCompiler::ReadCubinUint32(const std::string& cubin_path, const std::string& symbol_name) {
   CubinElfReader reader(cubin_path);
   return reader.GetUint32(symbol_name);
 }
 
-bool HummingJitCompiler::ReadCubinBool(const std::string& cubin_path,
-                                       const std::string& symbol_name) {
+bool HummingJitCompiler::ReadCubinBool(const std::string& cubin_path, const std::string& symbol_name) {
   CubinElfReader reader(cubin_path);
   return reader.GetBool(symbol_name);
 }
 
-std::string HummingJitCompiler::FindKernelSymbol(const std::string& cubin_path,
-                                                 const std::string& base_name) {
+std::string HummingJitCompiler::FindKernelSymbol(const std::string& cubin_path, const std::string& base_name) {
   CubinElfReader reader(cubin_path);
   return reader.FindFuncSymbol(base_name);
 }
