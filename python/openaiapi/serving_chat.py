@@ -344,75 +344,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 else:
                     output_index = 0
                     ksana_python_output = output_data
-
-                # First chunk , response with assistant role, get prompt token ids
-                if first_iteration:
-                    first_iteration = False
-                    if prompt_tokens_count and output_index < len(prompt_tokens_count):
-                        num_prompt_tokens = prompt_tokens_count[output_index]
-                    elif prompt_tokens_count and len(prompt_tokens_count) > 0:
-                        num_prompt_tokens = prompt_tokens_count[0]
-                    else:
-                        num_prompt_tokens = 0
-                    # For multimodal requests, prompt_token_ids is empty (plugin does tokenization).
-                    # Use input_tokens from engine output which reflects the real token count.
-                    if num_prompt_tokens == 0 and hasattr(ksana_python_output, 'input_tokens') \
-                            and ksana_python_output.input_tokens:
-                        num_prompt_tokens = len(ksana_python_output.input_tokens)
-                    role = self.get_chat_request_role(request)
-                    # Read prefix_cache_hit_tokens only once at the beginning
-                    if hasattr(ksana_python_output, 'prefix_cache_hit_tokens'):
-                        prefix_cache_hit_tokens = ksana_python_output.prefix_cache_hit_tokens
-                        logger.info(f"Stream: Read prefix_cache_hit_tokens = {prefix_cache_hit_tokens}")
-
-                    # NOTE num_choices defaults to 1 so this usually executes
-                    # once per request
-                    for i in range(num_choices):
-                        choice_data = ChatCompletionResponseStreamChoice(
-                            index=i,
-                            delta=DeltaMessage(
-                                role=role,
-                                content="",
-                            ),
-                            logprobs=None,
-                            finish_reason=None)
-                        chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            object=chunk_object_type,
-                            created=created_time,
-                            choices=[choice_data],
-                            model=model_name)
-
-                        data = chunk.model_dump_json(exclude_unset=True)
-                        yield f"data: {data}\n\n"
-
-                    # Send response to echo the input portion of the
-                    # last message
-                    if request.echo:
-                        last_msg_content: Union[str, list[dict[str, str]]] = ""
-                        if conversation and "content" in conversation[-1] \
-                                and conversation[-1].get("role") == role:
-                            last_msg_content = conversation[-1]["content"] or ""
-
-                        if last_msg_content:
-                            for i in range(num_choices):
-                                choice_data = (
-                                    ChatCompletionResponseStreamChoice(
-                                        index=i,
-                                        delta=DeltaMessage(
-                                            content=last_msg_content),
-                                        logprobs=None,
-                                        finish_reason=None))
-                                chunk = ChatCompletionStreamResponse(
-                                    id=request_id,
-                                    object=chunk_object_type,
-                                    created=created_time,
-                                    choices=[choice_data],
-                                    model=model_name)
-
-                                data = chunk.model_dump_json(
-                                    exclude_unset=True)
-                                yield f"data: {data}\n\n"
                     
                 is_finished = False
                 is_error = False
@@ -485,6 +416,75 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                         if all_previous_token_ids is not None:
                             all_previous_token_ids[i] = current_token_ids
+
+                        # First chunk , response with assistant role, get prompt token ids
+                        if first_iteration:
+                            first_iteration = False
+                            if prompt_tokens_count and output_index < len(prompt_tokens_count):
+                                num_prompt_tokens = prompt_tokens_count[output_index]
+                            elif prompt_tokens_count and len(prompt_tokens_count) > 0:
+                                num_prompt_tokens = prompt_tokens_count[0]
+                            else:
+                                num_prompt_tokens = 0
+                            # For multimodal requests, prompt_token_ids is empty (plugin does tokenization).
+                            # Use input_tokens from engine output which reflects the real token count.
+                            if num_prompt_tokens == 0 and hasattr(ksana_python_output, 'input_tokens') \
+                                    and ksana_python_output.input_tokens:
+                                num_prompt_tokens = len(ksana_python_output.input_tokens)
+                            role = self.get_chat_request_role(request)
+                            # Read prefix_cache_hit_tokens only once at the beginning
+                            if hasattr(ksana_python_output, 'prefix_cache_hit_tokens'):
+                                prefix_cache_hit_tokens = ksana_python_output.prefix_cache_hit_tokens
+                                logger.info(f"Stream: Read prefix_cache_hit_tokens = {prefix_cache_hit_tokens}")
+
+                            # NOTE num_choices defaults to 1 so this usually executes
+                            # once per request
+                            for i in range(num_choices):
+                                choice_data = ChatCompletionResponseStreamChoice(
+                                    index=i,
+                                    delta=DeltaMessage(
+                                        role=role,
+                                        content="",
+                                    ),
+                                    logprobs=None,
+                                    finish_reason=None)
+                                chunk = ChatCompletionStreamResponse(
+                                    id=request_id,
+                                    object=chunk_object_type,
+                                    created=created_time,
+                                    choices=[choice_data],
+                                    model=model_name)
+
+                                data = chunk.model_dump_json(exclude_unset=True)
+                                yield f"data: {data}\n\n"
+
+                            # Send response to echo the input portion of the
+                            # last message
+                            if request.echo:
+                                last_msg_content: Union[str, list[dict[str, str]]] = ""
+                                if conversation and "content" in conversation[-1] \
+                                        and conversation[-1].get("role") == role:
+                                    last_msg_content = conversation[-1]["content"] or ""
+
+                                if last_msg_content:
+                                    for i in range(num_choices):
+                                        choice_data = (
+                                            ChatCompletionResponseStreamChoice(
+                                                index=i,
+                                                delta=DeltaMessage(
+                                                    content=last_msg_content),
+                                                logprobs=None,
+                                                finish_reason=None))
+                                        chunk = ChatCompletionStreamResponse(
+                                            id=request_id,
+                                            object=chunk_object_type,
+                                            created=created_time,
+                                            choices=[choice_data],
+                                            model=model_name)
+
+                                        data = chunk.model_dump_json(
+                                            exclude_unset=True)
+                                        yield f"data: {data}\n\n"
 
                         logger.debug(f"previous_text: {previous_text}")
                         logger.debug(f"delta_text: {delta_text}")
