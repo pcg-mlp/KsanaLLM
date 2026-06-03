@@ -4,6 +4,7 @@
 
 // specific includes for matmul tests
 #include "layers/batched_matmul_layer.h"
+#include "layers/blockwise_matmul_layer.h"
 #include "layers/cutlass_matmul_layer.h"
 #include "layers/finegrained_mixed_dtype_gemm_layer.h"
 #include "layers/machete_matmul_layer.h"
@@ -783,6 +784,143 @@ TEST_F(LayerTest, FinegrainedMixedDtypeGemmLayerTest) {
   // 验证输出形状
   EXPECT_EQ(output_prefill.shape[0], m_prefill);
   EXPECT_EQ(output_prefill.shape[1], n);
+#endif
+}
+
+TEST_F(LayerTest, BlockwiseMatMulLayerBackendSweepTest) {
+#ifdef ENABLE_CUDA
+  if (context_->device->ext->GetComputeCapacity() != 90) {
+    GTEST_SKIP() << "BlockwiseMatMulLayer requires SM90 (Hopper) architecture";
+  }
+
+  constexpr int kDeviceRank = 0;
+  constexpr size_t block_size = 128;
+  runtime_config.inter_data_type = TYPE_BF16;
+  setenv("QUANT_PROFILE", "0", 1);
+
+  // All 4 backends
+  const std::vector<BlockwiseMatMulLayer::Fp8GemmType> all_types = {
+      BlockwiseMatMulLayer::Fp8GemmType::Cutlass,
+      BlockwiseMatMulLayer::Fp8GemmType::DeepGemm,
+      BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB,
+      BlockwiseMatMulLayer::Fp8GemmType::BridgeDeepGemm,
+  };
+
+  auto type_name = [](BlockwiseMatMulLayer::Fp8GemmType t) -> const char* {
+    switch (t) {
+      case BlockwiseMatMulLayer::Fp8GemmType::Cutlass:
+        return "Cutlass";
+      case BlockwiseMatMulLayer::Fp8GemmType::DeepGemm:
+        return "DeepGemm";
+      case BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB:
+        return "SwapAB";
+      case BlockwiseMatMulLayer::Fp8GemmType::BridgeDeepGemm:
+        return "BridgeDG";
+      default:
+        return "Unknown";
+    }
+  };
+
+  auto test_one_nk = [&](const char* label, size_t n, size_t k) {
+    const size_t n_groups = n / block_size;
+    const size_t k_groups = k / block_size;
+    constexpr size_t max_m = 8192;
+
+    // Create random FP8 weight + scales on GPU
+    Tensor weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3, {n, k});
+    Tensor weight_scales = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {n_groups, k_groups});
+    weight.weight_scales = &weight_scales;
+    {
+      auto dev = torch::Device(torch::kCUDA, kDeviceRank);
+      auto w = torch::randint(-128, 127, {static_cast<int64_t>(n), static_cast<int64_t>(k)},
+                              torch::TensorOptions().dtype(torch::kFloat32).device(dev));
+      MemcpyAsync(weight.GetPtr<void>(), w.to(torch::kFloat8_e4m3fn).data_ptr(), weight.GetTotalBytes(),
+                  MEMCPY_DEVICE_TO_DEVICE, context_->device->GetMemoryManageStream());
+      auto ws = torch::rand({static_cast<int64_t>(n_groups), static_cast<int64_t>(k_groups)},
+                            torch::TensorOptions().dtype(torch::kFloat32).device(dev))
+                    .abs() +
+                0.1f;
+      MemcpyAsync(weight_scales.GetPtr<void>(), ws.data_ptr(), weight_scales.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                  context_->device->GetMemoryManageStream());
+      StreamSynchronize(context_->device->GetMemoryManageStream());
+    }
+
+    // Init layer (QUANT_PROFILE=0 skips search, SetGemmType overrides per measurement)
+    BlockwiseMatMulLayer layer;
+    layer.Init({max_m, n, k, block_size, weight}, runtime_config, context_, kDeviceRank);
+    std::shared_ptr<LayerWorkspaceManager> wm = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
+    layer.SetWorkspaceBuffer(wm->GetWorkspace(layer.GetWorkspaceSize()));
+    layer.Preprocess(model_config, runtime_config);
+
+    cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
+    constexpr int kWarmup = 10;
+    constexpr int kMeasure = 20;
+
+    // Pre-allocate max-sized tensors, reuse across all m (only shapes change)
+    auto dev = torch::Device(torch::kCUDA, kDeviceRank);
+    auto big_act = torch::randn({static_cast<int64_t>(max_m), static_cast<int64_t>(k)},
+                                torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
+    Tensor input = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {max_m, k});
+    MemcpyAsync(input.GetPtr<void>(), big_act.data_ptr(), input.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                context_->device->GetMemoryManageStream());
+    StreamSynchronize(context_->device->GetMemoryManageStream());
+
+    Tensor output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {max_m, n});
+    std::vector<Tensor> in_tensors = {input, weight};
+    std::vector<Tensor> out_tensors = {output};
+
+    printf("\n========== %s N=%-4zu K=%-4zu  m=1..256 ==========\n", label, n, k);
+    printf("%-6s", "m");
+    for (auto t : all_types) printf(" %-12s", type_name(t));
+    printf(" %-12s\n", "Best");
+
+    std::vector<size_t> best_counts(all_types.size(), 0);
+
+    for (size_t m = 1; m <= 256; m++) {
+      // Slice to first m rows: update shapes, buffer pointers unchanged
+      in_tensors[0].shape = {m, k};
+      out_tensors[0].shape = {m, n};
+
+      float best_us = std::numeric_limits<float>::max();
+      size_t best_idx = 0;
+      std::vector<float> times_us;
+
+      for (size_t ti = 0; ti < all_types.size(); ++ti) {
+        layer.SetGemmType(all_types[ti]);
+        float ms = MeasureCudaExecutionTime([&] { layer.Forward(in_tensors, out_tensors); }, stream, kWarmup, kMeasure,
+                                            /*flush_l2=*/false);
+        float us = ms * 1000.0f;
+        times_us.push_back(us);
+        if (ms < best_us) {
+          best_us = ms;
+          best_idx = ti;
+        }
+      }
+      ++best_counts[best_idx];
+
+      printf("%-6zu", m);
+      for (float us : times_us) printf(" %-12.1f", us);
+      printf(" %-12s\n", type_name(all_types[best_idx]));
+    }
+
+    // Summary
+    printf("\n--- Best backend counts for %s N=%-4zu K=%-4zu ---\n", label, n, k);
+    for (size_t ti = 0; ti < all_types.size(); ++ti) {
+      printf("  %-12s: %3zu / 256 (%.1f%%)\n", type_name(all_types[ti]), best_counts[ti],
+             100.0f * best_counts[ti] / 256.0f);
+    }
+  };
+
+  // DSv4 Flash (TP=4) shapes (from model config)
+  const size_t hidden = 4096, moe_inter = 2048, head_dim = 512, num_heads = 64;
+  const size_t q_lora_rank = 1024, o_lora_rank = 1024, o_groups = 8, tp = 4;
+  test_one_nk("wq_b       ", num_heads * head_dim / tp, q_lora_rank);
+  test_one_nk("wo_b       ", hidden, o_groups * o_lora_rank / tp);
+  test_one_nk("gate_up_proj", moe_inter * 2 / tp, hidden);
+  test_one_nk("down_proj  ", hidden, moe_inter / tp);
+  test_one_nk("wqkv_a     ", q_lora_rank + head_dim, hidden);
+
+  unsetenv("QUANT_PROFILE");
 #endif
 }
 

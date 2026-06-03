@@ -95,9 +95,8 @@ if __name__ == '__main__':
     service.start()
 
     # Wait child processes.
-    for processes in processes_list:
-        for p in processes:
-            p.join
+    for ctx in processes_list:
+        ctx.join()
 
     if embedded_encoder:
         cleanup_encoder_processes(_encoder_processes)

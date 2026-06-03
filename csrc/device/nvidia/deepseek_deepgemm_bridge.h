@@ -30,4 +30,10 @@ void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const
                            const torch::Tensor& sqr_sum, const int& m, const int& n, const int& k,
                            const int& num_splits);
 
+void Sm90Fp8Gemm1D2D(const torch::Tensor& a, const torch::Tensor& sfa,
+                     const torch::Tensor& b, const torch::Tensor& sfb,
+                     const torch::Tensor& d,
+                     const int& m, const int& n, const int& k,
+                     const std::string& compiled_dims);
+
 }  // namespace deepseek

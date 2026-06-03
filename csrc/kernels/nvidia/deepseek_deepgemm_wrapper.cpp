@@ -350,5 +350,49 @@ void DeepSeekDeepGEMMWrapper::Tf32HcPreNormGemm(const Tensor& a_tensor, const Te
 #endif
 }
 
+void DeepSeekDeepGEMMWrapper::Fp8BlockGemm(void* a_q, void* a_s, void* b, void* b_s, void* out, int m, int n, int k,
+                                           cudaStream_t stream) {
+#if ENABLE_DEEPSEEK_DEEPGEMM
+  auto original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(at::cuda::getStreamFromExternal(stream, original_stream.device_index()));
+
+  KLLM_CHECK_WITH_INFO(m % 4 == 0, "M must be a multiple of 4 for TMA alignment");
+
+  const int k_groups = k / 128;
+  const int n_groups = n / 128;
+
+  const auto device = torch::Device(torch::kCUDA, original_stream.device_index());
+  const auto fp8_opts = torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(device);
+  const auto f32_opts = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+  const auto bf16_opts = torch::TensorOptions().dtype(torch::kBFloat16).device(device);
+
+  auto a_tensor = torch::from_blob(a_q, {m, k}, {k, 1}, fp8_opts);
+  auto sfa_tensor = torch::from_blob(a_s, {m, k_groups}, {1, m}, f32_opts);
+  auto b_tensor = torch::from_blob(b, {n, k}, {k, 1}, fp8_opts);
+  auto sfb_tensor = torch::from_blob(b_s, {n_groups, k_groups}, {k_groups, 1}, f32_opts);
+  auto d_tensor = torch::from_blob(out, {m, n}, {n, 1}, bf16_opts);
+
+  CUDA_CHECK_LAST_ERROR(
+      deepseek::Sm90Fp8Gemm1D2D(a_tensor, sfa_tensor, b_tensor, sfb_tensor, d_tensor, m, n, k, "nk"));
+
+  {
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+      KLLM_LOG_ERROR << "Fp8BlockGemm cudaStreamSynchronize failed: " << cudaGetErrorString(sync_err)
+                     << " (m=" << m << ", n=" << n << ", k=" << k << ")";
+    }
+    cudaError_t runtime_err = cudaGetLastError();
+    if (runtime_err != cudaSuccess) {
+      KLLM_LOG_ERROR << "Fp8BlockGemm runtime error: " << cudaGetErrorString(runtime_err)
+                     << " (m=" << m << ", n=" << n << ", k=" << k << ")";
+    }
+  }
+
+  at::cuda::setCurrentCUDAStream(original_stream);
+#else
+  KLLM_KERNEL_THROW("ENABLE_DEEPSEEK_DEEPGEMM=0, skipping DeepSeek DeepGEMM kernel.");
+#endif
+}
+
 }  // namespace nvidia
 }  // namespace ksana_llm

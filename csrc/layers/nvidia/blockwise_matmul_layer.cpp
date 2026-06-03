@@ -5,9 +5,10 @@
 #ifdef ENABLE_FP8
 #  include "layers/blockwise_matmul_layer.h"
 
+#  include <fmt/ranges.h>
+
 #  include "kernels/nvidia/kernel_wrapper.h"
 #  include "profiler/timer.h"
-#  include "utils/search_status.h"
 #  include "utils/singleton.h"
 #  include "utils/utils.h"
 
@@ -34,8 +35,12 @@ Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const
 
   // currently, DeepGEMM only support bfloat16
   deepgemm_enabled_ = ((inter_data_type_ == DataType::TYPE_BF16) && std::getenv("DISABLE_DEEPGEMM") == nullptr);
-  deepgemm_wrapper_ = std::make_shared<llm_kernels::nvidia::DeepGEMMWrapper>(rank);
+  if (deepgemm_enabled_) {
+    trtllm_deepgemm_wrapper_ = std::make_shared<llm_kernels::nvidia::DeepGEMMWrapper>(rank);
+    bridge_deepgemm_wrapper_ = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
+  }
 
+  KLLM_LOG_INFO << fmt::format("Rank[{}] BlockwiseMatMulLayer Init done, n={}, k={}", rank_, n_, k_);
   return Status();
 }
 
@@ -43,13 +48,12 @@ size_t BlockwiseMatMulLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data
 
 template <typename T>
 size_t BlockwiseMatMulLayer::GetCachedCutlassBufferSize() {
-  // Check if buffer size is already cached
-  if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsCutlassBufferSizeContain(inter_data_type_, max_m_, k_,
-                                                                                        n_)) {
-    size_t cached_size =
-        Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetCutlassBufferSize(inter_data_type_, max_m_, k_, n_);
-    KLLM_LOG_DEBUG << fmt::format("Rank[{}] Using cached cutlass buffer size: {}", rank_, cached_size);
-    return cached_size;
+  auto cache = Singleton<std::unordered_map<std::string, size_t>>::GetInstance();
+  std::string key = fmt::format("{}_{}", k_, n_);
+  auto it = cache->find(key);
+  if (it != cache->end()) {
+    KLLM_LOG_DEBUG << fmt::format("Rank[{}] Using cached cutlass buffer size: {}", rank_, it->second);
+    return it->second;
   }
 
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Computing cutlass buffer size for max_m={}, k={}, n={}", rank_, max_m_, k_,
@@ -58,12 +62,8 @@ size_t BlockwiseMatMulLayer::GetCachedCutlassBufferSize() {
   for (size_t m = kAlignSize_; m <= max_m_; m += kAlignSize_) {
     cutlass_buffer_size = std::max(cutlass_buffer_size, InvokeGetBlockGemmWorkspaceSize<T>(m, k_, n_));
   }
-
-  // Cache the computed buffer size
-  Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->AddCutlassBufferSize(inter_data_type_, max_m_, k_, n_,
-                                                                              cutlass_buffer_size);
+  (*cache)[key] = cutlass_buffer_size;
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Cached cutlass buffer size: {}", rank_, cutlass_buffer_size);
-
   return cutlass_buffer_size;
 }
 
@@ -74,108 +74,139 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
   }
 
   const auto start_time = ProfileTimer::GetCurrentTimeInMs();
+  const size_t kPerfIters = GetEnvAsPositiveInt("QUANT_PROFILE", 20);
+  if (kPerfIters == 0) {
+    SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::Cutlass);
+    return Status();
+  }
+  const size_t kWarmupIters = std::max(1UL, kPerfIters / 2);
 
   static std::mutex g_mtx;
   std::lock_guard<std::mutex> guard(g_mtx);
 
-  // Check if GEMM selection thresholds are already cached
-  if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsGemmSelectionThresholdContain(inter_data_type_, max_m_,
-                                                                                             k_, n_)) {
-    auto [deepgemm_threshold, swap_ab_thresholds] =
-        Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetGemmSelectionThreshold(inter_data_type_, max_m_, k_,
-                                                                                         n_);
-    deepgemm_max_m_threshold_ = deepgemm_threshold;
-    swap_ab_max_m_thresholds_ = std::move(swap_ab_thresholds);
+  auto sel_cache = Singleton<std::unordered_map<std::string, GemmTuningResult>>::GetInstance();
+  std::string sel_key = fmt::format("{}_{}_{}_{}", static_cast<int>(inter_data_type_), max_m_, k_, n_);
+  auto sel_it = sel_cache->find(sel_key);
+  if (sel_it != sel_cache->end()) {
+    search_cache_ = sel_it->second;
     KLLM_LOG_DEBUG << fmt::format("Reusing Profile BlockwiseMatMulLayer in rank:{}, ({},{},{},{})", rank_,
                                   inter_data_type_, max_m_, k_, n_);
-  } else {
-    const size_t kPerfIters = GetEnvAsPositiveInt("QUANT_PROFILE", 20);
-    if (kPerfIters == 0) {
-      return Status();
-    }
-    const size_t kWarmupIters = std::max(1UL, kPerfIters / 2);
-    // compute the threshold
-    const size_t kSmallStep = 8;
-    const size_t kUseSmallStepThreshold = 2048;
+    SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::Dynamic);
+    return Status();
+  }
 
-    // generate random input and output
-    auto input = torch::randn({static_cast<int64_t>(max_m_), static_cast<int64_t>(k_)},
-                              torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBFloat16));
-    Tensor output_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {max_m_, n_});
-    // 自适应GEMM算子选择阈值搜索算法
-    // 目标：通过性能测试确定三种GEMM实现（cutlass、deepgemm、deepgemm_swap_ab）的最优切换阈值
-    //
-    // 搜索策略：
-    //   1. 从 m=kAlignSize 开始，逐步增大 m 值
-    //   2. 对每个 m 值，分别测量三种算子的执行时间
-    //   3. 当 deepgemm 和 deepgemm_swap_ab 均不优于 cutlass 时，终止搜索
-    //   4. 否则更新 deepgemm_max_m_threshold_
-    //   5. 当 deepgemm_swap_ab 性能优于 deepgemm 时，更新 swap_ab_max_m_threshold_
-    //
-    // 算法假设：
-    //   1. m 越大，cutlass 相比 deepgemm 优势越大，因此当 m 大于
-    //      deepgemm_max_m_threshold_ 时使用 cutlass
-    //   2. deepgemm 使用的 wgmma 指令固定 m=kWgmmaBlockM_=64，导致执行时间按 64 呈阶梯式增长。
-    //      在每个 64 的分段内，m 越大，deepgemm 相比 deepgemm_swap_ab 优势越大，因此当 m
-    //      大于对应分段的 swap_ab_max_m_threshold_ 时使用 deepgemm，否则使用 deepgemm_swap_ab。
-    //      为避免段数过多，当 m 大于 kUseSmallStepThreshold=2048 时，固定使用 deepgemm
-    size_t m = kAlignSize_;
-    while (m <= max_m_) {
-      Tensor input_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m, k_},
-                          static_cast<void*>(input.data_ptr<torch::BFloat16>()));
+  // Generate random input for profiling
+  auto input = torch::randn({static_cast<int64_t>(max_m_), static_cast<int64_t>(k_)},
+                            torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBFloat16));
+  Tensor output_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {max_m_, n_});
+  Tensor input_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {max_m_, k_},
+                      static_cast<void*>(input.data_ptr<torch::BFloat16>()));
+
+  // ===== Phase 1: threshold-based search for DeepGemm / SwapAB vs Cutlass =====
+  // Strategy (validated in upstream):
+  //   1. Start from m=kAlignSize_, increase step size adaptively
+  //   2. For each m, measure Cutlass, DeepGemm, DeepGemmSwapAB
+  //   3. Early termination: stop when Cutlass beats both DeepGemm variants
+  //   4. deepgemm_max_m_threshold = largest m where DeepGEMM is better
+  //   5. swap_ab_max_m_thresholds: per-64-block threshold for SwapAB vs DeepGemm
+  {
+    auto profile_phase1_m = [&](size_t m) -> std::tuple<float, float, float> {
+      input_tensor.shape = {m, k_};
       std::vector<Tensor> input_tensors = {input_tensor, weight_};
       std::vector<Tensor> output_tensors = {output_tensor};
 
       auto cutlass_kernel = [&]() {
-        SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::Cutlass);
+        SetGemmType(Fp8GemmType::Cutlass);
         this->Forward(input_tensors, output_tensors);
       };
       auto deepgemm_kernel = [&]() {
-        SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::DeepGemm);
+        SetGemmType(Fp8GemmType::DeepGemm);
         this->Forward(input_tensors, output_tensors);
       };
-      auto deepgemm_swap_ab_kernel = [&]() {
-        SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB);
+      auto swap_ab_kernel = [&]() {
+        SetGemmType(Fp8GemmType::DeepGemmSwapAB);
         this->Forward(input_tensors, output_tensors);
       };
 
-      float cutlass_time = MeasureCudaExecutionTime(cutlass_kernel, context_->device->GetPrimaryComputeStream().Get(),
-                                                    kWarmupIters, kPerfIters);
-      float deepgemm_time = MeasureCudaExecutionTime(deepgemm_kernel, context_->device->GetPrimaryComputeStream().Get(),
-                                                     kWarmupIters, kPerfIters);
-      float deepgemm_swap_ab_time = MeasureCudaExecutionTime(
-          deepgemm_swap_ab_kernel, context_->device->GetPrimaryComputeStream().Get(), kWarmupIters, kPerfIters);
+      float ct = MeasureCudaExecutionTime(cutlass_kernel, context_->device->GetPrimaryComputeStream().Get(),
+                                          kWarmupIters, kPerfIters);
+      float dt = MeasureCudaExecutionTime(deepgemm_kernel, context_->device->GetPrimaryComputeStream().Get(),
+                                          kWarmupIters, kPerfIters);
+      float st = MeasureCudaExecutionTime(swap_ab_kernel, context_->device->GetPrimaryComputeStream().Get(),
+                                          kWarmupIters, kPerfIters);
+      return {ct, dt, st};
+    };
 
-      if (std::min(deepgemm_time, deepgemm_swap_ab_time) < cutlass_time) {
-        deepgemm_max_m_threshold_ = m;
+    size_t m = kAlignSize_;
+    while (m <= max_m_) {
+      auto [cutlass_time, deepgemm_time, swap_ab_time] = profile_phase1_m(m);
+
+      if (std::min(deepgemm_time, swap_ab_time) < cutlass_time) {
+        search_cache_.deepgemm_max_m_threshold = m;
       } else {
         break;
       }
-      if (m <= kUseSmallStepThreshold) {
-        if ((m - kAlignSize_) / kWgmmaBlockM_ == swap_ab_max_m_thresholds_.size()) {
-          swap_ab_max_m_thresholds_.push_back((m - kAlignSize_) / kWgmmaBlockM_ * kWgmmaBlockM_);
+      if (m <= kPhase1StepThreshold_) {
+        if ((m - kAlignSize_) / kWgmmaBlockM_ == search_cache_.swap_ab_max_m_thresholds.size()) {
+          search_cache_.swap_ab_max_m_thresholds.push_back((m - kAlignSize_) / kWgmmaBlockM_ * kWgmmaBlockM_);
         }
-        if (deepgemm_swap_ab_time < deepgemm_time) {
-          swap_ab_max_m_thresholds_.back() = m;
+        if (swap_ab_time < deepgemm_time) {
+          search_cache_.swap_ab_max_m_thresholds.back() = m;
         }
       }
 
-      m += m < kUseSmallStepThreshold ? std::min(m, kSmallStep) : m;
+      m += m < kPhase1StepThreshold_ ? std::min(m, kPhase1Step_) : m;
+    }
+  }
+
+  // ===== Phase 2: point-based search for Cutlass vs BridgeDeepGemm =====
+  // From deepgemm_max_m_threshold to max_m_, profile only Cutlass vs BridgeDeepGemm.
+  // Step: 512 for m < 8192, 1024 for m >= 8192.
+  {
+    size_t phase2_start;
+    if (search_cache_.deepgemm_max_m_threshold == 0) {
+      phase2_start = kAlignSize_;
+    } else {
+      size_t step =
+          (search_cache_.deepgemm_max_m_threshold < kPhase2StepThreshold_) ? kPhase2StepSmall_ : kPhase2StepLarge_;
+      phase2_start = ((search_cache_.deepgemm_max_m_threshold / step) + 1) * step;
     }
 
-    // Cache the computed thresholds
-    Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->AddGemmSelectionThreshold(
-        inter_data_type_, max_m_, k_, n_, deepgemm_max_m_threshold_, swap_ab_max_m_thresholds_);
-    KLLM_LOG_INFO << fmt::format(
-        "Set deepgemm_max_m_threshold_ to {} and swap_ab_max_m_thresholds_ to {} "
-        "for max_m={}, k={}, n={}",
-        deepgemm_max_m_threshold_, Vector2Str(swap_ab_max_m_thresholds_), max_m_, k_, n_);
+    auto profile_phase2_m = [&](size_t m) -> Fp8GemmType {
+      input_tensor.shape = {m, k_};
+      std::vector<Tensor> input_tensors = {input_tensor, weight_};
+      std::vector<Tensor> output_tensors = {output_tensor};
+
+      SetGemmType(Fp8GemmType::Cutlass);
+      float ct = MeasureCudaExecutionTime([&] { this->Forward(input_tensors, output_tensors); },
+                                          context_->device->GetPrimaryComputeStream().Get(), kWarmupIters, kPerfIters);
+      SetGemmType(Fp8GemmType::BridgeDeepGemm);
+      float bt = MeasureCudaExecutionTime([&] { this->Forward(input_tensors, output_tensors); },
+                                          context_->device->GetPrimaryComputeStream().Get(), kWarmupIters, kPerfIters);
+      return ct < bt ? Fp8GemmType::Cutlass : Fp8GemmType::BridgeDeepGemm;
+    };
+
+    for (size_t m = phase2_start; m <= max_m_;) {
+      search_cache_.phase2_keys.push_back(m);
+      search_cache_.phase2_types.push_back(profile_phase2_m(m));
+      m += (m < kPhase2StepThreshold_) ? kPhase2StepSmall_ : kPhase2StepLarge_;
+    }
   }
+
+  // Cache the search results
+  (*sel_cache)[sel_key] = search_cache_;
+
+  std::vector<int32_t> types_int(search_cache_.phase2_types.size());
+  for (size_t i = 0; i < search_cache_.phase2_types.size(); ++i)
+    types_int[i] = static_cast<int32_t>(search_cache_.phase2_types[i]);
+  KLLM_LOG_INFO << fmt::format(
+      "Rank[{}] BlockwiseMatMulLayer search: threshold={}, swap_ab_thresholds={}, phase2_points={}, phase2_types={}, "
+      "cost: {} ms",
+      rank_, search_cache_.deepgemm_max_m_threshold, search_cache_.swap_ab_max_m_thresholds, search_cache_.phase2_keys,
+      types_int, ProfileTimer::GetCurrentTimeInMs() - start_time);
 
   BuildDeepGemmKernels();
   SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::Dynamic);
-  KLLM_LOG_INFO << fmt::format("Rank[{}] BlockwiseMatMulLayer Preprocess cost time: {} ms", rank_,
-                               ProfileTimer::GetCurrentTimeInMs() - start_time);
   return Status();
 }
 
@@ -191,18 +222,19 @@ void BlockwiseMatMulLayer::BuildDeepGemmKernels() {
   std::lock_guard<std::mutex> guard(g_mtx);
 
   static_assert(kWgmmaBlockM_ % kAlignSize_ == 0);
-  for (size_t begin_m = kAlignSize_; begin_m <= deepgemm_max_m_threshold_; begin_m += kWgmmaBlockM_) {
-    const size_t swap_ab_max_m_threshold = begin_m > swap_ab_max_m_thresholds_.back()
-                                               ? begin_m - kAlignSize_
-                                               : swap_ab_max_m_thresholds_[(begin_m - kAlignSize_) / kWgmmaBlockM_];
+  for (size_t begin_m = kAlignSize_; begin_m <= search_cache_.deepgemm_max_m_threshold; begin_m += kWgmmaBlockM_) {
+    const size_t swap_ab_max_m_threshold =
+        begin_m > search_cache_.swap_ab_max_m_thresholds.back()
+            ? begin_m - kAlignSize_
+            : search_cache_.swap_ab_max_m_thresholds[(begin_m - kAlignSize_) / kWgmmaBlockM_];
     // Build SwapAB kernel
     for (size_t m = begin_m; m <= swap_ab_max_m_threshold; m += kAlignSize_) {
-      deepgemm_wrapper_->BuildGemmSwapABKernel(m, n_, k_);
+      trtllm_deepgemm_wrapper_->BuildGemmSwapABKernel(m, n_, k_);
     }
     // Build regular kernel
     for (size_t m = swap_ab_max_m_threshold + kAlignSize_;
-         m < begin_m + kWgmmaBlockM_ && m <= deepgemm_max_m_threshold_; m += kAlignSize_) {
-      deepgemm_wrapper_->BuildGemmKernel(m, n_, k_);
+         m < begin_m + kWgmmaBlockM_ && m <= search_cache_.deepgemm_max_m_threshold; m += kAlignSize_) {
+      trtllm_deepgemm_wrapper_->BuildGemmKernel(m, n_, k_);
     }
   }
 
@@ -216,14 +248,23 @@ BlockwiseMatMulLayer::Fp8GemmType BlockwiseMatMulLayer::PickGemmType(size_t m) {
   if (gemm_type_ != BlockwiseMatMulLayer::Fp8GemmType::Dynamic) {
     return gemm_type_;
   }
-  if (const size_t aligned_m = RoundUp(m, kAlignSize_); aligned_m > deepgemm_max_m_threshold_) {
-    return BlockwiseMatMulLayer::Fp8GemmType::Cutlass;
-  } else if (aligned_m > swap_ab_max_m_thresholds_.back() ||
-             aligned_m > swap_ab_max_m_thresholds_[(aligned_m - kAlignSize_) / kWgmmaBlockM_]) {
-    return BlockwiseMatMulLayer::Fp8GemmType::DeepGemm;
-  } else {
-    return BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB;
+  const size_t aligned_m = RoundUp(m, kAlignSize_);
+
+  // Phase 1: small m — DeepGemm variants (threshold-based from search)
+  if (aligned_m <= search_cache_.deepgemm_max_m_threshold) {
+    if (aligned_m > search_cache_.swap_ab_max_m_thresholds.back() ||
+        aligned_m > search_cache_.swap_ab_max_m_thresholds[(aligned_m - kAlignSize_) / kWgmmaBlockM_]) {
+      return Fp8GemmType::DeepGemm;
+    }
+    return Fp8GemmType::DeepGemmSwapAB;
   }
+
+  // Phase 2: large m — Cutlass vs BridgeDeepGemm (point-based from search)
+  auto it = std::lower_bound(search_cache_.phase2_keys.begin(), search_cache_.phase2_keys.end(), aligned_m);
+  if (it != search_cache_.phase2_keys.end()) {
+    return search_cache_.phase2_types[it - search_cache_.phase2_keys.begin()];
+  }
+  return BlockwiseMatMulLayer::Fp8GemmType::Cutlass;
 }
 
 template <typename T>
@@ -276,10 +317,10 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
   // Execute GEMM operation based on selected type
   switch (gemm_type) {
     case BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB:
-      deepgemm_wrapper_->GemmSwapAB(a_q, a_s, b, b_s, out, cur_m, n_, k_, compute_stream);
+      trtllm_deepgemm_wrapper_->GemmSwapAB(a_q, a_s, b, b_s, out, cur_m, n_, k_, compute_stream);
       break;
     case BlockwiseMatMulLayer::Fp8GemmType::DeepGemm:
-      deepgemm_wrapper_->Gemm(a_q, a_s, b, b_s, out, cur_m, n_, k_, compute_stream);
+      trtllm_deepgemm_wrapper_->Gemm(a_q, a_s, b, b_s, out, cur_m, n_, k_, compute_stream);
       break;
     case BlockwiseMatMulLayer::Fp8GemmType::Cutlass: {
       void* cutlass_buffer = workspace_buffer_->GetPtr<void>() + input_buffer_size_;
@@ -287,6 +328,9 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
                          cutlass_buffer, cutlass_gemm_workspace_size_);
       break;
     }
+    case BlockwiseMatMulLayer::Fp8GemmType::BridgeDeepGemm:
+      bridge_deepgemm_wrapper_->Fp8BlockGemm(a_q, a_s, b, b_s, out, cur_m, n_, k_, compute_stream);
+      break;
     default:
       KLLM_THROW(fmt::format("Invalid or unsupported gemm type: {}", static_cast<int>(gemm_type)));
       break;

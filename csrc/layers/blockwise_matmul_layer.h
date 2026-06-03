@@ -7,13 +7,14 @@
 #  include "layers/base_layer.h"
 #  ifdef ENABLE_CUDA
 #    include "csrc/kernels/nvidia/gemm/deepgemm/deepgemm_wrapper.h"
+#    include "kernels/nvidia/deepseek_deepgemm_wrapper.h"
 #  endif
 
 namespace ksana_llm {
 
 class BlockwiseMatMulLayer : public BaseLayer {
  public:
-  enum class Fp8GemmType : int32_t { Dynamic, Cutlass, DeepGemm, DeepGemmSwapAB };
+  enum class Fp8GemmType : int32_t { Dynamic, Cutlass, DeepGemm, DeepGemmSwapAB, BridgeDeepGemm };
 
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
@@ -25,6 +26,20 @@ class BlockwiseMatMulLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
+  // --- test access ---
+  void SetGemmType(BlockwiseMatMulLayer::Fp8GemmType gemm_type);
+  BlockwiseMatMulLayer::Fp8GemmType PickGemmType(size_t m);
+
+  // Profiling search results: Phase 1 thresholds + Phase 2 point-based lookup
+  struct GemmTuningResult {
+    size_t deepgemm_max_m_threshold = 0;
+    std::vector<size_t> swap_ab_max_m_thresholds;
+    std::vector<size_t> phase2_keys;
+    std::vector<Fp8GemmType> phase2_types;
+  };
+  GemmTuningResult search_cache_;
+  BlockwiseMatMulLayer::Fp8GemmType gemm_type_ = BlockwiseMatMulLayer::Fp8GemmType::Dynamic;
+
  private:
   template <typename T>
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
@@ -35,10 +50,6 @@ class BlockwiseMatMulLayer : public BaseLayer {
 
   template <typename T>
   size_t GetCachedCutlassBufferSize();
-
-  void SetGemmType(BlockwiseMatMulLayer::Fp8GemmType gemm_type);
-
-  BlockwiseMatMulLayer::Fp8GemmType PickGemmType(size_t m);
 
   void BuildDeepGemmKernels();
 
@@ -53,14 +64,12 @@ class BlockwiseMatMulLayer : public BaseLayer {
   size_t input_buffer_size_ = 0;
   size_t cutlass_gemm_workspace_size_ = 0;
 
-  // 使用deepgemm时，m的最大值，必须是kAlignSize_的整数倍
-  // 超过该值时，使用cutlass
-  size_t deepgemm_max_m_threshold_ = 0;
-  // 使用deepgemm_swap_ab时，m的最大值 (按kWgmmaBlockM_分段)，必须是kAlignSize_的整数倍
-  // 超过该值时，使用deepgemm
-  std::vector<size_t> swap_ab_max_m_thresholds_;
   bool deepgemm_enabled_ = false;
-  BlockwiseMatMulLayer::Fp8GemmType gemm_type_ = BlockwiseMatMulLayer::Fp8GemmType::Dynamic;
+
+  // When true, it indicates that quantization has already been performed elsewhere and stored in the workspace buffer
+  bool skip_quant_ = false;
+
+  float swiglu_limit_ = 0.0f;
 
   static constexpr size_t kAlignSize_ = 4;
   // wgmma on hopper requires `m = 64`
@@ -68,13 +77,18 @@ class BlockwiseMatMulLayer : public BaseLayer {
   // So the execution time of DeepGEMM increases in steps of 64
   static constexpr size_t kWgmmaBlockM_ = 64;
 
-  // When true, it indicates that quantization has already been performed elsewhere and stored in the workspace buffer
-  bool skip_quant_ = false;
+  // Phase 1 search: small step size and threshold for adaptive step
+  static constexpr size_t kPhase1Step_ = 8;
+  static constexpr size_t kPhase1StepThreshold_ = 2048;
 
-  float swiglu_limit_ = 0.0f;
+  // Phase 2 search step: 512 for m < 8192, 1024 for m >= 8192
+  static constexpr size_t kPhase2StepSmall_ = 512;
+  static constexpr size_t kPhase2StepLarge_ = 1024;
+  static constexpr size_t kPhase2StepThreshold_ = 8192;
 
 #  ifdef ENABLE_CUDA
-  std::shared_ptr<llm_kernels::nvidia::DeepGEMMWrapper> deepgemm_wrapper_;
+  std::shared_ptr<llm_kernels::nvidia::DeepGEMMWrapper> trtllm_deepgemm_wrapper_;
+  ksana_llm::nvidia::DeepSeekDeepGEMMWrapper* bridge_deepgemm_wrapper_ = nullptr;
 #  endif
 };
 

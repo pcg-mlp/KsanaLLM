@@ -43,6 +43,9 @@ class DeepSeekDeepGEMMWrapper {
   void Tf32HcPreNormGemm(const Tensor& a_tensor, const Tensor& b_tensor, Tensor& d_tensor, Tensor& sqr_sum_tensor,
                          const int num_splits, const int rank, cudaStream_t stream);
 
+  // FP8 block-wise GEMM using DeepGEMM (sm90_fp8_gemm_1d2d)
+  void Fp8BlockGemm(void* a_q, void* a_s, void* b, void* b_s, void* out, int m, int n, int k, cudaStream_t stream);
+
  private:
   int num_device_sms_;
 };

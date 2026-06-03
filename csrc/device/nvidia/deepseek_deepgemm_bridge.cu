@@ -14,6 +14,7 @@
 #  include "jit/kernel_runtime.hpp"
 
 #  include "jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp"
+#  include "jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
 #  include "jit_kernels/impls/smxx_fp8_fp4_mqa_logits.hpp"
 #  include "jit_kernels/impls/smxx_fp8_fp4_paged_mqa_logits.hpp"
 
@@ -88,6 +89,16 @@ void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const
   deep_gemm::sm90_tf32_hc_prenorm_gemm(a, b, d, sqr_sum, m, n, k, num_splits);
 }
 
+void Sm90Fp8Gemm1D2D(const torch::Tensor& a, const torch::Tensor& sfa,
+                     const torch::Tensor& b, const torch::Tensor& sfb,
+                     const torch::Tensor& d,
+                     const int& m, const int& n, const int& k,
+                     const std::string& compiled_dims) {
+  deep_gemm::sm90_fp8_gemm_1d2d(a, sfa, b, sfb, std::nullopt, d, m, n, k,
+                                cute::UMMA::Major::K, cute::UMMA::Major::K,
+                                cute::UMMA::Major::K, compiled_dims);
+}
+
 }  // namespace deepseek
 
 #else   // ENABLE_DEEPSEEK_DEEPGEMM
@@ -108,6 +119,9 @@ void SmxxPagedMqaLogitsMetadata(const torch::Tensor&, const torch::Tensor&, int,
 void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const torch::Tensor& d,
                            const torch::Tensor& sqr_sum, const int& m, const int& n, const int& k,
                            const int& num_splits) {}
+
+void Sm90Fp8Gemm1D2D(const torch::Tensor&, const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
+                     const torch::Tensor&, const int&, const int&, const int&, const std::string&) {}
 
 }  // namespace deepseek
 #endif  // ENABLE_DEEPSEEK_DEEPGEMM
