@@ -266,6 +266,17 @@ std::string FindNvcc() {
   return "nvcc";
 }
 
+/// Derive default humming_tool.py path from compile-time source file location.
+/// __FILE__ -> .../humming/jit/humming_jit_compiler.cpp -> .../humming/jit/humming_tool.py
+std::string GetDefaultHummingToolPath() {
+  std::string file_path(__FILE__);
+  size_t pos = file_path.rfind("/jit/");
+  if (pos != std::string::npos) {
+    return file_path.substr(0, pos) + "/jit/humming_tool.py";
+  }
+  return "";
+}
+
 /// Resolve humming pip package include directory.
 /// 1. $HUMMING_INCLUDE_DIR env var (explicit override)
 /// 2. Auto-detect via python3 -c "import humming; ..."
@@ -274,17 +285,14 @@ std::string ResolvePipIncludeDir() {
   const char* env = std::getenv("HUMMING_INCLUDE_DIR");
   if (env && env[0] != '\0') return env;
 
-  FILE* fp = popen(
+  std::string output;
+  int ret = ExecuteCommand(
       "python3 -c \"import humming; import os; "
       "print(os.path.join(os.path.dirname(humming.__file__), 'include'))\"",
-      "r");
-  if (fp) {
-    std::string path;
-    char buf[4096];
-    while (fgets(buf, sizeof(buf), fp)) path += buf;
-    int rc = pclose(fp);
-    while (!path.empty() && (path.back() == '\n' || path.back() == '\r')) path.pop_back();
-    if (rc == 0 && !path.empty() && path != "None") return path;
+      &output);
+  if (ret == 0 && !output.empty()) {
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) output.pop_back();
+    if (output != "None") return output;
   }
   return "";
 }
@@ -307,25 +315,25 @@ std::string HummingJitCompiler::KernelConfig::CacheKey() const {
 // ════════════════════════════════════════════════════════════════════════════════
 
 HummingJitCompiler::HummingJitCompiler() : nvcc_path_(FindNvcc()), force_regenerate_(false) {
-  // ── 1. Resolve base_dir: HUMMING_BASE_DIR env, or derive from CWD=build/ ──
-  const char* base_env = std::getenv("HUMMING_BASE_DIR");
+  // ── 1. Resolve humming_tool.py path: KSANA_HUMMING_BASE_DIR env, or derive from __FILE__ ──
+  const char* base_env = std::getenv("KSANA_HUMMING_BASE_DIR");
   if (base_env && base_env[0] != '\0') {
-    base_dir_ = base_env;
+    humming_tool_path_ = std::string(base_env) + "/jit/humming_tool.py";
   } else {
-    // Default: assume CWD is KsanaLLM/build/, derive relative path to humming operator
-    base_dir_ = "../3rdparty/LLM_kernels/csrc/kernels/nvidia/others/humming";
+    humming_tool_path_ = GetDefaultHummingToolPath();
+    KLLM_KERNEL_CHECK_WITH_INFO(!humming_tool_path_.empty(),
+                                "Cannot resolve humming_tool.py path from __FILE__ (%s). "
+                                "Set $KSANA_HUMMING_BASE_DIR environment variable.",
+                                __FILE__);
   }
 
-  // ── 2. Derived paths ──
+  // ── 2. Resolve include dir ──
   include_dir_ = ResolvePipIncludeDir();
-  if (include_dir_.empty()) {
-    // Detect failure is non-fatal here; CompileCubin will fail with clear nvcc error.
-    // User can set $HUMMING_INCLUDE_DIR to override.
-    fprintf(stderr,
-            "[HummingJitCompiler] WARNING: humming-kernels pip package not detected. "
-            "Set $HUMMING_INCLUDE_DIR or install: pip install humming-kernels\n");
-  }
-  script_dir_ = base_dir_ + "/jit";
+  KLLM_KERNEL_CHECK_WITH_INFO(!include_dir_.empty(),
+                              "humming-kernels pip package not detected at runtime. "
+                              "Set $HUMMING_INCLUDE_DIR or install:\n"
+                              "  pip install git+https://github.com/inclusionAI/humming.git@a373046\n"
+                              "  pip install triton==3.2.0");
 
   // ── 3. Cache dir: KSANA_HUMMING_KERNEL_PATH env, or ~/.cache/KsanaLLM/humming_kernel_files ──
   const char* cache_env = std::getenv("KSANA_HUMMING_KERNEL_PATH");
@@ -579,7 +587,7 @@ void HummingJitCompiler::GenerateSource(const KernelConfig& config, const std::s
   std::string meta_path = output_path + ".meta.json";
 
   std::ostringstream cmd;
-  cmd << "python3 " << script_dir_ << "/humming_tool.py generate"
+  cmd << "python3 " << humming_tool_path_ << " generate"
       << " --size_n " << config.size_n << " --size_k " << config.size_k << " --num_experts " << config.num_experts
       << " --block_m " << config.block_m << " --gemm_type " << static_cast<int>(config.gemm_type) << " --compute_dtype "
       << static_cast<int>(config.compute_dtype) << " --output " << output_path << " --meta_output " << meta_path;
@@ -742,7 +750,7 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryH20Config
                                                                                   GemmType gemm_type) {
   // Call Python script to query humming H20 heuristic
   std::ostringstream cmd;
-  cmd << "python3 " << script_dir_ << "/humming_tool.py query-configs"
+  cmd << "python3 " << humming_tool_path_ << " query-configs"
       << " --size_n " << size_n << " --size_k " << size_k << " --num_experts " << num_experts << " --compute_dtype "
       << static_cast<int>(compute_dtype);
 

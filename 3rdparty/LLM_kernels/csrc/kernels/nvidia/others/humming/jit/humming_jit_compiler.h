@@ -49,7 +49,7 @@ class HummingJitCompiler {
   /// @brief Constructs the JIT compiler with self-resolving paths.
   ///
   /// Path resolution order:
-  ///   base_dir: $HUMMING_BASE_DIR, or "../3rdparty/LLM_kernels/.../humming" (from CWD=build/)
+  ///   base_dir: $KSANA_HUMMING_BASE_DIR, or derived from __FILE__
   ///   cache_dir: $KSANA_HUMMING_KERNEL_PATH, or "~/.cache/KsanaLLM/humming_kernel_files"
   ///   include_dir: $HUMMING_INCLUDE_DIR, or auto-detect via python3, or base_dir + "/include"
   ///   script_dir: base_dir + "/jit"
@@ -117,10 +117,9 @@ class HummingJitCompiler {
 
   // ── Member state ────────────────────────────────────────────────────────
 
-  std::string base_dir_;
   std::string cache_dir_;
   std::string include_dir_;
-  std::string script_dir_;
+  std::string humming_tool_path_;
   std::string nvcc_path_;
   bool force_regenerate_;
 

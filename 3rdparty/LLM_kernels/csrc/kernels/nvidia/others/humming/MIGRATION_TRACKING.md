@@ -25,7 +25,7 @@
 - **JIT 编译**: `nvcc -I` 指向 pip 包 include 路径。`HummingJitCompiler` 构造函数按以下顺序解析:
   1. `$HUMMING_INCLUDE_DIR` 环境变量（显式覆盖）
   2. `python3 -c "import humming; ..."` 自动检测
-  3. `$HUMMING_BASE_DIR + "/include"` 回退（向后兼容）
+  3. `$KSANA_HUMMING_BASE_DIR + "/include"` 回退（向后兼容）
 - **CMake 构建** (preprocess): `execute_process` 在 cmake configure 时查询 pip 包路径，失败时回退到本地路径并发出 warning。
   - 优先使用 `find_package(Python3)` 获得的 `${Python3_EXECUTABLE}`
   - 回退到 `find_program(python3)`
@@ -163,4 +163,4 @@ KernelRuntime.init_sm_version = lambda self: None
 |------|------|------|
 | 2026-05-16 | 初始迁移 | humming-kernels 0.1.0 @ 13c42d05 |
 | 2026-05-28 | 移除本地 .cuh 副本 | Headers 改为编译时从 pip 包 include 路径引用，支持 `$HUMMING_INCLUDE_DIR` 覆盖 |
-| 2026-05-29 | 清理冗余文件 | 移除 3 个 reference 文件（不编译，纯拷贝）。合并 generate_kernel.py + get_h20_configs.py → humming_tool.py（统一子命令工具） |
+| 2026-06-03 | 版本升级适配 | humming-kernels 0.1.0→0.1.3 (13c42d05→a373046)。适配: process_mxfp4_w4a8.cu (max_range 12→11, +1步, global_scale /2), repack_weight.cu (+interleave_mode参数) |

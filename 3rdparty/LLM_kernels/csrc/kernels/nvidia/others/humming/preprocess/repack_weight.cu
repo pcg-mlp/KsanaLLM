@@ -47,18 +47,23 @@ void repack_weight_wgmma(cudaStream_t stream, const void* input, void* output, i
             static_cast<unsigned>((gmem_stride + smem_stride - 1) / smem_stride), static_cast<unsigned>(num_experts));
   dim3 block(32);
 
+  // interleave_mode matches humming layer.py:
+  //   W4A16 (BF16): 3 -> interleaved index for both low bits and sign bit
+  //   W4A8 (FP8 fused E8M0): 2 -> sequential index for low bits, interleaved for sign bit
   if (compute_dtype == ComputeDtype::BF16) {
     weight_repack_nk<4, 16, 1, 0, 0, 1, 0>
         <<<grid, block, 0, stream>>>(reinterpret_cast<const uint32_t*>(input), reinterpret_cast<uint32_t*>(output),
                                      nullptr, static_cast<uint32_t>(size_n), static_cast<uint32_t>(size_k),
-                                     static_cast<uint32_t>(size_n), static_cast<uint32_t>(size_k));
+                                     static_cast<uint32_t>(size_n), static_cast<uint32_t>(size_k),
+                                     /*interleave_mode=*/3u);
   } else {
     // W4A8 path: kNumBitsA=8, kShouldTransposeMiniBlock=0
     // (use_fused_e8m0_scale disables the mini-block transpose; matches humming reference)
     weight_repack_nk<4, 8, 1, 0, 0, 0, 0>
         <<<grid, block, 0, stream>>>(reinterpret_cast<const uint32_t*>(input), reinterpret_cast<uint32_t*>(output),
                                      nullptr, static_cast<uint32_t>(size_n), static_cast<uint32_t>(size_k),
-                                     static_cast<uint32_t>(size_n), static_cast<uint32_t>(size_k));
+                                     static_cast<uint32_t>(size_n), static_cast<uint32_t>(size_k),
+                                     /*interleave_mode=*/2u);
   }
 }
 

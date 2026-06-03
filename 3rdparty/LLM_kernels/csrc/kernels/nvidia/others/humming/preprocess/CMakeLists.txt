@@ -14,25 +14,46 @@ if(HUMMING_PREPROCESS_SRCS)
     find_program(_HUMMING_PYTHON python3)
   endif()
 
-  if(_HUMMING_PYTHON)
-    execute_process(
-      COMMAND ${_HUMMING_PYTHON} -c "import humming; import os; print(os.path.join(os.path.dirname(humming.__file__), 'include'))"
-      OUTPUT_VARIABLE HUMMING_PIP_INCLUDE_DIR
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-      RESULT_VARIABLE HUMMING_PIP_RESULT
-      ERROR_VARIABLE HUMMING_PIP_ERROR
-    )
-  else()
-    set(HUMMING_PIP_RESULT 1)
-    set(HUMMING_PIP_ERROR "python3 interpreter not found")
+  if(NOT _HUMMING_PYTHON)
+    message(FATAL_ERROR "python3 interpreter not found, required for humming-kernels installation")
   endif()
+
+  message(STATUS "Installing humming from git+https://github.com/inclusionAI/humming.git@a373046 ...")
+  execute_process(
+    COMMAND ${_HUMMING_PYTHON} -m pip install git+https://github.com/inclusionAI/humming.git@a373046
+    RESULT_VARIABLE HUMMING_INSTALL_RESULT
+  )
+  if(NOT HUMMING_INSTALL_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to install humming-kernels (exit code: ${HUMMING_INSTALL_RESULT}). "
+                        "Please install manually: pip install git+https://github.com/inclusionAI/humming.git@a373046")
+  endif()
+
+  message(STATUS "Installing triton==3.2.0 ...")
+  execute_process(
+    COMMAND ${_HUMMING_PYTHON} -m pip install triton==3.2.0
+    RESULT_VARIABLE TRITON_INSTALL_RESULT
+  )
+  if(NOT TRITON_INSTALL_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to install triton==3.2.0 (exit code: ${TRITON_INSTALL_RESULT}). "
+                        "Please install manually: pip install triton==3.2.0")
+  endif()
+
+  execute_process(
+    COMMAND ${_HUMMING_PYTHON} -c "import humming; import os; print(os.path.join(os.path.dirname(humming.__file__), 'include'))"
+    OUTPUT_VARIABLE HUMMING_PIP_INCLUDE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE HUMMING_PIP_RESULT
+    ERROR_VARIABLE HUMMING_PIP_ERROR
+  )
 
   if(HUMMING_PIP_RESULT EQUAL 0 AND HUMMING_PIP_INCLUDE_DIR)
     set(HUMMING_INCLUDE_DIR "${HUMMING_PIP_INCLUDE_DIR}")
     message(STATUS "Using humming pip package include: ${HUMMING_INCLUDE_DIR}")
   else()
-    message(FATAL_ERROR "humming-kernels pip package not found (${HUMMING_PIP_ERROR}). "
-                        "Install with: pip install humming-kernels")
+    message(FATAL_ERROR "humming-kernels import failed after installation (${HUMMING_PIP_ERROR}). "
+                        "Please install manually:\n"
+                        "  pip install git+https://github.com/inclusionAI/humming.git@a373046\n"
+                        "  pip install triton==3.2.0")
   endif()
 
   target_include_directories(llm_kernels_nvidia_kernel_humming_preprocess PUBLIC
