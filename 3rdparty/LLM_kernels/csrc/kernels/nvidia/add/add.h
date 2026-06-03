@@ -29,16 +29,12 @@ namespace nvidia {
 template <typename T>
 void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const T* residual2, const T* bias,
                            const float* scale_inter, const float* scale_out, const int32_t m, const int32_t n,
-                           cudaStream_t stream);
+                           const int32_t bias_stride, cudaStream_t stream);
 
 template <typename T>
-void InvokeAddBiasResidual(T* output, const T* residual1, const T* residual2, const T* bias, const int32_t m,
-                           const int32_t n, cudaStream_t stream);
-
-template <typename T>
-void InvokeAddBiasResidual(T* output, const T* residual1, const T* bias, const int32_t m, const int32_t n,
-                           cudaStream_t stream) {
-  InvokeAddBiasResidual(output, residual1, (const T*)nullptr, bias, m, n, stream);
+inline void InvokeAddBiasResidual(T* output, const T* residual1, const T* residual2, const T* bias, const int32_t m,
+                                  const int32_t n, cudaStream_t stream) {
+  InvokeAddBiasResidual(output, output, residual1, residual2, bias, nullptr, nullptr, m, n, m * n, stream);
 }
 
 template <typename T>

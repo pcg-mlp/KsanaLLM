@@ -39,8 +39,4 @@ add_subdirectory(moe)
 add_subdirectory(logits_topk)
 add_subdirectory(pooling)
 add_subdirectory(swa_topk_idxs)
-# For Triton/TileLang kernels,
-# generation can be omitted for lower SM architectures.
-if(HAS_SM90 OR HAS_SM90A)
-  add_subdirectory(mhc)
-endif()
+add_subdirectory(mhc)

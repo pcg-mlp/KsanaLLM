@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <unordered_map>
 
 namespace llm_kernels {
 namespace nvidia {

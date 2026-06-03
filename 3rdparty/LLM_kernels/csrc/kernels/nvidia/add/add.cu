@@ -33,10 +33,10 @@ template <typename T, int32_t RESIDUAL_NUM, typename T2 = T>
 __global__ void AddBiasResidualKernel(T* output, const T2* __restrict__ input, const T* __restrict__ residual1,
                                       const T* __restrict__ residual2, const T* __restrict__ bias,
                                       const float* __restrict__ scale_inter, const float* __restrict__ scale_out,
-                                      const int32_t total_element_num, const int32_t n) {
+                                      const int32_t total_element_num, const int32_t n, const int32_t bias_stride) {
   const int32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index < total_element_num) {
-    T bias_val = (bias == nullptr) ? (T)(0.0f) : bias[index % n];
+    T bias_val = (bias == nullptr) ? (T)(0.0f) : bias[(index / bias_stride) * n + index % n];
     T in;
     if (std::is_same<T, T2>::value) {
       in = CastCudaDataType<T>(input[index]);  // cast required for compilation when T != T2
@@ -53,6 +53,24 @@ __global__ void AddBiasResidualKernel(T* output, const T2* __restrict__ input, c
     } else if (RESIDUAL_NUM == 2) {
       output[index] = in + residual1[index] + residual2[index] + bias_val;
     }
+  }
+}
+
+template <typename T, int32_t kVecSize>
+__global__ void AddBiasVecKernel(T* __restrict__ output, const T* __restrict__ input, const T* __restrict__ bias,
+                                 const int32_t total_element_num, const int32_t n, const int32_t bias_stride) {
+  const int32_t index = kVecSize * (blockIdx.x * blockDim.x + threadIdx.x);
+  if (index < total_element_num) {
+    vec_t<T, kVecSize> input_vec;
+    input_vec.load(input + index);
+    vec_t<T, kVecSize> bias_vec;
+    const int32_t bias_offset = (index / bias_stride) * n + index % n;
+    bias_vec.load(bias + bias_offset);
+#pragma unroll
+    for (int i = 0; i < kVecSize; i++) {
+      input_vec[i] += bias_vec[i];
+    }
+    input_vec.store(output + index);
   }
 }
 
@@ -75,7 +93,7 @@ __global__ void AddResidualKernel(T* __restrict__ output, const T* __restrict__ 
 template <typename T>
 void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const T* residual2, const T* bias,
                            const float* scale_inter, const float* scale_out, const int32_t m, const int32_t n,
-                           cudaStream_t stream) {
+                           const int32_t bias_stride, cudaStream_t stream) {
   if (((scale_inter == nullptr) ^ (scale_out == nullptr))) {
     throw std::runtime_error("Cannot use `scale_inter` without `scale_out`");
   }
@@ -89,39 +107,43 @@ void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const 
     if (residual2 == nullptr) {
       AddBiasResidualKernel<T, 1><<<grid, block, 0, stream>>>(output, reinterpret_cast<const int32_t*>(input),
                                                               residual1, residual2, bias, scale_inter, scale_out,
-                                                              total_element_num, n);
+                                                              total_element_num, n, bias_stride);
     } else {
       AddBiasResidualKernel<T, 2><<<grid, block, 0, stream>>>(output, reinterpret_cast<const int32_t*>(input),
                                                               residual1, residual2, bias, scale_inter, scale_out,
-                                                              total_element_num, n);
+                                                              total_element_num, n, bias_stride);
     }
   } else {
     constexpr int32_t kVecSize = sizeof(uint4) / sizeof(T);
-    if (bias == nullptr && residual2 == nullptr && (total_element_num & (kVecSize - 1)) == 0) {
+    const bool can_vectorize = (n % kVecSize == 0) && (bias_stride % kVecSize == 0);
+    if (can_vectorize && bias == nullptr && residual2 == nullptr) {
+      // Fast path: residual-only, no bias — minimal overhead
       const int32_t vec_size_per_grid = kVecSize * BLOCK_SIZE;
       const uint32_t block_num = (total_element_num + vec_size_per_grid - 1) / vec_size_per_grid;
       dim3 grid(block_num);
       dim3 block(BLOCK_SIZE);
       AddResidualKernel<T, kVecSize><<<grid, block, 0, stream>>>(output, input, residual1, total_element_num);
+    } else if (can_vectorize && residual1 == nullptr && residual2 == nullptr) {
+      // Bias-only broadcast with stride
+      const int32_t vec_size_per_grid = kVecSize * BLOCK_SIZE;
+      const uint32_t block_num = (total_element_num + vec_size_per_grid - 1) / vec_size_per_grid;
+      dim3 grid(block_num);
+      dim3 block(BLOCK_SIZE);
+      AddBiasVecKernel<T, kVecSize><<<grid, block, 0, stream>>>(output, input, bias, total_element_num, n, bias_stride);
     } else {
+      // General scalar fallback: handles all residual+bias combinations
       const uint32_t block_num = (total_element_num + BLOCK_SIZE - 1) / BLOCK_SIZE;
       dim3 grid(block_num);
       dim3 block(BLOCK_SIZE);
       if (residual2 == nullptr) {
         AddBiasResidualKernel<T, 1><<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr,
-                                                                nullptr, total_element_num, n);
+                                                                nullptr, total_element_num, n, bias_stride);
       } else {
         AddBiasResidualKernel<T, 2><<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr,
-                                                                nullptr, total_element_num, n);
+                                                                nullptr, total_element_num, n, bias_stride);
       }
     }
   }
-}
-
-template <typename T>
-void InvokeAddBiasResidual(T* output, const T* residual1, const T* residual2, const T* bias, const int32_t m,
-                           const int32_t n, cudaStream_t stream) {
-  InvokeAddBiasResidual(output, output, residual1, residual2, bias, nullptr, nullptr, m, n, stream);
 }
 
 template <typename T>
@@ -169,23 +191,14 @@ void InvokeAddBiasAttentionFfnResidual(T* block_output, const T* ffn_output, con
   }
 }
 
-#define INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(T)                                                          \
-  template void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const T* residual2, \
-                                      const T* bias, const float* scale_inter, const float* scale_out,   \
-                                      const int32_t m, const int32_t n, cudaStream_t stream)
+#define INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(T)                                                                   \
+  template void InvokeAddBiasResidual(                                                                            \
+      T* output, const T* input, const T* residual1, const T* residual2, const T* bias, const float* scale_inter, \
+      const float* scale_out, const int32_t m, const int32_t n, const int32_t bias_stride, cudaStream_t stream)
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(float);
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(half);
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
 #undef INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL
-
-template void InvokeAddBiasResidual(float* output, const float* residual1, const float* residual2, const float* bias,
-                                    const int32_t m, const int32_t n, cudaStream_t stream);
-
-template void InvokeAddBiasResidual(half* output, const half* residual1, const half* residual2, const half* bias,
-                                    const int32_t m, const int32_t n, cudaStream_t stream);
-template void InvokeAddBiasResidual(__nv_bfloat16* output, const __nv_bfloat16* residual1,
-                                    const __nv_bfloat16* residual2, const __nv_bfloat16* bias, const int32_t m,
-                                    const int32_t n, cudaStream_t stream);
 
 template void InvokeAddBiasAttentionFfnResidual(float* block_output, const float* ffn_output, const float* attn_output,
                                                 const float* input, const float* bias, const int32_t m, const int32_t n,
@@ -230,7 +243,8 @@ template <typename T>
 void InvokeT5AddBiasResidual(T* output, const T* input, const T* bias, const int32_t m, const int32_t n,
                              cudaStream_t stream) {
   if (bias != nullptr) {
-    InvokeAddBiasResidual(output, input, bias, m, n, stream);
+    InvokeAddBiasResidual(output, input, (const T*)nullptr, (const T*)nullptr, bias, (const float*)nullptr,
+                          (const float*)nullptr, m, n, m * n, stream);
   } else {
     InvokeT5AddResidual(output, input, m, n, stream);
   }

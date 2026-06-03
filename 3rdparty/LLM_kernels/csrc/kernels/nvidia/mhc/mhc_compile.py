@@ -12,7 +12,7 @@ if script_dir not in sys.path:
 # The autotuner muse be first imported, otherwise the env will not take effect in matmul.
 from autotuner import autotune
 
-from mhc_kernel import (_mhc_pre_big_fuse, _mhc_pre_big_fuse_with_norm, _mhc_post_fwd, _mhc_head_big_fuse)
+from mhc_kernel import (_mhc_pre_big_fuse, _mhc_pre_big_fuse_with_norm, _mhc_head_big_fuse)
 
 import tilelang
 import torch
@@ -197,73 +197,6 @@ def build_mhc_pre_big_fuse_with_norm(output_dir):
              pass_configs=pass_configs)
 
 
-def build_mhc_post_fwd(output_dir):
-
-    def get_kernel_func(input_config, autotune_config):
-        mhc = input_config['mhc']
-        hidden = input_config['hidden']
-        n_thr = input_config['n_thr']
-        h_blk = input_config['h_blk']
-        h_blk = math.gcd(hidden, h_blk)
-
-        return _mhc_post_fwd(mhc, hidden, n_thr, h_blk)
-
-    def get_kernel_input(input_config):
-        mhc = input_config['mhc']
-        hidden = input_config['hidden']
-        n_thr = input_config['n_thr']
-        h_blk = input_config['h_blk']
-        h_blk = math.gcd(hidden, h_blk)
-
-        n = 128
-
-        a = torch.randn(n, mhc, mhc, device="cuda", dtype=torch.float32)
-        b = torch.randn(n, mhc, hidden, device="cuda", dtype=torch.bfloat16)
-        c = torch.randn(n, mhc, device="cuda", dtype=torch.float32)
-        d = torch.randn(n, hidden, device="cuda", dtype=torch.bfloat16)
-        x = torch.randn(n, mhc, hidden, device="cuda", dtype=torch.bfloat16)
-
-        return (a, b, c, d, x)
-
-    def get_kernel_name(kernel_name: str, input_config: Dict):
-        return (
-            f"{kernel_name}"
-            f"_mhc_{input_config['mhc']}"
-            f"_hidden_{input_config['hidden']}"
-            f"_n_thr_{input_config['n_thr']}"
-            f"_h_blk_{input_config['h_blk']}"
-        )
-
-    def get_input_configs():
-        iter_params = dict(
-            mhc=[4],
-            hidden=[4096, 7168],
-            n_thr=[128],
-            h_blk=[1024],
-        )
-        return [dict(zip(iter_params, values)) for values in itertools.product(*iter_params.values())]
-
-    def get_autotune_configs():
-        return []
-
-    pass_configs={
-        tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
-        tilelang.PassConfigKey.TL_PTXAS_REGISTER_USAGE_LEVEL: 10,
-        tilelang.PassConfigKey.TL_DISABLE_VECTORIZE_256: True,
-    }
-
-    autotune("mhc_post_fwd_kernel",
-             get_input_configs,
-             get_autotune_configs,
-             get_kernel_func,
-             get_kernel_input,
-             get_kernel_name,
-             output_dir,
-             target="cuda --arch=sm_90",
-             verbose=True,
-             pass_configs=pass_configs)
-
-
 def build_mhc_head_big_fuse(output_dir):
 
     def get_kernel_func(input_config, autotune_config):
@@ -344,5 +277,4 @@ if __name__ == "__main__":
 
     build_mhc_pre_big_fuse(output_dir)
     build_mhc_pre_big_fuse_with_norm(output_dir)
-    build_mhc_post_fwd(output_dir)
     build_mhc_head_big_fuse(output_dir)

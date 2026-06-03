@@ -1,5 +1,8 @@
 # Copyright 2026 Tencent Inc.  All rights reserved.
 
+# For Triton/TileLang kernels,
+# generation can be omitted for lower SM architectures.
+if(HAS_SM90 OR HAS_SM90A)
 file(GLOB_RECURSE MHC_ALL_FILES
   mhc_compile.py
   mhc_kernel.py
@@ -47,3 +50,12 @@ if(MHC_NEED_REGENERATE)
 
   message(STATUS "Success generate mhc tilelang kernel")
 endif()
+endif()
+
+# CUDA kernel static library
+file(GLOB_RECURSE MHC_CU_SRCS *.cu)
+list(FILTER MHC_CU_SRCS EXCLUDE REGEX ".*test.cu")
+add_library(llm_kernels_nvidia_kernel_mhc STATIC ${MHC_CU_SRCS})
+set_property(TARGET llm_kernels_nvidia_kernel_mhc PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET llm_kernels_nvidia_kernel_mhc PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(llm_kernels_nvidia_kernel_mhc PUBLIC -lcudart llm_kernels_nvidia_utils)

@@ -86,7 +86,6 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["mhc_pre_big_fuse_with_norm_kernel"] = {
       "hidden_size",         "rms_eps",         "mhc_pre_eps", "mhc_sinkhorn_eps",
       "mhc_post_mult_value", "sinkhorn_repeat", "n_splits",    "mhc_mult"};
-  kernel_key_map_["mhc_post_fwd_kernel"] = {"mhc", "hidden", "n_thr", "h_blk"};
   kernel_key_map_["mhc_head_big_fuse_kernel"] = {"hidden_size", "rms_eps", "mhc_pre_eps", "n_splits", "mhc_mult"};
 }
 
@@ -592,6 +591,7 @@ void TritonWrapper::InvokeMhcPreBigFuseWithNormKernel(void* gemm_out_mul, void* 
                                                       cudaStream_t stream) {
   std::string kernel_name = "mhc_pre_big_fuse_with_norm_kernel";
 
+  // TileLang lowers `T.prim_func` params in alphabetical order; mirror that.
   void* args[] = {
       &comb_mix,  &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base,
       &mhc_scale, &norm_weight,  &post_mix,        &residual,    &num_tokens,
@@ -616,34 +616,13 @@ INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL(__nv_bfloat16);
 #undef INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL
 
 template <typename T>
-void TritonWrapper::InvokeMhcPostFwdKernel(void* a, void* b, void* c, void* d, void* x, int num_tokens, int mhc,
-                                           int hidden, int n_thr, int h_blk, cudaStream_t stream) {
-  std::string kernel_name = "mhc_post_fwd_kernel";
-
-  void* args[] = {
-      &a, &b, &c, &d, &x, &num_tokens,
-  };
-  std::unordered_map<std::string, std::string> map = {{"mhc", ConvertToString(mhc)},
-                                                      {"hidden", ConvertToString(hidden)},
-                                                      {"n_thr", ConvertToString(n_thr)},
-                                                      {"h_blk", ConvertToString(h_blk)}};
-  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, n_thr, 1, 1);
-}
-#define INVOKE_MHC_POST_KERNEL(T)                                                                                    \
-  template void TritonWrapper::InvokeMhcPostFwdKernel<T>(void*, void*, void*, void*, void*, int, int, int, int, int, \
-                                                         cudaStream_t)
-INVOKE_MHC_POST_KERNEL(float);
-INVOKE_MHC_POST_KERNEL(half);
-INVOKE_MHC_POST_KERNEL(__nv_bfloat16);
-#undef INVOKE_MHC_POST_KERNEL
-
-template <typename T>
 void TritonWrapper::InvokeMhcHeadBigFuseKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale,
                                                void* mhc_base, void* residual, void* layer_input, int num_tokens,
                                                int hidden_size, float rms_eps, float mhc_pre_eps, int n_splits,
                                                int mhc_mult, cudaStream_t stream) {
   std::string kernel_name = "mhc_head_big_fuse_kernel";
 
+  // TileLang lowers `T.prim_func` params in alphabetical order; mirror that.
   void* args[] = {
       &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base, &mhc_scale, &residual, &num_tokens,
   };

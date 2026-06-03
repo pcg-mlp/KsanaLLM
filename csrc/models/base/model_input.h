@@ -95,6 +95,9 @@ class ModelInput {
   // current request batchsize matches cudagraph catpure range
   bool is_cudagraph_batchsize_matched = false;
 
+  // Whether the current batch concerns the request_target
+  bool has_request_target = false;
+
   // For cutoff layer
   int cutoff_layer = 0;
 

@@ -137,10 +137,6 @@ class TritonWrapper {
                                          int sinkhorn_repeat, int n_splits, int mhc_mult, cudaStream_t stream);
 
   template <typename T>
-  void InvokeMhcPostFwdKernel(void* a, void* b, void* c, void* d, void* x, int num_tokens, int mhc, int hidden,
-                              int n_thr, int h_blk, cudaStream_t stream);
-
-  template <typename T>
   void InvokeMhcHeadBigFuseKernel(void* gemm_out_mul, void* gemm_out_sqrsum, void* mhc_scale, void* mhc_base,
                                   void* residual, void* layer_input, int num_tokens, int hidden_size, float rms_eps,
                                   float mhc_pre_eps, int n_splits, int mhc_mult, cudaStream_t stream);

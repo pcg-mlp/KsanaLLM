@@ -107,9 +107,10 @@ class LlamaNvidiaAddTestSuit : public NvidiaTestSuitBase {
     BufferMeta output_ref_meta = CopyToDevice<T>(output_cpu_meta);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-    InvokeAddBiasResidual<T>(
-        reinterpret_cast<T*>(output_meta.data_ptr), reinterpret_cast<const T*>(input_a_meta.data_ptr),
-        reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr, nullptr, nullptr, m, n, stream);
+    InvokeAddBiasResidual<T>(reinterpret_cast<T*>(output_meta.data_ptr),
+                             reinterpret_cast<const T*>(input_a_meta.data_ptr),
+                             reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr, nullptr, nullptr,
+                             static_cast<int32_t>(m), static_cast<int32_t>(n), static_cast<int32_t>(m * n), stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
     EXPECT_TRUE(CheckResult<T>("add_bias_residual_" + type_str + "_m_" + std::to_string(m) + "_n_" + std::to_string(n),
@@ -141,7 +142,8 @@ class LlamaNvidiaAddTestSuit : public NvidiaTestSuitBase {
     InvokeAddBiasResidual<T>(reinterpret_cast<T*>(output_meta.data_ptr),
                              reinterpret_cast<const T*>(input_a_meta.data_ptr),
                              reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr,
-                             reinterpret_cast<const T*>(input_bias_meta.data_ptr), nullptr, nullptr, m, n, stream);
+                             reinterpret_cast<const T*>(input_bias_meta.data_ptr), nullptr, nullptr,
+                             static_cast<int32_t>(m), static_cast<int32_t>(n), static_cast<int32_t>(m * n), stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
     EXPECT_TRUE(CheckResult<T>("add_bias_residual_" + type_str + "_m_" + std::to_string(m) + "_n_" + std::to_string(n),
@@ -150,9 +152,9 @@ class LlamaNvidiaAddTestSuit : public NvidiaTestSuitBase {
     // warmup
     const int kWarmUpRounds = 5;
     for (int i = 0; i < kWarmUpRounds; i++) {
-      InvokeAddBiasResidual<T>(
-          reinterpret_cast<T*>(output_meta.data_ptr), reinterpret_cast<const T*>(input_a_meta.data_ptr),
-          reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr, nullptr, nullptr, m, n, stream);
+      InvokeAddBiasResidual<T>(reinterpret_cast<T*>(output_meta.data_ptr),
+                               reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr,
+                               static_cast<int32_t>(m), static_cast<int32_t>(n), stream);
     }
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
@@ -160,9 +162,9 @@ class LlamaNvidiaAddTestSuit : public NvidiaTestSuitBase {
     // performance
     const int k_rounds = 10;
     auto cuda_run = [&]() {
-      InvokeAddBiasResidual<T>(
-          reinterpret_cast<T*>(output_meta.data_ptr), reinterpret_cast<const T*>(input_a_meta.data_ptr),
-          reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr, nullptr, nullptr, m, n, stream);
+      InvokeAddBiasResidual<T>(reinterpret_cast<T*>(output_meta.data_ptr),
+                               reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr,
+                               static_cast<int32_t>(m), static_cast<int32_t>(n), stream);
     };
     float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, k_rounds, k_rounds);
 

@@ -311,16 +311,11 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
     CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
     const size_t token_num = residual_buffer[0].shape[0];
-    KLLM_CHECK(residual_buffer[0].shape[1] == hc_mult * hidden_dim);
-    KLLM_CHECK(residual_buffer[0].shape.size() == 2ul);
+    // Reshape directly since expand is skipped
+    residual_buffer[0].shape[1] = hidden_dim;
 
-    // Reshape residual_buffer to [token_num * hc_mult, hidden_dim] for norm and proj
-    residual_buffer[0].shape = {token_num * hc_mult, hidden_dim};
-
-    // Embedding Norm: enorm(residual)
-    enorm_->Forward(residual_buffer, residual_buffer);
-
-    // E-projection: e_proj(normed_residual)
+    // Embedding Norm + E-projection on residual_buffer
+    STATUS_CHECK_RETURN(enorm_->Forward(residual_buffer, residual_buffer));
     STATUS_CHECK_RETURN(e_proj_->Forward(residual_buffer[0], shared_buffer));
 
     // Gather last token hidden from mtp_hidden_buffer
@@ -335,16 +330,14 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
     // Reshape gathered mtp_hidden to [token_num * hc_mult, hidden_dim] for norm and proj
     mtp_hidden_buffer[0].shape = {token_num * hc_mult, hidden_dim};
 
-    // Hidden Norm: hnorm(gathered_mtp_hidden)
-    hnorm_->Forward(mtp_hidden_buffer, mtp_hidden_buffer);
-
-    // H-projection: h_proj(normed_mtp_hidden)
+    // Hidden Norm + E-projection on gatherd mtp_hidden_buffer
+    STATUS_CHECK_RETURN(hnorm_->Forward(mtp_hidden_buffer, mtp_hidden_buffer));
     STATUS_CHECK_RETURN(h_proj_->Forward(mtp_hidden_buffer[0], residual_buffer));
 
-    // Add: e_proj_output + h_proj_output -> residual_buffer
-    STATUS_CHECK_RETURN(add_->Forward(shared_buffer[0], residual_buffer[0], residual_buffer));
+    // Add with broadcast: h_proj_output[t*hc, d] + e_proj_output[t, d] -> residual_buffer[t*hc, d]
+    STATUS_CHECK_RETURN(add_->Forward(residual_buffer[0], shared_buffer[0], residual_buffer));
 
-    // Reshape residual_buffer back to [token_num, hc_mult * hidden_dim]
+    // Reshape residual_buffer to [token_num, hc_mult * hidden_dim]
     residual_buffer[0].shape = {token_num, hc_mult * hidden_dim};
   }
   const bool is_multi_token_forward = model_input->multi_token_request_num > 0;

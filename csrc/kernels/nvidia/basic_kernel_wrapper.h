@@ -141,7 +141,13 @@ void InvokeBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt
 
 template <typename T>
 void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
-                           void* output, cudaStream_t stream);
+                           const int bias_stride, void* output, cudaStream_t stream);
+
+template <typename T>
+inline void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
+                                  void* output, cudaStream_t stream) {
+  InvokeAddBiasResidual<T>(input_a, input_b, bias, m, n, m * n, output, stream);
+}
 
 // Add-Multiply fused operations
 template <typename T>
@@ -311,9 +317,9 @@ template <typename T>
 size_t InvokeGetBlockGemmWorkspaceSize(int m, int k, int n);
 
 struct PerTokenGroupQuantFusionParams {
-  bool fuse_silu_mul{false};      // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`
-  bool scale_ue8m0{false};        // Use UE8M0 (uint8 exponential) format for scales
-  float swiglu_limit{0.0f};       // > 0 时在 fuse_silu_mul 前 clamp
+  bool fuse_silu_mul{false};  // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`
+  bool scale_ue8m0{false};    // Use UE8M0 (uint8 exponential) format for scales
+  float swiglu_limit{0.0f};   // > 0 时在 fuse_silu_mul 前 clamp
 };
 template <typename T>
 void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,

@@ -5,6 +5,7 @@
 #include "layers/mhc_layer.h"
 
 #include "csrc/kernels/nvidia/expand/expand.h"
+#include "csrc/kernels/nvidia/mhc/mhc_kernel.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "kernels/nvidia/basic_kernel_wrapper.h"
 #include "kernels/nvidia/deepseek_deepgemm_wrapper.h"
@@ -19,6 +20,7 @@ Status MhcLayer::Init(const std::vector<std::any>& parameters, const RuntimeConf
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
   hc_mult_ = std::any_cast<const uint32_t>(parameters[parameter_index++]);
+  KLLM_CHECK_WITH_INFO(hc_mult_ == 4, "MhcLayer requires hc_mult == 4");
   hc_sinkhorn_iters_ = std::any_cast<const uint32_t>(parameters[parameter_index++]);
   hc_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
   hidden_dim_ = std::any_cast<const uint32_t>(parameters[parameter_index++]);
@@ -150,11 +152,10 @@ Status MhcLayer::PostForwardT(const std::vector<Tensor>& input_tensors, std::vec
   KLLM_CHECK(input_tensors[0].shape.size() == 2);
 
   const size_t token_num = input_tensors[0].shape[0];
-  // Call TileLang wrapper
-  Singleton<TritonWrapper>::GetInstance()->InvokeMhcPostFwdKernel<T>(
-      input_tensors[2].GetPtr<void>(), output_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(),
-      input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), token_num, hc_mult_, hidden_dim_,
-      /*n_thr*/ 128, /*h_blk*/ 1024, context_->device->GetPrimaryComputeStream().Get());
+  llm_kernels::nvidia::mhc_post(
+      /*out=*/output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(),
+      /*residual=*/output_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<float>(), input_tensors[2].GetPtr<float>(),
+      token_num, hidden_dim_, context_->device->GetPrimaryComputeStream().Get());
 
   output_tensors[0].shape = {token_num, hc_mult_ * hidden_dim_};
   output_tensors[0].dtype = input_tensors[0].dtype;

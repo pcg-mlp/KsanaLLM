@@ -385,15 +385,15 @@ INVOKE_BATCHED_GEMM(__nv_bfloat16, CUDA_R_16BF);
 
 template <typename T>
 void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
-                           void* output, cudaStream_t stream) {
+                           const int bias_stride, void* output, cudaStream_t stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeAddBiasResidual<T>(
       reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input_a), reinterpret_cast<const T*>(input_b), nullptr,
-      reinterpret_cast<const T*>(bias), nullptr, nullptr, m, n, stream));
+      reinterpret_cast<const T*>(bias), nullptr, nullptr, m, n, bias_stride, stream));
 }
 
 #define INVOKE_ADD_BIAS_RESIDUAL(T)                                                                               \
   template void InvokeAddBiasResidual<T>(const void* input_a, const void* input_b, const void* bias, const int m, \
-                                         const int n, void* output, cudaStream_t stream)
+                                         const int n, const int bias_stride, void* output, cudaStream_t stream)
 INVOKE_ADD_BIAS_RESIDUAL(float);
 INVOKE_ADD_BIAS_RESIDUAL(half);
 INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
