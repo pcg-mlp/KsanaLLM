@@ -32,6 +32,7 @@
 #include "csrc/kernels/nvidia/fused_add_norm/fused_add_norm.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
+#include "csrc/kernels/nvidia/grouped_topk/topk_gating_softmax.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant.h"
 #include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant_fp4.h"
@@ -329,11 +330,15 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
 
   // Special case for basic softmax + topk without grouping
   bool is_enable_basic_softmax_topk =
-      (scoring_func == "softmax" && e_bias == nullptr && !renormalize && num_expert_group == 1);
+      (scoring_func == "softmax" && e_bias == nullptr && num_expert_group == 1);
   if (is_enable_basic_softmax_topk) {
-    llm_kernels::nvidia::InvokeBasicSoftmaxTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows, num_experts,
-                                                   topk, routed_scaling_factor, stream);
-
+    if (renormalize) {
+      llm_kernels::nvidia::InvokeTopkGatingSoftmax<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows,
+                                                      num_experts, topk, renormalize, routed_scaling_factor, stream);
+    } else {
+      llm_kernels::nvidia::InvokeBasicSoftmaxTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows,
+                                                     num_experts, topk, routed_scaling_factor, stream);
+    }
     return;
   }
   cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
