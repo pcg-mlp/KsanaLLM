@@ -340,7 +340,8 @@ TEST_F(TopKTestSuit, WrapperV2ForwardsToLauncher) {
 
   Wrap::TransformV2(seq_lens_buf.data_ptr, scores.data_ptr, page_table.data_ptr, page_indices.data_ptr,
                     workspace.data_ptr, metadata.data_ptr, score_stride, page_table_stride, workspace_stride_bytes,
-                    batch_size, page_bits, /*max_seq_len=*/seq_len, /*static_cluster_threshold=*/0, stream);
+                    batch_size, page_bits, /*max_seq_len=*/seq_len, /*static_cluster_threshold=*/0,
+                    /*batch_indices=*/nullptr, /*extend_len=*/1, /*k=*/512, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 
@@ -395,7 +396,8 @@ TEST_F(TopKTestSuit, TopKV2SmokeShorPath) {
   TopKWrapper<float, int32_t>::TransformV2(
       seq_lens_buf.data_ptr, scores.data_ptr, page_table.data_ptr, page_indices.data_ptr, workspace.data_ptr,
       metadata.data_ptr, score_stride, page_table_stride, workspace_stride_bytes, batch_size,
-      /*page_bits=*/page_bits, /*max_seq_len=*/seq_len, /*static_cluster_threshold=*/0, stream);
+      /*page_bits=*/page_bits, /*max_seq_len=*/seq_len, /*static_cluster_threshold=*/0,
+      /*batch_indices=*/nullptr, /*extend_len=*/1, /*k=*/512, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 
@@ -446,7 +448,8 @@ TEST_F(TopKTestSuit, TopKV2TrivialTransformCorrectness) {
   TopKWrapper<float, int32_t>::TransformV2(
       seq_lens_buf.data_ptr, scores.data_ptr, page_table.data_ptr, page_indices.data_ptr, workspace.data_ptr,
       metadata.data_ptr, score_stride, page_table_stride, workspace_stride_bytes, batch_size,
-      /*page_bits=*/page_bits, /*max_seq_len=*/seq_len, /*static_cluster_threshold=*/0, stream);
+      /*page_bits=*/page_bits, /*max_seq_len=*/seq_len, /*static_cluster_threshold=*/0,
+      /*batch_indices=*/nullptr, /*extend_len=*/1, /*k=*/512, stream);
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   ASSERT_EQ(cudaGetLastError(), cudaSuccess);
 

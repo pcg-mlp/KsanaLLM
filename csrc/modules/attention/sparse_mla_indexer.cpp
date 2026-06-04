@@ -173,7 +173,8 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
          flash_indexer.cu_seq_len_start_tensor, flash_indexer.cu_seq_len_end_tensor,
          flash_indexer.batch_indices_tensor,
          model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
-         shared_indexer.chunk_token_starts_host, shared_indexer.chunk_kv_token_ranges_host, attn_ctx.forward_shape},
+         shared_indexer.chunk_token_starts_host, shared_indexer.chunk_kv_token_ranges_host,
+         shared_indexer.chunk_max_compressed_kv_lens_host, attn_ctx.forward_shape},
         context_output_tensors));
   }
 
@@ -200,7 +201,8 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
            model_input->page_metas[i]->input_length, page_indexer.expanded_seq_len_tensor,
            model_input->page_metas[i]->block_table, page_dsa.expanded_block_table,
            page_indexer.cu_seq_len_start_tensor, page_indexer.cu_seq_len_end_tensor,
-           model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta},
+           model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta,
+           shared_indexer.max_compressed_seq_len_host},
           current_output_tensors));
       page_dsa.paged_schedule_meta.shape[2] = 1;
 

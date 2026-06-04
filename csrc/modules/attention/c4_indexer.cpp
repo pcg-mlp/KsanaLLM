@@ -8,6 +8,7 @@
 
 #include "layers/flash_sparse_mla_indexer_layer.h"
 #include "layers/paged_sparse_mla_indexer_layer.h"
+#include "layers/topk_layer.h"
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "models/base/attention_meta/c4_indexer_attention_meta.h"
@@ -120,7 +121,9 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
 
   // Step 4: Process flash and paged attention separately for top-k token selection
   // Use large enough workspace for quantization
-  Tensor quant_workspace = workspace.GetView({total_tokens * n_heads_ * head_dim_}, workspace_offset);
+  // *2: metadata needs int32 (4B) per element, workspace dtype is fp16/bf16 (2B), so each int32 takes 2 elements.
+  size_t quant_workspace_size = std::max(n_heads_ * head_dim_, kTopkV2MetadataIntsPerBatch * 2);
+  Tensor quant_workspace = workspace.GetView({total_tokens * quant_workspace_size}, workspace_offset);
   auto& attn_ctx = forwarding_context.GetAttentionForwardContext();
   const auto& model_input = forwarding_context.GetModelInput();
 
@@ -157,6 +160,7 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
          model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
          c4_shared_indexer.chunk_token_starts_host,            // chunk_token_starts (HOST)
          c4_shared_indexer.chunk_kv_token_ranges_host,         // chunk_kv_token_ranges (HOST)
+         c4_shared_indexer.chunk_max_compressed_kv_lens_host,  // chunk_max_compressed_kv_lens (HOST)
          attn_ctx.forward_shape},                              // forward_shape
         context_outputs));
   }
@@ -190,10 +194,12 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
            page_c4_indexer.c4_seq_lens_tensor,                          // c4_seq_lens
            page_c4_indexer.expanded_c4_seq_lens_tensor,                 // expanded_c4_seq_lens
            model_input->page_metas[i]->block_table,                     // block_table
-           page_dsa.expanded_block_table,
-           page_c4_indexer.cu_seq_len_start_tensor,
-           page_c4_indexer.cu_seq_len_end_tensor,
-           model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta},
+           page_dsa.expanded_block_table,                               // expanded_block_table
+           page_c4_indexer.cu_seq_len_start_tensor,                     // cu_seq_len_start
+           page_c4_indexer.cu_seq_len_end_tensor,                       // cu_seq_len_end
+           model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
+           page_dsa.paged_schedule_meta,                                // paged_schedule_meta
+           c4_shared_indexer.max_compressed_seq_len_host},              // max_compressed_seq_len (HOST)
           current_outputs));
       page_dsa.paged_schedule_meta.shape[2] = 1;
 

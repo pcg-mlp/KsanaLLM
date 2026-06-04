@@ -39,6 +39,7 @@ struct PagedMlaInputData {
   size_t total_q_tokens;  // new tokens without prefix
   size_t total_k_tokens;  // k may be compressed
   size_t batch_size;
+  size_t max_compressed_seq_len;  // max(seq_len / compress_ratio) across decode requests in this group
   cudaStream_t stream;
 };
 
@@ -47,6 +48,8 @@ struct PagedQuantWorkspace {
   uint8_t* q_fp8_ptr;
   float* q_scale_ptr;
   float* logits_ptr;
+  uint8_t* topkv2_ws_ptr;
+  uint8_t* topkv2_metadata_ptr;
   size_t aligned_max_seq_len;
 };
 
@@ -142,6 +145,8 @@ static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
   const Tensor* cu_seq_len_end_tensor = &(*input_iter++);              // cu_seq_len_end
   const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // layer_indexer_kv_cache_ptr
   const Tensor& schedule_meta_tensor = *input_iter++;                  // schedule_meta
+  const size_t max_compressed_seq_len =
+      static_cast<size_t>((input_iter++)->template GetPtr<int32_t>()[0]);  // max_compressed_seq_len (HOST INT32)
 
   // 使用聚合初始化创建对象
   PagedMlaInputData<SCALAR_T> data{.q_ptr = q_tensor.GetPtr<SCALAR_T>(),
@@ -161,13 +166,14 @@ static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
                                    .total_q_tokens = q_tensor.shape[0],
                                    .total_k_tokens = k_tensor.shape[0],
                                    .batch_size = input_length_tensor.shape[0],
+                                   .max_compressed_seq_len = max_compressed_seq_len,
                                    .stream = context->device->GetPrimaryComputeStream().Get()};
 
   return data;
 }
 
 static void PrepareQuantWorkspace(size_t total_q_tokens, PagedQuantWorkspace& workspace, uint8_t* quant_workspace_ptr,
-                                  float* logits_workspace_ptr, int n_heads, int head_dim, int max_seq_len,
+                                  float* layer_workspace_ptr, int n_heads, int head_dim, int max_seq_len,
                                   int block_size) {
   // Calculate FP8 quantization buffer sizes
   size_t q_fp8_bytes = total_q_tokens * n_heads * head_dim;
@@ -177,9 +183,13 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, PagedQuantWorkspace& wo
       RoundUp(static_cast<size_t>(max_seq_len), static_cast<size_t>(num_math_warp_groups * block_size));
 
   // Setup workspace pointers
+  workspace.topkv2_ws_ptr = quant_workspace_ptr;
   workspace.q_fp8_ptr = quant_workspace_ptr;
   workspace.q_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes);
-  workspace.logits_ptr = logits_workspace_ptr;
+  uint8_t* layer_base = reinterpret_cast<uint8_t*>(layer_workspace_ptr);
+  workspace.topkv2_metadata_ptr = layer_base;
+  size_t topkv2_metadata_bytes = (total_q_tokens + 1) * kTopkV2MetadataIntsPerBatch * sizeof(int32_t);
+  workspace.logits_ptr = reinterpret_cast<float*>(layer_base + topkv2_metadata_bytes);
   workspace.aligned_max_seq_len = aligned_max_seq_len;
 }
 
@@ -247,10 +257,13 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
                                             {expanded_batch_size, static_cast<int64_t>(block_table_tensor->shape[1])},
                                             torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
 
-  // Prepare logits tensor
+  // Prepare logits tensor — use dynamic max_compressed_seq_len instead of static max
+  constexpr int num_math_warp_groups = 4;
+  const size_t dynamic_aligned_max_seq_len =
+      RoundUp(input_data.max_compressed_seq_len, static_cast<size_t>(num_math_warp_groups * block_size));
   auto logits_torch = torch::from_blob(
       workspace.logits_ptr,
-      {static_cast<int64_t>(input_data.total_q_tokens), static_cast<int64_t>(workspace.aligned_max_seq_len)},
+      {static_cast<int64_t>(input_data.total_q_tokens), static_cast<int64_t>(dynamic_aligned_max_seq_len)},
       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, rank));
 
   auto deepseek_deepgemm_wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
@@ -263,22 +276,29 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
 
   // Call DeepGEMM MQA
   deepseek_deepgemm_wrapper->Fp8PagedMqaLogits(q_torch, fused_kv_cache_torch, weights_torch, context_lens_torch,
-                                               block_table_torch, schedule_meta_torch, logits_torch, max_seq_len,
-                                               input_data.stream);
+                                               block_table_torch, schedule_meta_torch, logits_torch,
+                                               dynamic_aligned_max_seq_len, input_data.stream);
 
   return Status();
 }
 
 template <typename SCALAR_T>
 static Status SelectTopK(BaseLayer* topk_layer, const PagedMlaInputData<SCALAR_T>& input_data,
-                         PagedQuantWorkspace& workspace, Tensor& topk_indices, int index_topk) {
+                         PagedQuantWorkspace& workspace, Tensor& topk_indices, int index_topk, int block_size) {
+  constexpr int num_math_warp_groups = 4;
+  const size_t dynamic_aligned_max_seq_len =
+      RoundUp(input_data.max_compressed_seq_len, static_cast<size_t>(num_math_warp_groups * block_size));
   Tensor scores(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
-                {input_data.total_q_tokens, workspace.aligned_max_seq_len}, workspace.logits_ptr);
+                {input_data.total_q_tokens, dynamic_aligned_max_seq_len}, workspace.logits_ptr);
+  Tensor topkv2_workspace(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32,
+                          {input_data.total_q_tokens, kWrokspaceIntsPerBatch}, workspace.topkv2_ws_ptr);
+  Tensor topkv2_metadata(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32,
+                         {input_data.total_q_tokens + 1, kTopkV2MetadataIntsPerBatch}, workspace.topkv2_metadata_ptr);
 
   std::vector<Tensor> outputs = {topk_indices};
-  return topk_layer->Forward(
-      {scores, *input_data.cu_seq_len_start_tensor, *input_data.cu_seq_len_end_tensor, *input_data.block_table_tensor},
-      outputs);
+  return topk_layer->Forward({scores, *input_data.cu_seq_len_start_tensor, *input_data.cu_seq_len_end_tensor,
+                              *input_data.block_table_tensor, topkv2_workspace, topkv2_metadata},
+                             outputs);
 }
 
 template <typename SCALAR_T>
@@ -329,7 +349,7 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
                              layer_index_, max_seq_len_);
 
   // Step 5: TopK selection
-  SelectTopK<SCALAR_T>(topk_layer_.get(), input_data, workspace, topk_indices, index_topk_);
+  SelectTopK<SCALAR_T>(topk_layer_.get(), input_data, workspace, topk_indices, index_topk_, block_size_);
 
   return Status();
 }

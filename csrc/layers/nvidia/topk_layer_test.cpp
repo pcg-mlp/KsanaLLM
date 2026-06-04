@@ -71,11 +71,13 @@ class TopKLayerTest : public testing::Test {
   }
 
   // ---------------------------------------------------------------------------
-  // Build the radix-path input tensors matching ForwardRadix expectations:
-  //   [0] scores      [num_works, score_stride]       float
-  //   [1] row_starts  [num_works]                     int32_t
-  //   [2] row_ends    [num_works]                     int32_t
-  //   [3] page_table  [num_batches, page_table_stride] int32_t
+  // Build input tensors for TopKLayer Forward:
+  //   [0] scores      [num_works, score_stride]                    float
+  //   [1] row_starts  [num_works]                                  int32_t
+  //   [2] row_ends    [num_works]                                  int32_t
+  //   [3] page_table  [num_batches, page_table_stride]             int32_t
+  //   [4] workspace   [num_works, kWrokspaceIntsPerBatch]          int32_t
+  //   [5] metadata    [num_works+1, kTopkV2MetadataIntsPerBatch]   int32_t
   // ---------------------------------------------------------------------------
   std::vector<Tensor> MakeRadixInputs(uint32_t num_batches, uint32_t seq_len, uint32_t page_size) {
     // For simplicity: num_works == num_batches (one work item per batch).
@@ -109,6 +111,12 @@ class TopKLayerTest : public testing::Test {
                             pt_h.size() * sizeof(int32_t), cudaMemcpyHostToDevice));
     }
     inputs.push_back(pt_t);
+
+    // [4] workspace (for V2 path)
+    inputs.push_back(MakeDeviceTensor(TYPE_INT32, {num_works, kWrokspaceIntsPerBatch}));
+
+    // [5] metadata (for V2 path)
+    inputs.push_back(MakeDeviceTensor(TYPE_INT32, {num_works + 1, kTopkV2MetadataIntsPerBatch}));
 
     return inputs;
   }
@@ -213,6 +221,173 @@ TEST_F(TopKLayerTest, InvalidKThrows) {
   TopKLayer layer;
   EXPECT_THROW(layer.Init(MakeInitParams(/*k=*/256u), runtime_config_, context_, 0),
                std::runtime_error);
+}
+
+// ===========================================================================
+// V2 path tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Build V2 input tensors:
+//   [0] scores       [num_works, score_stride]        float
+//   [1] row_starts   [num_works]                      int32_t (cu_seq_len_start, zeros)
+//   [2] row_ends     [num_works]                      int32_t (cu_seq_len_end = seq_lens)
+//   [3] page_table   [num_batches, page_table_stride] int32_t
+//   [4] workspace    [num_works, kWrokspaceIntsPerBatch] int32_t
+//   [5] metadata     [num_works+1, kTopkV2MetadataIntsPerBatch] int32_t
+//   [6] batch_indices [num_works] int32_t (optional, for prefill)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ForwardV2 smoke test – k=512
+// ---------------------------------------------------------------------------
+TEST_F(TopKLayerTest, ForwardV2K512) {
+#ifndef ENABLE_CUDA
+  GTEST_SKIP();
+#endif
+  constexpr uint32_t num_batches = 2;
+  constexpr uint32_t seq_len = 2048;
+  constexpr uint32_t page_size = 64;
+  constexpr uint32_t k = 512;
+
+  TopKLayer layer;
+  ASSERT_TRUE(layer.Init(MakeInitParams(k, page_size), runtime_config_, context_, 0).OK());
+
+  auto inputs = MakeRadixInputs(num_batches, seq_len, page_size);
+
+  std::vector<Tensor> outputs;
+  outputs.push_back(MakeDeviceTensor(TYPE_INT32, {num_batches, k}));
+
+  EXPECT_TRUE(layer.Forward(inputs, outputs).OK());
+  CUDA_CHECK(cudaStreamSynchronize(context_->device->GetPrimaryComputeStream().Get()));
+  EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
+// ---------------------------------------------------------------------------
+// ForwardV2 smoke test – k=1024
+// ---------------------------------------------------------------------------
+TEST_F(TopKLayerTest, ForwardV2K1024) {
+#ifndef ENABLE_CUDA
+  GTEST_SKIP();
+#endif
+  constexpr uint32_t num_batches = 2;
+  constexpr uint32_t seq_len = 4096;
+  constexpr uint32_t page_size = 64;
+  constexpr uint32_t k = 1024;
+
+  TopKLayer layer;
+  ASSERT_TRUE(layer.Init(MakeInitParams(k, page_size), runtime_config_, context_, 0).OK());
+
+  auto inputs = MakeRadixInputs(num_batches, seq_len, page_size);
+
+  std::vector<Tensor> outputs;
+  outputs.push_back(MakeDeviceTensor(TYPE_INT32, {num_batches, k}));
+
+  EXPECT_TRUE(layer.Forward(inputs, outputs).OK());
+  CUDA_CHECK(cudaStreamSynchronize(context_->device->GetPrimaryComputeStream().Get()));
+  EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
+// ---------------------------------------------------------------------------
+// k=2048 should fall back to Radix path (V2 only supports up to 1024)
+// ---------------------------------------------------------------------------
+TEST_F(TopKLayerTest, ForwardK2048FallbackRadix) {
+#ifndef ENABLE_CUDA
+  GTEST_SKIP();
+#endif
+  constexpr uint32_t num_batches = 2;
+  constexpr uint32_t seq_len = 4096;
+  constexpr uint32_t page_size = 64;
+  constexpr uint32_t k = 2048;
+
+  TopKLayer layer;
+  ASSERT_TRUE(layer.Init(MakeInitParams(k, page_size), runtime_config_, context_, 0).OK());
+
+  // Radix path only needs [0..3] (no workspace/metadata)
+  auto inputs = MakeRadixInputs(num_batches, seq_len, page_size);
+
+  std::vector<Tensor> outputs;
+  outputs.push_back(MakeDeviceTensor(TYPE_INT32, {num_batches, k}));
+
+  EXPECT_TRUE(layer.Forward(inputs, outputs).OK());
+  CUDA_CHECK(cudaStreamSynchronize(context_->device->GetPrimaryComputeStream().Get()));
+  EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
+// ---------------------------------------------------------------------------
+// Compare Radix vs V2 results for k=512 — correctness check.
+// Fills scores with known pattern and verifies both paths produce the same
+// top-K page indices.
+// ---------------------------------------------------------------------------
+TEST_F(TopKLayerTest, RadixVsV2ConsistencyK512) {
+#ifndef ENABLE_CUDA
+  GTEST_SKIP();
+#endif
+  constexpr uint32_t num_batches = 1;
+  constexpr uint32_t seq_len = 2048;
+  constexpr uint32_t page_size = 64;
+  constexpr uint32_t k = 512;
+
+  // Build scores: descending pattern so top-K indices are deterministic.
+  std::vector<float> scores_h(num_batches * seq_len);
+  for (uint32_t i = 0; i < seq_len; ++i) {
+    scores_h[i] = static_cast<float>(seq_len - i);
+  }
+  Tensor scores_t = MakeDeviceTensor(TYPE_FP32, {num_batches, seq_len});
+  CUDA_CHECK(cudaMemcpy(scores_t.GetPtr<void>(), scores_h.data(),
+                        scores_h.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Common inputs
+  Tensor row_starts = MakeDeviceTensor(TYPE_INT32, {num_batches});
+  Tensor row_ends = MakeDeviceTensor(TYPE_INT32, {num_batches});
+  {
+    std::vector<int32_t> ends_h(num_batches, static_cast<int32_t>(seq_len));
+    CUDA_CHECK(cudaMemcpy(row_ends.GetPtr<void>(), ends_h.data(),
+                          num_batches * sizeof(int32_t), cudaMemcpyHostToDevice));
+  }
+  const uint32_t page_table_stride = (seq_len + page_size - 1) / page_size;
+  Tensor page_table = MakeDeviceTensor(TYPE_INT32, {num_batches, page_table_stride});
+  {
+    std::vector<int32_t> pt_h(num_batches * page_table_stride);
+    std::iota(pt_h.begin(), pt_h.end(), 0);
+    CUDA_CHECK(cudaMemcpy(page_table.GetPtr<void>(), pt_h.data(),
+                          pt_h.size() * sizeof(int32_t), cudaMemcpyHostToDevice));
+  }
+
+  Tensor workspace = MakeDeviceTensor(TYPE_INT32, {num_batches, kWrokspaceIntsPerBatch});
+  Tensor metadata = MakeDeviceTensor(TYPE_INT32, {num_batches + 1, kTopkV2MetadataIntsPerBatch});
+  std::vector<Tensor> inputs = {scores_t, row_starts, row_ends, page_table, workspace, metadata};
+
+  // --- Radix path (force via SetUseV2(false)) ---
+  TopKLayer radix_layer;
+  ASSERT_TRUE(radix_layer.Init(MakeInitParams(k, page_size), runtime_config_, context_, 0).OK());
+  radix_layer.SetUseV2(false);
+
+  Tensor radix_output = MakeDeviceTensor(TYPE_INT32, {num_batches, k});
+  std::vector<Tensor> radix_outputs = {radix_output};
+  ASSERT_TRUE(radix_layer.Forward(inputs, radix_outputs).OK());
+
+  // --- V2 path (default use_v2_=true) ---
+  TopKLayer v2_layer;
+  ASSERT_TRUE(v2_layer.Init(MakeInitParams(k, page_size), runtime_config_, context_, 0).OK());
+
+  Tensor v2_output = MakeDeviceTensor(TYPE_INT32, {num_batches, k});
+  std::vector<Tensor> v2_outputs = {v2_output};
+  ASSERT_TRUE(v2_layer.Forward(inputs, v2_outputs).OK());
+
+  CUDA_CHECK(cudaStreamSynchronize(context_->device->GetPrimaryComputeStream().Get()));
+
+  // Copy results back and compare (sort both since ordering may differ)
+  std::vector<int32_t> radix_res(k), v2_res(k);
+  CUDA_CHECK(cudaMemcpy(radix_res.data(), radix_output.GetPtr<void>(), k * sizeof(int32_t), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(v2_res.data(), v2_output.GetPtr<void>(), k * sizeof(int32_t), cudaMemcpyDeviceToHost));
+
+  std::sort(radix_res.begin(), radix_res.end());
+  std::sort(v2_res.begin(), v2_res.end());
+
+  for (uint32_t i = 0; i < k; ++i) {
+    EXPECT_EQ(radix_res[i], v2_res[i]) << "Mismatch at index " << i;
+  }
 }
 
 }  // namespace ksana_llm

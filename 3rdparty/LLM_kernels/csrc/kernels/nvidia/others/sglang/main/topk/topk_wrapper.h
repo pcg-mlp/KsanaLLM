@@ -57,7 +57,8 @@ class TopKWrapper {
   static void TransformV2(const void* seq_lens, const void* scores, const void* page_table, void* page_indices_out,
                           void* workspace, void* metadata, int64_t score_stride, int64_t page_table_stride,
                           int64_t workspace_stride_bytes, uint32_t batch_size, uint32_t page_bits, uint32_t max_seq_len,
-                          uint32_t static_cluster_threshold, cudaStream_t stream);
+                          uint32_t static_cluster_threshold, const void* batch_indices, uint32_t extend_len,
+                          uint32_t k, cudaStream_t stream);
 };
 
 }  // namespace topk

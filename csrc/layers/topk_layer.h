@@ -12,6 +12,9 @@
 
 namespace ksana_llm {
 
+constexpr size_t kWrokspaceIntsPerBatch = 2 + 1024 * 2;
+
+constexpr size_t kTopkV2MetadataIntsPerBatch = 4;
 // -----------------------------------------------------------------------------
 // TopKLayer
 // -----------------------------------------------------------------------------
@@ -27,10 +30,12 @@ class TopKLayer : public BaseLayer {
   Status ForwardRadix(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
   Status ForwardV2(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
+  void SetUseV2(bool use_v2) { use_v2_ = use_v2; }
+
  private:
   uint32_t k_ = 512;
   uint32_t page_bits_ = 4;
-  bool use_v2_ = false;
+  bool use_v2_ = true;
 };
 
 }  // namespace ksana_llm

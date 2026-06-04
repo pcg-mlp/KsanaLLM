@@ -23,8 +23,10 @@ struct IndexerSharedAttentionMeta {
   Tensor expanded_seq_len_tensor;  // DEVICE, INT32, [max_batch_size, decode_token_num_threshold]
 
   // ── Host staging (cross-batch persistent) ─────────────────────────────────
-  Tensor chunk_token_starts_host;     // HOST, INT32, [max_batch_size + 1]
-  Tensor chunk_kv_token_ranges_host;  // HOST, INT32, [max_batch_size * 2]
+  Tensor chunk_token_starts_host;              // HOST, INT32, [max_batch_size + 1]
+  Tensor chunk_kv_token_ranges_host;           // HOST, INT32, [max_batch_size * 2]
+  Tensor chunk_max_compressed_kv_lens_host;    // HOST, INT32, [max_batch_size], per-chunk max(seq_len/compress_ratio)
+  Tensor max_compressed_seq_len_host;          // HOST, INT32, [1], paged path: max(seq_len/compress_ratio)
 
   // ── Configuration (set by Init, read-only during Prepare*) ────────────────
   int compress_ratio = 1;

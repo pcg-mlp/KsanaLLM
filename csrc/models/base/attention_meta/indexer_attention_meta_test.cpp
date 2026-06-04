@@ -80,6 +80,9 @@ class IndexerAttentionMetaTest : public testing::Test {
     indexer_shared_.chunk_token_starts_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size + 1});
     indexer_shared_.chunk_kv_token_ranges_host =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size * 2});
+    indexer_shared_.chunk_max_compressed_kv_lens_host =
+        Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size});
+    indexer_shared_.max_compressed_seq_len_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {1});
     // Pre-allocate device backing tensors at full capacity.
     indexer_shared_.cu_seq_len_start_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
     indexer_shared_.cu_seq_len_end_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});

@@ -207,6 +207,60 @@ static void PrepareSeqLen(IndexerAttentionMeta& indexer_meta, IndexerSharedAtten
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// Compute max(seq_len / compress_ratio) across requests; for flash path also fills per-chunk HOST tensor.
+static void PrepareMaxCompressedSeqLen(IndexerAttentionMeta& indexer_meta, IndexerSharedAttentionMeta& indexer_shared,
+                                       const std::vector<ForwardRequest*>& dp_reqs, bool is_paged) {
+  const int batch_size = static_cast<int>(dp_reqs.size());
+  const int compress_ratio = indexer_shared.compress_ratio;
+
+  size_t global_max = 0;
+  for (int r = 0; r < batch_size; ++r) {
+    const size_t seq_len = dp_reqs[r]->forwarding_tokens->size();
+    const size_t compressed = seq_len / compress_ratio;
+    global_max = std::max(global_max, compressed);
+  }
+  indexer_meta.max_compressed_seq_len = global_max;
+
+  // Write global max to the shared HOST tensor (used by paged layer directly).
+  indexer_shared.max_compressed_seq_len_host.GetPtr<int32_t>()[0] = static_cast<int32_t>(global_max);
+
+  if (is_paged) return;
+
+  if (indexer_shared.chunk_token_starts_host.shape[0] > 1) {
+    const int* token_starts_ptr = indexer_shared.chunk_token_starts_host.GetPtr<int>();
+    const size_t num_chunks = indexer_shared.chunk_token_starts_host.shape[0] - 1;
+    indexer_meta.chunk_max_compressed_seq_lens.resize(num_chunks, 0);
+
+    int32_t* chunk_max_kv_ptr = indexer_shared.chunk_max_compressed_kv_lens_host.GetPtr<int32_t>();
+
+    int r = 0;
+    int cu_extend_len = 0;
+    for (size_t c = 0; c < num_chunks; ++c) {
+      const int chunk_end = token_starts_ptr[c + 1];
+      size_t chunk_max = 0;
+
+      while (r < batch_size && cu_extend_len < chunk_end) {
+        const size_t seq_len = dp_reqs[r]->forwarding_tokens->size();
+        const size_t compressed = seq_len / compress_ratio;
+        chunk_max = std::max(chunk_max, compressed);
+
+        const int extend_len = static_cast<int>(dp_reqs[r]->GetInputIdsLength());
+        if (cu_extend_len + extend_len <= chunk_end) {
+          cu_extend_len += extend_len;
+          r++;
+        } else {
+          break;
+        }
+      }
+      indexer_meta.chunk_max_compressed_seq_lens[c] = chunk_max;
+      chunk_max_kv_ptr[c] = static_cast<int32_t>(chunk_max);
+    }
+    indexer_shared.chunk_max_compressed_kv_lens_host.shape[0] = num_chunks;
+  }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
 void PrepareFlashIndexer(IndexerAttentionMeta& indexer_meta, IndexerSharedAttentionMeta& indexer_shared,
                          const FlashAttentionMeta& flash_meta, const AttentionBuilderConfig& config) {
   indexer_meta.Reset();
@@ -216,6 +270,7 @@ void PrepareFlashIndexer(IndexerAttentionMeta& indexer_meta, IndexerSharedAttent
   PrepareChunk(indexer_shared, indexer_meta, flash_meta);
   PrepareCuSeqLen(indexer_meta, indexer_shared, flash_meta.dp_reqs, /*is_paged=*/false, config);
   PrepareBatchIndices(indexer_meta, indexer_shared, flash_meta.dp_reqs, config);
+  PrepareMaxCompressedSeqLen(indexer_meta, indexer_shared, flash_meta.dp_reqs, /*is_paged=*/false);
 }
 
 void PreparePagedIndexer(IndexerAttentionMeta& indexer_meta, IndexerSharedAttentionMeta& indexer_shared,
@@ -228,6 +283,7 @@ void PreparePagedIndexer(IndexerAttentionMeta& indexer_meta, IndexerSharedAttent
     PrepareSeqLen(indexer_meta, indexer_shared, page_meta.dp_reqs, page_meta.q_seq_len, config);
   }
   PrepareCuSeqLen(indexer_meta, indexer_shared, page_meta.dp_reqs, /*is_paged=*/true, config);
+  PrepareMaxCompressedSeqLen(indexer_meta, indexer_shared, page_meta.dp_reqs, /*is_paged=*/true);
 }
 
 }  // namespace ksana_llm
