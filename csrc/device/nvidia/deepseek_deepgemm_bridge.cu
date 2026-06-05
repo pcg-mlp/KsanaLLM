@@ -13,8 +13,8 @@
 #  include "jit/include_parser.hpp"
 #  include "jit/kernel_runtime.hpp"
 
-#  include "jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp"
 #  include "jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
+#  include "jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp"
 #  include "jit_kernels/impls/smxx_fp8_fp4_mqa_logits.hpp"
 #  include "jit_kernels/impls/smxx_fp8_fp4_paged_mqa_logits.hpp"
 
@@ -26,7 +26,7 @@ void InitializeRuntime() {
     deep_gemm::Compiler::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH, DEEPGEMM_CUDA_HOME);
     deep_gemm::IncludeParser::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH);
   } else {
-    std::filesystem::path deepseek_deepgemm_path(env_path_str);
+    std::filesystem::path deepseek_deepgemm_path = std::filesystem::absolute(env_path_str);
     deepseek_deepgemm_path /= "deepseek_deep_gemm";
     deep_gemm::Compiler::prepare_init(deepseek_deepgemm_path, DEEPGEMM_CUDA_HOME);
     deep_gemm::IncludeParser::prepare_init(deepseek_deepgemm_path);
@@ -89,13 +89,10 @@ void Sm90Tf32HcPreNormGemm(const torch::Tensor& a, const torch::Tensor& b, const
   deep_gemm::sm90_tf32_hc_prenorm_gemm(a, b, d, sqr_sum, m, n, k, num_splits);
 }
 
-void Sm90Fp8Gemm1D2D(const torch::Tensor& a, const torch::Tensor& sfa,
-                     const torch::Tensor& b, const torch::Tensor& sfb,
-                     const torch::Tensor& d,
-                     const int& m, const int& n, const int& k,
+void Sm90Fp8Gemm1D2D(const torch::Tensor& a, const torch::Tensor& sfa, const torch::Tensor& b, const torch::Tensor& sfb,
+                     const torch::Tensor& d, const int& m, const int& n, const int& k,
                      const std::string& compiled_dims) {
-  deep_gemm::sm90_fp8_gemm_1d2d(a, sfa, b, sfb, std::nullopt, d, m, n, k,
-                                cute::UMMA::Major::K, cute::UMMA::Major::K,
+  deep_gemm::sm90_fp8_gemm_1d2d(a, sfa, b, sfb, std::nullopt, d, m, n, k, cute::UMMA::Major::K, cute::UMMA::Major::K,
                                 cute::UMMA::Major::K, compiled_dims);
 }
 
