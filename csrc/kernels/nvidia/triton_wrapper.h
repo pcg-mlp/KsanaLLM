@@ -141,6 +141,10 @@ class TritonWrapper {
                                   void* residual, void* layer_input, int num_tokens, int hidden_size, float rms_eps,
                                   float mhc_pre_eps, int n_splits, int mhc_mult, cudaStream_t stream);
 
+  template <typename T>
+  void InvokeHummingFp8Quant(const T* input, float* scale, void* output, int hidden_size, int num_tokens,
+                             cudaStream_t stream);
+
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,
                                                  const std::unordered_map<std::string, std::string>& map);

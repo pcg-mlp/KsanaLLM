@@ -52,6 +52,7 @@ static const Fp4MoeTestConfig kProEP8 = {"Pro_EP8", 7168, 3072, 384, 1, 8};
 // NOTE(jinxcwu) 可以多加一点做完整的性能测试覆盖，目前为了节省测试时间设置的比较小
 // ===========================================================================
 static const std::vector<size_t> kTokenSizes = {1, 4, 16};
+// static const std::vector<size_t> kTokenSizes = {16, 32, 64, 128, 256, 512, 1024};
 
 static constexpr int kWarmupIters = 20;
 static constexpr int kBenchIters = 50;
@@ -348,7 +349,7 @@ std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_tok
   params.push_back(true);                          // 8: use_vllm_moe
   params.push_back(uint32_t(1));                   // 9
   params.push_back(uint32_t(1));                   // 10
-  params.push_back(std::string("softmax"));        // 11
+  params.push_back(std::string("sqrtsoftplus"));   // 11
   params.push_back(std::string("greedy"));         // 12
   params.push_back(false);                         // 13
   params.push_back(1.0f);                          // 14
@@ -515,8 +516,10 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
   base_runtime_config.parallel_basic_config.expert_parallel_size = cfg.expert_para_size;
 
   // =========================================================================
-  // 1. Generate base weights once (shared across all backends)
+  // 1. Generate base weights once (seed 123, shared across all backends)
   // =========================================================================
+  torch::manual_seed(123);
+  torch::cuda::manual_seed(123);
   ProcessedWeights base = GenerateBaseWeights(cfg);
 
   // =========================================================================
@@ -524,6 +527,7 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
   //    All backends slice from these, guaranteeing identical inputs per M.
   // =========================================================================
   torch::manual_seed(42);
+  torch::cuda::manual_seed(42);
   auto bf16_opt = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kBFloat16);
   torch::Tensor hs_full = torch::randn({static_cast<int64_t>(max_ntok), static_cast<int64_t>(K)}, bf16_opt);
   torch::Tensor gate_full = torch::randn({static_cast<int64_t>(max_ntok), static_cast<int64_t>(E)}, bf16_opt);

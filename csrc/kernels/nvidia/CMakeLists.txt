@@ -25,6 +25,10 @@ target_link_libraries(llm_kernels_nvidia_kernel_triton PUBLIC utils ${TORCH_LIBR
 # cc_test(fused_moe_gptq_awq_test SRCS ${FUSED_MOE_GPTQ_AWQ_TEST_SRCS} DEPS
 #     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
+set(HUMMING_FP8_QUANT_TEST_SRCS humming_fp8_quant_test.cpp)
+cc_test(humming_fp8_quant_test SRCS ${HUMMING_FP8_QUANT_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
+
 # if (SM STREQUAL "90" OR SM STREQUAL "90a")
 #     file(GLOB_RECURSE FUSED_MOE_GPTQ_INT4_FP8_TEST_SRCS fused_moe_gptq_int4_fp8_test.cpp)
 #     cc_test(fused_moe_gptq_int4_fp8_test SRCS ${FUSED_MOE_GPTQ_INT4_FP8_TEST_SRCS} DEPS

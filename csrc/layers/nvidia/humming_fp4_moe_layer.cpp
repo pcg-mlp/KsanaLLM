@@ -7,7 +7,9 @@
 #include "csrc/kernels/nvidia/others/humming/jit/humming_jit_compiler.h"
 #include "csrc/kernels/nvidia/others/humming/ops/ops.h"
 #include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
+#include "kernels/nvidia/triton_wrapper.h"
 #include "layers/topk_softplus_sqrt_layer.h"
+#include "utils/singleton.h"
 #include "utils/utils.h"
 
 namespace ksana_llm {
@@ -351,12 +353,9 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     const void* gemm1_global_scale = nullptr;
 
     if (humming_compute_dtype_ == llm_kernels::nvidia::humming::ComputeDtype::FP8) {
-      // Zero-initialize scale buffer to avoid NaN from uninitialized memory
-      cudaMemsetAsync(fp8_scale_buffer_, 0, fp8_scale_buffer_size_, stream);
-      llm_kernels::nvidia::InvokeDynamicPerTokenScaledFP8Quant<T>(
-          reinterpret_cast<const T*>(hidden_states_ptr), fp8_scale_buffer_,
-          nullptr,  // scale_ub (no upper bound)
-          fp8_activation_buffer_, static_cast<int>(size_k_w1), static_cast<int>(total_tokens), stream);
+      Singleton<TritonWrapper>::GetInstance()->InvokeHummingFp8Quant<T>(
+          reinterpret_cast<const T*>(hidden_states_ptr), fp8_scale_buffer_, fp8_activation_buffer_,
+          static_cast<int>(size_k_w1), static_cast<int>(total_tokens), stream);
       gemm1_a = fp8_activation_buffer_;
       gemm1_a_scale = fp8_scale_buffer_;
       gemm1_global_scale = w1_global_scale_;
@@ -423,12 +422,9 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     const void* gemm2_global_scale = nullptr;
 
     if (humming_compute_dtype_ == llm_kernels::nvidia::humming::ComputeDtype::FP8) {
-      // Zero-initialize scale buffer to avoid NaN from uninitialized memory
-      cudaMemsetAsync(fp8_scale_buffer_, 0, fp8_scale_buffer_size_, stream);
-      llm_kernels::nvidia::InvokeDynamicPerTokenScaledFP8Quant<T>(
-          reinterpret_cast<const T*>(intermediate_cache2_), fp8_scale_buffer_,
-          nullptr,  // scale_ub (no upper bound)
-          fp8_activation_buffer_, static_cast<int>(size_k_w2), static_cast<int>(total_tokens * expert_topk_), stream);
+      Singleton<TritonWrapper>::GetInstance()->InvokeHummingFp8Quant<T>(
+          reinterpret_cast<const T*>(intermediate_cache2_), fp8_scale_buffer_, fp8_activation_buffer_,
+          static_cast<int>(size_k_w2), static_cast<int>(total_tokens * expert_topk_), stream);
       gemm2_a = fp8_activation_buffer_;
       gemm2_a_scale = fp8_scale_buffer_;
       gemm2_global_scale = w2_global_scale_;

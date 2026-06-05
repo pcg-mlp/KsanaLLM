@@ -87,6 +87,7 @@ TritonWrapper::TritonWrapper() {
       "hidden_size",         "rms_eps",         "mhc_pre_eps", "mhc_sinkhorn_eps",
       "mhc_post_mult_value", "sinkhorn_repeat", "n_splits",    "mhc_mult"};
   kernel_key_map_["mhc_head_big_fuse_kernel"] = {"hidden_size", "rms_eps", "mhc_pre_eps", "n_splits", "mhc_mult"};
+  kernel_key_map_["_quant_tensor_kernel"] = {"N"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -468,6 +469,42 @@ INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(float);
 INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(half);
 INVOKE_FUSED_MOE_WFP4AFP8_KERNEL(__nv_bfloat16);
 #undef INVOKE_FUSED_MOE_WFP4AFP8_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeHummingFp8Quant(const T* input, float* scale, void* output, int hidden_size, int num_tokens,
+                                          cudaStream_t stream) {
+  std::string kernel_name = "_quant_tensor_kernel";
+
+  // The cubin's .param list (verified against generated PTX):
+  //   param 0: x_ptr     (u64)
+  //   param 1: xq_ptr    (u64)
+  //   param 2: scale_ptr (u64)
+  //   param 3: stride_x  (u32)
+  //   param 4: num_blocks (u32)
+  int stride_x = hidden_size;
+  int num_blocks = num_tokens;
+
+  void* x_ptr = const_cast<T*>(input);
+  void* xq_ptr = output;
+  void* scale_ptr = scale;
+
+  void* args[] = {
+      &x_ptr, &xq_ptr, &scale_ptr, &stride_x, &num_blocks,
+  };
+
+  std::unordered_map<std::string, std::string> map = {{"N", ConvertToString(hidden_size)}};
+
+  size_t grid_x = static_cast<size_t>(num_tokens);
+  InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
+}
+
+#define INVOKE_HUMMING_FP8_QUANT(T)                                                                                  \
+  template void TritonWrapper::InvokeHummingFp8Quant<T>(const T* input, float* scale, void* output, int hidden_size, \
+                                                        int num_tokens, cudaStream_t stream)
+INVOKE_HUMMING_FP8_QUANT(float);
+INVOKE_HUMMING_FP8_QUANT(half);
+INVOKE_HUMMING_FP8_QUANT(__nv_bfloat16);
+#undef INVOKE_HUMMING_FP8_QUANT
 
 template <typename T>
 void TritonWrapper::InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void* expert_num_tokens, void* a_scale,

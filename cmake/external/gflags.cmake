@@ -9,8 +9,15 @@ find_package(gflags QUIET)
 
 if(gflags_FOUND)
     message(STATUS "Using system gflags: version ${GFLAGS_VERSION_STRING}, "
-                   "include=${GFLAGS_INCLUDE_DIR}, target=${GFLAGS_LIBRARIES}")
-    include_directories(${GFLAGS_INCLUDE_DIR})
+                   "include=${GFLAGS_INCLUDE_DIR}, libs=${GFLAGS_LIBRARIES}")
+    # Create an INTERFACE target so that target_link_libraries(… gflags …)
+    # works regardless of whether gflags was found as a system package or
+    # built from source.
+    if(NOT TARGET gflags)
+        add_library(gflags INTERFACE)
+        target_include_directories(gflags INTERFACE ${GFLAGS_INCLUDE_DIR})
+        target_link_libraries(gflags INTERFACE ${GFLAGS_LIBRARIES})
+    endif()
 else()
     message(STATUS "System gflags not found, building from source")
     include(FetchContent)
@@ -39,6 +46,4 @@ else()
 
     message(STATUS "Google flags source directory: ${gflags_SOURCE_DIR}")
     message(STATUS "Google flags binary directory: ${gflags_BINARY_DIR}")
-
-    include_directories(${gflags_BINARY_DIR}/include)
 endif()
