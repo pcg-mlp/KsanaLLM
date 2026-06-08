@@ -375,19 +375,6 @@ void DeepSeekDeepGEMMWrapper::Fp8BlockGemm(void* a_q, void* a_s, void* b, void* 
   CUDA_CHECK_LAST_ERROR(
       deepseek::Sm90Fp8Gemm1D2D(a_tensor, sfa_tensor, b_tensor, sfb_tensor, d_tensor, m, n, k, "nk"));
 
-  {
-    cudaError_t sync_err = cudaStreamSynchronize(stream);
-    if (sync_err != cudaSuccess) {
-      KLLM_LOG_ERROR << "Fp8BlockGemm cudaStreamSynchronize failed: " << cudaGetErrorString(sync_err)
-                     << " (m=" << m << ", n=" << n << ", k=" << k << ")";
-    }
-    cudaError_t runtime_err = cudaGetLastError();
-    if (runtime_err != cudaSuccess) {
-      KLLM_LOG_ERROR << "Fp8BlockGemm runtime error: " << cudaGetErrorString(runtime_err)
-                     << " (m=" << m << ", n=" << n << ", k=" << k << ")";
-    }
-  }
-
   at::cuda::setCurrentCUDAStream(original_stream);
 #else
   KLLM_KERNEL_THROW("ENABLE_DEEPSEEK_DEEPGEMM=0, skipping DeepSeek DeepGEMM kernel.");

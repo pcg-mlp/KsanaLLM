@@ -137,7 +137,8 @@ Status TopKLayer::ForwardV2(const std::vector<Tensor>& input_tensors, std::vecto
 
   const auto& workspace = input_tensors[4];
   const auto& metadata = input_tensors[5];
-  const int64_t workspace_stride_bytes = static_cast<int64_t>(workspace.shape[1]);
+  // V2 kernel expects workspace stride in bytes, while Tensor shape is counted in dtype elements.
+  const int64_t workspace_stride_bytes = static_cast<int64_t>(workspace.shape[1] * workspace.GetDTypeSize());
 
   const int32_t* batch_indices_ptr = nullptr;
   uint32_t extend_len;
