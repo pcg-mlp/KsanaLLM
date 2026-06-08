@@ -8,6 +8,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 
 #include "cache_manager/base_cache_manager.h"
 #include "runtime/request_state.h"
@@ -29,8 +30,10 @@ PrefixCacheManager::PrefixCacheManager(const CacheManagerConfig& cache_manager_c
 
   // Initialize SWACacheManager only when SWA is configured.
   if (swa_block_allocator_group != nullptr && cache_manager_config_.sliding_window_size > 0) {
-    swa_cache_manager_ = std::make_unique<SWACacheManager>(
-        swa_block_allocator_group, cache_manager_config_.sliding_window_size, cache_manager_config_.block_token_num);
+    const bool is_contiguous_swa_mode = !cache_manager_config_.enable_non_contiguous_swa_mode;
+    swa_cache_manager_ =
+        std::make_unique<SWACacheManager>(swa_block_allocator_group, cache_manager_config_.sliding_window_size,
+                                          cache_manager_config_.block_token_num, is_contiguous_swa_mode);
   }
 }
 
@@ -284,17 +287,17 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
     // cached_blocks.size() == last_swa_valid_idx.
     // For need_swa_align=false, cached_blocks.size() == last_fa_valid_idx >= last_swa_valid_idx.
     request->swa_window_fa_block_ids.clear();
+    request->swa_window_block_idxs.clear();
     if (last_swa_valid_idx > 0) {
       // When full cache hit occurs, HandleFullPrefixCacheHit may rollback one block for
       // extend recomputation, extend the window by 1 to cover it.
       const bool is_full_hit = (last_swa_valid_idx * block_token_num >= check_token_num);
       const size_t window_cover = sliding_window_blocks + (is_full_hit ? 1 : 0);
-      const size_t win_start =
-          (last_swa_valid_idx >= window_cover) ? last_swa_valid_idx - window_cover : 0;
-      request->swa_window_start_block_idx = win_start;
+      const size_t win_start = (last_swa_valid_idx >= window_cover) ? last_swa_valid_idx - window_cover : 0;
       for (size_t i = win_start; i < last_swa_valid_idx; ++i) {
         const size_t fa_id = request->cached_blocks[i]->block_id;
         request->swa_window_fa_block_ids.push_back(fa_id);
+        request->swa_window_block_idxs.push_back(i);
         // Increment hit_count here (at query time) so that the LFU eviction order
         // reflects every prefix-cache hit, regardless of whether AllocateRequestBlocks
         // is subsequently called.  AllocateRequestBlocksInternal will call AcquireSWABlock
@@ -677,27 +680,34 @@ bool PrefixCacheManager::FreeCachedBlocks(size_t block_num, size_t& free_block_n
 
 Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* cached_request, int64_t req_id,
                                                          std::vector<int>& req_block_ids, size_t fa_block_num,
-                                                         size_t swa_block_num, std::vector<int>& new_fa_block_ids,
-                                                         std::vector<int>& new_swa_block_ids) {
-  KLLM_CHECK_WITH_INFO(
-      fa_block_num >= swa_block_num,
-      FormatStr("FA block num (%zu) should be no less than SWA block num (%zu).", fa_block_num, swa_block_num));
+                                                         size_t minimum_swa_block_num,
+                                                         bool disable_swa_block_num_adjust,
+                                                         std::vector<int>& new_fa_block_ids,
+                                                         std::vector<int>& new_swa_fa_offsets) {
+  KLLM_CHECK_WITH_INFO(fa_block_num >= minimum_swa_block_num,
+                       FormatStr("FA block num (%zu) should be no less than minimum SWA block num (%zu).", fa_block_num,
+                                 minimum_swa_block_num));
 
-  // Pre-check SWA availability before touching any block.
-  // Pass swa_window_fa_block_ids as reserved_fa_block_ids so that reclaimable SWA
-  // blocks that will be re-acquired by ReuseSWABlock (below) are not counted as
-  // available capacity for the new swa_block_num allocations.  Without this
-  // exclusion the pre-check overestimates availability: those reclaimable blocks
-  // are removed from the reclaimable pool by ReuseSWABlock, leaving fewer blocks
-  // than expected for the new allocations.
-  if (swa_cache_manager_ != nullptr && swa_block_num > 0) {
-    const size_t available = swa_cache_manager_->GetAvailableBlockCount(cached_request->swa_window_fa_block_ids);
-    if (available < swa_block_num) {
-      return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("AllocateRequestBlocksInternal: not enough SWA blocks "
-                                                        "(needed=%zu, available=%zu).",
-                                                        swa_block_num, available));
+  // ── SWA resource check BEFORE any allocation (pure query, no state change) ──
+  // Query which new FA block positions should receive SWA blocks.
+  //   swa_window_fa_block_ids is passed as reserved_fa_block_ids so that reclaimable
+  //   SWA blocks in the current window are excluded from the available count. Without
+  //   this, GetAvailableBlockCount() would count them as free capacity, but AcquireSWABlock
+  //   (called below after this check) removes them from the reclaimable pool, leaving fewer
+  //   blocks than expected for the new allocations.
+  //   This is a pure query: if it returns -1 nothing has been allocated → clean OOM return.
+  new_swa_fa_offsets.clear();
+  if (swa_cache_manager_ != nullptr && minimum_swa_block_num > 0) {
+    const size_t cur_fa_block_num = cached_request->cached_blocks.size();
+    const size_t new_fa_block_num = cur_fa_block_num + fa_block_num;
+    if (swa_cache_manager_->GetAllocatableSWACache(req_id, cur_fa_block_num, new_fa_block_num, minimum_swa_block_num,
+                                                   disable_swa_block_num_adjust, new_swa_fa_offsets,
+                                                   cached_request->swa_window_fa_block_ids) < 0) {
+      return Status(RET_OUT_OF_DEVICE_MEMORY,
+                    FormatStr("AllocateRequestBlocksInternal: GetAllocatableSWACache failed for req %d.", req_id));
     }
   }
+  // ── End SWA resource check ───────────────────────────────────────────────────
 
   // Ensure enough FA blocks are available; evict unreferenced cached blocks if needed.
   size_t needed_blocks = 0;
@@ -710,7 +720,6 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
           ? cached_request->cached_blocks
           : std::vector<PrefixCachedBlock*>();
 
-  // Reuse some unreferenced blocks after swa cache check
   size_t free_block_num = 0;
   if (needed_blocks > 0 && !FreeCachedBlocks(needed_blocks, free_block_num, reserved_blocks)) {
     return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("AllocateRequestBlocksInternal: not enough FA blocks "
@@ -718,11 +727,10 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
                                                       fa_block_num, free_cached_blocks_.size()));
   }
 
-  // Both FA and SWA availability have been confirmed above.  Register SWA blocks for the
-  // cached FA blocks that were pre-computed in the query phase (§4.0.3: SWA registration
-  // must follow FA registration).  IncrementHitCount was already called for each of these
-  // blocks inside GetRequestPrefixBlockNumberInternal (Phase 2), so here we only call
-  // AcquireSWABlock to register req_id as an active holder without double-counting hit_count.
+  // Both SWA and FA availability confirmed above.  Now register SWA blocks for the cached
+  // FA blocks pre-computed in the query phase (§4.0.3: SWA registration must follow FA
+  // availability confirmation).  IncrementHitCount was already called in Phase 2; here we
+  // only call AcquireSWABlock to register req_id as an active holder.
   if (swa_cache_manager_ != nullptr) {
     for (size_t fa_id : cached_request->swa_window_fa_block_ids) {
       swa_cache_manager_->AcquireSWABlock(req_id, fa_id);
@@ -756,25 +764,26 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
     cb->active_requests[req_id] = std::make_pair(i, cached_request);
   }
 
+  // Build a fast lookup set from the positions returned by GetAllocatableSWACache.
+  const std::unordered_set<int> swa_positions(new_swa_fa_offsets.begin(), new_swa_fa_offsets.end());
+
   new_fa_block_ids.clear();
   new_fa_block_ids.reserve(fa_block_num);
-  new_swa_block_ids.clear();
-  new_swa_block_ids.reserve(swa_block_num);
 
-  // Allocate fa_block_num FA blocks and bind SWA blocks to the first swa_block_num of them.
+  // Allocate fa_block_num FA blocks; bind SWA blocks only at positions in swa_positions.
   for (size_t i = 0; i < fa_block_num; ++i) {
     PrefixCachedBlock* cached_block = free_cached_blocks_.front();
     free_cached_blocks_.pop();
 
+    const size_t global_idx = cached_request->cached_blocks.size();
     new_fa_block_ids.push_back(cached_block->memory_block_id);
     cached_request->cached_blocks.push_back(cached_block);
 
-    // Bind a SWA block to this FA block for the first swa_block_num allocations.
-    if (swa_cache_manager_ != nullptr && i < swa_block_num) {
+    if (swa_cache_manager_ != nullptr && swa_positions.count(static_cast<int>(global_idx))) {
       const size_t fa_block_id = cached_block->block_id;
-      const size_t prefix_fa_block_num = cached_request->cached_blocks.size() - 1;
-      int swa_mem_id = swa_cache_manager_->AllocateSWABlock(cached_request->req_id, fa_block_id, prefix_fa_block_num);
+      int swa_mem_id = swa_cache_manager_->AllocateSWABlock(cached_request->req_id, fa_block_id, global_idx);
       if (swa_mem_id < 0) {
+        // Unexpected: GetAllocatableSWACache already confirmed availability.
         // Roll back all FA blocks allocated so far (including this one).
         for (size_t j = 0; j <= i; ++j) {
           PrefixCachedBlock* cb = cached_request->cached_blocks.back();
@@ -783,13 +792,12 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
           free_cached_blocks_.push(cb);
         }
         new_fa_block_ids.clear();
-        new_swa_block_ids.clear();
+        new_swa_fa_offsets.clear();
         return Status(RET_OUT_OF_DEVICE_MEMORY,
-                      FormatStr("AllocateRequestBlocksInternal: failed to allocate SWA block %zu "
-                                "for fa_block_id=%zu.",
-                                i, fa_block_id));
+                      FormatStr("AllocateRequestBlocksInternal: unexpected AllocateSWABlock failure "
+                                "at global_idx=%zu for req %d.",
+                                global_idx, req_id));
       }
-      new_swa_block_ids.push_back(swa_mem_id);
     }
   }
 
@@ -805,11 +813,28 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   }
   PrefixCachedRequest* cached_request = it->second.get();
 
-  // Allocate new FA blocks (and SWA blocks for each of them) via the shared internal helper.
+  // Compute minimum_swa_block_num the same way as DirectCacheManager:
+  // min(new FA blocks beyond current SWA right-boundary, one full sliding window).
+  // This ensures we only require the tail-coverage SWA blocks, not one per new FA block.
+  const size_t sliding_window_blocks =
+      (cache_manager_config_.sliding_window_size > 0 && cache_manager_config_.block_token_num > 0)
+          ? (cache_manager_config_.sliding_window_size + cache_manager_config_.block_token_num - 1) /
+                    cache_manager_config_.block_token_num +
+                1
+          : 0;
+  const size_t cur_swa_end =
+      cached_request->swa_window_block_idxs.empty() ? 0 : cached_request->swa_window_block_idxs.back() + 1;
+  const size_t new_fa_total = cached_request->cached_blocks.size() + block_num;
+  const size_t minimum_swa_block_num = (swa_cache_manager_ != nullptr && sliding_window_blocks > 0)
+                                           ? std::min(new_fa_total - cur_swa_end, sliding_window_blocks)
+                                           : 0;
+
+  // Allocate new FA blocks; SWA binding is determined by GetAllocatableSWACache inside.
   std::vector<int> new_fa_block_ids;
-  std::vector<int> new_swa_block_ids;
-  Status status = AllocateRequestBlocksInternal(cached_request, req_id, req_block_ids, block_num, block_num,
-                                                new_fa_block_ids, new_swa_block_ids);
+  std::vector<int> new_swa_fa_offsets;
+  Status status =
+      AllocateRequestBlocksInternal(cached_request, req_id, req_block_ids, block_num, minimum_swa_block_num,
+                                    /*disable_swa_block_num_adjust*/ false, new_fa_block_ids, new_swa_fa_offsets);
   if (!status.OK()) {
     return Status(status.GetCode(),
                   FormatStr("Allocate %d blocks for req %d error: %s", block_num, req_id, status.GetMessage()));
@@ -820,37 +845,35 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
     req_block_ids.push_back(mem_id);
   }
 
-  // Append newly allocated FA block ids to the SWA window tracking list.
-  // ReuseSWABlock for the cached FA blocks was already called inside
-  // AllocateRequestBlocksInternal (after availability checks, §4.0.3).
-  // For the newly allocated FA blocks their SWA blocks were bound by AllocateSWABlock
-  // inside AllocateRequestBlocksInternal; just record their FA block ids here.
+  // Append only the FA blocks that actually received SWA blocks to the window tracking arrays.
+  // new_swa_fa_offsets contains the global FA block indices (ascending) chosen by
+  // GetAllocatableSWACache inside AllocateRequestBlocksInternal.
   if (swa_cache_manager_ != nullptr) {
-    const size_t first_new_idx = cached_request->cached_blocks.size() - block_num;
-    for (size_t i = 0; i < block_num; ++i) {
-      const size_t fa_block_id = cached_request->cached_blocks[first_new_idx + i]->block_id;
-      if (cached_request->swa_window_fa_block_ids.empty()) {
-        cached_request->swa_window_start_block_idx = first_new_idx + i;
-      }
+    for (int pos : new_swa_fa_offsets) {
+      const size_t global_idx = static_cast<size_t>(pos);
+      const size_t fa_block_id = cached_request->cached_blocks[global_idx]->block_id;
       cached_request->swa_window_fa_block_ids.push_back(fa_block_id);
+      cached_request->swa_window_block_idxs.push_back(global_idx);
     }
   }
 
-  // Fill SWA output parameters.
+  // Fill SWA output parameters directly from the per-block index arrays.
   // swa_block_idx_offsets[i] is the FA block global index for swa_req_block_ids[i].
   if (swa_cache_manager_ != nullptr) {
     swa_req_block_ids.clear();
     swa_block_idx_offsets.clear();
-    size_t block_idx = cached_request->swa_window_start_block_idx;
-    for (size_t fa_id : cached_request->swa_window_fa_block_ids) {
-      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(fa_id);
+    for (size_t i = 0; i < cached_request->swa_window_fa_block_ids.size(); ++i) {
+      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(cached_request->swa_window_fa_block_ids[i]);
       if (mem_id >= 0) {
         swa_req_block_ids.push_back(mem_id);
-        swa_block_idx_offsets.push_back(block_idx);
+        swa_block_idx_offsets.push_back(cached_request->swa_window_block_idxs[i]);
       }
-      ++block_idx;
     }
   }
+  KLLM_LOG_SCHEDULER << "AllocateRequestBlocks, req_id=" << req_id << ", block_num=" << block_num
+                     << ", req_block_num=" << cached_request->cached_blocks.size()
+                     << ", swa_block_idx_offsets.size=" << swa_block_idx_offsets.size() << ", "
+                     << Vector2Str(swa_block_idx_offsets);
 
   return Status();
 }
@@ -870,12 +893,14 @@ Status PrefixCacheManager::AllocateBlocksForRemoteCache(int64_t req_id, std::vec
                   FormatStr("AllocateBlocksForRemoteCache: req %d is not in remote_loading state.", req_id));
   }
 
-  // Allocate fa_block_num FA blocks; bind SWA blocks to the first swa_block_num of them.
+  // Allocate fa_block_num FA blocks; SWA blocks are bound at positions chosen by
+  // GetAllocatableSWACache (called inside AllocateRequestBlocksInternal).
   // AllocateRequestBlocksInternal also registers req_id into active_requests for all
-  // cached_blocks entries that were not yet registered (i.e., the previously-matched
-  // cached FA blocks in cached_blocks[0..fa_prefix_block_num)).
-  Status status = AllocateRequestBlocksInternal(cached_request, req_id, req_block_ids, fa_block_num, swa_block_num,
-                                                remote_fa_block_ids, remote_swa_block_ids);
+  // cached_blocks entries not yet registered (the previously-matched cached FA blocks).
+  std::vector<int> new_swa_fa_offsets;
+  Status status =
+      AllocateRequestBlocksInternal(cached_request, req_id, req_block_ids, fa_block_num, swa_block_num,
+                                    /*disable_swa_block_num_adjust*/ true, remote_fa_block_ids, new_swa_fa_offsets);
   if (!status.OK()) {
     return Status(status.GetCode(), FormatStr("AllocateBlocksForRemoteCache req %d: %s", req_id, status.GetMessage()));
   }
@@ -884,15 +909,24 @@ Status PrefixCacheManager::AllocateBlocksForRemoteCache(int64_t req_id, std::vec
   // inside AllocateRequestBlocksInternal after the availability checks (§4.0.3).
   // IncrementHitCount was called earlier in GetRequestPrefixBlockNumberInternal (Phase 2).
 
-  // Record the FA block ids of the blocks that have a SWA block bound to them.
-  // These are the first swa_block_num of the newly allocated FA blocks, which are at
-  // cached_blocks[fa_prefix_block_num .. fa_prefix_block_num + swa_block_num).
+  // Record the FA block ids that actually received SWA blocks, using the positions returned
+  // by GetAllocatableSWACache inside AllocateRequestBlocksInternal.
   cached_request->remote_cache_swa_fa_block_ids.clear();
-  if (swa_cache_manager_ != nullptr && swa_block_num > 0) {
-    const size_t first_new_idx = cached_request->cached_blocks.size() - fa_block_num;
-    for (size_t i = 0; i < swa_block_num; ++i) {
+  if (swa_cache_manager_ != nullptr) {
+    for (int pos : new_swa_fa_offsets) {
       cached_request->remote_cache_swa_fa_block_ids.push_back(
-          cached_request->cached_blocks[first_new_idx + i]->block_id);
+          cached_request->cached_blocks[static_cast<size_t>(pos)]->block_id);
+    }
+  }
+
+  // Fill remote_swa_block_ids with SWA memory block IDs for the caller.
+  remote_swa_block_ids.clear();
+  if (swa_cache_manager_ != nullptr) {
+    for (size_t fa_id : cached_request->remote_cache_swa_fa_block_ids) {
+      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(fa_id);
+      if (mem_id >= 0) {
+        remote_swa_block_ids.push_back(mem_id);
+      }
     }
   }
 
@@ -966,7 +1000,8 @@ Status PrefixCacheManager::ConfirmRemoteCacheLoadingResult(int64_t req_id, const
   if (swa_cache_manager_ != nullptr) {
     // SWA enabled: must cover at least the rightmost token position in swa_window_fa_block_ids.
     const size_t swa_right_token_pos =
-        (cached_request->swa_window_start_block_idx + cached_request->swa_window_fa_block_ids.size()) * block_token_num;
+        (cached_request->swa_window_block_idxs.empty() ? 0 : (cached_request->swa_window_block_idxs.back() + 1)) *
+        block_token_num;
     if (shareable_kvcache_token_num < swa_right_token_pos) {
       return Status(RET_RUNTIME_FAILED,
                     FormatStr("ConfirmRemoteCacheLoadingResult: req %d shareable_kvcache_token_num %zu < "
@@ -1017,7 +1052,7 @@ Status PrefixCacheManager::ConfirmRemoteCacheLoadingResult(int64_t req_id, const
   //
   // Case 1 (size == 0): no remote SWA match.
   //   Free all remote SWA blocks, then truncate cached_blocks to swa_aligned_block_num
-  //   (= swa_window_start_block_idx + swa_window_fa_block_ids.size()) so that FA cache
+  //   (= swa_window_block_idxs.back() + 1) so that FA cache
   //   and SWA cache are aligned at the SWA window's right boundary.
   //
   // Case 2 (size == 1): remote SWA matched.
@@ -1047,11 +1082,11 @@ Status PrefixCacheManager::ConfirmRemoteCacheLoadingResult(int64_t req_id, const
 
     // Truncate FA cache to align with the SWA cache right boundary.
     // fa_prefix_block_num >= swa cache length, so we must truncate cached_blocks down to
-    // swa_window_start_block_idx + swa_window_fa_block_ids.size() (the block count that
-    // covers exactly the SWA window's rightmost FA block).
+    // swa_window_block_idxs.back() + 1 (the block count that covers exactly the SWA window's
+    // rightmost FA block).
     // FreeSWABlock calls inside TruncateRequestBlocks are no-ops for already-freed SWA blocks.
     const size_t swa_aligned_block_num =
-        cached_request->swa_window_start_block_idx + cached_request->swa_window_fa_block_ids.size();
+        cached_request->swa_window_block_idxs.empty() ? 0 : (cached_request->swa_window_block_idxs.back() + 1);
     KLLM_CHECK_WITH_INFO(swa_aligned_block_num == shareable_block_num,
                          FormatStr("swa_aligned_block_num %zu should be equal to shareable_block_num %zu.",
                                    swa_aligned_block_num, shareable_block_num));
@@ -1065,11 +1100,12 @@ Status PrefixCacheManager::ConfirmRemoteCacheLoadingResult(int64_t req_id, const
     // Release the old SWA window BEFORE Transfer so that dst_fa_block_id has no bound SWA block
     // (Transfer precondition: dst must have no associated SWA block).
     auto& ids = cached_request->swa_window_fa_block_ids;
-    size_t& start_idx = cached_request->swa_window_start_block_idx;
+    auto& idxs = cached_request->swa_window_block_idxs;
     for (size_t fa_id : ids) {
       swa_cache_manager_->SetReclaimable(req_id, fa_id);
     }
     ids.clear();
+    idxs.clear();
 
     // Free all unmatched remote SWA blocks.
     const size_t remote_swa_count = cached_request->remote_cache_swa_fa_block_ids.size();
@@ -1091,7 +1127,7 @@ Status PrefixCacheManager::ConfirmRemoteCacheLoadingResult(int64_t req_id, const
 
     // Rebuild the SWA window pointing to the new rightmost FA block.
     ids.push_back(dst_fa_block_id);
-    start_idx = shareable_block_num - 1;
+    idxs.push_back(shareable_block_num - 1);
 
     // Truncate cached_blocks to shareable_block_num.
     TruncateRequestBlocks(cached_request, shareable_block_num);
@@ -1218,16 +1254,18 @@ Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_r
       swa_cache_manager_->FreeSWABlock(cached_block->block_id);
       // Replace the old FA block id with the merged block's FA block id in
       // swa_window_fa_block_ids so that the window remains consistent.
-      // The position of the old id in the list is (block_index - swa_window_start_block_idx).
+      // Locate the entry by searching swa_window_block_idxs for block_index.
       auto& ids = cached_request->swa_window_fa_block_ids;
-      const size_t start_idx = cached_request->swa_window_start_block_idx;
-      if (block_index >= start_idx && (block_index - start_idx) < ids.size()) {
-        // Replace in-place: the merged block's SWA block is now used by this request.
-        ids[block_index - start_idx] = dst_cached_block->block_id;
-        swa_cache_manager_->ReuseSWABlock(cached_request->req_id, dst_cached_block->block_id);
+      const auto& idxs = cached_request->swa_window_block_idxs;
+      for (size_t k = 0; k < idxs.size(); ++k) {
+        if (idxs[k] == block_index) {
+          // Replace in-place: the merged block's SWA block is now used by this request.
+          ids[k] = dst_cached_block->block_id;
+          swa_cache_manager_->ReuseSWABlock(cached_request->req_id, dst_cached_block->block_id);
+          break;
+        }
       }
-      // If block_index is outside the current window range, the old id is simply not
-      // present in ids (it was already slid out), so nothing needs to be updated.
+      // If block_index is not found in idxs, the block has already slid out of the window.
     }
     // Reset it and move to free list.
     ResetCachedBlock(cached_block);
@@ -1363,32 +1401,25 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
     }
 
     // Release SWA blocks whose FA block index < swa_left_block.
-    // swa_window_fa_block_ids is ordered by block index (oldest first).
-    // swa_window_start_block_idx tracks the cached_blocks index of ids[0],
-    // so we can compute each block's index directly without scanning cached_blocks.
+    // swa_window_fa_block_ids is ordered by block index (oldest first);
+    // swa_window_block_idxs[i] holds the FA global index for ids[i].
     auto& ids = cached_request->swa_window_fa_block_ids;
-    size_t& start_idx = cached_request->swa_window_start_block_idx;
-    while (!ids.empty()) {
-      // The block_index of ids[0] is always start_idx.
-      if (start_idx >= swa_left_block) {
-        break;
-      }
+    auto& idxs = cached_request->swa_window_block_idxs;
+    while (!ids.empty() && idxs.front() < swa_left_block) {
       swa_cache_manager_->SetReclaimable(req_id, ids.front());
       ids.erase(ids.begin());
-      ++start_idx;
+      idxs.erase(idxs.begin());
     }
 
-    // Rebuild swa_req_block_ids and swa_block_idx_offsets from the current window.
+    // Rebuild swa_req_block_ids and swa_block_idx_offsets from the per-block index arrays.
     swa_req_block_ids.clear();
     swa_block_idx_offsets.clear();
-    size_t block_idx = start_idx;
-    for (size_t fa_id : ids) {
-      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(fa_id);
+    for (size_t i = 0; i < ids.size(); ++i) {
+      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(ids[i]);
       if (mem_id >= 0) {
         swa_req_block_ids.push_back(mem_id);
-        swa_block_idx_offsets.push_back(block_idx);
+        swa_block_idx_offsets.push_back(idxs[i]);
       }
-      ++block_idx;
     }
   }
 

@@ -196,6 +196,11 @@ struct CacheManagerConfig {
   // Sliding window size for SWA (Sliding Window Attention) KV cache.
   // 0 means SWA is disabled (no sliding window, keep all KV blocks).
   size_t sliding_window_size = 0;
+
+  // When true, SWACacheManager operates in non-contiguous mode: only the trailing
+  // minimum_swa_block_num FA blocks in each allocation batch are bound to SWA cache
+  // blocks.  When false (default), every new FA block gets an SWA cache block.
+  bool enable_non_contiguous_swa_mode = false;
 };
 
 // For multiple node pipeline.
@@ -428,6 +433,12 @@ struct RuntimeConfig {
   size_t deepep_low_latency_max_tokens = 256;
 
   bool is_profile_mode = false;  // Only used for profiling performance
+
+  // Non-contiguous SWA cache mode controls for DSV4 flash attention.
+  // enable_non_contiguous_swa_mode=false: force-disable buffer path (rollback).
+  // force_non_contiguous_swa_mode=true:  force-enable buffer path for all flash batches (debug).
+  bool enable_non_contiguous_swa_mode = true;
+  bool force_non_contiguous_swa_mode = false;
 };
 
 class ScheduleConfigParser {

@@ -363,6 +363,12 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     runtime_config_.enable_o_proj_out_of_dp = true;
   }
 
+  if (std::getenv("FORCE_NON_CONTIGUOUS_SWA") != nullptr &&
+      strcmp(std::getenv("FORCE_NON_CONTIGUOUS_SWA"), "1") == 0) {
+    runtime_config_.force_non_contiguous_swa_mode = true;
+    KLLM_LOG_WARNING << "FORCE_NON_CONTIGUOUS_SWA=1: all flash batches will use the SWA cache buffer path.";
+  }
+
   // Read block manager config.
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
@@ -408,6 +414,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   cache_manager_config_.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   cache_manager_config_.enable_prefix_caching =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_auto_prefix_cache", false);
+  cache_manager_config_.enable_non_contiguous_swa_mode = yaml_reader.GetScalar<bool>(
+      yaml_reader.GetRootNode(), "setting.cache_manager.enable_non_contiguous_swa_mode", false);
   // Platform/model-specific overrides: disable unsupported features before the generic dependency check below.
 #ifdef ENABLE_ACL
   if (cache_manager_config_.enable_prefix_caching) {

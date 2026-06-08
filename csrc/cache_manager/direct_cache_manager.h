@@ -46,10 +46,11 @@ struct DirectCachedRequest {
   // window slides past a block in UpdateRequestTokens.
   std::vector<size_t> swa_window_fa_block_ids;
 
-  // The cached_blocks index of swa_window_fa_block_ids[0].
-  // Maintained so that UpdateRequestTokens can compute block positions
-  // directly without scanning cached_blocks.
-  size_t swa_window_start_block_idx = 0;
+  // Per-block FA global index: swa_window_block_idxs[i] is the FA block global
+  // index corresponding to swa_window_fa_block_ids[i].
+  // Must always have the same length as swa_window_fa_block_ids.
+  // Replaces the old scalar swa_window_start_block_idx to support non-contiguous windows.
+  std::vector<size_t> swa_window_block_idxs;
 };
 
 // Used to support prefix caching.

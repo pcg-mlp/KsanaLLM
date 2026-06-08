@@ -24,17 +24,20 @@ static constexpr int kC128Ratio = 128;
 // Mirrors CompressorMeta::GetForwardRequestType(): q_seq_len==1 with cached tokens.
 inline bool IsPaged(const ForwardRequest& req) { return req.GetInputIdsLength() == 1 && req.kv_cached_token_num > 0; }
 
-// Translate a global block index to the physical SWA block ID (same as CompressorMeta::MapGlobalBlockToSwa).
-int MapGlobalBlockToSwa(const std::vector<int>& swa_block_ids, const std::vector<size_t>& swa_block_idx_offsets,
-                        int global_block_idx, const char* purpose) {
-  const int swa_offset = swa_block_idx_offsets.empty() ? 0 : static_cast<int>(swa_block_idx_offsets[0]);
-  const int local_idx = global_block_idx - swa_offset;
-  KLLM_CHECK_WITH_INFO(
-      local_idx >= 0 && local_idx < static_cast<int>(swa_block_ids.size()),
-      fmt::format("compressor tail {}: global_block_idx {} -> local_swa_idx {} out of swa_kv_cache_blocks "
-                  "(swa_offset={} swa_size={}).",
-                  purpose, global_block_idx, local_idx, swa_offset, swa_block_ids.size()));
-  return swa_block_ids[local_idx];
+// Translate a global block index to the physical SWA block ID.
+// Performs a linear search over swa_block_idx_offsets, which supports both contiguous and
+// non-contiguous (sparse) SWA allocations.  The SWA window is at most kSwaSize/block_token_num
+// blocks wide (typically 2-4 entries), so linear search is always O(1) in practice.
+// Returns -1 when global_block_idx is absent from swa_block_idx_offsets (no physical SWA
+// allocation for that FA block — callers must skip rather than write garbage).
+int MapGlobalBlockToSwa(const std::vector<int>& swa_block_ids,
+                        const std::vector<size_t>& swa_block_idx_offsets, int global_block_idx) {
+  for (size_t i = 0; i < swa_block_idx_offsets.size(); ++i) {
+    if (static_cast<int>(swa_block_idx_offsets[i]) == global_block_idx) {
+      return swa_block_ids[i];
+    }
+  }
+  return -1;
 }
 
 // Convert a logical token position to its physical cache position.
@@ -120,8 +123,14 @@ void PrepareTailIndices(const std::vector<ForwardRequest>& reqs, const std::unor
       KLLM_CHECK_WITH_INFO(prefix_len % compressor_shared.block_token_num == 0,
                            "CompressorSharedAttentionMeta requires prefix_len to be a multiple of block_token_num");
       const int last_prefix_block_idx = (prefix_len - 1) / compressor_shared.block_token_num;
-      tail_read_block_host.push_back(MapGlobalBlockToSwa(req.swa_kv_cache_blocks, req.swa_kv_cache_block_idx_offsets,
-                                                         last_prefix_block_idx, "read"));
+      const int tail_read_block_id =
+          MapGlobalBlockToSwa(req.swa_kv_cache_blocks, req.swa_kv_cache_block_idx_offsets, last_prefix_block_idx);
+      KLLM_CHECK_WITH_INFO(tail_read_block_id >= 0,
+                           fmt::format("compressor tail read: global_block_idx {} not found in "
+                                       "swa_kv_cache_block_idx_offsets (req_id={} prefix_len={} swa_size={}).",
+                                       last_prefix_block_idx, req.req_id, prefix_len,
+                                       req.swa_kv_cache_block_idx_offsets.size()));
+      tail_read_block_host.push_back(tail_read_block_id);
       const int slot_id = compressor_shared.req_to_slot.at(req.req_id);
       const int sub_slot_load =
           GetSubSlotId(prefix_len, kC4Ratio, compressor_shared.c4_slot_num, compressor_shared.c128_slot_num);
@@ -151,9 +160,14 @@ void PrepareTailIndices(const std::vector<ForwardRequest>& reqs, const std::unor
       if (pos_in_block >= tail_first_pos_in_block) {
         const int block_idx = i / compressor_shared.block_token_num;
         const int block_id =
-            MapGlobalBlockToSwa(req.swa_kv_cache_blocks, req.swa_kv_cache_block_idx_offsets, block_idx, "write");
-        const int slot = pos_in_block - tail_first_pos_in_block;
-        tail_write_indices_host.push_back(block_id * kTailTokens | slot);
+            MapGlobalBlockToSwa(req.swa_kv_cache_blocks, req.swa_kv_cache_block_idx_offsets, block_idx);
+        if (block_id < 0) {
+          // FA block not present in SWA allocation (non-contiguous gap): skip tail write.
+          tail_write_indices_host.push_back(-1);
+        } else {
+          const int slot = pos_in_block - tail_first_pos_in_block;
+          tail_write_indices_host.push_back(block_id * kTailTokens | slot);
+        }
       } else {
         tail_write_indices_host.push_back(-1);
       }

@@ -11,10 +11,52 @@
 namespace ksana_llm {
 
 SWACacheManager::SWACacheManager(std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group,
-                                 size_t sliding_window_size, size_t block_token_num)
+                                 size_t sliding_window_size, size_t block_token_num,
+                                 bool is_contiguous_swa_mode)
     : swa_block_allocator_group_(swa_block_allocator_group),
       sliding_window_size_(sliding_window_size),
-      block_token_num_(block_token_num) {}
+      block_token_num_(block_token_num),
+      is_contiguous_swa_mode_(is_contiguous_swa_mode) {}
+
+int SWACacheManager::GetAllocatableSWACache(int64_t req_id, size_t cur_fa_block_num, size_t new_fa_block_num,
+                                            size_t minimum_swa_block_num, bool disable_swa_block_num_adjust,
+                                            std::vector<int>& fa_block_offset,
+                                            const std::vector<size_t>& reserved_fa_block_ids) {
+  fa_block_offset.clear();
+
+  // Determine the required block count based on the current mode.
+  const size_t needed = is_contiguous_swa_mode_ && !disable_swa_block_num_adjust ? (new_fa_block_num - cur_fa_block_num)
+                                                                                 : minimum_swa_block_num;
+
+  // Use GetAvailableBlockCount(reserved_fa_block_ids) so that reclaimable SWA blocks that
+  // belong to the caller's current window (and will be re-acquired via AcquireSWABlock after
+  // this check) are not counted as free capacity.  This avoids a race where the check passes
+  // but AcquireSWABlock later shrinks the pool below what AllocateSWABlock needs.
+  if (needed > 0 && GetAvailableBlockCount(reserved_fa_block_ids) < needed) {
+    return -1;
+  }
+
+  if (is_contiguous_swa_mode_ && !disable_swa_block_num_adjust) {
+    // Contiguous mode: bind an SWA block to every new FA block position.
+    for (size_t i = cur_fa_block_num; i < new_fa_block_num; ++i) {
+      fa_block_offset.push_back(static_cast<int>(i));
+    }
+  } else {
+    // Non-contiguous mode: first bind the trailing minimum_swa_block_num positions,
+    // i.e. [new_fa_block_num - minimum_swa_block_num, new_fa_block_num).
+    // Future policy extensions may additionally allocate earlier positions when surplus
+    // blocks are available.
+    if (minimum_swa_block_num > 0) {
+      const size_t tail_start = new_fa_block_num - minimum_swa_block_num;
+      for (size_t i = tail_start; i < new_fa_block_num; ++i) {
+        fa_block_offset.push_back(static_cast<int>(i));
+      }
+    }
+    // TODO(future): extend to [cur_fa_block_num, tail_start) based on remaining availability.
+  }
+
+  return 0;
+}
 
 int SWACacheManager::AllocateSWABlock(int64_t req_id, size_t fa_block_id, size_t prefix_fa_block_num) {
   // If this FA block already has an associated SWA block, only allow replacement

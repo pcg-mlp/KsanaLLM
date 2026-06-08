@@ -7,6 +7,7 @@ import asyncio
 import csv
 import http
 import random
+import sys
 import time
 from functools import partial
 from dataclasses import dataclass, field
@@ -473,11 +474,12 @@ def check_args(args):
 
 
 def read_from_csv(csv_file, col_idx=0, remove_head=True):
-    import csv
-    csv_reader = csv.reader(open(csv_file))
-    if remove_head:
-        next(csv_reader)
-    return [row[col_idx] for row in csv_reader]
+    csv.field_size_limit(sys.maxsize)
+    with open(csv_file, newline="") as f:
+        csv_reader = csv.reader(f)
+        if remove_head:
+            next(csv_reader)
+        return [row[col_idx] for row in csv_reader]
 
 
 def prepare_tensor(client, name, input, binary_data=True):

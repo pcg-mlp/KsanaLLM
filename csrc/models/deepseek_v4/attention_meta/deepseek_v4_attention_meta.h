@@ -111,6 +111,21 @@ struct MqaSharedAttentionMeta {
   Tensor layer_tail_attn_cache_ptr_tensor;     // HOST, INT64, [1 + layer_num_on_node]
   Tensor layer_tail_indexer_cache_ptr_tensor;  // HOST, INT64, [1 + layer_num_on_node]
 
+  // SWA cache buffer for non-contiguous SWA block support.
+  // Provides a contiguous block space that mirrors the pool layout, used when
+  // any flash request has non-contiguous swa_kv_cache_block_idx_offsets.
+  Tensor swa_cache_buffer;                   // DEVICE, UINT8, [swa_buffer_num_blocks * per_layer_swa_block_size]
+  Tensor layer_swa_cache_buffer_ptr_tensor;  // HOST, INT64, [2 + layer_num_on_node] (same layout as
+                                             //   layer_swa_kv_cache_ptr_tensor but pointing into buffer)
+  int swa_buffer_num_blocks = 0;
+  int per_layer_swa_block_size = 0;  // = swa_block_size / layer_num_on_node; stride per buffer slot
+
+  // Backing device tensors for BatchMemoryD2D addr lists (per-batch views sliced from these).
+  Tensor swa_pre_copy_src_tensor;   // DEVICE, UINT64, [swa_buffer_num_blocks]
+  Tensor swa_pre_copy_dst_tensor;
+  Tensor swa_post_copy_src_tensor;
+  Tensor swa_post_copy_dst_tensor;
+
   // Configuration (set by Init, read-only during Prepare*)
   int layer_num_on_node = 0;
   int block_size = 0;
@@ -202,11 +217,30 @@ struct MqaAttentionMeta {
   std::vector<int> c128_block_indices_host;
   std::vector<int> c128_topk_lengths_host;
 
+  // Non-contiguous SWA cache buffer support.
+  // True when any request in this flash batch has non-contiguous swa_kv_cache_block_idx_offsets.
+  bool has_non_contiguous_swa = false;
+  // Device tensor views (sliced from MqaSharedAttentionMeta backing tensors) for BatchMemoryD2D.
+  Tensor swa_pre_copy_src_tensor;   // pool blocks → buffer (historical SWA window)
+  Tensor swa_pre_copy_dst_tensor;
+  Tensor swa_post_copy_src_tensor;  // buffer → pool blocks (new tokens written this step)
+  Tensor swa_post_copy_dst_tensor;
+  // Host staging for the addr lists above (must outlive H2D memcpy in PrepareMqaFlash).
+  std::vector<uint64_t> swa_pre_copy_src_host;
+  std::vector<uint64_t> swa_pre_copy_dst_host;
+  std::vector<uint64_t> swa_post_copy_src_host;
+  std::vector<uint64_t> swa_post_copy_dst_host;
+
   void Reset() {
     raw_out_loc_host.clear();
     swa_block_indices_host.clear();
     c128_block_indices_host.clear();
     c128_topk_lengths_host.clear();
+    has_non_contiguous_swa = false;
+    swa_pre_copy_src_host.clear();
+    swa_pre_copy_dst_host.clear();
+    swa_post_copy_src_host.clear();
+    swa_post_copy_dst_host.clear();
   }
 };
 

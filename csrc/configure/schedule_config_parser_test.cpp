@@ -90,7 +90,9 @@ class ScheduleConfigParserTest : public ::testing::Test {
   // Helper function to create a temporary YAML configuration file with an
   // optional swa_block_num_ratio under setting.cache_manager.
   // Pass swa_block_num_ratio < 0 to omit the key entirely.
-  std::string CreateTempYamlConfigWithSwa(float swa_block_num_ratio = -1.0f) {
+  std::string CreateTempYamlConfigWithSwa(float swa_block_num_ratio = -1.0f,
+                                          bool enable_non_contiguous_swa_mode = false,
+                                          bool has_enable_non_contiguous_swa_mode = false) {
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
     std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
     std::filesystem::path temp_file_path = temp_dir / filename;
@@ -118,9 +120,14 @@ class ScheduleConfigParserTest : public ::testing::Test {
     file << "  block_manager:\n";
     file << "    block_token_num: 16\n";
     file << "    reserved_device_memory_ratio: 0.01\n";
-    if (swa_block_num_ratio >= 0.0f) {
+    if (swa_block_num_ratio >= 0.0f || has_enable_non_contiguous_swa_mode) {
       file << "  cache_manager:\n";
-      file << "    swa_block_num_ratio: " << swa_block_num_ratio << "\n";
+      if (swa_block_num_ratio >= 0.0f) {
+        file << "    swa_block_num_ratio: " << swa_block_num_ratio << "\n";
+      }
+      if (has_enable_non_contiguous_swa_mode) {
+        file << "    enable_non_contiguous_swa_mode: " << (enable_non_contiguous_swa_mode ? "true" : "false") << "\n";
+      }
     }
     file << "model_spec:\n";
     file << "  base_model:\n";
@@ -1034,6 +1041,40 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioReadFromYaml) {
   BatchSchedulerConfig batch_config;
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.3f) << "swa_block_num_ratio should be the value read from YAML";
+}
+
+TEST_F(ScheduleConfigParserTest, NonContiguousSwaModeDefaultsToFalseWhenNotConfigured) {
+  std::string yaml_path = CreateTempYamlConfigWithSwa(-1.0f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  CacheManagerConfig cache_config;
+  ASSERT_TRUE(parser_->GetCacheManagerConfig(cache_config).OK());
+  EXPECT_FALSE(cache_config.enable_non_contiguous_swa_mode);
+}
+
+TEST_F(ScheduleConfigParserTest, NonContiguousSwaModeReadFromYaml) {
+  std::string yaml_path = CreateTempYamlConfigWithSwa(-1.0f, true, true);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  CacheManagerConfig cache_config;
+  ASSERT_TRUE(parser_->GetCacheManagerConfig(cache_config).OK());
+  EXPECT_TRUE(cache_config.enable_non_contiguous_swa_mode);
 }
 
 // Test: when the model has SWA and swa_block_num_ratio is not set in YAML,

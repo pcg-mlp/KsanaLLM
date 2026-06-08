@@ -12,6 +12,7 @@
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "profiler/profile_event.h"
+#include "utils/memory_utils.h"
 
 namespace ksana_llm {
 
@@ -159,6 +160,9 @@ Dsv4Mqa::Dsv4Mqa(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_nor
   if (compress_ratio_ == 4) {
     c4_indexer_ = std::make_unique<C4Indexer>(layer_idx_, creation_context, model_creation_config);
   }
+
+  // Save the finalised local layer index (attn_config.idx is fully resolved by now).
+  local_layer_idx_ = attn_config.idx;
 }
 
 Status Dsv4Mqa::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
@@ -256,11 +260,41 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
 
   if (dp_context_tokens > 0) {
     auto& flash_mqa = static_cast<DeepSeekV4FlashAttentionMeta&>(*model_input->flash_meta).mqa;
-    STATUS_CHECK_RETURN(RunDsv4Attention<FlashDsv4AttentionLayer>(
-        flash_dsv4_attention_layer_.get(), *model_input->flash_meta, flash_mqa, q_tensors[0], kv_a_tensor, attn_output,
-        topk_indices_tensor, model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
-        mqa_shared.layer_swa_kv_cache_ptr_tensor, dp_context_tokens,
-        /*token_offset*/ 0, q_stride, kv_stride));
+
+    if (flash_mqa.has_non_contiguous_swa) {
+      // Compute the byte offset of this layer's KV data within each pool block.
+      // After InitSwaBasePointersIfNeeded: real_layer_ptrs[li] = pool_base + layer_offset.
+      const void* swa_pool_base = model_input->flash_meta->dp_reqs[0]->swa_block_base_addr;
+      void** real_layer_ptrs = mqa_shared.layer_swa_kv_cache_ptr_tensor.GetPtr<void*>() + 2;
+      const size_t layer_offset =
+          reinterpret_cast<size_t>(real_layer_ptrs[local_layer_idx_]) - reinterpret_cast<size_t>(swa_pool_base);
+      const size_t per_layer = static_cast<size_t>(mqa_shared.per_layer_swa_block_size);
+
+      auto& compute_stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
+      // Pre-copy: pool (layer portion) → buffer  (src_offset = layer's byte offset in pool block)
+      if (!flash_mqa.swa_pre_copy_src_host.empty()) {
+        BatchMemoryD2D(flash_mqa.swa_pre_copy_src_tensor, flash_mqa.swa_pre_copy_dst_tensor, layer_offset,
+                       /*dst_offset*/ 0, per_layer, compute_stream);
+      }
+
+      STATUS_CHECK_RETURN(RunDsv4Attention<FlashDsv4AttentionLayer>(
+          flash_dsv4_attention_layer_.get(), *model_input->flash_meta, flash_mqa, q_tensors[0], kv_a_tensor,
+          attn_output, topk_indices_tensor, model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+          mqa_shared.layer_swa_cache_buffer_ptr_tensor, dp_context_tokens,
+          /*token_offset*/ 0, q_stride, kv_stride));
+
+      // Post-copy: buffer → pool (layer portion)  (dst_offset = layer's byte offset in pool block)
+      if (!flash_mqa.swa_post_copy_src_host.empty()) {
+        BatchMemoryD2D(flash_mqa.swa_post_copy_src_tensor, flash_mqa.swa_post_copy_dst_tensor,
+                       /*src_offset*/ 0, layer_offset, per_layer, compute_stream);
+      }
+    } else {
+      STATUS_CHECK_RETURN(RunDsv4Attention<FlashDsv4AttentionLayer>(
+          flash_dsv4_attention_layer_.get(), *model_input->flash_meta, flash_mqa, q_tensors[0], kv_a_tensor,
+          attn_output, topk_indices_tensor, model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+          mqa_shared.layer_swa_kv_cache_ptr_tensor, dp_context_tokens,
+          /*token_offset*/ 0, q_stride, kv_stride));
+    }
   }
 
   if (dp_decode_tokens > 0) {

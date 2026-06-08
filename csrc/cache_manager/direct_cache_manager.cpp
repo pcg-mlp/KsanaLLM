@@ -22,8 +22,10 @@ DirectCacheManager::DirectCacheManager(const CacheManagerConfig& cache_manager_c
 
   // Initialize SWACacheManager only when SWA is configured.
   if (swa_block_allocator_group != nullptr && cache_manager_config_.sliding_window_size > 0) {
-    swa_cache_manager_ = std::make_unique<SWACacheManager>(
-        swa_block_allocator_group, cache_manager_config_.sliding_window_size, cache_manager_config_.block_token_num);
+    const bool is_contiguous_swa_mode = !cache_manager_config_.enable_non_contiguous_swa_mode;
+    swa_cache_manager_ =
+        std::make_unique<SWACacheManager>(swa_block_allocator_group, cache_manager_config_.sliding_window_size,
+                                          cache_manager_config_.block_token_num, is_contiguous_swa_mode);
   }
 }
 
@@ -151,7 +153,29 @@ Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
 
   DirectCachedRequest* cached_request = it->second.get();
 
-  // Try to allocate from free list.
+  // SWA resource check BEFORE FA allocation to avoid any rollback.
+  // Compute the SWA positions that should be bound in this round, using the known
+  // post-allocation FA count (old_size + block_num) without actually allocating first.
+  std::vector<int> positions_to_allocate;
+  if (swa_cache_manager_ != nullptr) {
+    // swa_right_block = total FA blocks AFTER this allocation round.
+    const size_t swa_right_block = cached_request->cached_blocks.size() + block_num;
+    const size_t sliding_window_blocks =
+        (cache_manager_config_.sliding_window_size + cache_manager_config_.block_token_num - 1) /
+            cache_manager_config_.block_token_num +
+        1;
+    const size_t minimum_swa_block_num = std::min(block_num, sliding_window_blocks);
+
+    if (swa_cache_manager_->GetAllocatableSWACache(req_id, cached_request->cached_blocks.size(), swa_right_block,
+                                                   minimum_swa_block_num, /*disable_swa_block_num_adjust*/ false,
+                                                   positions_to_allocate,
+                                                   cached_request->swa_window_fa_block_ids) < 0) {
+      return Status(RET_OUT_OF_DEVICE_MEMORY,
+                    FormatStr("GetAllocatableSWACache for req %d failed, no enough SWA blocks.", req_id));
+    }
+  }
+
+  // FA block allocation (SWA availability already confirmed above).
   for (size_t i = 0; i < block_num; ++i) {
     DirectCachedBlock* cached_block = free_cached_blocks_.front();
     free_cached_blocks_.pop();
@@ -163,47 +187,37 @@ Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
     cached_request->cached_blocks.push_back(cached_block);
   }
 
-  // SWA block allocation: skip if SWACacheManager is not configured.
   if (swa_cache_manager_ == nullptr) {
     return Status();
   }
 
-  // swa_right_block is the total number of KV blocks after this allocation.
-  // New SWA blocks must be allocated to cover any KV blocks not yet covered by SWA.
-  const size_t swa_right_block = cached_request->cached_blocks.size();
-  const size_t current_swa_end =
-      cached_request->swa_window_fa_block_ids.empty()
-          ? 0
-          : cached_request->swa_window_start_block_idx + cached_request->swa_window_fa_block_ids.size();
-
-  // Allocate new SWA blocks on the right side.
-  for (size_t i = current_swa_end; i < swa_right_block; ++i) {
-    const size_t fa_block_id = cached_request->cached_blocks[i]->block_id;
-    int swa_mem_id = swa_cache_manager_->AllocateSWABlock(req_id, fa_block_id, i);
+  // Allocate SWA blocks at the queried positions and record them in the window tracking arrays.
+  for (int pos : positions_to_allocate) {
+    const size_t fa_block_id = cached_request->cached_blocks[pos]->block_id;
+    int swa_mem_id = swa_cache_manager_->AllocateSWABlock(req_id, fa_block_id, static_cast<size_t>(pos));
     if (swa_mem_id < 0) {
-      return Status(RET_OUT_OF_DEVICE_MEMORY,
-                    FormatStr("Allocate SWA block for req %d error, no more SWA free blocks.", req_id));
-    }
-    // Record the start index the first time we append to the SWA window list.
-    if (cached_request->swa_window_fa_block_ids.empty()) {
-      cached_request->swa_window_start_block_idx = i;
+      return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("AllocateSWABlock at pos %d for req %d failed.", pos, req_id));
     }
     cached_request->swa_window_fa_block_ids.push_back(fa_block_id);
+    cached_request->swa_window_block_idxs.push_back(static_cast<size_t>(pos));
   }
 
-  // Fill output parameters.
+  // Fill output parameters directly from the per-block index arrays.
   // swa_block_idx_offsets[i] is the FA block global index for swa_req_block_ids[i].
   swa_req_block_ids.clear();
   swa_block_idx_offsets.clear();
-  size_t block_idx = cached_request->swa_window_start_block_idx;
-  for (size_t fa_id : cached_request->swa_window_fa_block_ids) {
-    int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(fa_id);
+  for (size_t i = 0; i < cached_request->swa_window_fa_block_ids.size(); ++i) {
+    int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(cached_request->swa_window_fa_block_ids[i]);
     if (mem_id >= 0) {
       swa_req_block_ids.push_back(mem_id);
-      swa_block_idx_offsets.push_back(block_idx);
+      swa_block_idx_offsets.push_back(cached_request->swa_window_block_idxs[i]);
     }
-    ++block_idx;
   }
+
+  KLLM_LOG_SCHEDULER << "AllocateRequestBlocks, req_id=" << req_id << ", block_num=" << block_num
+                     << ", req_block_num=" << cached_request->cached_blocks.size()
+                     << ", swa_block_idx_offsets.size=" << swa_block_idx_offsets.size() << ", "
+                     << Vector2Str(swa_block_idx_offsets);
 
   return Status();
 }
@@ -236,6 +250,7 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
       swa_cache_manager_->FreeSWABlock(fa_block_id);
     }
     cached_request->swa_window_fa_block_ids.clear();
+    cached_request->swa_window_block_idxs.clear();
   }
 
   cached_requests_.erase(it);
@@ -273,31 +288,28 @@ Status DirectCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
     swa_left_block = swa_left_token / block_token_num;
   }
 
-  // Release SWA blocks whose block index < swa_left_block.
-  // DirectCacheManager does not support prefix cache reuse, so blocks are freed
-  // immediately rather than being marked reclaimable.
-  // 同 DestroyFinishedRequest, 先 SetReclaimable 再 FreeSWABlock, 避免 lifecycle warn。
+  // Release SWA blocks whose FA block index < swa_left_block.
+  // DirectCacheManager does not support prefix cache reuse, so blocks are freed immediately.
+  // 先 SetReclaimable 再 FreeSWABlock，避免 lifecycle warn（同 DestroyFinishedRequest）。
   auto& ids = cached_request->swa_window_fa_block_ids;
-  size_t& start_idx = cached_request->swa_window_start_block_idx;
-  while (!ids.empty() && start_idx < swa_left_block) {
+  auto& idxs = cached_request->swa_window_block_idxs;
+  while (!ids.empty() && idxs.front() < swa_left_block) {
     swa_cache_manager_->SetReclaimable(req_id, ids.front());
     swa_cache_manager_->FreeSWABlock(ids.front());
     ids.erase(ids.begin());
-    start_idx++;
+    idxs.erase(idxs.begin());
   }
 
-  // Fill output parameters.
+  // Fill output parameters directly from the per-block index arrays.
   // swa_block_idx_offsets[i] is the FA block global index for swa_req_block_ids[i].
   swa_req_block_ids.clear();
   swa_block_idx_offsets.clear();
-  size_t block_idx = start_idx;
-  for (size_t fa_id : ids) {
-    int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(fa_id);
+  for (size_t i = 0; i < ids.size(); ++i) {
+    int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(ids[i]);
     if (mem_id >= 0) {
       swa_req_block_ids.push_back(mem_id);
-      swa_block_idx_offsets.push_back(block_idx);
+      swa_block_idx_offsets.push_back(idxs[i]);
     }
-    ++block_idx;
   }
 
   return Status();
@@ -514,14 +526,12 @@ Status DirectCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<int>& 
     DirectCachedRequest* cached_request = it->second.get();
     swa_req_block_ids.clear();
     swa_block_idx_offsets.clear();
-    size_t block_idx = cached_request->swa_window_start_block_idx;
-    for (size_t fa_id : cached_request->swa_window_fa_block_ids) {
-      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(fa_id);
+    for (size_t i = 0; i < cached_request->swa_window_fa_block_ids.size(); ++i) {
+      int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(cached_request->swa_window_fa_block_ids[i]);
       if (mem_id >= 0) {
         swa_req_block_ids.push_back(mem_id);
-        swa_block_idx_offsets.push_back(block_idx);
+        swa_block_idx_offsets.push_back(cached_request->swa_window_block_idxs[i]);
       }
-      ++block_idx;
     }
   }
 

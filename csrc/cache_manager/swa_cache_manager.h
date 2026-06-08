@@ -53,8 +53,10 @@ struct SWACachedBlock {
 // enclosing PrefixCacheManager (i.e., the caller is responsible for locking).
 class SWACacheManager {
  public:
+  // is_contiguous_swa_mode: when true (default) every new FA block gets an SWA cache block;
+  //   when false, only the trailing minimum_swa_block_num blocks per allocation are bound.
   SWACacheManager(std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group, size_t sliding_window_size,
-                  size_t block_token_num);
+                  size_t block_token_num, bool is_contiguous_swa_mode = true);
 
   // Allocate a new SWA block for the given FA block and register req_id as its first holder.
   // If the FA block already has an associated SWA block that is reclaimable (no active
@@ -108,6 +110,42 @@ class SWACacheManager {
   // Return the SWA memory_block_id for fa_block_id, or -1 if not found.
   int GetSWAMemoryBlockId(size_t fa_block_id) const;
 
+  // Query which FA block global-index positions should receive SWA cache blocks in this
+  // allocation round.
+  //
+  // Parameters:
+  //   req_id             — request ID (reserved for per-request policy in future)
+  //   cur_fa_block_num   — number of FA blocks the request currently owns (window right-boundary
+  //                        lower bound before this allocation)
+  //   new_fa_block_num   — total FA blocks after this allocation (new right boundary)
+  //   minimum_swa_block_num — minimum number of SWA blocks to allocate (used as the
+  //                        availability threshold in non-contiguous mode)
+  //   fa_block_offset    — [output] ascending list of FA block global indices at which SWA
+  //                        cache blocks should be allocated; each value ∈
+  //                        [cur_fa_block_num, new_fa_block_num)
+  //
+  // Return value:
+  //    0  — success; fa_block_offset is populated.
+  //   -1  — insufficient SWA cache blocks (caller should return RET_OUT_OF_DEVICE_MEMORY).
+  //
+  // Mode (controlled by is_contiguous_swa_mode_):
+  //   Contiguous   : needs (new_fa_block_num - cur_fa_block_num) blocks; enumerates the full
+  //                  range [cur_fa_block_num, new_fa_block_num).
+  //   Non-contiguous: needs minimum_swa_block_num blocks; outputs the trailing
+  //                  [new_fa_block_num - minimum_swa_block_num, new_fa_block_num) positions
+  //                  first, then optionally extends to earlier positions (future policy).
+  //
+  // reserved_fa_block_ids (optional): FA block ids whose SWA blocks are currently reclaimable
+  //   but will be re-acquired by AcquireSWABlock later in the same allocation call.
+  //   These blocks are excluded from the available count so the check is not over-optimistic:
+  //   without this parameter, GetAvailableBlockCount() would count them as free capacity, but
+  //   AcquireSWABlock removes them from the reclaimable pool before the new blocks are allocated.
+  //   Passing swa_window_fa_block_ids here avoids calling AcquireSWABlock before the check
+  //   and removes the need for SetReclaimable rollback on failure.
+  int GetAllocatableSWACache(int64_t req_id, size_t cur_fa_block_num, size_t new_fa_block_num,
+                             size_t minimum_swa_block_num, bool disable_swa_block_num_adjust,
+                             std::vector<int>& fa_block_offset, const std::vector<size_t>& reserved_fa_block_ids = {});
+
   // Return the total number of SWA blocks currently available for allocation:
   //   free pool (from swa_block_allocator_group_) + reclaimable pool.
   // Used by AllocateRequestBlocks as a pre-check before starting any allocation,
@@ -160,6 +198,9 @@ class SWACacheManager {
   std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group_;
   size_t sliding_window_size_;
   size_t block_token_num_;
+  // true  → contiguous mode: every new FA block gets an SWA block.
+  // false → non-contiguous mode: only trailing minimum_swa_block_num blocks are bound.
+  bool is_contiguous_swa_mode_;
 
   // fa_block_id -> SWACachedBlock
   std::unordered_map<size_t, std::unique_ptr<SWACachedBlock>> swa_blocks_;

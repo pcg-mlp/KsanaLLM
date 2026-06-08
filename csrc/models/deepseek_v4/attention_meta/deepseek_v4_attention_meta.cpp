@@ -10,6 +10,7 @@
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/flash_sparse_mla/flash_sparse_mla.h"
 #endif
+#include "cache_manager/cache_layout/deepseek_v4_cache_layout.h"
 #include "configure/environment.h"
 #include "device/device_utils.h"
 #include "utils/logger.h"
@@ -186,6 +187,49 @@ void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
 
   // Write swa_block_size into slot 1 once; it does not change across forward steps.
   *(layer_swa_kv_cache_ptr_tensor.GetPtr<int64_t>() + 1) = static_cast<int64_t>(swa_block_size);
+
+  if (runtime_config.enable_non_contiguous_swa_mode) {
+    // SWA cache buffer: contiguous scratch space for non-contiguous SWA block support.
+    // Each buffer slot holds only the SWA KV portion of one layer for one block.
+    // swa_block_size includes SWA + tail data for ALL layers; we must not touch tail data in
+    // pre/post copy, so per_layer_swa_block_size = ComputeKeyValueHeadBytes (pure SWA KV only).
+    per_layer_swa_block_size = static_cast<int>(
+        ComputeKeyValueHeadBytes(model_config, runtime_config.attn_backend_config.kv_cache_dtype, block_token_num));
+    // Buffer slots per request = end_blk - swa_start_blk + 1 ≤ (kSwaSize + extend_len) / block_token_num + 2.
+    // Total across the batch: extend tokens ≤ max_step_token_num, so
+    //   total ≤ max_step_token_num / block_token_num + (kSwaSize / block_token_num + 2) * max_batch_size + 1.
+    const size_t kSwaWindowBlocks = kSwaSize / static_cast<size_t>(block_token_num) + 2;
+    swa_buffer_num_blocks =
+        static_cast<int>(runtime_config.max_step_token_num / static_cast<size_t>(block_token_num) +
+                         kSwaWindowBlocks * static_cast<size_t>(runtime_config.max_batch_size) + 1);
+    swa_cache_buffer =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8,
+               {static_cast<size_t>(swa_buffer_num_blocks) * static_cast<size_t>(per_layer_swa_block_size)});
+    layer_swa_cache_buffer_ptr_tensor =
+        Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {2ul + static_cast<size_t>(layer_num_on_node)});
+    // Fully initialise buffer ptr tensor here: all data is available at Init time.
+    //   slot 0: swa_buffer_num_blocks
+    //   slot 1: per_layer_swa_block_size (stride between buffer slots)
+    //   slot 2..N+1: per-layer base pointers — all point to buffer_base (no per-layer offset in buffer)
+    layer_swa_cache_buffer_ptr_tensor.GetPtr<int64_t>()[0] = static_cast<int64_t>(swa_buffer_num_blocks);
+    layer_swa_cache_buffer_ptr_tensor.GetPtr<int64_t>()[1] = static_cast<int64_t>(per_layer_swa_block_size);
+    {
+      uint8_t* buf_device = swa_cache_buffer.GetPtr<uint8_t>();
+      void** buf_layer_ptrs = layer_swa_cache_buffer_ptr_tensor.GetPtr<void*>() + 2;
+      for (int li = 0; li < layer_num_on_node; ++li) {
+        buf_layer_ptrs[li] = buf_device;
+      }
+    }
+    // Addr list backing tensors for BatchMemoryD2D pre/post copies
+    swa_pre_copy_src_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {static_cast<size_t>(swa_buffer_num_blocks)});
+    swa_pre_copy_dst_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {static_cast<size_t>(swa_buffer_num_blocks)});
+    swa_post_copy_src_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {static_cast<size_t>(swa_buffer_num_blocks)});
+    swa_post_copy_dst_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {static_cast<size_t>(swa_buffer_num_blocks)});
+  }
 
   // Pre-compute per-layer SWA / tail cache offsets from the layout (fixed at startup).
   size_t* layer_swa_ptr = layer_swa_kv_cache_ptr_tensor.GetPtr<size_t>() + 2;

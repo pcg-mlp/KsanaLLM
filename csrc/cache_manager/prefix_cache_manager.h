@@ -89,10 +89,11 @@ struct PrefixCachedRequest {
   //      UpdateRequestTokens.
   std::vector<size_t> swa_window_fa_block_ids;
 
-  // The cached_blocks index of swa_window_fa_block_ids[0].
-  // Maintained so that UpdateRequestTokens can compute block positions
-  // directly without scanning cached_blocks.
-  size_t swa_window_start_block_idx = 0;
+  // Per-block FA global index: swa_window_block_idxs[i] is the FA block global
+  // index corresponding to swa_window_fa_block_ids[i].
+  // Must always have the same length as swa_window_fa_block_ids.
+  // Replaces the old scalar swa_window_start_block_idx to support non-contiguous windows.
+  std::vector<size_t> swa_window_block_idxs;
 
   // Whether the request is in remote_loading state.
   // Set to true after GetRequestPrefixBlockNumber(need_align_swa=false).
@@ -251,9 +252,14 @@ class PrefixCacheManager : public CacheManagerInterface,
  private:
   // Ensures free_cached_blocks_ has >= fa_block_num entries (calling FreeCachedBlocks if
   // needed), then allocates fa_block_num new FA blocks and appends them to
-  // cached_request->cached_blocks.  For the first swa_block_num of those FA blocks
-  // (in allocation order), allocates and binds one SWA block each via
-  // swa_cache_manager_->AllocateSWABlock().
+  // cached_request->cached_blocks.
+  //
+  // SWA block binding is query-driven: AcquireSWABlock is called for each block in
+  // swa_window_fa_block_ids, then GetAllocatableSWACache(cur, cur + minimum_swa_block_num,
+  // minimum_swa_block_num) determines which new FA block positions should receive SWA blocks.
+  // Only those positions get AllocateSWABlock(); remaining FA blocks receive no SWA block.
+  // GetAllocatableSWACache's return value (-1) is the sole SWA availability gate; no separate
+  // GetAvailableBlockCount pre-check is performed.
   //
   // First synchronizes req_block_ids with cached_request->cached_blocks (invalid prefix
   // truncation, fill missing prefix memory ids, req_state transition when empty,
@@ -264,18 +270,19 @@ class PrefixCacheManager : public CacheManagerInterface,
   // perform them before calling.
   //
   // Preconditions:
-  //   - fa_block_num >= swa_block_num.
-  //   - swa_cache_manager_ != nullptr when swa_block_num > 0.
+  //   - fa_block_num >= minimum_swa_block_num.
+  //   - swa_cache_manager_ != nullptr when minimum_swa_block_num > 0.
   //
   // Output:
   //   - new_fa_block_ids: memory_block_id list of the fa_block_num newly allocated FA blocks.
-  //   - new_swa_block_ids: memory_block_id list of the swa_block_num newly allocated SWA blocks
-  //                        (parallel to the first swa_block_num entries of new_fa_block_ids).
+  //   - new_swa_fa_offsets: FA block global indices (ascending) at which SWA blocks were
+  //                         bound.  Length == GetAllocatableSWACache's output size (<= minimum_swa_block_num).
   //
-  // Does NOT modify swa_window_fa_block_ids or swa_window_start_block_idx.
+  // Does NOT modify swa_window_fa_block_ids or swa_window_block_idxs.
   Status AllocateRequestBlocksInternal(PrefixCachedRequest* cached_request, int64_t req_id,
-                                       std::vector<int>& req_block_ids, size_t fa_block_num, size_t swa_block_num,
-                                       std::vector<int>& new_fa_block_ids, std::vector<int>& new_swa_block_ids);
+                                       std::vector<int>& req_block_ids, size_t fa_block_num,
+                                       size_t minimum_swa_block_num, bool disable_swa_block_num_adjust,
+                                       std::vector<int>& new_fa_block_ids, std::vector<int>& new_swa_fa_offsets);
 
   // Internal implementation shared by GetRequestPrefixBlockNumber and
   // GetRequestPrefixBlockNumberBeforeRemoteCacheLoading.

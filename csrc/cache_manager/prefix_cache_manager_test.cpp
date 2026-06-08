@@ -945,7 +945,8 @@ TEST_F(PrefixCacheManagerSWATest, NormalPrefixCacheHitWithSWA) {
   // Phase 2 should have registered sliding_window_blocks + 1 (3) blocks for full hit
   // (the extra block covers the rollback by HandleFullPrefixCacheHit).
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids.size(), sliding_window_blocks + 1);
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_start_block_idx, 8u - (sliding_window_blocks + 1));
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_block_idxs.front(),
+            8u - (sliding_window_blocks + 1));
 
   cache_manager_->DestroyFinishedRequest(req_id_b);
 }
@@ -1001,7 +1002,7 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockEvictionTruncatesPrefixCache) {
 
   // Phase 2 window: [5-2, 5) = [3, 5), so blocks 3 and 4 are registered.
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_fa_block_ids.size(), sliding_window_blocks);
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_start_block_idx, 3u);
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_block_idxs.front(), 3u);
 
   cache_manager_->DestroyFinishedRequest(req_id_c);
 }
@@ -1183,7 +1184,8 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
     // (the extra block covers the rollback by HandleFullPrefixCacheHit).
     // The window spans blocks [1, 2, 3] while Request A's post-slide window was [2, 3].
     EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids.size(), sliding_window_blocks + 1);
-    EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_start_block_idx, 4u - (sliding_window_blocks + 1));
+    EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_block_idxs.front(),
+              4u - (sliding_window_blocks + 1));
     // The tail of B's window (last sliding_window_blocks entries) must still match A's window.
     const auto& b_window = cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids;
     std::vector<size_t> b_window_tail(b_window.end() - sliding_window_blocks, b_window.end());
@@ -1279,7 +1281,7 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
 
 // Test: Two independent requests merge blocks in two UpdateRequestTokens steps.
 // After the first step the SWA window has already slid forward, so the second
-// merge only partially overlaps the window (swa_window_start_block_idx > 0).
+// merge only partially overlaps the window (swa_window_block_idxs.front() > 0).
 // Verifies that AppendFilledCachedBlock correctly updates swa_window_fa_block_ids
 // only for the blocks that are still inside the window.
 //
@@ -1335,7 +1337,7 @@ TEST_F(PrefixCacheManagerSWATest, SWAMergePartialWindowHit) {
                                         swa_req_block_ids_c, swa_block_idx_offset_c)
                   .OK());
   // After C's update: window slides to start_idx=4, ids=[c_b4, c_b5].
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_start_block_idx, 4u);
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_block_idxs.front(), 4u);
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_fa_block_ids.size(), 2u);
   std::vector<size_t> swa_window_c = cache_manager_->cached_requests_[req_id_c]->swa_window_fa_block_ids;
 
@@ -1347,7 +1349,7 @@ TEST_F(PrefixCacheManagerSWATest, SWAMergePartialWindowHit) {
                   ->UpdateRequestTokens(req_id_d, token_ids, 64, req_block_ids_d, block_merged_d, swa_req_block_ids_d,
                                         swa_block_idx_offset_d)
                   .OK());
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id_d]->swa_window_start_block_idx, 2u);
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id_d]->swa_window_block_idxs.front(), 2u);
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_d]->swa_window_fa_block_ids.size(), 4u);
 
   // The first two entries in D's window must now be C's block ids (merged).
@@ -1369,7 +1371,7 @@ TEST_F(PrefixCacheManagerSWATest, SWAMergePartialWindowHit) {
                   .OK());
 
   // D's window must now match C's exactly.
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id_d]->swa_window_start_block_idx, 4u);
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id_d]->swa_window_block_idxs.front(), 4u);
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_d]->swa_window_fa_block_ids, swa_window_c)
       << "D's SWA window must equal C's after two-step merge";
 
@@ -1722,11 +1724,14 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, AllocateBlocksForRemoteCache_SWABindin
 
   // §6.2.2 — each entry equals the block_id of the corresponding newly allocated FA block.
   // fa_prefix_block_num == fa_sb == 3; new FA blocks start at cached_blocks[3].
+  // swa_block_idx corresponds to last 3 fa blocks, which are at indices 5,6,7 in cached_blocks.
   size_t fa_prefix_block_num = cache_manager_->cached_requests_[req_id]->fa_prefix_block_num;
   EXPECT_EQ(fa_prefix_block_num, 3u);
+  size_t swa_fa_block_idx =
+      cache_manager_->cached_requests_[req_id]->cached_blocks.size() - remote_swa_block_ids.size();  // should be 5
   for (size_t k = 0; k < 3; ++k) {
     size_t expected_fa_block_id =
-        cache_manager_->cached_requests_[req_id]->cached_blocks[fa_prefix_block_num + k]->block_id;
+        cache_manager_->cached_requests_[req_id]->cached_blocks[swa_fa_block_idx + k]->block_id;
     EXPECT_EQ(swa_fa_ids[k], expected_fa_block_id);
   }
 
@@ -1817,7 +1822,7 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_PreCheck_SWAEnabled
                   .OK());
 
   // swa_window_fa_block_ids covers the last 1 block of the 4 already-matched blocks.
-  // swa_window right boundary = (swa_window_start_block_idx + 1) * block_token_num = 4 * 16 = 64.
+  // swa_window right boundary = (swa_window_block_idxs.front() + 1) * block_token_num = 4 * 16 = 64.
   // Passing shareable_kvcache_token_num = 48 (< 64) must fail.
   std::vector<int> kvcached_token_ids(48, 0);
   Status s = cache_manager_->ConfirmRemoteCacheLoadingResult(req_id, kvcached_token_ids,
@@ -2056,9 +2061,9 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_SWA_Case1_NoMatch) 
   ASSERT_EQ(cache_manager_->cached_requests_[req_id]->remote_cache_swa_fa_block_ids.size(), 1u);
 
   // swa_window_fa_block_ids covers the last 1 block of the 4 matched blocks (index 3).
-  // swa_aligned_block_num = swa_window_start_block_idx + swa_window_fa_block_ids.size() = 3 + 1 = 4.
-  size_t swa_aligned_block_num = cache_manager_->cached_requests_[req_id]->swa_window_start_block_idx +
-                                 cache_manager_->cached_requests_[req_id]->swa_window_fa_block_ids.size();
+  // swa_aligned_block_num = swa_window_block_idxs.back() + 1 = 3 + 1 = 4.
+  ASSERT_FALSE(cache_manager_->cached_requests_[req_id]->swa_window_block_idxs.empty());
+  size_t swa_aligned_block_num = cache_manager_->cached_requests_[req_id]->swa_window_block_idxs.back() + 1;
   ASSERT_EQ(swa_aligned_block_num, 4u);
 
   // Confirm with no match: shareable_kvcache_token_num = swa_aligned_block_num * block_token_num = 64.
@@ -2092,7 +2097,7 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_SWA_Case1_NoMatch) 
 // §6.4'.10 — unmatched remote SWA blocks freed via FreeSWABlock.
 // §6.4'.11 — matched SWA block transferred to cached_blocks[shareable_block_num-1].
 // §6.4'.12 — swa_window_fa_block_ids updated to [cached_blocks[shareable_block_num-1]->block_id].
-// §6.4'.13 — swa_window_start_block_idx updated to shareable_block_num - 1.
+// §6.4'.13 — swa_window_block_idxs.front() updated to shareable_block_num - 1.
 // §6.4'.14 — cached_blocks.size() == shareable_block_num.
 // §6.4'.15 — remote_cache_swa_fa_block_ids cleared.
 // §6.4'.16 — UpdateRequestTokens called when shareable_block_num > fa_prefix_block_num.
@@ -2151,8 +2156,8 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_SWA_Case2_Matched) 
   // §6.4'.12 — swa_window_fa_block_ids == [dst_fa_block_id].
   EXPECT_EQ(new_window[0], dst_fa_block_id);
 
-  // §6.4'.13 — swa_window_start_block_idx == shareable_block_num - 1 == 4.
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id]->swa_window_start_block_idx, 4u);
+  // §6.4'.13 — swa_window_block_idxs.front() == shareable_block_num - 1 == 4.
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id]->swa_window_block_idxs.front(), 4u);
 
   // §6.4'.14 — cached_blocks.size() == shareable_block_num == 5.
   EXPECT_EQ(cache_manager_->cached_requests_[req_id]->cached_blocks.size(), 5u);
@@ -2313,20 +2318,22 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, AllocateBlocksForRemoteCache_BindingRu
   const auto& swa_fa_ids = cache_manager_->cached_requests_[req_id]->remote_cache_swa_fa_block_ids;
   ASSERT_EQ(swa_fa_ids.size(), 3u);
 
+  // swa_fa_ids must correspond to the FA blocks for which SWA blocks were allocated (the last 3 FA blocks).
+  size_t swa_fa_block_idx =
+      cache_manager_->cached_requests_[req_id]->cached_blocks.size() - remote_swa_block_ids.size();
   for (size_t k = 0; k < 3; ++k) {
-    // swa_fa_ids[k] must equal cached_blocks[fa_prefix_block_num + k]->block_id.
-    size_t fa_prefix = cache_manager_->cached_requests_[req_id]->fa_prefix_block_num;
-    size_t expected_fa_id = cache_manager_->cached_requests_[req_id]->cached_blocks[fa_prefix + k]->block_id;
+    // swa_fa_ids[k] must equal cached_blocks[swa_fa_block_idx + k]->block_id.
+    size_t expected_fa_id = cache_manager_->cached_requests_[req_id]->cached_blocks[swa_fa_block_idx + k]->block_id;
     EXPECT_EQ(swa_fa_ids[k], expected_fa_id);
 
     // SWA block is bound.
     EXPECT_GE(cache_manager_->swa_cache_manager_->GetSWAMemoryBlockId(swa_fa_ids[k]), 0);
   }
 
-  // The last 2 FA blocks (indices 3-4) must NOT have SWA blocks bound.
+  // The first 2 FA blocks (indices 0-1) must NOT have SWA blocks bound.
   for (size_t k = 3; k < 5; ++k) {
     size_t fa_prefix = cache_manager_->cached_requests_[req_id]->fa_prefix_block_num;
-    size_t fa_id = cache_manager_->cached_requests_[req_id]->cached_blocks[fa_prefix + k]->block_id;
+    size_t fa_id = cache_manager_->cached_requests_[req_id]->cached_blocks[fa_prefix + k - 3]->block_id;
     EXPECT_EQ(cache_manager_->swa_cache_manager_->GetSWAMemoryBlockId(fa_id), -1);
   }
 
@@ -2473,8 +2480,8 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_SWA_Case1_FreeSWABl
   EXPECT_EQ(swa_free_before - swa_free_after_alloc, 1u);
 
   // Confirm with no match (Case 1): the remote SWA block must be freed.
-  size_t swa_aligned_block_num = cache_manager_->cached_requests_[req_id]->swa_window_start_block_idx +
-                                 cache_manager_->cached_requests_[req_id]->swa_window_fa_block_ids.size();
+  ASSERT_FALSE(cache_manager_->cached_requests_[req_id]->swa_window_block_idxs.empty());
+  size_t swa_aligned_block_num = cache_manager_->cached_requests_[req_id]->swa_window_block_idxs.back() + 1;
   std::vector<int> kvcached_token_ids(swa_aligned_block_num * block_token_num, 0);
   Status s = cache_manager_->ConfirmRemoteCacheLoadingResult(
       req_id, kvcached_token_ids,

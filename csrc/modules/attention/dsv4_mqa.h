@@ -104,6 +104,8 @@ class Dsv4Mqa {
 
   // ── Flags & dimensions ───────────────────────────────────────────────────────
   int layer_idx_;
+  int local_layer_idx_;  // = attn_config.idx (0-based within this pipeline node); used to look up
+                         //   per-layer pool offset for SWA buffer pre/post copy.
   // 0 = no compression, 4 = C4 sparse, 128 = C128 compression
   uint32_t compress_ratio_;
 
