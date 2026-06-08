@@ -255,9 +255,15 @@ class BuildExt(build_ext_orig):
 
         # Copy trt deepgemm package
         src_dir = (cwd / "3rdparty" / "LLM_kernels" / "csrc" / "kernels" / "nvidia" /
-                    "others" / "tensorrt-llm" / "dev" / "deep_gemm")
+                   "others" / "tensorrt-llm" / "dev" / "deep_gemm")
         dst_dir = extdir.parent / "ksana_llm" / "deep_gemm"
         shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
+        # Copy humming jit Python file
+        src_file = (cwd / "3rdparty" / "LLM_kernels" / "csrc" / "kernels" / "nvidia" /
+                    "others" / "humming" / "jit" / "humming_tool.py")
+        dst_dir = extdir.parent / "ksana_llm"
+        copy_file(str(src_file), str(dst_dir))
 
         # Copy triton cubin kernels
         if 'KSANA_TRITON_KERNEL_PATH' in os.environ:

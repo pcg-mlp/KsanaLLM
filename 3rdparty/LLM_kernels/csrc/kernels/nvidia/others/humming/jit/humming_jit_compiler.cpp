@@ -318,7 +318,7 @@ HummingJitCompiler::HummingJitCompiler() : nvcc_path_(FindNvcc()), force_regener
   // ── 1. Resolve humming_tool.py path: KSANA_HUMMING_BASE_DIR env, or derive from __FILE__ ──
   const char* base_env = std::getenv("KSANA_HUMMING_BASE_DIR");
   if (base_env && base_env[0] != '\0') {
-    humming_tool_path_ = std::string(base_env) + "/jit/humming_tool.py";
+    humming_tool_path_ = std::string(base_env) + "/humming_tool.py";
   } else {
     humming_tool_path_ = GetDefaultHummingToolPath();
     KLLM_KERNEL_CHECK_WITH_INFO(!humming_tool_path_.empty(),
