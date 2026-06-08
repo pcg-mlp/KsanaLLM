@@ -12,8 +12,7 @@ Status FlashMlaAttentionLayer::Init(const std::vector<std::any>& parameters, con
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-Status FlashMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status FlashMlaAttentionLayer::Forward(const FlashMlaAttentionInputs& inputs, Tensor* output) {
   KLLM_THROW("FlashMlaAttentionLayer not implement in Ascend.");
   return Status();
 }

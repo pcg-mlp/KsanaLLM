@@ -195,7 +195,7 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   // ── Fused wqkv_a path ───────────────────────────────────────────────────
   // wqkv_a: [T, hidden_size] → [T, q_lora_rank + head_dim] (in hidden_buffer_tensors_1)
   std::vector<Tensor>& qkv_a_tensors = hidden_buffer_tensors_1;
-  STATUS_CHECK_RETURN(wqkv_a_proj_->Forward(x_tensors, qkv_a_tensors));
+  STATUS_CHECK_RETURN(wqkv_a_proj_->Forward(x_tensors[0], qkv_a_tensors[0]));
 
   // Parallel RMSNorm: reads strided q_a and kv_a from wqkv_a output, writes contiguous
   //   q_a_input:  ptr = base,               shape = {T, q_lora_rank}, stride = q_lora_rank + head_dim
@@ -204,11 +204,10 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   std::vector<Tensor> q_a_tensors{reduce_buffer_tensors[0].GetView({total_tokens, static_cast<size_t>(q_lora_rank_)})};
   Tensor kv_a_tensor{reduce_buffer_tensors[0].GetView({total_tokens, static_cast<size_t>(head_dim_)},
                                                       q_a_tensors[0].GetElementNumber())};
-  std::vector<Tensor> parallel_norm_outputs = {q_a_tensors[0], kv_a_tensor};
   STATUS_CHECK_RETURN(qkv_a_norm_->ForwardParallel(
-      {qkv_a_tensors[0].GetView({total_tokens, static_cast<size_t>(q_lora_rank_)}),
-       qkv_a_tensors[0].GetView({total_tokens, static_cast<size_t>(head_dim_)}, q_lora_rank_)},
-      parallel_norm_outputs));
+      qkv_a_tensors[0].GetView({total_tokens, static_cast<size_t>(q_lora_rank_)}),
+      qkv_a_tensors[0].GetView({total_tokens, static_cast<size_t>(head_dim_)}, q_lora_rank_), q_a_tensors[0],
+      kv_a_tensor));
 
   // Now hidden_buffer_tensors_1 is free
 
@@ -243,7 +242,7 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   // ── wq_b: q_lora → Q ─────────────────────────────────────────────────────
   // wq_b: [T, q_lora_rank] → [T, n_local_heads * head_dim] (in hidden_buffer_tensors_1)
   std::vector<Tensor>& q_tensors = hidden_buffer_tensors_1;
-  STATUS_CHECK_RETURN(wq_b_proj_->Forward(q_a_tensors, q_tensors));
+  STATUS_CHECK_RETURN(wq_b_proj_->Forward(q_a_tensors[0], q_tensors[0]));
 
   // Now hidden_buffer_tensors_0 is free
 
@@ -257,11 +256,11 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
 
   if (dp_context_tokens > 0) {
     auto& flash_mqa = static_cast<DeepSeekV4FlashAttentionMeta&>(*model_input->flash_meta).mqa;
-    STATUS_CHECK_RETURN(RunDsv4Attention(flash_dsv4_attention_layer_.get(), *model_input->flash_meta, flash_mqa,
-                                         q_tensors[0], kv_a_tensor, attn_output, topk_indices_tensor,
-                                         model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
-                                         mqa_shared.layer_swa_kv_cache_ptr_tensor, dp_context_tokens,
-                                         /*token_offset*/ 0, q_stride, kv_stride));
+    STATUS_CHECK_RETURN(RunDsv4Attention<FlashDsv4AttentionLayer>(
+        flash_dsv4_attention_layer_.get(), *model_input->flash_meta, flash_mqa, q_tensors[0], kv_a_tensor, attn_output,
+        topk_indices_tensor, model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
+        mqa_shared.layer_swa_kv_cache_ptr_tensor, dp_context_tokens,
+        /*token_offset*/ 0, q_stride, kv_stride));
   }
 
   if (dp_decode_tokens > 0) {
@@ -271,7 +270,7 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
       auto& paged_mqa = static_cast<DeepSeekV4PagedAttentionMeta&>(*model_input->page_metas[i]).mqa;
       const size_t current_tokens = model_input->page_metas[i]->total_dp_input_ids_len;
 
-      STATUS_CHECK_RETURN(RunDsv4Attention(
+      STATUS_CHECK_RETURN(RunDsv4Attention<PagedDsv4AttentionLayer>(
           paged_dsv4_attention_layer_.get(), *model_input->page_metas[i], paged_mqa, q_tensors[0], kv_a_tensor,
           attn_output, topk_indices_tensor, model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
           mqa_shared.layer_swa_kv_cache_ptr_tensor, current_tokens, skip_tokens, q_stride, kv_stride));
@@ -290,7 +289,7 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   // ── Step 3: Output path ─────────────────────────────────────────────────────
   // wo_a Bmm: [T, n_local_groups, d_per_group] × [n_local_groups, d_per_group, o_lora_rank]
   //         → [T, n_local_groups, o_lora_rank]
-  STATUS_CHECK_RETURN(wo_a_bmm_->Forward(/*attn_output*/ hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+  STATUS_CHECK_RETURN(wo_a_bmm_->Forward(/*attn_output*/ hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
 
   // Flatten for wo_b: [T, n_local_groups * o_lora_rank]
   hidden_buffer_tensors_1[0].shape = {total_tokens, o_local_groups_ * o_lora_rank_};
@@ -298,22 +297,23 @@ Status Dsv4Mqa::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vecto
   // wo_b: [T, n_local_groups * o_lora_rank] → [T, hidden_size]
   // (in reduce_buffer_tensors if TP mode, otherwise in hidden_buffer_tensors_0)
   if (forwarding_context.GetModelCommunicator()) {
-    STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1, reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1[0], reduce_buffer_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1, hidden_buffer_tensors_0));
+    STATUS_CHECK_RETURN(wo_b_proj_->Forward(hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]));
   }
 
   return Status();
 }
 
-Status Dsv4Mqa::RunDsv4Attention(BaseLayer* attention_layer, StandardAttentionMeta& model_input_info,
+template <typename LayerT>
+Status Dsv4Mqa::RunDsv4Attention(LayerT* attention_layer, StandardAttentionMeta& model_input_info,
                                  MqaAttentionMeta& mqa_input_info, Tensor& q_tensor, Tensor& kv_tensor,
                                  Tensor& attn_output, Tensor& topk_indices_tensor, Tensor& layer_kv_cache_ptr,
                                  Tensor& layer_swa_kv_cache_ptr_tensor, size_t token_count, size_t token_offset,
                                  size_t q_stride, size_t kv_stride) {
   Tensor current_q = q_tensor.GetView({token_count, q_stride}, token_offset * q_stride);
   Tensor current_kv = kv_tensor.GetView({token_count, kv_stride}, token_offset * kv_stride);
-  std::vector<Tensor> current_output = {attn_output.GetView({token_count, q_stride}, token_offset * q_stride)};
+  Tensor current_output = attn_output.GetView({token_count, q_stride}, token_offset * q_stride);
 
   auto& model_mla = *model_input_info.GetMLA();
   Tensor& tile_sched_meta = compress_ratio_ == 0   ? model_mla.tile_scheduler_metadata
@@ -322,32 +322,45 @@ Status Dsv4Mqa::RunDsv4Attention(BaseLayer* attention_layer, StandardAttentionMe
   Tensor& num_splits = compress_ratio_ == 0   ? model_mla.num_splits
                        : compress_ratio_ == 4 ? mqa_input_info.c4_num_splits
                                               : mqa_input_info.c128_num_splits;
-  std::vector<Tensor> attention_inputs = {
-      model_input_info.rotary_embedding_pos,    // rotary_embedding_pos
-      current_q,                                // q
-      current_kv,                               // kv
-      layer_swa_kv_cache_ptr_tensor,            // layer_swa_kv_cache_ptr
-      tile_sched_meta,                          // tile_scheduler_metadata
-      num_splits,                               // num_splits
-      attn_sink_weight_,                        // attn_sink
-      mqa_input_info.raw_out_loc_tensor,        // raw_out_loc
-      mqa_input_info.swa_block_indices_tensor,  // swa_indices
-  };
+
+  // Declare here so lifetime spans past the if-blocks below
+  Tensor c4_extra_indices_view;
+
+  Dsv4AttentionInputs inputs;
+  inputs.rotary_embedding_pos = &model_input_info.rotary_embedding_pos;
+  inputs.q = &current_q;
+  inputs.kv = &current_kv;
+  inputs.layer_swa_kv_cache = &layer_swa_kv_cache_ptr_tensor;
+  inputs.tile_scheduler_metadata = &tile_sched_meta;
+  inputs.num_splits = &num_splits;
+  inputs.attn_sink = &attn_sink_weight_;
+  inputs.raw_out_loc = &mqa_input_info.raw_out_loc_tensor;
+  inputs.swa_indices = &mqa_input_info.swa_block_indices_tensor;
   if (compress_ratio_ > 0) {
-    attention_inputs.push_back(layer_kv_cache_ptr);  // layer_extra_kv_cache_ptr
+    inputs.layer_extra_kv_cache = &layer_kv_cache_ptr;
     if (compress_ratio_ == 4) {
-      attention_inputs.push_back(
-          topk_indices_tensor.GetView({token_count, topk_indices_tensor.shape[1]},
-                                      token_offset * topk_indices_tensor.shape[1]));  // extra_indices
-    } else {                                                                          // compress_ratio_ == 128
-      attention_inputs.push_back(mqa_input_info.c128_block_indices_tensor);           // extra_indices
-      attention_inputs.push_back(mqa_input_info.c128_topk_lengths_tensor);            // extra_topk_length
+      c4_extra_indices_view = topk_indices_tensor.GetView({token_count, topk_indices_tensor.shape[1]},
+                                                          token_offset * topk_indices_tensor.shape[1]);
+      inputs.extra_indices = &c4_extra_indices_view;
+    } else {  // compress_ratio_ == 128
+      inputs.extra_indices = &mqa_input_info.c128_block_indices_tensor;
+      inputs.extra_topk_length = &mqa_input_info.c128_topk_lengths_tensor;
     }
   }
-  STATUS_CHECK_RETURN(attention_layer->Forward(attention_inputs, current_output));
+  STATUS_CHECK_RETURN(attention_layer->Forward(inputs, &current_output));
   tile_sched_meta.shape[2] = 1;  // Mark tile_scheduler_metadata as initialized
 
   return Status();
 }
+
+// Explicit template instantiations
+template Status Dsv4Mqa::RunDsv4Attention<FlashDsv4AttentionLayer>(FlashDsv4AttentionLayer*, StandardAttentionMeta&,
+                                                                   MqaAttentionMeta&, Tensor&, Tensor&, Tensor&,
+                                                                   Tensor&, Tensor&, Tensor&, size_t, size_t, size_t,
+                                                                   size_t);
+template Status Dsv4Mqa::RunDsv4Attention<PagedDsv4AttentionLayer>(PagedDsv4AttentionLayer*, StandardAttentionMeta&,
+                                                                   MqaAttentionMeta&, Tensor&, Tensor&, Tensor&,
+                                                                   Tensor&, Tensor&, Tensor&, size_t, size_t, size_t,
+                                                                   size_t);
 
 }  // namespace ksana_llm

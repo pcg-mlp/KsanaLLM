@@ -5,7 +5,8 @@
 
 #include <memory>
 
-#include "layers/base_layer.h"
+#include "layers/cast_layer.h"
+#include "layers/compressor_layer.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/layer_creation_context.h"
 #include "modules/basic/linear.h"
@@ -52,11 +53,10 @@ class Compressor {
   std::unique_ptr<Linear> wkv_gate_proj_;
 
   // Cast layer for converting kv_score_input from bf16 to fp32
-  std::unique_ptr<BaseLayer> cast_layer_;
-  Tensor cast_shape_tensor_;  // Auxiliary shape tensor: {offset=0, vocab_size=1, vocab_size_pad=1}
+  std::unique_ptr<CastLayer> cast_layer_;
 
   // CompressorLayer handles: plan + flash_c4/c128 compress + fused norm+rope
-  std::unique_ptr<BaseLayer> compressor_layer_;
+  std::unique_ptr<CompressorLayer> compressor_layer_;
 
   Tensor ape_weight_;
   Tensor norm_weight_;

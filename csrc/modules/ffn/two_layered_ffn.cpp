@@ -84,7 +84,7 @@ Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std:
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (fuse_gate_up_proj_) {
     // Mlp gate_up_proj MatMul
-    STATUS_CHECK_RETURN(mlp_gate_up_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(mlp_gate_up_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
     if (!fuse_silu_mul_) {
       STATUS_CHECK_RETURN(silu_muls_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1));
@@ -93,13 +93,13 @@ Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std:
   } else {
     auto& gated_buffer_ = reduce_buffer_tensors;
     // Mlp gate_proj MatMul
-    STATUS_CHECK_RETURN(mlp_gate_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(mlp_gate_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
     if (mlp_bias_) {
       // Mlp gate_proj Bias Add
       STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_1[0], mlp_gate_bias_tensor_, hidden_buffer_tensors_1));
     }
     // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
-    STATUS_CHECK_RETURN(mlp_up_projs_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+    STATUS_CHECK_RETURN(mlp_up_projs_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
     if (mlp_bias_) {
       // Mlp up_proj Bias Add
       STATUS_CHECK_RETURN(adds_->Forward(gated_buffer_[0], mlp_up_bias_tensor_, gated_buffer_));
@@ -116,9 +116,9 @@ Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std:
   if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
     // Put output to `reduce_buffer_tensors` to ensure that the input for custom reduce sum is
     // always in `reduce_buffer_tensors`.
-    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 

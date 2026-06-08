@@ -6,6 +6,9 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "cache_manager/cache_layout/base_cache_layout.h"
+#include "configure/context.h"
+#include "configure/environment.h"
 #include "layers/add_layer.h"
 #include "layers/assemble_tokens_hidden_layer.h"
 #include "layers/base_layer.h"
@@ -17,11 +20,6 @@
 #include "layers/matmul_layer_factory.h"
 #include "layers/paged_attention_layer.h"
 #include "layers/silu_mul_layer.h"
-#include "runtime/hidden_unit_buffer.h"
-#include "runtime/infer_stage.h"
-#include "cache_manager/cache_layout/base_cache_layout.h"
-#include "configure/context.h"
-#include "configure/environment.h"
 #include "models/base/base_model.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/model_communicator.h"
@@ -30,6 +28,8 @@
 #include "models/common_moe/moe_config.h"
 #include "models/communicator/tp_communicator.h"
 #include "models/llama/llama_weight.h"
+#include "runtime/hidden_unit_buffer.h"
+#include "runtime/infer_stage.h"
 #include "utils/optional_file.h"
 #include "utils/status.h"
 #include "utils/tensor.h"
@@ -138,7 +138,7 @@ class CommonModel : public BaseModel {
 
   std::shared_ptr<BaseLayer> assemble_tokens_hidden_layer_;
   std::shared_ptr<BaseLayer> cast_layer_;
-  std::shared_ptr<BaseLayer> input_refit_layer_;
+  std::shared_ptr<InputRefitLayer> input_refit_layer_;
 
   std::shared_ptr<Linear> lm_head_;
   std::shared_ptr<Layernorm> lm_head_prenorm_{nullptr};

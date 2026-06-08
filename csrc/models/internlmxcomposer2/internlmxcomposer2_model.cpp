@@ -93,7 +93,7 @@ Status InternlmxComposer2DecoderLayer::ForwardMha(std::vector<Tensor>& hidden_bu
                                                   const bool is_multi_token_forward,
                                                   ForwardingContext& forwarding_context) {
   // Attn proj MatMul
-  STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+  STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
 #ifdef ENABLE_CUDA
   if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
     CREATE_BUFFER_SCOPE(plora_b_buffer_tensor, plora_b_buffer_);
@@ -125,9 +125,9 @@ Status InternlmxComposer2DecoderLayer::ForwardMha(std::vector<Tensor>& hidden_bu
     PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, forwarding_context);
   }
   if (forwarding_context.GetModelCommunicator()) {
-    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
     // Plora
 #ifdef ENABLE_CUDA
     if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
@@ -152,9 +152,9 @@ Status InternlmxComposer2DecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_bu
                                                   const bool is_multi_token_forward,
                                                   ForwardingContext& forwarding_context) {
   // Mlp gate_proj MatMul
-  STATUS_CHECK_RETURN(mlp_gate_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+  STATUS_CHECK_RETURN(mlp_gate_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
   // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
-  STATUS_CHECK_RETURN(mlp_up_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+  STATUS_CHECK_RETURN(mlp_up_projs_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0]));
 #ifdef ENABLE_CUDA
   // Plora
   if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
@@ -177,9 +177,9 @@ Status InternlmxComposer2DecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_bu
       silu_muls_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0], hidden_buffer_tensors_0));
   // Mlp down_proj MatMul
   if (forwarding_context.GetModelCommunicator()) {
-    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
     // Plora
 #ifdef ENABLE_CUDA
     if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
@@ -206,7 +206,7 @@ Status InternlmxComposer2DecoderLayer::Forward(std::vector<Tensor>& residual_buf
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   // Pre attn layernorm
   // Pre layernorm uses layernorm input for residual connection.
-  input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  input_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
   // MultiHeadAttention
   STATUS_CHECK_RETURN(ForwardMha(hidden_buffer_tensors_0, reduce_buffer_tensors, hidden_buffer_tensors_1,
                                  is_multi_token_forward, forwarding_context));
@@ -216,7 +216,7 @@ Status InternlmxComposer2DecoderLayer::Forward(std::vector<Tensor>& residual_buf
   STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
   // Pre mlp layernorm
   // Pre layernorm uses layernorm input for residual connection.
-  post_attention_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  post_attention_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
   // Common mlp
   STATUS_CHECK_RETURN(ForwardMlp(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors,
                                  is_multi_token_forward, forwarding_context));

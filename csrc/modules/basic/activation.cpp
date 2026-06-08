@@ -28,8 +28,10 @@ Activation::Activation(const std::string& activation_type_str, const LayerCreati
 
 Activation::~Activation() {}
 
-Status Activation::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(activation_layer_->Forward(input_tensors, output_tensors));
+Status Activation::Forward(const Tensor* input, Tensor* output, const Tensor* gated, const Tensor* bias,
+                           const Tensor* gated_bias) {
+  auto* typed = static_cast<ActivationLayer*>(activation_layer_.get());
+  STATUS_CHECK_RETURN(typed->Forward(input, output, gated, bias, gated_bias));
   return Status();
 }
 

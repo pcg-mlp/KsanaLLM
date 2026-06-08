@@ -19,16 +19,33 @@ class FlashSparseMlaIndexerLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  struct FlashSparseMlaIndexerParams {
+    const Tensor* q;
+    const Tensor* k;
+    const Tensor* weights;
+    const Tensor* quant_workspace;
+    const Tensor* rotary_embedding_pos;
+    const Tensor* store_out_loc;
+    const Tensor* seq_len_offset;
+    const Tensor* block_table;
+    const Tensor* cu_seq_len_start;
+    const Tensor* cu_seq_len_end;
+    const Tensor* batch_indices;
+    const Tensor* layer_kv_cache_ptr;
+    const Tensor* chunk_token_starts_host;
+    const Tensor* chunk_kv_token_ranges_host;
+    // Scalars formerly encoded in forward_shape (input[14]):
+    int batch_size;           // shape[7]
+    int total_prefix_tokens;  // shape[11]
+  };
+  Status Forward(const FlashSparseMlaIndexerParams& params, Tensor* output, const LayerExecContext& exec_ctx = {});
 
   // Get workspace size needed for this layer
   virtual size_t GetWorkspaceSize() override;
 
  private:
-  // Forward 主函数模板
   template <typename SCALAR_T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const FlashSparseMlaIndexerParams& p, Tensor* output);
 
  private:
   // Model parameters

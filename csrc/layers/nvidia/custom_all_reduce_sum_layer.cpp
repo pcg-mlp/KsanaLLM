@@ -73,11 +73,6 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, co
   return Status();
 }
 
-Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
-}
-
 void CustomAllReduceSumLayer::Clear() {
   if (reduce_op_ != nullptr) {
     delete static_cast<llm_kernels::nvidia::CustomAllreduce*>(reduce_op_);
@@ -96,8 +91,7 @@ void CustomAllReduceSumLayer::Clear() {
 }
 
 template <typename T>
-Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
+Status CustomAllReduceSumLayer::ForwardT(const Tensor& input, Tensor& output) {
   cudaStream_t* stream;
   if (context_->global->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->device->GetPrimaryComputeStream().Get());
@@ -105,9 +99,9 @@ Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensor
     stream = &(context_->device->GetCommStream().Get());
   }
   if (context_->global->GetTensorParallelSize() > 1) {
-    void* input = input_tensors[0].GetPtr<void>();
-    void* result = output_tensors[0].GetPtr<void>();
-    int data_size = input_tensors[0].GetElementNumber();
+    void* inp = input.GetPtr<void>();
+    void* result = output.GetPtr<void>();
+    int data_size = input.GetElementNumber();
     // Initialize the workspace on the first forward
     if (!is_init_) {
       CustomAllReduceInit(&reduce_op_, rank_data_, rank_data_sz_, rank_, world_size_, is_full_nvlink_, root_rank_);
@@ -120,19 +114,23 @@ Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensor
       cudaStreamSynchronize(*stream);
       is_init_ = true;
     }
-    CustomAllReduceRun<T>(reduce_op_, input, result, data_size, *stream);
+    CustomAllReduceRun<T>(reduce_op_, inp, result, data_size, *stream);
     // To avoid getting stuck during CustomAllReduce.
     if (need_sync_) {
       CUDA_CHECK(cudaStreamSynchronize(*stream));
     }
   } else {
-    void* src = input_tensors[0].GetPtr<void>();
-    void* dst = output_tensors[0].GetPtr<void>();
-    CUDA_CHECK(cudaMemcpyAsync(dst, src, input_tensors[0].GetTotalBytes(), cudaMemcpyDeviceToDevice, *stream));
+    void* src = input.GetPtr<void>();
+    void* dst = output.GetPtr<void>();
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, input.GetTotalBytes(), cudaMemcpyDeviceToDevice, *stream));
   }
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = input.shape;
+  output.dtype = input.dtype;
   return Status();
+}
+
+Status CustomAllReduceSumLayer::Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *input, *output);
 }
 
 }  // namespace ksana_llm

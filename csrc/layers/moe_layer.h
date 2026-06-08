@@ -7,7 +7,7 @@
 #  include "csrc/kernels/nvidia/moe/expert_map/expert_map.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
-#include "layers/base_layer.h"
+#include "layers/base_moe_layer.h"
 #include "layers/grouped_topk_layer.h"
 #include "layers/topk_softplus_sqrt_layer.h"
 #include "models/base/base_weight.h"
@@ -26,13 +26,13 @@ struct WorkspaceInfo {
   std::vector<size_t> workspace_sizes;
 };
 #ifdef ENABLE_CUDA
-class MoeLayer : public BaseLayer {
+class MoeLayer : public BaseMoeLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
   // Set expert parallel manager (should be called after Init)
-  void SetExpertParallelManager(std::shared_ptr<ExpertParallelManager> expert_parallel_manager);
+  virtual void SetExpertParallelManager(std::shared_ptr<ExpertParallelManager> expert_parallel_manager) override;
 
   virtual size_t GetWorkspaceSize() override;
 
@@ -40,7 +40,10 @@ class MoeLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  // eplb_map/e_score_bias/input_ids are nullptr when unused.
+  virtual Status Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                         const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                         const Tensor* e_score_bias = nullptr, const Tensor* input_ids = nullptr,
                          const LayerExecContext& exec_ctx = {}) override;
 
   // Test-only observability: true iff Init picked the sqrt+softplus gate.
@@ -49,12 +52,15 @@ class MoeLayer : public BaseLayer {
  private:
   // 执行 GroupedTopk 计算与 Dispatch 分发
   template <typename T>
-  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* eplb_map,
+                            Tensor* workspace, const Tensor* e_score_bias, Tensor* a1_q, Tensor* a1_scale,
+                            Tensor* fp8_workspace);
 
   // Softplus+sqrt gating used by DeepSeek V4 (parallel to ExecuteGroupedTopk).
   template <typename T>
-  Status ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensors,
-                                 std::vector<Tensor>& output_tensors);
+  Status ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* eplb_map,
+                                 Tensor* workspace, const Tensor* e_score_bias, const Tensor* input_ids, Tensor* a1_q,
+                                 Tensor* a1_scale, Tensor* fp8_workspace);
 
   // Used for distributing and gathering topk_ids and hidden_buffer in Expert-Parallel scenarios
   Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
@@ -73,7 +79,9 @@ class MoeLayer : public BaseLayer {
   Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);
 
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                  const Tensor* eplb_map, Tensor* output, Tensor* workspace, const Tensor* e_score_bias,
+                  const Tensor* input_ids);
 
  protected:
   bool set_workspace_buffer_info_ = true;

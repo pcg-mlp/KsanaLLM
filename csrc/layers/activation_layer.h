@@ -19,12 +19,15 @@ class ActivationLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // gated_weight/bias/gated_bias are optional (nullptr when unused).
+  Status Forward(const Tensor* input, Tensor* output, const Tensor* gated_weight = nullptr,
+                 const Tensor* bias = nullptr, const Tensor* gated_bias = nullptr,
+                 const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* input, Tensor* output, const Tensor* gated_weight, const Tensor* bias,
+                  const Tensor* gated_bias);
 
  private:
   ActivationType activation_type_;
@@ -32,12 +35,12 @@ class ActivationLayer : public BaseLayer {
 
 class SigmoidLayer : public BaseLayer {
  public:
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // In-place sigmoid on inout.
+  Status Forward(Tensor* inout, const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(Tensor* inout);
 };
 
 }  // namespace ksana_llm

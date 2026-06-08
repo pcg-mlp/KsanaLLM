@@ -16,7 +16,7 @@ class GatherFirstDim {
 
   ~GatherFirstDim() = default;
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor& data, const Tensor& indices, Tensor& output);
 
  protected:
   std::unique_ptr<BaseLayer> gather_first_dim_layer_;

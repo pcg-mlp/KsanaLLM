@@ -5,8 +5,8 @@
 #include "layers/silu_mul_layer.h"
 
 #include "csrc/utils/ascend/common.h"
-#include "kernels/ascend/kernel_wrapper.h"
 #include "device/ascend/acl_utils.h"
+#include "kernels/ascend/kernel_wrapper.h"
 
 namespace ksana_llm {
 
@@ -57,26 +57,36 @@ Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status();
 }
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  if (input_tensors.size() != 2) {
-    KLLM_THROW(fmt::format("SiluMulLayer only support 2 input tensors, but got {}", input_tensors.size()));
-  }
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
-  void* silu_input_buf_ptr = input_tensors[0].GetPtr<void>();
-  void* silu_output_buf_ptr = output_tensors[0].GetPtr<void>();
-  void* gated_weight_buf_ptr = input_tensors[1].GetPtr<void>();
+template <typename T>
+Status SiluMulLayer::ForwardFusedT(const Tensor& fused_gate_up, Tensor& output, const LayerExecContext& exec_ctx) {
+  KLLM_THROW("SiluMulLayer: fused gate_up not supported on Ascend.");
+  return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer fused not supported.");
+}
+
+template <typename T>
+Status SiluMulLayer::ForwardSplitT(const Tensor& gate, const Tensor& up, Tensor& output,
+                                   const LayerExecContext& exec_ctx) {
+  output.shape = gate.shape;
+  output.dtype = gate.dtype;
+  void* silu_input_buf_ptr = gate.GetPtr<void>();
+  void* silu_output_buf_ptr = output.GetPtr<void>();
+  void* gated_weight_buf_ptr = up.GetPtr<void>();
   reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
-  atb_op_executor_.SetInputTensor(silu_input_buf_ptr, input_tensors[0].shape,
-                                  static_cast<aclDataType>(DataType(input_tensors[0].dtype)));
-  atb_op_executor_.SetInputTensor(gated_weight_buf_ptr, input_tensors[1].shape,
-                                  static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
-  atb_op_executor_.SetOutputTensor(silu_output_buf_ptr, output_tensors[0].shape,
-                                   static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
+  atb_op_executor_.SetInputTensor(silu_input_buf_ptr, gate.shape, static_cast<aclDataType>(DataType(gate.dtype)));
+  atb_op_executor_.SetInputTensor(gated_weight_buf_ptr, up.shape, static_cast<aclDataType>(DataType(up.dtype)));
+  atb_op_executor_.SetOutputTensor(silu_output_buf_ptr, output.shape, static_cast<aclDataType>(DataType(output.dtype)));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
   return Status();
+}
+
+Status SiluMulLayer::Forward(const Tensor* fused_gate_up, Tensor* output, const LayerExecContext& exec_ctx) {
+  KLLM_THROW("SiluMulLayer: fused gate_up not supported on Ascend.");
+  return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer fused not supported.");
+}
+
+Status SiluMulLayer::Forward(const Tensor* gate, const Tensor* up, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardSplitT, *gate, *up, *output, exec_ctx);
 }
 
 }  // namespace ksana_llm

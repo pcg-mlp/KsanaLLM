@@ -3,9 +3,9 @@
 ==============================================================================*/
 #pragma once
 
+#include "layers/add_layer.h"
 #include "layers/base_layer.h"
 #include "layers/layernorm_layer.h"
-#include "layers/add_layer.h"
 #ifdef ENABLE_ACL
 #  include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
 #  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
@@ -20,12 +20,13 @@ class AddNormLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // input is normed in-place; residual is updated in-place as residual += input before norm.
+  Status Forward(const Tensor* input, const Tensor* residual, const Tensor* weight, Tensor* output,
+                 const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* input, const Tensor* residual, const Tensor* weight, Tensor* output);
 
  protected:
   float rms_norm_eps_;

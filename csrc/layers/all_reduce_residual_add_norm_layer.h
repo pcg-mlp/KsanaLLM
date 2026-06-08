@@ -24,12 +24,15 @@ class AllReduceResidualAddNormLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // AllReduce + residual add only (residual updated in-place). residual==nullptr skips the add.
+  Status Forward(const Tensor* input, Tensor* residual_inout, const LayerExecContext& exec_ctx = {});
+  // AllReduce + residual add + RMSNorm: norm result written to output.
+  Status Forward(const Tensor* input, const Tensor* residual, Tensor* output, const LayerExecContext& exec_ctx = {});
 
  private:
+  // residual_in==nullptr means 1-input path (allreduce + residual update in-place).
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor& input, const Tensor* residual_in, Tensor& output);
 
   bool is_init_ = false;
   float rms_norm_eps_;

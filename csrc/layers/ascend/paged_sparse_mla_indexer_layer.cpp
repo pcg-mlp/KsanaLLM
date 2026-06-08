@@ -13,12 +13,12 @@ Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   KLLM_THROW("PagedSparseMlaIndexerLayer is not supported on NPU/Ascend platform");
 }
 
-Status PagedSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+size_t PagedSparseMlaIndexerLayer::GetWorkspaceSize() {
   KLLM_THROW("PagedSparseMlaIndexerLayer is not supported on NPU/Ascend platform");
 }
 
-size_t PagedSparseMlaIndexerLayer::GetWorkspaceSize() {
+Status PagedSparseMlaIndexerLayer::Forward(const PagedSparseMlaIndexerParams& p, Tensor* output,
+                                           const LayerExecContext& exec_ctx) {
   KLLM_THROW("PagedSparseMlaIndexerLayer is not supported on NPU/Ascend platform");
 }
 

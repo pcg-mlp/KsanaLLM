@@ -21,10 +21,11 @@ FusePostAttentionAddNorm::~FusePostAttentionAddNorm() {}
 Status FusePostAttentionAddNorm::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                          std::vector<Tensor>& residual_buffer) {
   if (is_fusion_supported_dtype_) {
-    add_norm_layer_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
+    STATUS_CHECK_RETURN(
+        add_norm_layer_->Forward(&hidden_buffer_tensors_0[0], &residual_buffer[0], &hidden_buffer_tensors_0[0]));
   } else {
     STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
-    STATUS_CHECK_RETURN(layernorm_layer_->Forward(residual_buffer, hidden_buffer_tensors_0));
+    STATUS_CHECK_RETURN(layernorm_layer_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]));
   }
   return Status();
 }

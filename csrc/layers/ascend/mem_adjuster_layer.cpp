@@ -12,12 +12,6 @@ Status MemAdjusterLayer::Init(const std::vector<std::any>& parameters, const Run
   return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
 }
 
-Status MemAdjusterLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  KLLM_THROW("MemAdjusterLayer is not implemented in Ascend.");
-  return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
-}
-
 Status MemAdjusterLayer::ExtractSubMatrix(const Tensor& input_tensor, Tensor& output_tensor, size_t input_offset,
                                           size_t output_n) {
   KLLM_THROW("MemAdjusterLayer is not implemented in Ascend.");

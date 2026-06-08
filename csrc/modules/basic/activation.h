@@ -16,7 +16,8 @@ class Activation {
 
   ~Activation();
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor* input, Tensor* output, const Tensor* gated = nullptr, const Tensor* bias = nullptr,
+                 const Tensor* gated_bias = nullptr);
 
  protected:
   std::shared_ptr<BaseLayer> activation_layer_;

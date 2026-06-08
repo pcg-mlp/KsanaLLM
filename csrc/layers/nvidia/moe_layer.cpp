@@ -14,11 +14,6 @@
 
 namespace ksana_llm {
 
-// MOE layer tensor数量常量
-constexpr size_t kA1QTensorIndex = 2;        // a1_q_tensor在output_tensors中的索引
-constexpr size_t kA1ScaleTensorIndex = 3;    // a1_scale_tensor在output_tensors中的索引
-constexpr size_t kWorkspaceTensorIndex = 4;  // workspace_tensor在output_tensors中的索引
-
 Status MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
@@ -29,11 +24,6 @@ size_t MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetW
 
 Status MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
-}
-
-Status MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
 template <typename T>
@@ -314,20 +304,15 @@ Status MoeLayer::PreprocessT(const ModelConfig& model_config_, const RuntimeConf
 }
 
 template <typename T>
-Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // input_tensors:
-  //  0: hidden_states
-  //  1: gating_output
-  //  2: up_gate_proj_weight
-  //  3: down_proj_weight
-  //  4: eplb_expert_map
-  //  (*)5: e_score_correction_bias_weight
-  const size_t num_tokens = input_tensors[0].shape[0];
-  const size_t hidden_size = input_tensors[0].shape[1];
+Status MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                          const Tensor* eplb_map, Tensor* output, Tensor* workspace, const Tensor* e_score_bias,
+                          const Tensor* input_ids) {
+  const size_t num_tokens = hidden_states->shape[0];
+  const size_t hidden_size = hidden_states->shape[1];
   size_t best_config_index = 0;  // TODO(winminkong): op optimization
   void* e_score_correction_bias_weight_void = nullptr;
-  if (use_e_score_correction_bias_) {
-    e_score_correction_bias_weight_void = input_tensors[5].GetPtr<void>();
+  if (use_e_score_correction_bias_ && e_score_bias != nullptr) {
+    e_score_correction_bias_weight_void = e_score_bias->GetPtr<void>();
   }
 
   // SetWorkspaceBuffer只保证空间足够大，不能保证后续地址不发生改变，要写死就只能在Forward中做
@@ -347,35 +332,36 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
 
     if (use_vllm_moe_) {
       topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
-      topk_ids_ptr_ = topk_weights_ptr_ + topk_weights_ptr_size;
+      topk_ids_ptr_ = reinterpret_cast<uint8_t*>(topk_weights_ptr_) + topk_weights_ptr_size;
 
       if (low_latency_mode_) {
         // LCOV_EXCL_START
         // LL模式：分配ll_output、expert_num_tokens和batched moe中间缓冲区
-        ll_output_ = topk_ids_ptr_ + topk_ids_ptr_size;
-        expert_num_tokens_ = ll_output_ + ll_output_size;
-        batched_intermediate_output_ = expert_num_tokens_ + expert_num_tokens_size;
-        batched_silu_output_ = batched_intermediate_output_ + batched_intermediate_output_size;
+        ll_output_ = reinterpret_cast<uint8_t*>(topk_ids_ptr_) + topk_ids_ptr_size;
+        expert_num_tokens_ = reinterpret_cast<uint8_t*>(ll_output_) + ll_output_size;
+        batched_intermediate_output_ = reinterpret_cast<uint8_t*>(expert_num_tokens_) + expert_num_tokens_size;
+        batched_silu_output_ =
+            reinterpret_cast<uint8_t*>(batched_intermediate_output_) + batched_intermediate_output_size;
 
         if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
           // LL模式只需要a1的量化
-          a1_q_ = batched_silu_output_ + batched_silu_output_size;
-          a1_scale_ = a1_q_ + a1_q_size;
+          a1_q_ = reinterpret_cast<uint8_t*>(batched_silu_output_) + batched_silu_output_size;
+          a1_scale_ = reinterpret_cast<uint8_t*>(a1_q_) + a1_q_size;
         }
       } else {
         // Normal模式：分配fused_id_buffer和intermediate_cache
-        fused_id_buffer_ = topk_ids_ptr_ + topk_ids_ptr_size;
-        intermediate_cache1_ = fused_id_buffer_ + max_fused_id_buffer_size;
-        intermediate_cache2_ = intermediate_cache1_ + intermediate_cache1_and_cache3_size;
+        fused_id_buffer_ = reinterpret_cast<uint8_t*>(topk_ids_ptr_) + topk_ids_ptr_size;
+        intermediate_cache1_ = reinterpret_cast<uint8_t*>(fused_id_buffer_) + max_fused_id_buffer_size;
+        intermediate_cache2_ = reinterpret_cast<uint8_t*>(intermediate_cache1_) + intermediate_cache1_and_cache3_size;
         intermediate_cache3_ = intermediate_cache1_;  // 共享
         if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-          a1_q_ = intermediate_cache2_ + intermediate_cache2_size;
+          a1_q_ = reinterpret_cast<uint8_t*>(intermediate_cache2_) + intermediate_cache2_size;
           a2_q_ = a1_q_;  // 共享
-          a1_scale_ = a1_q_ + a1_and_a2_q_size;
+          a1_scale_ = reinterpret_cast<uint8_t*>(a1_q_) + a1_and_a2_q_size;
           a2_scale_ = a1_scale_;  // 共享
           if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2 ||
               weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
-            dequant_workspace_ = a1_scale_ + a1_and_a2_scale_size;
+            dequant_workspace_ = reinterpret_cast<uint8_t*>(a1_scale_) + a1_and_a2_scale_size;
           }
         }
       }
@@ -387,65 +373,72 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     void* w1_scale = nullptr;
     void* w2_scale = nullptr;
     if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-      w1_scale = input_tensors[2].weight_scales->GetPtr<void>();
-      w2_scale = input_tensors[3].weight_scales->GetPtr<void>();
+      w1_scale = w1->weight_scales->GetPtr<void>();
+      w2_scale = w2->weight_scales->GetPtr<void>();
     } else if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
       // W4A8AWQ method binds scales to weight_scales, fallback to legacy scales if weight_scales is null
-      if (input_tensors[2].weight_scales != nullptr) {
-        w1_scale = input_tensors[2].weight_scales->GetPtr<void>();
-        w2_scale = input_tensors[3].weight_scales->GetPtr<void>();
-      } else if (input_tensors[2].scales != nullptr) {
-        w1_scale = input_tensors[2].scales->GetPtr<void>();
-        w2_scale = input_tensors[3].scales->GetPtr<void>();
+      if (w1->weight_scales != nullptr) {
+        w1_scale = w1->weight_scales->GetPtr<void>();
+        w2_scale = w2->weight_scales->GetPtr<void>();
+      } else if (w1->scales != nullptr) {
+        w1_scale = w1->scales->GetPtr<void>();
+        w2_scale = w2->scales->GetPtr<void>();
       }
     } else if (weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
       // FP4: scales are E8M0 format, bound via weight_scales in PostProcess
-      if (input_tensors[2].weight_scales != nullptr) {
-        w1_scale = input_tensors[2].weight_scales->GetPtr<void>();
-        w2_scale = input_tensors[3].weight_scales->GetPtr<void>();
+      if (w1->weight_scales != nullptr) {
+        w1_scale = w1->weight_scales->GetPtr<void>();
+        w2_scale = w2->weight_scales->GetPtr<void>();
       }
     }
-    void* w1_input_scale = input_tensors[2].input_scales ? input_tensors[2].input_scales->GetPtr<void>() : nullptr;
-    void* w2_input_scale = input_tensors[3].input_scales ? input_tensors[3].input_scales->GetPtr<void>() : nullptr;
-    void* w1_input_alpha = input_tensors[2].input_alpha ? input_tensors[2].input_alpha->GetPtr<void>() : nullptr;
-    void* w2_input_alpha = input_tensors[3].input_alpha ? input_tensors[3].input_alpha->GetPtr<void>() : nullptr;
+    void* w1_input_scale = w1->input_scales ? w1->input_scales->GetPtr<void>() : nullptr;
+    void* w2_input_scale = w2->input_scales ? w2->input_scales->GetPtr<void>() : nullptr;
+    void* w1_input_alpha = w1->input_alpha ? w1->input_alpha->GetPtr<void>() : nullptr;
+    void* w2_input_alpha = w2->input_alpha ? w2->input_alpha->GetPtr<void>() : nullptr;
 
+    // For deepep+FP8: create local tensor objects (avoid push_back to output_tensors)
+    Tensor a1_q_tensor;
+    Tensor a1_scale_tensor;
+    Tensor fp8_workspace_tensor;
+    Tensor* a1_q_ptr = nullptr;
+    Tensor* a1_scale_ptr = nullptr;
+    Tensor* fp8_workspace_ptr = nullptr;
     if (using_deepep_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-      Tensor workspace_tensor(input_tensors[1].location, TYPE_FP8_E4M3, {num_tokens, hidden_size},
-                              workspace_buffer_->GetPtr<void>());
-      Tensor a1_q_tensor(input_tensors[1].location, TYPE_FP8_E4M3, {num_tokens, hidden_size}, a1_q_);
-      Tensor a1_scale_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, hidden_size / 128}, a1_scale_);
-      output_tensors.push_back(a1_q_tensor);
-      output_tensors.push_back(a1_scale_tensor);
-      output_tensors.push_back(workspace_tensor);
+      fp8_workspace_tensor =
+          Tensor(gating_output->location, TYPE_FP8_E4M3, {num_tokens, hidden_size}, workspace_buffer_->GetPtr<void>());
+      a1_q_tensor = Tensor(gating_output->location, TYPE_FP8_E4M3, {num_tokens, hidden_size}, a1_q_);
+      a1_scale_tensor = Tensor(gating_output->location, TYPE_FP32, {num_tokens, hidden_size / 128}, a1_scale_);
+      a1_q_ptr = &a1_q_tensor;
+      a1_scale_ptr = &a1_scale_tensor;
+      fp8_workspace_ptr = &fp8_workspace_tensor;
     }
+
     // 使用 GroupedTopkLayer 计算 topk
     if (use_topk_softplus_sqrt_) {
-      STATUS_CHECK_RETURN(ExecuteTopkSoftplusSqrt<T>(input_tensors, output_tensors));
+      STATUS_CHECK_RETURN(ExecuteTopkSoftplusSqrt<T>(hidden_states, gating_output, eplb_map, workspace, e_score_bias,
+                                                     input_ids, a1_q_ptr, a1_scale_ptr, fp8_workspace_ptr));
     } else {
-      ExecuteGroupedTopk<T>(input_tensors, output_tensors);
+      STATUS_CHECK_RETURN(ExecuteGroupedTopk<T>(hidden_states, gating_output, eplb_map, workspace, e_score_bias,
+                                                a1_q_ptr, a1_scale_ptr, fp8_workspace_ptr));
     }
 
     // LCOV_EXCL_START
     auto AutoInvoke = [&](auto template_param, void* hidden_states_ptr, void* output_hidden_states_ptr,
-                          int num_tokens) {
+                          int num_tokens_arg) {
       // 当启用 low_latency 模式时，使用 InvokeFusedBatchedMoe
       if (low_latency_mode_) {
-        // low_latency 模式下，数据已经按 expert 组织，使用 batched kernel
-        // 输入格式: [num_experts, max_num_tokens, hidden_size]
-        // 注意：在 low_latency 模式下，hidden_states_ptr 可能是 a1_q_（FP8量化后的数据）
         void* input_scale = (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) ? a1_scale_ : nullptr;
         InvokeFusedBatchedMoe<T>(
             output_hidden_states_ptr,                         // output
             hidden_states_ptr,                                // input (batched by expert)
-            input_tensors[2].GetPtr<void>(),                  // weight1
-            input_tensors[3].GetPtr<void>(),                  // weight2
+            w1->GetPtr<void>(),                               // weight1
+            w2->GetPtr<void>(),                               // weight2
             input_scale,                                      // input_scale
             w1_scale,                                         // weight1_scale
             w2_scale,                                         // weight2_scale
             expert_num_per_node_,                             // num_experts
-            expert_num_tokens_,                               // expert_num_tokens (每个expert的实际token数)
-            num_tokens,                                       // max_num_tokens
+            expert_num_tokens_,                               // expert_num_tokens
+            num_tokens_arg,                                   // max_num_tokens
             expert_hidden_size_,                              // k (hidden_size)
             expert_inter_size_,                               // n (inter_size)
             static_cast<int>(expert_topk_),                   // topk
@@ -458,95 +451,91 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
             context_->device->GetPrimaryComputeStream().Get());  // stream
       } else {
         // 标准模式：使用原有的 InvokeFusedMoe
-        InvokeFusedMoe<T, template_param>(hidden_states_ptr,                // hidden_states
-                                          input_tensors[2].GetPtr<void>(),  // w1
-                                          input_tensors[3].GetPtr<void>(),  // w2
-                                          expert_topk_,                     // topk
-                                          weight_dtype_,                    // weight_dtype
-                                          compute_dtype_,                   // compute_dtype
-                                          false,                            // is_marlin
-                                          false,                            // use_triton
-                                          w1_scale,                         // w1_scale
-                                          w2_scale,                         // w2_scale
-                                          nullptr,                          // w1_zp
-                                          nullptr,                          // w2_zp
-                                          a1_q_,                            // a1_q
-                                          a2_q_,                            // a2_q
-                                          w1_input_scale,                   // w1_input_scale
-                                          w2_input_scale,                   // w2_input_scale
-                                          a1_scale_,                        // a1_scale
-                                          a2_scale_,                        // a2_scale
-                                          w1_input_alpha,                   // w1_input_alpha
-                                          w2_input_alpha,                   // w2_input_alpha
-                                          block_shape_,                     // block_shape
-                                          topk_weights_ptr_,                // topk_weights_ptr
-                                          topk_ids_ptr_,                    // topk_ids_ptr
-                                          routed_scaling_factor_,           // routed_scaling_factor
-                                          output_hidden_states_ptr,         // output_hidden_states
-                                          intermediate_cache1_,             // intermediate_cache1
-                                          intermediate_cache2_,             // intermediate_cache2
-                                          intermediate_cache3_,             // intermediate_cache3
-                                          fused_id_buffer_,                 // buffer_of_ids_in_kernel
-                                          num_tokens,                       // num_tokens
-                                          expert_num_per_node_,             // num_experts_per_node
-                                          expert_hidden_size_,              // hidden_size
-                                          expert_inter_size_,               // inter_size
-                                          global_expert_para_size_,         // expert_para_size * expert_world_size
-                                          dequant_workspace_,               // dequant_workspace
-                                          w4afp8_moe_backend_,              // w4afp8_moe_backend
-                                          rank_,                            // rank
-                                          swiglu_limit_,                    // swiglu_limit
+        InvokeFusedMoe<T, template_param>(hidden_states_ptr,         // hidden_states
+                                          w1->GetPtr<void>(),        // w1
+                                          w2->GetPtr<void>(),        // w2
+                                          expert_topk_,              // topk
+                                          weight_dtype_,             // weight_dtype
+                                          compute_dtype_,            // compute_dtype
+                                          false,                     // is_marlin
+                                          false,                     // use_triton
+                                          w1_scale,                  // w1_scale
+                                          w2_scale,                  // w2_scale
+                                          nullptr,                   // w1_zp
+                                          nullptr,                   // w2_zp
+                                          a1_q_,                     // a1_q
+                                          a2_q_,                     // a2_q
+                                          w1_input_scale,            // w1_input_scale
+                                          w2_input_scale,            // w2_input_scale
+                                          a1_scale_,                 // a1_scale
+                                          a2_scale_,                 // a2_scale
+                                          w1_input_alpha,            // w1_input_alpha
+                                          w2_input_alpha,            // w2_input_alpha
+                                          block_shape_,              // block_shape
+                                          topk_weights_ptr_,         // topk_weights_ptr
+                                          topk_ids_ptr_,             // topk_ids_ptr
+                                          routed_scaling_factor_,    // routed_scaling_factor
+                                          output_hidden_states_ptr,  // output_hidden_states
+                                          intermediate_cache1_,      // intermediate_cache1
+                                          intermediate_cache2_,      // intermediate_cache2
+                                          intermediate_cache3_,      // intermediate_cache3
+                                          fused_id_buffer_,          // buffer_of_ids_in_kernel
+                                          num_tokens_arg,            // num_tokens
+                                          expert_num_per_node_,      // num_experts_per_node
+                                          expert_hidden_size_,       // hidden_size
+                                          expert_inter_size_,        // inter_size
+                                          global_expert_para_size_,  // expert_para_size * expert_world_size
+                                          dequant_workspace_,        // dequant_workspace
+                                          w4afp8_moe_backend_,       // w4afp8_moe_backend
+                                          rank_,                     // rank
+                                          swiglu_limit_,             // swiglu_limit
                                           context_->device->GetPrimaryComputeStream().Get());  // stream
       }
     };
 
     if (global_expert_para_size_ == 1) {  // 单卡情况
-      AutoInvoke(std::false_type{}, input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), num_tokens);
+      AutoInvoke(std::false_type{}, hidden_states->GetPtr<void>(), output->GetPtr<void>(), num_tokens);
     } else if (!using_deepep_) {  // EP但不使用deepep
       expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                           context_->device->GetPrimaryComputeStream().Get());
-      AutoInvoke(std::true_type{}, input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), num_tokens);
+      AutoInvoke(std::true_type{}, hidden_states->GetPtr<void>(), output->GetPtr<void>(), num_tokens);
     } else {  // EP使用deepep
-      // LL模式下，output_tensors[1]的shape是3D: [num_experts_per_node, max_tokens_per_rank, hidden_size]
-      // Normal模式下，output_tensors[1]的shape是2D: [recv_num_tokens, hidden_size]
+      // LL模式下，workspace的shape是3D: [num_experts_per_node, max_tokens_per_rank, hidden_size]
+      // Normal模式下，workspace的shape是2D: [recv_num_tokens, hidden_size]
       size_t dispatch_num_tokens;
       if (low_latency_mode_) {
-        // LL模式：使用shape[1]作为max_tokens_per_rank
-        dispatch_num_tokens = output_tensors[1].shape[1];
+        dispatch_num_tokens = workspace->shape[1];
       } else {
-        // Normal模式：使用shape[0]作为recv_num_tokens
-        dispatch_num_tokens = output_tensors[1].shape[0];
+        dispatch_num_tokens = workspace->shape[0];
       }
       KLLM_LOG_DEBUG << fmt::format("Rank[{}] MoeLayer: dispatch_num_tokens={}", rank_, dispatch_num_tokens);
       if (dispatch_num_tokens > 0) {
-        void* hidden_states_ptr = output_tensors[1].GetPtr<void>();
+        void* hs_ptr = workspace->GetPtr<void>();
         if (using_deepep_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-          // 使用fp8的a1_q，hidden_states设置为nullptr
-          hidden_states_ptr = nullptr;
+          hs_ptr = nullptr;
         }
-
-        AutoInvoke(std::true_type{}, hidden_states_ptr, output_tensors[1].GetPtr<void>(), dispatch_num_tokens);
+        AutoInvoke(std::true_type{}, hs_ptr, workspace->GetPtr<void>(), dispatch_num_tokens);
       }
 
       // Combine is an in-place operation
-      // 注意：在LL模式下，output_tensors[1]仍然保持3D shape传给Combine
       if (low_latency_mode_) {
-        output_tensors[1].shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
+        workspace->shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
       }
 
-      Combine({output_tensors[1]}, output_tensors);
+      std::vector<Tensor> combine_outputs = {*output};
+      Combine({*workspace}, combine_outputs);
+      *output = combine_outputs[0];
       // LCOV_EXCL_STOP
     }
   } else {
     KLLM_CHECK_WITH_INFO(!use_topk_softplus_sqrt_,
                          "MoeLayer: sqrt+softplus gate is only supported on the use_vllm_moe path");
-    // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     if (moe_scale_norm_mode_ == MoeScaleNormMode::RE_NORM) {
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
-          input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-          input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_,
-          expert_inter_size_, expert_num_per_node_, expert_topk_, workspace_info_.workspace_sizes,
-          static_cast<char*>(workspace_info_.workspace), output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
+          hidden_states->GetPtr<void>(), gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
+          e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_, expert_inter_size_,
+          expert_num_per_node_, expert_topk_, workspace_info_.workspace_sizes,
+          static_cast<char*>(workspace_info_.workspace), output->GetPtr<void>(), workspace_info_.scale_probs,
           static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
           tp_size_, rank_, use_lora_, best_config_index, tactics_, use_vllm_moe_, num_expert_group_,
           expert_groups_topk_, scoring_func_, topk_method_, norm_topk_prob_, routed_scaling_factor_,
@@ -554,10 +543,10 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
           nullptr, apply_weight_);
     } else if (moe_scale_norm_mode_ == MoeScaleNormMode::NO_NORM) {
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
-          input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-          input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_,
-          expert_inter_size_, expert_num_per_node_, expert_topk_, workspace_info_.workspace_sizes,
-          static_cast<char*>(workspace_info_.workspace), output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
+          hidden_states->GetPtr<void>(), gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
+          e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_, expert_inter_size_,
+          expert_num_per_node_, expert_topk_, workspace_info_.workspace_sizes,
+          static_cast<char*>(workspace_info_.workspace), output->GetPtr<void>(), workspace_info_.scale_probs,
           static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
           tp_size_, rank_, use_lora_, best_config_index, tactics_, use_vllm_moe_, num_expert_group_,
           expert_groups_topk_, scoring_func_, topk_method_, norm_topk_prob_, routed_scaling_factor_,
@@ -565,37 +554,19 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
           nullptr, apply_weight_);
     }
   }
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output->shape = hidden_states->shape;
+  output->dtype = hidden_states->dtype;
   return Status();
 }
 
 template <typename T>
-Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // 准备 GroupedTopkLayer 的输入和输出张量
-  std::vector<Tensor> grouped_topk_input_tensors;
-  std::vector<Tensor> grouped_topk_output_tensors;
-
-  size_t num_tokens = input_tensors[0].shape[0];
-
-  // 输入: gating_output
-  grouped_topk_input_tensors.push_back(input_tensors[1]);
-
-  // 输入: e_bias (直接传递，让 GroupedTopkLayer 内部判断是否使用)
-  if (input_tensors.size() > 5) {
-    grouped_topk_input_tensors.push_back(input_tensors[5]);
-  }
-
-  // 输出: topk_weights_ptr
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
-  grouped_topk_output_tensors.push_back(topk_weights_tensor);
-
-  // 输出: topk_ids_ptr
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
-  grouped_topk_output_tensors.push_back(topk_ids_tensor);
-
-  // 调用 GroupedTopkLayer
-  Status status = grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
+Status MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* eplb_map,
+                                    Tensor* workspace, const Tensor* e_score_bias, Tensor* a1_q, Tensor* a1_scale,
+                                    Tensor* fp8_workspace) {
+  const size_t num_tokens = hidden_states->shape[0];
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
+  Status status = grouped_topk_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, e_score_bias);
   if (!status.OK()) {
     KLLM_LOG_ERROR << fmt::format("ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer");
     return status;
@@ -605,9 +576,10 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && input_tensors[4].shape[0] > layer_idx_) {
-    size_t num_experts = input_tensors[4].shape[1];
-    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+    size_t num_experts = eplb_map->shape[1];
+    void* layer_expert_ptr =
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
     expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
@@ -615,80 +587,59 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
 
   if (using_deepep_) {
     // LCOV_EXCL_START
-    // 调用 Dispatch 分发
-    // 分发结果将被存储到 common_mlp_tensor, topk_ids, topk_weights 中
-    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor> deepep_output_tensors = output_tensors;
-    // 在 InvokeFusedMoe 前进行首次量化（当数据类型为 TYPE_BLOCK_FP8_E4M3 时）
-    bool use_scales = output_tensors.size() > kWorkspaceTensorIndex;
-    if (use_scales) {
-      Tensor a1_q_tensor = output_tensors[kA1QTensorIndex];
-      Tensor a1_scale_tensor = output_tensors[kA1ScaleTensorIndex];
-      Tensor workspace_tensor = output_tensors[kWorkspaceTensorIndex];
-      InvokePerTokenGroupQuantFp8E4m3<T>(input_tensors[0].GetPtr<void>(), a1_q_tensor.GetPtr<void>(),
-                                         a1_scale_tensor.GetPtr<void>(), num_tokens, expert_hidden_size_, false,
+    std::vector<Tensor> deepep_input_tensors = {*hidden_states, topk_ids_tensor, topk_weights_tensor};
+    std::vector<Tensor> deepep_output_tensors = {*workspace};
+
+    if (a1_q != nullptr) {
+      InvokePerTokenGroupQuantFp8E4m3<T>(hidden_states->GetPtr<void>(), a1_q->GetPtr<void>(), a1_scale->GetPtr<void>(),
+                                         num_tokens, expert_hidden_size_, false,
                                          context_->device->GetPrimaryComputeStream().Get());
-      deepep_input_tensors.push_back(a1_q_tensor);
-      deepep_input_tensors.push_back(a1_scale_tensor);
-      deepep_input_tensors.push_back(workspace_tensor);
+      deepep_input_tensors.push_back(*a1_q);
+      deepep_input_tensors.push_back(*a1_scale);
+      deepep_input_tensors.push_back(*fp8_workspace);
     }
 
     if (low_latency_mode_) {
-      deepep_output_tensors.emplace_back(input_tensors[1].location, TYPE_INT32,
-                                         std::vector<size_t>{expert_num_per_node_}, expert_num_tokens_);
+      deepep_output_tensors.emplace_back(gating_output->location, TYPE_INT32, std::vector<size_t>{expert_num_per_node_},
+                                         expert_num_tokens_);
     }
 
     Dispatch(deepep_input_tensors, deepep_output_tensors);
 
     if (!low_latency_mode_) {
-      topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
-      topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+      topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+      topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
     }
-    output_tensors[1].shape = deepep_output_tensors[1].shape;
+    workspace->shape = deepep_output_tensors[0].shape;
     // LCOV_EXCL_STOP
   }
   return Status();
 }
 
 template <typename T>
-Status MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
-  // Layout of input_tensors (from MoE::Forward):
-  //   [0] hidden_states
-  //   [1] router_logits
-  //   [2] up_gate_proj_weight
-  //   [3] down_proj_weight
-  //   [4] eplb_expert_map
-  //   [5] gate extra weight (tid2eid [vocab, topk] int32 for hash;
-  //                          correction_bias [num_experts] fp32 for bias)
-  //   [6] input_ids [num_tokens] int32 (hash path only)
+Status MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
+                                         const Tensor* eplb_map, Tensor* workspace, const Tensor* e_score_bias,
+                                         const Tensor* input_ids, Tensor* a1_q, Tensor* a1_scale,
+                                         Tensor* fp8_workspace) {
+  const size_t num_tokens = hidden_states->shape[0];
 
-  std::vector<Tensor> softplus_inputs;
-  std::vector<Tensor> softplus_outputs;
-
-  const size_t num_tokens = input_tensors[0].shape[0];
-
-  // Router logits.
-  softplus_inputs.push_back(input_tensors[1]);
-
+  // aux1: input_ids (hash) or correction_bias; aux2: tid2eid (hash only).
+  const Tensor* aux1_ptr = nullptr;
+  const Tensor* aux2_ptr = nullptr;
   if (use_hash_) {
-    KLLM_CHECK_WITH_INFO(input_tensors.size() >= 7,
-                         "MoeLayer: hash path requires input_ids (slot 6) and tid2eid (slot 5)");
-    softplus_inputs.push_back(input_tensors[6]);  // input_ids
-    softplus_inputs.push_back(input_tensors[5]);  // tid2eid
+    KLLM_CHECK_WITH_INFO(input_ids != nullptr, "MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
+    aux1_ptr = input_ids;     // input_ids
+    aux2_ptr = e_score_bias;  // tid2eid
   } else if (use_e_score_correction_bias_) {
-    KLLM_CHECK_WITH_INFO(input_tensors.size() >= 6, "MoeLayer: correction-bias path requires bias at slot 5");
-    softplus_inputs.push_back(input_tensors[5]);  // bias
+    aux1_ptr = e_score_bias;  // correction_bias
   }
 
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
                              topk_weights_ptr_);
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
                          topk_ids_ptr_);
-  softplus_outputs.push_back(topk_weights_tensor);
-  softplus_outputs.push_back(topk_ids_tensor);
-
-  Status status = topk_softplus_sqrt_layer_->Forward(softplus_inputs, softplus_outputs);
+  Status status =
+      topk_softplus_sqrt_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, aux1_ptr, aux2_ptr);
   if (!status.OK()) {
     KLLM_LOG_ERROR << "ExecuteTopkSoftplusSqrt ERROR: forward failed";
     return status;
@@ -698,41 +649,39 @@ Status MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensor
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && input_tensors[4].shape[0] > layer_idx_) {
-    size_t num_experts = input_tensors[4].shape[1];
-    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+    size_t num_experts = eplb_map->shape[1];
+    void* layer_expert_ptr =
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
     expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
   }
 
   if (using_deepep_) {
-    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor>& deepep_output_tensors = output_tensors;
-    bool use_scales = output_tensors.size() > kWorkspaceTensorIndex;
-    if (use_scales) {
-      Tensor a1_q_tensor = output_tensors[kA1QTensorIndex];
-      Tensor a1_scale_tensor = output_tensors[kA1ScaleTensorIndex];
-      Tensor workspace_tensor = output_tensors[kWorkspaceTensorIndex];
-      InvokePerTokenGroupQuantFp8E4m3<T>(input_tensors[0].GetPtr<void>(), a1_q_tensor.GetPtr<void>(),
-                                         a1_scale_tensor.GetPtr<void>(), num_tokens, expert_hidden_size_, false,
+    std::vector<Tensor> deepep_input_tensors = {*hidden_states, topk_ids_tensor, topk_weights_tensor};
+    std::vector<Tensor> deepep_output_tensors = {*workspace};
+
+    if (a1_q != nullptr) {
+      InvokePerTokenGroupQuantFp8E4m3<T>(hidden_states->GetPtr<void>(), a1_q->GetPtr<void>(), a1_scale->GetPtr<void>(),
+                                         num_tokens, expert_hidden_size_, false,
                                          context_->device->GetPrimaryComputeStream().Get());
-      deepep_input_tensors.push_back(a1_q_tensor);
-      deepep_input_tensors.push_back(a1_scale_tensor);
-      deepep_input_tensors.push_back(workspace_tensor);
+      deepep_input_tensors.push_back(*a1_q);
+      deepep_input_tensors.push_back(*a1_scale);
+      deepep_input_tensors.push_back(*fp8_workspace);
     }
     KLLM_LOG_DEBUG << fmt::format("ExecuteTopkSoftplusSqrt: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
                                   deepep_input_tensors[1].shape[0]);
     Dispatch(deepep_input_tensors, deepep_output_tensors);
     KLLM_LOG_DEBUG << fmt::format("ExecuteTopkSoftplusSqrt: Dispatch output shape {} {}",
                                   deepep_output_tensors[0].shape[0], deepep_output_tensors[1].shape[0]);
-    topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
-    topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+    topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    workspace->shape = deepep_output_tensors[0].shape;
   }
 
   return Status();
 }
-
 
 Status MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // 调用 ExpertParallelManager 的 Dispatch 方法
@@ -761,6 +710,13 @@ Status MoeLayer::DumpEplbData(Tensor& topk_ids) {
       fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
+}
+
+Status MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                         const Tensor* eplb_map, Tensor* output, Tensor* workspace, const Tensor* e_score_bias,
+                         const Tensor* input_ids, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, hidden_states, gating_output, w1, w2, eplb_map, output, workspace,
+                      e_score_bias, input_ids);
 }
 
 }  // namespace ksana_llm

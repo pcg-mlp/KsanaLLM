@@ -11,7 +11,9 @@
 #include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
+#include "layers/cast_layer.h"
 #include "models/base/model_weight.h"
+#include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 #include "modules/attention/multihead_latent_attention.h"
 #include "samplers/sampler.h"
 #include "tests/test.h"
@@ -21,7 +23,6 @@
 #include "utils/memory_allocator.h"
 #include "utils/search_path.h"
 #include "utils/singleton.h"
-#include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 
 using namespace ksana_llm;
 
@@ -206,9 +207,8 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
       CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->buffers_->hidden_buffer_1);
-      STATUS_CHECK_RETURN(cast_layer_->Forward(
-          {hidden_buffer_tensors_0[0], forwarding_context_->GetAttentionForwardContext().forward_shape},
-          hidden_buffer_tensors_1));
+      STATUS_CHECK_RETURN(static_cast<CastLayer*>(cast_layer_.get())
+                              ->Forward(&hidden_buffer_tensors_0[0], 0, 1, 1, &hidden_buffer_tensors_1[0]));
       StreamSynchronize(context_->device->GetPrimaryComputeStream());
       Memcpy(input_data.data(), hidden_buffer_tensors_1[0].template GetPtr<void>(),
              sizeof(float) * hidden_buffer_tensors_0[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);

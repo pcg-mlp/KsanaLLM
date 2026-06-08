@@ -26,9 +26,8 @@ Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
+Status PagedAttentionLayer::Forward(const PagedAttentionInputs& inputs, std::vector<Tensor>& output_tensors) {
+  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, inputs, output_tensors);
 }
 
 Status PagedAttentionLayer::SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
@@ -58,49 +57,23 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // PagedAttention部分
-  // input_tensors:
-  //   0: 输入数据
-  //   1: int_input_tokens_tensor
-  //   2: kv_list
-  //   3: kv_cache_offset_tensor
-  //   4: rotary_embedding_pos
-  //   5: rotary_embedding_mask
-  //   6: workspace 空间
-  //   7: forward_shape (multi_token_request_num, multi_token_request_max_tokens, context_total_block_num,
-  //      single_token_request_num, single_token_request_max_tokens, decode_total_block_num)
-  //   8: 用于存储 qk 的临时空间(TODO:)
-  //   9: query_layernorm_weight (if not use_qk_norm, value is nullptr)
-  //  10: key_layernorm_weight (if not use_qk_norm, value is nullptr)
-  // #ifdef ENABLE_FLASH_ATTN_WITH_CACHE
-  //   11: kv_cache_base_ptr_tensor: [layer_num, 2]
-  //   12: block_table: [batch_size, max_tokens]
-  //  #endif
-  // output_tensors:
-  //   0: paged attention output
-  const Tensor& query = input_tensors[0];
-  const Tensor& context_lens = input_tensors[1];
-  // 块的位移情况
-  // 如上kv_list的情况
-  // 一块有8个token时
-  // context_lens是17,41
-  // input_offse是0,17,58
-  // cache_offset是0,3,9
-  const Tensor& kv_list = input_tensors[2];
-  const Tensor& cache_offset = input_tensors[3];
-  const Tensor& rotary_embedding_pos = input_tensors[4];
-  const Tensor& rotary_embedding_mask = input_tensors[5];
-  const Tensor& workspace = input_tensors[6];
-  const Tensor& qkv_workspace = input_tensors[8];
-  int layer_block_num = input_tensors[7].shape[5];
-  int max_tokens = input_tensors[7].shape[4];
-  int batch_size = input_tensors[7].shape[3];
+Status PagedAttentionLayer::ForwardT(const PagedAttentionInputs& inputs, std::vector<Tensor>& output_tensors) {
+  const Tensor& query = *inputs.query;
+  const Tensor& context_lens = *inputs.context_lens;
+  const Tensor& kv_list = *inputs.kv_list;
+  const Tensor& cache_offset = *inputs.cache_offset;
+  const Tensor& rotary_embedding_pos = *inputs.rotary_embedding_pos;
+  const Tensor& rotary_embedding_mask = *inputs.rotary_embedding_mask;
+  const Tensor& workspace = *inputs.workspace;
+  const Tensor& qkv_workspace = *inputs.qkv_workspace;
+  int layer_block_num = inputs.forward_shape->shape[5];
+  int max_tokens = inputs.forward_shape->shape[4];
+  int batch_size = inputs.forward_shape->shape[3];
   // Read the real total decode tokens from forward_shape[12] (dp_decode_tokens).
   // For multi-token decode (e.g., MTP validation), total_tokens > batch_size.
   // Falls back to batch_size for backward compatibility when shape[12] is not present.
-  int total_tokens = (input_tensors[7].shape.size() > 12 && input_tensors[7].shape[12] > 0)
-                         ? static_cast<int>(input_tensors[7].shape[12])
+  int total_tokens = (inputs.forward_shape->shape.size() > 12 && inputs.forward_shape->shape[12] > 0)
+                         ? static_cast<int>(inputs.forward_shape->shape[12])
                          : batch_size;
   size_t context_tokens = query.shape[0] - total_tokens;
 
@@ -120,12 +93,12 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
   int max_blocks_per_seq = 0;
 
   if (enable_blocked_multi_token_forwarding_kv_ || use_flashinfer_for_decode_) {
-    kv_cache_block_num = *(input_tensors[11].GetPtr<int64_t>());
-    layer_kv_cache_ptr = input_tensors[11].GetPtr<void*>() + 1;
+    kv_cache_block_num = *(inputs.layer_kv_cache_ptr->GetPtr<int64_t>());
+    layer_kv_cache_ptr = inputs.layer_kv_cache_ptr->GetPtr<void*>() + 1;
     k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];
     v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
-    block_table_ptr = input_tensors[12].GetPtr<int32_t>();
-    max_blocks_per_seq = input_tensors[12].shape[1];
+    block_table_ptr = inputs.block_table->GetPtr<int32_t>();
+    max_blocks_per_seq = inputs.block_table->shape[1];
   }
 
   auto skipped_context_out_ptr = out.GetPtr<void>() + context_tokens * (out.GetTotalBytes() / out.shape[0]);
@@ -151,8 +124,9 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
       this->num_heads_, this->head_size_, this->num_kv_heads_, this->stride_size_, this->block_token_num_,
       this->k_scale_, this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(),
       rotary_embedding_mask.GetPtr<void>(), total_tokens, this->rotary_embedding_cuda_, workspace.GetPtr<void>(),
-      this->layernorm_eps_, this->use_qk_norm_, input_tensors[9].GetPtr<void>(), input_tensors[10].GetPtr<void>(),
-      workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_, qkv_workspace.GetPtr<void>(),
+      this->layernorm_eps_, this->use_qk_norm_, inputs.query_layernorm_weight->GetPtr<void>(),
+      inputs.key_layernorm_weight->GetPtr<void>(), workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_,
+      qkv_workspace.GetPtr<void>(),
       shared_device_workspace_ != nullptr ? shared_device_workspace_->GetPtr<void>() : nullptr,
       shared_pinned_host_workspace_, k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
       this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,

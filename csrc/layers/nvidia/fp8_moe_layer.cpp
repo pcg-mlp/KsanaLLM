@@ -21,11 +21,6 @@ Status Fp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeCon
   DISPATCH_BY_2_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
 }
 
-Status Fp8MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_2_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
-}
-
 template <typename T>
 size_t Fp8MoeLayer::GetWorkspaceSizeT() {
   GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_per_node_, this->expert_hidden_size_,
@@ -56,9 +51,10 @@ Status Fp8MoeLayer::PreprocessT(const ModelConfig& model_config_, const RuntimeC
 }
 
 template <typename T>
-Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts
-  const size_t num_tokens = input_tensors[0].shape[0];
+Status Fp8MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                             const Tensor* w2, const Tensor* eplb_map, Tensor* output, const Tensor* e_score_bias,
+                             const Tensor* input_ids) {
+  const size_t num_tokens = hidden_states->shape[0];
   bool is_fp8 = true;
   void* fc1_dequant_scale = nullptr;
   void* fc2_quant_scale = nullptr;
@@ -70,7 +66,7 @@ Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
     this->set_workspace_buffer_info_ = false;
 
     this->workspace_info_.size = this->max_ws_bytes_ - quant_buffer_size_;
-    this->workspace_info_.workspace = buffer->GetPtr<void>() + quant_buffer_size_;
+    this->workspace_info_.workspace = reinterpret_cast<uint8_t*>(buffer->GetPtr<void>()) + quant_buffer_size_;
     this->workspace_info_.scale_probs = llm_kernels::utils::nextWorkspacePtr(
         reinterpret_cast<int8_t*>(this->workspace_info_.workspace), this->moe_workspace_size_);
     this->workspace_info_.src_to_dest_map = llm_kernels::utils::nextWorkspacePtr(
@@ -81,29 +77,28 @@ Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
         reinterpret_cast<int8_t*>(this->workspace_info_.selected_experts), this->selected_expert_size_);
   }
 
-  if (input_tensors[2].weight_scales && input_tensors[2].input_scales) {
-    float* fc1_quant_scale = static_cast<float*>(input_tensors[2].input_scales->GetPtr<void>());
-    // convert input to fp8
-    Fp8E4m3Quantize<T>(1, input_tensors[0].GetElementNumber(), static_cast<T*>(input_tensors[0].GetPtr<void>()),
+  if (w1->weight_scales && w1->input_scales) {
+    float* fc1_quant_scale = static_cast<float*>(w1->input_scales->GetPtr<void>());
+    Fp8E4m3Quantize<T>(1, hidden_states->GetElementNumber(), static_cast<T*>(hidden_states->GetPtr<void>()),
                        input_activations, fc1_quant_scale, true,
                        this->context_->device->GetPrimaryComputeStream().Get());
-    fc1_dequant_scale = input_tensors[2].weight_scales->GetPtr<void>();
-    fc2_quant_scale = input_tensors[3].input_scales->GetPtr<void>();
-    fc2_dequant_scale = input_tensors[3].weight_scales->GetPtr<void>();
+    fc1_dequant_scale = w1->weight_scales->GetPtr<void>();
+    fc2_quant_scale = w2->input_scales->GetPtr<void>();
+    fc2_dequant_scale = w2->weight_scales->GetPtr<void>();
   } else {
     KLLM_THROW("Unsupported fp8 moe method, only support both weight_scale and input_scale are not null.");
   }
   void* e_score_correction_bias_weight_void = nullptr;
   if (this->use_e_score_correction_bias_) {
-    e_score_correction_bias_weight_void = input_tensors[4].GetPtr<void>();
+    e_score_correction_bias_weight_void = eplb_map->GetPtr<void>();
   }
   if (this->moe_scale_norm_mode_ == MoeScaleNormMode::RE_NORM) {
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
-        input_activations, input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-        input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_,
-        this->expert_inter_size_, this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
-        static_cast<char*>(this->workspace_info_.workspace), output_tensors[0].GetPtr<void>(),
-        this->workspace_info_.scale_probs, static_cast<int*>(this->workspace_info_.src_to_dest_map),
+        input_activations, gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
+        e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_, this->expert_inter_size_,
+        this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
+        static_cast<char*>(this->workspace_info_.workspace), output->GetPtr<void>(), this->workspace_info_.scale_probs,
+        static_cast<int*>(this->workspace_info_.src_to_dest_map),
         static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
         best_config_index_, this->tactics_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
         this->scoring_func_, this->topk_method_, this->norm_topk_prob_, this->routed_scaling_factor_,
@@ -111,11 +106,11 @@ Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
         fc1_dequant_scale, fc2_quant_scale, fc2_dequant_scale);
   } else if (this->moe_scale_norm_mode_ == MoeScaleNormMode::NO_NORM) {
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
-        input_activations, input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-        input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_,
-        this->expert_inter_size_, this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
-        static_cast<char*>(this->workspace_info_.workspace), output_tensors[0].GetPtr<void>(),
-        this->workspace_info_.scale_probs, static_cast<int*>(this->workspace_info_.src_to_dest_map),
+        input_activations, gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
+        e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_, this->expert_inter_size_,
+        this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
+        static_cast<char*>(this->workspace_info_.workspace), output->GetPtr<void>(), this->workspace_info_.scale_probs,
+        static_cast<int*>(this->workspace_info_.src_to_dest_map),
         static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
         best_config_index_, this->tactics_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
         this->scoring_func_, this->topk_method_, this->norm_topk_prob_, this->routed_scaling_factor_,
@@ -123,11 +118,18 @@ Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
         fc1_dequant_scale, fc2_quant_scale, fc2_dequant_scale);
   }
 
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output->shape = hidden_states->shape;
+  output->dtype = hidden_states->dtype;
   return Status();
 }
 
 #undef WT
+
+Status Fp8MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                            const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                            const Tensor* e_score_bias, const Tensor* input_ids, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_2_DTYPE(inter_data_type_, ForwardT, hidden_states, gating_output, w1, w2, eplb_map, output, e_score_bias,
+                      input_ids);
+}
 
 }  // namespace ksana_llm

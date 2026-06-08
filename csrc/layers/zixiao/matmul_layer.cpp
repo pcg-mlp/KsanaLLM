@@ -17,13 +17,13 @@ size_t MatMulLayer<T>::GetWorkspaceSize() {
   return 0;
 }
 
-template <typename T>
-Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  return Status(RET_UNDEFINED_REFERENCE, "MatMulLayer not supported.");
-}
-
 template class MatMulLayer<float>;
 template class MatMulLayer<float16>;
 template class MatMulLayer<bfloat16>;
+
+Status MatMulLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                            const LayerExecContext& exec_ctx) {
+  return Status(RET_UNDEFINED_REFERENCE, "MatMulLayer not supported.");
+}
+
 }  // namespace ksana_llm

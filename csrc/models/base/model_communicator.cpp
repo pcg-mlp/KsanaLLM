@@ -113,7 +113,8 @@ ModelCommunicator::~ModelCommunicator() {
 
 Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
 #ifdef ENABLE_CUDA
-  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
+  const Tensor* permute_buf = input_tensors.size() > 1 ? &input_tensors[1] : nullptr;
+  STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(&input_tensors[0], &output_tensors[0], permute_buf));
   if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
     EventRecord(comm_finish_event_, context_->device->GetCommStream());
     StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);
@@ -122,7 +123,7 @@ Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, st
 
 #ifdef ENABLE_ACL
   if (context_->global->GetTensorParallelSize() > 1) {
-    STATUS_CHECK_RETURN(hccl_all_gather_layer_->Forward(input_tensors, output_tensors));
+    STATUS_CHECK_RETURN(hccl_all_gather_layer_->Forward(&input_tensors[0], &input_tensors[1], &output_tensors[0]));
     if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
       EventRecord(comm_finish_event_, context_->device->GetCommStream());
       StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);
@@ -140,13 +141,13 @@ Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, st
 #ifdef ENABLE_CUDA
   const size_t data_size = input_tensors[0].GetTotalBytes();
   if (use_custom && tp_trt_all_reduce_sum_layer_ != nullptr && data_size <= kTrtReduceThreshold) {
-    STATUS_CHECK_RETURN(tp_trt_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
+    STATUS_CHECK_RETURN(tp_trt_all_reduce_sum_layer_->Forward(&input_tensors[0], &output_tensors[0]));
   } else if (use_custom && tp_custom_all_reduce_sum_layer_ != nullptr &&
              !(select_all_reduce_by_size_ && data_size > kAllReduceThreshold)) {
     // custom all reduce may hang in dynamic buffer mode, disable it temporarily. Reopen it after this bug fixed.
-    STATUS_CHECK_RETURN(tp_custom_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
+    STATUS_CHECK_RETURN(tp_custom_all_reduce_sum_layer_->Forward(&input_tensors[0], &output_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
+    STATUS_CHECK_RETURN(nccl_all_reduce_sum_layer_->Forward(&input_tensors[0], &output_tensors[0]));
   }
 
   if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
@@ -157,7 +158,7 @@ Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, st
 
 #ifdef ENABLE_ACL
   if (context_->global->GetTensorParallelSize() > 1) {
-    STATUS_CHECK_RETURN(hccl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
+    STATUS_CHECK_RETURN(hccl_all_reduce_sum_layer_->Forward(&input_tensors[0], &output_tensors[0]));
     if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
       EventRecord(comm_finish_event_, context_->device->GetCommStream());
       StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);

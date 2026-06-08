@@ -21,24 +21,22 @@ Status HcclAllReduceSumLayer::Init(const std::vector<std::any>& parameters, cons
   return Status();
 }
 
-Status HcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+Status HcclAllReduceSumLayer::Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx) {
+  output->shape = input->shape;
+  output->dtype = input->dtype;
 
   if (context_->GetTensorParallelSize() > 1) {
     reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
     atb_op_executor_.ResetVariantPack();
-    atb_op_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
-                                    static_cast<aclDataType>(DataType(input_tensors[0].dtype)));
-    atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                     static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
+    atb_op_executor_.SetInputTensor(input->GetPtr<void>(), input->shape,
+                                    static_cast<aclDataType>(DataType(input->dtype)));
+    atb_op_executor_.SetOutputTensor(output->GetPtr<void>(), output->shape,
+                                     static_cast<aclDataType>(DataType(output->dtype)));
     atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
   } else {
-    void* src = input_tensors[0].GetPtr<void>();
-    void* dst = output_tensors[0].GetPtr<void>();
-    MemcpyAsync(dst, src, input_tensors[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
-                context_->GetMemoryManageStreams()[rank_]);
+    void* src = input->GetPtr<void>();
+    void* dst = output->GetPtr<void>();
+    MemcpyAsync(dst, src, input->GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
   }
   return Status();
 }

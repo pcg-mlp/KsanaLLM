@@ -14,7 +14,8 @@ Mul::Mul(const LayerCreationContext& creation_context) {
 }
 
 Status Mul::Forward(Tensor A, Tensor B, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(mul_layer_->Forward({A, B}, output_tensors));
+  auto* typed = static_cast<MulLayer*>(mul_layer_.get());
+  STATUS_CHECK_RETURN(typed->Forward(&A, &B, &output_tensors[0]));
   return Status();
 }
 

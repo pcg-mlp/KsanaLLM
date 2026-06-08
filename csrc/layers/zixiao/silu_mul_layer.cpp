@@ -12,8 +12,23 @@ Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
 }
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+template <typename T>
+Status SiluMulLayer::ForwardFusedT(const Tensor& fused_gate_up, Tensor& output, const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
 }
+
+template <typename T>
+Status SiluMulLayer::ForwardSplitT(const Tensor& gate, const Tensor& up, Tensor& output,
+                                   const LayerExecContext& exec_ctx) {
+  return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
+}
+
+Status SiluMulLayer::Forward(const Tensor* fused_gate_up, Tensor* output, const LayerExecContext& exec_ctx) {
+  return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
+}
+
+Status SiluMulLayer::Forward(const Tensor* gate, const Tensor* up, Tensor* output, const LayerExecContext& exec_ctx) {
+  return Status(RET_UNDEFINED_REFERENCE, "SiluMulLayer not supported.");
+}
+
 }  // namespace ksana_llm

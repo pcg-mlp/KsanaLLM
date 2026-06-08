@@ -26,84 +26,76 @@ Status LayernormLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+template <typename T>
+Status LayernormLayer::ForwardNoWeightT(const Tensor& input, Tensor& output) {
+  KLLM_CHECK_WITH_INFO(num_heads_ > 0 && head_dim_ > 0,
+                       "num_heads and head_dim must be set for no-weight per-head RMSNorm");
+
+  const uint32_t batch_size = static_cast<uint32_t>(input.shape[0]);
+  const int64_t stride_batch_bytes = static_cast<int64_t>(num_heads_ * head_dim_ * sizeof(T));
+  const int64_t stride_head_bytes = static_cast<int64_t>(head_dim_ * sizeof(T));
+
+  cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
+
+  if (head_dim_ == 512) {
+    llm_kernels::nvidia::rmsnorm_self<T, 512>(input.GetPtr<void>(), output.GetPtr<void>(), stride_batch_bytes,
+                                              stride_head_bytes, batch_size, num_heads_, rms_norm_eps_, stream);
+  } else {
+    KLLM_THROW(fmt::format("Unsupported head_dim {} for no-weight per-head RMSNorm", head_dim_));
+  }
+
+  output.shape = input.shape;
+  output.dtype = input.dtype;
+  return Status();
 }
 
 template <typename T>
-Status LayernormLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // input_tensors:
-  //   0: input [token_num, hidden_size]
-  //   1: weight [hidden_size] (optional)
-  //   2: bias [hidden_size] (optional)
-  // output_tensors:
-  //   0: output [token_num, hidden_size]
-  // Note: when bias is provided, compute layernorm, otherwise compute rmsnorm.
-  //       when no weight is provided (size==1), compute per-head no-weight rmsnorm via sglang kernel.
-  //
-  // Parallel path (size==4):
-  //   input_tensors[0]: input1 [token_num, hidden_size1]
-  //   input_tensors[1]: weight1 [hidden_size1]
-  //   input_tensors[2]: input2 [token_num, hidden_size2]
-  //   input_tensors[3]: weight2 [hidden_size2]
-  //   output_tensors[0]: output1 [token_num, hidden_size1]
-  //   output_tensors[1]: output2 [token_num, hidden_size2]
-
-  if (input_tensors.size() == 4) {
-    // Parallel RmsNorm for two inputs
-    const int token_num = input_tensors[0].shape[0];
-    const int hidden_size1 = input_tensors[0].shape[1];
-    const int hidden_size2 = input_tensors[2].shape[1];
-    // When shape has 3 dims, the 3rd dim encodes the row stride (in elements);
-    // otherwise stride == hidden_size (contiguous).
-    const int stride1 = input_tensors[0].shape.size() > 2 ? static_cast<int>(input_tensors[0].shape[2]) : hidden_size1;
-    const int stride2 = input_tensors[2].shape.size() > 2 ? static_cast<int>(input_tensors[2].shape[2]) : hidden_size2;
-    llm_kernels::nvidia::InvokeParallelRmsNorm<T>(
-        input_tensors[0].GetPtr<const T>(), input_tensors[1].GetPtr<const T>(), output_tensors[0].GetPtr<T>(),
-        hidden_size1,
-        /*stride_input1*/ stride1, input_tensors[2].GetPtr<const T>(), input_tensors[3].GetPtr<const T>(),
-        output_tensors[1].GetPtr<T>(), hidden_size2,
-        /*stride_input2*/ stride2, token_num, rms_norm_eps_, context_->device->GetPrimaryComputeStream().Get());
-    output_tensors[0].shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_size1)};
-    output_tensors[0].dtype = input_tensors[0].dtype;
-    output_tensors[1].shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_size2)};
-    output_tensors[1].dtype = input_tensors[2].dtype;
-    return Status();
-  } else if (input_tensors.size() > 1) {
-    const void* bias = input_tensors.size() > 2 ? input_tensors[2].GetPtr<void>() : nullptr;
-    if (bias) {
-      InvokeLayerNorm<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), bias, rms_norm_eps_,
-                         input_tensors[0].shape[0], input_tensors[0].shape[1], output_tensors[0].GetPtr<void>(),
-                         context_->device->GetPrimaryComputeStream().Get());
-    } else {
-      InvokeRMSNorm<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), rms_norm_eps_,
-                       input_tensors[0].shape[0], input_tensors[0].shape[1], output_tensors[0].GetPtr<void>(),
-                       context_->device->GetPrimaryComputeStream().Get());
-    }
+Status LayernormLayer::ForwardWeightT(const Tensor& input, const Tensor& weight, Tensor& output, const Tensor* bias) {
+  if (bias != nullptr) {
+    InvokeLayerNorm<T>(input.GetPtr<void>(), weight.GetPtr<void>(), bias->GetPtr<void>(), rms_norm_eps_, input.shape[0],
+                       input.shape[1], output.GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());
   } else {
-    KLLM_CHECK_WITH_INFO(num_heads_ > 0 && head_dim_ > 0,
-                         "num_heads and head_dim must be set for no-weight per-head RMSNorm");
-
-    const uint32_t batch_size = static_cast<uint32_t>(input_tensors[0].shape[0]);
-    const int64_t stride_batch_bytes = static_cast<int64_t>(num_heads_ * head_dim_ * sizeof(T));
-    const int64_t stride_head_bytes = static_cast<int64_t>(head_dim_ * sizeof(T));
-
-    cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
-
-    // Dispatch by head_dim
-    if (head_dim_ == 512) {
-      llm_kernels::nvidia::rmsnorm_self<T, 512>(input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(),
-                                                stride_batch_bytes, stride_head_bytes, batch_size, num_heads_,
-                                                rms_norm_eps_, stream);
-    } else {
-      KLLM_THROW(fmt::format("Unsupported head_dim {} for no-weight per-head RMSNorm", head_dim_));
-    }
+    InvokeRMSNorm<T>(input.GetPtr<void>(), weight.GetPtr<void>(), rms_norm_eps_, input.shape[0], input.shape[1],
+                     output.GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());
   }
-
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = input.shape;
+  output.dtype = input.dtype;
   return Status();
+}
+
+template <typename T>
+Status LayernormLayer::ForwardParallelT(const Tensor& in1, const Tensor& w1, const Tensor& in2, const Tensor& w2,
+                                        Tensor& out1, Tensor& out2, int stride1, int stride2) {
+  const int token_num = in1.shape[0];
+  const int hidden_size1 = in1.shape[1];
+  const int hidden_size2 = in2.shape[1];
+  const int s1 = (stride1 > 0) ? stride1 : hidden_size1;
+  const int s2 = (stride2 > 0) ? stride2 : hidden_size2;
+  llm_kernels::nvidia::InvokeParallelRmsNorm<T>(in1.GetPtr<const T>(), w1.GetPtr<const T>(), out1.GetPtr<T>(),
+                                                hidden_size1, s1, in2.GetPtr<const T>(), w2.GetPtr<const T>(),
+                                                out2.GetPtr<T>(), hidden_size2, s2, token_num, rms_norm_eps_,
+                                                context_->device->GetPrimaryComputeStream().Get());
+  out1.shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_size1)};
+  out1.dtype = in1.dtype;
+  out2.shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_size2)};
+  out2.dtype = in2.dtype;
+  return Status();
+}
+
+Status LayernormLayer::Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardNoWeightT, *input, *output);
+}
+
+Status LayernormLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output, const Tensor* bias,
+                               const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardWeightT, *input, *weight, *output, bias);
+}
+
+Status LayernormLayer::Forward(const Tensor* input1, const Tensor* weight1, const Tensor* input2, const Tensor* weight2,
+                               Tensor* output1, Tensor* output2, int stride1, int stride2,
+                               const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardParallelT, *input1, *weight1, *input2, *weight2, *output1, *output2,
+                      stride1, stride2);
 }
 
 }  // namespace ksana_llm

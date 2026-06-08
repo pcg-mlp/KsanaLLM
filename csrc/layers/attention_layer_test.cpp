@@ -81,7 +81,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                         runtime_config, context_, 0)
                   .OK());
 
-  Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape, flag_tensor, flexible_rotary_embedding_pos,
+  Tensor qkv, input_len, prefix_offsets, pos, mask, flag_tensor, flexible_rotary_embedding_pos,
       flexible_rotary_embedding_mask, dst_flexible_kv_cache_tensor, src_flexible_kv_cache_tensor,
       dst_flexible_token_idx_tensor, src_flexible_token_idx_tensor;
   std::vector<size_t> input_shape = {2, 12288};
@@ -99,7 +99,6 @@ TEST_F(LayerTest, AttentionLayerTest) {
   CreateHalfDataTypeTensor(src_flexible_kv_cache_tensor, {0}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(dst_flexible_token_idx_tensor, {0}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(src_flexible_token_idx_tensor, {0}, GetDataType<int>(), sizeof(int));
-  forward_shape.shape = {1, 2, 1, 0, 0, 0, 2, 1, 2, 0, 0, 0};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
   Memcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
@@ -148,33 +147,34 @@ TEST_F(LayerTest, AttentionLayerTest) {
 
   Tensor empty_q_norm_weight;
   Tensor empty_k_norm_weight;
-  EXPECT_TRUE(flash_attention_layer
-                  .Forward(
-                      {
-                          qkv,
-                          input_len,
-                          kv_list,
-                          prefix_offsets,
-                          block_offsets,
-                          pos,
-                          mask,
-                          flexible_rotary_embedding_pos,
-                          flexible_rotary_embedding_mask,
-                          dst_flexible_kv_cache_tensor,
-                          src_flexible_kv_cache_tensor,
-                          dst_flexible_token_idx_tensor,
-                          src_flexible_token_idx_tensor,
-                          prefix_offsets,
-                          forward_shape,
-                          empty_q_norm_weight,
-                          empty_k_norm_weight,
-                          flag_tensor,
-                          layer_kv_cache_ptr_tensor,
-                          multi_token_request_block_table,
-                          input_len,
-                      },
-                      output_tensors)
-                  .OK());
+  FlashAttentionLayer::CudaForwardParams flash_params;
+  flash_params.qkv = &qkv;
+  flash_params.token_offset = &input_len;
+  flash_params.kv_list = &kv_list;
+  flash_params.prefix_offset = &prefix_offsets;
+  flash_params.kv_cache_offset = &block_offsets;
+  flash_params.rotary_embedding_pos = &pos;
+  flash_params.rotary_embedding_mask = &mask;
+  flash_params.src_flexible_rotary_embedding_pos = &flexible_rotary_embedding_pos;
+  flash_params.flexible_rotary_embedding_mask = &flexible_rotary_embedding_mask;
+  flash_params.dst_flexible_kv_cache = &dst_flexible_kv_cache_tensor;
+  flash_params.src_flexible_kv_cache = &src_flexible_kv_cache_tensor;
+  flash_params.dst_flexible_token_idx = &dst_flexible_token_idx_tensor;
+  flash_params.src_flexible_token_idx = &src_flexible_token_idx_tensor;
+  flash_params.flexible_offset_uint64 = &prefix_offsets;
+  // Scalars formerly encoded in forward_shape.shape[2/3/6/7/8]:
+  flash_params.layer_block_num = 1;           // shape[2]
+  flash_params.single_token_request_num = 0;  // shape[3]
+  flash_params.max_forwarding_tokens = 2;     // shape[6]
+  flash_params.batch_size = 1;                // shape[7]
+  flash_params.max_tokens = 2;                // shape[8]
+  flash_params.query_layernorm_weight = &empty_q_norm_weight;
+  flash_params.key_layernorm_weight = &empty_k_norm_weight;
+  flash_params.use_cache = flag_tensor.GetPtr<bool>()[0];
+  flash_params.kv_cache_base_ptr = &layer_kv_cache_ptr_tensor;
+  flash_params.block_table = &multi_token_request_block_table;
+  flash_params.input_without_prefix_offset = &input_len;
+  EXPECT_TRUE(flash_attention_layer.Forward(flash_params, &output_tensors[0]).OK());
   PagedAttentionLayer attention_layer;
   EXPECT_TRUE(attention_layer
                   .Init({quant_mode,

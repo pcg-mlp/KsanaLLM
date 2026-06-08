@@ -108,7 +108,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
   // Step 2: Key normalization
   {
     PROFILE_EVENT_SCOPE(k_norm_forward, "indexer_k_norm", rank);
-    STATUS_CHECK_RETURN(k_norm_->Forward(k_indexer_tensors, k_indexer_tensors));
+    STATUS_CHECK_RETURN(k_norm_->Forward(k_indexer_tensors[0], k_indexer_tensors[0]));
   }
 
   // Calculate token counts
@@ -166,16 +166,25 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
 
     std::vector<Tensor> context_output_tensors = {topk_indices.GetView({dp_context_tokens, index_topk_})};
     auto& flash_dsa = *model_input->flash_meta->GetDSA();
-    STATUS_CHECK_RETURN(flash_sparse_mla_indexer_layer_->Forward(
-        {context_q_indexer, context_k_indexer, context_weights, quant_workspace,
-         model_input->flash_meta->rotary_embedding_pos, flash_dsa.store_out_loc,
-         model_input->dp_input_offset_uint64_tensor, model_input->flash_meta->block_table,
-         flash_indexer.cu_seq_len_start_tensor, flash_indexer.cu_seq_len_end_tensor,
-         flash_indexer.batch_indices_tensor,
-         model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
-         shared_indexer.chunk_token_starts_host, shared_indexer.chunk_kv_token_ranges_host,
-         shared_indexer.chunk_max_compressed_kv_lens_host, attn_ctx.forward_shape},
-        context_output_tensors));
+    auto* typed = static_cast<FlashSparseMlaIndexerLayer*>(flash_sparse_mla_indexer_layer_.get());
+    FlashSparseMlaIndexerLayer::FlashSparseMlaIndexerParams fparams;
+    fparams.q = &context_q_indexer;
+    fparams.k = &context_k_indexer;
+    fparams.weights = &context_weights;
+    fparams.quant_workspace = &quant_workspace;
+    fparams.rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos;
+    fparams.store_out_loc = &flash_dsa.store_out_loc;
+    fparams.seq_len_offset = &model_input->dp_input_offset_uint64_tensor;
+    fparams.block_table = &model_input->flash_meta->block_table;
+    fparams.cu_seq_len_start = &flash_indexer.cu_seq_len_start_tensor;
+    fparams.cu_seq_len_end = &flash_indexer.cu_seq_len_end_tensor;
+    fparams.batch_indices = &flash_indexer.batch_indices_tensor;
+    fparams.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr;
+    fparams.chunk_token_starts_host = &shared_indexer.chunk_token_starts_host;
+    fparams.chunk_kv_token_ranges_host = &shared_indexer.chunk_kv_token_ranges_host;
+    fparams.batch_size = static_cast<int>(attn_ctx.forward_shape.shape[7]);
+    fparams.total_prefix_tokens = static_cast<int>(attn_ctx.forward_shape.shape[11]);
+    STATUS_CHECK_RETURN(typed->Forward(fparams, &context_output_tensors[0]));
   }
 
   if (dp_decode_tokens > 0) {
@@ -195,15 +204,24 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
           topk_indices.GetView({current_tokens, index_topk_}, skip_tokens * index_topk_)};
 
       auto& page_dsa = *model_input->page_metas[i]->GetDSA();
-      STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
-          {current_q_indexer, current_k_indexer, current_weights, quant_workspace,
-           model_input->page_metas[i]->rotary_embedding_pos, page_dsa.store_out_loc,
-           model_input->page_metas[i]->input_length, page_indexer.expanded_seq_len_tensor,
-           model_input->page_metas[i]->block_table, page_dsa.expanded_block_table,
-           page_indexer.cu_seq_len_start_tensor, page_indexer.cu_seq_len_end_tensor,
-           model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr, page_dsa.paged_schedule_meta,
-           shared_indexer.max_compressed_seq_len_host},
-          current_output_tensors));
+      auto* typed = static_cast<PagedSparseMlaIndexerLayer*>(paged_sparse_mla_indexer_layer_.get());
+      PagedSparseMlaIndexerLayer::PagedSparseMlaIndexerParams pparams;
+      pparams.q = &current_q_indexer;
+      pparams.k = &current_k_indexer;
+      pparams.weights = &current_weights;
+      pparams.quant_workspace = &quant_workspace;
+      pparams.rotary_embedding_pos = &model_input->page_metas[i]->rotary_embedding_pos;
+      pparams.store_out_loc = &page_dsa.store_out_loc;
+      pparams.input_length = &model_input->page_metas[i]->input_length;
+      pparams.expanded_input_length = &page_indexer.expanded_seq_len_tensor;
+      pparams.block_table = &model_input->page_metas[i]->block_table;
+      pparams.expanded_block_table = &page_dsa.expanded_block_table;
+      pparams.cu_seq_len_start = &page_indexer.cu_seq_len_start_tensor;
+      pparams.cu_seq_len_end = &page_indexer.cu_seq_len_end_tensor;
+      pparams.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr;
+      pparams.schedule_meta = &page_dsa.paged_schedule_meta;
+      pparams.sched_meta_initialized = (page_dsa.paged_schedule_meta.shape[2] != 0);
+      STATUS_CHECK_RETURN(typed->Forward(pparams, &current_output_tensors[0]));
       page_dsa.paged_schedule_meta.shape[2] = 1;
 
       skip_tokens += current_tokens;

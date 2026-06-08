@@ -21,7 +21,10 @@ class Fp8MoeLayer : public MoeLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  // eplb_map/e_score_bias/input_ids are nullptr when unused.
+  virtual Status Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                         const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                         const Tensor* e_score_bias = nullptr, const Tensor* input_ids = nullptr,
                          const LayerExecContext& exec_ctx = {}) override;
 
  private:
@@ -32,7 +35,8 @@ class Fp8MoeLayer : public MoeLayer {
   Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);
 
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                  const Tensor* eplb_map, Tensor* output, const Tensor* e_score_bias, const Tensor* input_ids);
 
  private:
   size_t quant_buffer_size_;

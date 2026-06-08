@@ -98,93 +98,66 @@ Status CompressorLayer::Init(const std::vector<std::any>& parameters, const Runt
 }
 
 // =============================================================================
-// Forward
-// =============================================================================
-Status CompressorLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  const auto& kv_scale_input = input_tensors[1];
-  KLLM_CHECK_WITH_INFO(kv_scale_input.dtype == compressor_dtype_,
-                       "kv_score_input dtype must be aligned with compressor dtype");
-
-  const bool is_prefill = (input_tensors.size() >= 10);
-  if (is_prefill) {
-    if (compress_ratio_ == 4) {
-      return ForwardPrefillC4(input_tensors, output_tensors);
-    } else {
-      return ForwardPrefillC128(input_tensors, output_tensors);
-    }
-  } else {
-    if (compress_ratio_ == 4) {
-      return ForwardDecodeC4(input_tensors, output_tensors);
-    } else {
-      return ForwardDecodeC128(input_tensors, output_tensors);
-    }
-  }
-}
-
-// =============================================================================
 // Prefill – C4 (compress_ratio = 4, overlap mode)
 // =============================================================================
-Status CompressorLayer::ForwardPrefillC4(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
+Status CompressorLayer::ForwardPrefillC4(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input,
+                                         const Tensor* score_bias, const Tensor* indices, const Tensor* extra,
+                                         Tensor* compress_plan, Tensor* write_plan, const Tensor* seq_lens,
+                                         const Tensor* extend_lens, const Tensor* norm_weight,
+                                         const Tensor* layer_kv_cache_ptr, const Tensor* compressed_out_loc,
+                                         Tensor* output, bool plan_initialized) {
+  KLLM_CHECK_WITH_INFO(kv_score_input->dtype == compressor_dtype_,
+                       "kv_score_input dtype must be aligned with compressor dtype");
   cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
 
-  auto input_iter = input_tensors.cbegin();
-  void* kv_score_buffer = (input_iter++)->GetPtr<void*>()[layer_idx_];
-  const Tensor& kv_score_input_tensor = *input_iter++;
-  const void* kv_score_input = kv_score_input_tensor.GetPtr<void>();
-  const void* score_bias = (input_iter++)->GetPtr<void>();
-  const Tensor& indices_tensor = *input_iter++;
-  const int32_t* indices = indices_tensor.GetPtr<int32_t>();
-  const void* extra = (input_iter++)->GetPtr<void>();
-  const Tensor& compress_plan_tensor = *input_iter++;
-  auto* compress_plan = compress_plan_tensor.GetPtr<PrefillPlan>();
-  const Tensor& write_plan_tensor = *input_iter++;
-  auto* write_plan = write_plan_tensor.GetPtr<PrefillPlan>();
-  const int32_t* seq_lens = (input_iter++)->GetPtr<int32_t>();
-  const int32_t* extend_lens = (input_iter++)->GetPtr<int32_t>();
-
-  void* kv_compressed_output = output_tensors[0].GetPtr<void>();
-
-  const uint32_t num_tokens = static_cast<uint32_t>(kv_score_input_tensor.shape[0]);
+  void* kv_score_buffer = kv_score_buffer_tensor->GetPtr<void*>()[layer_idx_];
+  const void* kv_score_input_ptr = kv_score_input->GetPtr<void>();
+  const void* score_bias_ptr = score_bias->GetPtr<void>();
+  const int32_t* indices_ptr = indices->GetPtr<int32_t>();
+  const void* extra_ptr = extra->GetPtr<void>();
+  auto* compress_plan_ptr = compress_plan->GetPtr<PrefillPlan>();
+  auto* write_plan_ptr = write_plan->GetPtr<PrefillPlan>();
+  const int32_t* seq_lens_ptr = seq_lens->GetPtr<int32_t>();
+  const int32_t* extend_lens_ptr = extend_lens->GetPtr<int32_t>();
+  void* kv_compressed_output = output->GetPtr<void>();
+  const uint32_t num_tokens = static_cast<uint32_t>(kv_score_input->shape[0]);
 
   // Step 1: build plan if needed
-  if (compress_plan_tensor.shape[2] == 0) {
-    const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
+  if (!plan_initialized) {
+    const uint32_t batch_size = static_cast<uint32_t>(indices->shape[0]);
     DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-        compressor_dtype_, PlanPrefillCompress(compress_plan, write_plan, seq_lens, extend_lens, batch_size, num_tokens,
-                                               compress_ratio_, is_overlap_, stream));
+        compressor_dtype_, PlanPrefillCompress(compress_plan_ptr, write_plan_ptr, seq_lens_ptr, extend_lens_ptr,
+                                               batch_size, num_tokens, compress_ratio_, is_overlap_, stream));
   }
 
   // Step 2: prefill compression
-  const uint32_t num_compress = static_cast<uint32_t>(compress_plan_tensor.shape[0]);
-  const uint32_t num_write = static_cast<uint32_t>(write_plan_tensor.shape[0]);
+  const uint32_t num_compress = static_cast<uint32_t>(compress_plan->shape[0]);
+  const uint32_t num_write = static_cast<uint32_t>(write_plan->shape[0]);
   if (head_dim_ == 512) {
     DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-        compressor_dtype_,
-        template FlashC4Prefill<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                     compress_plan, write_plan, extra, num_compress, num_write, stream));
+        compressor_dtype_, template FlashC4Prefill<512>(kv_score_buffer, kv_score_input_ptr, kv_compressed_output,
+                                                        score_bias_ptr, indices_ptr, compress_plan_ptr, write_plan_ptr,
+                                                        extra_ptr, num_compress, num_write, stream));
   } else {
     DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-        compressor_dtype_,
-        template FlashC4Prefill<128>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                     compress_plan, write_plan, extra, num_compress, num_write, stream));
+        compressor_dtype_, template FlashC4Prefill<128>(kv_score_buffer, kv_score_input_ptr, kv_compressed_output,
+                                                        score_bias_ptr, indices_ptr, compress_plan_ptr, write_plan_ptr,
+                                                        extra_ptr, num_compress, num_write, stream));
   }
 
   // Step 3: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache
-  const void* norm_weight = (input_iter++)->GetPtr<void>();
-  const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
-  const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
-  void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
+  const void* norm_weight_ptr = norm_weight->GetPtr<void>();
+  void* cache = layer_kv_cache_ptr->GetPtr<void*>()[1 + layer_idx_ * 2];
+  const int32_t* compressed_out_loc_ptr = compressed_out_loc->GetPtr<int32_t>();
   if (head_dim_ == 512) {
-    DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, compress_plan,
+    DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight_ptr, compress_plan_ptr,
                                       freqs_cis_, num_compress, ForwardMode::CompressExtend, rms_norm_eps_,
-                                      compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_,
-                                      stream);
+                                      compress_ratio_, cache, compressed_out_loc_ptr, page_stride_,
+                                      compressed_page_bits_, stream);
   } else {
     Bf16Wrapper::template IndexerFusedNormRopeStore<128>(
-        kv_compressed_output, norm_weight, compress_plan, freqs_cis_, num_compress, ForwardMode::CompressExtend,
-        rms_norm_eps_, compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+        kv_compressed_output, norm_weight_ptr, compress_plan_ptr, freqs_cis_, num_compress, ForwardMode::CompressExtend,
+        rms_norm_eps_, compress_ratio_, cache, compressed_out_loc_ptr, page_stride_, compressed_page_bits_, stream);
   }
 
   return Status();
@@ -193,53 +166,52 @@ Status CompressorLayer::ForwardPrefillC4(const std::vector<Tensor>& input_tensor
 // =============================================================================
 // Prefill – C128 (compress_ratio = 128, non-overlap mode)
 // =============================================================================
-Status CompressorLayer::ForwardPrefillC128(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+Status CompressorLayer::ForwardPrefillC128(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input,
+                                           const Tensor* score_bias, const Tensor* indices, const Tensor* load_indices,
+                                           Tensor* compress_plan, Tensor* write_plan, const Tensor* seq_lens,
+                                           const Tensor* extend_lens, const Tensor* norm_weight,
+                                           const Tensor* layer_kv_cache_ptr, const Tensor* compressed_out_loc,
+                                           Tensor* output, bool plan_initialized) {
+  KLLM_CHECK_WITH_INFO(kv_score_input->dtype == compressor_dtype_,
+                       "kv_score_input dtype must be aligned with compressor dtype");
   cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
 
-  auto input_iter = input_tensors.cbegin();
-  void* kv_score_buffer = (input_iter++)->GetPtr<void*>()[layer_idx_];
-  const auto& kv_score_input_tensor = *input_iter++;
-  const void* kv_score_input = kv_score_input_tensor.GetPtr<void>();
-  const void* score_bias = (input_iter++)->GetPtr<void>();
-  const auto& indices_tensor = *input_iter++;
-  const int32_t* indices = indices_tensor.GetPtr<int32_t>();
-  const int32_t* load_indices = (input_iter++)->GetPtr<int32_t>();
-  const Tensor& compress_plan_tensor = *input_iter++;
-  auto* compress_plan = compress_plan_tensor.GetPtr<PrefillPlan>();
-  const Tensor& write_plan_tensor = *input_iter++;
-  auto* write_plan = write_plan_tensor.GetPtr<PrefillPlan>();
-  const int32_t* seq_lens = (input_iter++)->GetPtr<int32_t>();
-  const int32_t* extend_lens = (input_iter++)->GetPtr<int32_t>();
-
-  void* kv_compressed_output = output_tensors[0].GetPtr<void>();
-
-  const uint32_t num_tokens = static_cast<uint32_t>(kv_score_input_tensor.shape[0]);
+  void* kv_score_buffer = kv_score_buffer_tensor->GetPtr<void*>()[layer_idx_];
+  const void* kv_score_input_ptr = kv_score_input->GetPtr<void>();
+  const void* score_bias_ptr = score_bias->GetPtr<void>();
+  const int32_t* indices_ptr = indices->GetPtr<int32_t>();
+  const int32_t* load_indices_ptr = load_indices->GetPtr<int32_t>();
+  auto* compress_plan_ptr = compress_plan->GetPtr<PrefillPlan>();
+  auto* write_plan_ptr = write_plan->GetPtr<PrefillPlan>();
+  const int32_t* seq_lens_ptr = seq_lens->GetPtr<int32_t>();
+  const int32_t* extend_lens_ptr = extend_lens->GetPtr<int32_t>();
+  void* kv_compressed_output = output->GetPtr<void>();
+  const uint32_t num_tokens = static_cast<uint32_t>(kv_score_input->shape[0]);
 
   // Step 1: build plan if needed
-  if (compress_plan_tensor.shape[2] == 0) {
-    const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
+  if (!plan_initialized) {
+    const uint32_t batch_size = static_cast<uint32_t>(indices->shape[0]);
     DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-        compressor_dtype_, PlanPrefillCompress(compress_plan, write_plan, seq_lens, extend_lens, batch_size, num_tokens,
-                                               compress_ratio_, is_overlap_, stream));
+        compressor_dtype_, PlanPrefillCompress(compress_plan_ptr, write_plan_ptr, seq_lens_ptr, extend_lens_ptr,
+                                               batch_size, num_tokens, compress_ratio_, is_overlap_, stream));
   }
 
   // Step 2: prefill compression (C128 always has head_dim=512)
-  const uint32_t num_compress = static_cast<uint32_t>(compress_plan_tensor.shape[0]);
-  const uint32_t num_write = static_cast<uint32_t>(write_plan_tensor.shape[0]);
+  const uint32_t num_compress = static_cast<uint32_t>(compress_plan->shape[0]);
+  const uint32_t num_write = static_cast<uint32_t>(write_plan->shape[0]);
   DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-      compressor_dtype_,
-      template FlashC128Prefill<512>(kv_score_buffer, kv_score_input, kv_compressed_output, score_bias, indices,
-                                     load_indices, compress_plan, write_plan, num_compress, num_write, stream));
+      compressor_dtype_, template FlashC128Prefill<512>(
+                             kv_score_buffer, kv_score_input_ptr, kv_compressed_output, score_bias_ptr, indices_ptr,
+                             load_indices_ptr, compress_plan_ptr, write_plan_ptr, num_compress, num_write, stream));
 
   // Step 3: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache (C128 always head_dim=512)
-  const void* norm_weight = (input_iter++)->GetPtr<void>();
-  const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
-  const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
-  void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
-  DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, compress_plan, freqs_cis_,
-                                    num_compress, ForwardMode::CompressExtend, rms_norm_eps_, compress_ratio_, cache,
-                                    compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+  const void* norm_weight_ptr = norm_weight->GetPtr<void>();
+  void* cache = layer_kv_cache_ptr->GetPtr<void*>()[1 + layer_idx_ * 2];
+  const int32_t* compressed_out_loc_ptr = compressed_out_loc->GetPtr<int32_t>();
+  DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight_ptr, compress_plan_ptr,
+                                    freqs_cis_, num_compress, ForwardMode::CompressExtend, rms_norm_eps_,
+                                    compress_ratio_, cache, compressed_out_loc_ptr, page_stride_, compressed_page_bits_,
+                                    stream);
 
   return Status();
 }
@@ -247,45 +219,48 @@ Status CompressorLayer::ForwardPrefillC128(const std::vector<Tensor>& input_tens
 // =============================================================================
 // Decode – C4
 // =============================================================================
-Status CompressorLayer::ForwardDecodeC4(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CompressorLayer::ForwardDecodeC4(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input,
+                                        const Tensor* score_bias, const Tensor* indices, const Tensor* seq_lens,
+                                        const Tensor* extra, const Tensor* norm_weight,
+                                        const Tensor* layer_kv_cache_ptr, const Tensor* compressed_out_loc,
+                                        Tensor* output) {
   cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
 
-  auto input_iter = input_tensors.cbegin();
-  void* kv_score_buffer = (input_iter++)->GetPtr<void*>()[layer_idx_];
-  const void* kv_score_input = (input_iter++)->GetPtr<void>();
-  const void* score_bias = (input_iter++)->GetPtr<void>();
-  const auto& indices_tensor = *input_iter++;
-  const int32_t* indices = indices_tensor.GetPtr<int32_t>();
-  const int32_t* seq_lens = (input_iter++)->GetPtr<int32_t>();
-  const int32_t* extra = (input_iter++)->GetPtr<int32_t>();
-
-  void* kv_compressed_output = output_tensors[0].GetPtr<void>();
+  void* kv_score_buffer = kv_score_buffer_tensor->GetPtr<void*>()[layer_idx_];
+  const void* kv_score_input_ptr = kv_score_input->GetPtr<void>();
+  const void* score_bias_ptr = score_bias->GetPtr<void>();
+  const int32_t* indices_ptr = indices->GetPtr<int32_t>();
+  const int32_t* seq_lens_ptr = seq_lens->GetPtr<int32_t>();
+  const int32_t* extra_ptr = extra->GetPtr<int32_t>();
+  void* kv_compressed_output = output->GetPtr<void>();
 
   // Step 1: decode compression
-  const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
+  const uint32_t batch_size = static_cast<uint32_t>(indices->shape[0]);
   if (head_dim_ == 512) {
     DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-        compressor_dtype_, template FlashC4Decode<512>(kv_score_buffer, kv_score_input, kv_compressed_output,
-                                                       score_bias, indices, seq_lens, extra, batch_size, stream));
+        compressor_dtype_,
+        template FlashC4Decode<512>(kv_score_buffer, kv_score_input_ptr, kv_compressed_output, score_bias_ptr,
+                                    indices_ptr, seq_lens_ptr, extra_ptr, batch_size, stream));
   } else {
     DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-        compressor_dtype_, template FlashC4Decode<128>(kv_score_buffer, kv_score_input, kv_compressed_output,
-                                                       score_bias, indices, seq_lens, extra, batch_size, stream));
+        compressor_dtype_,
+        template FlashC4Decode<128>(kv_score_buffer, kv_score_input_ptr, kv_compressed_output, score_bias_ptr,
+                                    indices_ptr, seq_lens_ptr, extra_ptr, batch_size, stream));
   }
 
   // Step 2: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache
-  const void* norm_weight = (input_iter++)->GetPtr<void>();
-  const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
-  const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
-  void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
+  const void* norm_weight_ptr = norm_weight->GetPtr<void>();
+  void* cache = layer_kv_cache_ptr->GetPtr<void*>()[1 + layer_idx_ * 2];
+  const int32_t* compressed_out_loc_ptr = compressed_out_loc->GetPtr<int32_t>();
   if (head_dim_ == 512) {
-    DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, seq_lens, freqs_cis_,
-                                      batch_size, ForwardMode::CompressDecode, rms_norm_eps_, compress_ratio_, cache,
-                                      compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+    DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight_ptr, seq_lens_ptr,
+                                      freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_,
+                                      compress_ratio_, cache, compressed_out_loc_ptr, page_stride_,
+                                      compressed_page_bits_, stream);
   } else {
     Bf16Wrapper::template IndexerFusedNormRopeStore<128>(
-        kv_compressed_output, norm_weight, seq_lens, freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_,
-        compress_ratio_, cache, compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+        kv_compressed_output, norm_weight_ptr, seq_lens_ptr, freqs_cis_, batch_size, ForwardMode::CompressDecode,
+        rms_norm_eps_, compress_ratio_, cache, compressed_out_loc_ptr, page_stride_, compressed_page_bits_, stream);
   }
 
   return Status();
@@ -294,34 +269,32 @@ Status CompressorLayer::ForwardDecodeC4(const std::vector<Tensor>& input_tensors
 // =============================================================================
 // Decode – C128
 // =============================================================================
-Status CompressorLayer::ForwardDecodeC128(const std::vector<Tensor>& input_tensors,
-                                          std::vector<Tensor>& output_tensors) {
+Status CompressorLayer::ForwardDecodeC128(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input,
+                                          const Tensor* score_bias, const Tensor* indices, const Tensor* seq_lens,
+                                          const Tensor* norm_weight, const Tensor* layer_kv_cache_ptr,
+                                          const Tensor* compressed_out_loc, Tensor* output) {
   cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
 
-  auto input_iter = input_tensors.cbegin();
-  void* kv_score_buffer = (input_iter++)->GetPtr<void*>()[layer_idx_];
-  const void* kv_score_input = (input_iter++)->GetPtr<void>();
-  const void* score_bias = (input_iter++)->GetPtr<void>();
-  const auto& indices_tensor = *input_iter++;
-  const int32_t* indices = indices_tensor.GetPtr<int32_t>();
-  const int32_t* seq_lens = (input_iter++)->GetPtr<int32_t>();
-
-  void* kv_compressed_output = output_tensors[0].GetPtr<void>();
+  void* kv_score_buffer = kv_score_buffer_tensor->GetPtr<void*>()[layer_idx_];
+  const void* kv_score_input_ptr = kv_score_input->GetPtr<void>();
+  const void* score_bias_ptr = score_bias->GetPtr<void>();
+  const int32_t* indices_ptr = indices->GetPtr<int32_t>();
+  const int32_t* seq_lens_ptr = seq_lens->GetPtr<int32_t>();
+  void* kv_compressed_output = output->GetPtr<void>();
 
   // Step 1: decode compression (C128 always has head_dim=512)
-  const uint32_t batch_size = static_cast<uint32_t>(indices_tensor.shape[0]);
+  const uint32_t batch_size = static_cast<uint32_t>(indices->shape[0]);
   DISPATCH_FLASH_BY_COMPRESSOR_DTYPE(
-      compressor_dtype_, template FlashC128Decode<512>(kv_score_buffer, kv_score_input, kv_compressed_output,
-                                                       score_bias, indices, seq_lens, batch_size, stream));
+      compressor_dtype_, template FlashC128Decode<512>(kv_score_buffer, kv_score_input_ptr, kv_compressed_output,
+                                                       score_bias_ptr, indices_ptr, seq_lens_ptr, batch_size, stream));
 
   // Step 2: Fused RMSNorm + RoPE + FP8 quantize + store to paged cache (C128 always head_dim=512)
-  const void* norm_weight = (input_iter++)->GetPtr<void>();
-  const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
-  const int32_t* compressed_out_loc = (input_iter++)->GetPtr<int32_t>();
-  void* cache = layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + layer_idx_ * 2];
-  DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight, seq_lens, freqs_cis_,
-                                    batch_size, ForwardMode::CompressDecode, rms_norm_eps_, compress_ratio_, cache,
-                                    compressed_out_loc, page_stride_, compressed_page_bits_, stream);
+  const void* norm_weight_ptr = norm_weight->GetPtr<void>();
+  void* cache = layer_kv_cache_ptr->GetPtr<void*>()[1 + layer_idx_ * 2];
+  const int32_t* compressed_out_loc_ptr = compressed_out_loc->GetPtr<int32_t>();
+  DISPATCH_COMPRESS_STORE_BY_KVTYPE(kv_cache_dtype_, 512, kv_compressed_output, norm_weight_ptr, seq_lens_ptr,
+                                    freqs_cis_, batch_size, ForwardMode::CompressDecode, rms_norm_eps_, compress_ratio_,
+                                    cache, compressed_out_loc_ptr, page_stride_, compressed_page_bits_, stream);
 
   return Status();
 }

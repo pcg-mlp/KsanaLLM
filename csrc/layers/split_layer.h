@@ -12,13 +12,13 @@ class SplitLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  // Split a matrix into multiple matrices along the column dimension
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // split_sizes[i] = column count for outputs[i].
+  Status Forward(const Tensor* input, const std::vector<size_t>& split_sizes, std::vector<Tensor*> outputs,
+                 const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* input, const std::vector<size_t>& split_sizes, std::vector<Tensor*> outputs);
 };
 
 }  // namespace ksana_llm

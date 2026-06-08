@@ -126,7 +126,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   moe_layer.Init(params, runtime_config, context_, kDeviceRank);
   moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(moe_layer.GetWorkspaceSize()));
   moe_layer.Preprocess(model_config, runtime_config);
-  EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
+  EXPECT_TRUE(moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
 
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
@@ -243,7 +243,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   moe_layer.Init(params, runtime_config, context_, kDeviceRank);
   moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(moe_layer.GetWorkspaceSize()));
   moe_layer.Preprocess(model_config, runtime_config);
-  EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
+  EXPECT_TRUE(moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
 
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
@@ -315,13 +315,10 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   topk_ids =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {static_cast<size_t>(num_tokens), static_cast<size_t>(topk)});
 
-  std::vector<Tensor> input_tensors = {gating_output};
-  std::vector<Tensor> output_tensors = {topk_weights, topk_ids};
-
   StreamSynchronize(context_->device->GetMemoryManageStream());
 
   // 测试前向传播
-  EXPECT_TRUE(grouped_topk_layer.Forward(input_tensors, output_tensors).OK());
+  EXPECT_TRUE(grouped_topk_layer.Forward(&gating_output, &topk_weights, &topk_ids).OK());
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证输出
@@ -398,13 +395,10 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   MemcpyAsync(e_bias.GetPtr<void>(), e_bias_host.data(), e_bias.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
               context_->device->GetMemoryManageStream());
 
-  std::vector<Tensor> input_tensors_with_bias = {gating_output, e_bias};
-  std::vector<Tensor> output_tensors_with_bias = {topk_weights, topk_ids};
-
   StreamSynchronize(context_->device->GetMemoryManageStream());
 
   // 测试带偏置的前向传播
-  EXPECT_TRUE(grouped_topk_layer_with_bias.Forward(input_tensors_with_bias, output_tensors_with_bias).OK());
+  EXPECT_TRUE(grouped_topk_layer_with_bias.Forward(&gating_output, &topk_weights, &topk_ids, &e_bias).OK());
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 测试profile模式下输出固定的专家
@@ -419,7 +413,7 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
                                             .score_threshold = 0.f};
   runtime_config.is_profile_mode = true;
   EXPECT_TRUE(grouped_topk_layer_profile_mode.Init({params_profile}, runtime_config, context_, kDeviceRank).OK());
-  EXPECT_TRUE(grouped_topk_layer_profile_mode.Forward(input_tensors, output_tensors).OK());
+  EXPECT_TRUE(grouped_topk_layer_profile_mode.Forward(&gating_output, &topk_weights, &topk_ids).OK());
   Memcpy(ids_host.data(), topk_ids.GetPtr<void>(), topk_ids.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
 
   // 验证 topk_ids 的值是固定的根据seed选出来的专家
@@ -746,7 +740,8 @@ TEST_F(LayerTest, MoeLayerTest) {
                         {static_cast<size_t>(cutlass_output.size(0)), static_cast<size_t>(cutlass_output.size(1))},
                         cutlass_output.data_ptr());
     // 推理
-    EXPECT_TRUE(cutlass_moe_layer.Forward(inputs, outputs).OK());
+    EXPECT_TRUE(
+        cutlass_moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
   }
 
@@ -826,7 +821,7 @@ TEST_F(LayerTest, MoeLayerTest) {
                         {static_cast<size_t>(triton_output.size(0)), static_cast<size_t>(triton_output.size(1))},
                         triton_output.data_ptr());
     // 推理
-    EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
+    EXPECT_TRUE(moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
   }
 
@@ -860,7 +855,7 @@ TEST_F(LayerTest, MoeLayerTest) {
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
                {static_cast<size_t>(topk_ids.size(0)), static_cast<size_t>(topk_ids.size(1))}, topk_ids.data_ptr());
     // 推理
-    EXPECT_TRUE(grouped_topk_layer.Forward(inputs, outputs).OK());
+    EXPECT_TRUE(grouped_topk_layer.Forward(&inputs[0], &outputs[0], &outputs[1]).OK());
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     // 计算参考结果
     torch::Tensor selected_experts = topk_ids.clone();
@@ -1233,7 +1228,9 @@ TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
                           cutlass_output.data_ptr());
 
       // 推理并测试性能（warmup/iterations 可按需调大以做 benchmark）
-      auto forward_func = [&]() { cutlass_moe_layer.Forward(inputs, outputs); };
+      auto forward_func = [&]() {
+        cutlass_moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr);
+      };
       float avg_time_ms = MeasureCudaExecutionTime(forward_func, context_->device->GetPrimaryComputeStream().Get(),
                                                    /*warmups=*/1, /*iterations=*/1);
     }

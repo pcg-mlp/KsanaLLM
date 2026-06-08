@@ -40,7 +40,7 @@ Status BgeScaledDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, cons
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
-  input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  input_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // MultiHeadAttention
   STATUS_CHECK_RETURN(
@@ -50,10 +50,10 @@ Status BgeScaledDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, cons
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
 
   // Attn residual add with scale_depth using MUL_THEN_ADD: hidden * scale_depth + residual * 1.0
-  STATUS_CHECK_RETURN(attn_add_layer_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, residual_buffer));
+  STATUS_CHECK_RETURN(attn_add_layer_->Forward(&hidden_buffer_tensors_0[0], &residual_buffer[0], &residual_buffer[0]));
 
   // Pre mlp layernorm
-  post_attention_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  post_attention_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // Common mlp
   STATUS_CHECK_RETURN(
@@ -62,7 +62,7 @@ Status BgeScaledDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, cons
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
 
   // Mlp residual add with scale_depth using MUL_THEN_ADD: hidden * scale_depth + residual * 1.0
-  STATUS_CHECK_RETURN(mlp_add_layer_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, residual_buffer));
+  STATUS_CHECK_RETURN(mlp_add_layer_->Forward(&hidden_buffer_tensors_0[0], &residual_buffer[0], &residual_buffer[0]));
 
   return Status();
 }
@@ -198,12 +198,13 @@ Status BgeRerankerMinicpmModel::LmHead(ForwardingContext& forwarding_context,
 
   std::vector<Tensor>& cutoff_hidden_states = this->GetHiddenUnitBufferTensors(forwarding_context);
 
-  this->lm_head_prenorm_->Forward(cutoff_hidden_states, cutoff_hidden_states);
+  this->lm_head_prenorm_->Forward(cutoff_hidden_states[0], cutoff_hidden_states[0]);
 
   const int layer_idx = cutoff_layer - model_config_.start_layer;
   Tensor lm_head_weight = base_weight->GetModelWeights(fmt::format("lm_head.{}.linear_head.weight", layer_idx));
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
-  STATUS_CHECK_RETURN(lm_head_proj_layer_->Forward({cutoff_hidden_states[0], lm_head_weight}, hidden_buffer_tensors_0));
+  STATUS_CHECK_RETURN(
+      lm_head_proj_layer_->Forward(&cutoff_hidden_states[0], &lm_head_weight, &hidden_buffer_tensors_0[0]));
 
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   if (is_multi_token_forward) {

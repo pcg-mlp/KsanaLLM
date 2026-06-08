@@ -33,12 +33,13 @@ class GroupedTopkLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // e_bias==nullptr when use_e_score_correction_bias is false.
+  Status Forward(const Tensor* gating_output, Tensor* topk_weights, Tensor* topk_ids, const Tensor* e_bias = nullptr,
+                 const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* gating_output, const Tensor* e_bias, Tensor* topk_weights, Tensor* topk_ids);
 
  private:
   struct GroupedTopkLayerParameters params_;

@@ -287,136 +287,6 @@ inline std::vector<int64_t> CutlassMoeLayer::GetBestTactic(const size_t& num_row
   }
 }
 
-Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  // input_tensors:
-  //  0: hidden_states
-  //  1: gating_output
-  //  2: up_gate_proj_weight
-  //  3: down_proj_weight
-  //  (*)4: e_score_correction_bias_weight
-  if (set_workspace_buffer_info_) {
-    set_workspace_buffer_info_ = false;
-    topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
-    topk_ids_ptr_ = topk_weights_ptr_ + topk_weights_ptr_size;
-
-    if (use_low_latency_mode_) {
-      adapted_topk_weights_ptr_ = topk_ids_ptr_ + topk_ids_ptr_size;
-      adapted_topk_ids_ptr_ = adapted_topk_weights_ptr_ + adapted_topk_weights_size_;
-      recv_expert_count_ptr_ = adapted_topk_ids_ptr_ + adapted_topk_ids_size_;
-      kernel_workspace_ptr_ = recv_expert_count_ptr_ + recv_expert_count_size_;
-
-      KLLM_LOG_DEBUG << fmt::format(
-          "Rank[{}] LowLatency workspace layout: topk_weights@{}, topk_ids@{}, "
-          "adapted_weights@{}, adapted_ids@{}, recv_count@{}, kernel@{}",
-          rank_, topk_weights_ptr_, topk_ids_ptr_, adapted_topk_weights_ptr_, adapted_topk_ids_ptr_,
-          recv_expert_count_ptr_, kernel_workspace_ptr_);
-    } else {
-      // Normal模式：原始topk -> kernel workspace
-      kernel_workspace_ptr_ = topk_ids_ptr_ + topk_ids_ptr_size;
-    }
-
-    cutlass_moe_wrapper_->SetWorkspacePtr(kernel_workspace_ptr_);
-    if (swiglu_limit_ > 0.0f) {
-      swiglu_limit_ptr_ = kernel_workspace_ptr_ + kernel_workspace_size;
-    }
-  }
-
-  // workspace is shared across layers; refill every Forward
-  if (swiglu_limit_ > 0.0f) {
-    cudaMemcpyAsync(swiglu_limit_ptr_, swiglu_limit_host_.data(), expert_num_per_node_ * sizeof(float),
-                    cudaMemcpyHostToDevice, context_->device->GetPrimaryComputeStream().Get());
-  }
-
-  // 获取并转换权重
-  const Tensor& up_gate_experts_weight = input_tensors[2];
-  const Tensor& down_experts_weight = input_tensors[3];
-  KTensor fc1_expert_weights_ktensor = TensorToKTensor(up_gate_experts_weight);
-  KTensor fc2_expert_weights_ktensor = TensorToKTensor(down_experts_weight);
-  KTensor fc1_weight_scales_ktensor = TensorToKTensor(*(up_gate_experts_weight.scales));
-  KTensor fc2_weight_scales_ktensor = TensorToKTensor(*(down_experts_weight.scales));
-  KTensor fc1_act_scales_ktensor = TensorToKTensor(*(up_gate_experts_weight.input_scales));
-  KTensor fc2_act_scales_ktensor = TensorToKTensor(*(down_experts_weight.input_scales));
-  KTensor fc1_weight_zeros_ktensor;
-  KTensor fc2_weight_zeros_ktensor;
-  KTensor fc1_alpha_ktensor = TensorToKTensor(*(up_gate_experts_weight.input_alpha));
-  KTensor fc2_alpha_ktensor = TensorToKTensor(*(down_experts_weight.input_alpha));
-
-  // 使用 GroupedTopkLayer 计算 topk
-  ExecuteGroupedTopk(input_tensors, output_tensors);
-
-  auto AutoInvoke = [&](auto& input_tensor, auto& output_tensor, int num_tokens) {
-    ProcessChunks(input_tensor, output_tensor, num_tokens, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
-                  {fc1_weight_scales_ktensor, fc2_weight_scales_ktensor, fc1_act_scales_ktensor, fc2_act_scales_ktensor,
-                   fc1_weight_zeros_ktensor, fc2_weight_zeros_ktensor, fc1_alpha_ktensor, fc2_alpha_ktensor});
-  };
-
-  if (using_deepep_) {
-    // LCOV_EXCL_START
-    // LowLatency模式下，Dispatch输出的shape是3D: [num_experts_per_node, num_max_dispatch_tokens, hidden_size]
-    // Normal模式下，Dispatch输出的shape是2D: [recv_num_tokens, hidden_size]
-    size_t dispatch_num_tokens;
-    if (use_low_latency_mode_) {
-      // LL模式：shape[1]是 num_max_dispatch_tokens (deepep_wrapper 中设置)
-      dispatch_num_tokens = output_tensors[1].shape[1];
-    } else {
-      // Normal模式：shape[0]是recv_num_tokens
-      dispatch_num_tokens = output_tensors[1].shape[0];
-    }
-
-    if (dispatch_num_tokens > 0) {
-      if (use_low_latency_mode_) {
-        // LowLatency 模式：使用 recv_expert_count 生成适配的 topk_ids 和 topk_weights
-        // 展平后的总 token 数 = local_num_experts * dispatch_num_tokens
-        // dispatch_num_tokens 来自 deepep_wrapper 设置的 output_tensors[1].shape[1] = num_max_dispatch_tokens_
-        const size_t flat_token_num = expert_num_per_node_ * dispatch_num_tokens;
-        KLLM_LOG_DEBUG << fmt::format(
-            "Rank[{}] LowLatency mode: dispatch_num_tokens(per_expert)={}, flat_token_num={}, "
-            "expert_num_per_node={}, calling AdaptLowLatencyDispatchOutput",
-            rank_, dispatch_num_tokens, flat_token_num, expert_num_per_node_);
-
-        // 调用适配函数，将 recv_expert_count 转换为 FusedMoe 需要的格式
-        // tokens_per_expert = dispatch_num_tokens (即 output_tensors[1].shape[1])
-        // kernel 的 total_positions = local_num_experts * tokens_per_expert = flat_token_num
-        // 超出实际 recv_expert_count 的位置会被标记为 invalid (slot_id = -1)
-        AdaptLowLatencyDispatchOutput(static_cast<const int*>(recv_expert_count_ptr_), expert_num_per_node_,
-                                      dispatch_num_tokens, context_->device->GetPrimaryComputeStream());
-
-        // 将3D shape [num_experts_per_node, dispatch_num_tokens, hidden_size] 展平为2D [flat_token_num, hidden_size]
-        // 这样 ProcessChunks 中 input_tensor.shape[1] 才能正确取到 hidden_size
-        output_tensors[1].shape = {flat_token_num, expert_hidden_size_};
-        AutoInvoke(output_tensors[1], output_tensors[1], flat_token_num);
-      } else {
-        // Normal 模式：使用原始的 topk_ids
-        expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
-                                                   dispatch_num_tokens * expert_topk_,
-                                                   context_->device->GetPrimaryComputeStream().Get());
-        AutoInvoke(output_tensors[1], output_tensors[1], dispatch_num_tokens);
-      }
-    }
-
-    // Combine is an in-place operation
-    // 在LL模式下，需要恢复3D shape传给Combine，因为DeepEP的low_latency_combine要求x.dim()==3
-    // dispatch_num_tokens = output_tensors[1].shape[1] 即每个expert的 num_max_dispatch_tokens
-    if (use_low_latency_mode_) {
-      output_tensors[1].shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
-      KLLM_LOG_DEBUG << fmt::format("Rank[{}] CutlassMoeLayer: LL mode Combine input shape: [{}, {}, {}]", rank_,
-                                    expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_);
-    }
-
-    Combine({output_tensors[1]}, output_tensors);
-    // LCOV_EXCL_STOP
-  } else {
-    output_tensors[0].shape = input_tensors[0].shape;
-    output_tensors[0].dtype = input_tensors[0].dtype;
-    const size_t num_tokens = input_tensors[0].shape[0];
-    AutoInvoke(input_tensors[0], output_tensors[0], num_tokens);
-  }
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
-  return Status();
-}
-
 inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor& output_tensor,
                                              const size_t total_tokens, const KTensor& fc1_expert_weights_ktensor,
                                              const KTensor& fc2_expert_weights_ktensor,
@@ -463,32 +333,13 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
   return Status();
 }
 
-Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
-  // 准备 GroupedTopkLayer 的输入和输出张量
-  std::vector<Tensor> grouped_topk_input_tensors;
-  std::vector<Tensor> grouped_topk_output_tensors;
-
-  size_t num_tokens = input_tensors[0].shape[0];
-
-  // 输入: gating_output
-  grouped_topk_input_tensors.push_back(input_tensors[1]);
-
-  // 输入: e_bias (直接传递，让 GroupedTopkLayer 内部判断是否使用)
-  if (input_tensors.size() > 5) {
-    grouped_topk_input_tensors.push_back(input_tensors[5]);
-  }
-
-  // 输出: topk_weights_ptr
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
-  grouped_topk_output_tensors.push_back(topk_weights_tensor);
-
-  // 输出: topk_ids_ptr
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
-  grouped_topk_output_tensors.push_back(topk_ids_tensor);
-
-  // 调用 GroupedTopkLayer
-  Status status = grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
+Status CutlassMoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
+                                           const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                           const Tensor* e_score_bias) {
+  const size_t num_tokens = hidden_states->shape[0];
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
+  Status status = grouped_topk_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, e_score_bias);
   if (!status.OK()) {
     KLLM_LOG_ERROR << fmt::format("ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer");
     return status;
@@ -498,9 +349,10 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tens
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && input_tensors[4].shape[0] > layer_idx_) {
-    size_t num_experts = input_tensors[4].shape[1];
-    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+    size_t num_experts = eplb_map->shape[1];
+    void* layer_expert_ptr =
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
     expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
@@ -509,26 +361,23 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tens
   // TODO(jinxcwu) 支持deepep的量化传输
   if (using_deepep_) {
     // LCOV_EXCL_START
-    // 调用 Dispatch 分发
-    // 分发结果将被存储到 common_mlp_tensor, topk_ids, topk_weights 中
-    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor> deepep_output_tensors = output_tensors;
+    std::vector<Tensor> deepep_input_tensors = {*hidden_states, topk_ids_tensor, topk_weights_tensor};
+    std::vector<Tensor> deepep_output_tensors = {*output, *workspace};
     KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
                                   deepep_input_tensors[1].shape[0]);
 
     if (use_low_latency_mode_) {
-      deepep_output_tensors.emplace_back(input_tensors[1].location, TYPE_INT32,
-                                         std::vector<size_t>{expert_num_per_node_}, recv_expert_count_ptr_);
+      deepep_output_tensors.emplace_back(gating_output->location, TYPE_INT32, std::vector<size_t>{expert_num_per_node_},
+                                         recv_expert_count_ptr_);
     }
 
     Dispatch(deepep_input_tensors, deepep_output_tensors);
 
-    // Dispatch后，同步更新output_tensors对应的shape（从deepep_output_tensors同步回来）
     if (!use_low_latency_mode_) {
       topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
       topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
     }
-    output_tensors[1].shape = deepep_output_tensors[1].shape;
+    workspace->shape = deepep_output_tensors[1].shape;
     // LCOV_EXCL_STOP
   }
   return Status();
@@ -568,6 +417,111 @@ void CutlassMoeLayer::AdaptLowLatencyDispatchOutput(const int* recv_expert_count
       num_experts_per_node, max_tokens_per_expert, global_expert_para_rank_, num_slots, stream.Get());
 
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] AdaptLowLatencyDispatchOutput completed", rank_);
+}
+
+Status CutlassMoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                const Tensor* e_score_bias, const Tensor* input_ids, const LayerExecContext& exec_ctx) {
+  if (set_workspace_buffer_info_) {
+    set_workspace_buffer_info_ = false;
+    topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
+    topk_ids_ptr_ = reinterpret_cast<uint8_t*>(topk_weights_ptr_) + topk_weights_ptr_size;
+
+    if (use_low_latency_mode_) {
+      adapted_topk_weights_ptr_ = reinterpret_cast<uint8_t*>(topk_ids_ptr_) + topk_ids_ptr_size;
+      adapted_topk_ids_ptr_ = reinterpret_cast<uint8_t*>(adapted_topk_weights_ptr_) + adapted_topk_weights_size_;
+      recv_expert_count_ptr_ = reinterpret_cast<uint8_t*>(adapted_topk_ids_ptr_) + adapted_topk_ids_size_;
+      kernel_workspace_ptr_ = reinterpret_cast<uint8_t*>(recv_expert_count_ptr_) + recv_expert_count_size_;
+
+      KLLM_LOG_DEBUG << fmt::format(
+          "Rank[{}] LowLatency workspace layout: topk_weights@{}, topk_ids@{}, "
+          "adapted_weights@{}, adapted_ids@{}, recv_count@{}, kernel@{}",
+          rank_, topk_weights_ptr_, topk_ids_ptr_, adapted_topk_weights_ptr_, adapted_topk_ids_ptr_,
+          recv_expert_count_ptr_, kernel_workspace_ptr_);
+    } else {
+      kernel_workspace_ptr_ = reinterpret_cast<uint8_t*>(topk_ids_ptr_) + topk_ids_ptr_size;
+    }
+
+    cutlass_moe_wrapper_->SetWorkspacePtr(kernel_workspace_ptr_);
+    if (swiglu_limit_ > 0.0f) {
+      swiglu_limit_ptr_ = reinterpret_cast<uint8_t*>(kernel_workspace_ptr_) + kernel_workspace_size;
+    }
+  }
+
+  if (swiglu_limit_ > 0.0f) {
+    cudaMemcpyAsync(swiglu_limit_ptr_, swiglu_limit_host_.data(), expert_num_per_node_ * sizeof(float),
+                    cudaMemcpyHostToDevice, context_->device->GetPrimaryComputeStream().Get());
+  }
+
+  KTensor fc1_expert_weights_ktensor = TensorToKTensor(*w1);
+  KTensor fc2_expert_weights_ktensor = TensorToKTensor(*w2);
+  KTensor fc1_weight_scales_ktensor = TensorToKTensor(*(w1->scales));
+  KTensor fc2_weight_scales_ktensor = TensorToKTensor(*(w2->scales));
+  KTensor fc1_act_scales_ktensor = TensorToKTensor(*(w1->input_scales));
+  KTensor fc2_act_scales_ktensor = TensorToKTensor(*(w2->input_scales));
+  KTensor fc1_weight_zeros_ktensor;
+  KTensor fc2_weight_zeros_ktensor;
+  KTensor fc1_alpha_ktensor = TensorToKTensor(*(w1->input_alpha));
+  KTensor fc2_alpha_ktensor = TensorToKTensor(*(w2->input_alpha));
+
+  STATUS_CHECK_RETURN(ExecuteGroupedTopk(hidden_states, gating_output, eplb_map, output, workspace, e_score_bias));
+
+  auto AutoInvoke = [&](auto& input_tensor, auto& output_tensor, int num_tokens) {
+    ProcessChunks(input_tensor, output_tensor, num_tokens, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
+                  {fc1_weight_scales_ktensor, fc2_weight_scales_ktensor, fc1_act_scales_ktensor, fc2_act_scales_ktensor,
+                   fc1_weight_zeros_ktensor, fc2_weight_zeros_ktensor, fc1_alpha_ktensor, fc2_alpha_ktensor});
+  };
+
+  if (using_deepep_) {
+    // LCOV_EXCL_START
+    size_t dispatch_num_tokens;
+    if (use_low_latency_mode_) {
+      dispatch_num_tokens = workspace->shape[1];
+    } else {
+      dispatch_num_tokens = workspace->shape[0];
+    }
+
+    if (dispatch_num_tokens > 0) {
+      if (use_low_latency_mode_) {
+        const size_t flat_token_num = expert_num_per_node_ * dispatch_num_tokens;
+        KLLM_LOG_DEBUG << fmt::format(
+            "Rank[{}] LowLatency mode: dispatch_num_tokens(per_expert)={}, flat_token_num={}, "
+            "expert_num_per_node={}, calling AdaptLowLatencyDispatchOutput",
+            rank_, dispatch_num_tokens, flat_token_num, expert_num_per_node_);
+
+        AdaptLowLatencyDispatchOutput(static_cast<const int*>(recv_expert_count_ptr_), expert_num_per_node_,
+                                      dispatch_num_tokens, context_->device->GetPrimaryComputeStream());
+
+        workspace->shape = {flat_token_num, expert_hidden_size_};
+        AutoInvoke(*workspace, *workspace, flat_token_num);
+      } else {
+        expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
+                                                   dispatch_num_tokens * expert_topk_,
+                                                   context_->device->GetPrimaryComputeStream().Get());
+        AutoInvoke(*workspace, *workspace, dispatch_num_tokens);
+      }
+    }
+
+    if (use_low_latency_mode_) {
+      workspace->shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
+      KLLM_LOG_DEBUG << fmt::format("Rank[{}] CutlassMoeLayer: LL mode Combine input shape: [{}, {}, {}]", rank_,
+                                    expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_);
+    }
+
+    std::vector<Tensor> combine_inputs = {*workspace};
+    std::vector<Tensor> combine_outputs = {*output, *workspace};
+    Combine(combine_inputs, combine_outputs);
+    *output = combine_outputs[0];
+    // LCOV_EXCL_STOP
+  } else {
+    output->shape = hidden_states->shape;
+    output->dtype = hidden_states->dtype;
+    const size_t num_tokens = hidden_states->shape[0];
+    AutoInvoke(*hidden_states, *output, num_tokens);
+  }
+  output->shape = hidden_states->shape;
+  output->dtype = hidden_states->dtype;
+  return Status();
 }
 
 }  // namespace ksana_llm

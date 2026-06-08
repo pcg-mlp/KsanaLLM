@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "layers/layer_exec_context.h"
+#include "layers/matmul_base_layer.h"
 #include "models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -20,14 +21,13 @@ class Linear {
 
   ~Linear() = default;
 
+  Status Forward(const Tensor& input, Tensor& output, const LayerExecContext& exec_ctx = {});
+
+  // Convenience overload for callers holding output in a vector; delegates to the typed Forward above.
   Status Forward(Tensor input_tensor, std::vector<Tensor>& output_tensors, const LayerExecContext& exec_ctx = {});
 
-  // TODO(robertyuan): Remove later
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                 const LayerExecContext& exec_ctx = {});
-
  protected:
-  std::shared_ptr<BaseLayer> proj_layer_;
+  std::shared_ptr<MatMulBaseLayer> proj_layer_;
   Tensor weight_;
 };
 

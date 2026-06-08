@@ -117,15 +117,15 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
 
       auto cutlass_kernel = [&]() {
         SetGemmType(Fp8GemmType::Cutlass);
-        this->Forward(input_tensors, output_tensors);
+        this->Forward(&input_tensor, &weight_, &output_tensor);
       };
       auto deepgemm_kernel = [&]() {
         SetGemmType(Fp8GemmType::DeepGemm);
-        this->Forward(input_tensors, output_tensors);
+        this->Forward(&input_tensor, &weight_, &output_tensor);
       };
       auto swap_ab_kernel = [&]() {
         SetGemmType(Fp8GemmType::DeepGemmSwapAB);
-        this->Forward(input_tensors, output_tensors);
+        this->Forward(&input_tensor, &weight_, &output_tensor);
       };
 
       float ct = MeasureCudaExecutionTime(cutlass_kernel, context_->device->GetPrimaryComputeStream().Get(),
@@ -178,10 +178,10 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
       std::vector<Tensor> output_tensors = {output_tensor};
 
       SetGemmType(Fp8GemmType::Cutlass);
-      float ct = MeasureCudaExecutionTime([&] { this->Forward(input_tensors, output_tensors); },
+      float ct = MeasureCudaExecutionTime([&] { this->Forward(&input_tensor, &weight_, &output_tensor); },
                                           context_->device->GetPrimaryComputeStream().Get(), kWarmupIters, kPerfIters);
       SetGemmType(Fp8GemmType::BridgeDeepGemm);
-      float bt = MeasureCudaExecutionTime([&] { this->Forward(input_tensors, output_tensors); },
+      float bt = MeasureCudaExecutionTime([&] { this->Forward(&input_tensor, &weight_, &output_tensor); },
                                           context_->device->GetPrimaryComputeStream().Get(), kWarmupIters, kPerfIters);
       return ct < bt ? Fp8GemmType::Cutlass : Fp8GemmType::BridgeDeepGemm;
     };
@@ -279,24 +279,17 @@ size_t BlockwiseMatMulLayer::GetWorkspaceSizeT() {
   return workspace_size_;
 }
 
-Status BlockwiseMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
-}
-
 template <typename T>
-Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+Status BlockwiseMatMulLayer::ForwardT(const Tensor& input, const Tensor& weight, Tensor& output,
                                       const LayerExecContext& exec_ctx) {
   if (workspace_size_ > workspace_buffer_->GetTotalBytes()) {
     KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size_, workspace_buffer_->GetTotalBytes()));
   }
-  const size_t m = input_tensors[0].shape[0];
-  const size_t k = input_tensors[0].shape[1];
-  // input_tensors[0].shape[1] is k_ (normal case) or 2*k_ (need to do silu mul first)
-  // input_tensors[1].shape[0] is n_
+  const size_t m = input.shape[0];
+  const size_t k = input.shape[1];
   BlockwiseMatMulLayer::Fp8GemmType gemm_type = PickGemmType(m);
   const size_t cur_m = RoundUp(m, kAlignSize_);
-  T* a = static_cast<T*>(input_tensors[0].GetPtr<void>());
+  T* a = static_cast<T*>(input.GetPtr<void>());
   void* a_q = workspace_buffer_->GetPtr<void>();
   void* a_s = a_q + GetTypeSize(TYPE_FP8_E4M3) * cur_m * k_;
 
@@ -309,12 +302,10 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
                                        });
   }
 
-  void* b = input_tensors[1].GetPtr<void>();
-  void* b_s = input_tensors[1].weight_scales->GetPtr<void>();
+  void* b = weight.GetPtr<void>();
+  void* b_s = weight.weight_scales->GetPtr<void>();
+  void* out = output.GetPtr<void>();
 
-  void* out = output_tensors[0].GetPtr<void>();
-
-  // Execute GEMM operation based on selected type
   switch (gemm_type) {
     case BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB:
       trtllm_deepgemm_wrapper_->GemmSwapAB(a_q, a_s, b, b_s, out, cur_m, n_, k_, compute_stream);
@@ -336,9 +327,14 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
       break;
   }
 
-  output_tensors[0].shape = {m, n_};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = {m, n_};
+  output.dtype = input.dtype;
   return Status();
+}
+
+Status BlockwiseMatMulLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                                     const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *input, *weight, *output, exec_ctx);
 }
 
 }  // namespace ksana_llm

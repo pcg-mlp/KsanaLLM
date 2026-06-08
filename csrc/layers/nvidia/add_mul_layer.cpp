@@ -25,29 +25,25 @@ Status AddMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status();
 }
 
-Status AddMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+template <typename T>
+Status AddMulLayer::ForwardT(const Tensor& input1, const Tensor& input2, Tensor& output) {
+  output.shape = input1.shape;
+  output.dtype = input1.dtype;
+
+  const int m = static_cast<int>(input1.shape[0]);
+  const int n = static_cast<int>(input1.shape[1]);
+  cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
+
+  InvokeMulThenAdd<T>(reinterpret_cast<const void*>(input1.GetPtr<void>()),
+                      reinterpret_cast<const void*>(input2.GetPtr<void>()), scale1_, scale2_, m, n,
+                      output.GetPtr<void>(), stream);
+
   return Status();
 }
 
-template <typename T>
-Status AddMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // Set output tensor properties
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
-
-  const int m = static_cast<int>(input_tensors[0].shape[0]);
-  const int n = static_cast<int>(input_tensors[0].shape[1]);
-  cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
-
-  auto input1 = reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>());
-  auto input2 = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());
-  auto output = output_tensors[0].GetPtr<void>();
-
-  InvokeMulThenAdd<T>(input1, input2, scale1_, scale2_, m, n, output, stream);
-
-  return Status();
+Status AddMulLayer::Forward(const Tensor* input1, const Tensor* input2, Tensor* output,
+                            const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *input1, *input2, *output);
 }
 
 }  // namespace ksana_llm

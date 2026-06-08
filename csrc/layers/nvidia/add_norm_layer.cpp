@@ -16,29 +16,23 @@ Status AddNormLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status();
 }
 
-Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
-}
-
 template <typename T>
-Status AddNormLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  if (input_tensors[0].GetPtr<void>() != output_tensors[0].GetPtr<void>()) {
-    KLLM_THROW("AddNormLayer input[0] and output[0] tensors must be the same because it is an inplace operation.");
+Status AddNormLayer::ForwardT(const Tensor* input, const Tensor* residual, const Tensor* weight, Tensor* output) {
+  if (input->GetPtr<void>() != output->GetPtr<void>()) {
+    KLLM_THROW("AddNormLayer input and output tensors must be the same because it is an inplace operation.");
   }
-  // input_tensors:
-  //   0: input [token_num, hidden_size] modified in-place
-  //   1: residual [token_num, hidden_size] modified in-place
-  //   2: weight [hidden_size]
   // Step 1: residual[i] += input[i]
   // Step 2: input[i] = (residual[i] / RMS(residual)) * weight[i]
-  InvokeFusedAddRmsNorm<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(),
-                           input_tensors[2].GetPtr<void>(), rms_norm_eps_, input_tensors[0].shape[0],
-                           input_tensors[0].shape[1], context_->device->GetPrimaryComputeStream().Get());
-
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  InvokeFusedAddRmsNorm<T>(input->GetPtr<void>(), residual->GetPtr<void>(), weight->GetPtr<void>(), rms_norm_eps_,
+                           input->shape[0], input->shape[1], context_->device->GetPrimaryComputeStream().Get());
+  output->shape = input->shape;
+  output->dtype = input->dtype;
   return Status();
+}
+
+Status AddNormLayer::Forward(const Tensor* input, const Tensor* residual, const Tensor* weight, Tensor* output,
+                             const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input, residual, weight, output);
 }
 
 }  // namespace ksana_llm

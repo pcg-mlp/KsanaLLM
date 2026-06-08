@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include "layers/base_layer.h"
+#include "layers/matmul_base_layer.h"
 #ifdef ENABLE_ACL
 #  include "3rdparty/LLM_kernels/csrc/utils/ascend/atb_executor.h"
 #  include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
@@ -11,20 +11,19 @@
 
 namespace ksana_llm {
 
-class MatMulLayer : public BaseLayer {
+class MatMulLayer : public MatMulBaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  virtual Status Forward(const Tensor* input, const Tensor* weight, Tensor* output,
                          const LayerExecContext& exec_ctx = {}) override;
 
   virtual size_t GetWorkspaceSize() override;
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                  const LayerExecContext& exec_ctx);
+  Status ForwardT(const Tensor& input, const Tensor& weight, Tensor& output, const LayerExecContext& exec_ctx);
 
  private:
 #ifdef ENABLE_CUDA

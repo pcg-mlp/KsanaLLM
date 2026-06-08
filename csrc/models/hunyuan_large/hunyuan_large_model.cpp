@@ -41,7 +41,7 @@ Status HunyuanDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const 
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   // Pre attn layernorm
   // Pre layernorm uses layernorm input for residual connection.
-  input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  input_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // Cla attention
   STATUS_CHECK_RETURN(
@@ -54,7 +54,7 @@ Status HunyuanDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const 
 
   // Pre mlp layernorm
   // Pre layernorm uses layernorm input for residual connection.
-  post_attention_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  post_attention_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // Common mlp
   STATUS_CHECK_RETURN(
@@ -75,7 +75,7 @@ Status HunyuanDecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensor
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
   auto& gated_buffer_ = reduce_buffer_tensors;
   // Expert gating MatMul
-  STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+  STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
 
   // MOE layer
   moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors);

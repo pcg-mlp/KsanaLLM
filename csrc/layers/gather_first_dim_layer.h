@@ -13,12 +13,11 @@ namespace ksana_llm {
 
 class GatherFirstDimLayer : public BaseLayer {
  public:
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  Status Forward(const Tensor* data, const Tensor* indices, Tensor* output, const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor& data, const Tensor& indices, Tensor& output);
 
 #ifdef ENABLE_ACL
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;

@@ -8,7 +8,7 @@
 #  include "csrc/utils/nvidia/workspace.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
-#include "layers/base_layer.h"
+#include "layers/base_moe_layer.h"
 #include "layers/grouped_topk_layer.h"
 #include "models/base/base_weight.h"
 #include "models/common_moe/moe_config.h"
@@ -16,19 +16,22 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-class CutlassMoeLayer : public BaseLayer {
+class CutlassMoeLayer : public BaseMoeLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
   // Set expert parallel manager (should be called after Init)
-  void SetExpertParallelManager(std::shared_ptr<ExpertParallelManager> expert_parallel_manager);
+  virtual void SetExpertParallelManager(std::shared_ptr<ExpertParallelManager> expert_parallel_manager) override;
 
   virtual size_t GetWorkspaceSize() override;
 
   virtual Status Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  // eplb_map/e_score_bias are nullptr when unused.
+  virtual Status Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1, const Tensor* w2,
+                         const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                         const Tensor* e_score_bias = nullptr, const Tensor* input_ids = nullptr,
                          const LayerExecContext& exec_ctx = {}) override;
 
  private:
@@ -37,8 +40,8 @@ class CutlassMoeLayer : public BaseLayer {
                               const llm_kernels::nvidia::tensorrt_llm::dev::Tensor& fc2_expert_weights_ktensor,
                               const std::vector<llm_kernels::nvidia::tensorrt_llm::dev::Tensor>& quant_scales_ktensors);
 
-  // 执行 GroupedTopk 计算的辅助函数
-  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* eplb_map,
+                            Tensor* output, Tensor* workspace, const Tensor* e_score_bias);
 
   // Used for distributing and gathering topk_ids and hidden_buffer in Expert-Parallel scenarios
   Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);

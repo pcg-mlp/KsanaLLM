@@ -181,7 +181,8 @@ Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<Forw
   cpu_input_tokens_tensor_.shape = {forwarding_context.GetModelInput()->input_ids_cpu.size()};
 
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
-  cpu_emb_lookup_layer_->Forward({cpu_input_tokens_tensor_, cpu_tokens_emb_tensor_, embedding_weight}, residual_buffer);
+  auto* typed = static_cast<CpuEmbLookupLayer*>(cpu_emb_lookup_layer_.get());
+  typed->Forward(&cpu_input_tokens_tensor_, &cpu_tokens_emb_tensor_, &embedding_weight, &residual_buffer[0]);
   return Status();
 }
 
@@ -197,19 +198,18 @@ Status CommonModel::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContex
 
   KLLM_LOG_DEBUG << "CommonModel::EmbedTokensUseGpu before emb residual_buffer.shape:"
                  << Vector2Str(residual_buffer[0].shape);
+  auto* typed_emb = static_cast<EmbLookupLayer*>(emb_lookup_layer_.get());
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
-    STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-        {forwarding_context.GetModelInput()->input_ids, forwarding_context.GetModelInput()->input_offset_uint64_tensor,
-         forwarding_context.GetModelInput()->input_prefix_uint64_tensor, embedding_weight,
-         forwarding_context.GetModelInput()->flash_meta->rotary_embedding_pos},
-        residual_buffer));
+    STATUS_CHECK_RETURN(typed_emb->Forward(
+        &forwarding_context.GetModelInput()->input_ids, &forwarding_context.GetModelInput()->input_offset_uint64_tensor,
+        &forwarding_context.GetModelInput()->input_prefix_uint64_tensor, &embedding_weight, &residual_buffer[0],
+        &forwarding_context.GetModelInput()->flash_meta->rotary_embedding_pos));
     KLLM_LOG_DEBUG << "CommonModel::EmbedTokensUseGpu after emb residual_buffer.shape:"
                    << Vector2Str(residual_buffer[0].shape);
   } else {
-    STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-        {forwarding_context.GetModelInput()->input_ids, forwarding_context.GetModelInput()->input_offset_uint64_tensor,
-         forwarding_context.GetModelInput()->input_prefix_uint64_tensor, embedding_weight},
-        residual_buffer));
+    STATUS_CHECK_RETURN(typed_emb->Forward(
+        &forwarding_context.GetModelInput()->input_ids, &forwarding_context.GetModelInput()->input_offset_uint64_tensor,
+        &forwarding_context.GetModelInput()->input_prefix_uint64_tensor, &embedding_weight, &residual_buffer[0]));
     KLLM_LOG_DEBUG << "CommonModel::EmbedTokensUseGpu after emb residual_buffer.shape:"
                    << Vector2Str(residual_buffer[0].shape);
   }
@@ -346,7 +346,7 @@ Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
   if (!context_->global->IsDistributedWorker() || (run_mode == RunMode::kNextN && context_->global->IsSamplingNode())) {
     RecordRequestSchedEventWithFContext(*forwarding_context_, "EmbLookup", RequestEventPhase::Begin);
-    LookupEmbedding(*forwarding_context_, base_weight, forward_reqs, run_mode);
+    LookupEmbedding(*forwarding_context_, base_weight, forward_reqs);
     RecordRequestSchedEventWithFContext(*forwarding_context_, "EmbLookup", RequestEventPhase::End);
   }
 
@@ -395,12 +395,14 @@ Status CommonModel::LookupEmbedding(ForwardingContext& forwarding_context,
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
     std::vector<Tensor>& emb_tensors = forwarding_context.GetModelInput()->cpu_input_refit_tensor.emb_tensors;
-    emb_tensors.push_back(forwarding_context.GetModelInput()->cpu_input_refit_tensor.pos_tensor);
-    input_refit_layer_->Forward(emb_tensors, residual_buffer);
-    emb_tensors.pop_back();
+    const Tensor& pos_tensor = forwarding_context.GetModelInput()->cpu_input_refit_tensor.pos_tensor;
+    std::vector<const Tensor*> emb_ptrs;
+    emb_ptrs.reserve(emb_tensors.size());
+    for (const Tensor& t : emb_tensors) emb_ptrs.push_back(&t);
+    input_refit_layer_->Forward(emb_ptrs, &pos_tensor, &residual_buffer[0]);
   }
 
-  if (initial_mhc_ && run_mode != RunMode::kNextN) {
+  if (initial_mhc_) {
     // Expand residual_buffer from [t, d] to [t, hc, d]
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
@@ -432,33 +434,12 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     }
   }
 
-  // Assemble early when there is no need to save mtp_hidden and no need for request_target
-  bool assemble_early =
-      model_run_config_.return_hidden_states_before_norm && !forwarding_context.GetModelInput()->has_request_target;
-
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
-  if (assemble_early) {
-// assemble last token
-// The input is stored in `residual_buffer`.
-#ifdef ENABLE_CUDA
-    STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-        {residual_buffer[0], forwarding_context.GetModelInput()->logits_idx_uint64_tensor}, hidden_buffer_tensors_0));
-#elif defined(ENABLE_ACL)
-    STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-        {residual_buffer[0], forwarding_context.GetModelInput()->last_token_index_tensor,
-         forwarding_context.GetModelInput()->input_prefix_uint64_tensor},
-        hidden_buffer_tensors_0));
-#endif
-  }
-
-  auto& input_tensors = assemble_early ? hidden_buffer_tensors_0 : residual_buffer;
-
   // Squeeze residual_buffer from [t, hc, d] to [t, d]
   if (run_mode == RunMode::kNextN && nextn_final_mhc_) {
     // Use MTP-specific hc_head for NextN mode
-    nextn_final_mhc_->FinalForward(input_tensors, input_tensors);
+    nextn_final_mhc_->FinalForward(residual_buffer, residual_buffer);
   } else if (final_mhc_) {
-    final_mhc_->FinalForward(input_tensors, input_tensors);
+    final_mhc_->FinalForward(residual_buffer, residual_buffer);
   }
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
@@ -474,9 +455,9 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   // Both input and output are in `residual_buffer`.
   if (run_mode == RunMode::kNextN && nextn_shared_head_norm_) {
     // Use MTP-specific shared_head.norm for NextN mode
-    nextn_shared_head_norm_->Forward(input_tensors, input_tensors);
+    nextn_shared_head_norm_->Forward(residual_buffer[0], residual_buffer[0]);
   } else if (lm_head_prenorm_) {
-    lm_head_prenorm_->Forward(input_tensors, input_tensors);
+    lm_head_prenorm_->Forward(residual_buffer[0], residual_buffer[0]);
   }
 
   // save normed hidden result if enable MTP model
@@ -499,31 +480,30 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     }
   }
 
-  if (!assemble_early) {
-    // assemble last token
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+// assemble last token
 // The input is stored in `residual_buffer`.
 #ifdef ENABLE_CUDA
-    STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-        {residual_buffer[0], forwarding_context.GetModelInput()->logits_idx_uint64_tensor}, hidden_buffer_tensors_0));
+  auto* typed = static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get());
+  STATUS_CHECK_RETURN(typed->Forward(&residual_buffer[0], &forwarding_context.GetModelInput()->logits_idx_uint64_tensor,
+                                     &hidden_buffer_tensors_0[0]));
 #elif defined(ENABLE_ACL)
-    STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-        {residual_buffer[0], forwarding_context.GetModelInput()->last_token_index_tensor,
-         forwarding_context.GetModelInput()->input_prefix_uint64_tensor},
-        hidden_buffer_tensors_0));
+  STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get())
+                          ->Forward(&residual_buffer[0], &forwarding_context.GetModelInput()->last_token_index_tensor,
+                                    &hidden_buffer_tensors_0[0]));
 #endif
-  }
 
   // lm_head
   PROFILE_EVENT_SCOPE(CommonModel_LmHead_, "CommonModel_LmHead", forwarding_context.GetCurrentRank());
 
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (forwarding_context.GetModelCommunicator() && runtime_config_.enable_full_shared_expert) {
     forwarding_context.GetModelCommunicator()->ReduceSum(hidden_buffer_tensors_0, hidden_buffer_tensors_1,
                                                          is_multi_token_forward, /*use_custom*/ false);
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 
-  STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+  STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
@@ -548,8 +528,10 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   PROFILE_EVENT_SCOPE(CommonModel_Cast_, fmt::format("CommonModel_Cast"), forwarding_context.GetCurrentRank());
   forwarding_context.UpdateAfterForward(forward_reqs);
   std::vector<Tensor> logits_buffer{forwarding_context.GetModelOutput()->logits_tensor};
-  STATUS_CHECK_RETURN(cast_layer_->Forward(
-      {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
+  const auto& fs = forwarding_context.GetAttentionForwardContext().forward_shape;
+  auto* typed_cast_layer = static_cast<CastLayer*>(cast_layer_.get());
+  STATUS_CHECK_RETURN(
+      typed_cast_layer->Forward(&hidden_buffer_tensors_0[0], fs.shape[0], fs.shape[1], fs.shape[2], &logits_buffer[0]));
 
 #ifndef ENABLE_CUDA
   StreamSynchronize(context_->device->GetPrimaryComputeStream());

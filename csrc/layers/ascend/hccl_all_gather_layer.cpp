@@ -27,33 +27,33 @@ Status HcclAllGatherLayer::Init(const std::vector<std::any>& parameters, const R
   return Status();
 }
 
-Status HcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  output_tensors[0].dtype = input_tensors[0].dtype;
+Status HcclAllGatherLayer::Forward(const Tensor* local, const Tensor* internal_buf, Tensor* output,
+                                   const LayerExecContext& exec_ctx) {
+  output->dtype = local->dtype;
   size_t tp_size = context_->GetTensorParallelSize();
   if (tp_size == 1) {
     return Status();
   }
-  size_t h = input_tensors[0].shape[0];
-  size_t w_per = input_tensors[0].shape[1];
-  output_tensors[0].shape = {h, tp_size, w_per};
+  size_t h = local->shape[0];
+  size_t w_per = local->shape[1];
+  output->shape = {h, tp_size, w_per};
   std::vector<size_t> internal_tensor_shape = {tp_size, h, w_per};
   // all gather op
   reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_all_gather_executor_.ResetVariantPack();
-  atb_all_gather_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
-                                          static_cast<aclDataType>(DataType(input_tensors[0].dtype)));
-  atb_all_gather_executor_.SetOutputTensor(input_tensors[1].GetPtr<void>(), internal_tensor_shape,
-                                           static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
+  atb_all_gather_executor_.SetInputTensor(local->GetPtr<void>(), local->shape,
+                                          static_cast<aclDataType>(DataType(local->dtype)));
+  atb_all_gather_executor_.SetOutputTensor(internal_buf->GetPtr<void>(), internal_tensor_shape,
+                                           static_cast<aclDataType>(DataType(internal_buf->dtype)));
   atb_all_gather_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
   // permute op
   atb_permute_executor_.ResetVariantPack();
-  atb_permute_executor_.SetInputTensor(input_tensors[1].GetPtr<void>(), internal_tensor_shape,
-                                       static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
-  atb_permute_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                        static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
+  atb_permute_executor_.SetInputTensor(internal_buf->GetPtr<void>(), internal_tensor_shape,
+                                       static_cast<aclDataType>(DataType(internal_buf->dtype)));
+  atb_permute_executor_.SetOutputTensor(output->GetPtr<void>(), output->shape,
+                                        static_cast<aclDataType>(DataType(output->dtype)));
   atb_permute_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
-  output_tensors[0].shape = {h, tp_size * w_per};
+  output->shape = {h, tp_size * w_per};
   return Status();
 }
 

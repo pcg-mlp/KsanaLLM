@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include "layers/base_layer.h"
+#include "layers/matmul_base_layer.h"
 #include "models/base/base_weight.h"
 
 namespace ksana_llm {
@@ -19,14 +19,14 @@ namespace ksana_llm {
  * - 支持desc操作
  * - 目前只支持half的激活类型
  */
-class MarlinMatMulLayer : public BaseLayer {
+class MarlinMatMulLayer : public MatMulBaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
   virtual size_t GetWorkspaceSize() override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  virtual Status Forward(const Tensor* input, const Tensor* weight, Tensor* output,
                          const LayerExecContext& exec_ctx = {}) override;
 
  private:
@@ -34,8 +34,7 @@ class MarlinMatMulLayer : public BaseLayer {
   size_t GetWorkspaceSizeT();
 
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                  const LayerExecContext& exec_ctx);
+  Status ForwardT(const Tensor& input, const Tensor& weight, Tensor& output, const LayerExecContext& exec_ctx);
 
  private:
   DataType weight_data_type_;

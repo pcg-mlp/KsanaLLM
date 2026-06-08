@@ -4,16 +4,16 @@
 #pragma once
 
 #ifdef ENABLE_FP8
-#  include "layers/base_layer.h"
+#  include "layers/matmul_base_layer.h"
 
 namespace ksana_llm {
 
-class Fp8MatMulLayer : public BaseLayer {
+class Fp8MatMulLayer : public MatMulBaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  virtual Status Forward(const Tensor* input, const Tensor* weight, Tensor* output,
                          const LayerExecContext& exec_ctx = {}) override;
 
   size_t GetWorkspaceSize(const int m, const int k);
@@ -22,8 +22,7 @@ class Fp8MatMulLayer : public BaseLayer {
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                  const LayerExecContext& exec_ctx);
+  Status ForwardT(const Tensor& input, const Tensor& weight, Tensor& output, const LayerExecContext& exec_ctx);
 
  private:
   int max_m_;

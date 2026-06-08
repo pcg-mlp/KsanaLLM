@@ -51,7 +51,7 @@ TEST_F(LayerTest, AddLayerTest) {
   // 测试相同shape
   AddLayer add_layer = AddLayer();
   add_layer.Init({}, runtime_config, context_, kDeviceRank);
-  add_layer.Forward({input, bias_a}, output);
+  add_layer.Forward(&input, &bias_a, &output[0]);
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
   // 验证结果
   std::vector<dtype> output_host(output[0].GetElementNumber());
@@ -61,7 +61,7 @@ TEST_F(LayerTest, AddLayerTest) {
   }
 
   // 测试broadcast shape
-  add_layer.Forward({input, bias_b}, output);
+  add_layer.Forward(&input, &bias_b, &output[0]);
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
   // 验证结果
   Memcpy(output_host.data(), output[0].GetPtr<void>(), output[0].GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
@@ -124,7 +124,7 @@ TEST_F(LayerTest, AssembleAcceptedTokensHiddenTest) {
 
   AssembleTokensHiddenLayer test_layer = AssembleTokensHiddenLayer();
   test_layer.Init({}, runtime_config, context_, kDeviceRank);
-  test_layer.Forward({input, accepted_tokens_idx}, output);
+  test_layer.Forward(&input, &accepted_tokens_idx, &output[0]);
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证结果
@@ -189,12 +189,8 @@ TEST_F(LayerTest, InputRefitLayerTest) {
   emb1_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_FP16, {hidden_size});
   Memcpy(emb1_tensor.GetPtr<void>(), emb1_host.data(), hidden_size * sizeof(dtype), MEMCPY_HOST_TO_HOST);
 
-  // 构建输入: emb0, emb1, pos
-  std::vector<Tensor> input_tensors = {emb0_tensor, emb1_tensor, pos_tensor};
-  std::vector<Tensor> output_tensors = {output_tensor};
-
   // 执行Forward
-  EXPECT_TRUE(input_refit_layer.Forward(input_tensors, output_tensors).OK());
+  EXPECT_TRUE(input_refit_layer.Forward({&emb0_tensor, &emb1_tensor}, &pos_tensor, &output_tensor).OK());
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证结果
@@ -226,8 +222,7 @@ TEST_F(LayerTest, InputRefitLayerTest) {
   EXPECT_TRUE(input_refit_layer.cast_cache_.empty());
 
   // 测试空输入情况（只有pos张量）
-  std::vector<Tensor> empty_input_tensors = {pos_tensor};
-  EXPECT_TRUE(input_refit_layer.Forward(empty_input_tensors, output_tensors).OK());
+  EXPECT_TRUE(input_refit_layer.Forward({}, &pos_tensor, &output_tensor).OK());
 
   // 测试数据类型转换功能 - 使用FP32输入，FP16输出
   Tensor emb_fp32_tensor;
@@ -246,8 +241,7 @@ TEST_F(LayerTest, InputRefitLayerTest) {
   single_pos_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1});
   single_pos_tensor.GetPtr<int64_t>()[0] = 2;  // 写入位置2
 
-  std::vector<Tensor> cast_input_tensors = {emb_fp32_tensor, single_pos_tensor};
-  EXPECT_TRUE(input_refit_layer.Forward(cast_input_tensors, output_tensors).OK());
+  EXPECT_TRUE(input_refit_layer.Forward({&emb_fp32_tensor}, &single_pos_tensor, &output_tensor).OK());
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证类型转换后的结果
@@ -373,7 +367,7 @@ TEST_F(LayerTest, AllReduceResidualAddNormLayerTest) {
 
     // Reduce + Residual
     std::vector<Tensor> outputs{residual};
-    EXPECT_TRUE(all_reduce_residual_add_norm_layer.Forward({input}, outputs).OK());
+    EXPECT_TRUE(all_reduce_residual_add_norm_layer.Forward(&input, &outputs[0]).OK());
     // Verify output
     std::vector<dtype> output_host(token_num * hidden_size);
     MemcpyAsync(output_host.data(), outputs[0].GetPtr<void>(), outputs[0].GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
@@ -385,7 +379,7 @@ TEST_F(LayerTest, AllReduceResidualAddNormLayerTest) {
 
     // Reduce + Residual + Norm
     outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {token_num, hidden_size});
-    EXPECT_TRUE(all_reduce_residual_add_norm_layer.Forward({input, residual}, outputs).OK());
+    EXPECT_TRUE(all_reduce_residual_add_norm_layer.Forward(&input, &residual, &outputs[0]).OK());
     // Validate the first few elements
     MemcpyAsync(output_host.data(), outputs[0].GetPtr<void>(), outputs[0].GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
                 context->device->GetPrimaryComputeStream());

@@ -10,13 +10,14 @@ namespace ksana_llm {
 
 class InputRefitLayer : public BaseLayer {
  public:
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // emb_tensors: N embedding tensors; pos_tensor: position indices tensor.
+  Status Forward(const std::vector<const Tensor*>& emb_tensors, const Tensor* pos_tensor, Tensor* output,
+                 const LayerExecContext& exec_ctx = {});
   void Clear() { cast_cache_.clear(); }
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const std::vector<const Tensor*>& emb_tensors, const Tensor* pos_tensor, Tensor* output);
 
  public:
   std::vector<torch::Tensor> cast_cache_;

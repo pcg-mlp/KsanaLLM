@@ -22,8 +22,7 @@ Status NcclAllReduceSumLayer::Init(const std::vector<std::any>& parameters, cons
   return Status();
 }
 
-Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status NcclAllReduceSumLayer::Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
@@ -38,21 +37,20 @@ Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, 
     if (need_sync_) {
       CUDA_CHECK(cudaStreamSynchronize(*stream));
     }
-    ncclResult_t ncclError =
-        ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
-                      input_tensors[0].GetElementNumber(), GetNcclDataType(inter_data_type_), ncclSum,
-                      context_->device->ext->GetNCCLParam().nccl_comm, *stream);
+    ncclResult_t ncclError = ncclAllReduce(reinterpret_cast<const void*>(input->GetPtr<void>()), output->GetPtr<void>(),
+                                           input->GetElementNumber(), GetNcclDataType(inter_data_type_), ncclSum,
+                                           context_->device->ext->GetNCCLParam().nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       KLLM_LOG_ERROR << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
       return Status(RetCode::RET_INFER_FAILED, "NCCL error");
     }
   } else {
-    void* src = input_tensors[0].GetPtr<void>();
-    void* dst = output_tensors[0].GetPtr<void>();
-    CUDA_CHECK(cudaMemcpyAsync(dst, src, input_tensors[0].GetTotalBytes(), cudaMemcpyDeviceToDevice, *stream));
+    void* src = input->GetPtr<void>();
+    void* dst = output->GetPtr<void>();
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, input->GetTotalBytes(), cudaMemcpyDeviceToDevice, *stream));
   }
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output->shape = input->shape;
+  output->dtype = input->dtype;
   return Status();
 }
 

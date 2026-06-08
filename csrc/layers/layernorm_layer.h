@@ -19,12 +19,24 @@ class LayernormLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // No-weight per-head RMSNorm.
+  Status Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx = {});
+  // Single-path: RMSNorm (bias==nullptr) or LayerNorm (bias!=nullptr).
+  Status Forward(const Tensor* input, const Tensor* weight, Tensor* output, const Tensor* bias = nullptr,
+                 const LayerExecContext& exec_ctx = {});
+  // Parallel two-path norm. stride1/stride2==0 means use hidden_size as row stride.
+  Status Forward(const Tensor* input1, const Tensor* weight1, const Tensor* input2, const Tensor* weight2,
+                 Tensor* output1, Tensor* output2, int stride1 = 0, int stride2 = 0,
+                 const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardNoWeightT(const Tensor& input, Tensor& output);
+  template <typename T>
+  Status ForwardWeightT(const Tensor& input, const Tensor& weight, Tensor& output, const Tensor* bias);
+  template <typename T>
+  Status ForwardParallelT(const Tensor& in1, const Tensor& w1, const Tensor& in2, const Tensor& w2, Tensor& out1,
+                          Tensor& out2, int stride1, int stride2);
 
  protected:
   float rms_norm_eps_;

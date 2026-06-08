@@ -5,6 +5,8 @@
 
 #include <memory>
 
+#include "layers/flash_mla_attention_layer.h"
+#include "layers/flash_sparse_mla_attention_layer.h"
 #include "models/base/layer_creation_context.h"
 #include "modules/basic/linear.h"
 
@@ -26,8 +28,8 @@ class FlashMlaAttention {
  protected:
   std::shared_ptr<Linear> kv_b_nope_proj_;
   std::shared_ptr<Linear> v_head_proj_;
-  std::shared_ptr<BaseLayer> flash_mla_attention_layer_;
-  std::shared_ptr<BaseLayer> flash_sparse_mla_attention_layer_;
+  std::shared_ptr<FlashMlaAttentionLayer> flash_mla_attention_layer_;
+  std::shared_ptr<FlashSparseMlaAttentionLayer> flash_sparse_mla_attention_layer_;
 
   Tensor kv_b_nope_proj_weight_;
   Tensor v_head_proj_weight_;

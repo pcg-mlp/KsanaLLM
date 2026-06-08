@@ -16,8 +16,22 @@ class MhcLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // PreForward: hidden + 3 weights -> 4 outputs (out, mix_h, norm, h_post, h_res)
+  Status ForwardPre(const Tensor* hidden, const Tensor* fn_w, const Tensor* scale_w, const Tensor* base_w, Tensor* out,
+                    Tensor* mix_h, Tensor* norm_buf, Tensor* h_post, Tensor* h_res,
+                    const LayerExecContext& exec_ctx = {});
+  // PreForwardWithNorm: same as ForwardPre but with additional norm weight.
+  Status ForwardPreWithNorm(const Tensor* hidden, const Tensor* fn_w, const Tensor* scale_w, const Tensor* base_w,
+                            const Tensor* norm_w, Tensor* out, Tensor* mix_h, Tensor* norm_buf, Tensor* h_post,
+                            Tensor* h_res, const LayerExecContext& exec_ctx = {});
+  // PostForward: hidden + h_post + h_res -> output
+  Status ForwardPost(const Tensor* hidden, const Tensor* h_post, const Tensor* h_res, Tensor* output,
+                     const LayerExecContext& exec_ctx = {});
+  // InitialForward: hidden -> output (up-project after embedding)
+  Status ForwardInitial(const Tensor* hidden, Tensor* output, const LayerExecContext& exec_ctx = {});
+  // FinalForward: hidden + 3 weights -> 3 outputs (out, mix_h, norm)
+  Status ForwardFinal(const Tensor* hidden, const Tensor* fn_w, const Tensor* scale_w, const Tensor* base_w,
+                      Tensor* out, Tensor* mix_h, Tensor* norm_buf, const LayerExecContext& exec_ctx = {});
 
   // The num_splits used by mhc_pre kernel
   size_t GetMhcPreNumSplits(int token_num, int hc_hidden_dim);
@@ -25,25 +39,20 @@ class MhcLayer : public BaseLayer {
   static constexpr size_t kMaxNumSplits = 64;
 
  private:
-  // Down-project input before attn/mlp
   template <typename T>
-  Status PreForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
-  // Down-project input before attn/mlp, with fused RMSNorm
+  Status PreForwardT(const Tensor& hidden, const Tensor& fn_w, const Tensor& scale_w, const Tensor& base_w, Tensor& out,
+                     Tensor& mix_h, Tensor& norm_buf, Tensor& h_post, Tensor& h_res);
   template <typename T>
-  Status PreForwardWithNormT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
-  // Combine input and residual after attn/mlp
+  Status PreForwardWithNormT(const Tensor& hidden, const Tensor& fn_w, const Tensor& scale_w, const Tensor& base_w,
+                             const Tensor& norm_w, Tensor& out, Tensor& mix_h, Tensor& norm_buf, Tensor& h_post,
+                             Tensor& h_res);
   template <typename T>
-  Status PostForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
-  // Up-project input after embedding lookup
+  Status PostForwardT(const Tensor& hidden, const Tensor& h_post, const Tensor& h_res, Tensor& output);
   template <typename T>
-  Status InitialForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
-  // Down-project input before lmhead
+  Status InitialForwardT(const Tensor& hidden, Tensor& output);
   template <typename T>
-  Status FinalForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status FinalForwardT(const Tensor& hidden, const Tensor& fn_w, const Tensor& scale_w, const Tensor& base_w,
+                       Tensor& out, Tensor& mix_h, Tensor& norm_buf);
 
  private:
   float rms_norm_eps_;

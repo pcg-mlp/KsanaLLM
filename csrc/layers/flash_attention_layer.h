@@ -11,12 +11,63 @@ class FlashAttentionLayer : public AttentionLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+#ifdef ENABLE_CUDA
+  // Typed parameters for the CUDA forward path.
+  struct CudaForwardParams {
+    const Tensor* qkv;
+    const Tensor* token_offset;
+    const Tensor* kv_list;
+    const Tensor* prefix_offset;
+    const Tensor* kv_cache_offset;
+    const Tensor* rotary_embedding_pos;
+    const Tensor* rotary_embedding_mask;
+    const Tensor* src_flexible_rotary_embedding_pos;
+    const Tensor* flexible_rotary_embedding_mask;
+    const Tensor* dst_flexible_kv_cache;
+    const Tensor* src_flexible_kv_cache;
+    const Tensor* dst_flexible_token_idx;
+    const Tensor* src_flexible_token_idx;
+    const Tensor* flexible_offset_uint64;
+    // Scalars formerly encoded in forward_shape (input[14]):
+    int layer_block_num;           // shape[2]
+    int single_token_request_num;  // shape[3], used to compute total_tokens
+    int max_forwarding_tokens;     // shape[6]
+    int batch_size;                // shape[7]
+    int max_tokens;                // shape[8]
+    const Tensor* query_layernorm_weight;
+    const Tensor* key_layernorm_weight;
+    bool use_cache;
+    // Optional blocked-prefill / flashinfer-decode path (nullptr = disabled):
+    const Tensor* kv_cache_base_ptr;
+    const Tensor* block_table;
+    const Tensor* input_without_prefix_offset;
+  };
+  Status Forward(const CudaForwardParams& params, Tensor* output, const LayerExecContext& exec_ctx = {});
+#endif
+
+#ifdef ENABLE_ACL
+  // Typed parameters for the Ascend ATB forward path.
+  struct AclForwardParams {
+    const Tensor* qkv;
+    const Tensor* rotary_embedding_pos;
+    const Tensor* layers_slot_mapping;
+    const Tensor* k_cache_blocks_base;
+    const Tensor* v_cache_blocks_base;
+    const Tensor* seq_len_host;
+    // Scalars formerly encoded in forward_shape (input[6]):
+    int batch_size;       // shape[0]
+    int max_tokens;       // shape[1]
+    int layer_block_num;  // shape[2]
+    const Tensor* atb_attention_attr;
+  };
+  Status Forward(const AclForwardParams& params, Tensor* output, const LayerExecContext& exec_ctx = {});
+#endif
 
  private:
+#ifdef ENABLE_CUDA
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const CudaForwardParams& p, Tensor* output);
+#endif
 
  private:
 #ifdef ENABLE_ACL

@@ -16,8 +16,9 @@ AddMul::AddMul(float scale1, float scale2, const LayerCreationContext& creation_
 
 AddMul::~AddMul() {}
 
-Status AddMul::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(add_mul_layer_->Forward(input_tensors, output_tensors));
+Status AddMul::Forward(const Tensor* input1, const Tensor* input2, Tensor* output) {
+  auto* typed = static_cast<AddMulLayer*>(add_mul_layer_.get());
+  STATUS_CHECK_RETURN(typed->Forward(input1, input2, output));
   return Status();
 }
 

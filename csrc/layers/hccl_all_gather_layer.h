@@ -16,8 +16,8 @@ class HcclAllGatherLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  Status Forward(const Tensor* local, const Tensor* internal_buf, Tensor* output,
+                 const LayerExecContext& exec_ctx = {});
 
  protected:
 #ifdef ENABLE_ACL

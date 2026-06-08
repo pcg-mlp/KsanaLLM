@@ -15,47 +15,34 @@ Status ConcatLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status();
 }
 
-Status ConcatLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
-}
-
 template <typename T>
-Status ConcatLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  const auto& input_a = input_tensors[0];
-  const auto& input_b = input_tensors[1];
-  auto& output = output_tensors[0];
-
-  // check shape
-  std::vector<size_t> input_a_shape = std::vector<size_t>(input_a.shape);
-  std::vector<size_t> input_b_shape = std::vector<size_t>(input_b.shape);
-  KLLM_CHECK_WITH_INFO(input_a_shape.size() == input_b_shape.size(), "shape size must be identical in cacat");
-  for (size_t i = 0; i < input_a_shape.size(); ++i) {
-    if (i == concat_dim) {
-      continue;
-    }
+Status ConcatLayer::ForwardT(const Tensor* a, const Tensor* b, Tensor* output) {
+  std::vector<size_t> a_shape = std::vector<size_t>(a->shape);
+  std::vector<size_t> b_shape = std::vector<size_t>(b->shape);
+  KLLM_CHECK_WITH_INFO(a_shape.size() == b_shape.size(), "shape size must be identical in cacat");
+  for (size_t i = 0; i < a_shape.size(); ++i) {
+    if (i == concat_dim) continue;
     KLLM_CHECK_WITH_INFO(
-        input_a_shape[i] == input_b_shape[i],
+        a_shape[i] == b_shape[i],
         fmt::format("The shapes of all dimensions except the concatenation dimension must be identical. {} vs {}",
-                    input_a.ToString(), input_b.ToString()));
+                    a->ToString(), b->ToString()));
   }
-
-  output.dtype = input_a.dtype;
-  output.shape = input_a.shape;
-  output.shape[concat_dim] = input_a_shape[concat_dim] + input_b_shape[concat_dim];
-
-  std::vector<size_t> output_shape = std::vector<size_t>(output.shape);
-
+  output->dtype = a->dtype;
+  output->shape = a->shape;
+  output->shape[concat_dim] = a_shape[concat_dim] + b_shape[concat_dim];
+  std::vector<size_t> output_shape = std::vector<size_t>(output->shape);
   const size_t inner_dim_size =
       std::accumulate(output_shape.begin() + concat_dim + 1, output_shape.end(), 1, std::multiplies<>());
   const size_t outer_dim_size =
       std::accumulate(output_shape.begin(), output_shape.begin() + concat_dim, 1, std::multiplies<>());
-  Concat<T>(reinterpret_cast<const void*>(input_a.GetPtr<void>()),
-            reinterpret_cast<const void*>(input_b.GetPtr<void>()), input_a_shape[concat_dim], input_b_shape[concat_dim],
-            outer_dim_size, inner_dim_size, reinterpret_cast<void*>(output.GetPtr<void>()),
-            context_->device->GetPrimaryComputeStream().Get());
-
+  Concat<T>(reinterpret_cast<const void*>(a->GetPtr<void>()), reinterpret_cast<const void*>(b->GetPtr<void>()),
+            a_shape[concat_dim], b_shape[concat_dim], outer_dim_size, inner_dim_size,
+            reinterpret_cast<void*>(output->GetPtr<void>()), context_->device->GetPrimaryComputeStream().Get());
   return Status();
+}
+
+Status ConcatLayer::Forward(const Tensor* a, const Tensor* b, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, a, b, output);
 }
 
 }  // namespace ksana_llm

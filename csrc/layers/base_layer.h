@@ -59,9 +59,6 @@ class BaseLayer {
 
   virtual size_t GetWorkspaceSize() { return 0; }
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) = 0;
-
   virtual Status SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
     workspace_buffer_ = workspace_buffer;
     return Status();

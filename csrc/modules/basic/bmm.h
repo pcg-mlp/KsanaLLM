@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "layers/matmul_base_layer.h"
 #include "models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -17,10 +18,10 @@ class Bmm {
 
   ~Bmm() = default;
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor& input, Tensor& output);
 
  protected:
-  std::shared_ptr<BaseLayer> bmm_layer_;
+  std::shared_ptr<MatMulBaseLayer> bmm_layer_;
   Tensor weight_;
 
   int rank_;

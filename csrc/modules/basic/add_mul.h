@@ -20,7 +20,7 @@ class AddMul {
 
   ~AddMul();
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor* input1, const Tensor* input2, Tensor* output);
 
  protected:
   std::shared_ptr<BaseLayer> add_mul_layer_;

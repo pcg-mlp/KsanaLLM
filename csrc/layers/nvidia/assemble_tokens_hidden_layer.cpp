@@ -14,24 +14,23 @@ Status AssembleTokensHiddenLayer::Init(const std::vector<std::any>& parameters, 
   return Status();
 }
 
-Status AssembleTokensHiddenLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                          std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+template <typename T>
+Status AssembleTokensHiddenLayer::ForwardT(const Tensor& hidden_states, const Tensor& accepted_token_indices,
+                                           Tensor& output) {
+  const int accepted_tokens_size = accepted_token_indices.shape[0];
+  AssembleTokensHidden<T>(reinterpret_cast<const void*>(hidden_states.GetPtr<void>()),
+                          reinterpret_cast<const void*>(accepted_token_indices.GetPtr<void>()), accepted_tokens_size,
+                          hidden_states.shape[1], reinterpret_cast<void*>(output.GetPtr<void>()),
+                          context_->device->GetPrimaryComputeStream().Get());
+  output.shape = hidden_states.shape;
+  output.shape[0] = accepted_tokens_size;
+  output.dtype = hidden_states.dtype;
+  return Status();
 }
 
-template <typename T>
-Status AssembleTokensHiddenLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
-  const int accepted_tokens_size = input_tensors[1].shape[0];
-  AssembleTokensHidden<T>(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                          reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), accepted_tokens_size,
-                          input_tensors[0].shape[1], reinterpret_cast<void*>(output_tensors[0].GetPtr<void>()),
-                          context_->device->GetPrimaryComputeStream().Get());
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].shape[0] = accepted_tokens_size;
-  output_tensors[0].dtype = input_tensors[0].dtype;
-  return Status();
+Status AssembleTokensHiddenLayer::Forward(const Tensor* hidden_states, const Tensor* accepted_token_indices,
+                                          Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *hidden_states, *accepted_token_indices, *output);
 }
 
 }  // namespace ksana_llm

@@ -11,9 +11,13 @@ Status ActivationLayer::Init(const std::vector<std::any>& parameters, const Runt
   return Status(RET_UNDEFINED_REFERENCE, "ActivationLayer not supported.");
 }
 
-Status ActivationLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status ActivationLayer::Forward(const Tensor* input, Tensor* output, const Tensor* gated_weight, const Tensor* bias,
+                                const Tensor* gated_bias, const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "ActivationLayer not supported.");
+}
+
+Status SigmoidLayer::Forward(Tensor* inout, const LayerExecContext& exec_ctx) {
+  return Status(RET_UNDEFINED_REFERENCE, "SigmoidLayer not supported.");
 }
 
 }  // namespace ksana_llm

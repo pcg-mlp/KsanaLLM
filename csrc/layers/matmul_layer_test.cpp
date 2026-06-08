@@ -130,9 +130,8 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
   {
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto begin_time = std::chrono::high_resolution_clock::now();
-    std::vector<Tensor> output_tensors = {output0};
     for (size_t it = 0; it < 100; it++) {
-      machete_matmul_layer.Forward({input_activation, weightPrePack}, output_tensors);
+      machete_matmul_layer.Forward(&input_activation, &weightPrePack, &output0);
     }
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -148,9 +147,8 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
   {
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto begin_time = std::chrono::high_resolution_clock::now();
-    std::vector<Tensor> output_tensors = {output1};
     for (size_t it = 0; it < 100; it++) {
-      machete_matmul_layer.Forward({input_activation, weightPrePack}, output_tensors);
+      machete_matmul_layer.Forward(&input_activation, &weightPrePack, &output1);
     }
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -239,9 +237,8 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
   {
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto begin_time = std::chrono::high_resolution_clock::now();
-    std::vector<Tensor> output_tensors = {output0};
     for (size_t it = 0; it < 100; it++) {
-      cutlass_matmul_layer.Forward({input_activation, weight}, output_tensors);
+      cutlass_matmul_layer.Forward(&input_activation, &weight, &output0);
     }
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -256,9 +253,8 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
   {
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto begin_time = std::chrono::high_resolution_clock::now();
-    std::vector<Tensor> output_tensors = {output1};
     for (size_t it = 0; it < 100; it++) {
-      cutlass_matmul_layer.Forward({input_activation, weight}, output_tensors);
+      cutlass_matmul_layer.Forward(&input_activation, &weight, &output1);
     }
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -376,9 +372,8 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
   {
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto begin_time = std::chrono::high_resolution_clock::now();
-    std::vector<Tensor> output_tensors = {output};
     for (size_t it = 0; it < 100; it++) {
-      marlin_matmul_layer.Forward({input_activation, weightPrePack}, output_tensors);
+      marlin_matmul_layer.Forward(&input_activation, &weightPrePack, &output);
     }
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -457,8 +452,7 @@ TEST_F(LayerTest, BatchedMatMulLayerTest) {
 
   StreamSynchronize(context_->device->GetMemoryManageStream());
 
-  std::vector<Tensor> output_tensors = {output};
-  EXPECT_TRUE(batched_matmul_layer.Forward({input_a, input_b}, output_tensors).OK());
+  EXPECT_TRUE(batched_matmul_layer.Forward(&input_a, &input_b, &output).OK());
   StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证输出形状
@@ -715,11 +709,8 @@ TEST_F(LayerTest, FinegrainedMixedDtypeGemmLayerTest) {
   const size_t m_decode = 16;
   Tensor input_decode = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, k});
   Tensor output_default = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, n});
-  {
-    std::vector<Tensor> output_tensors = {output_default};
-    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_decode, weight}, output_tensors).OK());
-    StreamSynchronize(context_->device->GetPrimaryComputeStream());
-  }
+  EXPECT_TRUE(finegrained_gemm_layer.Forward(&input_decode, &weight, &output_default).OK());
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证输出形状
   EXPECT_EQ(output_default.shape[0], m_decode);
@@ -736,11 +727,8 @@ TEST_F(LayerTest, FinegrainedMixedDtypeGemmLayerTest) {
 
   // 使用最优 tactic 执行 Forward
   Tensor output_optimized = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, n});
-  {
-    std::vector<Tensor> output_tensors = {output_optimized};
-    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_decode, weight}, output_tensors).OK());
-    StreamSynchronize(context_->device->GetPrimaryComputeStream());
-  }
+  EXPECT_TRUE(finegrained_gemm_layer.Forward(&input_decode, &weight, &output_optimized).OK());
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证输出形状
   EXPECT_EQ(output_optimized.shape[0], m_decode);
@@ -754,11 +742,8 @@ TEST_F(LayerTest, FinegrainedMixedDtypeGemmLayerTest) {
   weight.pre_quant_scales = &pre_quant_scales;
 
   Tensor output_with_prequant = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, n});
-  {
-    std::vector<Tensor> output_tensors = {output_with_prequant};
-    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_decode, weight}, output_tensors).OK());
-    StreamSynchronize(context_->device->GetPrimaryComputeStream());
-  }
+  EXPECT_TRUE(finegrained_gemm_layer.Forward(&input_decode, &weight, &output_with_prequant).OK());
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证输出形状
   EXPECT_EQ(output_with_prequant.shape[0], m_decode);
@@ -775,11 +760,8 @@ TEST_F(LayerTest, FinegrainedMixedDtypeGemmLayerTest) {
   const size_t m_prefill = 256;
   Tensor input_prefill = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_prefill, k});
   Tensor output_prefill = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_prefill, n});
-  {
-    std::vector<Tensor> output_tensors = {output_prefill};
-    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_prefill, weight}, output_tensors).OK());
-    StreamSynchronize(context_->device->GetPrimaryComputeStream());
-  }
+  EXPECT_TRUE(finegrained_gemm_layer.Forward(&input_prefill, &weight, &output_prefill).OK());
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
 
   // 验证输出形状
   EXPECT_EQ(output_prefill.shape[0], m_prefill);
@@ -887,7 +869,8 @@ TEST_F(LayerTest, BlockwiseMatMulLayerBackendSweepTest) {
 
       for (size_t ti = 0; ti < all_types.size(); ++ti) {
         layer.SetGemmType(all_types[ti]);
-        float ms = MeasureCudaExecutionTime([&] { layer.Forward(in_tensors, out_tensors); }, stream, kWarmup, kMeasure,
+        float ms = MeasureCudaExecutionTime([&] { layer.Forward(&in_tensors[0], &in_tensors[1], &out_tensors[0]); },
+                                            stream, kWarmup, kMeasure,
                                             /*flush_l2=*/false);
         float us = ms * 1000.0f;
         times_us.push_back(us);

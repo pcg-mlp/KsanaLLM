@@ -71,12 +71,12 @@ Status GPTDecoderLayer::ForwardMlp(std::vector<Tensor>& mlp_temp_buffer_tensors,
                                    ForwardingContext& forwarding_context) {
   STATUS_CHECK_RETURN(mlp_gate_bias_add_->Forward(mlp_temp_buffer_tensors[0], mlp_temp_buffer_tensors));
   std::swap(mlp_temp_buffer_tensors, hidden_buffer_tensors_0);
-  STATUS_CHECK_RETURN(activation_layer_->Forward({hidden_buffer_tensors_0[0]}, hidden_buffer_tensors_0));
+  STATUS_CHECK_RETURN(activation_layer_->Forward(&hidden_buffer_tensors_0[0], &hidden_buffer_tensors_0[0]));
   // Mlp down_proj MatMul
   if (forwarding_context.GetModelCommunicator()) {
-    STATUS_CHECK_RETURN(mlp_down_proj_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(mlp_down_proj_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(mlp_down_proj_->Forward(hidden_buffer_tensors_0, mlp_temp_buffer_tensors));
+    STATUS_CHECK_RETURN(mlp_down_proj_->Forward(hidden_buffer_tensors_0[0], mlp_temp_buffer_tensors[0]));
     std::swap(mlp_temp_buffer_tensors, hidden_buffer_tensors_0);
   }
   // Only add down_proj bias for rank 0 to avoid duplication.
@@ -107,7 +107,7 @@ Status GPTDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   CREATE_BUFFER_SCOPE(mlp_temp_buffer_tensors, mlp_temp_buffer_);
 
-  attn_qkv_projs_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  attn_qkv_projs_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   STATUS_CHECK_RETURN(
       ForwardMha(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
@@ -124,10 +124,10 @@ Status GPTDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool
   STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], hidden_buffer_tensors_0));
 
   // Post layernorm
-  input_layernorms_->Forward(hidden_buffer_tensors_0, residual_buffer);
+  input_layernorms_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0]);
 
   // Mlp gate_proj MatMul
-  STATUS_CHECK_RETURN(mlp_gate_proj_->Forward(residual_buffer, mlp_temp_buffer_tensors));
+  STATUS_CHECK_RETURN(mlp_gate_proj_->Forward(residual_buffer[0], mlp_temp_buffer_tensors[0]));
 
   // Common mlp
   STATUS_CHECK_RETURN(ForwardMlp(mlp_temp_buffer_tensors, hidden_buffer_tensors_0, reduce_buffer_tensors,
@@ -139,7 +139,7 @@ Status GPTDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool
   // Mlp residual add
   STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], hidden_buffer_tensors_0));
   // Post layernorm
-  post_attention_layernorms_->Forward(hidden_buffer_tensors_0, residual_buffer);
+  post_attention_layernorms_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0]);
   return Status();
 }
 

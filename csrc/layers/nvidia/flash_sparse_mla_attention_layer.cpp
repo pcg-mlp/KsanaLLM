@@ -47,9 +47,7 @@ size_t FlashSparseMlaAttentionLayer::GetWorkspaceSize() {
   return workspace_size;
 }
 
-Status FlashSparseMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                             std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status FlashSparseMlaAttentionLayer::Forward(const FlashSparseMlaAttentionInputs& inputs, Tensor* output) {
 #define DISPATCH_FLASH_SPARSE_MLA_BY_KVTYPE(dtype, kv_cache_dtype, func, ...)                                 \
   switch (kv_cache_dtype) {                                                                                   \
     case TYPE_FP8_DS_MLA:                                                                                     \
@@ -61,39 +59,37 @@ Status FlashSparseMlaAttentionLayer::Forward(const std::vector<Tensor>& input_te
   }
   switch (inter_data_type_) {
     case DataType::TYPE_BF16:
-      DISPATCH_FLASH_SPARSE_MLA_BY_KVTYPE(bfloat16, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
+      DISPATCH_FLASH_SPARSE_MLA_BY_KVTYPE(bfloat16, kv_cache_dtype_, ForwardT, inputs, output);
     default:
       KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, inter_data_type_));
   }
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashSparseMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                              std::vector<Tensor>& output_tensors) {
-  auto input_iter = input_tensors.cbegin();
-  int64_t* rotary_embedding_pos_ptr = (input_iter++)->GetPtr<int64_t>();
-  int64_t* rotary_embedding_mask_ptr = (input_iter++)->GetPtr<int64_t>();
-  const Tensor& q_pe_tensor = *input_iter++;
+Status FlashSparseMlaAttentionLayer::ForwardT(const FlashSparseMlaAttentionInputs& inputs, Tensor* output) {
+  int64_t* rotary_embedding_pos_ptr = inputs.rotary_embedding_pos->GetPtr<int64_t>();
+  int64_t* rotary_embedding_mask_ptr = inputs.rotary_embedding_mask->GetPtr<int64_t>();
+  const Tensor& q_pe_tensor = *inputs.q_pe;
   void* q_pe_ptr = q_pe_tensor.GetPtr<void>();
-  void* k_pe_ptr = (input_iter++)->GetPtr<void>();
-  void* q_nope_ptr = (input_iter++)->GetPtr<void>();
-  void* q_ptr = (input_iter++)->GetPtr<void>();
-  SCALAR_T* compressed_kv_ptr = (input_iter++)->GetPtr<SCALAR_T>();
-  const Tensor& kv_list_tensor = *input_iter++;
-  size_t* prefix_offsets_ptr = (input_iter++)->GetPtr<size_t>();
-  size_t* seqlens_without_prefix_ptr = (input_iter++)->GetPtr<size_t>();
-  const Tensor& block_offsets_tensor = *input_iter++;
+  void* k_pe_ptr = inputs.k_pe->GetPtr<void>();
+  void* q_nope_ptr = inputs.q_nope->GetPtr<void>();
+  void* q_ptr = inputs.q->GetPtr<void>();
+  SCALAR_T* compressed_kv_ptr = inputs.compressed_kv->GetPtr<SCALAR_T>();
+  const Tensor& kv_list_tensor = *inputs.kv_list;
+  size_t* prefix_offsets_ptr = inputs.prefix_offsets->GetPtr<size_t>();
+  size_t* seqlens_without_prefix_ptr = inputs.seqlens_without_prefix->GetPtr<size_t>();
+  const Tensor& block_offsets_tensor = *inputs.cache_offset;
   int* block_offsets_ptr = block_offsets_tensor.GetPtr<int>();
-  const Tensor& layer_kv_cache_ptr_tensor = *input_iter++;
-  const Tensor& block_table_tensor = *input_iter++;
+  const Tensor& layer_kv_cache_ptr_tensor = *inputs.layer_kv_cache;
+  const Tensor& block_table_tensor = *inputs.block_table;
   int* block_table_ptr = block_table_tensor.GetPtr<int>();
-  const Tensor& tile_scheduler_metadata_tensor = *input_iter++;
+  const Tensor& tile_scheduler_metadata_tensor = *inputs.tile_scheduler_metadata;
   int* tile_scheduler_metadata_ptr = tile_scheduler_metadata_tensor.GetPtr<int>();
-  int* num_splits_ptr = (input_iter++)->GetPtr<int>();
-  const Tensor& indices_tensor = *input_iter++;
+  int* num_splits_ptr = inputs.num_splits->GetPtr<int>();
+  const Tensor& indices_tensor = *inputs.indices;
   int* indices_ptr = indices_tensor.GetPtr<int>();
 
-  SCALAR_T* out_ptr = output_tensors[0].GetPtr<SCALAR_T>();
+  SCALAR_T* out_ptr = output->GetPtr<SCALAR_T>();
 
   const size_t token_num = q_pe_tensor.shape[0];
   const size_t batch_size = block_offsets_tensor.shape[0] - 1;

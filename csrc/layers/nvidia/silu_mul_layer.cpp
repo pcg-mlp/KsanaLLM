@@ -17,33 +17,35 @@ Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status();
 }
 
-Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
+template <typename T>
+Status SiluMulLayer::ForwardFusedT(const Tensor& fused_gate_up, Tensor& output, const LayerExecContext& exec_ctx) {
+  InvokeRowBasedGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
+      reinterpret_cast<const void*>(fused_gate_up.GetPtr<void>()), static_cast<int>(fused_gate_up.shape[0]),
+      static_cast<int>(fused_gate_up.shape[1]), output.GetPtr<void>(), GetComputeStream(exec_ctx), swiglu_limit_);
+  output.shape = fused_gate_up.shape;
+  output.shape[1] = output.shape[1] / 2;
+  output.dtype = fused_gate_up.dtype;
+  return Status();
 }
 
 template <typename T>
-Status SiluMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                              const LayerExecContext& exec_ctx) {
-  if (input_tensors.size() == 1) {
-    InvokeRowBasedGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
-        reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), static_cast<int>(input_tensors[0].shape[0]),
-        static_cast<int>(input_tensors[0].shape[1]), output_tensors[0].GetPtr<void>(),
-        GetComputeStream(exec_ctx),  swiglu_limit_);
-    output_tensors[0].shape = input_tensors[0].shape;
-    output_tensors[0].shape[1] = output_tensors[0].shape[1] / 2;
-    output_tensors[0].dtype = input_tensors[0].dtype;
-  } else if (input_tensors.size() == 2) {
-    InvokeGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
-        reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), /* bias */ nullptr,
-        reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), /* gated_bias */ nullptr,
-        static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[0].shape[1]),
-        output_tensors[0].GetPtr<void>(), GetComputeStream(exec_ctx));
-    output_tensors[0].shape = input_tensors[0].shape;
-    output_tensors[0].dtype = input_tensors[0].dtype;
-  }
-
+Status SiluMulLayer::ForwardSplitT(const Tensor& gate, const Tensor& up, Tensor& output,
+                                   const LayerExecContext& exec_ctx) {
+  InvokeGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
+      reinterpret_cast<const void*>(gate.GetPtr<void>()), /* bias */ nullptr,
+      reinterpret_cast<const void*>(up.GetPtr<void>()), /* gated_bias */ nullptr, static_cast<int>(gate.shape[0]),
+      static_cast<int>(gate.shape[1]), output.GetPtr<void>(), GetComputeStream(exec_ctx));
+  output.shape = gate.shape;
+  output.dtype = gate.dtype;
   return Status();
+}
+
+Status SiluMulLayer::Forward(const Tensor* fused_gate_up, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardFusedT, *fused_gate_up, *output, exec_ctx);
+}
+
+Status SiluMulLayer::Forward(const Tensor* gate, const Tensor* up, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardSplitT, *gate, *up, *output, exec_ctx);
 }
 
 }  // namespace ksana_llm

@@ -104,14 +104,24 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
   auto& standard_shared = *model_input->shared_attention_meta->GetStandard();
   auto& mla_shared = *model_input->shared_attention_meta->GetMLA();
   if (indices_tensor.GetElementNumber() > 0) {
-    STATUS_CHECK_RETURN(flash_sparse_mla_attention_layer_->Forward(
-        {model_input->flash_meta->rotary_embedding_pos, model_input->flash_meta->rotary_embedding_mask,
-         context_q_rope_tensor, k_rope_buffer_tensor, context_q_nope_tensor, /*q_ptr*/ k_buffer[0], kv_buffer_tensor,
-         model_input->flash_meta->kv_list, model_input->dp_input_prefix_uint64_tensor,
-         model_input->dp_prefill_q_offset_uint64_tensor, model_input->flash_meta->kv_cache_offset,
-         standard_shared.layer_kv_cache_ptr, model_input->flash_meta->block_table, flash_mla.tile_scheduler_metadata,
-         flash_mla.num_splits, indices_tensor},
-        output_tensors));
+    FlashSparseMlaAttentionInputs sparse_inputs;
+    sparse_inputs.rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos;
+    sparse_inputs.rotary_embedding_mask = &model_input->flash_meta->rotary_embedding_mask;
+    sparse_inputs.q_pe = &context_q_rope_tensor;
+    sparse_inputs.k_pe = &k_rope_buffer_tensor;
+    sparse_inputs.q_nope = &context_q_nope_tensor;
+    sparse_inputs.q = &k_buffer[0];
+    sparse_inputs.compressed_kv = &kv_buffer_tensor;
+    sparse_inputs.kv_list = &model_input->flash_meta->kv_list;
+    sparse_inputs.prefix_offsets = &model_input->dp_input_prefix_uint64_tensor;
+    sparse_inputs.seqlens_without_prefix = &model_input->dp_prefill_q_offset_uint64_tensor;
+    sparse_inputs.cache_offset = &model_input->flash_meta->kv_cache_offset;
+    sparse_inputs.layer_kv_cache = &standard_shared.layer_kv_cache_ptr;
+    sparse_inputs.block_table = &model_input->flash_meta->block_table;
+    sparse_inputs.tile_scheduler_metadata = &flash_mla.tile_scheduler_metadata;
+    sparse_inputs.num_splits = &flash_mla.num_splits;
+    sparse_inputs.indices = &indices_tensor;
+    STATUS_CHECK_RETURN(flash_sparse_mla_attention_layer_->Forward(sparse_inputs, &output_tensors[0]));
     flash_mla.tile_scheduler_metadata.shape[2] = 1;
     return Status();
   } else {
@@ -123,35 +133,37 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
       STATUS_CHECK_RETURN(v_head_proj_->Forward(kv_buffer_tensor, v_buffer));
     }
 
-    return flash_mla_attention_layer_->Forward({model_input->dp_input_offset_uint64_tensor,
-                                                model_input->dp_input_offset_uint64_host,
-                                                model_input->flash_meta->kv_list,
-                                                model_input->dp_input_prefix_uint64_tensor,
-                                                model_input->dp_prefill_q_offset_uint64_tensor,
-                                                model_input->dp_prefill_q_offset_uint64_host,
-                                                mla_shared.chunk_kv_batch_starts_host,
-                                                mla_shared.chunk_kv_cu_extend_lens_tensor,
-                                                mla_shared.chunk_kv_cu_seq_lens_tensor,
-                                                model_input->flash_meta->kv_cache_offset,
-                                                model_input->flash_meta->rotary_embedding_pos,
-                                                model_input->flash_meta->rotary_embedding_mask,
-                                                standard_shared.dp_src_flexible_rotary_embedding_pos,
-                                                standard_shared.dp_dst_flexible_rotary_embedding_pos,
-                                                standard_shared.dp_flexible_rotary_embedding_mask,
-                                                standard_shared.dp_dst_flexible_kv_cache_tensor,
-                                                standard_shared.dp_src_flexible_kv_cache_tensor,
-                                                standard_shared.dp_dst_flexible_token_idx_tensor,
-                                                standard_shared.dp_src_flexible_token_idx_tensor,
-                                                standard_shared.dp_flexible_offset_uint64_tensor,
-                                                attn_ctx.forward_shape,
-                                                context_q_nope_rope_tensor,
-                                                kv_buffer_tensor,
-                                                k_rope_buffer_tensor,
-                                                kv_b_nope_proj_weight_,
-                                                v_head_proj_weight_,
-                                                k_buffer[0],
-                                                v_buffer[0]},
-                                               output_tensors);
+    FlashMlaAttentionInputs mla_inputs{
+        .dp_input_offset = &model_input->dp_input_offset_uint64_tensor,
+        .dp_input_offset_host = &model_input->dp_input_offset_uint64_host,
+        .kv_list = &model_input->flash_meta->kv_list,
+        .dp_input_prefix = &model_input->dp_input_prefix_uint64_tensor,
+        .dp_prefill_q_offset = &model_input->dp_prefill_q_offset_uint64_tensor,
+        .dp_prefill_q_offset_host = &model_input->dp_prefill_q_offset_uint64_host,
+        .chunk_kv_batch_starts_host = &mla_shared.chunk_kv_batch_starts_host,
+        .chunk_kv_cu_extend_lens = &mla_shared.chunk_kv_cu_extend_lens_tensor,
+        .chunk_kv_cu_seq_lens = &mla_shared.chunk_kv_cu_seq_lens_tensor,
+        .kv_cache_offset = &model_input->flash_meta->kv_cache_offset,
+        .rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos,
+        .rotary_embedding_mask = &model_input->flash_meta->rotary_embedding_mask,
+        .dp_src_flexible_rotary_embedding_pos = &standard_shared.dp_src_flexible_rotary_embedding_pos,
+        .dp_dst_flexible_rotary_embedding_pos = &standard_shared.dp_dst_flexible_rotary_embedding_pos,
+        .dp_flexible_rotary_embedding_mask = &standard_shared.dp_flexible_rotary_embedding_mask,
+        .dp_dst_flexible_kv_cache = &standard_shared.dp_dst_flexible_kv_cache_tensor,
+        .dp_src_flexible_kv_cache = &standard_shared.dp_src_flexible_kv_cache_tensor,
+        .dp_dst_flexible_token_idx = &standard_shared.dp_dst_flexible_token_idx_tensor,
+        .dp_src_flexible_token_idx = &standard_shared.dp_src_flexible_token_idx_tensor,
+        .dp_flexible_offset_uint64 = &standard_shared.dp_flexible_offset_uint64_tensor,
+        .forward_shape = &attn_ctx.forward_shape,
+        .q_nope_rope = &context_q_nope_rope_tensor,
+        .kv_buffer = &kv_buffer_tensor,
+        .k_rope_buffer = &k_rope_buffer_tensor,
+        .kv_b_nope_proj_weight = &kv_b_nope_proj_weight_,
+        .v_head_proj_weight = &v_head_proj_weight_,
+        .k_buffer = &k_buffer[0],
+        .v_buffer = &v_buffer[0],
+    };
+    return flash_mla_attention_layer_->Forward(mla_inputs, &output_tensors[0]);
   }
 }
 

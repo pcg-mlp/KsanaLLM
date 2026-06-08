@@ -24,35 +24,35 @@ Status EmbLookupLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+// input_ids [token_num]
+// ids_offsets [batch_size + 1]
+// prefix_offsets [batch_size + 1]
+// emb_weight [vocab_size, hidden_units]
+// steps [token_num] (optional)
+// emb_output [token_num, hidden_units]
+template <typename T>
+Status EmbLookupLayer::ForwardT(const Tensor* input_ids, const Tensor* ids_offsets, const Tensor* prefix_offsets,
+                                const Tensor* emb_weight, Tensor* output, const Tensor* steps) {
+  int vocab_size = emb_weight->shape[0];
+  int hidden_units = emb_weight->shape[1];
+  int bs = ids_offsets->shape[0] - 1;
+  int token_num = input_ids->shape[0];
+  int vocab_id = 0;
+  const void* steps_ptr = steps != nullptr ? steps->GetPtr<void>() : nullptr;
+
+  LookupEmbedding<T>(input_ids->GetPtr<void>(), ids_offsets->GetPtr<void>(), prefix_offsets->GetPtr<void>(),
+                     emb_weight->GetPtr<void>(), pos_weight_, steps_ptr, output->GetPtr<void>(), use_emb_scale_,
+                     emb_scale_, vocab_size, hidden_units, bs, vocab_id,
+                     context_->device->GetPrimaryComputeStream().Get());
+  output->shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_units)};
+  output->dtype = emb_weight->dtype;
+  return Status();
 }
 
-template <typename T>
-Status EmbLookupLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // input_tensors:
-  //   0: input_ids [token_num]
-  //   1: ids_offsets [batch_size + 1]
-  //   2: prefix_offsets [batch_size + 1]
-  //   3: emb_weight [vocab_size, hidden_units]
-  //   4: steps [token_num] (optional)
-  // output_tensors:
-  //   0: emb_output [token_num, hidden_units]
-  int vocab_size = input_tensors[3].shape[0];
-  int hidden_units = input_tensors[3].shape[1];
-  int bs = input_tensors[1].shape[0] - 1;
-  int token_num = input_tensors[0].shape[0];
-  int vocab_id = 0;
-  const void* steps = input_tensors.size() > 4 ? input_tensors[4].GetPtr<void>() : nullptr;
-
-  LookupEmbedding<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-                     input_tensors[3].GetPtr<void>(), pos_weight_, steps, output_tensors[0].GetPtr<void>(),
-                     use_emb_scale_, emb_scale_, vocab_size, hidden_units, bs, vocab_id,
-                     context_->device->GetPrimaryComputeStream().Get());
-  output_tensors[0].shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_units)};
-  output_tensors[0].dtype = input_tensors[3].dtype;
-  return Status();
+Status EmbLookupLayer::Forward(const Tensor* input_ids, const Tensor* ids_offsets, const Tensor* prefix_offsets,
+                               const Tensor* emb_weight, Tensor* output, const Tensor* steps,
+                               const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_ids, ids_offsets, prefix_offsets, emb_weight, output, steps);
 }
 
 }  // namespace ksana_llm

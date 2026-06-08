@@ -14,7 +14,9 @@ Sigmoid::Sigmoid(const LayerCreationContext& creation_context) {
 }
 
 Status Sigmoid::Forward(std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(sigmoid_layer_->Forward(input_tensors, output_tensors));
+  auto* typed = static_cast<SigmoidLayer*>(sigmoid_layer_.get());
+  STATUS_CHECK_RETURN(typed->Forward(&input_tensors[0]));
+  output_tensors[0] = input_tensors[0];
   return Status();
 }
 

@@ -26,26 +26,24 @@ Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
 
 size_t MatMulLayer::GetWorkspaceSize() { return 0; }
 
-Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status MatMulLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                            const LayerExecContext& exec_ctx) {
   // TODO(karlluo): support bias
-  int64_t m = input_tensors[0].shape[0];
-  int64_t n = (GetACLFormat(input_tensors[1].data_format) == aclFormat::ACL_FORMAT_FRACTAL_NZ)
-                  ? size_t(input_tensors[1].shape[1]) * size_t(input_tensors[1].shape[3])
-                  : size_t(input_tensors[1].shape[1]);
-  output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  int64_t m = input->shape[0];
+  int64_t n = (GetACLFormat(weight->data_format) == aclFormat::ACL_FORMAT_FRACTAL_NZ)
+                  ? size_t(weight->shape[1]) * size_t(weight->shape[3])
+                  : size_t(weight->shape[1]);
+  output->shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
+  output->dtype = input->dtype;
   reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
-  atb_op_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
-                                  static_cast<aclDataType>(DataType(input_tensors[0].dtype)),
-                                  GetACLFormat(input_tensors[0].data_format));
-  atb_op_executor_.SetInputTensor(input_tensors[1].GetPtr<void>(), input_tensors[1].shape,
-                                  static_cast<aclDataType>(DataType(input_tensors[1].dtype)),
-                                  GetACLFormat(input_tensors[1].data_format));
-  atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                   static_cast<aclDataType>(DataType(output_tensors[0].dtype)),
-                                   GetACLFormat(output_tensors[0].data_format));
+  atb_op_executor_.SetInputTensor(input->GetPtr<void>(), input->shape, static_cast<aclDataType>(DataType(input->dtype)),
+                                  GetACLFormat(input->data_format));
+  atb_op_executor_.SetInputTensor(weight->GetPtr<void>(), weight->shape,
+                                  static_cast<aclDataType>(DataType(weight->dtype)), GetACLFormat(weight->data_format));
+  atb_op_executor_.SetOutputTensor(output->GetPtr<void>(), output->shape,
+                                   static_cast<aclDataType>(DataType(output->dtype)),
+                                   GetACLFormat(output->data_format));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
   return Status();
 }

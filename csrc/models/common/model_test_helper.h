@@ -98,9 +98,9 @@ class FakeModel {
   Status GetOutputToCPU(std::vector<float>& cpu_fp32_data) {
     auto& residula_buffer_tensor = residual_buffer_[0];
     cpu_fp32_data.resize(residula_buffer_tensor.GetElementNumber());
-    STATUS_CHECK_RETURN(
-        cast_layer_->Forward({residula_buffer_tensor, forwarding_context_.GetAttentionForwardContext().forward_shape},
-                             residual_fp32_buffer_));
+    const auto& fs = forwarding_context_.GetAttentionForwardContext().forward_shape;
+    STATUS_CHECK_RETURN(cast_layer_->Forward(&residula_buffer_tensor, fs.shape[0], fs.shape[1], fs.shape[2],
+                                             &residual_fp32_buffer_[0]));
     DeviceSynchronize();
     Memcpy(cpu_fp32_data.data(), residual_fp32_buffer_[0].template GetPtr<void>(),
            sizeof(float) * residual_fp32_buffer_[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
@@ -170,7 +170,7 @@ class FakeModel {
   Tensor host_residual_buffer_tensor_;
   std::vector<Tensor> residual_buffer_{1};
   std::vector<Tensor> residual_fp32_buffer_{1};
-  std::shared_ptr<BaseLayer> cast_layer_;
+  std::shared_ptr<CastLayer> cast_layer_;
 
   // Only used for QWenVL
   Tensor mrotary_section_tensor_;

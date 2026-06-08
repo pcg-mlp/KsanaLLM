@@ -54,55 +54,55 @@ Status MarlinMoeLayer::Preprocess(const ModelConfig& model_config_, const Runtim
   return Status();
 }
 
-Status MarlinMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  if (input_tensors[0].dtype == TYPE_FP16) {
-    half* output = static_cast<half*>(output_tensors[0].GetPtr<void>());
-    half* input = static_cast<half*>(input_tensors[0].GetPtr<void>());
-
-    void* w1 = input_tensors[2].GetPtr<void>();
-    void* w2 = input_tensors[3].GetPtr<void>();
-    if (w1 == nullptr || w2 == nullptr) {
-      KLLM_THROW("w1 or w2 is nullptr.");
-    }
-
-    void* w1_scales = input_tensors[2].scales->GetPtr<void>();
-    void* w2_scales = input_tensors[3].scales->GetPtr<void>();
-    if (w1_scales == nullptr || w2_scales == nullptr) {
-      KLLM_THROW("w1_scales or w2_scales is nullptr.");
-    }
-
-    int* w1_g_idx = (input_tensors[2].g_idx ? static_cast<int*>(input_tensors[2].g_idx->GetPtr<void>()) : nullptr);
-    int* w2_g_idx = (input_tensors[3].g_idx ? static_cast<int*>(input_tensors[3].g_idx->GetPtr<void>()) : nullptr);
-
-    void* w1_zeros = (input_tensors[2].zeros ? input_tensors[2].zeros->GetPtr<void>() : nullptr);
-    void* w2_zeros = (input_tensors[3].zeros ? input_tensors[3].zeros->GetPtr<void>() : nullptr);
-
-    int* w1_perm = (input_tensors[2].perm ? static_cast<int*>(input_tensors[2].perm->GetPtr<void>()) : nullptr);
-    int* w2_perm = (input_tensors[3].perm ? static_cast<int*>(input_tensors[3].perm->GetPtr<void>()) : nullptr);
-    half* gating_output = static_cast<half*>(input_tensors[1].GetPtr<void>());
-    float* gating_output_float = static_cast<float*>(workspace_buffer_->GetPtr<void>());
-    int gating_output_size = input_tensors[1].shape[0] * input_tensors[1].shape[1];
-
-    DataToFloat<half>(gating_output, gating_output_size, 1, 1, gating_output_float,
-                      context_->device->GetPrimaryComputeStream().Get());
-
-    void* workspace = workspace_buffer_->GetPtr<void>() + max_gating_size_;
-    size_t workspace_size = max_ws_bytes_ - max_gating_size_;
-
-    int num_tokens = input_tensors[0].shape[0];
-    llm_kernels::nvidia::MOEExpertScaleNormalizationMode norm_mode =
-        static_cast<llm_kernels::nvidia::MOEExpertScaleNormalizationMode>(static_cast<int>(moe_scale_norm_mode_));
-    FusedMarlinMoe(output, input, gating_output_float, w1, w2, w1_scales, w2_scales, workspace, workspace_size,
-                   num_tokens, expert_inter_size_, expert_hidden_size_, expert_num_, expert_topk_,
-                   context_->device->GetPrimaryComputeStream().Get(), norm_mode, w1_g_idx, w2_g_idx, w1_perm, w2_perm,
-                   w1_zeros, w2_zeros, num_bits_, group_size_);
-    output_tensors[0].shape = input_tensors[0].shape;
-    output_tensors[0].dtype = input_tensors[0].dtype;
-  } else {
+Status MarlinMoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                               const Tensor* w2, const Tensor* /*eplb_map*/, Tensor* output, Tensor* /*workspace*/,
+                               const Tensor* /*e_score_bias*/, const Tensor* /*input_ids*/,
+                               const LayerExecContext& exec_ctx) {
+  if (hidden_states->dtype != TYPE_FP16) {
     KLLM_THROW("marlin moe only support input type " + std::to_string(TYPE_FP16) + ", not support input type " +
-               std::to_string(input_tensors[0].dtype));
+               std::to_string(hidden_states->dtype));
   }
+
+  half* out_ptr = static_cast<half*>(output->GetPtr<void>());
+  half* input_ptr = static_cast<half*>(hidden_states->GetPtr<void>());
+
+  void* w1_ptr = w1->GetPtr<void>();
+  void* w2_ptr = w2->GetPtr<void>();
+  if (w1_ptr == nullptr || w2_ptr == nullptr) {
+    KLLM_THROW("w1 or w2 is nullptr.");
+  }
+
+  void* w1_scales = w1->scales->GetPtr<void>();
+  void* w2_scales = w2->scales->GetPtr<void>();
+  if (w1_scales == nullptr || w2_scales == nullptr) {
+    KLLM_THROW("w1_scales or w2_scales is nullptr.");
+  }
+
+  int* w1_g_idx = (w1->g_idx ? static_cast<int*>(w1->g_idx->GetPtr<void>()) : nullptr);
+  int* w2_g_idx = (w2->g_idx ? static_cast<int*>(w2->g_idx->GetPtr<void>()) : nullptr);
+  void* w1_zeros = (w1->zeros ? w1->zeros->GetPtr<void>() : nullptr);
+  void* w2_zeros = (w2->zeros ? w2->zeros->GetPtr<void>() : nullptr);
+  int* w1_perm = (w1->perm ? static_cast<int*>(w1->perm->GetPtr<void>()) : nullptr);
+  int* w2_perm = (w2->perm ? static_cast<int*>(w2->perm->GetPtr<void>()) : nullptr);
+
+  half* gating_ptr = static_cast<half*>(gating_output->GetPtr<void>());
+  float* gating_float = static_cast<float*>(workspace_buffer_->GetPtr<void>());
+  int gating_size = static_cast<int>(gating_output->shape[0] * gating_output->shape[1]);
+
+  DataToFloat<half>(gating_ptr, gating_size, 1, 1, gating_float, context_->device->GetPrimaryComputeStream().Get());
+
+  void* ws = static_cast<char*>(workspace_buffer_->GetPtr<void>()) + max_gating_size_;
+  size_t ws_size = max_ws_bytes_ - max_gating_size_;
+  int num_tokens = static_cast<int>(hidden_states->shape[0]);
+
+  llm_kernels::nvidia::MOEExpertScaleNormalizationMode norm_mode =
+      static_cast<llm_kernels::nvidia::MOEExpertScaleNormalizationMode>(static_cast<int>(moe_scale_norm_mode_));
+  FusedMarlinMoe(out_ptr, input_ptr, gating_float, w1_ptr, w2_ptr, w1_scales, w2_scales, ws, ws_size, num_tokens,
+                 expert_inter_size_, expert_hidden_size_, expert_num_, expert_topk_,
+                 context_->device->GetPrimaryComputeStream().Get(), norm_mode, w1_g_idx, w2_g_idx, w1_perm, w2_perm,
+                 w1_zeros, w2_zeros, num_bits_, group_size_);
+  output->shape = hidden_states->shape;
+  output->dtype = hidden_states->dtype;
   return Status();
 }
 

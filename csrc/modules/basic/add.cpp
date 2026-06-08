@@ -20,12 +20,14 @@ Add::Add(const LayerCreationContext& creation_context, const std::string& weight
 Add::~Add() {}
 
 Status Add::Forward(Tensor A, Tensor B, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(add_layer_->Forward({A, B}, output_tensors));
+  auto* typed_layer = static_cast<AddLayer*>(add_layer_.get());
+  STATUS_CHECK_RETURN(typed_layer->Forward(&A, &B, &output_tensors[0]));
   return Status();
 }
 
 Status Add::Forward(Tensor A, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(add_layer_->Forward({A, weight_}, output_tensors));
+  auto* typed_layer = static_cast<AddLayer*>(add_layer_.get());
+  STATUS_CHECK_RETURN(typed_layer->Forward(&A, &weight_, &output_tensors[0]));
   return Status();
 }
 

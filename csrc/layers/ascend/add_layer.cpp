@@ -21,32 +21,28 @@ Status AddLayer::Init(const std::vector<std::any>& parameters, const RuntimeConf
   return Status();
 }
 
-Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  const auto& a = input_tensors[0];
-  const auto& b = input_tensors[1];
-  auto& output = output_tensors[0];
-  output.shape = a.shape;
-  output.dtype = a.dtype;
+Status AddLayer::Forward(const Tensor* a, const Tensor* b, Tensor* output, const LayerExecContext& exec_ctx) {
+  output->shape = a->shape;
+  output->dtype = a->dtype;
 
-  void* const out_ptr = output.GetPtr<void>();
-  void* const a_ptr = a.GetPtr<void>();
-  void* const b_ptr = b.GetPtr<void>();
+  void* const out_ptr = output->GetPtr<void>();
+  void* const a_ptr = a->GetPtr<void>();
+  void* const b_ptr = b->GetPtr<void>();
   reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
-  atb_op_executor_.SetInputTensor(a_ptr, a.shape, static_cast<aclDataType>(DataType(a.dtype)));
+  atb_op_executor_.SetInputTensor(a_ptr, a->shape, static_cast<aclDataType>(DataType(a->dtype)));
 
-  // only bias and decode scenarios are involved, a more accurate broadcast check is required in the future.
-  if (a.shape.size() == b.shape.size()) {
-    atb_op_executor_.SetInputTensor(b_ptr, b.shape, static_cast<aclDataType>(DataType(b.dtype)));
+  if (a->shape.size() == b->shape.size()) {
+    atb_op_executor_.SetInputTensor(b_ptr, b->shape, static_cast<aclDataType>(DataType(b->dtype)));
   } else {
-    const std::vector<size_t> reshape({b.shape[0], b.GetElementNumber() / b.shape[0]});
-    atb_op_executor_.SetInputTensor(b_ptr, reshape, static_cast<aclDataType>(DataType(b.dtype)));
+    const std::vector<size_t> reshape({b->shape[0], b->GetElementNumber() / b->shape[0]});
+    atb_op_executor_.SetInputTensor(b_ptr, reshape, static_cast<aclDataType>(DataType(b->dtype)));
   }
 
-  atb_op_executor_.SetOutputTensor(out_ptr, output.shape, static_cast<aclDataType>(DataType(output.dtype)));
+  atb_op_executor_.SetOutputTensor(out_ptr, output->shape, static_cast<aclDataType>(DataType(output->dtype)));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
 
   return Status();
 }
+
 }  // namespace ksana_llm

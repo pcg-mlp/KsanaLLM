@@ -6,8 +6,9 @@
 
 namespace ksana_llm {
 
-Status InputRefitLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status InputRefitLayer::Forward(const std::vector<const Tensor*>& emb_tensors, const Tensor* pos_tensor, Tensor* output,
+                                const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "InputRefitLayer not supported.");
 }
+
 }  // namespace ksana_llm

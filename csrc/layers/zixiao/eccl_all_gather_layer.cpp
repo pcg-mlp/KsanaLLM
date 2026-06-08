@@ -7,14 +7,13 @@
 namespace ksana_llm {
 
 template <typename T>
-Status EcclAllGatherLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                   int rank) {
+Status EcclAllGatherLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                   std::shared_ptr<Context> context, int rank) {
   return Status(RET_UNDEFINED_REFERENCE, "EcclAllGatherLayer not supported.");
 }
 
 template <typename T>
-Status EcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status EcclAllGatherLayer<T>::Forward(const Tensor* local, Tensor* output, const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "EcclAllGatherLayer not supported.");
 }
 

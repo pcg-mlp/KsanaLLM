@@ -18,7 +18,7 @@
 
 namespace ksana_llm {
 
-// 解析输入张量的辅助结构
+// Input data assembled from typed params (avoids vector indexing overhead)
 template <typename SCALAR_T>
 struct FlashMlaInputData {
   SCALAR_T* q_ptr;
@@ -33,9 +33,8 @@ struct FlashMlaInputData {
   const Tensor* cu_seq_len_end_tensor;
   const Tensor* batch_indices_tensor;
   const Tensor* layer_indexer_kv_cache_ptr_tensor;
-  const Tensor* chunk_token_starts_host;            // HOST [num_chunks+1]: Q token boundaries
-  const Tensor* chunk_kv_token_ranges_host;         // HOST [2*num_chunks]: KV [start, end) per chunk (pairs)
-  const Tensor* chunk_max_compressed_kv_lens_host;  // HOST [num_chunks]: per-chunk max(seq_len/compress_ratio)
+  const Tensor* chunk_token_starts_host;     // HOST [num_chunks+1]: Q token boundaries
+  const Tensor* chunk_kv_token_ranges_host;  // HOST [2*num_chunks]: KV [start, end) per chunk (pairs)
 
   size_t total_q_tokens;  // new tokens without prefix
   size_t total_k_tokens;  // k may be compressed
@@ -45,15 +44,13 @@ struct FlashMlaInputData {
   cudaStream_t stream;
 };
 
-// FP8 量化工作空间布局
+// FP8 quantization workspace layout
 struct FlashQuantWorkspace {
   uint8_t* q_fp8_ptr;
   float* q_scale_ptr;
   uint8_t* k_fp8_ptr;
   float* k_scale_ptr;
   float* logits_ptr;
-  uint8_t* topkv2_ws_ptr;
-  uint8_t* topkv2_metadata_ptr;
   size_t aligned_seq_len_kv;
 };
 
@@ -123,61 +120,6 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
                       is_neox_, context_->device->GetPrimaryComputeStream().Get());
 }
 
-Status FlashSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  return ForwardT<__nv_bfloat16>(input_tensors, output_tensors);
-}
-
-template <typename SCALAR_T>
-static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& input_tensors,
-                                                     std::shared_ptr<Context> context, int rank) {
-  auto input_iter = input_tensors.cbegin();
-
-  // 提取所有引用类型的 tensor
-  const Tensor& q_tensor = *input_iter++;                              // query
-  const Tensor& k_tensor = *input_iter++;                              // key
-  SCALAR_T* weights_ptr = (input_iter++)->GetPtr<SCALAR_T>();          // weights
-  const Tensor& quant_workspace_tensor = *input_iter++;                // quant_workspace
-  const Tensor& rotary_pos = *input_iter++;                            // rotary pos
-  const int* store_out_loc_ptr = (input_iter++)->GetPtr<int>();        // store_out_loc
-  const Tensor& seq_len_offset_tensor = *input_iter++;                 // dp_input_offset (seq_len)
-  const Tensor* block_table_tensor = &(*input_iter++);                 // block_table
-  const Tensor* cu_seq_len_start_tensor = &(*input_iter++);            // cu_seq_len_start
-  const Tensor* cu_seq_len_end_tensor = &(*input_iter++);              // cu_seq_len_end
-  const Tensor* batch_indices_tensor = &(*input_iter++);               // batch_indices
-  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // layer_indexer_kv_cache_ptr
-  const Tensor* chunk_token_starts_host = &(*input_iter++);            // chunk_token_starts (HOST)
-  const Tensor* chunk_kv_token_ranges_host = &(*input_iter++);         // chunk_kv_token_ranges (HOST)
-  const Tensor* chunk_max_compressed_kv_lens_host = &(*input_iter++);  // chunk_max_compressed_kv_lens (HOST)
-  const Tensor* forward_shape_tensor = &(*input_iter++);               // forward_shape
-
-  // 使用聚合初始化创建对象
-  FlashMlaInputData<SCALAR_T> data{.q_ptr = q_tensor.GetPtr<SCALAR_T>(),
-                                   .k_ptr = k_tensor.GetPtr<SCALAR_T>(),
-                                   .weights_ptr = weights_ptr,
-                                   .quant_workspace_ptr = quant_workspace_tensor.GetPtr<uint8_t>(),
-                                   .rotary_pos = rotary_pos,
-                                   .store_out_loc_ptr = store_out_loc_ptr,
-                                   .seq_len_offset_tensor = seq_len_offset_tensor,
-                                   .block_table_tensor = block_table_tensor,
-                                   .cu_seq_len_start_tensor = cu_seq_len_start_tensor,
-                                   .cu_seq_len_end_tensor = cu_seq_len_end_tensor,
-                                   .batch_indices_tensor = batch_indices_tensor,
-                                   .layer_indexer_kv_cache_ptr_tensor = layer_indexer_kv_cache_ptr_tensor,
-                                   .chunk_token_starts_host = chunk_token_starts_host,
-                                   .chunk_kv_token_ranges_host = chunk_kv_token_ranges_host,
-                                   .chunk_max_compressed_kv_lens_host = chunk_max_compressed_kv_lens_host,
-                                   .total_q_tokens = q_tensor.shape[0],
-                                   .total_k_tokens = k_tensor.shape[0],
-                                   .batch_size = forward_shape_tensor->shape[7],
-                                   .total_prefix_tokens = forward_shape_tensor->shape[11],
-                                   .total_tokens = forward_shape_tensor->shape[11] + q_tensor.shape[0],
-                                   .stream = context->device->GetPrimaryComputeStream().Get()};
-
-  return data;
-}
-
 static void PrepareQuantWorkspace(size_t total_q_tokens, size_t max_chunked_kv_tokens, size_t max_seq_len,
                                   FlashQuantWorkspace& workspace, uint8_t* quant_workspace_ptr,
                                   float* layer_workspace_ptr, int n_heads, int head_dim) {
@@ -187,18 +129,13 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, size_t max_chunked_kv_t
   size_t k_fp8_bytes = max_chunked_kv_tokens * head_dim;
   size_t k_scale_bytes = max_chunked_kv_tokens * sizeof(float);
 
-  size_t topkv2_metadata_bytes = (total_q_tokens + 1) * kTopkV2MetadataIntsPerBatch * sizeof(int32_t);
-  size_t max_k_topkmeta_bytes = std::max(k_fp8_bytes + k_scale_bytes, topkv2_metadata_bytes);
-
   // Setup workspace pointers
-  workspace.topkv2_ws_ptr = quant_workspace_ptr;
   workspace.q_fp8_ptr = quant_workspace_ptr;
   workspace.q_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes);
   uint8_t* layer_base = reinterpret_cast<uint8_t*>(layer_workspace_ptr);
-  workspace.topkv2_metadata_ptr = layer_base;
   workspace.k_fp8_ptr = layer_base;
   workspace.k_scale_ptr = reinterpret_cast<float*>(layer_base + k_fp8_bytes);
-  workspace.logits_ptr = reinterpret_cast<float*>(layer_base + max_k_topkmeta_bytes);
+  workspace.logits_ptr = reinterpret_cast<float*>(layer_base + k_fp8_bytes + k_scale_bytes);
 
   constexpr size_t kBlockKV = 256;
   workspace.aligned_seq_len_kv = RoundUp(max_seq_len, kBlockKV);
@@ -206,16 +143,12 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, size_t max_chunked_kv_t
 
 template <typename SCALAR_T>
 static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, FlashQuantWorkspace& workspace, int rank,
-                               int n_heads, int head_dim, size_t chunk_start, size_t chunk_size, int64_t chunk_kv_size,
-                               size_t chunk_max_compressed_kv_len) {
+                               int n_heads, int head_dim, size_t chunk_start, size_t chunk_size,
+                               int64_t chunk_kv_size) {
   constexpr int kBlockQH = 128;
   const int block_q = kBlockQH / n_heads;
   const int64_t aligned_seq_len = RoundUp(chunk_size, block_q);
   const int64_t seq_len_kv = chunk_kv_size;
-
-  // Use per-chunk dynamic max compressed kv len (aligned to 256) instead of static max
-  constexpr size_t kBlockKV = 256;
-  const size_t dynamic_aligned_seq_len_kv = RoundUp(chunk_max_compressed_kv_len, kBlockKV);
 
   const auto device = torch::Device(torch::kCUDA, rank);
 
@@ -239,7 +172,7 @@ static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, Fl
 
   auto logits_torch_aligned = torch::from_blob(
       workspace.logits_ptr,
-      std::vector<int64_t>{static_cast<int64_t>(aligned_seq_len), static_cast<int64_t>(dynamic_aligned_seq_len_kv)},
+      std::vector<int64_t>{static_cast<int64_t>(aligned_seq_len), static_cast<int64_t>(workspace.aligned_seq_len_kv)},
       torch::TensorOptions().dtype(torch::kFloat32).device(device));
 
   auto k_fp8_torch =
@@ -251,10 +184,10 @@ static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, Fl
 
   auto kv_fp8 = std::make_pair(k_fp8_torch, k_scale_torch);
 
-  // Call DeepGEMM wrapper — max_seqlen_k must match logits column count
+  // Call DeepGEMM wrapper
   auto wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
   wrapper->Fp8MqaLogits(q_torch, kv_fp8, weights_torch, cu_seq_len_start_torch, cu_seq_len_end_torch,
-                        logits_torch_aligned, dynamic_aligned_seq_len_kv, input_data.stream);
+                        logits_torch_aligned, workspace.aligned_seq_len_kv, input_data.stream);
 
   return Status();
 }
@@ -262,15 +195,9 @@ static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, Fl
 template <typename SCALAR_T>
 static Status SelectTopK(BaseLayer* topk_layer, const FlashMlaInputData<SCALAR_T>& input_data,
                          FlashQuantWorkspace& workspace, Tensor& topk_indices, int index_topk, size_t chunk_start,
-                         size_t chunk_size, size_t chunk_max_compressed_kv_len) {
-  constexpr size_t kBlockKV = 256;
-  const size_t dynamic_aligned_seq_len_kv = RoundUp(chunk_max_compressed_kv_len, kBlockKV);
-  Tensor scores(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, {chunk_size, dynamic_aligned_seq_len_kv},
+                         size_t chunk_size) {
+  Tensor scores(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, {chunk_size, workspace.aligned_seq_len_kv},
                 workspace.logits_ptr);
-  Tensor topkv2_workspace(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32, {chunk_size, kWrokspaceIntsPerBatch},
-                          workspace.topkv2_ws_ptr);
-  Tensor topkv2_metadata(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32,
-                         {chunk_size + 1, kTopkV2MetadataIntsPerBatch}, workspace.topkv2_metadata_ptr);
 
   Tensor row_starts_chunk = input_data.cu_seq_len_start_tensor->GetView({chunk_size}, chunk_start);
   Tensor row_ends_chunk = input_data.cu_seq_len_end_tensor->GetView({chunk_size}, chunk_start);
@@ -278,18 +205,37 @@ static Status SelectTopK(BaseLayer* topk_layer, const FlashMlaInputData<SCALAR_T
       topk_indices.GetView({chunk_size, static_cast<size_t>(index_topk)}, chunk_start * index_topk);
   Tensor batch_indices_chunk = input_data.batch_indices_tensor->GetView({chunk_size}, chunk_start);
 
-  std::vector<Tensor> outputs = {topk_indices_chunk};
-  return topk_layer->Forward({scores, row_starts_chunk, row_ends_chunk, *input_data.block_table_tensor,
-                              topkv2_workspace, topkv2_metadata, batch_indices_chunk},
-                             outputs);
+  auto* typed = static_cast<TopKLayer*>(topk_layer);
+  return typed->ForwardRadix(&scores, &row_starts_chunk, &row_ends_chunk, input_data.block_table_tensor,
+                             &topk_indices_chunk, &batch_indices_chunk);
 }
 
 template <typename SCALAR_T>
-Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                            std::vector<Tensor>& output_tensors) {
-  // Step 1: Parse input tensors
-  FlashMlaInputData<SCALAR_T> input_data = ParseInputTensors<SCALAR_T>(input_tensors, context_, rank_);
-  Tensor& topk_indices = output_tensors[0];
+Status FlashSparseMlaIndexerLayer::ForwardT(const FlashSparseMlaIndexerParams& p, Tensor* output) {
+  // Step 1: Build input data directly from typed params (no vector indexing)
+  FlashMlaInputData<SCALAR_T> input_data{
+      .q_ptr = p.q->GetPtr<SCALAR_T>(),
+      .k_ptr = p.k->GetPtr<SCALAR_T>(),
+      .weights_ptr = p.weights->GetPtr<SCALAR_T>(),
+      .quant_workspace_ptr = p.quant_workspace->GetPtr<uint8_t>(),
+      .rotary_pos = *p.rotary_embedding_pos,
+      .store_out_loc_ptr = p.store_out_loc->GetPtr<int>(),
+      .seq_len_offset_tensor = *p.seq_len_offset,
+      .block_table_tensor = p.block_table,
+      .cu_seq_len_start_tensor = p.cu_seq_len_start,
+      .cu_seq_len_end_tensor = p.cu_seq_len_end,
+      .batch_indices_tensor = p.batch_indices,
+      .layer_indexer_kv_cache_ptr_tensor = p.layer_kv_cache_ptr,
+      .chunk_token_starts_host = p.chunk_token_starts_host,
+      .chunk_kv_token_ranges_host = p.chunk_kv_token_ranges_host,
+      .total_q_tokens = p.q->shape[0],
+      .total_k_tokens = p.k->shape[0],
+      .batch_size = static_cast<size_t>(p.batch_size),
+      .total_prefix_tokens = static_cast<size_t>(p.total_prefix_tokens),
+      .total_tokens = static_cast<size_t>(p.total_prefix_tokens) + p.q->shape[0],
+      .stream = context_->device->GetPrimaryComputeStream().Get(),
+  };
+  Tensor& topk_indices = *output;
 
   // When context_use_dsa is false, only the KV needs to be stored
   const bool context_use_dsa = (input_data.weights_ptr != nullptr);
@@ -340,7 +286,6 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
     // Step 6: Per-chunk loop — gather KV, compute MQA, select TopK
     const int* token_starts = input_data.chunk_token_starts_host->template GetPtr<int>();
     const int* kv_token_ranges = input_data.chunk_kv_token_ranges_host->template GetPtr<int>();
-    const int32_t* chunk_max_kv_lens = input_data.chunk_max_compressed_kv_lens_host->template GetPtr<int32_t>();
     const size_t num_chunks = input_data.chunk_token_starts_host->shape[0] - 1;
 
     void* cache = input_data.layer_indexer_kv_cache_ptr_tensor->template GetPtr<void*>()[1 + layer_index_ * 2];
@@ -365,13 +310,12 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
       }
 
       // 6b. Compute MQA logits
-      const size_t chunk_max_kv = static_cast<size_t>(chunk_max_kv_lens[c]);
       ComputeMqaLogits<SCALAR_T>(input_data, workspace, rank_, n_heads_, head_dim_, chunk_q_start, chunk_q_tokens,
-                                 chunk_kv_tokens, chunk_max_kv);
+                                 chunk_kv_tokens);
 
       // 6c. TopK selection
       SelectTopK<SCALAR_T>(topk_layer_.get(), input_data, workspace, topk_indices, index_topk_, chunk_q_start,
-                           chunk_q_tokens, chunk_max_kv);
+                           chunk_q_tokens);
     }
   }
 
@@ -398,6 +342,11 @@ size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
   KLLM_LOG_DEBUG << fmt::format("FlashSparseMlaIndexerLayer GetWorkspaceSize={}", total_bytes);
 
   return total_bytes;
+}
+
+Status FlashSparseMlaIndexerLayer::Forward(const FlashSparseMlaIndexerParams& p, Tensor* output,
+                                           const LayerExecContext& exec_ctx) {
+  return ForwardT<__nv_bfloat16>(p, output);
 }
 
 }  // namespace ksana_llm

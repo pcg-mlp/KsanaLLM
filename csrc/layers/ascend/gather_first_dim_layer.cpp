@@ -6,7 +6,8 @@
 
 namespace ksana_llm {
 
-Status GatherFirstDimLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status GatherFirstDimLayer::Forward(const Tensor* data, const Tensor* indices, Tensor* output,
+                                    const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "GatherFirstDimLayer not supported.");
 }
 

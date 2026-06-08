@@ -8,7 +8,6 @@
 
 #include "layers/flash_sparse_mla_indexer_layer.h"
 #include "layers/paged_sparse_mla_indexer_layer.h"
-#include "layers/topk_layer.h"
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "models/base/attention_meta/c4_indexer_attention_meta.h"
@@ -120,19 +119,14 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
   STATUS_CHECK_RETURN(wq_b_->Forward(qr, q_indexer_tensors));
 
   // Step 4: Process flash and paged attention separately for top-k token selection
-  // Use large enough workspace for quantization and TopK V2 scratch.
-  const size_t topkv2_workspace_bytes = kWrokspaceIntsPerBatch * sizeof(int32_t);
-  const size_t topkv2_workspace_elements =
-      (topkv2_workspace_bytes + workspace.GetDTypeSize() - 1) / workspace.GetDTypeSize();
-  size_t quant_workspace_size = std::max(n_heads_ * head_dim_, topkv2_workspace_elements);
-  Tensor quant_workspace = workspace.GetView({total_tokens * quant_workspace_size}, workspace_offset);
+  // Use large enough workspace for quantization
+  Tensor quant_workspace = workspace.GetView({total_tokens * n_heads_ * head_dim_}, workspace_offset);
   auto& attn_ctx = forwarding_context.GetAttentionForwardContext();
   const auto& model_input = forwarding_context.GetModelInput();
 
   auto& c4_shared_indexer =
       static_cast<C4IndexerSharedAttentionMeta&>(*model_input->shared_attention_meta->GetIndexer());
-  auto& flash_c4_indexer =
-      static_cast<C4IndexerAttentionMeta&>(*model_input->flash_meta->GetIndexer());
+  auto& flash_c4_indexer = static_cast<C4IndexerAttentionMeta&>(*model_input->flash_meta->GetIndexer());
 
   const size_t dp_context_tokens = c4_shared_indexer.dp_context_tokens;
   const size_t dp_context_kv_tokens = c4_shared_indexer.dp_context_kv_tokens;
@@ -146,25 +140,27 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
     Tensor context_k_indexer = kv_compressed_output.GetView({dp_context_kv_tokens, k_stride});
     Tensor context_weights = weights_tensors[0].GetView({dp_context_tokens, n_heads_});
 
-    std::vector<Tensor> context_outputs = {topk_indices.GetView({dp_context_tokens, index_topk_})};
-    STATUS_CHECK_RETURN(flash_sparse_mla_indexer_layer_->Forward(
-        {context_q_indexer,                                    // q
-         context_k_indexer,                                    // k
-         context_weights,                                      // weights
-         quant_workspace,                                      // quant_workspace
-         model_input->flash_meta->rotary_embedding_pos,        // rotary_embedding_pos
-         c4_shared_indexer.gathered_c4_out_loc_tensor,         // store_out_loc (unused for C4)
-         model_input->dp_input_offset_uint64_tensor,           // dp_input_offset
-         model_input->flash_meta->block_table,                 // block_table
-         flash_c4_indexer.cu_seq_len_start_tensor,             // cu_seq_len_start
-         flash_c4_indexer.cu_seq_len_end_tensor,               // cu_seq_len_end
-         flash_c4_indexer.batch_indices_tensor,                // batch_indices
-         model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
-         c4_shared_indexer.chunk_token_starts_host,            // chunk_token_starts (HOST)
-         c4_shared_indexer.chunk_kv_token_ranges_host,         // chunk_kv_token_ranges (HOST)
-         c4_shared_indexer.chunk_max_compressed_kv_lens_host,  // chunk_max_compressed_kv_lens (HOST)
-         attn_ctx.forward_shape},                              // forward_shape
-        context_outputs));
+    FlashSparseMlaIndexerLayer::FlashSparseMlaIndexerParams flash_params{
+        .q = &context_q_indexer,
+        .k = &context_k_indexer,
+        .weights = &context_weights,
+        .quant_workspace = &quant_workspace,
+        .rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos,
+        .store_out_loc = &c4_shared_indexer.gathered_c4_out_loc_tensor,
+        .seq_len_offset = &model_input->dp_input_offset_uint64_tensor,
+        .block_table = &model_input->flash_meta->block_table,
+        .cu_seq_len_start = &flash_c4_indexer.cu_seq_len_start_tensor,
+        .cu_seq_len_end = &flash_c4_indexer.cu_seq_len_end_tensor,
+        .batch_indices = &flash_c4_indexer.batch_indices_tensor,
+        .layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
+        .chunk_token_starts_host = &c4_shared_indexer.chunk_token_starts_host,
+        .chunk_kv_token_ranges_host = &c4_shared_indexer.chunk_kv_token_ranges_host,
+        .batch_size = static_cast<int>(attn_ctx.forward_shape.shape[7]),
+        .total_prefix_tokens = static_cast<int>(attn_ctx.forward_shape.shape[11]),
+    };
+    Tensor context_output = topk_indices.GetView({dp_context_tokens, index_topk_});
+    auto* flash_typed = static_cast<FlashSparseMlaIndexerLayer*>(flash_sparse_mla_indexer_layer_.get());
+    STATUS_CHECK_RETURN(flash_typed->Forward(flash_params, &context_output));
   }
 
   if (dp_decode_tokens > 0) {
@@ -173,8 +169,7 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
     size_t skip_tokens = dp_context_tokens;
     size_t skip_kv_tokens = dp_context_kv_tokens;
     for (size_t i = 0; i < model_input->page_metas.size(); ++i) {
-      auto& page_c4_indexer =
-          static_cast<C4IndexerAttentionMeta&>(*model_input->page_metas[i]->GetIndexer());
+      auto& page_c4_indexer = static_cast<C4IndexerAttentionMeta&>(*model_input->page_metas[i]->GetIndexer());
       const size_t current_tokens = page_c4_indexer.total_dp_input_ids_len;
       const size_t current_kv_tokens = page_c4_indexer.total_dp_compressed_input_ids_len;
 
@@ -182,27 +177,27 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
       Tensor current_k_indexer = kv_compressed_output.GetView({current_kv_tokens, k_stride}, skip_kv_tokens * k_stride);
       Tensor current_weights = weights_tensors[0].GetView({current_tokens, n_heads_}, skip_tokens * n_heads_);
 
-      // Offset output tensor for current page
-      std::vector<Tensor> current_outputs = {
-          topk_indices.GetView({current_tokens, index_topk_}, skip_tokens * index_topk_)};
       auto& page_dsa = *model_input->page_metas[i]->GetDSA();
-      STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
-          {current_q_indexer,                                           // q
-           current_k_indexer,                                           // k
-           current_weights,                                             // weights
-           quant_workspace,                                             // quant_workspace
-           model_input->page_metas[i]->rotary_embedding_pos,            // rotary_embedding_pos
-           c4_shared_indexer.gathered_c4_out_loc_tensor,                // store_out_loc (unused for C4)
-           page_c4_indexer.c4_seq_lens_tensor,                          // c4_seq_lens
-           page_c4_indexer.expanded_c4_seq_lens_tensor,                 // expanded_c4_seq_lens
-           model_input->page_metas[i]->block_table,                     // block_table
-           page_dsa.expanded_block_table,                               // expanded_block_table
-           page_c4_indexer.cu_seq_len_start_tensor,                     // cu_seq_len_start
-           page_c4_indexer.cu_seq_len_end_tensor,                       // cu_seq_len_end
-           model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
-           page_dsa.paged_schedule_meta,                                // paged_schedule_meta
-           c4_shared_indexer.max_compressed_seq_len_host},              // max_compressed_seq_len (HOST)
-          current_outputs));
+      PagedSparseMlaIndexerLayer::PagedSparseMlaIndexerParams paged_params{
+          .q = &current_q_indexer,
+          .k = &current_k_indexer,
+          .weights = &current_weights,
+          .quant_workspace = &quant_workspace,
+          .rotary_embedding_pos = &model_input->page_metas[i]->rotary_embedding_pos,
+          .store_out_loc = &c4_shared_indexer.gathered_c4_out_loc_tensor,
+          .input_length = &page_c4_indexer.c4_seq_lens_tensor,
+          .expanded_input_length = &page_c4_indexer.expanded_c4_seq_lens_tensor,
+          .block_table = &model_input->page_metas[i]->block_table,
+          .expanded_block_table = &page_dsa.expanded_block_table,
+          .cu_seq_len_start = &page_c4_indexer.cu_seq_len_start_tensor,
+          .cu_seq_len_end = &page_c4_indexer.cu_seq_len_end_tensor,
+          .layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
+          .schedule_meta = &page_dsa.paged_schedule_meta,
+          .sched_meta_initialized = (page_dsa.paged_schedule_meta.shape[2] != 0),
+      };
+      Tensor current_output = topk_indices.GetView({current_tokens, index_topk_}, skip_tokens * index_topk_);
+      auto* paged_typed = static_cast<PagedSparseMlaIndexerLayer*>(paged_sparse_mla_indexer_layer_.get());
+      STATUS_CHECK_RETURN(paged_typed->Forward(paged_params, &current_output));
       page_dsa.paged_schedule_meta.shape[2] = 1;
 
       skip_tokens += current_tokens;

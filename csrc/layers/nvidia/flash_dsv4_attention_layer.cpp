@@ -52,8 +52,7 @@ size_t FlashDsv4AttentionLayer::GetWorkspaceSize() {
   return workspace_size;
 }
 
-Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                                        const LayerExecContext& exec_ctx) {
+Status FlashDsv4AttentionLayer::Forward(const Dsv4AttentionInputs& inputs, Tensor* output) {
 // Dispatch by inter_data_type_ and kv_cache_dtype_
 #define DISPATCH_FLASH_DSV4_ATTENTION_BY_KVTYPE(dtype, kv_cache_dtype, func, ...)                             \
   switch (kv_cache_dtype) {                                                                                   \
@@ -66,8 +65,7 @@ Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors
   }
   switch (inter_data_type_) {
     case DataType::TYPE_BF16:
-      DISPATCH_FLASH_DSV4_ATTENTION_BY_KVTYPE(bfloat16, kv_cache_dtype_, ForwardT, input_tensors, output_tensors,
-                                              exec_ctx);
+      DISPATCH_FLASH_DSV4_ATTENTION_BY_KVTYPE(bfloat16, kv_cache_dtype_, ForwardT, inputs, output);
     default:
       KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, inter_data_type_));
   }
@@ -75,24 +73,21 @@ Status FlashDsv4AttentionLayer::Forward(const std::vector<Tensor>& input_tensors
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashDsv4AttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                                         const LayerExecContext& exec_ctx) {
-  auto input_iter = input_tensors.cbegin();
-  // Parse input tensors
-  int64_t* rotary_embedding_pos_ptr = (input_iter++)->GetPtr<int64_t>();
-  const Tensor& q_tensor = *input_iter++;
+Status FlashDsv4AttentionLayer::ForwardT(const Dsv4AttentionInputs& inputs, Tensor* output) {
+  int64_t* rotary_embedding_pos_ptr = inputs.rotary_embedding_pos->GetPtr<int64_t>();
+  const Tensor& q_tensor = *inputs.q;
   void* q_ptr = q_tensor.GetPtr<void>();
-  void* kv_ptr = (input_iter++)->GetPtr<void>();
-  const Tensor& layer_swa_kv_cache_ptr_tensor = *input_iter++;
-  const Tensor& tile_scheduler_metadata_tensor = *input_iter++;
+  void* kv_ptr = inputs.kv->GetPtr<void>();
+  const Tensor& layer_swa_kv_cache_ptr_tensor = *inputs.layer_swa_kv_cache;
+  const Tensor& tile_scheduler_metadata_tensor = *inputs.tile_scheduler_metadata;
   int* tile_scheduler_metadata_ptr = tile_scheduler_metadata_tensor.GetPtr<int>();
-  int* num_splits_ptr = (input_iter++)->GetPtr<int>();
-  float* attn_sink_ptr = (input_iter++)->GetPtr<float>();
-  int* raw_out_loc_ptr = (input_iter++)->GetPtr<int>();
-  const Tensor& indices_tensor = *input_iter++;
+  int* num_splits_ptr = inputs.num_splits->GetPtr<int>();
+  float* attn_sink_ptr = inputs.attn_sink->GetPtr<float>();
+  int* raw_out_loc_ptr = inputs.raw_out_loc->GetPtr<int>();
+  const Tensor& indices_tensor = *inputs.swa_indices;
   int* indices_ptr = indices_tensor.GetPtr<int>();
 
-  SCALAR_T* out_ptr = output_tensors[0].GetPtr<SCALAR_T>();
+  SCALAR_T* out_ptr = output->GetPtr<SCALAR_T>();
 
   const size_t token_num = q_tensor.shape[0];
   // layer_swa_kv_cache_ptr_tensor layout:
@@ -111,13 +106,13 @@ Status FlashDsv4AttentionLayer::ForwardT(const std::vector<Tensor>& input_tensor
   int extra_topk = 0;
   int* extra_topk_length_ptr = nullptr;
   // Extra parameters required only when compress_ratio > 0
-  if (input_iter != input_tensors.cend()) {
-    const Tensor& layer_extra_kv_cache_ptr_tensor = *input_iter++;
-    const Tensor& extra_indices_tensor = *input_iter++;
+  if (inputs.layer_extra_kv_cache != nullptr) {
+    const Tensor& layer_extra_kv_cache_ptr_tensor = *inputs.layer_extra_kv_cache;
+    const Tensor& extra_indices_tensor = *inputs.extra_indices;
     extra_indices_ptr = extra_indices_tensor.GetPtr<int>();
     // extra_topk_length is optional (provided for c128, not for c4)
-    if (input_iter != input_tensors.cend()) {
-      extra_topk_length_ptr = (input_iter++)->GetPtr<int>();
+    if (inputs.extra_topk_length != nullptr) {
+      extra_topk_length_ptr = inputs.extra_topk_length->GetPtr<int>();
     }
     extra_kcache_ptr =
         reinterpret_cast<CACHE_T*>(layer_extra_kv_cache_ptr_tensor.GetPtr<void*>()[1 + this->layer_index_ * 2]);

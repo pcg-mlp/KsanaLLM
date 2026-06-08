@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 Status AllReduceResidualAddNormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-  std::shared_ptr<Context> context, int rank) {
+                                           std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
@@ -18,9 +18,19 @@ Status AllReduceResidualAddNormLayer::Init(const std::vector<std::any>& paramete
   return Status();
 }
 
-Status AllReduceResidualAddNormLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                              std::vector<Tensor>& output_tensors) {
-  return Status(RET_NOT_IMPLEMENTED, "AllReduceResidualAddNormLayer overloaded forward is not implemented");
+template <typename T>
+Status AllReduceResidualAddNormLayer::ForwardT(const Tensor& input, const Tensor* residual_in, Tensor& output) {
+  return Status(RET_NOT_IMPLEMENTED, "AllReduceResidualAddNormLayer is not implemented on Ascend.");
+}
+
+Status AllReduceResidualAddNormLayer::Forward(const Tensor* input, Tensor* residual_inout,
+                                              const LayerExecContext& exec_ctx) {
+  return Status(RET_NOT_IMPLEMENTED, "AllReduceResidualAddNormLayer is not implemented on Ascend.");
+}
+
+Status AllReduceResidualAddNormLayer::Forward(const Tensor* input, const Tensor* residual, Tensor* output,
+                                              const LayerExecContext& exec_ctx) {
+  return Status(RET_NOT_IMPLEMENTED, "AllReduceResidualAddNormLayer is not implemented on Ascend.");
 }
 
 }  // namespace ksana_llm

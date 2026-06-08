@@ -89,12 +89,11 @@ Status CrossLayerAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0
                                     std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                     ForwardingContext& forwarding_context) {
 #ifdef ENABLE_CUDA
-  std::vector<Tensor> empty_tensors;
-  set_torch_stream_layer_->Forward(empty_tensors, empty_tensors);
+  static_cast<SetTorchStreamLayer*>(set_torch_stream_layer_.get())->Forward();
 #endif
   {
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
-    attn_qkv_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
+    attn_qkv_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]);
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
     // For cla

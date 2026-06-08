@@ -11,8 +11,13 @@ Status AddNormLayer::Init(const std::vector<std::any>& parameters, const Runtime
   return Status(RET_UNDEFINED_REFERENCE, "AddNormLayer not supported.");
 }
 
-Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+template <typename T>
+Status AddNormLayer::ForwardT(const Tensor* input, const Tensor* residual, const Tensor* weight, Tensor* output) {
+  return Status(RET_UNDEFINED_REFERENCE, "AddNormLayer not supported.");
+}
+
+Status AddNormLayer::Forward(const Tensor* input, const Tensor* residual, const Tensor* weight, Tensor* output,
+                             const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "AddNormLayer not supported.");
 }
 

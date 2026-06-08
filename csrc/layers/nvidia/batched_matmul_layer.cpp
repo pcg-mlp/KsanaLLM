@@ -22,11 +22,6 @@ size_t BatchedMatMulLayer::GetWorkspaceSize() {
   return workspace_size;
 }
 
-Status BatchedMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
-}
-
 template <typename T>
 cudaDataType_t GetCublasDataType();
 #define GET_Cublas_DATA_TYPE(T, Cublas_TYPE) \
@@ -100,18 +95,17 @@ void FindBestMatmulAlgos(cublasLtHandle_t cublasLtHandle, size_t bs, size_t m, s
 }
 
 template <typename T>
-Status BatchedMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                             const LayerExecContext& exec_ctx) {
-  KLLM_CHECK_WITH_INFO(input_tensors.size() == 2, "shoud have two input tensors.");
-  KLLM_CHECK_WITH_INFO(input_tensors[0].shape.size() == 3, "input tensors shape size should be 3.");
-  KLLM_CHECK_WITH_INFO(input_tensors[1].shape.size() == 3, "input tensors shape size should be 3.");
-  KLLM_CHECK_WITH_INFO(input_tensors[0].shape[1] == input_tensors[1].shape[0], "input batch size should be equal.");
-  KLLM_CHECK_WITH_INFO(input_tensors[0].shape[2] == input_tensors[1].shape[1], "input k dim should be equal.");
+Status BatchedMatMulLayer::ForwardT(const Tensor& a, const Tensor& b, Tensor& output,
+                                    const LayerExecContext& exec_ctx) {
+  KLLM_CHECK_WITH_INFO(a.shape.size() == 3, "input tensors shape size should be 3.");
+  KLLM_CHECK_WITH_INFO(b.shape.size() == 3, "input tensors shape size should be 3.");
+  KLLM_CHECK_WITH_INFO(a.shape[1] == b.shape[0], "input batch size should be equal.");
+  KLLM_CHECK_WITH_INFO(a.shape[2] == b.shape[1], "input k dim should be equal.");
 
-  size_t bs = input_tensors[0].shape[1];
-  size_t m = input_tensors[0].shape[0];
-  size_t n = input_tensors[1].shape[2];
-  size_t k = input_tensors[0].shape[2];
+  size_t bs = a.shape[1];
+  size_t m = a.shape[0];
+  size_t n = b.shape[2];
+  size_t k = a.shape[2];
 
   cublas_workspace_ptr_ = nullptr;
   cublas_workspace_size_ = 0;
@@ -133,13 +127,16 @@ Status BatchedMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
 
   InvokeBatchedMatMul<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(), bs, m, n,
                          k, /*lda*/ bs * k, /*ldb*/ n, /*ldc*/ bs * n, /*batch_offset_a*/ k, /*batch_offset_b*/ n * k,
-                         /*batch_offset_c*/ n, reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                         reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()),
-                         output_tensors[0].GetPtr<void>(), GetComputeStream(exec_ctx),
-                         cublas_workspace_ptr_, cublas_workspace_size_, cublaslt_algo_ptr_);
-  output_tensors[0].shape = {m, bs, n};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+                         /*batch_offset_c*/ n, reinterpret_cast<const void*>(a.GetPtr<void>()),
+                         reinterpret_cast<const void*>(b.GetPtr<void>()), output.GetPtr<void>(),
+                         GetComputeStream(exec_ctx), cublas_workspace_ptr_, cublas_workspace_size_, cublaslt_algo_ptr_);
+  output.shape = {m, bs, n};
+  output.dtype = a.dtype;
   return Status();
+}
+
+Status BatchedMatMulLayer::Forward(const Tensor* a, const Tensor* b, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *a, *b, *output, exec_ctx);
 }
 
 }  // namespace ksana_llm

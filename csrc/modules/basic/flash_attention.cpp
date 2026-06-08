@@ -81,38 +81,54 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
   }
 
 #ifdef ENABLE_CUDA
-  STATUS_CHECK_RETURN(flash_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0],
-       model_input->dp_input_offset_uint64_tensor,
-       model_input->flash_meta->kv_list,
-       model_input->dp_input_prefix_uint64_tensor,
-       model_input->flash_meta->kv_cache_offset,
-       use_mrotary_
-           ? model_input->dp_mrotary_embedding_pos
-           : (use_xdrotary_ ? model_input->dp_xdrotary_embedding_pos : model_input->flash_meta->rotary_embedding_pos),
-       model_input->flash_meta->rotary_embedding_mask,
-       model_input->shared_attention_meta->GetStandard()->dp_src_flexible_rotary_embedding_pos,
-       model_input->shared_attention_meta->GetStandard()->dp_flexible_rotary_embedding_mask,
-       model_input->shared_attention_meta->GetStandard()->dp_dst_flexible_kv_cache_tensor,
-       model_input->shared_attention_meta->GetStandard()->dp_src_flexible_kv_cache_tensor,
-       model_input->shared_attention_meta->GetStandard()->dp_dst_flexible_token_idx_tensor,
-       model_input->shared_attention_meta->GetStandard()->dp_src_flexible_token_idx_tensor,
-       model_input->shared_attention_meta->GetStandard()->dp_flexible_offset_uint64_tensor,
-       forward_context.forward_shape,
-       query_layernorm_weight, /* for use_qk_norm */
-       key_layernorm_weight,   /* for use_qk_norm */
-       forward_context.flag_tensor,
-       model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr,
-       model_input->flash_meta->block_table,
-       model_input->dp_prefill_q_offset_uint64_tensor},
-      hidden_buffer_tensors_1));
+  auto* typed_flash_layer = static_cast<FlashAttentionLayer*>(flash_attention_layer_.get());
+  const auto& fs = forward_context.forward_shape;
+  const Tensor& rotary_pos = use_mrotary_ ? model_input->dp_mrotary_embedding_pos
+                                          : (use_xdrotary_ ? model_input->dp_xdrotary_embedding_pos
+                                                           : model_input->flash_meta->rotary_embedding_pos);
+  const auto* std_meta = model_input->shared_attention_meta->GetStandard();
+  FlashAttentionLayer::CudaForwardParams params;
+  params.qkv = &hidden_buffer_tensors_0[0];
+  params.token_offset = &model_input->dp_input_offset_uint64_tensor;
+  params.kv_list = &model_input->flash_meta->kv_list;
+  params.prefix_offset = &model_input->dp_input_prefix_uint64_tensor;
+  params.kv_cache_offset = &model_input->flash_meta->kv_cache_offset;
+  params.rotary_embedding_pos = &rotary_pos;
+  params.rotary_embedding_mask = &model_input->flash_meta->rotary_embedding_mask;
+  params.src_flexible_rotary_embedding_pos = &std_meta->dp_src_flexible_rotary_embedding_pos;
+  params.flexible_rotary_embedding_mask = &std_meta->dp_flexible_rotary_embedding_mask;
+  params.dst_flexible_kv_cache = &std_meta->dp_dst_flexible_kv_cache_tensor;
+  params.src_flexible_kv_cache = &std_meta->dp_src_flexible_kv_cache_tensor;
+  params.dst_flexible_token_idx = &std_meta->dp_dst_flexible_token_idx_tensor;
+  params.src_flexible_token_idx = &std_meta->dp_src_flexible_token_idx_tensor;
+  params.flexible_offset_uint64 = &std_meta->dp_flexible_offset_uint64_tensor;
+  params.layer_block_num = static_cast<int>(fs.shape[2]);
+  params.single_token_request_num = static_cast<int>(fs.shape[3]);
+  params.max_forwarding_tokens = static_cast<int>(fs.shape[6]);
+  params.batch_size = static_cast<int>(fs.shape[7]);
+  params.max_tokens = static_cast<int>(fs.shape[8]);
+  params.query_layernorm_weight = &query_layernorm_weight;
+  params.key_layernorm_weight = &key_layernorm_weight;
+  params.use_cache = forward_context.flag_tensor.GetPtr<bool>()[0];
+  params.kv_cache_base_ptr = &std_meta->layer_kv_cache_ptr;
+  params.block_table = &model_input->flash_meta->block_table;
+  params.input_without_prefix_offset = &model_input->dp_prefill_q_offset_uint64_tensor;
+  STATUS_CHECK_RETURN(typed_flash_layer->Forward(params, &hidden_buffer_tensors_1[0]));
 #elif defined(ENABLE_ACL)
-  // inference on NPU with ATB
-  STATUS_CHECK_RETURN(flash_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0], model_input->flash_meta->rotary_embedding_pos, model_input->layers_slot_mapping,
-       model_input->k_cache_blocks_base, model_input->v_cache_blocks_base, model_input->seq_len_host,
-       forward_context.forward_shape, model_input->atb_attention_attr},
-      hidden_buffer_tensors_1));
+  auto* typed_flash_layer = static_cast<FlashAttentionLayer*>(flash_attention_layer_.get());
+  const auto& fs = forward_context.forward_shape;
+  FlashAttentionLayer::AclForwardParams params;
+  params.qkv = &hidden_buffer_tensors_0[0];
+  params.rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos;
+  params.layers_slot_mapping = &model_input->layers_slot_mapping;
+  params.k_cache_blocks_base = &model_input->k_cache_blocks_base;
+  params.v_cache_blocks_base = &model_input->v_cache_blocks_base;
+  params.seq_len_host = &model_input->seq_len_host;
+  params.batch_size = static_cast<int>(fs.shape[0]);
+  params.max_tokens = static_cast<int>(fs.shape[1]);
+  params.layer_block_num = static_cast<int>(fs.shape[2]);
+  params.atb_attention_attr = &model_input->atb_attention_attr;
+  STATUS_CHECK_RETURN(typed_flash_layer->Forward(params, &hidden_buffer_tensors_1[0]));
 #endif
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 

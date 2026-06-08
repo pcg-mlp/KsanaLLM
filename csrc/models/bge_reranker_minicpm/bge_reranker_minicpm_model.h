@@ -13,6 +13,7 @@
 #include "utils/utils.h"
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
+#include "layers/matmul_base_layer.h"
 #include "models/common/simple_decoder_layer.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/multihead_attention.h"
@@ -89,7 +90,7 @@ class BgeRerankerMinicpmModel : public CommonModel {
 
  private:
   std::shared_ptr<BaseLayer> add_layer_;
-  std::shared_ptr<BaseLayer> lm_head_proj_layer_;
+  std::shared_ptr<MatMulBaseLayer> lm_head_proj_layer_;
   BgeRerankerMinicpm bge_reranker_minicpm_;
 };
 

@@ -8,24 +8,21 @@
 
 namespace ksana_llm {
 
-Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+template <typename SRC_DTYPE>
+Status CastLayer::ForwardT(const Tensor* input, size_t byte_offset, size_t vocab_size, size_t vocab_size_pad,
+                           Tensor* output) {
+  void* output_ptr = output->GetPtr<void>();
+  output_ptr += byte_offset;
+  DataToFloat<SRC_DTYPE>(reinterpret_cast<const void*>(input->GetPtr<void>()), input->GetElementNumber(), vocab_size,
+                         vocab_size_pad, output_ptr, context_->device->GetPrimaryComputeStream().Get());
+  output->dtype = DataType::TYPE_FP32;
+  output->shape = input->shape;
+  return Status();
 }
 
-template <typename SRC_DTYPE>
-Status CastLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  void* output_ptr = output_tensors[0].GetPtr<void>();
-  // When the number of input_tensors is greater than 1, perform a cast operation with an offset.
-  // Set output_offset to the value of the first dimension of input_tensors[1].
-  size_t output_offset = input_tensors[1].shape[0];
-  output_ptr += output_offset;
-  DataToFloat<SRC_DTYPE>(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                         input_tensors[0].GetElementNumber(), input_tensors[1].shape[1], input_tensors[1].shape[2],
-                         output_ptr, context_->device->GetPrimaryComputeStream().Get());
-  output_tensors[0].dtype = DataType::TYPE_FP32;
-  output_tensors[0].shape = input_tensors[0].shape;
-  return Status();
+Status CastLayer::Forward(const Tensor* input, size_t byte_offset, size_t vocab_size, size_t vocab_size_pad,
+                          Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input, byte_offset, vocab_size, vocab_size_pad, output);
 }
 
 }  // namespace ksana_llm

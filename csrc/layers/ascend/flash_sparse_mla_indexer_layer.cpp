@@ -13,12 +13,12 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   KLLM_THROW("FlashSparseMlaIndexerLayer is not supported on NPU/Ascend platform");
 }
 
-Status FlashSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
   KLLM_THROW("FlashSparseMlaIndexerLayer is not supported on NPU/Ascend platform");
 }
 
-size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
+Status FlashSparseMlaIndexerLayer::Forward(const FlashSparseMlaIndexerParams& p, Tensor* output,
+                                           const LayerExecContext& exec_ctx) {
   KLLM_THROW("FlashSparseMlaIndexerLayer is not supported on NPU/Ascend platform");
 }
 

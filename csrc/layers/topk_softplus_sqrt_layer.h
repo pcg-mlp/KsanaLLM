@@ -36,8 +36,10 @@ class TopKSoftplusSqrtLayer : public BaseLayer {
 
   size_t GetWorkspaceSize() override;
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // aux1: input_ids (use_hash) or correction_bias (use_correction_bias), nullptr otherwise.
+  // aux2: tid2eid (use_hash only), nullptr otherwise.
+  Status Forward(const Tensor* router_logits, Tensor* topk_weights, Tensor* topk_ids, const Tensor* aux1 = nullptr,
+                 const Tensor* aux2 = nullptr, const LayerExecContext& exec_ctx = {});
 
  private:
   TopKSoftplusSqrtLayerParameters params_;

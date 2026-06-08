@@ -7,13 +7,40 @@
 
 namespace ksana_llm {
 
+struct PagedAttentionInputs {
+#ifdef ENABLE_CUDA
+  const Tensor* query;
+  const Tensor* context_lens;
+  const Tensor* kv_list;
+  const Tensor* cache_offset;
+  const Tensor* rotary_embedding_pos;
+  const Tensor* rotary_embedding_mask;
+  const Tensor* workspace;
+  const Tensor* forward_shape;
+  const Tensor* qkv_workspace;
+  const Tensor* query_layernorm_weight;
+  const Tensor* key_layernorm_weight;
+  const Tensor* layer_kv_cache_ptr;
+  const Tensor* block_table;
+#elif defined(ENABLE_ACL)
+  const Tensor* qkv_tensor;
+  const Tensor* rotary_embedding_pos;
+  const Tensor* layers_slot_mapping;
+  const Tensor* layers_block_table;
+  const Tensor* k_cache_blocks_base;
+  const Tensor* v_cache_blocks_base;
+  const Tensor* seq_len_host;
+  const Tensor* forward_shape;
+  const Tensor* atb_attention_attr;
+#endif
+};
+
 class PagedAttentionLayer : public AttentionLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  Status Forward(const PagedAttentionInputs& inputs, std::vector<Tensor>& output_tensors);
 
 #ifdef ENABLE_CUDA
   // Override SetWorkspaceBuffer to initialize FlashInfer workspaces.
@@ -26,7 +53,7 @@ class PagedAttentionLayer : public AttentionLayer {
 
  private:
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const PagedAttentionInputs& inputs, std::vector<Tensor>& output_tensors);
 
  private:
 #ifdef ENABLE_ACL

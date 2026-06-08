@@ -43,7 +43,7 @@ Status Qwen3MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
 
-  input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  input_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
   // MHA output buffer policy:
   // - When tp>1, MHA outputs to reduce_buffer_tensors for AllReduce.
   // - When tp=1, MHA outputs directly to hidden_buffer_tensors_0.
@@ -56,9 +56,9 @@ Status Qwen3MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const
   STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
 
   // Pre layernorm uses layernorm input for residual connection.
-  post_attention_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  post_attention_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
-  STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, moe_buffer_tensors));
+  STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0]));
 
   if (forwarding_context.GetContext()->global->GetTensorParallelSize() > 1) {
     STATUS_CHECK_RETURN(moes_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], reduce_buffer_tensors[0],

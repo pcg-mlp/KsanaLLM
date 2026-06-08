@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "layers/base_moe_layer.h"
 #include "models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -37,7 +38,7 @@ class MoE {
  protected:
   int layer_idx_;
 
-  std::shared_ptr<BaseLayer> moe_layer_;
+  std::shared_ptr<BaseMoeLayer> moe_layer_;
   Tensor up_gate_proj_weight_;
   Tensor down_proj_weight_;
   Tensor eplb_expert_map_;

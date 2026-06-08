@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "layers/paged_attention_layer.h"
 #include "models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -24,7 +25,7 @@ class PagedAttention {
                  Tensor query_layernorm_weight, Tensor key_layernorm_weight);
 
  protected:
-  std::shared_ptr<BaseLayer> paged_attention_layer_;
+  std::shared_ptr<PagedAttentionLayer> paged_attention_layer_;
   bool is_cudagraph_enabled_;
   int rank_;
 };

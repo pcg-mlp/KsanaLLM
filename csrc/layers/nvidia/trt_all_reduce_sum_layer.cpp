@@ -37,11 +37,6 @@ Status TrtAllReduceSumLayer::Init(const std::vector<std::any>& parameters, const
   return Status();
 }
 
-Status TrtAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
-}
-
 void TrtAllReduceSumLayer::Clear() {
   if (is_init_) {
     FreeTrtAllReduceWorkspace(rank_, context_->device->ext->GetTrtAllReduceBuffers(),
@@ -51,7 +46,7 @@ void TrtAllReduceSumLayer::Clear() {
 }
 
 template <typename T>
-Status TrtAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status TrtAllReduceSumLayer::ForwardT(const Tensor& input, Tensor& output) {
   cudaStream_t* stream;
   if (context_->global->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->device->GetPrimaryComputeStream().Get());
@@ -59,8 +54,8 @@ Status TrtAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
     stream = &(context_->device->GetCommStream().Get());
   }
   if (context_->global->GetTensorParallelSize() > 1) {
-    void* input = input_tensors[0].GetPtr<void>();
-    void* result = output_tensors[0].GetPtr<void>();
+    void* inp = input.GetPtr<void>();
+    void* result = output.GetPtr<void>();
     // Initialize the workspace on the first forward
     if (!is_init_) {
       InitTrtAllReduceWorkspace(rank_, context_->device->ext->GetTrtAllReduceBuffers(),
@@ -68,22 +63,26 @@ Status TrtAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
                                 context_->device->ext->GetTrtAllReduceWorkspaces(), *stream);
       is_init_ = true;
     }
-    const size_t token_num = input_tensors[0].shape[0];
-    const size_t hidden_dim = input_tensors[0].shape[1];
-    RunTrtAllReduce<T>(input, rank_, token_num, hidden_dim, context_->device->ext->GetTrtAllReduceWorkspaces(), result,
+    const size_t token_num = input.shape[0];
+    const size_t hidden_dim = input.shape[1];
+    RunTrtAllReduce<T>(inp, rank_, token_num, hidden_dim, context_->device->ext->GetTrtAllReduceWorkspaces(), result,
                        *stream);
     // To avoid getting stuck during TrtAllReduce.
     if (need_sync_) {
       CUDA_CHECK(cudaStreamSynchronize(*stream));
     }
   } else {
-    void* src = input_tensors[0].GetPtr<void>();
-    void* dst = output_tensors[0].GetPtr<void>();
-    CUDA_CHECK(cudaMemcpyAsync(dst, src, input_tensors[0].GetTotalBytes(), cudaMemcpyDeviceToDevice, *stream));
+    void* src = input.GetPtr<void>();
+    void* dst = output.GetPtr<void>();
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, input.GetTotalBytes(), cudaMemcpyDeviceToDevice, *stream));
   }
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = input.shape;
+  output.dtype = input.dtype;
   return Status();
+}
+
+Status TrtAllReduceSumLayer::Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *input, *output);
 }
 
 }  // namespace ksana_llm

@@ -13,9 +13,9 @@ Status FlashSparseMlaAttentionLayer::Init(const std::vector<std::any>& parameter
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-Status FlashSparseMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                             std::vector<Tensor>& output_tensors) {
+Status FlashSparseMlaAttentionLayer::Forward(const FlashSparseMlaAttentionInputs& inputs, Tensor* output) {
   KLLM_THROW("FlashSparseMlaAttentionLayer not implement in Ascend.");
+  return Status();
 }
 
 size_t FlashSparseMlaAttentionLayer::GetWorkspaceSize() { return 0; }

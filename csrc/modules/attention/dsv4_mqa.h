@@ -7,7 +7,8 @@
 #include <memory>
 #include <vector>
 
-#include "layers/base_layer.h"
+#include "layers/flash_dsv4_attention_layer.h"
+#include "layers/paged_dsv4_attention_layer.h"
 #include "models/base/buffer_manager.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/layer_creation_context.h"
@@ -68,7 +69,8 @@ class Dsv4Mqa {
                               const RuntimeConfig& runtime_config, Dsv4AttnBuffer& dsv4_attn_buffer);
 
  private:
-  Status RunDsv4Attention(BaseLayer* attention_layer, StandardAttentionMeta& model_input_info,
+  template <typename LayerT>
+  Status RunDsv4Attention(LayerT* attention_layer, StandardAttentionMeta& model_input_info,
                           MqaAttentionMeta& mqa_input_info, Tensor& q_tensor, Tensor& kv_tensor, Tensor& attn_output,
                           Tensor& topk_indices_tensor, Tensor& layer_kv_cache_ptr,
                           Tensor& layer_swa_kv_cache_ptr_tensor, size_t token_count, size_t token_offset,
@@ -87,9 +89,9 @@ class Dsv4Mqa {
 
   // ── Attention ────────────────────────────────────────────────────────────────
   // Flash DSV4 attention (prefill/context phase)
-  std::unique_ptr<BaseLayer> flash_dsv4_attention_layer_;
+  std::unique_ptr<FlashDsv4AttentionLayer> flash_dsv4_attention_layer_;
   // Paged DSV4 attention (decode phase)
-  std::unique_ptr<BaseLayer> paged_dsv4_attention_layer_;
+  std::unique_ptr<PagedDsv4AttentionLayer> paged_dsv4_attention_layer_;
   // Attention sink weight: [n_local_heads, head_dim]
   Tensor attn_sink_weight_;
 

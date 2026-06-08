@@ -27,13 +27,8 @@ size_t MatMulLayer::GetWorkspaceSize() {
   return cublas_workspace_size_;
 }
 
-Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
-}
-
 template <typename T>
-Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+Status MatMulLayer::ForwardT(const Tensor& input, const Tensor& weight, Tensor& output,
                              const LayerExecContext& exec_ctx) {
   if (cublas_workspace_size_ > 0) {
     cublas_workspace_ptr_ = workspace_buffer_->GetPtr<void>();
@@ -53,8 +48,8 @@ Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
       dtype = CUDA_R_16BF;
     }
     llm_kernels::nvidia::GemmAlgoInfo gemm_algo_info = context_->device->ext->GetGPUGemmAlgoHelper().GetGemmAlgo(
-        sm, cuda_ver, BATCH_SIZE, input_tensors[0].shape[0], input_tensors[1].shape[1], input_tensors[0].shape[1],
-        dtype, dtype, dtype, CUDA_R_32F, CUBLAS_OP_N, CUBLAS_OP_N);
+        sm, cuda_ver, BATCH_SIZE, input.shape[0], weight.shape[1], input.shape[1], dtype, dtype, dtype, CUDA_R_32F,
+        CUBLAS_OP_N, CUBLAS_OP_N);
     if (gemm_algo_info.gemm_op_type != llm_kernels::nvidia::DEFAULT_GEMM_ALGO) {
       cublaslt_algo_ptr_ = &(gemm_algo_info.cublaslt_algo);
     }
@@ -62,17 +57,20 @@ Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
 
   cudaStream_t compute_stream = GetComputeStream(exec_ctx);
   InvokeMatMul<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(),
-                  static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
-                  static_cast<int>(input_tensors[0].shape[1]),
-                  reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                  reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
-                  compute_stream, cublas_workspace_ptr_, cublaslt_algo_ptr_,
-                  cublas_workspace_size_);
+                  static_cast<int>(input.shape[0]), static_cast<int>(weight.shape[1]), static_cast<int>(input.shape[1]),
+                  reinterpret_cast<const void*>(input.GetPtr<void>()),
+                  reinterpret_cast<const void*>(weight.GetPtr<void>()), output.GetPtr<void>(), compute_stream,
+                  cublas_workspace_ptr_, cublaslt_algo_ptr_, cublas_workspace_size_);
 
-  output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = {input.shape[0], weight.shape[1]};
+  output.dtype = input.dtype;
   cublaslt_algo_ptr_ = nullptr;
   return Status();
+}
+
+Status MatMulLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                            const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *input, *weight, *output, exec_ctx);
 }
 
 }  // namespace ksana_llm

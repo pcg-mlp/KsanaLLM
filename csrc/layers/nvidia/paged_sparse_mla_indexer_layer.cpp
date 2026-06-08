@@ -18,7 +18,6 @@
 
 namespace ksana_llm {
 
-// 解析输入张量的辅助结构
 template <typename SCALAR_T>
 struct PagedMlaInputData {
   SCALAR_T* q_ptr;
@@ -35,11 +34,11 @@ struct PagedMlaInputData {
   const Tensor* cu_seq_len_end_tensor;
   const Tensor* layer_indexer_kv_cache_ptr_tensor;
   const Tensor& schedule_meta_tensor;
+  bool sched_meta_initialized;
 
   size_t total_q_tokens;  // new tokens without prefix
   size_t total_k_tokens;  // k may be compressed
   size_t batch_size;
-  size_t max_compressed_seq_len;  // max(seq_len / compress_ratio) across decode requests in this group
   cudaStream_t stream;
 };
 
@@ -48,8 +47,6 @@ struct PagedQuantWorkspace {
   uint8_t* q_fp8_ptr;
   float* q_scale_ptr;
   float* logits_ptr;
-  uint8_t* topkv2_ws_ptr;
-  uint8_t* topkv2_metadata_ptr;
   size_t aligned_max_seq_len;
 };
 
@@ -119,61 +116,8 @@ Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
                       is_neox_, context_->device->GetPrimaryComputeStream().Get());
 }
 
-Status PagedSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  return ForwardT<__nv_bfloat16>(input_tensors, output_tensors);
-}
-
-template <typename SCALAR_T>
-static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& input_tensors,
-                                                     std::shared_ptr<Context> context, int rank) {
-  auto input_iter = input_tensors.cbegin();
-
-  // 提取所有引用类型的 tensor
-  const Tensor& q_tensor = *input_iter++;                              // query
-  const Tensor& k_tensor = *input_iter++;                              // key
-  SCALAR_T* weights_ptr = (input_iter++)->GetPtr<SCALAR_T>();          // weights
-  const Tensor& quant_workspace_tensor = *input_iter++;                // quant_workspace
-  const Tensor& rotary_pos = *input_iter++;                            // rotary pos
-  const int* store_out_loc_ptr = (input_iter++)->GetPtr<int>();        // store_out_loc
-  const Tensor& input_length_tensor = *input_iter++;                   // input_length
-  const Tensor& expanded_input_length_tensor = *input_iter++;          // expanded_input_length
-  const Tensor* block_table_tensor = &(*input_iter++);                 // block_table
-  const Tensor* expanded_block_table_tensor = &(*input_iter++);        // expanded_block_table
-  const Tensor* cu_seq_len_start_tensor = &(*input_iter++);            // cu_seq_len_start
-  const Tensor* cu_seq_len_end_tensor = &(*input_iter++);              // cu_seq_len_end
-  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // layer_indexer_kv_cache_ptr
-  const Tensor& schedule_meta_tensor = *input_iter++;                  // schedule_meta
-  const size_t max_compressed_seq_len =
-      static_cast<size_t>((input_iter++)->template GetPtr<int32_t>()[0]);  // max_compressed_seq_len (HOST INT32)
-
-  // 使用聚合初始化创建对象
-  PagedMlaInputData<SCALAR_T> data{.q_ptr = q_tensor.GetPtr<SCALAR_T>(),
-                                   .k_ptr = k_tensor.GetPtr<SCALAR_T>(),
-                                   .weights_ptr = weights_ptr,
-                                   .quant_workspace_ptr = quant_workspace_tensor.GetPtr<uint8_t>(),
-                                   .rotary_pos = rotary_pos,
-                                   .store_out_loc_ptr = store_out_loc_ptr,
-                                   .input_length_tensor = input_length_tensor,
-                                   .expanded_input_length_tensor = expanded_input_length_tensor,
-                                   .block_table_tensor = block_table_tensor,
-                                   .expanded_block_table_tensor = expanded_block_table_tensor,
-                                   .cu_seq_len_start_tensor = cu_seq_len_start_tensor,
-                                   .cu_seq_len_end_tensor = cu_seq_len_end_tensor,
-                                   .layer_indexer_kv_cache_ptr_tensor = layer_indexer_kv_cache_ptr_tensor,
-                                   .schedule_meta_tensor = schedule_meta_tensor,
-                                   .total_q_tokens = q_tensor.shape[0],
-                                   .total_k_tokens = k_tensor.shape[0],
-                                   .batch_size = input_length_tensor.shape[0],
-                                   .max_compressed_seq_len = max_compressed_seq_len,
-                                   .stream = context->device->GetPrimaryComputeStream().Get()};
-
-  return data;
-}
-
 static void PrepareQuantWorkspace(size_t total_q_tokens, PagedQuantWorkspace& workspace, uint8_t* quant_workspace_ptr,
-                                  float* layer_workspace_ptr, int n_heads, int head_dim, int max_seq_len,
+                                  float* logits_workspace_ptr, int n_heads, int head_dim, int max_seq_len,
                                   int block_size) {
   // Calculate FP8 quantization buffer sizes
   size_t q_fp8_bytes = total_q_tokens * n_heads * head_dim;
@@ -183,13 +127,9 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, PagedQuantWorkspace& wo
       RoundUp(static_cast<size_t>(max_seq_len), static_cast<size_t>(num_math_warp_groups * block_size));
 
   // Setup workspace pointers
-  workspace.topkv2_ws_ptr = quant_workspace_ptr;
   workspace.q_fp8_ptr = quant_workspace_ptr;
   workspace.q_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes);
-  uint8_t* layer_base = reinterpret_cast<uint8_t*>(layer_workspace_ptr);
-  workspace.topkv2_metadata_ptr = layer_base;
-  size_t topkv2_metadata_bytes = (total_q_tokens + 1) * kTopkV2MetadataIntsPerBatch * sizeof(int32_t);
-  workspace.logits_ptr = reinterpret_cast<float*>(layer_base + topkv2_metadata_bytes);
+  workspace.logits_ptr = logits_workspace_ptr;
   workspace.aligned_max_seq_len = aligned_max_seq_len;
 }
 
@@ -257,56 +197,63 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
                                             {expanded_batch_size, static_cast<int64_t>(block_table_tensor->shape[1])},
                                             torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
 
-  // Prepare logits tensor — use dynamic max_compressed_seq_len instead of static max
-  constexpr int num_math_warp_groups = 4;
-  const size_t dynamic_aligned_max_seq_len =
-      RoundUp(input_data.max_compressed_seq_len, static_cast<size_t>(num_math_warp_groups * block_size));
+  // Prepare logits tensor
   auto logits_torch = torch::from_blob(
       workspace.logits_ptr,
-      {static_cast<int64_t>(input_data.total_q_tokens), static_cast<int64_t>(dynamic_aligned_max_seq_len)},
+      {static_cast<int64_t>(input_data.total_q_tokens), static_cast<int64_t>(workspace.aligned_max_seq_len)},
       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, rank));
 
   auto deepseek_deepgemm_wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
 
-  // Initialize schedule_meta according to init flag (shape[2])
-  if (!input_data.schedule_meta_tensor.shape[2]) {
+  // Initialize schedule_meta on first call
+  if (!input_data.sched_meta_initialized) {
     deepseek_deepgemm_wrapper->PagedMqaLogitsMetadata(context_lens_torch, schedule_meta_torch, expanded_batch_size,
                                                       block_size, input_data.stream);
   }
 
   // Call DeepGEMM MQA
   deepseek_deepgemm_wrapper->Fp8PagedMqaLogits(q_torch, fused_kv_cache_torch, weights_torch, context_lens_torch,
-                                               block_table_torch, schedule_meta_torch, logits_torch,
-                                               dynamic_aligned_max_seq_len, input_data.stream);
+                                               block_table_torch, schedule_meta_torch, logits_torch, max_seq_len,
+                                               input_data.stream);
 
   return Status();
 }
 
 template <typename SCALAR_T>
 static Status SelectTopK(BaseLayer* topk_layer, const PagedMlaInputData<SCALAR_T>& input_data,
-                         PagedQuantWorkspace& workspace, Tensor& topk_indices, int index_topk, int block_size) {
-  constexpr int num_math_warp_groups = 4;
-  const size_t dynamic_aligned_max_seq_len =
-      RoundUp(input_data.max_compressed_seq_len, static_cast<size_t>(num_math_warp_groups * block_size));
+                         PagedQuantWorkspace& workspace, Tensor& topk_indices, int index_topk) {
   Tensor scores(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
-                {input_data.total_q_tokens, dynamic_aligned_max_seq_len}, workspace.logits_ptr);
-  Tensor topkv2_workspace(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32,
-                          {input_data.total_q_tokens, kWrokspaceIntsPerBatch}, workspace.topkv2_ws_ptr);
-  Tensor topkv2_metadata(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32,
-                         {input_data.total_q_tokens + 1, kTopkV2MetadataIntsPerBatch}, workspace.topkv2_metadata_ptr);
+                {input_data.total_q_tokens, workspace.aligned_max_seq_len}, workspace.logits_ptr);
 
-  std::vector<Tensor> outputs = {topk_indices};
-  return topk_layer->Forward({scores, *input_data.cu_seq_len_start_tensor, *input_data.cu_seq_len_end_tensor,
-                              *input_data.block_table_tensor, topkv2_workspace, topkv2_metadata},
-                             outputs);
+  auto* typed = static_cast<TopKLayer*>(topk_layer);
+  return typed->ForwardRadix(&scores, input_data.cu_seq_len_start_tensor, input_data.cu_seq_len_end_tensor,
+                             input_data.block_table_tensor, &topk_indices);
 }
 
 template <typename SCALAR_T>
-Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                            std::vector<Tensor>& output_tensors) {
-  // Step 1: Parse input tensors
-  PagedMlaInputData<SCALAR_T> input_data = ParseInputTensors<SCALAR_T>(input_tensors, context_, rank_);
-  Tensor& topk_indices = output_tensors[0];
+Status PagedSparseMlaIndexerLayer::ForwardT(const PagedSparseMlaIndexerParams& p, Tensor* output) {
+  PagedMlaInputData<SCALAR_T> input_data{
+      .q_ptr = p.q->GetPtr<SCALAR_T>(),
+      .k_ptr = p.k->GetPtr<SCALAR_T>(),
+      .weights_ptr = p.weights->GetPtr<SCALAR_T>(),
+      .quant_workspace_ptr = p.quant_workspace->GetPtr<uint8_t>(),
+      .rotary_pos = *p.rotary_embedding_pos,
+      .store_out_loc_ptr = p.store_out_loc->GetPtr<int>(),
+      .input_length_tensor = *p.input_length,
+      .expanded_input_length_tensor = *p.expanded_input_length,
+      .block_table_tensor = p.block_table,
+      .expanded_block_table_tensor = p.expanded_block_table,
+      .cu_seq_len_start_tensor = p.cu_seq_len_start,
+      .cu_seq_len_end_tensor = p.cu_seq_len_end,
+      .layer_indexer_kv_cache_ptr_tensor = p.layer_kv_cache_ptr,
+      .schedule_meta_tensor = *p.schedule_meta,
+      .sched_meta_initialized = p.sched_meta_initialized,
+      .total_q_tokens = p.q->shape[0],
+      .total_k_tokens = p.k->shape[0],
+      .batch_size = p.input_length->shape[0],
+      .stream = context_->device->GetPrimaryComputeStream().Get(),
+  };
+  Tensor& topk_indices = *output;
 
   // Step 2: Prepare workspace
   PagedQuantWorkspace workspace;
@@ -349,7 +296,7 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
                              layer_index_, max_seq_len_);
 
   // Step 5: TopK selection
-  SelectTopK<SCALAR_T>(topk_layer_.get(), input_data, workspace, topk_indices, index_topk_, block_size_);
+  SelectTopK<SCALAR_T>(topk_layer_.get(), input_data, workspace, topk_indices, index_topk_);
 
   return Status();
 }
@@ -369,6 +316,11 @@ size_t PagedSparseMlaIndexerLayer::GetWorkspaceSize() {
                                 max_decode_tokens, logits_bytes);
 
   return logits_bytes;
+}
+
+Status PagedSparseMlaIndexerLayer::Forward(const PagedSparseMlaIndexerParams& p, Tensor* output,
+                                           const LayerExecContext& exec_ctx) {
+  return ForwardT<__nv_bfloat16>(p, output);
 }
 
 }  // namespace ksana_llm

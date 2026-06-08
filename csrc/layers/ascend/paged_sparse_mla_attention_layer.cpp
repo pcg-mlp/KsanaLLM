@@ -13,9 +13,9 @@ Status PagedSparseMlaAttentionLayer::Init(const std::vector<std::any>& parameter
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-Status PagedSparseMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                             std::vector<Tensor>& output_tensors) {
+Status PagedSparseMlaAttentionLayer::Forward(const PagedSparseMlaAttentionInputs& inputs, Tensor* output) {
   KLLM_THROW("PagedSparseMlaAttentionLayer not implement in Ascend.");
+  return Status();
 }
 
 }  // namespace ksana_llm

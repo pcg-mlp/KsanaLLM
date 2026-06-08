@@ -10,12 +10,11 @@ namespace ksana_llm {
 // Pointwise multiplication of two tensors
 class MulLayer : public BaseLayer {
  public:
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  Status Forward(const Tensor* a, const Tensor* b, Tensor* output, const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor& a, const Tensor& b, Tensor& output);
 };
 
 }  // namespace ksana_llm

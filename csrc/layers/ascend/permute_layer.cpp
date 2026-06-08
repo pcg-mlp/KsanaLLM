@@ -7,10 +7,10 @@
 namespace ksana_llm {
 
 template <typename T>
-Status PermuteLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status PermuteLayer<T>::Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "PermuteLayer not supported.");
 }
+
 template class PermuteLayer<float>;
 template class PermuteLayer<float16>;
 template class PermuteLayer<bfloat16>;

@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include "layers/base_layer.h"
+#include "layers/matmul_base_layer.h"
 #include "models/base/base_weight.h"
 
 namespace ksana_llm {
@@ -19,7 +19,7 @@ namespace ksana_llm {
  * - 不支持desc操作
  * - 支持half和bfloat16的激活类型
  */
-class MacheteMatMulLayer : public BaseLayer {
+class MacheteMatMulLayer : public MatMulBaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
@@ -28,7 +28,7 @@ class MacheteMatMulLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  virtual Status Forward(const Tensor* input, const Tensor* weight, Tensor* output,
                          const LayerExecContext& exec_ctx = {}) override;
 
  private:

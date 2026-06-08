@@ -14,8 +14,7 @@ Status BatchedMatMulLayer::Init(const std::vector<std::any>& parameters, const R
 
 size_t BatchedMatMulLayer::GetWorkspaceSize() { return 0; }
 
-Status BatchedMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status BatchedMatMulLayer::Forward(const Tensor* a, const Tensor* b, Tensor* output, const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "BatchedMatMulLayer not supported.");
 }
 

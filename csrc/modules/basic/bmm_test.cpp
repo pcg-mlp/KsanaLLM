@@ -176,17 +176,14 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   ASSERT_EQ(err2, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err2);
   Tensor gpu_tensor2(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {tokens, heads, kv_lora_rank}, gpu_buf2);
 
-  std::vector<Tensor> input_tensors = {gpu_tensor};
-  std::vector<Tensor> output_tensors = {gpu_tensor2};
+  Status status = my_bmm.Forward(gpu_tensor, gpu_tensor2);
 
-  Status status = my_bmm.Forward(input_tensors, output_tensors);
+  std::vector<T> res(gpu_tensor2.GetElementNumber());
 
-  std::vector<T> res(output_tensors[0].GetElementNumber());
-
-  Memcpy(res.data(), output_tensors[0].template GetPtr<void>(), sizeof(T) * output_tensors[0].GetElementNumber(),
+  Memcpy(res.data(), gpu_tensor2.template GetPtr<void>(), sizeof(T) * gpu_tensor2.GetElementNumber(),
          MEMCPY_DEVICE_TO_HOST);
 
-  std::vector<float> output(output_tensors[0].GetElementNumber());
+  std::vector<float> output(gpu_tensor2.GetElementNumber());
   BatchedMatmul<float>(input_data1, input_data, output, tokens, heads, qk_nope_dim, kv_lora_rank);
 
   float diff = 0;

@@ -85,9 +85,9 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   const size_t token_hidden_stat_bytes = residual_buffer[0].GetTotalBytes() / org_token_size;
   if (!need_add_residual_before_attn) {  // Adding the residual should have been done after mlp in the previous layer
                                          // for better performance.
-    input_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
+    input_layernorm_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
   } else if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
-    pre_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
+    pre_attention_add_norm_->Forward(&hidden_buffer_tensors_0[0], &residual_buffer[0], &hidden_buffer_tensors_0[0]);
   } else {
     // Mlp/moe all reduce
     STATUS_CHECK_RETURN(fused_all_reduce_norm_add_pre_attn_->Forward(
@@ -99,7 +99,7 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
   if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
     std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
-    post_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
+    post_attention_add_norm_->Forward(&hidden_buffer_tensors_0[0], &residual_buffer[0], &hidden_buffer_tensors_0[0]);
   } else {
     // Mla all reduce
     STATUS_CHECK_RETURN(fused_all_reduce_norm_add_post_attn_->Forward(
@@ -183,7 +183,7 @@ Status DeepSeekV3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
 
     {
       PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
     }
 
     {
@@ -252,17 +252,20 @@ Status DeepSeekV3MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
     CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
     // Embedding Norm
-    enorm_->Forward(residual_buffer, residual_buffer);
+    enorm_->Forward(residual_buffer[0], residual_buffer[0]);
 
     // gather last token hidden
-    STATUS_CHECK_RETURN(gather_layer_->Forward(
-        {mtp_hidden_buffer[0], forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor}, shared_buffer));
+    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
+                            ->Forward(&mtp_hidden_buffer[0],
+                                      &forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor,
+                                      &shared_buffer[0]));
 
     // last token hidden norm
-    hnorm_->Forward(shared_buffer, mtp_hidden_buffer);
+    hnorm_->Forward(shared_buffer[0], mtp_hidden_buffer[0]);
 
     // concat embedding_norm and hidden norm
-    concat_layer_->Forward({residual_buffer[0], mtp_hidden_buffer[0]}, shared_buffer);
+    static_cast<ConcatLayer*>(concat_layer_.get())
+        ->Forward(&residual_buffer[0], &mtp_hidden_buffer[0], &shared_buffer[0]);
 
     // linear, no bias. hidden_units * 2 -> hidden_units
     STATUS_CHECK_RETURN(eh_proj_->Forward(shared_buffer[0], residual_buffer));

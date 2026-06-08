@@ -66,9 +66,9 @@ Status CommonAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
   if (forwarding_context.GetModelCommunicator()) {
     // Put output to `reduce_buffer_tensors` to ensure that the input for custom reduce sum is
     // always in `reduce_buffer_tensors`.
-    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0]));
   } else {
-    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 

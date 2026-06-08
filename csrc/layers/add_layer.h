@@ -16,12 +16,13 @@ class AddLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // Typed interface: a and b are added element-wise into output.
+  // b may have a different shape[0] than a to trigger broadcast (bias-add mode).
+  Status Forward(const Tensor* a, const Tensor* b, Tensor* output, const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Tensor* a, const Tensor* b, Tensor* output);
 
  private:
 #ifdef ENABLE_ACL

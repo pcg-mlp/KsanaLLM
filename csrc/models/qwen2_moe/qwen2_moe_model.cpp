@@ -52,7 +52,7 @@ Status Qwen2MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const
 
   // Pre attn layernorm
   // Pre layernorm uses layernorm input for residual connection.
-  input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  input_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // MultiHeadAttention
   STATUS_CHECK_RETURN(
@@ -66,7 +66,7 @@ Status Qwen2MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const
 
   // Pre mlp layernorm
   // Pre layernorm uses layernorm input for residual connection.
-  post_attention_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  post_attention_layernorms_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // Common mlp
   STATUS_CHECK_RETURN(
@@ -89,13 +89,13 @@ Status Qwen2MoeDecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tenso
   auto& gated_buffer_ = reduce_buffer_tensors;
 
   // Expert gating MatMul
-  STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+  STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
 
   // MOE layer
   moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors);
 
   // Expert share gating MatMul
-  STATUS_CHECK_RETURN(shared_expert_gates_->Forward(hidden_buffer_tensors_0, share_gating_buffer_tensors));
+  STATUS_CHECK_RETURN(shared_expert_gates_->Forward(hidden_buffer_tensors_0[0], share_gating_buffer_tensors[0]));
 
   shared_mlps_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
 

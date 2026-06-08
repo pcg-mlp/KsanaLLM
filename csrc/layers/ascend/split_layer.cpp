@@ -12,9 +12,10 @@ Status SplitLayer::Init(const std::vector<std::any>& parameters, const RuntimeCo
   return Status(RET_UNDEFINED_REFERENCE, "SplitLayer not supported.");
 }
 
-Status SplitLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status SplitLayer::Forward(const Tensor* input, const std::vector<size_t>& split_sizes, std::vector<Tensor*> outputs,
+                           const LayerExecContext& exec_ctx) {
   KLLM_THROW("SplitLayer not implement in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "SplitLayer not supported.");
 }
+
 }  // namespace ksana_llm

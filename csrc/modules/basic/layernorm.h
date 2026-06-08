@@ -23,10 +23,10 @@ class Layernorm {
 
   ~Layernorm();
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor& input, Tensor& output);
 
   // Parallelly computes norm on two inputs with different dims
-  Status ForwardParallel(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardParallel(const Tensor& in1, const Tensor& in2, Tensor& out1, Tensor& out2);
 
  protected:
   std::shared_ptr<BaseLayer> layernorm_layer_;

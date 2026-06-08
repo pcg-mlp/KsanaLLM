@@ -3,8 +3,8 @@
 ==============================================================================*/
 #include "layers/finegrained_mixed_dtype_gemm_layer.h"
 
-#include "kernels/nvidia/kernel_wrapper.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
+#include "kernels/nvidia/kernel_wrapper.h"
 #include "profiler/timer.h"
 #include "utils/search_status.h"
 #include "utils/singleton.h"
@@ -148,28 +148,27 @@ int64_t FinegrainedMixedDtypeGemmLayer::GetBestTactic(const size_t& m) {
   }
 }
 
-Status FinegrainedMixedDtypeGemmLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                               std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status FinegrainedMixedDtypeGemmLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                                               const LayerExecContext& exec_ctx) {
   workspace_info_.SetPtr(workspace_buffer_->GetPtr<void>());
 
-  const size_t m = input_tensors[0].shape[0];
-  const size_t n = 2 * input_tensors[1].shape[1];
-  const size_t k = input_tensors[0].shape[1];
+  const size_t m = input->shape[0];
+  const size_t n = 2 * weight->shape[1];
+  const size_t k = input->shape[1];
 
-  output_tensors[0].shape = {m, n};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output->shape = {m, n};
+  output->dtype = input->dtype;
 
-  KTensor input_kt = TensorToKTensor(input_tensors[0]);
-  KTensor output_kt = TensorToKTensor(output_tensors[0]);
-  KTensor weight_kt = TensorToKTensor(input_tensors[1]);
-  KTensor input_scale_kt = TensorToKTensor(*(input_tensors[1].input_scales));
-  KTensor weight_scale_kt = TensorToKTensor(*(input_tensors[1].weight_scales));
-  const float alpha = input_tensors[1].alpha;
+  KTensor input_kt = TensorToKTensor(*input);
+  KTensor output_kt = TensorToKTensor(*output);
+  KTensor weight_kt = TensorToKTensor(*weight);
+  KTensor input_scale_kt = TensorToKTensor(*(weight->input_scales));
+  KTensor weight_scale_kt = TensorToKTensor(*(weight->weight_scales));
+  const float alpha = weight->alpha;
   KTensor quantized_input_kt(workspace_info_.quantized_input_ptr_, {m, k}, KScalarType::Float8_e4m3fn);
 
-  if (input_tensors[1].pre_quant_scales) {
-    KTensor pre_quant_scale_kt = TensorToKTensor(*(input_tensors[1].pre_quant_scales));
+  if (weight->pre_quant_scales) {
+    KTensor pre_quant_scale_kt = TensorToKTensor(*(weight->pre_quant_scales));
     wrapper_->StaticQuantizeE4M3PerChannel(quantized_input_kt, input_kt, pre_quant_scale_kt,
                                            context_->device->GetPrimaryComputeStream().Get());
   } else {
@@ -177,8 +176,8 @@ Status FinegrainedMixedDtypeGemmLayer::Forward(const std::vector<Tensor>& input_
                                           context_->device->GetPrimaryComputeStream().Get());
   }
   const int64_t best_tactic = GetBestTactic(m);
-  wrapper_->Forward(GetComputeStream(exec_ctx), output_kt, workspace_info_.kernel_workspace_ptr_,
-                    quantized_input_kt, weight_kt, weight_scale_kt, best_tactic, std::nullopt, std::nullopt, alpha);
+  wrapper_->Forward(GetComputeStream(exec_ctx), output_kt, workspace_info_.kernel_workspace_ptr_, quantized_input_kt,
+                    weight_kt, weight_scale_kt, best_tactic, std::nullopt, std::nullopt, alpha);
   return Status();
 }
 

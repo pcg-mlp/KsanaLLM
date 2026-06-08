@@ -16,13 +16,16 @@ class SiluMulLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // Fused gate_up input: silu(gate) * up in a single [token_num, 2*hidden] tensor.
+  Status Forward(const Tensor* fused_gate_up, Tensor* output, const LayerExecContext& exec_ctx = {});
+  // Split gate and up inputs separately.
+  Status Forward(const Tensor* gate, const Tensor* up, Tensor* output, const LayerExecContext& exec_ctx = {});
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                  const LayerExecContext& exec_ctx);
+  Status ForwardFusedT(const Tensor& fused_gate_up, Tensor& output, const LayerExecContext& exec_ctx);
+  template <typename T>
+  Status ForwardSplitT(const Tensor& gate, const Tensor& up, Tensor& output, const LayerExecContext& exec_ctx);
 
   float swiglu_limit_;
 

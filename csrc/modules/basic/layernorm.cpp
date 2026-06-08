@@ -40,30 +40,30 @@ Layernorm::Layernorm(float layernorm_eps, uint32_t num_heads, uint32_t head_dim,
 
 Layernorm::~Layernorm() {}
 
-Status Layernorm::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK_WITH_INFO(input_tensors.size() == 1ul, "Layernorm::Forward requires 1 input tensor");
+Status Layernorm::Forward(const Tensor& input, Tensor& output) {
+  auto* typed = static_cast<LayernormLayer*>(layernorm_layer_.get());
   if (!with_weight_) {
-    // No weight per-head RMSNorm
-    return layernorm_layer_->Forward({input_tensors[0]}, output_tensors);
+    return typed->Forward(&input, &output);
   } else if (with_bias_) {
-    // With bias weight LayerNorm
-    return layernorm_layer_->Forward({input_tensors[0], weight_, weight_bias_}, output_tensors);
+    return typed->Forward(&input, &weight_, &output, &weight_bias_);
   } else {
-    // No bias weight RMSNorm
-    return layernorm_layer_->Forward({input_tensors[0], weight_}, output_tensors);
+    return typed->Forward(&input, &weight_, &output);
   }
 }
 
-Status Layernorm::ForwardParallel(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK_WITH_INFO(input_tensors.size() == 2ul, "Layernorm::ForwardParallel requires 2 input tensors");
-  Tensor in1 = input_tensors[0];
-  Tensor in2 = input_tensors[1];
+Status Layernorm::ForwardParallel(const Tensor& in1, const Tensor& in2, Tensor& out1, Tensor& out2) {
+  Tensor t1 = in1;
+  Tensor t2 = in2;
   if (stride_ > 0) {
-    // Encode the row stride as a 3rd shape dimension so the layer can extract it.
-    in1.shape = {in1.shape[0], in1.shape[1], static_cast<size_t>(stride_)};
-    in2.shape = {in2.shape[0], in2.shape[1], static_cast<size_t>(stride_)};
+    t1.shape = {t1.shape[0], t1.shape[1], static_cast<size_t>(stride_)};
+    t2.shape = {t2.shape[0], t2.shape[1], static_cast<size_t>(stride_)};
   }
-  return layernorm_layer_->Forward({in1, weight_, in2, weight2_}, output_tensors);
+  auto* typed = static_cast<LayernormLayer*>(layernorm_layer_.get());
+  int s1 = (t1.shape.size() > 2) ? static_cast<int>(t1.shape[2]) : 0;
+  int s2 = (t2.shape.size() > 2) ? static_cast<int>(t2.shape[2]) : 0;
+  if (s1 > 0) t1.shape.resize(2);
+  if (s2 > 0) t2.shape.resize(2);
+  return typed->Forward(&t1, &weight_, &t2, &weight2_, &out1, &out2, s1, s2);
 }
 
 }  // namespace ksana_llm

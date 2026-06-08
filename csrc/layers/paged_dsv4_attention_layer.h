@@ -4,6 +4,7 @@
 #pragma once
 
 #include "layers/attention_layer.h"
+#include "layers/dsv4_attention_types.h"
 
 namespace ksana_llm {
 
@@ -14,12 +15,12 @@ class PagedDsv4AttentionLayer : public AttentionLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+
+  Status Forward(const Dsv4AttentionInputs& inputs, Tensor* output);
 
  private:
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status ForwardT(const Dsv4AttentionInputs& inputs, Tensor* output);
 
   uint32_t page_bits_;              // log2(block_token_num)
   int compressed_block_token_num_;  // block_token_num / compress_ratio

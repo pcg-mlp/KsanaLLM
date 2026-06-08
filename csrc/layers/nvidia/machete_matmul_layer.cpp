@@ -246,8 +246,8 @@ Status MacheteMatMulLayer::Preprocess(const ModelConfig& model_config_, const Ru
   }
 }
 
-Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status MacheteMatMulLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                                   const LayerExecContext& exec_ctx) {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     // 根据模板类型确定各类型
     vllm_dtype::ScalarType::Id activation_type_id;
@@ -262,12 +262,11 @@ Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std
     vllm_dtype::ScalarType::Id scale_type_id = activation_type_id;
     vllm_dtype::ScalarType::Id zero_type_id = activation_type_id;
 
-    const Tensor& weight_tensor = input_tensors[1];
-    void* p_qweight_tensor = weight_tensor.GetPtr<void>();
-    void* p_scales_tensor = weight_tensor.scales->GetPtr<void>();
-    void* p_zeros_tensor = is_awq_ ? weight_tensor.zeros->GetPtr<void>() : nullptr;
+    void* p_qweight_tensor = weight->GetPtr<void>();
+    void* p_scales_tensor = weight->scales->GetPtr<void>();
+    void* p_zeros_tensor = is_awq_ ? weight->zeros->GetPtr<void>() : nullptr;
 
-    const size_t m = input_tensors[0].shape[0];
+    const size_t m = input->shape[0];
     const size_t n = max_n_;
     const size_t k = max_k_;
 
@@ -278,17 +277,16 @@ Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std
 
     int64_t workspace_size = 0;  // 不等于-1即可
     InvokeMacheteGemm(
-        workspace_size, workspace_buffer_->GetPtr<void>(), GetComputeStream(exec_ctx), m, n, k,
-        input_tensors[0].GetPtr<void>(), p_qweight_tensor, output_tensors[0].GetPtr<void>(),
-        vllm_dtype::ScalarType::from_id(activation_type_id), vllm_dtype::ScalarType::from_id(weight_type_id),
-        p_scales_tensor, weight_tensor.scales->shape, vllm_dtype::ScalarType::from_id(scale_type_id),
-        is_awq_ ? std::optional<void*>(p_zeros_tensor) : std::nullopt,
-        is_awq_ ? std::optional<std::vector<size_t>>(weight_tensor.zeros->shape) : std::nullopt,
+        workspace_size, workspace_buffer_->GetPtr<void>(), GetComputeStream(exec_ctx), m, n, k, input->GetPtr<void>(),
+        p_qweight_tensor, output->GetPtr<void>(), vllm_dtype::ScalarType::from_id(activation_type_id),
+        vllm_dtype::ScalarType::from_id(weight_type_id), p_scales_tensor, weight->scales->shape,
+        vllm_dtype::ScalarType::from_id(scale_type_id), is_awq_ ? std::optional<void*>(p_zeros_tensor) : std::nullopt,
+        is_awq_ ? std::optional<std::vector<size_t>>(weight->zeros->shape) : std::nullopt,
         is_awq_ ? std::optional<vllm_dtype::ScalarType>(vllm_dtype::ScalarType::from_id(zero_type_id)) : std::nullopt,
         groupsize_, best_schedule);
 
-    output_tensors[0].shape = {m, n};
-    output_tensors[0].dtype = input_tensors[0].dtype;
+    output->shape = {m, n};
+    output->dtype = input->dtype;
     return Status();
   } else {
     KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.",

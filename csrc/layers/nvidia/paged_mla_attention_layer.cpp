@@ -111,9 +111,8 @@ Status PagedMlaAttentionLayer::Init(const std::vector<std::any>& parameters, con
   return Status();
 }
 
-Status PagedMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
+Status PagedMlaAttentionLayer::Forward(const PagedMlaAttentionInputs& inputs, Tensor* output) {
+  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, inputs, output);
 }
 
 /*
@@ -125,24 +124,21 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  auto input_iter = input_tensors.cbegin();
-  const Tensor& hidden_buffer_1 = *input_iter++;
-  const Tensor& kv_seq_len = *input_iter++;  // kv seq len (len of forwarding_tokens)
-  const Tensor& kv_list = *input_iter++;
-  const Tensor& cache_offset = *input_iter++;
-  const Tensor& rotary_embedding_pos = *input_iter++;
-  const Tensor& rotary_embedding_mask = *input_iter++;
-  const Tensor& layer_kv_cache = *input_iter++;
-  const Tensor& block_table = *input_iter++;
-  const Tensor& q_nope_tensor = *input_iter++;
-  const Tensor& q_pe_tensor = *input_iter++;
-  const Tensor& compressed_kv_tensor = *input_iter++;
-  const Tensor& k_pe_tensor = *input_iter++;
-  const Tensor& tile_scheduler_metadata_tensor = *input_iter++;
-  const Tensor& num_splits_tensor = *input_iter++;
-
-  Tensor& output = output_tensors[0];
+Status PagedMlaAttentionLayer::ForwardT(const PagedMlaAttentionInputs& inputs, Tensor* output) {
+  const Tensor& hidden_buffer_1 = *inputs.hidden_buffer_1;
+  const Tensor& kv_seq_len = *inputs.kv_seq_len;
+  const Tensor& kv_list = *inputs.kv_list;
+  const Tensor& cache_offset = *inputs.cache_offset;
+  const Tensor& rotary_embedding_pos = *inputs.rotary_embedding_pos;
+  const Tensor& rotary_embedding_mask = *inputs.rotary_embedding_mask;
+  const Tensor& layer_kv_cache = *inputs.layer_kv_cache;
+  const Tensor& block_table = *inputs.block_table;
+  const Tensor& q_nope_tensor = *inputs.q_nope;
+  const Tensor& q_pe_tensor = *inputs.q_pe;
+  const Tensor& compressed_kv_tensor = *inputs.compressed_kv;
+  const Tensor& k_pe_tensor = *inputs.k_pe;
+  const Tensor& tile_scheduler_metadata_tensor = *inputs.tile_scheduler_metadata;
+  const Tensor& num_splits_tensor = *inputs.num_splits;
 
   const size_t batch_size = kv_seq_len.shape[0];
   const size_t total_tokens = k_pe_tensor.shape[0];
@@ -155,7 +151,7 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const int max_blocks_per_seq = block_table.shape[1];             // shape: [bs, max_num_blocks_per_query]
 
   InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-      hidden_buffer_1.GetPtr<void>(), output.GetPtr<void>(), q_nope_tensor.GetPtr<void>(), q_pe_tensor.GetPtr<void>(),
+      hidden_buffer_1.GetPtr<void>(), output->GetPtr<void>(), q_nope_tensor.GetPtr<void>(), q_pe_tensor.GetPtr<void>(),
       compressed_kv_tensor.GetPtr<void>(), k_pe_tensor.GetPtr<void>(), k_list, kv_seq_len.GetPtr<void>(),
       this->context_->device->GetPrimaryComputeStream().Get(), cache_offset.GetPtr<void>(), this->num_heads_,
       this->qk_rope_head_dim_, this->kv_lora_rank_, this->block_token_num_, this->k_scale_, this->v_scale_, batch_size,
@@ -164,7 +160,7 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
       this->rank_, k_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len);
 
   // Correctly set the shape for the following bmm
-  output.shape = {total_tokens, static_cast<size_t>(num_heads_), static_cast<size_t>(kv_lora_rank_)};
+  output->shape = {total_tokens, static_cast<size_t>(num_heads_), static_cast<size_t>(kv_lora_rank_)};
   return Status();
 }
 

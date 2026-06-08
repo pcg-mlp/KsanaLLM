@@ -5,6 +5,8 @@
 
 #include <memory>
 
+#include "layers/paged_mla_attention_layer.h"
+#include "layers/paged_sparse_mla_attention_layer.h"
 #include "models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -22,6 +24,7 @@ class PagedMlaAttention {
                  Tensor& k_rope_buffer_tensor, Tensor& indices_tensor, std::vector<Tensor>& output_tensors);
 
  protected:
-  std::shared_ptr<BaseLayer> paged_mla_attention_layer_;
+  std::shared_ptr<PagedMlaAttentionLayer> paged_mla_layer_;
+  std::shared_ptr<PagedSparseMlaAttentionLayer> paged_sparse_mla_layer_;
 };
 }  // namespace ksana_llm

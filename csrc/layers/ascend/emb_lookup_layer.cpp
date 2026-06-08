@@ -25,39 +25,35 @@ Status EmbLookupLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  // weigth_shape = input_tensors[2].
-  // input_tensors:
-  //   0: input_ids
-  //   1: offset
-  //   2: prefix (not be used)
-  //   3: emb_weight
-  //   4: pos (optional)
-  // output_tensors:
-  //   0: emb_output
-  int total_seq_len = input_tensors[0].shape[0];
-  int hidden_units = input_tensors[3].shape[1];
-  output_tensors[0].shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
-  output_tensors[0].dtype = input_tensors[3].dtype;
-
-  Tensor input_ids = input_tensors[0];
-  Tensor embedding_table = input_tensors[3];
-
-  if (input_tensors.size() > 4) {
+// input_ids
+// offset
+// prefix (not be used)
+// emb_weight
+// pos (optional)
+// emb_output
+Status EmbLookupLayer::Forward(const Tensor* input_ids, const Tensor* ids_offsets, const Tensor* prefix_offsets,
+                               const Tensor* emb_weight, Tensor* output, const Tensor* steps,
+                               const LayerExecContext& exec_ctx) {
+  if (steps != nullptr) {
     KLLM_THROW("Not supported position embedding on NPU.");
-  } else {
-    reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
-    atb_op_executor_.ResetVariantPack();
-    atb_op_executor_.SetInputTensor(embedding_table.GetPtr<void>(), embedding_table.shape,
-                                    static_cast<aclDataType>(DataType(embedding_table.dtype)));
-    atb_op_executor_.SetInputTensor(input_ids.GetPtr<void>(), input_ids.shape,
-                                    static_cast<aclDataType>(DataType(input_ids.dtype)));
-    atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                     static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
-    atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
   }
+
+  int total_seq_len = input_ids->shape[0];
+  int hidden_units = emb_weight->shape[1];
+  output->shape = {static_cast<size_t>(total_seq_len), static_cast<size_t>(hidden_units)};
+  output->dtype = emb_weight->dtype;
+
+  reinterpret_cast<atb::Context*>(GetRuntimeContext())->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+  atb_op_executor_.ResetVariantPack();
+  atb_op_executor_.SetInputTensor(emb_weight->GetPtr<void>(), emb_weight->shape,
+                                  static_cast<aclDataType>(DataType(emb_weight->dtype)));
+  atb_op_executor_.SetInputTensor(input_ids->GetPtr<void>(), input_ids->shape,
+                                  static_cast<aclDataType>(DataType(input_ids->dtype)));
+  atb_op_executor_.SetOutputTensor(output->GetPtr<void>(), output->shape,
+                                   static_cast<aclDataType>(DataType(output->dtype)));
+  atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext()), GetWorkSpaceFunc());
 
   return Status();
 }
+
 }  // namespace ksana_llm

@@ -42,7 +42,7 @@ Status MultiHeadAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
   {
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
     // Attn proj MatMul
-    STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
 
     if (add_qkv_bias_) {
       STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_1[0], qkv_bais_, hidden_buffer_tensors_1));

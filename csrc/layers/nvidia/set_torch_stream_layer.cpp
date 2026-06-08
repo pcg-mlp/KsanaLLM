@@ -11,12 +11,11 @@ Status SetTorchStreamLayer::Init(const std::vector<std::any>& parameters, const 
   BaseLayer::Init(parameters, runtime_config, context, rank);
   return Status();
 }
-Status SetTorchStreamLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+void SetTorchStreamLayer::Clear() { torch_stream_ = InvokeSetTorchStream(torch_stream_, this->rank_); }
+
+Status SetTorchStreamLayer::Forward(const LayerExecContext& exec_ctx) {
   torch_stream_ = InvokeSetTorchStream(this->context_->device->GetPrimaryComputeStream().Get(), this->rank_);
   return Status();
 }
-
-void SetTorchStreamLayer::Clear() { torch_stream_ = InvokeSetTorchStream(torch_stream_, this->rank_); }
 
 }  // namespace ksana_llm

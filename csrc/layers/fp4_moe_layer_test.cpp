@@ -17,6 +17,7 @@
 #  include "csrc/kernels/nvidia/others/sglang/main/marlin_moe_wna16/marlin_moe_wna16_preprocess.h"
 #  include "csrc/utils/nvidia/workspace.h"
 #  include "device/nvidia/cuda_utils.h"
+#  include "layers/base_moe_layer.h"
 #  include "layers/humming_fp4_moe_layer.h"
 #  include "layers/marlin_fp4_moe_layer.h"
 #  include "layers/moe_layer.h"
@@ -442,8 +443,9 @@ std::vector<Tensor> SetupPersistentInputs(const ProcessedWeights& pw, Fp4Backend
 // Slices from pre-generated hs_full / gate_full so every backend sees the
 // same input data for each M.  Uses MeasureCudaExecutionTime for warmup+timing.
 // ===========================================================================
-std::vector<float> RunBenchmark(BaseLayer* layer, std::vector<Tensor>& persistent_inputs, const Fp4MoeTestConfig& cfg,
-                                cudaStream_t stream, const void* hs_full, const void* gate_full) {
+std::vector<float> RunBenchmark(BaseMoeLayer* layer, std::vector<Tensor>& persistent_inputs,
+                                const Fp4MoeTestConfig& cfg, cudaStream_t stream, const void* hs_full,
+                                const void* gate_full) {
   size_t K = cfg.hidden_size;
   size_t E = cfg.num_experts;
   static constexpr size_t kBytesPerBF16 = 2;
@@ -459,10 +461,14 @@ std::vector<float> RunBenchmark(BaseLayer* layer, std::vector<Tensor>& persisten
     cudaMemcpyAsync(persistent_inputs[1].GetPtr<void>(), gate_full, num_tokens * E * kBytesPerBF16,
                     cudaMemcpyDeviceToDevice, stream);
 
-    std::vector<Tensor> outputs(1);
-    outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, K});
+    Tensor output(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, K});
+    Tensor eplb_map;   // empty: eplb not active in benchmark
+    Tensor workspace;  // empty: workspace pre-allocated via SetWorkspaceBuffer
 
-    auto forward = [&]() { layer->Forward(persistent_inputs, outputs); };
+    auto forward = [&]() {
+      layer->Forward(&persistent_inputs[0], &persistent_inputs[1], &persistent_inputs[2], &persistent_inputs[3],
+                     &eplb_map, &output, &workspace);
+    };
     times.push_back(MeasureCudaExecutionTime(forward, stream, kWarmupIters, kBenchIters));
   }
 
@@ -557,7 +563,7 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
 
     auto inputs = SetupPersistentInputs(pw, Fp4Backend::kMarlin, stream);
     cudaDeviceSynchronize();
-    all_times.push_back(RunBenchmark(layer.get(), inputs, cfg, stream, hs_ptr, gate_ptr));
+    all_times.push_back(RunBenchmark(static_cast<BaseMoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
   }  // ~pw, ~layer, ~inputs
 
   // =========================================================================
@@ -574,7 +580,7 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
 
       auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A16, stream);
       cudaDeviceSynchronize();
-      all_times.push_back(RunBenchmark(layer.get(), inputs, cfg, stream, hs_ptr, gate_ptr));
+      all_times.push_back(RunBenchmark(static_cast<BaseMoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
       h16_available = true;
     } catch (const std::exception& e) {
       std::cout << "\n[WARNING] Humming backend unavailable: " << e.what()
@@ -596,7 +602,7 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
 
       auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A8, stream);
       cudaDeviceSynchronize();
-      all_times.push_back(RunBenchmark(layer.get(), inputs, cfg, stream, hs_ptr, gate_ptr));
+      all_times.push_back(RunBenchmark(static_cast<BaseMoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
       h8_available = true;
     } catch (const std::exception& e) {
     }

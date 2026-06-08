@@ -3,18 +3,19 @@
 ==============================================================================*/
 #pragma once
 
-#include "layers/base_layer.h"
+#include "layers/matmul_base_layer.h"
 
 namespace ksana_llm {
 
-class BatchedMatMulLayer : public BaseLayer {
+class BatchedMatMulLayer : public MatMulBaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
   virtual size_t GetWorkspaceSize() override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  // a: [m, bs, k], b: [bs, k, n] -> output: [m, bs, n]
+  virtual Status Forward(const Tensor* a, const Tensor* b, Tensor* output,
                          const LayerExecContext& exec_ctx = {}) override;
 
  private:
@@ -26,8 +27,7 @@ class BatchedMatMulLayer : public BaseLayer {
 
  private:
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                  const LayerExecContext& exec_ctx);
+  Status ForwardT(const Tensor& a, const Tensor& b, Tensor& output, const LayerExecContext& exec_ctx);
 };
 
 }  // namespace ksana_llm

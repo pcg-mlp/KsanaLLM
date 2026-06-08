@@ -40,183 +40,147 @@ size_t MhcLayer::GetMhcPreNumSplits(int token_num, int hc_hidden_dim) {
   return *(--it);
 }
 
-Status MhcLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  if (input_tensors.size() == 5 && output_tensors.size() == 5) {
-    DISPATCH_BY_3_DTYPE(inter_data_type_, PreForwardWithNormT, input_tensors, output_tensors);
-  } else if (input_tensors.size() == 4 && output_tensors.size() == 5) {
-    DISPATCH_BY_3_DTYPE(inter_data_type_, PreForwardT, input_tensors, output_tensors);
-  } else if (input_tensors.size() == 3 && output_tensors.size() == 1) {
-    DISPATCH_BY_3_DTYPE(inter_data_type_, PostForwardT, input_tensors, output_tensors);
-  } else if (input_tensors.size() == 1 && output_tensors.size() == 1) {
-    DISPATCH_BY_3_DTYPE(inter_data_type_, InitialForwardT, input_tensors, output_tensors);
-  } else {
-    KLLM_CHECK(input_tensors.size() == 4 && output_tensors.size() == 3);
-    DISPATCH_BY_3_DTYPE(inter_data_type_, FinalForwardT, input_tensors, output_tensors);
-  }
-  return Status();
-}
-
 // PreForwardT: Down-project input before attn/mlp
-// Inputs:
-//   input_tensors[0]: hidden_states [t, hc * d] T
-//   input_tensors[1]: fn_weight [(2 + hc) * hc, hc * d] FP32
-//   input_tensors[2]: scale_weight [3] FP32
-//   input_tensors[3]: base_weight [(2 + hc) * hc] FP32
-// Outputs:
-//   output_tensors[0]: projected_out [t, d] T
-//   output_tensors[1]: mix_h_buffer [t, (2 + hc) * hc] FP32
-//   output_tensors[2]: norm_buffer [t] FP32
-//   output_tensors[3]: h_post_buffer [t, hc] FP32
-//   output_tensors[4]: h_res_buffer [t, hc * hc] FP32
 template <typename T>
-Status MhcLayer::PreForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK(input_tensors[0].shape.size() == 2);
-  KLLM_CHECK(input_tensors[1].shape.size() == 2);
-  KLLM_CHECK(input_tensors[0].shape[1] == input_tensors[1].shape[1]);
+Status MhcLayer::PreForwardT(const Tensor& hidden, const Tensor& fn_w, const Tensor& scale_w, const Tensor& base_w,
+                             Tensor& out, Tensor& mix_h, Tensor& norm_buf, Tensor& h_post, Tensor& h_res) {
+  KLLM_CHECK(hidden.shape.size() == 2);
+  KLLM_CHECK(fn_w.shape.size() == 2);
+  KLLM_CHECK(hidden.shape[1] == fn_w.shape[1]);
 
-  const size_t token_num = input_tensors[0].shape[0];
-  const size_t num_splits = GetMhcPreNumSplits(token_num, input_tensors[0].shape[1]);
-  output_tensors[1].shape = {num_splits, token_num, input_tensors[1].shape[0]};
-  output_tensors[2].shape = {num_splits, token_num};
-  // Call DeepGEMM wrapper
+  const size_t token_num = hidden.shape[0];
+  const size_t num_splits = GetMhcPreNumSplits(token_num, hidden.shape[1]);
+  mix_h.shape = {num_splits, token_num, fn_w.shape[0]};
+  norm_buf.shape = {num_splits, token_num};
   auto wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
-  wrapper->Tf32HcPreNormGemm(input_tensors[0], input_tensors[1], output_tensors[1], output_tensors[2], num_splits,
-                             rank_, context_->device->GetPrimaryComputeStream().Get());
+  wrapper->Tf32HcPreNormGemm(hidden, fn_w, mix_h, norm_buf, num_splits, rank_,
+                             context_->device->GetPrimaryComputeStream().Get());
 
-  // Call TileLang wrapper
   Singleton<TritonWrapper>::GetInstance()->InvokeMhcPreBigFuseKernel<T>(
-      output_tensors[1].GetPtr<void>(), output_tensors[2].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-      input_tensors[3].GetPtr<void>(), input_tensors[0].GetPtr<void>(), output_tensors[3].GetPtr<void>(),
-      output_tensors[4].GetPtr<void>(), output_tensors[0].GetPtr<void>(), token_num, hidden_dim_, rms_norm_eps_,
-      hc_eps_, /*hc_sinkhorn_eps*/ hc_eps_,
+      mix_h.GetPtr<void>(), norm_buf.GetPtr<void>(), scale_w.GetPtr<void>(), base_w.GetPtr<void>(),
+      hidden.GetPtr<void>(), h_post.GetPtr<void>(), h_res.GetPtr<void>(), out.GetPtr<void>(), token_num, hidden_dim_,
+      rms_norm_eps_, hc_eps_, /*hc_sinkhorn_eps*/ hc_eps_,
       /*hc_post_mult_value*/ 2, hc_sinkhorn_iters_, num_splits, hc_mult_,
       context_->device->GetPrimaryComputeStream().Get());
 
-  output_tensors[0].shape = {token_num, hidden_dim_};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  out.shape = {token_num, hidden_dim_};
+  out.dtype = hidden.dtype;
   return Status();
 }
 
-// PreForwardWithNormT: Down-project input before attn/mlp, with fused RMSNorm
-// Inputs:
-//   input_tensors[0]: hidden_states [t, hc * d] T
-//   input_tensors[1]: fn_weight [(2 + hc) * hc, hc * d] FP32
-//   input_tensors[2]: scale_weight [3] FP32
-//   input_tensors[3]: base_weight [(2 + hc) * hc] FP32
-//   input_tensors[4]: norm_weight [d] T (RMSNorm weight)
-// Outputs:
-//   output_tensors[0]: projected_out [t, d] T  (already RMSNorm'd)
-//   output_tensors[1]: mix_h_buffer [t, (2 + hc) * hc] FP32
-//   output_tensors[2]: norm_buffer [t] FP32
-//   output_tensors[3]: h_post_buffer [t, hc] FP32
-//   output_tensors[4]: h_res_buffer [t, hc * hc] FP32
+// PreForwardWithNormT: Down-project + fused RMSNorm
 template <typename T>
-Status MhcLayer::PreForwardWithNormT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK(input_tensors[0].shape.size() == 2);
-  KLLM_CHECK(input_tensors[1].shape.size() == 2);
-  KLLM_CHECK(input_tensors[0].shape[1] == input_tensors[1].shape[1]);
+Status MhcLayer::PreForwardWithNormT(const Tensor& hidden, const Tensor& fn_w, const Tensor& scale_w,
+                                     const Tensor& base_w, const Tensor& norm_w, Tensor& out, Tensor& mix_h,
+                                     Tensor& norm_buf, Tensor& h_post, Tensor& h_res) {
+  KLLM_CHECK(hidden.shape.size() == 2);
+  KLLM_CHECK(fn_w.shape.size() == 2);
+  KLLM_CHECK(hidden.shape[1] == fn_w.shape[1]);
 
-  const size_t token_num = input_tensors[0].shape[0];
-  const size_t num_splits = GetMhcPreNumSplits(token_num, input_tensors[0].shape[1]);
-  output_tensors[1].shape = {num_splits, token_num, input_tensors[1].shape[0]};
-  output_tensors[2].shape = {num_splits, token_num};
-  // Call DeepGEMM wrapper
+  const size_t token_num = hidden.shape[0];
+  const size_t num_splits = GetMhcPreNumSplits(token_num, hidden.shape[1]);
+  mix_h.shape = {num_splits, token_num, fn_w.shape[0]};
+  norm_buf.shape = {num_splits, token_num};
   auto wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
-  wrapper->Tf32HcPreNormGemm(input_tensors[0], input_tensors[1], output_tensors[1], output_tensors[2], num_splits,
-                             rank_, context_->device->GetPrimaryComputeStream().Get());
+  wrapper->Tf32HcPreNormGemm(hidden, fn_w, mix_h, norm_buf, num_splits, rank_,
+                             context_->device->GetPrimaryComputeStream().Get());
 
-  // Call fused TileLang wrapper (MHC pre + RMSNorm in one kernel)
   Singleton<TritonWrapper>::GetInstance()->InvokeMhcPreBigFuseWithNormKernel<T>(
-      output_tensors[1].GetPtr<void>(), output_tensors[2].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-      input_tensors[3].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[4].GetPtr<void>(),
-      output_tensors[3].GetPtr<void>(), output_tensors[4].GetPtr<void>(), output_tensors[0].GetPtr<void>(), token_num,
-      hidden_dim_, rms_norm_eps_, hc_eps_, /*hc_sinkhorn_eps*/ hc_eps_,
+      mix_h.GetPtr<void>(), norm_buf.GetPtr<void>(), scale_w.GetPtr<void>(), base_w.GetPtr<void>(),
+      hidden.GetPtr<void>(), norm_w.GetPtr<void>(), h_post.GetPtr<void>(), h_res.GetPtr<void>(), out.GetPtr<void>(),
+      token_num, hidden_dim_, rms_norm_eps_, hc_eps_, /*hc_sinkhorn_eps*/ hc_eps_,
       /*hc_post_mult_value*/ 2, hc_sinkhorn_iters_, num_splits, hc_mult_,
       context_->device->GetPrimaryComputeStream().Get());
 
-  output_tensors[0].shape = {token_num, hidden_dim_};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  out.shape = {token_num, hidden_dim_};
+  out.dtype = hidden.dtype;
   return Status();
 }
 
 // PostForwardT: Combine input and residual after attn/mlp
-// Inputs:
-//   input_tensors[0]: hidden_states [t, d] T
-//   input_tensors[1]: h_post_buffer [t, hc] FP32
-//   input_tensors[2]: h_res_buffer [t, hc * hc] FP32
-// Outputs:
-//   output_tensors[0]: combined_out [t, hc * d] T
 template <typename T>
-Status MhcLayer::PostForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK(input_tensors[0].shape.size() == 2);
+Status MhcLayer::PostForwardT(const Tensor& hidden, const Tensor& h_post, const Tensor& h_res, Tensor& output) {
+  KLLM_CHECK(hidden.shape.size() == 2);
 
-  const size_t token_num = input_tensors[0].shape[0];
+  const size_t token_num = hidden.shape[0];
   llm_kernels::nvidia::mhc_post(
-      /*out=*/output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(),
-      /*residual=*/output_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<float>(), input_tensors[2].GetPtr<float>(),
-      token_num, hidden_dim_, context_->device->GetPrimaryComputeStream().Get());
+      /*out=*/output.GetPtr<void>(), hidden.GetPtr<void>(),
+      /*residual=*/output.GetPtr<void>(), h_post.GetPtr<float>(), h_res.GetPtr<float>(), token_num, hidden_dim_,
+      context_->device->GetPrimaryComputeStream().Get());
 
-  output_tensors[0].shape = {token_num, hc_mult_ * hidden_dim_};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = {token_num, hc_mult_ * hidden_dim_};
+  output.dtype = hidden.dtype;
   return Status();
 }
 
 // InitialForwardT: Up-project input after embedding lookup
-// Inputs:
-//   input_tensors[0]: hidden_states [t, d] T
-// Outputs:
-//   output_tensors[0]: expanded_out [t, hc, d] T
 template <typename T>
-Status MhcLayer::InitialForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK(input_tensors[0].shape.size() == 2);
+Status MhcLayer::InitialForwardT(const Tensor& hidden, Tensor& output) {
+  KLLM_CHECK(hidden.shape.size() == 2);
 
-  const size_t token_num = input_tensors[0].shape[0];
-  const size_t hidden_size = input_tensors[0].shape[1];
-  llm_kernels::nvidia::InvokeExpand<T>(input_tensors[0].GetPtr<const T>(), output_tensors[0].GetPtr<T>(), token_num,
-                                       hc_mult_, hidden_size, context_->device->GetPrimaryComputeStream().Get());
+  const size_t token_num = hidden.shape[0];
+  const size_t hidden_size = hidden.shape[1];
+  llm_kernels::nvidia::InvokeExpand<T>(hidden.GetPtr<const T>(), output.GetPtr<T>(), token_num, hc_mult_, hidden_size,
+                                       context_->device->GetPrimaryComputeStream().Get());
 
-  output_tensors[0].shape = {token_num, hc_mult_ * hidden_size};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output.shape = {token_num, hc_mult_ * hidden_size};
+  output.dtype = hidden.dtype;
   return Status();
 }
 
 // FinalForwardT: Down-project input before lmhead
-// Inputs:
-//   input_tensors[0]: hidden_states [t, hc * d] T
-//   input_tensors[1]: fn_weight [2 * hc, hc * d] FP32
-//                     NOTE: Pad from hc to 2*hc to work around DeepGEMM kernel limitations
-//   input_tensors[2]: scale_weight [1] FP32
-//   input_tensors[3]: base_weight [hc] FP32
-// Outputs:
-//   output_tensors[0]: projected_out [t, d] T
-//   output_tensors[1]: mix_h_buffer [t, 2 * hc] FP32
-//   output_tensors[2]: norm_buffer [t] FP32
 template <typename T>
-Status MhcLayer::FinalForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK(input_tensors[0].shape.size() == 2);
-  KLLM_CHECK(input_tensors[1].shape.size() == 2);
-  KLLM_CHECK(input_tensors[0].shape[1] == input_tensors[1].shape[1]);
-  KLLM_CHECK(input_tensors[1].shape[0] == 2 * hc_mult_);  // Verify padding
+Status MhcLayer::FinalForwardT(const Tensor& hidden, const Tensor& fn_w, const Tensor& scale_w, const Tensor& base_w,
+                               Tensor& out, Tensor& mix_h, Tensor& norm_buf) {
+  KLLM_CHECK(hidden.shape.size() == 2);
+  KLLM_CHECK(fn_w.shape.size() == 2);
+  KLLM_CHECK(hidden.shape[1] == fn_w.shape[1]);
+  KLLM_CHECK(fn_w.shape[0] == 2 * hc_mult_);
 
-  const size_t token_num = input_tensors[0].shape[0];
-  const size_t num_splits = GetMhcPreNumSplits(token_num, input_tensors[0].shape[1]);
-  output_tensors[1].shape = {num_splits, token_num, input_tensors[1].shape[0]};
-  output_tensors[2].shape = {num_splits, token_num};
-  // Call DeepGEMM wrapper
+  const size_t token_num = hidden.shape[0];
+  const size_t num_splits = GetMhcPreNumSplits(token_num, hidden.shape[1]);
+  mix_h.shape = {num_splits, token_num, fn_w.shape[0]};
+  norm_buf.shape = {num_splits, token_num};
   auto wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
-  wrapper->Tf32HcPreNormGemm(input_tensors[0], input_tensors[1], output_tensors[1], output_tensors[2], num_splits,
-                             rank_, context_->device->GetPrimaryComputeStream().Get());
+  wrapper->Tf32HcPreNormGemm(hidden, fn_w, mix_h, norm_buf, num_splits, rank_,
+                             context_->device->GetPrimaryComputeStream().Get());
 
-  // Call TileLang wrapper
   Singleton<TritonWrapper>::GetInstance()->InvokeMhcHeadBigFuseKernel<T>(
-      output_tensors[1].GetPtr<void>(), output_tensors[2].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-      input_tensors[3].GetPtr<void>(), input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), token_num,
-      hidden_dim_, rms_norm_eps_, hc_eps_, num_splits, hc_mult_, context_->device->GetPrimaryComputeStream().Get());
+      mix_h.GetPtr<void>(), norm_buf.GetPtr<void>(), scale_w.GetPtr<void>(), base_w.GetPtr<void>(),
+      hidden.GetPtr<void>(), out.GetPtr<void>(), token_num, hidden_dim_, rms_norm_eps_, hc_eps_, num_splits, hc_mult_,
+      context_->device->GetPrimaryComputeStream().Get());
 
-  output_tensors[0].shape = {token_num, hidden_dim_};
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  out.shape = {token_num, hidden_dim_};
+  out.dtype = hidden.dtype;
   return Status();
+}
+
+Status MhcLayer::ForwardPre(const Tensor* hidden, const Tensor* fn_w, const Tensor* scale_w, const Tensor* base_w,
+                            Tensor* out, Tensor* mix_h, Tensor* norm_buf, Tensor* h_post, Tensor* h_res,
+                            const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, PreForwardT, *hidden, *fn_w, *scale_w, *base_w, *out, *mix_h, *norm_buf,
+                      *h_post, *h_res);
+}
+
+Status MhcLayer::ForwardPreWithNorm(const Tensor* hidden, const Tensor* fn_w, const Tensor* scale_w,
+                                    const Tensor* base_w, const Tensor* norm_w, Tensor* out, Tensor* mix_h,
+                                    Tensor* norm_buf, Tensor* h_post, Tensor* h_res, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, PreForwardWithNormT, *hidden, *fn_w, *scale_w, *base_w, *norm_w, *out, *mix_h,
+                      *norm_buf, *h_post, *h_res);
+}
+
+Status MhcLayer::ForwardPost(const Tensor* hidden, const Tensor* h_post, const Tensor* h_res, Tensor* output,
+                             const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, PostForwardT, *hidden, *h_post, *h_res, *output);
+}
+
+Status MhcLayer::ForwardInitial(const Tensor* hidden, Tensor* output, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, InitialForwardT, *hidden, *output);
+}
+
+Status MhcLayer::ForwardFinal(const Tensor* hidden, const Tensor* fn_w, const Tensor* scale_w, const Tensor* base_w,
+                              Tensor* out, Tensor* mix_h, Tensor* norm_buf, const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, FinalForwardT, *hidden, *fn_w, *scale_w, *base_w, *out, *mix_h, *norm_buf);
 }
 
 }  // namespace ksana_llm

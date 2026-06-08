@@ -67,7 +67,7 @@ Status Glm4MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const 
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
   // Pre-Norm: LayerNorm before attention
-  input_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  input_layernorm_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // MultiHeadAttention (with QK Norm handled inside MHA)
   STATUS_CHECK_RETURN(
@@ -80,7 +80,7 @@ Status Glm4MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const 
   STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
 
   // Pre-Norm: LayerNorm before MLP/MoE
-  post_attention_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  post_attention_layernorm_->Forward(residual_buffer[0], hidden_buffer_tensors_0[0]);
 
   // MLP or MoE
   STATUS_CHECK_RETURN(
@@ -108,7 +108,7 @@ Status Glm4MoeDecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensor
     auto& gated_buffer_ = reduce_buffer_tensors;
 
     // Expert gating: compute router logits
-    STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+    STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
 
     // Routed experts: process hidden_buffer_tensors_0 with routing
     STATUS_CHECK_RETURN(
@@ -180,17 +180,20 @@ Status Glm4MoeMtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forwarding
     CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
     // Embedding Norm
-    enorm_->Forward(residual_buffer, residual_buffer);
+    enorm_->Forward(residual_buffer[0], residual_buffer[0]);
 
     // gather last token hidden
-    STATUS_CHECK_RETURN(gather_layer_->Forward(
-        {mtp_hidden_buffer[0], forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor}, shared_buffer));
+    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
+                            ->Forward(&mtp_hidden_buffer[0],
+                                      &forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor,
+                                      &shared_buffer[0]));
 
     // last token hidden norm
-    hnorm_->Forward(shared_buffer, mtp_hidden_buffer);
+    hnorm_->Forward(shared_buffer[0], mtp_hidden_buffer[0]);
 
     // concat embedding_norm and hidden norm
-    concat_layer_->Forward({residual_buffer[0], mtp_hidden_buffer[0]}, shared_buffer);
+    static_cast<ConcatLayer*>(concat_layer_.get())
+        ->Forward(&residual_buffer[0], &mtp_hidden_buffer[0], &shared_buffer[0]);
 
     // linear, no bias. hidden_units * 2 -> hidden_units
     STATUS_CHECK_RETURN(eh_proj_->Forward(shared_buffer[0], residual_buffer));

@@ -3,6 +3,8 @@
 ==============================================================================*/
 #include "layers/matmul_layer_factory.h"
 
+#include "layers/matmul_base_layer.h"
+
 #include "layers/batched_matmul_layer.h"
 #include "layers/blockwise_matmul_layer.h"
 #include "layers/cutlass_matmul_layer.h"
@@ -84,11 +86,11 @@ MatMulLayerFactory::MatMulLayerFactory(const ModelConfig& model_config, const Ru
 #endif
 }
 
-std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<BaseWeight> base_weight,
-                                                               std::string weight_name, DataType weight_type,
-                                                               DataType input_type, DataType output_type,
-                                                               LinearComputeBackend backend,
-                                                               const std::vector<std::any>& init_params) {
+std::shared_ptr<MatMulBaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<BaseWeight> base_weight,
+                                                                     std::string weight_name, DataType weight_type,
+                                                                     DataType input_type, DataType output_type,
+                                                                     LinearComputeBackend backend,
+                                                                     const std::vector<std::any>& init_params) {
   // w4a8_awq
   const WeightStatus& weight_status = context_->device->GetWeightStatus(weight_name);
   if (weight_status.quant_mode == QUANT_W4A8_AWQ) {
@@ -211,11 +213,11 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
                      DEFAULT_LINEAR_BACKEND);
 }
 
-std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(std::shared_ptr<BaseWeight> base_weight,
-                                                           std::string weight_name, DataType input_type,
-                                                           DataType output_type,
-                                                           const std::vector<std::any>& init_params,
-                                                           QuantMode quant_mode, LinearComputeBackend backend) {
+std::shared_ptr<MatMulBaseLayer> MatMulLayerFactory::CreateLayer(std::shared_ptr<BaseWeight> base_weight,
+                                                                 std::string weight_name, DataType input_type,
+                                                                 DataType output_type,
+                                                                 const std::vector<std::any>& init_params,
+                                                                 QuantMode quant_mode, LinearComputeBackend backend) {
   DataType weight_type = base_weight->GetModelWeights(weight_name).dtype;
   // deepseek v3
   if (weight_type == TYPE_INVALID) {
@@ -228,13 +230,13 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(std::shared_ptr<BaseW
   return CreateLayer(weight_type, input_type, output_type, init_params, quant_mode, backend);
 }
 
-std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(DataType weight_type, DataType input_type,
-                                                           DataType output_type,
-                                                           const std::vector<std::any>& init_params,
-                                                           QuantMode quant_mode, LinearComputeBackend backend) {
+std::shared_ptr<MatMulBaseLayer> MatMulLayerFactory::CreateLayer(DataType weight_type, DataType input_type,
+                                                                 DataType output_type,
+                                                                 const std::vector<std::any>& init_params,
+                                                                 QuantMode quant_mode, LinearComputeBackend backend) {
   auto it = builder_map_.find({weight_type, input_type, output_type, quant_mode, backend});
   if (it != builder_map_.end()) {
-    std::shared_ptr<BaseLayer> layer = (this->*(it->second))();
+    std::shared_ptr<MatMulBaseLayer> layer = (this->*(it->second))();
     layer->Init(init_params, runtime_config_, context_, rank_);
     return layer;
   } else {

@@ -205,40 +205,30 @@ Status HummingFp4MoeLayer::Preprocess(const ModelConfig& model_config, const Run
   return Status();
 }
 
-Status HummingFp4MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                                   const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
-}
-
 template <typename T>
-Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  // input_tensors:
-  //  0: hidden_states [num_tokens, hidden_size]
-  //  1: gating_output [num_tokens, num_experts]
-  //  2: up_gate_proj_weight (w1) — packed FP4
-  //  3: down_proj_weight (w2) — packed FP4
-  //  4: eplb_expert_map
-  //  (*)5: e_score_correction_bias_weight / tid2eid
-  //  (*)6: input_ids (hash path)
-
+Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                    const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                    const Tensor* e_score_bias, const Tensor* input_ids) {
   // Assign workspace pointers on first call
   if (set_workspace_buffer_info_) {
     set_workspace_buffer_info_ = false;
     topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
-    topk_ids_ptr_ = topk_weights_ptr_ + topk_weights_ptr_size_;
-    fused_id_buffer_ = topk_ids_ptr_ + topk_ids_ptr_size_;
-    intermediate_cache1_ = fused_id_buffer_ + max_fused_id_buffer_size_;
-    intermediate_cache2_ = intermediate_cache1_ + std::max(intermediate_cache1_size_, intermediate_cache3_size_);
+    topk_ids_ptr_ = reinterpret_cast<uint8_t*>(topk_weights_ptr_) + topk_weights_ptr_size_;
+    fused_id_buffer_ = reinterpret_cast<uint8_t*>(topk_ids_ptr_) + topk_ids_ptr_size_;
+    intermediate_cache1_ = reinterpret_cast<uint8_t*>(fused_id_buffer_) + max_fused_id_buffer_size_;
+    intermediate_cache2_ = reinterpret_cast<uint8_t*>(intermediate_cache1_) +
+                           std::max(intermediate_cache1_size_, intermediate_cache3_size_);
     // cache3 shares memory with cache1 (non-overlapping lifetimes: cache1 consumed before cache3 produced)
     intermediate_cache3_ = intermediate_cache1_;
-    humming_locks_ = reinterpret_cast<int32_t*>(intermediate_cache2_ + intermediate_cache2_size_);
-    humming_workspace_ = reinterpret_cast<char*>(humming_locks_) + humming_locks_size_;
+    humming_locks_ =
+        reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(intermediate_cache2_) + intermediate_cache2_size_);
+    humming_workspace_ = reinterpret_cast<uint8_t*>(humming_locks_) + humming_locks_size_;
 
     // W4A8 FP8 buffers (after humming_workspace_)
     if (humming_compute_dtype_ == llm_kernels::nvidia::humming::ComputeDtype::FP8) {
-      fp8_activation_buffer_ = reinterpret_cast<char*>(humming_workspace_) + humming_workspace_size_;
+      fp8_activation_buffer_ = reinterpret_cast<uint8_t*>(humming_workspace_) + humming_workspace_size_;
       fp8_scale_buffer_ =
-          reinterpret_cast<float*>(reinterpret_cast<char*>(fp8_activation_buffer_) + fp8_activation_buffer_size_);
+          reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(fp8_activation_buffer_) + fp8_activation_buffer_size_);
     }
 
     if (softplus_sqrt_workspace_size_ > 0) {
@@ -250,27 +240,26 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     }
   }
 
-  const size_t num_tokens = input_tensors[0].shape[0];
-  const size_t hidden_size = input_tensors[0].shape[1];
+  const size_t num_tokens = hidden_states->shape[0];
+  const size_t hidden_size = hidden_states->shape[1];
 
   // Execute TopK gating (sqrtsoftplus only)
-  STATUS_CHECK_RETURN(ExecuteTopkSoftplusSqrt<T>(input_tensors, output_tensors));
+  STATUS_CHECK_RETURN(
+      ExecuteTopkSoftplusSqrt<T>(hidden_states, gating_output, eplb_map, workspace, e_score_bias, input_ids));
 
   // Get weight pointers
-  void* w1 = input_tensors[2].GetPtr<void>();
-  void* w2 = input_tensors[3].GetPtr<void>();
-  void* w1_scales =
-      (input_tensors[2].weight_scales != nullptr) ? input_tensors[2].weight_scales->GetPtr<void>() : nullptr;
-  void* w2_scales =
-      (input_tensors[3].weight_scales != nullptr) ? input_tensors[3].weight_scales->GetPtr<void>() : nullptr;
+  void* w1_ptr = w1->GetPtr<void>();
+  void* w2_ptr = w2->GetPtr<void>();
+  void* w1_scales = (w1->weight_scales != nullptr) ? w1->weight_scales->GetPtr<void>() : nullptr;
+  void* w2_scales = (w2->weight_scales != nullptr) ? w2->weight_scales->GetPtr<void>() : nullptr;
 
   // W4A8: Get per-expert global_scale from weight tensors
   if (humming_compute_dtype_ == llm_kernels::nvidia::humming::ComputeDtype::FP8) {
-    if (input_tensors[2].weight_global_scale != nullptr) {
-      w1_global_scale_ = input_tensors[2].weight_global_scale->GetPtr<float>();
+    if (w1->weight_global_scale != nullptr) {
+      w1_global_scale_ = w1->weight_global_scale->GetPtr<float>();
     }
-    if (input_tensors[3].weight_global_scale != nullptr) {
-      w2_global_scale_ = input_tensors[3].weight_global_scale->GetPtr<float>();
+    if (w2->weight_global_scale != nullptr) {
+      w2_global_scale_ = w2->weight_global_scale->GetPtr<float>();
     }
   }
 
@@ -283,9 +272,6 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     void* curr_topk_weights = topk_weights_ptr_;
 
     // ----- Determine moe_block_size from GEMM1's kernel BLOCK_SHAPE_M -----
-    // The humming kernel reads expert_ids[row / BLOCK_SHAPE_M], so expert boundaries
-    // MUST be padded to multiples of BLOCK_SHAPE_M. We use GEMM1's block_m as the
-    // shared moe_block_size, and force GEMM2 to use a kernel with the same block_m.
     int64_t size_n_w1 = static_cast<int64_t>(expert_inter_size_ * 2);
     int64_t size_k_w1 = static_cast<int64_t>(hidden_size);
     int32_t moe_block_size_i32 = llm_kernels::nvidia::humming::get_kernel_block_m(
@@ -365,7 +351,7 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     cudaMemsetAsync(humming_locks_, 0, humming_locks_size_, stream);
 
     llm_kernels::nvidia::humming::humming_moe_gemm(gemm1_a,                  // a
-                                                   w1,                       // b (FP4 WGMMA layout)
+                                                   w1_ptr,                   // b (FP4 WGMMA layout)
                                                    intermediate_cache1_,     // c
                                                    gemm1_a_scale,            // a_scale (nullptr for W4A16)
                                                    w1_scales,                // b_scale
@@ -440,7 +426,7 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     // would cause the kernel to divide sorted_ids by topk, reading only 1/topk of the rows.
     llm_kernels::nvidia::humming::humming_moe_gemm(
         gemm2_a,                  // a
-        w2,                       // b (FP4 WGMMA layout)
+        w2_ptr,                   // b (FP4 WGMMA layout)
         intermediate_cache3_,     // c
         gemm2_a_scale,            // a_scale (nullptr for W4A16)
         w2_scales,                // b_scale
@@ -465,11 +451,6 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
         moe_block_size_i32);  // required_block_m: use same as GEMM1
 
     // ----- Fused MulTopkWeight + Sum: intermediate_cache3 → output [tokens, hidden_size] -----
-    // Single kernel fusing topk_weight multiplication and expert-sum reduction.
-    // Eliminates intermediate write-back + re-read of cache3 (~48KB/token for DSv4).
-    // intermediate_cache3: [total_tokens * topk, hidden_size] (read-only, not modified in-place)
-    // topk_weights: [total_tokens * topk] (flat float, one weight per token-expert row)
-    // output: [total_tokens, hidden_size]
     if (use_expert_parallel) {
       llm_kernels::nvidia::InvokeMoeFusedMulSum<T, true>(
           intermediate_cache3_, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
@@ -483,59 +464,56 @@ Status HummingFp4MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
 
   if (using_deepep_) {
     // LCOV_EXCL_START
-    const size_t dispatch_num_tokens = output_tensors[1].shape[0];
+    const size_t dispatch_num_tokens = workspace->shape[0];
     if (dispatch_num_tokens > 0) {
       expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
                                                  dispatch_num_tokens * expert_topk_,
                                                  context_->device->GetPrimaryComputeStream().Get());
-      ProcessTokens(output_tensors[1].GetPtr<void>(), output_tensors[1].GetPtr<void>(), dispatch_num_tokens);
+      ProcessTokens(workspace->GetPtr<void>(), workspace->GetPtr<void>(), dispatch_num_tokens);
     }
-    Combine({output_tensors[1]}, output_tensors);
+    std::vector<Tensor> combine_outputs = {*output};
+    Combine({*workspace}, combine_outputs);
+    *output = combine_outputs[0];
     // LCOV_EXCL_STOP
   } else if (global_expert_para_size_ > 1) {
     // EP without deepep
     expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                         context_->device->GetPrimaryComputeStream().Get());
-    ProcessTokens(input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), num_tokens);
+    ProcessTokens(hidden_states->GetPtr<void>(), output->GetPtr<void>(), num_tokens);
   } else {
     // Single-node, no EP
-    ProcessTokens(input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), num_tokens);
+    ProcessTokens(hidden_states->GetPtr<void>(), output->GetPtr<void>(), num_tokens);
   }
 
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  output->shape = hidden_states->shape;
+  output->dtype = hidden_states->dtype;
   return Status();
 }
 
 template <typename T>
-Status HummingFp4MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& input_tensors,
-                                                   std::vector<Tensor>& output_tensors) {
-  std::vector<Tensor> softplus_inputs;
-  std::vector<Tensor> softplus_outputs;
+Status HummingFp4MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
+                                                   const Tensor* eplb_map, Tensor* workspace,
+                                                   const Tensor* e_score_bias, const Tensor* input_ids) {
+  const size_t num_tokens = hidden_states->shape[0];
 
-  const size_t num_tokens = input_tensors[0].shape[0];
-
-  // Router logits
-  softplus_inputs.push_back(input_tensors[1]);
-
+  // aux1: input_ids (hash) or correction_bias; aux2: tid2eid (hash only).
+  const Tensor* aux1_ptr = nullptr;
+  const Tensor* aux2_ptr = nullptr;
   if (use_hash_) {
-    KLLM_CHECK_WITH_INFO(input_tensors.size() >= 7,
-                         "HummingFp4MoeLayer: hash path requires input_ids (slot 6) and tid2eid (slot 5)");
-    softplus_inputs.push_back(input_tensors[6]);  // input_ids
-    softplus_inputs.push_back(input_tensors[5]);  // tid2eid
+    KLLM_CHECK_WITH_INFO(input_ids != nullptr,
+                         "HummingFp4MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
+    aux1_ptr = input_ids;     // input_ids
+    aux2_ptr = e_score_bias;  // tid2eid
   } else if (use_e_score_correction_bias_) {
-    KLLM_CHECK_WITH_INFO(input_tensors.size() >= 6, "HummingFp4MoeLayer: correction-bias path requires bias at slot 5");
-    softplus_inputs.push_back(input_tensors[5]);  // bias
+    aux1_ptr = e_score_bias;  // correction_bias
   }
 
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
                              topk_weights_ptr_);
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
                          topk_ids_ptr_);
-  softplus_outputs.push_back(topk_weights_tensor);
-  softplus_outputs.push_back(topk_ids_tensor);
-
-  Status status = topk_softplus_sqrt_layer_->Forward(softplus_inputs, softplus_outputs);
+  Status status =
+      topk_softplus_sqrt_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, aux1_ptr, aux2_ptr);
   if (!status.OK()) {
     KLLM_LOG_ERROR << "HummingFp4MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
     return status;
@@ -545,9 +523,10 @@ Status HummingFp4MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& in
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && input_tensors[4].shape[0] > layer_idx_) {
-    size_t num_experts = input_tensors[4].shape[1];
-    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+    size_t num_experts = eplb_map->shape[1];
+    void* layer_expert_ptr =
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
     expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
@@ -555,11 +534,12 @@ Status HummingFp4MoeLayer::ExecuteTopkSoftplusSqrt(const std::vector<Tensor>& in
 
   if (using_deepep_) {
     // LCOV_EXCL_START
-    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
-    std::vector<Tensor>& deepep_output_tensors = output_tensors;
+    std::vector<Tensor> deepep_input_tensors = {*hidden_states, topk_ids_tensor, topk_weights_tensor};
+    std::vector<Tensor> deepep_output_tensors = {*workspace};
     Dispatch(deepep_input_tensors, deepep_output_tensors);
-    topk_ids_tensor.shape[0] = deepep_output_tensors[1].shape[0];
-    topk_weights_tensor.shape[0] = deepep_output_tensors[1].shape[0];
+    topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    workspace->shape = deepep_output_tensors[0].shape;
     // LCOV_EXCL_STOP
   }
 
@@ -579,6 +559,14 @@ Status HummingFp4MoeLayer::DumpEplbData(Tensor& topk_ids) {
       fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
+}
+
+Status HummingFp4MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                   const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                   const Tensor* e_score_bias, const Tensor* input_ids,
+                                   const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, hidden_states, gating_output, w1, w2, eplb_map, output, workspace,
+                      e_score_bias, input_ids);
 }
 
 }  // namespace ksana_llm

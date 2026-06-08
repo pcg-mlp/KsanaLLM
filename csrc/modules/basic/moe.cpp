@@ -4,7 +4,7 @@
 
 #include "modules/basic/moe.h"
 
-#include "layers/moe_layer.h"
+#include "layers/base_moe_layer.h"
 
 namespace ksana_llm {
 
@@ -41,21 +41,11 @@ MoE::~MoE() {}
 
 Status MoE::Forward(Tensor hidden_states, Tensor gating_output, Tensor workspace_tensor,
                     std::vector<Tensor>& output_tensors, const Tensor* input_ids) {
-  std::vector<Tensor> moe_output_tensors = {output_tensors[0], workspace_tensor};
-  std::vector<Tensor> moe_input_tensors = {hidden_states, gating_output, up_gate_proj_weight_,
-                                           down_proj_weight_, eplb_expert_map_};
-  if (use_e_score_correction_bias_) {
-    // Slot 5 carries either gate.e_score_correction_bias (fp32) for V3/GLM4
-    // or gate.tid2eid (int32) for DSv4 hash layers. MoeLayer decides how to
-    // interpret it via scoring_func_ + use_hash_.
-    moe_input_tensors.push_back(e_score_correction_bias_weight_);
-  }
-  if (input_ids != nullptr) {
-    // Slot 6: DSv4 hash layers feed input_ids into TopKSoftplusSqrtLayer.
-    moe_input_tensors.push_back(*input_ids);
-  }
-  STATUS_CHECK_RETURN(moe_layer_->Forward(moe_input_tensors, moe_output_tensors));
-  output_tensors[0].shape = moe_output_tensors[0].shape;
+  const Tensor* e_score_bias_ptr = use_e_score_correction_bias_ ? &e_score_correction_bias_weight_ : nullptr;
+  Tensor output = output_tensors[0];
+  STATUS_CHECK_RETURN(moe_layer_->Forward(&hidden_states, &gating_output, &up_gate_proj_weight_, &down_proj_weight_,
+                                          &eplb_expert_map_, &output, &workspace_tensor, e_score_bias_ptr, input_ids));
+  output_tensors[0].shape = output.shape;
   return Status();
 }
 

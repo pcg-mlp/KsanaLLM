@@ -37,7 +37,8 @@ Status FusedAllReduceNormAdd::Forward(std::vector<Tensor>& reduce_buffer_tensors
   // Case 1: AllReduce + Residual
   if (!need_apply_norm) {
     if (forwarding_context.GetContext()->device->ext->IsMulticastSupported()) {
-      return all_reduce_residual_add_norm_layer_->Forward(reduce_buffer_tensors, residual_buffer);
+      auto* typed = static_cast<AllReduceResidualAddNormLayer*>(all_reduce_residual_add_norm_layer_.get());
+      return typed->Forward(&reduce_buffer_tensors[0], &residual_buffer[0]);
     } else {
       tp_comm_->AllReduce(reduce_buffer_tensors, output_tensors, is_multi_token_forward, forwarding_context);
       return add_->Forward(output_tensors[0], residual_buffer[0], residual_buffer);
@@ -53,8 +54,8 @@ Status FusedAllReduceNormAdd::Forward(std::vector<Tensor>& reduce_buffer_tensors
   }
 #endif
   if (use_custom) {
-    STATUS_CHECK_RETURN(
-        all_reduce_residual_add_norm_layer_->Forward({reduce_buffer_tensors[0], residual_buffer[0]}, output_tensors));
+    auto* typed = static_cast<AllReduceResidualAddNormLayer*>(all_reduce_residual_add_norm_layer_.get());
+    STATUS_CHECK_RETURN(typed->Forward(&reduce_buffer_tensors[0], &residual_buffer[0], &output_tensors[0]));
   } else {
     tp_comm_->AllReduce(reduce_buffer_tensors, output_tensors, is_multi_token_forward, forwarding_context);
     if (reduce_fuse_type_ == ReduceFuseType::kPreAttn) {

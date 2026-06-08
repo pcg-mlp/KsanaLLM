@@ -21,11 +21,6 @@ Status CutlassMatMulLayer::Preprocess(const ModelConfig& model_config, const Run
   DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
 }
 
-Status CutlassMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors, exec_ctx);
-}
-
 template <typename T>
 Status CutlassMatMulLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                                  std::shared_ptr<Context> context, int rank) {
@@ -143,40 +138,43 @@ Status CutlassMatMulLayer::PreprocessT(const ModelConfig& model_config, const Ru
 }
 
 template <typename T>
-Status CutlassMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                             const LayerExecContext& exec_ctx) {
+Status CutlassMatMulLayer::ForwardT(const Tensor& input, const Tensor& weight, Tensor& output,
+                                    const LayerExecContext& exec_ctx) {
   if (weight_data_type_ == TYPE_I4_GROUP) {
-    const Tensor& weight_tensor = input_tensors[1];
-    void* p_qweight_tensor = weight_tensor.GetPtr<void>();
-    void* p_scales_tensor = weight_tensor.scales->GetPtr<void>();
-    void* p_zeros_tensor = is_awq_ ? weight_tensor.zeros->GetPtr<void>() : nullptr;
+    void* p_qweight_tensor = weight.GetPtr<void>();
+    void* p_scales_tensor = weight.scales->GetPtr<void>();
+    void* p_zeros_tensor = is_awq_ ? weight.zeros->GetPtr<void>() : nullptr;
 
-    const size_t m = input_tensors[0].shape[0];
+    const size_t m = input.shape[0];
     const size_t n = max_n_;
     const size_t k = max_k_;
 
     if (cutlass_use_gemv_cuda_core_ && m < 5) {
       InvokeFpAIntBGroupCudaGemm<T, llm_kernels::nvidia::WeightType::INT4>(
-          output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
-          p_zeros_tensor, m, n, k, groupsize_, GetComputeStream(exec_ctx));
+          output.GetPtr<void>(), input.GetPtr<void>(), p_qweight_tensor, p_scales_tensor, p_zeros_tensor, m, n, k,
+          groupsize_, GetComputeStream(exec_ctx));
     } else {
       size_t best_config_index = 0;
       if (m < cutlass_config_map_.size()) {
         best_config_index = cutlass_config_map_[m];
       }
       InvokeFpAIntBGroupCutlassGemm<T, llm_kernels::nvidia::WeightType::INT4>(
-          output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), p_qweight_tensor, p_scales_tensor,
-          p_zeros_tensor, workspace_buffer_->GetPtr<void>(), m, n, k, groupsize_, best_config_index,
-          GetComputeStream(exec_ctx));
+          output.GetPtr<void>(), input.GetPtr<void>(), p_qweight_tensor, p_scales_tensor, p_zeros_tensor,
+          workspace_buffer_->GetPtr<void>(), m, n, k, groupsize_, best_config_index, GetComputeStream(exec_ctx));
     }
 
-    output_tensors[0].shape = {m, n};
-    output_tensors[0].dtype = input_tensors[0].dtype;
+    output.shape = {m, n};
+    output.dtype = input.dtype;
     return Status();
   } else {
     KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.",
                            weight_data_type_));
   }
+}
+
+Status CutlassMatMulLayer::Forward(const Tensor* input, const Tensor* weight, Tensor* output,
+                                   const LayerExecContext& exec_ctx) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, *input, *weight, *output, exec_ctx);
 }
 
 }  // namespace ksana_llm

@@ -30,17 +30,29 @@ class CompressorLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  // Prefill path – compress_ratio_ == 4.
+  Status ForwardPrefillC4(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input, const Tensor* score_bias,
+                          const Tensor* indices, const Tensor* extra, Tensor* compress_plan, Tensor* write_plan,
+                          const Tensor* seq_lens, const Tensor* extend_lens, const Tensor* norm_weight,
+                          const Tensor* layer_kv_cache_ptr, const Tensor* compressed_out_loc, Tensor* output,
+                          bool plan_initialized);
 
- private:
-  Status ForwardPrefillC4(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  // Prefill path – compress_ratio_ == 128.
+  Status ForwardPrefillC128(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input,
+                            const Tensor* score_bias, const Tensor* indices, const Tensor* load_indices,
+                            Tensor* compress_plan, Tensor* write_plan, const Tensor* seq_lens,
+                            const Tensor* extend_lens, const Tensor* norm_weight, const Tensor* layer_kv_cache_ptr,
+                            const Tensor* compressed_out_loc, Tensor* output, bool plan_initialized);
 
-  Status ForwardPrefillC128(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  // Decode path – compress_ratio_ == 4.
+  Status ForwardDecodeC4(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input, const Tensor* score_bias,
+                         const Tensor* indices, const Tensor* seq_lens, const Tensor* extra, const Tensor* norm_weight,
+                         const Tensor* layer_kv_cache_ptr, const Tensor* compressed_out_loc, Tensor* output);
 
-  Status ForwardDecodeC4(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
-  Status ForwardDecodeC128(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  // Decode path – compress_ratio_ == 128.
+  Status ForwardDecodeC128(const Tensor* kv_score_buffer_tensor, const Tensor* kv_score_input, const Tensor* score_bias,
+                           const Tensor* indices, const Tensor* seq_lens, const Tensor* norm_weight,
+                           const Tensor* layer_kv_cache_ptr, const Tensor* compressed_out_loc, Tensor* output);
 
  private:
   // Model/layer config

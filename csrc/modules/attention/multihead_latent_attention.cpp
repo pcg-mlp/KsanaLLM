@@ -177,8 +177,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", dp_total_tokens, hidden_units), rank);
 
 #ifdef ENABLE_CUDA
-  std::vector<Tensor> empty_tensors;
-  set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
+  static_cast<SetTorchStreamLayer*>(set_torch_stream_layers_.get())->Forward();
 #endif
 
   // Only take tokens assigned to the current dp group
@@ -227,7 +226,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     }
     {
       PROFILE_EVENT_SCOPE(kv_a_layernorm, "kv_a_layernorm", rank);
-      kv_a_layernorms_->Forward(kv_lora_buffer_tensors, kv_buffer_tensors);
+      kv_a_layernorms_->Forward(kv_lora_buffer_tensors[0], kv_buffer_tensors[0]);
     }
 
     Tensor q_b_input = dp_hidden_input;
@@ -241,7 +240,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       }
       {
         PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
-        q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
+        q_a_layernorms_->Forward(q_buffer_tensors[0], hidden_buffer_tensors_1[0]);
       }
       q_b_input = hidden_buffer_tensors_1[0];
     }
@@ -270,7 +269,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       // Reshape for the following bmm
       q_buffer_tensors[0].shape = {dp_absorb_tokens, head_num_per_atp_, qk_nope_head_dim_};
       // 融合Wuk到Qnope, 最后一维从qk_nope_dim变为kv_lora_rank
-      STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(q_buffer_tensors, q_nope_tensors));
+      STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(q_buffer_tensors[0], q_nope_tensors[0]));
 
       // Correctly set the shape
       q_rope_tensors[0].shape = {dp_absorb_tokens, head_num_per_atp_ * qk_rope_head_dim_};
@@ -360,7 +359,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     reduce_buffer_tensors[0].shape = {dp_absorb_tokens, head_num_per_atp_, kv_lora_rank_};
     std::vector<Tensor> absorb_attn_output_tensors = {hidden_buffer_tensors_0[0].GetView(
         {dp_absorb_tokens, o_proj_k_dim_}, (dp_total_tokens - dp_absorb_tokens) * o_proj_k_dim_ + attn_output_offset)};
-    STATUS_CHECK_RETURN(attn_w_uv_bmm_->Forward(reduce_buffer_tensors, absorb_attn_output_tensors));
+    STATUS_CHECK_RETURN(attn_w_uv_bmm_->Forward(reduce_buffer_tensors[0], absorb_attn_output_tensors[0]));
   }
 
   if (o_proj_out_of_dp_) {
@@ -387,7 +386,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     mem_adjuster_->ExtractSubMatrix(hidden_buffer_tensors_1[0], reduce_buffer_tensors[0],
                                     o_proj_k_dim_per_tp * dp_group_id, o_proj_k_dim_per_tp);
 
-    attn_o_proj_->Forward(reduce_buffer_tensors, hidden_buffer_tensors_0);
+    attn_o_proj_->Forward(reduce_buffer_tensors[0], hidden_buffer_tensors_0[0]);
   } else if (dp_total_tokens > 0) {
     PROFILE_EVENT_SCOPE(o_proj, fmt::format("o_proj_m_{}_n_{}", dp_total_tokens, o_proj_k_dim_), rank);
     if (forwarding_context.GetModelCommunicator()) {
@@ -397,7 +396,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     // Only output tokens assigned to the current dp group
     std::vector<Tensor> o_outputs = {
         hidden_buffer_tensors_1[0].GetView({dp_total_tokens, hidden_units}, dp_token_offset * hidden_units)};
-    attn_o_proj_->Forward({o_input}, o_outputs);
+    attn_o_proj_->Forward(o_input, o_outputs);
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }

@@ -12,8 +12,7 @@ class PermuteLayer : public BaseLayer {
  public:
   std::vector<size_t> FindPermutation(const std::vector<size_t>& input_shape, const std::vector<size_t>& output_shape);
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx = {}) override;
+  Status Forward(const Tensor* input, Tensor* output, const LayerExecContext& exec_ctx = {});
 };
 
 }  // namespace ksana_llm

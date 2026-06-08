@@ -17,7 +17,7 @@ class AddNorm {
 
   ~AddNorm();
 
-  Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor* input, const Tensor* residual, Tensor* output);
 
  protected:
   std::shared_ptr<BaseLayer> add_norm_layer_;

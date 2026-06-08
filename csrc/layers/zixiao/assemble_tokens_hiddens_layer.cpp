@@ -15,8 +15,14 @@ Status AssembleTokensHiddenLayer::Init(const std::vector<std::any>& parameters, 
   return Status(RET_UNDEFINED_REFERENCE, "AssembleTokensHiddenLayer not supported.");
 }
 
-Status AssembleTokensHiddenLayer::Forward(const std::vector<Tensor>& input_tensors,
-                                          std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status AssembleTokensHiddenLayer::ForwardT(const Tensor& hidden_states, const Tensor& accepted_token_indices,
+                                           Tensor& output) {
+  return Status(RET_UNDEFINED_REFERENCE, "AssembleTokensHiddenLayer not supported.");
+}
+
+Status AssembleTokensHiddenLayer::Forward(const Tensor* hidden_states, const Tensor* accepted_token_indices,
+                                          Tensor* output, const LayerExecContext& exec_ctx) {
   return Status(RET_UNDEFINED_REFERENCE, "AssembleTokensHiddenLayer not supported.");
 }
 

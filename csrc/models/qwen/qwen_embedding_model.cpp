@@ -167,7 +167,7 @@ Status QwenEmbeddingModel::LmHead(ForwardingContext& forwarding_context,
 
   // 1. Final RMSNorm (only for pre-norm models, which Qwen3 is)
   if (lm_head_prenorm_) {
-    lm_head_prenorm_->Forward(residual_buffer, residual_buffer);
+    lm_head_prenorm_->Forward(residual_buffer[0], residual_buffer[0]);
   }
 
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
@@ -216,8 +216,10 @@ Status QwenEmbeddingModel::LmHead(ForwardingContext& forwarding_context,
   } else {
     // LAST / CLS pooling: extract single token via AssembleTokensHidden.
     // The token index (last or first) is controlled by Python layer's slice_pos → logits_idx.
-    STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-        {residual_buffer[0], forwarding_context.GetModelInput()->logits_idx_uint64_tensor}, hidden_buffer_tensors_0));
+    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get())
+                            ->Forward(&residual_buffer[0],
+                                      &forwarding_context.GetModelInput()->logits_idx_uint64_tensor,
+                                      &hidden_buffer_tensors_0[0]));
   }
 #else
   KLLM_LOG_ERROR << "QwenEmbeddingModel::LmHead requires CUDA support";

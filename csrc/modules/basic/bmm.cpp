@@ -23,17 +23,11 @@ Bmm::Bmm(const std::string& weight_name, const LayerCreationContext& creation_co
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
 }
 
-Status Bmm::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  KLLM_CHECK_WITH_INFO(input_tensors.size() == 1, "should have exactly one input tensor.");
-  KLLM_CHECK_WITH_INFO(output_tensors.size() == 1, "should have exactly one output tensor.");
-
-  const Tensor& input_tensor = input_tensors[0];
-
-  if (input_tensor.shape[1] == weight_.shape[0] && input_tensor.shape[2] == weight_.shape[1]) {
-    return bmm_layer_->Forward({input_tensor, weight_}, output_tensors);
+Status Bmm::Forward(const Tensor& input, Tensor& output) {
+  if (input.shape[1] == weight_.shape[0] && input.shape[2] == weight_.shape[1]) {
+    return bmm_layer_->Forward(&input, &weight_, &output);
   }
-
-  KLLM_THROW("The input shapes: " + Vector2Str(std::vector<size_t>(input_tensors[0].shape)) + " and weight shapes: " +
+  KLLM_THROW("The input shapes: " + Vector2Str(std::vector<size_t>(input.shape)) + " and weight shapes: " +
              Vector2Str(std::vector<size_t>(weight_.shape)) + " of bmm that have not been implemented yet.");
   return Status();
 }

@@ -53,7 +53,10 @@ Status Mhc::PreForward(const std::vector<Tensor>& input_tensors, std::vector<Ten
   output_tensors.push_back(norm_buffer_tensors[0]);
   output_tensors.push_back(h_post_buffer_tensors[0]);
   output_tensors.push_back(h_res_buffer_tensors[0]);
-  STATUS_CHECK_RETURN(mhc_layer_->Forward({input_tensors[0], fn_weight_, scale_weight_, base_weight_}, output_tensors));
+  auto* typed = static_cast<MhcLayer*>(mhc_layer_.get());
+  STATUS_CHECK_RETURN(typed->ForwardPre(&input_tensors[0], &fn_weight_, &scale_weight_, &base_weight_,
+                                        &output_tensors[0], &output_tensors[1], &output_tensors[2], &output_tensors[3],
+                                        &output_tensors[4]));
   output_tensors.resize(1);
   return Status();
 }
@@ -71,8 +74,10 @@ Status Mhc::PreForwardWithNorm(const std::vector<Tensor>& input_tensors, std::ve
   output_tensors.push_back(norm_buffer_tensors[0]);
   output_tensors.push_back(h_post_buffer_tensors[0]);
   output_tensors.push_back(h_res_buffer_tensors[0]);
-  STATUS_CHECK_RETURN(
-      mhc_layer_->Forward({input_tensors[0], fn_weight_, scale_weight_, base_weight_, norm_weight_}, output_tensors));
+  auto* typed = static_cast<MhcLayer*>(mhc_layer_.get());
+  STATUS_CHECK_RETURN(typed->ForwardPreWithNorm(&input_tensors[0], &fn_weight_, &scale_weight_, &base_weight_,
+                                                &norm_weight_, &output_tensors[0], &output_tensors[1],
+                                                &output_tensors[2], &output_tensors[3], &output_tensors[4]));
   output_tensors.resize(1);
   return Status();
 }
@@ -85,14 +90,17 @@ Status Mhc::PostForward(const std::vector<Tensor>& input_tensors, std::vector<Te
 
   CREATE_BUFFER_SCOPE(h_post_buffer_tensors, mhc_buffers_.h_post_buffer);
   CREATE_BUFFER_SCOPE(h_res_buffer_tensors, mhc_buffers_.h_res_buffer);
-  return mhc_layer_->Forward({input_tensors[0], h_post_buffer_tensors[0], h_res_buffer_tensors[0]}, output_tensors);
+
+  auto* typed = static_cast<MhcLayer*>(mhc_layer_.get());
+  return typed->ForwardPost(&input_tensors[0], &h_post_buffer_tensors[0], &h_res_buffer_tensors[0], &output_tensors[0]);
 }
 
 Status Mhc::InitialForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_CHECK(input_tensors.size() == 1);
   KLLM_CHECK(output_tensors.size() == 1);
 
-  return mhc_layer_->Forward(input_tensors, output_tensors);
+  auto* typed = static_cast<MhcLayer*>(mhc_layer_.get());
+  return typed->ForwardInitial(&input_tensors[0], &output_tensors[0]);
 }
 
 Status Mhc::FinalForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
@@ -103,7 +111,9 @@ Status Mhc::FinalForward(const std::vector<Tensor>& input_tensors, std::vector<T
   CREATE_BUFFER_SCOPE(norm_buffer_tensors, mhc_buffers_.norm_buffer);
   output_tensors.push_back(mix_h_buffer_tensors[0]);
   output_tensors.push_back(norm_buffer_tensors[0]);
-  STATUS_CHECK_RETURN(mhc_layer_->Forward({input_tensors[0], fn_weight_, scale_weight_, base_weight_}, output_tensors));
+  auto* typed = static_cast<MhcLayer*>(mhc_layer_.get());
+  STATUS_CHECK_RETURN(typed->ForwardFinal(&input_tensors[0], &fn_weight_, &scale_weight_, &base_weight_,
+                                          &output_tensors[0], &output_tensors[1], &output_tensors[2]));
   output_tensors.resize(1);
   return Status();
 }

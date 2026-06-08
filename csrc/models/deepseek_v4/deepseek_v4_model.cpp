@@ -179,7 +179,7 @@ Status DeepSeekV4DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
     static const bool enable_shared_expert_parallel = (GetEnvAsPositiveInt("SHARED_EXPERT_PARALLEL", 0) != 0);
     {
       PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
     }
 
     if (enable_shared_expert_parallel) {
@@ -193,7 +193,7 @@ Status DeepSeekV4DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
       // ─── Step 1: launch expert_gate on primary stream FIRST ───
       {
         PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
-        STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+        STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
       }
 
       // ─── Step 2: launch SharedExpert on secondary (or primary) stream ───
@@ -246,7 +246,7 @@ Status DeepSeekV4DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
       // ═══ Serial path (original logic): expert_gate → MoE → SharedExpert → Add ═══
       {
         PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
-        STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+        STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
       }
       {
         PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
@@ -311,18 +311,25 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
     CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
     const size_t token_num = residual_buffer[0].shape[0];
-    // Reshape directly since expand is skipped
-    residual_buffer[0].shape[1] = hidden_dim;
+    KLLM_CHECK(residual_buffer[0].shape[1] == hc_mult * hidden_dim);
+    KLLM_CHECK(residual_buffer[0].shape.size() == 2ul);
 
-    // Embedding Norm + E-projection on residual_buffer
-    STATUS_CHECK_RETURN(enorm_->Forward(residual_buffer, residual_buffer));
+    // Reshape residual_buffer to [token_num * hc_mult, hidden_dim] for norm and proj
+    residual_buffer[0].shape = {token_num * hc_mult, hidden_dim};
+
+    // Embedding Norm: enorm(residual)
+    enorm_->Forward(residual_buffer[0], residual_buffer[0]);
+
+    // E-projection: e_proj(normed_residual)
     STATUS_CHECK_RETURN(e_proj_->Forward(residual_buffer[0], shared_buffer));
 
     // Gather last token hidden from mtp_hidden_buffer
     KLLM_CHECK(mtp_hidden_buffer[0].shape[1] == hc_mult * hidden_dim);
     KLLM_CHECK(mtp_hidden_buffer[0].shape.size() == 2ul);
-    STATUS_CHECK_RETURN(gather_layer_->Forward(
-        {mtp_hidden_buffer[0], forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor}, mtp_hidden_buffer));
+    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
+                            ->Forward(&mtp_hidden_buffer[0],
+                                      &forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor,
+                                      &mtp_hidden_buffer[0]));
     KLLM_CHECK_WITH_INFO(
         mtp_hidden_buffer[0].shape[0] == token_num,
         fmt::format("mtp_hidden_buffer shape[0]={} != token_num={}", mtp_hidden_buffer[0].shape[0], token_num));
@@ -330,14 +337,16 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
     // Reshape gathered mtp_hidden to [token_num * hc_mult, hidden_dim] for norm and proj
     mtp_hidden_buffer[0].shape = {token_num * hc_mult, hidden_dim};
 
-    // Hidden Norm + E-projection on gatherd mtp_hidden_buffer
-    STATUS_CHECK_RETURN(hnorm_->Forward(mtp_hidden_buffer, mtp_hidden_buffer));
+    // Hidden Norm: hnorm(gathered_mtp_hidden)
+    hnorm_->Forward(mtp_hidden_buffer[0], mtp_hidden_buffer[0]);
+
+    // H-projection: h_proj(normed_mtp_hidden)
     STATUS_CHECK_RETURN(h_proj_->Forward(mtp_hidden_buffer[0], residual_buffer));
 
-    // Add with broadcast: h_proj_output[t*hc, d] + e_proj_output[t, d] -> residual_buffer[t*hc, d]
-    STATUS_CHECK_RETURN(add_->Forward(residual_buffer[0], shared_buffer[0], residual_buffer));
+    // Add: e_proj_output + h_proj_output -> residual_buffer
+    STATUS_CHECK_RETURN(add_->Forward(shared_buffer[0], residual_buffer[0], residual_buffer));
 
-    // Reshape residual_buffer to [token_num, hc_mult * hidden_dim]
+    // Reshape residual_buffer back to [token_num, hc_mult * hidden_dim]
     residual_buffer[0].shape = {token_num, hc_mult * hidden_dim};
   }
   const bool is_multi_token_forward = model_input->multi_token_request_num > 0;

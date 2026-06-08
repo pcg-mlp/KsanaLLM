@@ -9,11 +9,11 @@
 #include "layers/cutlass_moe_layer.h"
 #include "layers/fp8_matmul_layer.h"
 #include "layers/fp8_moe_layer.h"
+#include "layers/humming_fp4_moe_layer.h"
 #include "layers/machete_matmul_layer.h"
+#include "layers/marlin_fp4_moe_layer.h"
 #include "layers/marlin_matmul_layer.h"
 #include "layers/marlin_moe_layer.h"
-#include "layers/marlin_fp4_moe_layer.h"
-#include "layers/humming_fp4_moe_layer.h"
 #include "layers/matmul_layer.h"
 #include "layers/moe_layer.h"
 
@@ -96,11 +96,11 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
 #endif
 }
 
-std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<BaseWeight> base_weight,
-                                                               std::vector<std::string> weight_names,
-                                                               DataType weight_type, DataType input_type,
-                                                               DataType output_type, int layer_idx,
-                                                               const std::vector<std::any>& init_params) {
+std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<BaseWeight> base_weight,
+                                                                  std::vector<std::string> weight_names,
+                                                                  DataType weight_type, DataType input_type,
+                                                                  DataType output_type, int layer_idx,
+                                                                  const std::vector<std::any>& init_params) {
   // moe layer   (weight_names[0]: up_gate_experts, weight_names[1]: down_experts)
   bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
   size_t hidden_size = static_cast<size_t>(model_config_.hidden_units);
@@ -165,16 +165,14 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
       up_gate_hidden_size = up_gate_hidden_size / 4 * (32 / model_config_.quant_config.bits);
     } else {
       // Marlin GPTQ path
-      up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[1] /
-                            (sizeof(int) / model_config_.quant_config.bits) * 16;
-      down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[2] /
-                         model_config_.quant_config.bits * 2;
+      up_gate_hidden_size =
+          base_weight->GetModelWeights(weight_names[0]).shape[1] / (sizeof(int) / model_config_.quant_config.bits) * 16;
+      down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[2] / model_config_.quant_config.bits * 2;
     }
   }
-  KLLM_CHECK_WITH_INFO(
-      up_gate_hidden_size == down_hidden_size,
-      fmt::format("up_gate_experts hidden_size {} != down_experts hidden_size {}",
-                  up_gate_hidden_size, down_hidden_size));
+  KLLM_CHECK_WITH_INFO(up_gate_hidden_size == down_hidden_size,
+                       fmt::format("up_gate_experts hidden_size {} != down_experts hidden_size {}", up_gate_hidden_size,
+                                   down_hidden_size));
   // MoE layer weight type check
   weight_type = base_weight->GetModelWeights(weight_names[0]).dtype;
   DataType down_weight_type = base_weight->GetModelWeights(weight_names[1]).dtype;
@@ -208,8 +206,8 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
     moe_matmul_param.push_back(DataType::TYPE_INVALID);  // fp8_weight_dtype: not FP8
   }
   if (enable_moe_fp4) {
-    moe_matmul_param.push_back(DataType::TYPE_FP4_E2M1FN_x2);   // int_weight_dtype: FP4
-    moe_matmul_param.push_back(static_cast<int>(128));            // group_size: 128 for merged FP4 scales
+    moe_matmul_param.push_back(DataType::TYPE_FP4_E2M1FN_x2);  // int_weight_dtype: FP4
+    moe_matmul_param.push_back(static_cast<int>(128));         // group_size: 128 for merged FP4 scales
   } else if (enable_moe_int4) {
     if (weight_type == TYPE_UINT8) {
       moe_matmul_param.push_back(TYPE_UINT4x2);  // int_weight_dtype
@@ -232,7 +230,7 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
     moe_matmul_param.push_back(0);                       // group_size
   }
   moe_matmul_param.push_back(model_config_.moe_config.apply_weight);
-  moe_matmul_param.push_back(model_config_.swiglu_limit);      // swiglu_limit (>0 means enabled)
+  moe_matmul_param.push_back(model_config_.swiglu_limit);  // swiglu_limit (>0 means enabled)
   moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.num_hash_layers));
   moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.vocab_size));
 
@@ -273,42 +271,24 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_NONE, DEFAULT_MOE_BACKEND);
 }
 
-std::shared_ptr<BaseLayer> MoeLayerFactory::CreateLayer(DataType weight_type, DataType input_type, DataType output_type,
-                                                        const std::vector<std::any>& init_params, QuantMode quant_mode,
-                                                        MoeComputeBackend backend) {
+std::shared_ptr<BaseMoeLayer> MoeLayerFactory::CreateLayer(DataType weight_type, DataType input_type,
+                                                           DataType output_type,
+                                                           const std::vector<std::any>& init_params,
+                                                           QuantMode quant_mode, MoeComputeBackend backend) {
   auto it = builder_map_.find({weight_type, input_type, output_type, quant_mode, backend});
   KLLM_CHECK_WITH_INFO(
       it != builder_map_.end(),
       fmt::format("Moe Not support weight_type {}, input_type {}, output_type {}, quant_mode {}, backend {}.",
                   GetTypeString(weight_type), GetTypeString(input_type), GetTypeString(output_type),
                   GetQuantModeString(quant_mode), GetMoeComputeBackendString(backend)));
-  std::shared_ptr<BaseLayer> layer = (this->*(it->second))();
+  std::shared_ptr<BaseMoeLayer> layer = (this->*(it->second))();
   layer->Init(init_params, runtime_config_, context_, rank_);
 
-  // Set expert_parallel_manager via setter method instead of std::any_cast
-  // This approach is safer and avoids potential parsing errors
-  if (backend == DEFAULT_MOE_BACKEND || backend == TRITON_MOE_BACKEND) {
-    // MoeLayer and Fp8MoeLayer use expert_parallel_manager
-    std::static_pointer_cast<MoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
-  } else if (backend == CUTLASS_MOE_BACKEND) {
-    // CutlassMoeLayer uses expert_parallel_manager
-    std::static_pointer_cast<CutlassMoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
-  }
-
-  // For FP4 Marlin path: MarlinFp4MoeLayer needs expert_parallel_manager
-  // TYPE_FP4_E2M1FN_x2 with MARLIN_MOE_BACKEND → MarlinFp4MoeLayer
-  // TYPE_I4_GROUP with MARLIN_MOE_BACKEND → MarlinMoeLayer (no EP, different class)
-  if (backend == MARLIN_MOE_BACKEND && weight_type == TYPE_FP4_E2M1FN_x2) {
-    std::static_pointer_cast<MarlinFp4MoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
-  }
-
-  // For Humming path: HummingFp4MoeLayer needs expert_parallel_manager
-  if (backend == HUMMING_MOE_BACKEND) {
-    std::static_pointer_cast<HummingFp4MoeLayer>(layer)->SetExpertParallelManager(expert_parallel_manager_);
-  }
+  // All BaseMoeLayer subclasses expose SetExpertParallelManager via the virtual interface.
+  // Subclasses without EP support (e.g., MarlinMoeLayer) inherit the default no-op from BaseMoeLayer.
+  layer->SetExpertParallelManager(expert_parallel_manager_);
 
   return layer;
 }
 
 }  // namespace ksana_llm
-

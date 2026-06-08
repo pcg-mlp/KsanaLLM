@@ -36,8 +36,8 @@ Status TopKSoftplusSqrtLayer::Init(const std::vector<std::any>& parameters, cons
     backend_ = SqrtSoftplusBackend::kHybrid;
   }
 
-  const bool will_use_sglang = (backend_ == SqrtSoftplusBackend::kSglang) ||
-                               (backend_ == SqrtSoftplusBackend::kHybrid && params_.use_hash);
+  const bool will_use_sglang =
+      (backend_ == SqrtSoftplusBackend::kSglang) || (backend_ == SqrtSoftplusBackend::kHybrid && params_.use_hash);
   if (will_use_sglang) {
     const bool ok = (params_.num_experts == 256 || params_.num_experts == 384) &&
                     (params_.topk == 6 || params_.topk == 8) && (params_.topk_ids_dtype == TYPE_INT32);
@@ -47,7 +47,7 @@ Status TopKSoftplusSqrtLayer::Init(const std::vector<std::any>& parameters, cons
                                      params_.num_experts, params_.topk, params_.topk_ids_dtype));
   }
 
-  const char* backend_str = (backend_ == SqrtSoftplusBackend::kHybrid)  ? "hybrid"
+  const char* backend_str = (backend_ == SqrtSoftplusBackend::kHybrid)   ? "hybrid"
                             : (backend_ == SqrtSoftplusBackend::kSglang) ? "sglang"
                                                                          : "vllm";
   KLLM_LOG_INFO << fmt::format("Rank[{}] TopKSoftplusSqrtLayer backend={}, use_hash={}", rank_, backend_str,
@@ -56,32 +56,32 @@ Status TopKSoftplusSqrtLayer::Init(const std::vector<std::any>& parameters, cons
 }
 
 size_t TopKSoftplusSqrtLayer::GetWorkspaceSize() {
-  const bool uses_sglang = (backend_ == SqrtSoftplusBackend::kSglang) ||
-                           (backend_ == SqrtSoftplusBackend::kHybrid && params_.use_hash);
+  const bool uses_sglang =
+      (backend_ == SqrtSoftplusBackend::kSglang) || (backend_ == SqrtSoftplusBackend::kHybrid && params_.use_hash);
   if (uses_sglang || params_.use_hash) return 0;
   return static_cast<size_t>(params_.max_token_num) * params_.topk * sizeof(int32_t);
 }
 
-Status TopKSoftplusSqrtLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status TopKSoftplusSqrtLayer::Forward(const Tensor* router_logits, Tensor* topk_weights, Tensor* topk_ids,
+                                      const Tensor* aux1, const Tensor* aux2, const LayerExecContext& exec_ctx) {
   // Inputs:
-  //   [0] router_logits [N, num_experts], fp32/fp16/bf16
+  //   router_logits [N, num_experts], fp32/fp16/bf16
   //   if use_hash:
-  //     [1] input_ids     [N], int32 or int64 (must match params_.topk_ids_dtype)
-  //     [2] tid2eid       [vocab, topk], same int type as [1]
+  //     aux1: input_ids [N], int32 or int64
+  //     aux2: tid2eid   [vocab, topk], same int type as aux1
   //   elif use_correction_bias:
-  //     [1] correction_bias [num_experts], fp32
+  //     aux1: correction_bias [num_experts], fp32
   //
   // Outputs:
-  //   [0] topk_weights  [N, topk], fp32
-  //   [1] topk_ids      [N, topk], int32 or int64 (dtype from params_.topk_ids_dtype)
+  //   topk_weights [N, topk], fp32
+  //   topk_ids     [N, topk], int32 or int64 (dtype from params_.topk_ids_dtype)
 
-  const uint32_t num_tokens = static_cast<uint32_t>(input_tensors[0].shape[0]);
+  const uint32_t num_tokens = static_cast<uint32_t>(router_logits->shape[0]);
   const std::vector<size_t> out_shape = {static_cast<size_t>(num_tokens), static_cast<size_t>(params_.topk)};
-  output_tensors[0].shape = out_shape;
-  output_tensors[0].dtype = TYPE_FP32;
-  output_tensors[1].shape = out_shape;
-  output_tensors[1].dtype = params_.topk_ids_dtype;
+  topk_weights->shape = out_shape;
+  topk_weights->dtype = TYPE_FP32;
+  topk_ids->shape = out_shape;
+  topk_ids->dtype = params_.topk_ids_dtype;
 
   if (num_tokens == 0) return Status();
 
@@ -89,36 +89,37 @@ Status TopKSoftplusSqrtLayer::Forward(const std::vector<Tensor>& input_tensors, 
   const void* tid2eid = nullptr;
   const float* bias = nullptr;
   if (params_.use_hash) {
-    input_ids = input_tensors[1].GetPtr<void>();
-    tid2eid = input_tensors[2].GetPtr<void>();
+    KLLM_CHECK_WITH_INFO(aux1 != nullptr && aux2 != nullptr,
+                         "TopKSoftplusSqrtLayer: use_hash requires aux1 (input_ids) and aux2 (tid2eid)");
+    input_ids = aux1->GetPtr<void>();
+    tid2eid = aux2->GetPtr<void>();
   } else if (params_.use_correction_bias) {
-    bias = input_tensors[1].GetPtr<float>();
+    KLLM_CHECK_WITH_INFO(aux1 != nullptr, "TopKSoftplusSqrtLayer: use_correction_bias requires aux1");
+    bias = aux1->GetPtr<float>();
   }
 
-  void* token_expert_indices = nullptr;
-
-  const bool use_sglang_path = (backend_ == SqrtSoftplusBackend::kSglang) ||
-                               (backend_ == SqrtSoftplusBackend::kHybrid && params_.use_hash);
+  const bool use_sglang_path =
+      (backend_ == SqrtSoftplusBackend::kSglang) || (backend_ == SqrtSoftplusBackend::kHybrid && params_.use_hash);
   if (use_sglang_path) {
     KLLM_CHECK_WITH_INFO(
-        input_tensors[0].dtype == TYPE_FP32 || input_tensors[0].dtype == TYPE_BF16,
-        fmt::format("sglang backend requires fp32 or bf16 router_logits, got dtype={}", input_tensors[0].dtype));
-    const auto sglang_input_dtype = (input_tensors[0].dtype == TYPE_FP32)
+        router_logits->dtype == TYPE_FP32 || router_logits->dtype == TYPE_BF16,
+        fmt::format("sglang backend requires fp32 or bf16 router_logits, got dtype={}", router_logits->dtype));
+    const auto sglang_input_dtype = (router_logits->dtype == TYPE_FP32)
                                         ? llm_kernels::nvidia::sglang_gate::GateInputDtype::kFloat32
                                         : llm_kernels::nvidia::sglang_gate::GateInputDtype::kBFloat16;
     llm_kernels::nvidia::sglang_gate::InvokeTopkSoftplusSqrtSglang(
-        input_tensors[0].GetPtr<void>(), sglang_input_dtype, output_tensors[0].GetPtr<void>(),
-        output_tensors[1].GetPtr<void>(), static_cast<int>(num_tokens), static_cast<int>(params_.num_experts),
-        static_cast<int>(params_.topk), params_.renormalize, params_.routed_scaling_factor, bias, input_ids, tid2eid,
+        router_logits->GetPtr<void>(), sglang_input_dtype, topk_weights->GetPtr<void>(), topk_ids->GetPtr<void>(),
+        static_cast<int>(num_tokens), static_cast<int>(params_.num_experts), static_cast<int>(params_.topk),
+        params_.renormalize, params_.routed_scaling_factor, bias, input_ids, tid2eid,
         context_->device->GetPrimaryComputeStream().Get());
   } else {
-    token_expert_indices = params_.use_hash ? nullptr : workspace_buffer_->GetPtr<void>();
+    void* token_expert_indices = params_.use_hash ? nullptr : workspace_buffer_->GetPtr<void>();
     llm_kernels::nvidia::InvokeTopkSoftplusSqrt(
-        input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), output_tensors[1].GetPtr<void>(),
-        token_expert_indices, static_cast<int>(num_tokens), static_cast<int>(params_.num_experts),
-        static_cast<int>(params_.topk), params_.renormalize, static_cast<double>(params_.routed_scaling_factor), bias,
-        input_ids, tid2eid, DataTypeToScalarTypeMap.at(input_tensors[0].dtype),
-        DataTypeToScalarTypeMap.at(params_.topk_ids_dtype), context_->device->GetPrimaryComputeStream().Get());
+        router_logits->GetPtr<void>(), topk_weights->GetPtr<void>(), topk_ids->GetPtr<void>(), token_expert_indices,
+        static_cast<int>(num_tokens), static_cast<int>(params_.num_experts), static_cast<int>(params_.topk),
+        params_.renormalize, static_cast<double>(params_.routed_scaling_factor), bias, input_ids, tid2eid,
+        DataTypeToScalarTypeMap.at(router_logits->dtype), DataTypeToScalarTypeMap.at(params_.topk_ids_dtype),
+        context_->device->GetPrimaryComputeStream().Get());
   }
   return Status();
 }

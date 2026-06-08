@@ -343,54 +343,57 @@ size_t FlashMlaAttentionLayer::GetWorkspaceSize() {
   return workspace_size_;
 }
 
-Status FlashMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                         const LayerExecContext& exec_ctx) {
+Status FlashMlaAttentionLayer::Forward(const FlashMlaAttentionInputs& inputs, Tensor* output) {
   if (kv_cache_dtype_ == TYPE_FP8_DS_MLA) {
     switch (inter_data_type_) {
       case DataType::TYPE_FP16:
-        return ForwardT<float16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla>(input_tensors, output_tensors);
+        return ForwardT<float16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla>(inputs, output);
       case DataType::TYPE_BF16:
-        return ForwardT<bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla>(input_tensors, output_tensors);
+        return ForwardT<bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla>(inputs, output);
       default:
         KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, inter_data_type_));
     }
   }
-  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
+  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, inputs, output);
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  auto input_iter = input_tensors.cbegin();
-  const Tensor& dp_input_offset = *input_iter++;
-  const size_t* dp_input_offset_uint64_ptr = (input_iter++)->GetPtr<size_t>();
-  const Tensor& kv_list = *input_iter++;
-  const Tensor& dp_input_prefix = *input_iter++;
-  const Tensor& dp_prefill_q_offset = *input_iter++;
-  const size_t* dp_prefill_q_offset_uint64_ptr = (input_iter++)->GetPtr<size_t>();
-  const Tensor& chunk_kv_batch_starts_host = *input_iter++;
-  const Tensor& chunk_kv_cu_extend_lens_tensor = *input_iter++;
-  const Tensor& chunk_kv_cu_seq_lens_tensor = *input_iter++;
-  const Tensor& kv_cache_offset = *input_iter++;
-  const Tensor& rotary_embedding_pos = *input_iter++;   // rope for q/k [total_q_tokens, num_q_heads/1, head_size]
-  const Tensor& rotary_embedding_mask = *input_iter++;  // mask for q/k [total_q_tokens, num_q_heads/1, head_size]
-  const Tensor& dp_src_flexible_rotary_embedding_pos = *input_iter++;  // reverse rope for k [total_tokens, head_size]
-  const Tensor& dp_dst_flexible_rotary_embedding_pos = *input_iter++;  // correct rope for k [total_tokens, head_size]
-  const Tensor& dp_flexible_rotary_embedding_mask = *input_iter++;     // mask for k [total_tokens, head_size]
-  const Tensor& dp_dst_flexible_kv_cache = *input_iter++;
-  const Tensor& dp_src_flexible_kv_cache = *input_iter++;
-  const Tensor& dp_dst_flexible_token_idx = *input_iter++;
-  const Tensor& dp_src_flexible_token_idx = *input_iter++;
-  const Tensor& dp_flexible_offset_uint64 = *input_iter++;
-  const Tensor& forward_shape = *input_iter++;
-  const Tensor& q_nope_rope_tensor = *input_iter++;
-  const Tensor& kv_buffer = *input_iter++;
-  const Tensor& k_rope_buffer = *input_iter++;
-  const Tensor& kv_b_nope_proj_weight = *input_iter++;
-  const Tensor& v_head_proj_weight = *input_iter++;
-  const Tensor& k_buffer = *input_iter++;
-  const Tensor& v_buffer = *input_iter++;
+Status FlashMlaAttentionLayer::ForwardT(const FlashMlaAttentionInputs& inputs, Tensor* out) {
+  const Tensor& dp_input_offset = *inputs.dp_input_offset;
+  const size_t* dp_input_offset_uint64_ptr = inputs.dp_input_offset_host->GetPtr<size_t>();
+  const Tensor& kv_list = *inputs.kv_list;
+  const Tensor& dp_input_prefix = *inputs.dp_input_prefix;
+  const Tensor& dp_prefill_q_offset = *inputs.dp_prefill_q_offset;
+  const size_t* dp_prefill_q_offset_uint64_ptr = inputs.dp_prefill_q_offset_host->GetPtr<size_t>();
+  const Tensor& chunk_kv_batch_starts_host = *inputs.chunk_kv_batch_starts_host;
+  const Tensor& chunk_kv_cu_extend_lens_tensor = *inputs.chunk_kv_cu_extend_lens;
+  const Tensor& chunk_kv_cu_seq_lens_tensor = *inputs.chunk_kv_cu_seq_lens;
+  const Tensor& kv_cache_offset = *inputs.kv_cache_offset;
+  const Tensor& rotary_embedding_pos =
+      *inputs.rotary_embedding_pos;  // rope for q/k [total_q_tokens, num_q_heads/1, head_size]
+  const Tensor& rotary_embedding_mask =
+      *inputs.rotary_embedding_mask;  // mask for q/k [total_q_tokens, num_q_heads/1, head_size]
+  const Tensor& dp_src_flexible_rotary_embedding_pos =
+      *inputs.dp_src_flexible_rotary_embedding_pos;  // reverse rope for k [total_tokens, head_size]
+  const Tensor& dp_dst_flexible_rotary_embedding_pos =
+      *inputs.dp_dst_flexible_rotary_embedding_pos;  // correct rope for k [total_tokens, head_size]
+  const Tensor& dp_flexible_rotary_embedding_mask =
+      *inputs.dp_flexible_rotary_embedding_mask;  // mask for k [total_tokens, head_size]
+  const Tensor& dp_dst_flexible_kv_cache = *inputs.dp_dst_flexible_kv_cache;
+  const Tensor& dp_src_flexible_kv_cache = *inputs.dp_src_flexible_kv_cache;
+  const Tensor& dp_dst_flexible_token_idx = *inputs.dp_dst_flexible_token_idx;
+  const Tensor& dp_src_flexible_token_idx = *inputs.dp_src_flexible_token_idx;
+  const Tensor& dp_flexible_offset_uint64 = *inputs.dp_flexible_offset_uint64;
+  const Tensor& forward_shape = *inputs.forward_shape;
+  const Tensor& q_nope_rope_tensor = *inputs.q_nope_rope;
+  const Tensor& kv_buffer = *inputs.kv_buffer;
+  const Tensor& k_rope_buffer = *inputs.k_rope_buffer;
+  const Tensor& kv_b_nope_proj_weight = *inputs.kv_b_nope_proj_weight;
+  const Tensor& v_head_proj_weight = *inputs.v_head_proj_weight;
+  const Tensor& k_buffer = *inputs.k_buffer;
+  const Tensor& v_buffer = *inputs.v_buffer;
 
-  Tensor& output = output_tensors[0];
+  Tensor& output = *out;
 
   const int layer_block_num = forward_shape.shape[2];
   const int max_tokens = forward_shape.shape[6];

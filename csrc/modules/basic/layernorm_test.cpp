@@ -95,9 +95,13 @@ class LayernormTest : public testing::Test {
 
 // Forward with weight, no bias (RMSNorm path).
 TEST_F(LayernormTest, ForwardRMSNorm) {
-  struct Config { DataType dtype; size_t token_num; size_t hidden_size; };
-  Config configs[] = {{TYPE_FP16, 4, 256}, {TYPE_BF16, 4, 256}, {TYPE_FP32, 4, 256},
-                      {TYPE_FP16, 1, 128}, {TYPE_FP16, 64, 1024}};
+  struct Config {
+    DataType dtype;
+    size_t token_num;
+    size_t hidden_size;
+  };
+  Config configs[] = {
+      {TYPE_FP16, 4, 256}, {TYPE_BF16, 4, 256}, {TYPE_FP32, 4, 256}, {TYPE_FP16, 1, 128}, {TYPE_FP16, 64, 1024}};
 
   for (auto& cfg : configs) {
     const std::string weight_name = "test.layernorm.weight";
@@ -111,15 +115,18 @@ TEST_F(LayernormTest, ForwardRMSNorm) {
     FillInputData(input);
     Tensor output(MemoryLocation::LOCATION_DEVICE, cfg.dtype, {cfg.token_num, cfg.hidden_size});
 
-    std::vector<Tensor> inputs = {input}, outputs = {output};
-    EXPECT_TRUE(layernorm.Forward(inputs, outputs).OK());
-    VerifyOutput(outputs[0], cfg.dtype);
+    EXPECT_TRUE(layernorm.Forward(input, output).OK());
+    VerifyOutput(output, cfg.dtype);
   }
 }
 
 // Forward with weight + bias (LayerNorm path).
 TEST_F(LayernormTest, ForwardWithBias) {
-  struct Config { DataType dtype; size_t token_num; size_t hidden_size; };
+  struct Config {
+    DataType dtype;
+    size_t token_num;
+    size_t hidden_size;
+  };
   Config configs[] = {{TYPE_FP16, 4, 256}, {TYPE_BF16, 4, 256}, {TYPE_FP32, 4, 256}};
 
   for (auto& cfg : configs) {
@@ -136,15 +143,18 @@ TEST_F(LayernormTest, ForwardWithBias) {
     FillInputData(input);
     Tensor output(MemoryLocation::LOCATION_DEVICE, cfg.dtype, {cfg.token_num, cfg.hidden_size});
 
-    std::vector<Tensor> inputs = {input}, outputs = {output};
-    EXPECT_TRUE(layernorm.Forward(inputs, outputs).OK());
-    VerifyOutput(outputs[0], cfg.dtype);
+    EXPECT_TRUE(layernorm.Forward(input, output).OK());
+    VerifyOutput(output, cfg.dtype);
   }
 }
 
 // Forward without weight (per-head RMSNorm). Kernel only supports head_dim=512.
 TEST_F(LayernormTest, ForwardPerHeadRMSNorm) {
-  struct Config { DataType dtype; size_t token_num; uint32_t num_heads; };
+  struct Config {
+    DataType dtype;
+    size_t token_num;
+    uint32_t num_heads;
+  };
   Config configs[] = {{TYPE_FP16, 4, 4}, {TYPE_BF16, 4, 8}, {TYPE_FP16, 1, 4}};
   const uint32_t head_dim = 512;
 
@@ -158,15 +168,19 @@ TEST_F(LayernormTest, ForwardPerHeadRMSNorm) {
     FillInputData(input);
     Tensor output(MemoryLocation::LOCATION_DEVICE, cfg.dtype, {cfg.token_num, hidden_size});
 
-    std::vector<Tensor> inputs = {input}, outputs = {output};
-    EXPECT_TRUE(layernorm.Forward(inputs, outputs).OK());
-    VerifyOutput(outputs[0], cfg.dtype);
+    EXPECT_TRUE(layernorm.Forward(input, output).OK());
+    VerifyOutput(output, cfg.dtype);
   }
 }
 
 // ForwardParallel: dual weight parallel norm, with and without stride.
 TEST_F(LayernormTest, ForwardParallel) {
-  struct Config { DataType dtype; size_t token_num; size_t hidden_size; int32_t stride; };
+  struct Config {
+    DataType dtype;
+    size_t token_num;
+    size_t hidden_size;
+    int32_t stride;
+  };
   Config configs[] = {
       {TYPE_FP16, 4, 256, 0},
       {TYPE_BF16, 4, 256, 0},
@@ -196,12 +210,11 @@ TEST_F(LayernormTest, ForwardParallel) {
     Tensor output1(MemoryLocation::LOCATION_DEVICE, cfg.dtype, {cfg.token_num, alloc_cols});
     Tensor output2(MemoryLocation::LOCATION_DEVICE, cfg.dtype, {cfg.token_num, alloc_cols});
 
-    std::vector<Tensor> inputs = {input1, input2}, outputs = {output1, output2};
-    EXPECT_TRUE(layernorm.ForwardParallel(inputs, outputs).OK());
+    EXPECT_TRUE(layernorm.ForwardParallel(input1, input2, output1, output2).OK());
 
     // Output shape should always be 2D regardless of stride.
-    EXPECT_EQ(outputs[0].shape.size(), 2ul);
-    EXPECT_EQ(outputs[0].shape[1], cfg.hidden_size);
-    VerifyOutput(outputs[0], cfg.dtype);
+    EXPECT_EQ(output1.shape.size(), 2ul);
+    EXPECT_EQ(output1.shape[1], cfg.hidden_size);
+    VerifyOutput(output1, cfg.dtype);
   }
 }

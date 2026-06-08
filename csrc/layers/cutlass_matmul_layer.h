@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include "layers/base_layer.h"
+#include "layers/matmul_base_layer.h"
 #include "models/base/base_weight.h"
 
 namespace ksana_llm {
@@ -22,7 +22,7 @@ namespace ksana_llm {
  * - 支持half和bfloat16的激活类型
  */
 
-class CutlassMatMulLayer : public BaseLayer {
+class CutlassMatMulLayer : public MatMulBaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
@@ -31,7 +31,7 @@ class CutlassMatMulLayer : public BaseLayer {
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
-  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+  virtual Status Forward(const Tensor* input, const Tensor* weight, Tensor* output,
                          const LayerExecContext& exec_ctx = {}) override;
 
  private:
@@ -46,8 +46,7 @@ class CutlassMatMulLayer : public BaseLayer {
   Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);
 
   template <typename T>
-  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                  const LayerExecContext& exec_ctx);
+  Status ForwardT(const Tensor& input, const Tensor& weight, Tensor& output, const LayerExecContext& exec_ctx);
 
  private:
   DataType weight_data_type_;

@@ -73,23 +73,39 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
   auto& input_meta = *model_input->page_metas.back();
 
 #ifdef ENABLE_CUDA
-  STATUS_CHECK_RETURN(paged_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0], input_meta.input_length, input_meta.kv_list, input_meta.kv_cache_offset,
-       input_meta.rotary_embedding_pos, input_meta.rotary_embedding_mask, kv_cache_buffer_tensor,
-       forward_context.forward_shape, paged_buffer_tensors[0], /* workspace */
-       query_layernorm_weight,                                 /* for use_qk_norm */
-       key_layernorm_weight,                                   /* for use_qk_norm */
-       // blocked_multi_token_forwarding_kv
-       model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr, input_meta.block_table},
-      hidden_buffer_tensors_1));
+  {
+    PagedAttentionInputs inputs;
+    inputs.query = &hidden_buffer_tensors_0[0];
+    inputs.context_lens = &input_meta.input_length;
+    inputs.kv_list = &input_meta.kv_list;
+    inputs.cache_offset = &input_meta.kv_cache_offset;
+    inputs.rotary_embedding_pos = &input_meta.rotary_embedding_pos;
+    inputs.rotary_embedding_mask = &input_meta.rotary_embedding_mask;
+    inputs.workspace = &kv_cache_buffer_tensor;
+    inputs.forward_shape = &forward_context.forward_shape;
+    inputs.qkv_workspace = &paged_buffer_tensors[0];
+    inputs.query_layernorm_weight = &query_layernorm_weight;
+    inputs.key_layernorm_weight = &key_layernorm_weight;
+    inputs.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr;
+    inputs.block_table = &input_meta.block_table;
+    STATUS_CHECK_RETURN(paged_attention_layer_->Forward(inputs, hidden_buffer_tensors_1));
+  }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 #elif defined(ENABLE_ACL)
-  // inference on NPU with ATB
-  STATUS_CHECK_RETURN(paged_attention_layer_->Forward(
-      {hidden_buffer_tensors_0[0], input_meta.rotary_embedding_pos, model_input->layers_slot_mapping,
-       model_input->layers_block_table, model_input->k_cache_blocks_base, model_input->v_cache_blocks_base,
-       model_input->seq_len_host, forward_context.forward_shape, model_input->atb_attention_attr},
-      hidden_buffer_tensors_1));
+  {
+    PagedAttentionInputs inputs;
+    inputs.qkv_tensor = &hidden_buffer_tensors_0[0];
+    inputs.rotary_embedding_pos = &input_meta.rotary_embedding_pos;
+    inputs.layers_slot_mapping = &model_input->layers_slot_mapping;
+    inputs.layers_block_table = &model_input->layers_block_table;
+    inputs.k_cache_blocks_base = &model_input->k_cache_blocks_base;
+    inputs.v_cache_blocks_base = &model_input->v_cache_blocks_base;
+    inputs.seq_len_host = &model_input->seq_len_host;
+    inputs.forward_shape = &forward_context.forward_shape;
+    inputs.atb_attention_attr = &model_input->atb_attention_attr;
+    // inference on NPU with ATB
+    STATUS_CHECK_RETURN(paged_attention_layer_->Forward(inputs, hidden_buffer_tensors_1));
+  }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 #endif
   return Status();

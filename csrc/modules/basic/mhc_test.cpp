@@ -227,7 +227,7 @@ class MhcTest : public testing::Test {
     Mhc mhc_a("model.layers.0.hc_attn", creation_ctx, mhc_buffers);
     EXPECT_TRUE(mhc_a.PreForward({input_a}, output_a).OK());
     Layernorm norm("model.layers.0.input_layernorm.weight", model_config.layernorm_eps, creation_ctx);
-    EXPECT_TRUE(norm.Forward(output_a, output_a).OK());
+    EXPECT_TRUE(norm.Forward(output_a[0], output_a[0]).OK());
 
     // Path B: Fused PreForwardWithNorm
     auto [input_b, output_b] = make_path();
