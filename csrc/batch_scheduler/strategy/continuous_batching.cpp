@@ -573,6 +573,9 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
       continue;
     }
 
+    // No more blocks, skip waiting_req launch.
+    batch_state_->step_sched_finish = true;
+
     // decoding request can not run due to block limitation, disable split fuse to free some blocks
     size_t recomputing_waiting_task_num = 0;
     if (!batch_state_->waiting_queue.empty() && batch_scheduler_config_.split_fuse_token_num > 0) {
@@ -588,9 +591,6 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
         RemoveRequestFromQueue(batch_state_->waiting_queue, req);
         RecomputeRequest(req);
       }
-      batch_scheduler_config_.split_fuse_token_num = 0;
-      KLLM_LOG_WARNING << "Split fuse disabled due to allocation failure. " << recomputing_reqs.size()
-                       << " chunked prefilling requests will be recomputed";
     }
 
     if (recomputing_waiting_task_num > 0) {
@@ -616,8 +616,6 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
 
     KLLM_LOG_SCHEDULER << "Allocate blocks error, info: " << status.GetMessage();
     alloc_failed_req_num++;
-    // No more blocks, skip waiting_req launch.
-    batch_state_->step_sched_finish = true;
     ++it;
   }
 }
