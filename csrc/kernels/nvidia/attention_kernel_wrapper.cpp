@@ -39,6 +39,7 @@
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
+#include "csrc/kernels/nvidia/qknorm_rope/fused_qknorm_rope.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
 
 #include "kernels/argmax.h"
@@ -154,9 +155,32 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
                  bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode) {
   // qk norm before rotary position embedding
+  bool use_fused_qknorm_rope = false;
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
-    InvokeQKRmsNorm<SCALAR_T>(qkv_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
-                              num_kv_heads, head_size, reinterpret_cast<int64_t*>(rotary_embedding_mask), stream);
+    // Try fused QKNorm+RoPE path: ~4.5x faster for BF16 + head_dim=128 + neox RoPE
+    if constexpr (std::is_same_v<SCALAR_T, __nv_bfloat16>) {
+      if (!no_rope && rotary_embedding_cuda.has_value() && head_size == 128 &&
+          rotary_embedding_cuda->GetRotaryDim() == head_size &&
+          rotary_embedding_cuda->GetIsNeox() &&
+          rotary_embedding_cuda->GetRotaryEmbeddingType() == llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT) {
+        use_fused_qknorm_rope = true;
+        void* cos_sin_cache = rotary_embedding_cuda->GetCosSinCache();
+        int64_t* positions_ptr = reinterpret_cast<int64_t*>(rotary_embedding_pos);
+        int64_t* mask_ptr = reinterpret_cast<int64_t*>(rotary_embedding_mask);
+        const int qkv_stride = (num_heads + num_kv_heads * 2) * head_size;
+        llm_kernels::nvidia::InvokeFusedQKNormRoPE(
+            qkv_ptr, qkv_ptr, q_norm_weight, positions_ptr, cos_sin_cache,
+            total_tokens, num_heads, head_size, layernorm_eps, stream, qkv_stride, mask_ptr);
+        void* k_ptr = static_cast<char*>(qkv_ptr) + num_heads * head_size * sizeof(SCALAR_T);
+        llm_kernels::nvidia::InvokeFusedQKNormRoPE(
+            k_ptr, k_ptr, k_norm_weight, positions_ptr, cos_sin_cache,
+            total_tokens, num_kv_heads, head_size, layernorm_eps, stream, qkv_stride, mask_ptr);
+      }
+    }
+    if (!use_fused_qknorm_rope) {
+      InvokeQKRmsNorm<SCALAR_T>(qkv_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
+                                num_kv_heads, head_size, reinterpret_cast<int64_t*>(rotary_embedding_mask), stream);
+    }
   }
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
@@ -207,10 +231,13 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
     }
 
-    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_tensor.data_ptr(),
-                                    k_tensor.data_ptr(), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
+    if (!use_fused_qknorm_rope) {
+      // Regular forward RoPE (skip if fused QKNorm+RoPE already applied it)
+      rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                      reinterpret_cast<int64_t*>(rotary_embedding_mask), q_tensor.data_ptr(),
+                                      k_tensor.data_ptr(), total_tokens, stream);
+      CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
+    }
   }
 
   if (!no_rope && use_qk_norm) {
@@ -523,9 +550,32 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                           bool enable_blocked_multi_token_forwarding_kv, bool is_first_layer_on_node,
                           bool use_flashinfer_for_decode, void* flashinfer_prefill_helper) {
   // qk norm before rotary position embedding for paged attention
+  bool use_fused_qknorm_rope_paged = false;
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
-    InvokeQKRmsNorm<SCALAR_T>(query_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
-                              num_kv_heads, head_size, reinterpret_cast<int64_t*>(rotary_embedding_mask), stream);
+    // Try fused QKNorm+RoPE path for decode
+    if constexpr (std::is_same_v<SCALAR_T, __nv_bfloat16>) {
+      if (!no_rope && rotary_embedding_cuda.has_value() && head_size == 128 &&
+          rotary_embedding_cuda->GetRotaryDim() == head_size &&
+          rotary_embedding_cuda->GetIsNeox() &&
+          rotary_embedding_cuda->GetRotaryEmbeddingType() == llm_kernels::nvidia::RotaryEmbeddingType::DEFAULT) {
+        use_fused_qknorm_rope_paged = true;
+        void* cos_sin_cache = rotary_embedding_cuda->GetCosSinCache();
+        int64_t* positions_ptr = reinterpret_cast<int64_t*>(rotary_embedding_pos);
+        int64_t* mask_ptr = reinterpret_cast<int64_t*>(rotary_embedding_mask);
+        const int qkv_stride = (num_heads + num_kv_heads * 2) * head_size;
+        llm_kernels::nvidia::InvokeFusedQKNormRoPE(
+            query_ptr, query_ptr, q_norm_weight, positions_ptr, cos_sin_cache,
+            total_tokens, num_heads, head_size, layernorm_eps, stream, qkv_stride, mask_ptr);
+        void* k_ptr = static_cast<char*>(query_ptr) + num_heads * head_size * sizeof(SCALAR_T);
+        llm_kernels::nvidia::InvokeFusedQKNormRoPE(
+            k_ptr, k_ptr, k_norm_weight, positions_ptr, cos_sin_cache,
+            total_tokens, num_kv_heads, head_size, layernorm_eps, stream, qkv_stride, mask_ptr);
+      }
+    }
+    if (!use_fused_qknorm_rope_paged) {
+      InvokeQKRmsNorm<SCALAR_T>(query_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
+                                num_kv_heads, head_size, reinterpret_cast<int64_t*>(rotary_embedding_mask), stream);
+    }
   }
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
@@ -541,7 +591,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   void* k_tensor_ptr = k_tensor.data_ptr();
   void* v_tensor_ptr = v_tensor.data_ptr();
 
-  if (!no_rope && rotary_embedding_cuda.has_value()) {
+  if (!no_rope && rotary_embedding_cuda.has_value() && !use_fused_qknorm_rope_paged) {
     rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
                                     reinterpret_cast<int64_t*>(rotary_embedding_mask), q_tensor_ptr, k_tensor_ptr,
                                     total_tokens, stream);

@@ -329,17 +329,19 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
   }
 
   // Special case for basic softmax + topk without grouping
+  auto is_power_of_2 = [](int x) { return x > 0 && (x & (x - 1)) == 0; };
   bool is_enable_basic_softmax_topk =
       (scoring_func == "softmax" && e_bias == nullptr && num_expert_group == 1);
   if (is_enable_basic_softmax_topk) {
-    if (renormalize) {
+    if (renormalize && is_power_of_2(num_experts) && num_experts <= 256) {
       llm_kernels::nvidia::InvokeTopkGatingSoftmax<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows,
                                                       num_experts, topk, renormalize, routed_scaling_factor, stream);
-    } else {
+      return;
+    } else if (!renormalize && num_experts < 1024 && topk <= num_experts && topk <= 32) {
       llm_kernels::nvidia::InvokeBasicSoftmaxTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows,
                                                      num_experts, topk, routed_scaling_factor, stream);
+      return;
     }
-    return;
   }
   cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
 

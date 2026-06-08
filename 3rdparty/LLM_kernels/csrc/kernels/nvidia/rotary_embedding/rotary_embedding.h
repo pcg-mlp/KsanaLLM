@@ -101,6 +101,16 @@ class RotaryEmbeddingCuda {
   template <typename T>
   void Forward();
 
+  // Accessor for the precomputed cos/sin cache buffer
+  void* GetCosSinCache() const { return cos_sin_cache_; }
+
+  // Accessor for the rotary dimension (= head_dim for standard RoPE)
+  int GetRotaryDim() const { return params_.rotary_dim; }
+
+  bool GetIsNeox() const { return params_.is_neox; }
+
+  RotaryEmbeddingType GetRotaryEmbeddingType() const { return params_.rotary_embedding_type; }
+
   void* cos_sin_cache_;  // [max_position_embeddings, rotary_dim]
 
  private:
