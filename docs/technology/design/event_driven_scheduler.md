@@ -142,11 +142,10 @@ struct ScheduleBackendEvent {
 - **UpdateWithGenerationResult(multi_batch_id, generation_output, context, events)**：处理生成结果并输出 `events`。对于生成过程中已结束的请求，后端通过 stop 事件通知调度器；`ScheduleState` 的实际变更由调度器主线程执行。
 - **Stop()**：请求后端停止。
 - 默认后端实现为 **ContinuousBatchingBackend**（参考 ContinuousBatchingStrategy）：
-  - `ProcessDecodingQueue/ProcessPrefillingQueue/ProcessSwappedQueue` 在轮询队列时根据 block 分配结果直接决策并产出 events；请求能被规划的判定基于 `HasPlanningTask()==false`。
+  - `ProcessDecodingQueue/ProcessPrefillingQueue` 在轮询队列时根据 block 分配结果直接决策并产出 events；请求能被规划的判定基于 `HasPlanningTask()==false`。
   - 请求加入 `DpBatch.running_reqs` 前必须调用 `SetPlanningTask()`，固定本轮 planning 状态。
   - `ProcessDecodingQueue` 的 OOM 兜底：若当前 DP 的 `running_reqs` 为空且 decoding 队列本轮候选请求全部分配失败，则优先从 `prefilling_reqs` 中选择“已持有 kv blocks”的请求产出 `kRecomputeRequest`；若不存在此类请求，再从 decoding 候选中选择一个请求产出 `kRecomputeRequest`。
-  - 支持 `kSwapoutRequest / kSwapinRequest / kMoveToDecode` 等事件；其中 `kMoveToDecode` 用于将请求从 `prefilling_reqs` 迁移到 `decoding_reqs`。
-  - `swapout` 启动失败时，调度器侧会立即降级为 `recompute`（释放并重建该请求执行路径），避免请求长期卡在内存不足状态；`swapin` 启动失败时请求保持在 `swapped_reqs`，等待后续轮次重试。
+  - 支持 `kRecomputeRequest / kStopRequest / kMoveToDecode` 等事件；其中 `kMoveToDecode` 用于将请求从 `prefilling_reqs` 迁移到 `decoding_reqs`。
   - `UpdateWithGenerationResult` 中仅在“完成判定”时产出 `kStopRequest`；`stop/abort` 仅用于决定是否继续执行 cache 状态更新，超时等其余终止状态由后续 `PreSchedule` 统一处理。
   - 调度器只消费 backend events，不再在外层额外扫描状态生成同类事件。
 
@@ -163,7 +162,6 @@ struct ScheduleBackendEvent {
 - `EventAddRequest`
 - `EventUpdateAfterGeneration`
 - `EventAsyncTaskFinished`
-- `EventSwapTaskFinished`
 - `EventGetScheduleResult`：消费者请求下一个结果；主线程**只有收到此事件后**才将 PlanningBatch 组织成 ScheduleResult 放入 result_queue_。
 
 ---
@@ -208,24 +206,11 @@ struct EventAsyncTaskFinishedInfo {
 };
 ```
 
-### 4.4 EventSwapTaskFinished
-
-用于承接 cache manager 的异步 swap 回调，主线程收到后执行 wait + merge 并更新队列状态。
-
-```cpp
-struct EventSwapTaskFinishedInfo {
-  int64_t req_id;
-  bool is_swapout;
-  size_t block_num;
-  Status status;
-};
-```
-
-### 4.5 EventGetScheduleResult
+### 4.4 EventGetScheduleResult
 
 `GetNextScheduleResult()` 会先向事件队列发送本事件，再阻塞等待 `result_queue_`。主线程处理本事件时**仅设置标志位** `pending_get_schedule_result_`。
 
-**调度时机**：`AsyncSchedulerLoop` 在每轮先 `Get()` 一个事件并 `DispatchEvent`，再用 `NonBlockingGet()` 尽量排空当前队列并逐一 `DispatchEvent`；随后统一执行 `RunScheduleForBatches()`（内部先 `PreSchedule` 再 `Schedule`，并应用 backend events）。若 `pending_get_schedule_result_` 为 true，主线程会尝试 `TryBuildAndLaunchScheduleResult()`；成功时会立刻再跑一轮 `RunScheduleForBatches()` 预热下一次结果。`ApplyBackendEventsToState()` 对 Stop/Recompute/Swapout 事件采用“两阶段处理”：先把请求从 `ScheduleState` 与 `DpBatch.running_reqs` 摘除；若 `HasInflightTask()==true` 则写入延迟队列，待后续 `ProcessDelayedBackendEvents()` 条件满足再执行请求级操作。
+**调度时机**：`AsyncSchedulerLoop` 在每轮先 `Get()` 一个事件并 `DispatchEvent`，再用 `NonBlockingGet()` 尽量排空当前队列并逐一 `DispatchEvent`；随后统一执行 `RunScheduleForBatches()`（内部先 `PreSchedule` 再 `Schedule`，并应用 backend events）。若 `pending_get_schedule_result_` 为 true，主线程会尝试 `TryBuildAndLaunchScheduleResult()`；成功时会立刻再跑一轮 `RunScheduleForBatches()` 预热下一次结果。`ApplyBackendEventsToState()` 对 Stop/Recompute 事件采用”两阶段处理”：先把请求从 `ScheduleState` 与 `DpBatch.running_reqs` 摘除；若 `HasInflightTask()==true` 则写入延迟队列，待后续 `ProcessDelayedBackendEvents()` 条件满足再执行请求级操作。
 
 `pending_get_schedule_result_` 的语义可视为“二阶段提交”：
 
@@ -361,7 +346,7 @@ void UpdateAfterAsyncTaskFinished(
 
 - 调度主线程在处理 `EventAsyncTaskFinished` 事件时，将事件 payload 传入并调用 `UpdateAfterAsyncTaskFinished`。调度器将 `event_info.task_results` 传给 ScheduleHookManager 的 **UpdateAsyncResult**。Manager 先按 hook_idx 顺序调用各 Hook 的 `UpdateAsyncResult`，再将可继续请求按 `req_id -> hook_idx+1` 统一续跑责任链；若返回 req_id 不在 `preprocessing_reqs`，打印 error 并忽略。
 - 调度器根据 **UpdateAsyncResult** 返回的 **ReqIdToNextStep** 做请求移动：kContinue 的请求从 **preprocessing_reqs** 移入 **prefilling_reqs**，其余按 action 保持等待或结束。
-- `RunScheduleForBatches` 阶段，调度器先调用 backend 的 `PreSchedule(const ScheduleContext&, planning_batches, events)` 处理 timeout 等预检查事件，再调用 `Schedule(const ScheduleContext&, planning_batches, events)` 获取本轮可执行 batch；两类 events 都按主线程两阶段处理：先从 `ScheduleState` 队列和 `DpBatch.running_reqs` 移除请求；请求级 Stop/Recompute/Swapout 若遇到 `HasInflightTask()==true` 则写入延迟队列，后续轮次在 `HasInflightTask()==false` 时再执行。swap 完成后由 `EventSwapTaskFinished` 回填并执行 wait+merge，更新 `swapped_reqs/decoding_reqs` 与对节点广播信息。
+- `RunScheduleForBatches` 阶段，调度器先调用 backend 的 `PreSchedule(const ScheduleContext&, planning_batches, events)` 处理 timeout 等预检查事件，再调用 `Schedule(const ScheduleContext&, planning_batches, events)` 获取本轮可执行 batch；两类 events 都按主线程两阶段处理：先从 `ScheduleState` 队列和 `DpBatch.running_reqs` 移除请求；请求级 Stop/Recompute 若遇到 `HasInflightTask()==true` 则写入延迟队列，后续轮次在 `HasInflightTask()==false` 时再执行。
 
 ---
 
@@ -414,7 +399,7 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
 
 - **请求入口分配（`AddInferRequests`）**
   - 单 DP：所有请求固定写入 `attn_dp_group_id = 0`；
-  - 多 DP：优先选择“无 swapped 请求”的 DP；再按队列负载
+  - 多 DP：按队列负载均衡选择目标 DP
     `preprocessing_reqs + prefilling_reqs + decoding_reqs` 最小优先；
   - 若负载相同，按 round-robin 距离 `next_dp_idx_` 做 tie-break，避免长期偏置。
 
@@ -440,44 +425,33 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
 
 本节补充正常调度路径之外的关键状态机行为，便于排障与维护。
 
-#### 5.5.1 Swap 失败恢复策略
+#### 5.5.1 DelayedBackendEvents 设计意图与触发时机
 
-- **Swapout 启动失败**：`HandleSwapoutRequest` 调用 cache manager 失败后，立即执行降级：
-  - 清除 in-plan 的 swapout 标记；
-  - 转为 recompute（写入 recompute in-plan 并执行 `HandleRecomputeRequest`）；
-  - 目标是“释放现有 cache 占用并回到可重新 prefill 的路径”，避免持续 OOM。
-- **Swapin 启动失败**：请求不会丢失；会保留/回插到 `swapped_reqs`，等待后续轮次在资源允许时再次尝试 swapin。
-- **Swap 完成但 merge/wait 失败**：记录错误并保留当前状态，不做破坏性迁移；依赖后续事件轮次继续收敛。
-
-#### 5.5.2 DelayedBackendEvents 设计意图与触发时机
-
-- **设计意图**：将“状态摘除”和“请求级副作用执行（stop/recompute/swapout）”解耦，避免对仍有 in-flight task 的请求提前执行破坏性动作。
+- **设计意图**：将”状态摘除”和”请求级副作用执行（stop/recompute）”解耦，避免对仍有 in-flight task 的请求提前执行破坏性动作。
 - **触发时机**：
-  - 在 `ApplyBackendEventsToState()` 中，Stop/Recompute/Swapout 事件会先把请求从队列与 `running_reqs` 摘除；
+  - 在 `ApplyBackendEventsToState()` 中，Stop/Recompute 事件会先把请求从队列与 `running_reqs` 摘除；
   - 若发现 `HasInflightTask()==true`，则事件进入 `delayed_backend_events_`；
   - 后续在 `OnEventUpdateAfterGeneration` 后调用 `ProcessDelayedBackendEvents()`，当请求变为无 in-flight task 时再真正执行请求级操作。
-- **收益**：保证“后续调度不可再选中该请求”，同时避免“请求级操作与正在执行的任务并发冲突”。
+- **收益**：保证”后续调度不可再选中该请求”，同时避免”请求级操作与正在执行的任务并发冲突”。
 
-#### 5.5.3 `pending_get_schedule_result_` 的二阶段语义
+#### 5.5.2 `pending_get_schedule_result_` 的二阶段语义
 
 - 它不是“是否需要调度”的标记，而是“是否有消费者在等待下一个可发布结果”的意图标记。
 - 第一阶段由 `EventGetScheduleResult` 设置等待意图；第二阶段由 `TryBuildAndLaunchScheduleResult()` 成功构建后清标志并投递结果。
 - 主线程在成功发布一个结果后会立即再跑一轮 `RunScheduleForBatches()`，用于预热下一次结果，降低下一次 `GetNextScheduleResult()` 的等待时延。
 
-#### 5.5.4 Stop() 有序关闭顺序
+#### 5.5.3 Stop() 有序关闭顺序
 
 当前实现中，`EventDrivenScheduleProcessor::Stop()` 的关闭顺序为：
 
 1. 设置 `terminated_ = true`，阻止调度循环继续正常处理；
-2. 清理 swap 回调目标（全局 callback target 置空），使后续异步 swap 回调可安全丢弃；
-3. 调用 `backend_->Stop()`，通知后端停止继续产生活跃调度行为；
-4. 向 `event_queue_` 注入空事件，唤醒可能阻塞在 `Get()` 的调度主线程；
-5. `join` 调度主线程，确保主循环退出完成；
-6. 向 `result_queue_` 投递 `nullptr`，唤醒可能阻塞的消费者。
+2. 调用 `backend_->Stop()`，通知后端停止继续产生活跃调度行为；
+3. 向 `event_queue_` 注入空事件，唤醒可能阻塞在 `Get()` 的调度主线程；
+4. `join` 调度主线程，确保主循环退出完成；
+5. 向 `result_queue_` 投递 `nullptr`，唤醒可能阻塞的消费者。
 
 说明：
 - Hook 线程池生命周期不由调度器内核直接管理；应由 Hook/HookManager 持有方在系统关闭路径中执行线程池停机与任务收敛。
-- 因为 swap 回调在 Stop 后会被主动丢弃，未完成 swap 任务不会再驱动状态机前进；该行为属于“优先保证关闭安全”的策略。
 
 ---
 

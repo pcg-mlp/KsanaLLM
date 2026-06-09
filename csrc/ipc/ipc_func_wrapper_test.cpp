@@ -30,17 +30,6 @@ namespace ksana_llm {
 // Mock BlockAllocatorGroup for Testing
 // ============================================================================
 
-// Structure to record swap operations
-struct SwapOperation {
-  int index;
-  bool is_swapin;
-  std::vector<int> device_block_ids;
-  std::vector<int> host_block_ids;
-  std::chrono::steady_clock::time_point timestamp;
-};
-
-// Mock BlockAllocatorGroup that records all swap operations
-
 // ============================================================================
 // Test Fixture
 // ============================================================================

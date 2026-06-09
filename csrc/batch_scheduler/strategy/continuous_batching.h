@@ -35,9 +35,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // In asynchronous mode, inflighting request may be in other queues.
   void RemoveRequestFromBatchState(const std::shared_ptr<InferRequest> &req);
 
-  // Reset the req and cache status, destroy swap or finish req
-  // If terminated is true, the request is terminated, and will notify to stop this request.
-  // If is_swap_req is true, the request is a swap request, otherwise it is a normal request.
+  // Reset the req and cache status, finish or recompute req.
+  // If terminated is true, the request is terminated and will notify to stop this request.
   void ResetRequest(std::shared_ptr<InferRequest> req, Status ret_status, bool terminated);
 
   // Destroy the request and add it to the begining of waiting queue to recompute.

@@ -141,8 +141,6 @@ def get_event_color(event_type: str) -> str:
         "SchedBegin": "yellow",  # Yellow (light)
         "DropReq": "bad",  # Red (lighter than terrible)
         "FinishReq": "good",  # Green (light)
-        "SwapOut": "rail_response",  # Blue (light)
-        "SwapIn": "rail_animation",  # Light green
         "Recompute": "heap_dump_object_type",  # Purple (light)
         "Schedule": "yellow",  # Yellow (light)
         "PrepareForwarding": "olive",  # Olive (light)

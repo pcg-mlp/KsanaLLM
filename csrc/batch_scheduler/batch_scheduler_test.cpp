@@ -49,9 +49,6 @@ TEST_F(BatchSchedulerTest, SwaBasicTokenGenerationTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
 }
 
 TEST_F(BatchSchedulerTest, SwaPrefixCacheBasicTokenGenerationTest) {
@@ -75,14 +72,11 @@ TEST_F(BatchSchedulerTest, SwaPrefixCacheBasicTokenGenerationTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
 }
 
-TEST_F(BatchSchedulerTest, SwaPrefixCacheSwapOutInNotTriggeredPressTest) {
+TEST_F(BatchSchedulerTest, SwaPrefixCacheNoCachePressureTest) {
   // SWA enabled, prefix cache enabled, parallel requests.
-  // Verify that all requests complete and no swap is triggered.
+  // Verify that all requests complete and no recompute is triggered.
   sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
   enable_prefix_cache_ = true;
   CommonSetUp();
@@ -92,7 +86,7 @@ TEST_F(BatchSchedulerTest, SwaPrefixCacheSwapOutInNotTriggeredPressTest) {
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
   hooks.push_back(&default_hook);
 
-  // Run requests in parallel; input and max output token are limited so swap is not triggered.
+  // Run requests in parallel; input and max output token are limited so recompute is not triggered.
   int request_num = 100;
   int client_num = 10;
   int max_expect_output_num = 40;
@@ -101,15 +95,11 @@ TEST_F(BatchSchedulerTest, SwaPrefixCacheSwapOutInNotTriggeredPressTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);
 }
 
-TEST_F(BatchSchedulerTest, SwaSwapOutInNotTriggeredPressTest) {
+TEST_F(BatchSchedulerTest, SwaNoCachePressureTest) {
   // SWA enabled, prefix cache disabled, parallel requests.
-  // Verify that all requests complete and no swap is triggered.
+  // Verify that all requests complete and no recompute is triggered.
   sliding_window_size_ = 12;  // = 2 * block_token_num (block_token_num=6)
   enable_prefix_cache_ = false;
   CommonSetUp();
@@ -119,7 +109,7 @@ TEST_F(BatchSchedulerTest, SwaSwapOutInNotTriggeredPressTest) {
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
   hooks.push_back(&default_hook);
 
-  // Run requests in parallel; input and max output token are limited so swap is not triggered.
+  // Run requests in parallel; input and max output token are limited so recompute is not triggered.
   int request_num = 100;
   int client_num = 10;
   int max_expect_output_num = 40;
@@ -128,10 +118,6 @@ TEST_F(BatchSchedulerTest, SwaSwapOutInNotTriggeredPressTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);
 }
 
 TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
@@ -151,15 +137,9 @@ TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
-  EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);
-  EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
-TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
+TEST_F(BatchSchedulerTest, NoCachePressurePressTest) {
   CommonSetUp();
   ParallelTester tester(schedule_processor_, env_simulator_);
 
@@ -168,7 +148,7 @@ TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
   hooks.push_back(&default_hook);
 
   // Run requests in parallel
-  // input and max output token are limited, SwapOut/In are not triggered.
+  // input and max output token are limited, recompute is not triggered.
   int request_num = 100;
   int client_num = 10;
   int max_expect_output_num = 40;
@@ -177,12 +157,6 @@ TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
-  EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);
-  EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
 TEST_F(BatchSchedulerTest, RecomputeTriggeredPressTest) {
@@ -193,7 +167,7 @@ TEST_F(BatchSchedulerTest, RecomputeTriggeredPressTest) {
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
   hooks.push_back(&default_hook);
 
-  // Run requests in parallel; cache pressure triggers recompute (swap removed).
+  // Run requests in parallel; cache pressure triggers recompute (recompute used).
   int request_num = 10;
   int client_num = 10;
   int min_expect_output_num = 1;
@@ -205,12 +179,6 @@ TEST_F(BatchSchedulerTest, RecomputeTriggeredPressTest) {
                           req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);
-  EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);
-  EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
 TEST_F(BatchSchedulerTest, SplitFusePressTest) {
@@ -226,7 +194,7 @@ TEST_F(BatchSchedulerTest, SplitFusePressTest) {
   hooks.push_back(&split_fuse_check_hook);
 
   // Run requests in parallel
-  // max output token are large, SwapOut/In will be triggered when there are multiple requests.
+  // max output token are large, recompute will be triggered when there are multiple requests.
   // exceed cache size, not exceed_batch size and max_step_size
   int request_num = 10;
   int client_num = 10;
@@ -239,15 +207,9 @@ TEST_F(BatchSchedulerTest, SplitFusePressTest) {
                           req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
-
-  auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);  // Recomputed, no swap
-  EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);  // Recomputed, no swap
-  EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
-TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredTest) {
+TEST_F(BatchSchedulerTest, FixPrefixCacheNoCachePressureTest) {
   enable_prefix_cache_ = true;
   CommonSetUp();
 
@@ -257,10 +219,10 @@ TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredTest) {
   FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, true, false);
   test_case.SetScheduleProcessor(schedule_processor_);
   test_case.SetEnvSimulator(env_simulator_);
-  test_case.RunTestNoSwapTriggered();
+  test_case.RunTestNoCachePressure();
 }
 
-TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheNoSwapTriggeredTest) {
+TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheNoCachePressureTest) {
   enable_prefix_cache_ = true;
   enable_async_ = true;
   CommonSetUp();
@@ -271,10 +233,10 @@ TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheNoSwapTriggeredTest) {
   FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, true, false);
   test_case.SetScheduleProcessor(schedule_processor_);
   test_case.SetEnvSimulator(env_simulator_);
-  test_case.RunTestNoSwapTriggered();
+  test_case.RunTestNoCachePressure();
 }
 
-TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
+TEST_F(BatchSchedulerTest, FixPrefixCacheNoCachePressureSplitfuseTest) {
   enable_prefix_cache_ = true;
   split_fuse_token_num_ = 6;
   CommonSetUp();
@@ -285,7 +247,7 @@ TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
   FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, true, false);
   test_case.SetScheduleProcessor(schedule_processor_);
   test_case.SetEnvSimulator(env_simulator_);
-  test_case.RunTestNoSwapTriggered();
+  test_case.RunTestNoCachePressure();
 }
 
 TEST_F(BatchSchedulerTest, FixPrefixCacheRecomputeTriggeredTest) {

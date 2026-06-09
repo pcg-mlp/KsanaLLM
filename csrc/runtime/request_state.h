@@ -7,5 +7,4 @@ enum class RequestState {
   kWaiting,
   kRunning,
   kFinished,
-  kTransfer,
 };

@@ -30,8 +30,6 @@ setting:
     launch_block_threshold: 2.0
     # 是否开启自动前缀匹配
     enable_auto_prefix_cache: false
-    # 用于执行异步swap的线程池大小
-    # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数。如果要获得在910B2C上获得最佳性能，建议将此值改成128。

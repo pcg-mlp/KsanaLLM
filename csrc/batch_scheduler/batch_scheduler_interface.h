@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "cache_manager/cache_manager_interface.h"
-#include "runtime/schedule_output.h"
 #include "runtime/infer_request.h"
+#include "runtime/schedule_output.h"
 
 namespace ksana_llm {
 
@@ -34,7 +34,7 @@ class BatchSchedulerInterface {
   // Get cache manager
   virtual std::shared_ptr<CacheManagerInterface> &GetCacheManager(int attn_dp_idx) = 0;
 
-  // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
+  // Whether the scheduler is idle, that is, waiting buffer is empty.
   virtual bool IsIdle(size_t multi_batch_id) = 0;
 
   virtual void WaitUntilHaveReqs(size_t multi_batch_id) = 0;

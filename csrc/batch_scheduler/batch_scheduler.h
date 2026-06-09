@@ -56,7 +56,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   // 设置全局 cache put 追踪器，用于延迟析构。
   void SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
 
-  // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
+  // Whether the scheduler is idle, that is, waiting buffer is empty.
   bool IsIdle(size_t multi_batch_id) override;
 
   void WaitUntilHaveReqs(size_t multi_batch_id) override;

@@ -147,7 +147,7 @@ void StreamingIterator::Abort() {
   // Idempotent: safe to call multiple times. Wakes step_waiter so any in-flight
   // GetNext() returns immediately with RET_REQUEST_TERMINATED. Setting `aborted`
   // also makes the scheduler StopRequest the request on its next sweep
-  // (continuous_batching.cpp running/waiting/swapped checks).
+  // (continuous_batching.cpp running/waiting queue checks).
   if (all_finished) {
     return;
   }

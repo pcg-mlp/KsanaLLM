@@ -250,8 +250,8 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       }
     }
 
-    // If decoding queue has no launchable request and current dp batch is empty, and no async recompute/stop/swapout
-    // event has been emitted, trigger a recompute/swapout event to release memory.
+    // If decoding queue has no launchable request and current dp batch is empty, and no async recompute/stop
+    // event has been emitted, trigger a recompute event to release memory.
     // 1) Prefer recompute a prefilling request that already owns kv blocks.
     // 2) Otherwise recompute one decoding request.
     if (has_candidate && !has_success && (dp_batch.running_reqs.size() == 0) && in_plan_ops.stop_req_ids.empty() &&
@@ -445,7 +445,6 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       }
 
       if (recompute_candidate != nullptr) {
-        // Recompute only. Swapout is not supported for chunk-prefilled requests.
         EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, recompute_candidate, last_failed_status,
                       events, emitted_event_keys);
         in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);

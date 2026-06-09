@@ -56,11 +56,6 @@ struct PrefixCachedBlock {
   // All running or finished requests that reference this block.
   // pair.first is position index of current block in request.
   std::unordered_map<int, std::pair<int, PrefixCachedRequest*>> active_requests;
-
-  // All waiting or swapped requests that reference this block.
-  // The block could not be reuse if any swapped request reference it.
-  // pair.first is position index of current block in request.
-  std::unordered_map<int, std::pair<int, PrefixCachedRequest*>> inactive_requests;
 };
 
 // Describe the cache information for a infer request.
@@ -313,9 +308,8 @@ class PrefixCacheManager : public CacheManagerInterface,
   // For each released FA block:
   //   - If the block is not shareable: FreeSWABlock is called (if swa_cache_manager_ != nullptr),
   //     then the block is reset and returned to free_cached_blocks_.
-  //   - If the block is shareable: the request is removed from active_requests /
-  //     inactive_requests according to cached_request->req_state; the block is inserted into
-  //     reusable_cached_blocks_ when no references remain.
+  //   - If the block is shareable: the request is removed from active_requests;
+  //     the block is inserted into reusable_cached_blocks_ when no references remain.
   //
   // Does NOT touch swa_window_fa_block_ids or remote_cache_swa_fa_block_ids; callers are
   // responsible for managing those lists before calling this method.

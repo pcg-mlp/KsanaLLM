@@ -392,15 +392,6 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
     }
   }
 
-  struct Statistics {
-    int swapout_succ_num = 0;
-    int swapout_fail_num = 0;
-    int swapin_succ_num = 0;
-    int swapin_fail_num = 0;
-  };
-
-  const Statistics& GetStatistics() { return stat_; }
-
  private:
   void CollectKvCacheContentFromDevice(int device_idx, std::vector<int>& block_list, int token_num,
                                        std::vector<int>& kv_cache_contents) {
@@ -467,8 +458,6 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
   int device_num_;
 
   WorkspaceMeta dummy_workspace_meta_;
-
-  Statistics stat_;
 
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
 
@@ -768,8 +757,6 @@ class BatchSchedulerEnvironmentSimulator {
       }
     }
   }
-
-  const FakedBlockAllocatorGroup::Statistics& GetBlockManagerStat() { return block_allocator_group_->GetStatistics(); }
 
   const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
 

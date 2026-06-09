@@ -530,5 +530,5 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {
   std::shared_ptr<ScheduleProcessorInterface> schedule_processor = std::make_shared<ScheduleProcessor>(false, 1);
   schedule_processor->Initialize(batch_scheduler);
   test_case.SetScheduleProcessor(schedule_processor);
-  test_case.RunTestNoSwapTriggered();
+  test_case.RunTestNoCachePressure();
 }

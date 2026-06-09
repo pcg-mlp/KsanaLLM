@@ -26,7 +26,6 @@ setting:
     # 单个请求可用block大于该值触发换入
     # 单个请求可用block大于该值拉起新任务
     launch_block_threshold: 2.0
-    # 用于执行异步swap的线程池大小
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

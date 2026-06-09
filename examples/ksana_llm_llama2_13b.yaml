@@ -35,8 +35,6 @@ setting:
     # 如果设置为0，则表示不对处理的token数量进行限制，模型将尝试一次性处理整个输入。
     # 控制此参数可以帮助平衡推理速度与资源消耗，特别是在处理长文本时。
     split_fuse_token_num: 256
-    # 用于执行异步swap的线程池大小
-    # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

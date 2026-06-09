@@ -121,7 +121,7 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
 
   // State guard: both GetRequestPrefixBlockNumber and GetRequestPrefixBlockNumberBeforeRemoteCacheLoading
   // may only be called when the request is in kWaiting or kRemoteLoading state.
-  // Calling them in kRunning/kFinished/kSwapped would corrupt the cached_blocks list and
+  // Calling them in kRunning/kFinished would corrupt the cached_blocks list and
   // the SWA window state that is already in use by the running inference.
   KLLM_CHECK_WITH_INFO(
       request->req_state == RequestState::kWaiting || request->is_remote_loading,
@@ -383,7 +383,6 @@ void PrefixCacheManager::ResetCachedBlock(PrefixCachedBlock* cached_block) {
   cached_block->token_ids.resize(cache_manager_config_.block_token_num);
 
   cached_block->active_requests.clear();
-  cached_block->inactive_requests.clear();
 
   cached_block->parent = nullptr;
   cached_block->children.clear();
@@ -396,9 +395,6 @@ void PrefixCacheManager::QueryIncompleteBlock(PrefixCachedBlock* last_block, con
                                               int start_idx, PrefixCachedBlock*& prefix_append_block,
                                               size_t& prefix_append_len) {
   for (auto& try_block : last_block->children) {
-    if (!try_block.second->inactive_requests.empty()) {
-      continue;
-    }
     size_t i = 0;
     for (; i < cache_manager_config_.block_token_num; i++) {
       if (try_block.second->token_ids[i] != token_ids[start_idx + i]) {
@@ -486,18 +482,11 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
         size_t hit_num = block_token_num;
         uint32_t start_idx = block_token_num - (offset - new_shared_token_num);
         cached_block = block;
-        if (!cached_block->inactive_requests.empty()) {
-          continue;
-        }
         std::vector<PrefixCachedBlock*> new_cached_blocks;
         if (offset != new_shared_token_num) {
           if (cached_block->parent == nullptr) {
             continue;
           }
-          if (!cached_block->parent->inactive_requests.empty()) {
-            continue;
-          }
-          // skip if the parent is root block
           if (cached_block->parent->token_ids.empty()) {
             continue;
           }
@@ -518,9 +507,6 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
           auto it = cached_block->children.find(dst_token_ids);
           if (it != cached_block->children.end()) {
             cached_block = it->second;
-            if (!cached_block->inactive_requests.empty()) {
-              continue;
-            }
             new_cached_blocks.push_back(cached_block);
           } else {
             partial_match = true;
@@ -652,7 +638,7 @@ bool PrefixCacheManager::FreeCachedBlocks(size_t block_num, size_t& free_block_n
       continue;
     }
 
-    if (cb->active_requests.empty() && cb->inactive_requests.empty()) {
+    if (cb->active_requests.empty()) {
       // Take it and all its children from tree.
       auto it2 = cb->parent->children.find(cb->token_ids);
       if (it2 != cb->parent->children.end()) {
@@ -752,7 +738,7 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
     req_block_ids.push_back(cb->memory_block_id);
 
     // Not reusable if no request associated with it.
-    if (cb->active_requests.empty() && cb->inactive_requests.empty()) {
+    if (cb->active_requests.empty()) {
       reusable_cached_blocks_.erase(cb);
     }
 
@@ -940,8 +926,7 @@ Status PrefixCacheManager::AllocateBlocksForRemoteCache(int64_t req_id, std::vec
 // For each released FA block:
 //   - If the block is not shareable: FreeSWABlock is called (if swa_cache_manager_ != nullptr),
 //     then the block is reset and returned to free_cached_blocks_.
-//   - If the block is shareable: the request is removed from active_requests /
-//     inactive_requests according to cached_request->req_state; the block is inserted into
+//   - If the block is shareable: the request is removed from active_requests;
 //     reusable_cached_blocks_ when no references remain.
 //
 // Does NOT touch swa_window_fa_block_ids or remote_cache_swa_fa_block_ids; callers are
@@ -960,14 +945,10 @@ void PrefixCacheManager::TruncateRequestBlocks(PrefixCachedRequest* cached_reque
     }
 
     // Shareable block: remove this request's reference.
-    auto& request =
-        (cached_request->req_state == RequestState::kRunning || cached_request->req_state == RequestState::kFinished)
-            ? cb->active_requests
-            : cb->inactive_requests;
-    request.erase(cached_request->req_id);
+    cb->active_requests.erase(cached_request->req_id);
 
     // Make reusable if no request left.
-    if (cb->active_requests.empty() && cb->inactive_requests.empty()) {
+    if (cb->active_requests.empty()) {
       reusable_cached_blocks_.insert(cb);
     }
   }
@@ -1168,8 +1149,7 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
     if (cached_request.is_remote_loading_block_allocated) {
       // kRemoteLoadingBlockAllocated: FA blocks were registered to req_id via
       // AllocateRequestBlocksInternal (active_requests).
-      // TruncateRequestBlocks uses req_state to choose active_requests vs inactive_requests,
-      // so we must set req_state=kRunning (matching the active_requests registration).
+      // Set req_state=kRunning so TruncateRequestBlocks releases SWA blocks correctly.
       // TruncateRequestBlocks will call FreeSWABlock for each non-shareable FA block it
       // releases, so no explicit FreeSWABlock/SetReclaimable loops are needed here.
       // Just clear the list references to avoid stale FA block IDs after truncation.

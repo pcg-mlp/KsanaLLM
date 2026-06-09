@@ -28,10 +28,8 @@ setting:
     # 单个请求可用block大于该值触发换入
     # 单个请求可用block大于该值拉起新任务
     launch_block_threshold: 2.0
-    # 用于执行异步swap的线程池大小
     # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
     prefix_cache_len: 0
-    # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

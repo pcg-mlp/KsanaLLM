@@ -41,7 +41,7 @@ class BaseSchedulerTest : public testing::Test {
     block_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(block_manager_config_, tp_num);
 
     // When SWA is enabled, create a separate SWA block allocator group.
-    // SWA blocks do not need host swap, so host_allocator_config.blocks_num = 0.
+    // SWA blocks do not need host blocks, so host_allocator_config.blocks_num = 0.
     if (sliding_window_size_ > 0) {
       BlockManagerConfig swa_block_manager_config = block_manager_config_;
       swa_block_manager_config.host_allocator_config.blocks_num = 0;
@@ -80,7 +80,7 @@ class BaseSchedulerTest : public testing::Test {
     FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false, false);
     test_case.SetScheduleProcessor(schedule_processor_);
     test_case.SetEnvSimulator(env_simulator_);
-    test_case.RunTestSwapTriggered();
+    test_case.RunTestRecomputeTriggered();
   }
 
   void TearDown() override {

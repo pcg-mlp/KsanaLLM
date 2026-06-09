@@ -66,13 +66,11 @@ class PrefixCacheManagerTest : public testing::Test {
         EXPECT_EQ(cb->parent, cb_prev);
         EXPECT_EQ(cb->parent->children[cb->token_ids], cb);
         EXPECT_EQ(cb->active_requests.size(), 1);
-        EXPECT_EQ(cb->inactive_requests.size(), 0);
         EXPECT_EQ(cb->is_shareable, true);
         EXPECT_EQ(cb->is_device_location, true);
       } else {
         EXPECT_EQ(cb->parent, nullptr);
         EXPECT_EQ(cb->active_requests.size(), 0);
-        EXPECT_EQ(cb->inactive_requests.size(), 0);
         EXPECT_EQ(cb->is_shareable, false);
         EXPECT_EQ(cb->is_device_location, true);
       }

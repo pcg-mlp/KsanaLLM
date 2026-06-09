@@ -134,8 +134,8 @@ Step 5. 继续计算剩余 block index [6,9] 的 token
 
 | 状态 | 允许的接口调用 | 禁止的接口调用 |
 |---|---|---|
-| `kRemoteLoading` | `AllocateBlocksForRemoteCache`、`ConfirmRemoteCacheLoadingResult`、`DestroyFinishedRequest`、`DestroySwappedRequest` | `AllocateRequestBlocks`、`UpdateRequestTokens`、`AppendFilledCachedBlock` 等推理相关接口 |
-| `kRemoteLoadingBlockAllocated` | `ConfirmRemoteCacheLoadingResult`、`DestroyFinishedRequest`、`DestroySwappedRequest` | `AllocateBlocksForRemoteCache`（已调用过）、`AllocateRequestBlocks`、`UpdateRequestTokens`、`AppendFilledCachedBlock` 等推理相关接口 |
+| `kRemoteLoading` | `AllocateBlocksForRemoteCache`、`ConfirmRemoteCacheLoadingResult`、`DestroyFinishedRequest` | `AllocateRequestBlocks`、`UpdateRequestTokens`、`AppendFilledCachedBlock` 等推理相关接口 |
+| `kRemoteLoadingBlockAllocated` | `ConfirmRemoteCacheLoadingResult`、`DestroyFinishedRequest` | `AllocateBlocksForRemoteCache`（已调用过）、`AllocateRequestBlocks`、`UpdateRequestTokens`、`AppendFilledCachedBlock` 等推理相关接口 |
 | 其他状态 | 原有接口（不变） | `AllocateBlocksForRemoteCache`、`ConfirmRemoteCacheLoadingResult` |
 
 **状态转换触发条件：**
@@ -144,8 +144,8 @@ Step 5. 继续计算剩余 block index [6,9] 的 token
 - `kRemoteLoading` → `kRemoteLoadingBlockAllocated`：调用 `AllocateBlocksForRemoteCache` 成功后进入，此时 block 已注册 `req_id`。
 - `kRemoteLoading` → `kWaiting`：调用 `ConfirmRemoteCacheLoadingResult` 后，若未曾调用过 `AllocateBlocksForRemoteCache`（即仍处于 `kRemoteLoading`），则请求回到 `kWaiting` 状态，等待调度器重新分配 block 后推理。
 - `kRemoteLoadingBlockAllocated` → `kRunning`：调用 `ConfirmRemoteCacheLoadingResult` 后，若已调用过 `AllocateBlocksForRemoteCache`，则请求进入 `kRunning` 状态，可直接推理（FA cache 与 SWA cache 已对齐）。
-- `kRemoteLoading` → 终止：调用 `DestroyFinishedRequest` 或 `DestroySwappedRequest` 时，`cached_blocks` 中的 block 尚未注册 `req_id`，直接丢弃数据结构即可，无需调用 `TruncateRequestBlocks`。
-- `kRemoteLoadingBlockAllocated` → 终止：调用 `DestroyFinishedRequest` 或 `DestroySwappedRequest` 时，block 已注册 `req_id`，必须调用 `TruncateRequestBlocks` 释放，同时清理 `remote_cache_swa_fa_block_ids` 中所有未处理的 SWA block。
+- `kRemoteLoading` → 终止：调用 `DestroyFinishedRequest` 时，`cached_blocks` 中的 block 尚未注册 `req_id`，直接丢弃数据结构即可，无需调用 `TruncateRequestBlocks`。
+- `kRemoteLoadingBlockAllocated` → 终止：调用 `DestroyFinishedRequest` 时，block 已注册 `req_id`，必须调用 `TruncateRequestBlocks` 释放，同时清理 `remote_cache_swa_fa_block_ids` 中所有未处理的 SWA block。
 
 **`PrefixCachedRequest` 状态字段扩展：**
 
@@ -319,7 +319,7 @@ struct PrefixCachedRequest {
 //
 // 状态转换：
 //   调用成功后，请求状态从 kRemoteLoading 转换为 kRemoteLoadingBlockAllocated。
-//   此后 DestroyFinishedRequest/DestroySwappedRequest 必须通过 TruncateRequestBlocks 释放已注册的 block。
+//   此后 DestroyFinishedRequest 必须通过 TruncateRequestBlocks 释放已注册的 block。
 Status AllocateBlocksForRemoteCache(int64_t req_id, std::vector<int>& req_block_ids,
                                     size_t fa_block_num, size_t swa_block_num,
                                     std::vector<int>& remote_fa_block_ids,
@@ -596,7 +596,7 @@ Transfer(src_fa_block_id=999, dst_fa_block_id=5, dst_prefix_fa_block_num=5)
 |---|---|
 | [`csrc/cache_manager/cache_manager_interface.h`](../../csrc/cache_manager/cache_manager_interface.h) | 新增 `GetRequestPrefixBlockNumberBeforeRemoteCacheLoading`、`AllocateBlocksForRemoteCache`、`ConfirmRemoteCacheLoadingResult` 纯虚接口 |
 | [`csrc/cache_manager/prefix_cache_manager.h`](../../csrc/cache_manager/prefix_cache_manager.h) | `PrefixCachedRequest` 增加 `is_remote_loading`、`is_remote_loading_block_allocated`、`fa_prefix_block_num`、`remote_cache_swa_fa_block_ids` 字段 |
-| [`csrc/cache_manager/prefix_cache_manager.cpp`](../../csrc/cache_manager/prefix_cache_manager.cpp) | 实现 `GetRequestPrefixBlockNumberBeforeRemoteCacheLoading`；实现 `AllocateBlocksForRemoteCache`（成功后置 `is_remote_loading_block_allocated=true`）；实现 `ConfirmRemoteCacheLoadingResult`（根据 `is_remote_loading_block_allocated` 决定转入 `kWaiting` 或 `kRunning`）；更新 `DestroyFinishedRequest`/`DestroySwappedRequest`（根据 `is_remote_loading_block_allocated` 决定是否调用 `TruncateRequestBlocks`） |
+| [`csrc/cache_manager/prefix_cache_manager.cpp`](../../csrc/cache_manager/prefix_cache_manager.cpp) | 实现 `GetRequestPrefixBlockNumberBeforeRemoteCacheLoading`；实现 `AllocateBlocksForRemoteCache`（成功后置 `is_remote_loading_block_allocated=true`）；实现 `ConfirmRemoteCacheLoadingResult`（根据 `is_remote_loading_block_allocated` 决定转入 `kWaiting` 或 `kRunning`）；更新 `DestroyFinishedRequest`（根据 `is_remote_loading_block_allocated` 决定是否调用 `TruncateRequestBlocks`） |
 | [`csrc/cache_manager/swa_cache_manager.h`](../../csrc/cache_manager/swa_cache_manager.h) | 新增 `Transfer` 接口声明 |
 | [`csrc/cache_manager/swa_cache_manager.cpp`](../../csrc/cache_manager/swa_cache_manager.cpp) | 实现 `Transfer` 方法 |
 | [`csrc/cache_manager/direct_cache_manager.h`](../../csrc/cache_manager/direct_cache_manager.h) | 新增 `AllocateBlocksForRemoteCache`、`ConfirmRemoteCacheLoadingResult` 的空实现（返回 `Status::NOT_SUPPORTED`） |
@@ -617,13 +617,13 @@ Transfer(src_fa_block_id=999, dst_fa_block_id=5, dst_prefix_fa_block_num=5)
 
 4. **remote_cache_swa_fa_block_ids 的生命周期**：`remote_cache_swa_fa_block_ids` 中记录的临时 FA block id 在 `ConfirmRemoteCacheLoadingResult` 调用后必须全部处理完毕（Transfer 或 FreeSWABlock），不允许遗留未处理的 remote SWA block。
 
-5. **与现有 SWA cache 的交互**：`AllocateBlocksForRemoteCache` 分配的 remote SWA block 在 `SWACacheManager` 中以临时 FA block id 注册（`is_content_fixed=false, is_reclaimable=false`）。若 `ConfirmRemoteCacheLoadingResult` 未被调用（如请求被取消），需在 `DestroyFinishedRequest`/`DestroySwappedRequest` 中清理这些临时记录。
+5. **与现有 SWA cache 的交互**：`AllocateBlocksForRemoteCache` 分配的 remote SWA block 在 `SWACacheManager` 中以临时 FA block id 注册（`is_content_fixed=false, is_reclaimable=false`）。若 `ConfirmRemoteCacheLoadingResult` 未被调用（如请求被取消），需在 `DestroyFinishedRequest` 中清理这些临时记录。
 
 6. **`AllocateBlocksForRemoteCache` 的预检查**：与 `AllocateRequestBlocks` 类似，在实际分配前需同时检查 FA 侧和 SWA 侧的可用 block 数量，避免半分配状态。SWA 侧只需检查 `swa_block_num` 个（而非 `fa_block_num` 个），这是本优化的核心收益之一。
 
 7. **`matched_block_index` 与 SWA 对齐**：`ConfirmRemoteCacheLoadingResult` 中，`matched_block_index` 之后的 FA block 若要保留（通过 `reserved_block_num`），必须保证这些 block 有对应的 SWA cache。实现时需验证 `matched_remote_swa_block_indexs` 中是否有足够的 SWA block 覆盖预留范围。
 
-8. **`DestroyFinishedRequest`/`DestroySwappedRequest` 中的子状态判断**：在销毁处于远程加载状态的请求时，必须根据 `is_remote_loading_block_allocated` 区分处理方式：
+8. **`DestroyFinishedRequest` 中的子状态判断**：在销毁处于远程加载状态的请求时，必须根据 `is_remote_loading_block_allocated` 区分处理方式：
    - `is_remote_loading=true, is_remote_loading_block_allocated=false`（`kRemoteLoading`）：`cached_blocks` 中的 block 尚未注册 `req_id`，**不得**调用 `TruncateRequestBlocks`，直接丢弃数据结构即可。若有 `remote_cache_swa_fa_block_ids`（理论上此时为空，因为 `AllocateBlocksForRemoteCache` 未调用），也无需处理。
    - `is_remote_loading=true, is_remote_loading_block_allocated=true`（`kRemoteLoadingBlockAllocated`）：block 已注册 `req_id`，**必须**先清理 `remote_cache_swa_fa_block_ids` 中的 remote SWA block（`FreeSWABlock`），再调用 `TruncateRequestBlocks` 释放已注册的 FA block。
 

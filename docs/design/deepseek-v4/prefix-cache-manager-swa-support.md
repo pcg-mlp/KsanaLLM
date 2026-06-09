@@ -264,7 +264,7 @@ struct PrefixCachedRequest {
 | `AppendFilledCachedBlock`：FA block 填充完成，挂入前缀树 | `SetSWABlockContentFixed(fa_block_id)` | 标记 SWA block 内容固定，可复用 |
 | `AppendFilledCachedBlock`：FA block merge 到已有节点 | `FreeSWABlock(new_fa_block_id)` | 新 FA block 被合并，释放其 SWA block |
 | `UpdateRequestTokens`：SWA 窗口推进，block 滑出窗口 | `SetReclaimable(fa_block_id, true)` | block 不再被当前请求 SWA 窗口覆盖，标记可回收 |
-| `DestroyFinishedRequest` / `DestroySwappedRequest` | `SetReclaimable(fa_block_id, true)` for each id in `swa_window_fa_block_ids` | 请求结束，释放所有 SWA window 内 block 的占用 |
+| `DestroyFinishedRequest` | `SetReclaimable(fa_block_id, true)` for each id in `swa_window_fa_block_ids` | 请求结束，释放所有 SWA window 内 block 的占用 |
 | `FreeCachedBlocks`：FA block 被 LRU 驱逐（不再重用） | `FreeSWABlock(fa_block_id)` | FA block 彻底释放时同步释放 SWA block |
 
 ### 4.3 AllocateRequestBlocks 分配前预检查
@@ -488,7 +488,7 @@ if (sliding_window_blocks > 0 && last_swa_valid_idx > 0) {
 
 **窗口推进时**：在 `UpdateRequestTokens` 中，当 SWA 窗口左边界推进时，对滑出窗口的 FA block 调用 `SetReclaimable(fa_block_id, true)`，并从 `swa_window_fa_block_ids` 中移除。窗口不会在 `AllocateRequestBlocks` 时自动推进，只有 `UpdateRequestTokens` 才会触发窗口滑动。
 
-**清理时机**：在 `DestroyFinishedRequest` 和 `DestroySwappedRequest` 中，遍历 `swa_window_fa_block_ids`，对每个 `fa_block_id` 调用 `swa_cache_manager_->SetReclaimable(fa_block_id, true)`。
+**清理时机**：在 `DestroyFinishedRequest` 中，遍历 `swa_window_fa_block_ids`，对每个 `fa_block_id` 调用 `swa_cache_manager_->SetReclaimable(fa_block_id, true)`。
 
 ---
 
@@ -584,7 +584,7 @@ SWA 显存已满，所有 SWA block 均已分配。
 | 文件 | 修改内容 |
 |---|---|
 | `csrc/cache_manager/prefix_cache_manager.h` | `PrefixCachedRequest` 增加 `swa_window_fa_block_ids`；`PrefixCacheManager` 增加 `swa_cache_manager_` 成员；构造函数增加 `swa_block_allocator_group` 参数 |
-| `csrc/cache_manager/prefix_cache_manager.cpp` | 修改 `GetRequestPrefixBlockNumber`、`AllocateRequestBlocks`、`AppendFilledCachedBlock`、`UpdateRequestTokens`、`DestroyFinishedRequest`、`DestroySwappedRequest`、`FreeCachedBlocks` |
+| `csrc/cache_manager/prefix_cache_manager.cpp` | 修改 `GetRequestPrefixBlockNumber`、`AllocateRequestBlocks`、`AppendFilledCachedBlock`、`UpdateRequestTokens`、`DestroyFinishedRequest`、`FreeCachedBlocks` |
 | `csrc/cache_manager/cache_manager_factory.h/.cpp` | 创建 `PrefixCacheManager` 时透传 `swa_block_allocator_group` 参数 |
 
 ---
@@ -595,7 +595,6 @@ SWA 显存已满，所有 SWA block 均已分配。
 
 2. **SWA window 边界的 block 对齐**：SWA window 的左边界 token 不一定对齐到 block 边界。当 `swa_left_token % block_token_num != 0` 时，边界 block 内有部分 token 在窗口内、部分在窗口外。采用保守策略：只要 block 内有任意 token 在 SWA window 内，就要求该 block 的 SWA cache 存在。
 
-3. **Swap out/in 与 SWA block 的交互**：当前设计不支持 SWA block 的 swap out/in（与 DirectCacheManager 的现状一致，见 `direct_cache_manager.cpp` 中的 TODO 注释）。调度层应避免对持有 SWA window 内 FA block 的请求执行 swap，或在 swap 时同时释放对应的 SWA block 并在 swap in 后重新分配。
 
 4. **`is_reclaimable` 与 FA block `active_requests` 的语义差异**：FA block 的 `active_requests` 追踪所有引用该 block 的请求（包括 SWA window 外的），而 SWA block 的 `is_reclaimable` 只反映 SWA window 内是否有请求正在使用。两者由上层分别维护，互不干扰。
 
