@@ -41,8 +41,8 @@ std::string ExecutorInferRequest::ToString(bool print_details) const {
       << ", input_tokens_size:" << input_tokens.size() << ", output_tokens_size:" << output_tokens.size()
       << ", forwarding_tokens_size:" << forwarding_tokens.size() << ", draft_tokens_size:" << draft_tokens.size()
       << ", accepted_tokens_size:" << accepted_tokens.size() << ", generated_token_size:" << generated_tokens.size()
-      << PrintKVBlockIds(print_details) << ", swap_pending:" << swap_pending << ", finished:" << finished
-      << ", aborted:" << aborted << ", finish_status:" << finish_status.ToString() << " ) ";
+      << PrintKVBlockIds(print_details) << ", finished:" << finished << ", aborted:" << aborted
+      << ", finish_status:" << finish_status.ToString() << " ) ";
   return oss.str();
 }
 

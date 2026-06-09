@@ -8,7 +8,6 @@
 
 #include <algorithm>
 
-#include "executor/executor_block_manager.h"
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
 #include "profiler/profile_event.h"
@@ -50,10 +49,6 @@ void ModelRunner::SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager
 
 void ModelRunner::SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager) {
   executor_runtime_->SetSwaBlockAllocatorManager(swa_block_allocator_manager);
-}
-
-void ModelRunner::SetExecutorBlockManager(std::shared_ptr<ExecutorBlockManager> executor_block_manager) {
-  executor_block_manager_ = executor_block_manager;
 }
 
 void ModelRunner::SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool) {
@@ -141,24 +136,6 @@ Status ModelRunner::HandlePreprocess() {
     }
 
     PROFILE_EVENT_SCOPE(preprocess_iter, "Exec.HandlePreprocess.iter");
-
-    if (executor_block_manager_ != nullptr) {
-      PROFILE_EVENT_SCOPE(preprocess_swap, "Exec.HandlePreprocess.Swap");
-      Status status = executor_block_manager_->SwapoutRequestMemoryBlockAsync(schedule_output->swapout_req_block_ids);
-      if (!status.OK()) {
-        KLLM_LOG_ERROR << "HandlePreprocess swapout request failed: " << status.ToString()
-                       << ", schedule_id=" << schedule_output->schedule_id;
-        _exit(EXIT_FAILURE);
-      }
-      executor_block_manager_->WaitSwapoutRequestMemoryBlock(schedule_output->merged_swapout_req_ids);
-      status = executor_block_manager_->SwapinRequestMemoryBlockAsync(schedule_output->swapin_req_block_ids);
-      if (!status.OK()) {
-        KLLM_LOG_ERROR << "HandlePreprocess swapin request failed: " << status.ToString()
-                       << ", schedule_id=" << schedule_output->schedule_id;
-        _exit(EXIT_FAILURE);
-      }
-      executor_block_manager_->WaitSwapinRequestMemoryBlock(schedule_output->merged_swapin_req_ids);
-    }
 
     {
       PROFILE_EVENT_SCOPE(preprocess_update_cached, "Exec.HandlePreprocess.UpdateCachedRequests");

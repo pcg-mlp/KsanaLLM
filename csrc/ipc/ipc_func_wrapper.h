@@ -11,7 +11,6 @@
 #include "executor/executor_runtime.h"
 #include "ipc/core/ipc_func_proxy.h"
 #include "ipc/core/ipc_func_types.h"
-#include "ipc/functions/batch_swap.h"
 #include "ipc/functions/report_layer_progress.h"
 #include "runtime/sampling_output.h"
 #include "runtime/schedule_output.h"
@@ -54,8 +53,6 @@ enum {
 
   IPC_FUNC_GET_EP_COMMUNICATION_CONFIG,
   IPC_FUNC_SET_EP_COMMUNICATION_CONFIG,
-
-  IPC_FUNC_BATCH_SWAP,
 
   IPC_FUNC_GLOBAL_CACHE_QUERY,
   IPC_FUNC_GLOBAL_CACHE_QUERY_DONE,
@@ -145,10 +142,6 @@ class IpcFuncWrapper {
   // Executor to engine - 报告层进度
   Status SetLayerProgressRecvQueue(std::shared_ptr<BlockingQueue<LayerProgressInfo>> layer_progress_queue);
   Status ReportLayerProgress(int device_id, int layer_index);
-
-  // Send BatchSwap request to executor and wait for completion (engine side, blocking)
-  Status BatchSwap(int executor_id, bool is_swapin, const std::vector<int>& device_block_ids,
-                   const std::vector<int>& host_block_ids);
 
   // Engine → Executor: 向指定 executor 发送全局 cache 查询请求（异步，不阻塞）
   Status DispatchGlobalCacheQuery(int executor_id, int64_t req_id, const std::vector<int>& token_ids,

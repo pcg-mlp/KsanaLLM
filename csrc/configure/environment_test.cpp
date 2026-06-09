@@ -62,7 +62,6 @@ TEST_F(EnvironmentTest, GetCacheManagerConfig) {
   auto status = env_->GetCacheManagerConfig(config);
   EXPECT_TRUE(status.OK());
 
-  EXPECT_GT(config.swap_threadpool_size, 0);
   EXPECT_GE(config.min_flexible_cache_num, 0);
   EXPECT_GT(config.block_token_num, 0);
   EXPECT_GT(config.tensor_para_size, 0);
@@ -339,7 +338,6 @@ TEST_F(EnvironmentTest, PerformanceConfig) {
   ksana_llm::CacheManagerConfig cache_config;
   auto status = env_->GetCacheManagerConfig(cache_config);
   EXPECT_TRUE(status.OK());
-  EXPECT_GT(cache_config.swap_threadpool_size, 0);
 
   // 验证批处理配置
   ksana_llm::BatchSchedulerConfig batch_config;

@@ -279,14 +279,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.transfer_layer_chunk_size", 1);
   batch_scheduler_config_.max_pp_batch_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_pp_batch_num", 1);
-  batch_scheduler_config_.swapout_block_threshold =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapout_block_threshold", 1.0);
-  batch_scheduler_config_.swapin_block_threshold =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swapin_block_threshold", 2.0);
   batch_scheduler_config_.launch_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
-  batch_scheduler_config_.preempt_mode = static_cast<PreemptMode>(
-      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.preempt_mode", 0));
   batch_scheduler_config_.split_fuse_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.split_fuse_token_num", 0);
   batch_scheduler_config_.enable_speculative_decoding = yaml_reader.GetScalar<bool>(
@@ -363,8 +357,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     runtime_config_.enable_o_proj_out_of_dp = true;
   }
 
-  if (std::getenv("FORCE_NON_CONTIGUOUS_SWA") != nullptr &&
-      strcmp(std::getenv("FORCE_NON_CONTIGUOUS_SWA"), "1") == 0) {
+  if (std::getenv("FORCE_NON_CONTIGUOUS_SWA") != nullptr && strcmp(std::getenv("FORCE_NON_CONTIGUOUS_SWA"), "1") == 0) {
     runtime_config_.force_non_contiguous_swa_mode = true;
     KLLM_LOG_WARNING << "FORCE_NON_CONTIGUOUS_SWA=1: all flash batches will use the SWA cache buffer path.";
   }
@@ -406,8 +399,6 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   if (batch_scheduler_config_.swa_block_num_ratio <= 0.0f) {
     batch_scheduler_config_.swa_block_num_ratio = 0.5f;
   }
-  cache_manager_config_.swap_threadpool_size =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.swap_threadpool_size", 2);
   cache_manager_config_.min_flexible_cache_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.min_flexible_cache_num", 0);
   cache_manager_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;

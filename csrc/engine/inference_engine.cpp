@@ -247,9 +247,7 @@ Status InferenceEngine::Initialize() {
   // Create cache manager.
   if (!context_->global->IsDistributedWorker()) {
     std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
-    // Pass ipc_func_wrapper_ to BlockAllocatorManager for engine-side BatchSwap IPC support
-    BlockAllocatorManager block_allocator_manager(true, block_allocator_manager_config, memory_allocator_, context_,
-                                                  nullptr, nullptr, ipc_func_wrapper_);
+    BlockAllocatorManager block_allocator_manager(true, block_allocator_manager_config, memory_allocator_, context_);
 
     // Create SWA block allocator manager when SWA is enabled.
     std::unique_ptr<BlockAllocatorManager> swa_block_allocator_manager;

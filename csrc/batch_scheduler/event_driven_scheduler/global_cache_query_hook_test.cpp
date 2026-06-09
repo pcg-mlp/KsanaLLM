@@ -32,7 +32,6 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(void, InitializeCachedBlocks, (), (override));
   MOCK_METHOD(std::shared_ptr<BlockAllocatorGroupInterface>, GetBlockAllocatorGroup, (), (const, override));
   MOCK_METHOD(size_t, GetUsableBlockNumber, (), (override));
-  MOCK_METHOD(size_t, GetFutureFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetHostFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetUsedBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t), (override));
@@ -55,23 +54,6 @@ class MockCacheManager : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
-  MOCK_METHOD(Status, GetRequestFreeableBlockNum, (int64_t, size_t&), (override));
-  MOCK_METHOD(Status, GetRequestNeededBlockNumForOneNextToken, (int64_t, size_t&), (override));
-  MOCK_METHOD(void, SetSwapCallbackFunc, (AsyncSwapCallbackFunc), (override));
-  MOCK_METHOD(Status, SwapoutRequestAsync,
-              (int64_t, size_t&, size_t&, std::vector<int>&, std::vector<int>&), (override));
-  MOCK_METHOD(Status, SwapinRequestAsync,
-              (int64_t, size_t&, std::vector<int>&, std::vector<int>&, std::vector<int>&), (override));
-  MOCK_METHOD(Status, WaitSwapoutRequests, (std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapinRequests, (std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapoutRequests,
-              (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapinRequests,
-              (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, MergeSwapoutRequest, (int64_t), (override));
-  MOCK_METHOD(Status, MergeSwapinRequest, (int64_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&),
-              (override));
-  MOCK_METHOD(void, DestroySwappedRequest, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };
@@ -103,12 +85,9 @@ class QueryHookTest : public ::testing::Test {
 
     // 默认 mock 行为：prefix cache 无命中，block 分配成功
     ON_CALL(*mock_cm_,
-            GetRequestPrefixBlockNumber(
-                testing::_, testing::_, testing::_,
-                testing::_, testing::_, testing::_))
+            GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
-    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_))
-        .WillByDefault(testing::Return(2));
+    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_)).WillByDefault(testing::Return(2));
     ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
 
@@ -156,11 +135,9 @@ TEST_F(QueryHookTest, BlockAllocFailReturnsContinue) {
 
 TEST_F(QueryHookTest, PrefixCacheHitUpdatesWorkload) {
   ON_CALL(*mock_cm_,
-          GetRequestPrefixBlockNumber(
-              testing::_, testing::_, testing::_,
-              testing::_, testing::_, testing::_))
-      .WillByDefault([](int64_t, const std::vector<int>&, size_t, size_t& shared_block_num,
-                        size_t& req_step_block_num, size_t& shared_token_num) {
+          GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([](int64_t, const std::vector<int>&, size_t, size_t& shared_block_num, size_t& req_step_block_num,
+                        size_t& shared_token_num) {
         shared_block_num = 1;
         shared_token_num = 5;
         req_step_block_num = 2;

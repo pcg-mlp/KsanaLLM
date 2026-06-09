@@ -25,17 +25,13 @@ setting:
     # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
     max_token_len: 2048
     # 单个请求可用blck小于该值触发换出
-    swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入
-    swapin_block_threshold: 2.0
     # 单个请求可用block大于该值拉起新任务
     launch_block_threshold: 2.0
     # 用于执行异步swap的线程池大小
-    swap_threadpool_size: 8
     # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
     prefix_cache_len: 0
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
-    preempt_mode: 0
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

@@ -311,12 +311,6 @@ void ContinuousBatchingStrategy::RemoveRequestFromBatchState(const std::shared_p
     return;
   }
 
-  auto swap_it = batch_state_->async_swapout_reqs.find(req->req_id);
-  if (swap_it != batch_state_->async_swapout_reqs.end()) {
-    batch_state_->async_swapout_reqs.erase(swap_it);
-    return;
-  }
-
   KLLM_LOG_FATAL << "Request " << req->req_id << " not found in batch state. " << batch_state_->ToString(true);
   // TODO(robertyuan): request maybe moved to another batch state.
 }
@@ -519,29 +513,13 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
       }
     }
   }
-  if (batch_state_->async_swapout_reqs.size() > 0) {
-    if (has_block_freed) {
-      // Some blocks freed, do not recompute async requests.
-      RecoverAsyncSwapoutRequests();
-    } else {
-      for (const auto &req : running_reqs) {
-        ProcessAsyncSwapoutRequest(req);
-      }
-    }
-  }
-
   KLLM_LOG_SCHEDULER << "After updating, batch_state_=" << *batch_state_;
 }
 
 void ContinuousBatchingStrategy::ProcessDecodingQueue() {
   PROFILE_EVENT_SCOPE(ProcessDecodingQueue, "ProcessDecodingQueue");
   KLLM_LOG_SCHEDULER << "ProcessDecodingQueue invoked: " << *batch_state_
-                     << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
-                     << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
-
-  if (!batch_state_->swapin_pending_requests.empty()) {
-    MergePendingSwapinRequests(false, true);
-  }
+                     << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber();
 
   // Estimate inflight task result and update planning workloads
   for (auto &req : batch_state_->decoding_queue) {
@@ -602,13 +580,8 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
     // tasks;
     // TODO(robertyuan): optimize choice to balance wasted computing and decoding in future
     if ((recomputing_waiting_task_num == 0) && (batch_state_->async_stoped_reqs.size() == 0) &&
-        (batch_state_->async_recomputed_reqs.size() == 0) && (batch_state_->async_swapout_reqs.size() == 0) &&
-        (batch_state_->swapout_pending_requests.size() == 0) && (batch_state_->decoding_queue.size() > 1)) {
-      if (batch_scheduler_config_.preempt_mode == SWAP) {
-        SwapoutRequest(req);
-      } else {
-        RecomputeRequest(req);
-      }
+        (batch_state_->async_recomputed_reqs.size() == 0) && (batch_state_->decoding_queue.size() > 1)) {
+      RecomputeRequest(req);
       RemoveRequestFromQueue(batch_state_->decoding_queue, req);
       ++it;
       continue;
@@ -623,8 +596,7 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
 void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   PROFILE_EVENT_SCOPE(ProcessWaitingQueue, "ProcessWaitingQueue");
   KLLM_LOG_SCHEDULER << "ProcessWaitingQueue invoked, waiting queue size:" << batch_state_->waiting_queue.size()
-                     << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
-                     << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
+                     << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber();
 
   std::vector<std::shared_ptr<InferRequest>> passed_reqs;
   auto [step_token_num, step_not_kv_cached_token_num] =
@@ -873,8 +845,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       scheduler_ticktok_->Unlock();
     }
 
-    KLLM_LOG_SCHEDULER << "total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
-                       << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
+    KLLM_LOG_SCHEDULER << "total_free_block_num:" << cache_manager_->GetUsableBlockNumber();
     break;
   }
 
@@ -920,12 +891,9 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
   ProcessDecodingQueue();
   auto running_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
   REPORT_METRIC("batch_scheduler_running_queue_time_us", running_queue_end_us - transfer_queue_end_us);
-  ProcessSwappedQueue();
-  auto swapped_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
-  REPORT_METRIC("batch_scheduler_swapped_queue_time_us", swapped_queue_end_us - running_queue_end_us);
   ProcessWaitingQueue();
   auto waiting_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
-  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", waiting_queue_end_us - swapped_queue_end_us);
+  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", waiting_queue_end_us - running_queue_end_us);
   AddTransferMeta(batch_state_->transfer_queue);
   auto add_transfer_meta_end_us = ProfileTimer::GetCurrentTimeInUs();
   REPORT_METRIC("batch_scheduler_add_transfer_meta_time_us", add_transfer_meta_end_us - waiting_queue_end_us);
@@ -964,260 +932,6 @@ void ContinuousBatchingStrategy::ReportRequestProgressInfo(const std::shared_ptr
     REPORT_COUNTER("computed_token_num", computed_token_num);
     req->computed_token_num = req->kv_cached_token_num;
   }
-}
-
-void ContinuousBatchingStrategy::SwapoutRequest(std::shared_ptr<InferRequest> req) {
-  REPORT_COUNTER("swapout_request_num", 1);
-  if (!req->HasInflightTask()) {
-    // No task is running, start swapout immediately
-    SyncSwapoutRequest(req);
-  } else {
-    KLLM_LOG_SCHEDULER << "Put req_id=" << req->req_id << " to async swapout queue";
-    batch_state_->async_swapout_reqs[req->req_id] = req;
-  }
-}
-
-void ContinuousBatchingStrategy::SyncSwapoutRequest(std::shared_ptr<InferRequest> req) {
-  // Merge all swapin request before swapout.
-  if (!batch_state_->swapin_pending_requests.empty()) {
-    KLLM_LOG_DEBUG << "Pending swapin requests exists, merge it first.";
-    MergePendingSwapinRequests(true, false);
-  }
-  KLLM_LOG_INFO << "swapout req_id=" << req->req_id;
-  size_t free_block_num = 0;
-  size_t swapped_block_num = 0;
-  std::vector<int> swapout_memory_blocks;
-  std::vector<int> swapout_host_block_ids;
-  Status status = cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num,
-                                                      swapout_memory_blocks, swapout_host_block_ids);
-  if (status.OK()) {
-    batch_state_->swapout_pending_requests[req->req_id] = req;
-
-    // Record swapout operation.
-    if (batch_state_->schedule_output->swapout_req_block_ids.empty()) {
-      batch_state_->schedule_output->swapout_req_block_ids.emplace_back(
-          std::unordered_map<int64_t, SwapReqBlockInfo>());
-    }
-    auto &swapout_info = batch_state_->schedule_output->swapout_req_block_ids[0][req->req_id];
-    swapout_info.dev_block_ids = std::move(swapout_memory_blocks);
-    swapout_info.host_block_ids = std::move(swapout_host_block_ids);
-
-    // Mark that structured generator needs to be recreated after swapin
-    // because the generator state is not preserved during swap
-    if (req->structured_generator_config.HasConstraint()) {
-      req->need_recreate_generator = true;
-      KLLM_LOG_DEBUG << "Marked req_id=" << req->req_id << " to recreate structured generator after swapin";
-    }
-  } else {
-    KLLM_LOG_ERROR << "SyncSwapoutRequest error, recompute req_id=" << req->req_id << ", msg=" << status.GetMessage();
-    SyncRecomputeRequest(req);
-  }
-}
-
-void ContinuousBatchingStrategy::RecoverAsyncSwapoutRequests() {
-  for (auto &it : batch_state_->async_swapout_reqs) {
-    const auto &req = it.second;
-    if (req->IsStopped()) {
-      continue;
-    }
-    batch_state_->decoding_queue.push_back(req);
-  }
-  batch_state_->async_swapout_reqs.clear();
-}
-
-bool ContinuousBatchingStrategy::ProcessAsyncSwapoutRequest(const std::shared_ptr<InferRequest> &req) {
-  auto it = batch_state_->async_swapout_reqs.find(req->req_id);
-  if (it == batch_state_->async_swapout_reqs.end()) {
-    return false;
-  }
-
-  if (!req->IsStopped()) {
-    KLLM_CHECK(!req->HasInflightTask());
-    KLLM_LOG_SCHEDULER << "Processing async swapout request " << req->req_id;
-    SyncSwapoutRequest(req);
-  }
-
-  batch_state_->async_swapout_reqs.erase(it);
-  return true;
-}
-
-void ContinuousBatchingStrategy::UpdateAsyncState() {
-  MergePendingSwapinRequests(false, true);
-  MergePendingSwapoutRequests(false, true);
-}
-
-void ContinuousBatchingStrategy::ProcessSwappedQueue() {
-  PROFILE_EVENT_SCOPE(ProcessSwappedQueue, "ProcessSwappedQueue");
-  KLLM_LOG_DEBUG << "ProcessSwappedQueue invoked:" << *batch_state_
-                 << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
-                 << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
-
-  if (batch_scheduler_config_.preempt_mode != SWAP) {
-    return;
-  }
-
-  // Merge pending swapout requests.
-  Status status = MergePendingSwapoutRequests(false, true);
-  if (!status.OK()) {
-    KLLM_LOG_ERROR << "ProcessSwappedQueue error, info: " << status.GetMessage();
-  }
-
-  if (batch_state_->swapped_queue.empty() || batch_state_->swapout_pending_requests.size() > 0 ||
-      batch_state_->step_sched_finish) {
-    return;
-  }
-
-  for (auto it = batch_state_->swapped_queue.begin(); it != batch_state_->swapped_queue.end();) {
-    auto req = it->second;
-
-    // Check timeout, no finished req in swapped queue.
-    if (CheckRequestTimeout(req)) {
-      KLLM_LOG_DEBUG << "req timeout in swapped: " << req;
-      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in swapped."), RequestState::kSwapped);
-      it = batch_state_->swapped_queue.erase(it);
-      continue;
-    }
-
-    // Check abort.
-    if (req->aborted) {
-      KLLM_LOG_DEBUG << "req aborted in swapped:" << req;
-      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in swapped."), RequestState::kSwapped);
-      it = batch_state_->swapped_queue.erase(it);
-      continue;
-    }
-
-    size_t swapin_needed_block_num = 0;
-    cache_manager_->GetRequestNeededBlockNumForOneNextToken(req->req_id, swapin_needed_block_num);
-
-    const size_t swapin_block_threshold =
-        std::ceil(batch_state_->decoding_queue.size() * batch_scheduler_config_.swapin_block_threshold);
-
-    const size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
-    const size_t max_required_token_num = GetMaxRequiredTokenNum(req->forwarding_tokens.size());
-    const size_t step_needed_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
-
-    if (swapin_needed_block_num + step_needed_block_num + swapin_block_threshold <= total_free_block_num) {
-      std::vector<int> swapin_memory_blocks;
-      std::vector<int> swapin_host_block_ids;
-      status = cache_manager_->SwapinRequestAsync(req->req_id, swapin_needed_block_num, req->kv_cache_blocks,
-                                                  swapin_memory_blocks, swapin_host_block_ids);
-      if (status.OK()) {
-        batch_state_->swapin_pending_requests[req->req_id] = req;
-        it = batch_state_->swapped_queue.erase(it);
-        KLLM_LOG_INFO << "Start async swapin req_id=" << req->req_id;
-        // Record swapin operation.
-        if (batch_state_->schedule_output->swapin_req_block_ids.empty()) {
-          batch_state_->schedule_output->swapin_req_block_ids.emplace_back(
-              std::unordered_map<int64_t, SwapReqBlockInfo>());
-        }
-        auto &swapin_info = batch_state_->schedule_output->swapin_req_block_ids[0][req->req_id];
-        swapin_info.dev_block_ids = std::move(swapin_memory_blocks);
-        swapin_info.host_block_ids = std::move(swapin_host_block_ids);
-        continue;
-      }
-
-      KLLM_LOG_ERROR << "Swap in request error, info: " << status.GetMessage();
-      ++it;
-    }
-
-    // Swapped job still existed, skip launch waiting.
-    batch_state_->step_sched_finish = true;
-    KLLM_LOG_DEBUG << "Swapped queue not empty, skip processing waiting_queue." << *batch_state_;
-    break;
-  }
-}
-
-Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, bool early_stop) {
-  if (batch_state_->swapin_pending_requests.empty()) {
-    return Status();
-  }
-  size_t swapin_left_req_num = 0;
-  do {
-    std::vector<int64_t> swapin_req_ids;
-    Status status = cache_manager_->WaitSwapinRequests(swapin_req_ids, swapin_left_req_num, blocking);
-    if (!status.OK()) {
-      KLLM_LOG_ERROR << "Error MergePendingSwapinRequests WaitSwapinRequests failed. swapin_req_ids:" << swapin_req_ids
-                     << ", info: " << status.GetMessage();
-      return status;
-    }
-    if (!swapin_req_ids.empty()) {
-      KLLM_LOG_SCHEDULER << "finished swapin request size:" << swapin_req_ids.size();
-    }
-    for (int64_t req_id : swapin_req_ids) {
-      auto it = batch_state_->swapin_pending_requests.find(req_id);
-      if (it == batch_state_->swapin_pending_requests.end()) {
-        KLLM_LOG_ERROR << "The cached swapin req_id:" << req_id << " is not found in pending queue.";
-        continue;
-      }
-
-      auto &req = it->second;
-      status = cache_manager_->MergeSwapinRequest(req->req_id, req->kv_cache_blocks, req->swa_kv_cache_blocks,
-                                                  req->swa_kv_cache_block_idx_offsets);
-      if (!status.OK()) {
-        KLLM_LOG_SCHEDULER << "Error MergeSwapinRequest " << *req << ", info: " << status.GetMessage();
-        return status;
-      }
-
-      // Record merged swapin request.
-      if (batch_state_->schedule_output->merged_swapin_req_ids.empty()) {
-        batch_state_->schedule_output->merged_swapin_req_ids.emplace_back();
-      }
-      batch_state_->schedule_output->merged_swapin_req_ids[0].push_back(req->req_id);
-
-      KLLM_LOG_INFO << "Swapin finished. req_id=" << req->req_id;
-
-      batch_state_->decoding_queue.push_back(req);
-      batch_state_->swapin_pending_requests.erase(it);
-    }
-  } while (!early_stop && swapin_left_req_num > 0);
-
-  return Status();
-}
-
-Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bool early_stop) {
-  // Wait all requests done.
-  if (batch_state_->swapout_pending_requests.empty()) {
-    return Status();
-  }
-
-  size_t swapout_left_req_num = 0;
-  do {
-    std::vector<int64_t> swapout_req_ids;
-    Status status = cache_manager_->WaitSwapoutRequests(swapout_req_ids, swapout_left_req_num, blocking);
-    if (!status.OK()) {
-      KLLM_LOG_SCHEDULER << "multi_batch_id=" << batch_state_->multi_batch_id_
-                         << "Error MergePendingSwapoutRequests WaitSwapoutRequests failed. swapout_req_ids:"
-                         << swapout_req_ids << ", info: " << status.GetMessage();
-      return status;
-    }
-
-    for (int64_t req_id : swapout_req_ids) {
-      auto it = batch_state_->swapout_pending_requests.find(req_id);
-      if (it == batch_state_->swapout_pending_requests.end()) {
-        KLLM_LOG_ERROR << "The cached swapout req_id:" << req_id << " is not found in pending queue.";
-        continue;
-      }
-
-      auto &req = it->second;
-      status = cache_manager_->MergeSwapoutRequest(req->req_id);
-      if (!status.OK()) {
-        KLLM_LOG_ERROR << "The cached swapout :" << *req << " failed.";
-        return status;
-      }
-
-      // Record merged swapout request.
-      if (batch_state_->schedule_output->merged_swapout_req_ids.empty()) {
-        batch_state_->schedule_output->merged_swapout_req_ids.emplace_back();
-      }
-      batch_state_->schedule_output->merged_swapout_req_ids[0].push_back(req->req_id);
-
-      batch_state_->swapped_queue[req->req_id] = req;
-      batch_state_->swapout_pending_requests.erase(it);
-      KLLM_LOG_INFO << "Swapout finished. req_id=" << req->req_id;
-    }
-  } while (!early_stop && swapout_left_req_num > 0);
-
-  return Status();
 }
 
 }  // namespace ksana_llm

@@ -8,9 +8,7 @@
 
 #include "batch_scheduler/global_cache_fetcher.h"
 #include "ipc/core/ipc_func_types.h"
-#include "profiler/profile_event.h"
 #include "ipc/functions/add_executor.h"
-#include "ipc/functions/batch_swap.h"
 #include "ipc/functions/connect_nccl_data_channel.h"
 #include "ipc/functions/connect_tcp_data_channel.h"
 #include "ipc/functions/create_block_manager.h"
@@ -33,6 +31,7 @@
 #include "ipc/functions/report_sampling_output.h"
 #include "ipc/functions/reset_pipeline_config.h"
 #include "ipc/functions/set_ep_communication_config.h"
+#include "profiler/profile_event.h"
 #include "utils/random_generator.h"
 #include "utils/status.h"
 
@@ -125,10 +124,6 @@ void IpcFuncWrapper::SetIpcFunctions() {
   // report layer progress.
   ipc_func_proxy_->SetFuncInfo<ReportLayerProgressCallable, ReportLayerProgressRequest, ReportLayerProgressResponse,
                                ReportLayerProgressCallback>(IPC_FUNC_REPORT_LAYER_PROGRESS);
-
-  // batch swap: engine to executor, executor executes swap operation.
-  ipc_func_proxy_->SetFuncInfo<BatchSwapCallable, BatchSwapRequest, BatchSwapResponse, BatchSwapCallback>(
-      IPC_FUNC_BATCH_SWAP);
 
   // 全局 cache 查询: engine 广播到 executor（异步）
   ipc_func_proxy_->SetFuncInfo<GlobalCacheQueryCallable, GlobalCacheQueryRequest, GlobalCacheQueryResponse,
@@ -545,9 +540,6 @@ Status IpcFuncWrapper::SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorMa
       ipc_func_proxy_->GetSharedIpcFuncCallable<CreateBlockManagerCallable>(IPC_FUNC_CREATE_BLOCK_ALLOCATOR);
   block_mgr_callable->SetBlockAllocatorManager(block_allocator_manager);
 
-  // Set on executor side - the callable that executes the swap
-  auto swap_callable = ipc_func_proxy_->GetSharedIpcFuncCallable<BatchSwapCallable>(IPC_FUNC_BATCH_SWAP);
-  swap_callable->SetBlockAllocatorManager(block_allocator_manager, dp_group_id);
   return Status();
 }
 
@@ -810,29 +802,6 @@ Status IpcFuncWrapper::ConnectorGetNcclCommInfo(const std::string& group_key, in
   return callback->status;
 }
 #endif
-
-Status IpcFuncWrapper::BatchSwap(int executor_id, bool is_swapin, const std::vector<int>& device_block_ids,
-                                 const std::vector<int>& host_block_ids) {
-  std::shared_ptr<IpcContext> ipc_context =
-      CreateEngine2ExecutorContext(IPC_FUNC_BATCH_SWAP, executor_id, /*is_async=*/false, /*is_oneway=*/false,
-                                   /*share_callable=*/true, /*share_callback=*/true, /*is_heavy=*/true);
-  std::shared_ptr<BatchSwapRequest> request = std::make_shared<BatchSwapRequest>();
-  request->index = executor_id;
-  request->is_swapin = is_swapin;
-  request->device_block_ids = device_block_ids;
-  request->host_block_ids = host_block_ids;
-  std::shared_ptr<BatchSwapResponse> response = std::make_shared<BatchSwapResponse>();
-
-  Status send_status = ipc_func_proxy_->Invoke(request.get(), response.get(), ipc_context.get());
-  if (!send_status.OK()) {
-    return send_status;
-  }
-
-  KLLM_LOG_SCHEDULER << "BatchSwap finished. executor_id=" << executor_id << ", is_swapin=" << is_swapin
-                     << ", device_block_ids=" << device_block_ids << ", host_block_ids=" << host_block_ids
-                     << ", status=" << response->swap_status.GetMessage();
-  return response->swap_status;
-}
 
 Status IpcFuncWrapper::DispatchGlobalCacheQuery(int executor_id, int64_t req_id, const std::vector<int>& token_ids,
                                                 size_t local_cached_len, int block_size,

@@ -178,14 +178,6 @@ Status InferenceExecutor::Initialize() {
     ipc_func_wrapper_->SetSwaBlockAllocatorManager(swa_block_allocator_manager_);
   }
 
-  if (context_->global->IsDistributedWorker()) {
-    CacheManagerConfig cache_manager_config;
-    STATUS_CHECK_RETURN(env_->GetCacheManagerConfig(cache_manager_config));
-    executor_block_manager_ = std::make_shared<ExecutorBlockManager>(
-        dp_group_id, device_idx_in_dp_group, block_allocator_manager_, cache_manager_config.swap_threadpool_size);
-    model_runner_->SetExecutorBlockManager(executor_block_manager_);
-  }
-
 #ifdef ENABLE_CUDA
   // Set BlockAllocatorManager to NcclExecutorHandler for pointer resolution
   if (nccl_executor_handler_) {

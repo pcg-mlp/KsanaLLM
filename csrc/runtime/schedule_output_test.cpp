@@ -55,32 +55,6 @@ bool CheckVectorsVector(const std::vector<std::vector<T>>& src, const std::vecto
   return src == dst;
 }
 
-bool CheckSwapReqBlockInfo(const SwapReqBlockInfo& src, const SwapReqBlockInfo& dst) {
-  return src.dev_block_ids == dst.dev_block_ids && src.host_block_ids == dst.host_block_ids;
-}
-
-bool CheckSwapReqBlockMaps(const std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& src,
-                           const std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& dst) {
-  if (src.size() != dst.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < src.size(); ++i) {
-    if (src[i].size() != dst[i].size()) {
-      return false;
-    }
-    for (const auto& [req_id, info] : src[i]) {
-      auto it = dst[i].find(req_id);
-      if (it == dst[i].end()) {
-        return false;
-      }
-      if (!CheckSwapReqBlockInfo(info, it->second)) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 TargetDescribe BuildTargetDescribe() {
   TargetDescribe target;
   target.cutoff_layer = {1, 3};
@@ -126,7 +100,6 @@ std::shared_ptr<InferRequest> BuildInferRequest(std::shared_ptr<Request>& reques
   infer_req->kv_cache_blocks = {11, 13, 21};
   infer_req->block_token_num = 16;
   infer_req->logits_offset = 7;
-  infer_req->swap_pending = true;
   infer_req->prefix_cache_len = 9;
   infer_req->incremental_decoded_str = "partial";
   infer_req->need_recreate_generator = false;
@@ -157,18 +130,6 @@ ScheduleOutput BuildScheduleOutput() {
   ScheduleOutput output;
   output.schedule_id = 42;
   output.finish_req_ids = {{1, 3, 5}, {7}};
-  output.merged_swapout_req_ids = {{11, 13}, {15}};
-  output.merged_swapin_req_ids = {{12, 14}, {16}};
-
-  std::unordered_map<int64_t, SwapReqBlockInfo> swapout_map;
-  swapout_map[101] = {{111, 113}, {211, 213}};
-  swapout_map[102] = {{115}, {215}};
-  output.swapout_req_block_ids.push_back(swapout_map);
-
-  std::unordered_map<int64_t, SwapReqBlockInfo> swapin_map;
-  swapin_map[201] = {{121, 123}, {221, 223}};
-  swapin_map[202] = {{125}, {225}};
-  output.swapin_req_block_ids.push_back(swapin_map);
 
   return output;
 }
@@ -194,10 +155,6 @@ TEST(ScheduleOutputTest, SerializeAndDeserializeScheduleOutput) {
 
   EXPECT_EQ(src.schedule_id, dst.schedule_id);
   EXPECT_TRUE(CheckVectorsVector(src.finish_req_ids, dst.finish_req_ids));
-  EXPECT_TRUE(CheckVectorsVector(src.merged_swapout_req_ids, dst.merged_swapout_req_ids));
-  EXPECT_TRUE(CheckVectorsVector(src.merged_swapin_req_ids, dst.merged_swapin_req_ids));
-  EXPECT_TRUE(CheckSwapReqBlockMaps(src.swapout_req_block_ids, dst.swapout_req_block_ids));
-  EXPECT_TRUE(CheckSwapReqBlockMaps(src.swapin_req_block_ids, dst.swapin_req_block_ids));
   EXPECT_TRUE(dst.executor_running_reqs.empty());
   EXPECT_TRUE(dst.running_req_patches.empty());
 }
@@ -255,7 +212,6 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(exec_req->kv_cache_blocks, full_req->kv_cache_blocks);
   EXPECT_EQ(exec_req->block_token_num, full_req->block_token_num);
   EXPECT_EQ(exec_req->logits_offset, full_req->logits_offset);
-  EXPECT_EQ(exec_req->swap_pending, full_req->swap_pending);
   EXPECT_EQ(exec_req->prefix_cache_len, full_req->prefix_cache_len);
   EXPECT_EQ(exec_req->infer_stage, full_req->infer_stage);
   EXPECT_EQ(exec_req->step, full_req->step);
@@ -306,11 +262,6 @@ TEST(ScheduleOutputTest, ScheduleOutputPool) {
 
   EXPECT_EQ(schedule_output->schedule_id, new_schedule_output->schedule_id);
   EXPECT_TRUE(CheckVectorsVector(schedule_output->finish_req_ids, new_schedule_output->finish_req_ids));
-  EXPECT_TRUE(CheckVectorsVector(schedule_output->merged_swapout_req_ids, new_schedule_output->merged_swapout_req_ids));
-  EXPECT_TRUE(CheckVectorsVector(schedule_output->merged_swapin_req_ids, new_schedule_output->merged_swapin_req_ids));
-  EXPECT_TRUE(
-      CheckSwapReqBlockMaps(schedule_output->swapout_req_block_ids, new_schedule_output->swapout_req_block_ids));
-  EXPECT_TRUE(CheckSwapReqBlockMaps(schedule_output->swapin_req_block_ids, new_schedule_output->swapin_req_block_ids));
 
   schedule_output_pool.FreeScheduleOutput(new_schedule_output);
   ScheduleOutput* free_schedule_output = schedule_output_pool.GetFreeScheduleOutput();

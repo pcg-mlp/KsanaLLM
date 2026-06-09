@@ -202,7 +202,7 @@ TEST_F(EventDrivenSchedulerTest, SwapOutInNotTriggeredPressTest) {
   EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
-TEST_F(EventDrivenSchedulerTest, SwapOutInTriggeredPressTest) {
+TEST_F(EventDrivenSchedulerTest, RecomputeTriggeredPressTest) {
   CommonSetUp();
   ParallelTester tester(schedule_processor_, env_simulator_);
 
@@ -210,9 +210,7 @@ TEST_F(EventDrivenSchedulerTest, SwapOutInTriggeredPressTest) {
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
   hooks.push_back(&default_hook);
 
-  // Run requests in parallel
-  // max output token are large, SwapOut/In will be triggered when there are multiple requests.
-  // exceed cache size, not exceed_batch size and max_step_size
+  // Run requests in parallel; cache pressure triggers recompute (swap removed).
   int request_num = 10;
   int client_num = 10;
   int min_expect_output_num = 1;
@@ -226,9 +224,9 @@ TEST_F(EventDrivenSchedulerTest, SwapOutInTriggeredPressTest) {
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
 
   auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_GT(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapout_succ_num, 0);
   EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_GT(stat.swapin_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
   EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
@@ -293,24 +291,11 @@ TEST_F(EventDrivenSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
   test_case.RunTestNoSwapTriggered();
 }
 
-TEST_F(EventDrivenSchedulerTest, FixPrefixCacheSwapTriggeredTest) {
+TEST_F(EventDrivenSchedulerTest, FixPrefixCacheRecomputeTriggeredTest) {
   enable_prefix_cache_ = true;
   FixPrefixCacheBlockLimitTriggeredTest();
 }
 
-TEST_F(EventDrivenSchedulerTest, FixPrefixCacheRecomputeTriggeredTest) {
-  enable_prefix_cache_ = true;
-  enable_swap_ = false;
-  FixPrefixCacheBlockLimitTriggeredTest();
-}
-/*
-TEST_F(EventDrivenSchedulerTest, MultiBatchFixPrefixCacheRecomputeTriggeredTest) {
-  enable_prefix_cache_ = true;
-  enable_swap_ = false;
-  max_pp_batch_num_ = 2;
-  FixPrefixCacheBlockLimitTriggeredTest();
-}
-*/
 TEST_F(EventDrivenSchedulerTest, CheckRequestTimeoutTest) {
   waiting_timeout_in_ms_ = 1000;
   CommonSetUp();

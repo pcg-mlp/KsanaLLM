@@ -20,7 +20,6 @@ enum class SchedEventType {
   EventAddRequest,
   EventUpdateAfterGeneration,
   EventAsyncTaskFinished,
-  EventSwapTaskFinished,
   EventGetScheduleResult,  // 消费者请求下一个结果；主线程收到后才将 PlanningBatch 组织成 ScheduleResult 放入
                            // result_queue_
 };
@@ -33,8 +32,6 @@ inline std::string SchedEventType2Str(SchedEventType e) {
       return "EventUpdateAfterGeneration";
     case SchedEventType::EventAsyncTaskFinished:
       return "EventAsyncTaskFinished";
-    case SchedEventType::EventSwapTaskFinished:
-      return "EventSwapTaskFinished";
     case SchedEventType::EventGetScheduleResult:
       return "EventGetScheduleResult";
     default:
@@ -69,14 +66,6 @@ struct EventUpdateAfterGenerationInfo : public SchedEventInfoBase {
 struct EventAsyncTaskFinishedInfo : public SchedEventInfoBase {
   std::vector<AsyncTaskResult> task_results;
   SchedEventType GetType() const override { return SchedEventType::EventAsyncTaskFinished; }
-};
-
-struct EventSwapTaskFinishedInfo : public SchedEventInfoBase {
-  int64_t req_id = 0;
-  bool is_swapout = false;
-  size_t block_num = 0;
-  Status status;
-  SchedEventType GetType() const override { return SchedEventType::EventSwapTaskFinished; }
 };
 
 struct EventGetScheduleResultInfo : public SchedEventInfoBase {

@@ -16,7 +16,6 @@
 
 namespace ksana_llm {
 
-class ExecutorBlockManager;
 class GlobalCachePutWorker;
 
 // Used to execute really inference calculation on the device.
@@ -30,7 +29,6 @@ class ModelRunner {
   void SetModelWeight(std::shared_ptr<WeightInstanceInterface> model_weight);
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
   void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager);
-  void SetExecutorBlockManager(std::shared_ptr<ExecutorBlockManager> executor_block_manager);
   void SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool);
   void SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> sampling_output_pool);
   void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller);
@@ -60,7 +58,6 @@ class ModelRunner {
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<WeightInstanceInterface> model_weight_ = nullptr;
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
-  std::shared_ptr<ExecutorBlockManager> executor_block_manager_ = nullptr;
 
   // The really executor runtime.
   std::shared_ptr<ExecutorRuntime> executor_runtime_ = nullptr;

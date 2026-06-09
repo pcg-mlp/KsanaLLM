@@ -41,7 +41,6 @@ class PrefixCacheManagerTest : public testing::Test {
 
     cache_manager_config.block_token_num = 16;
     cache_manager_config.tensor_para_size = 2;
-    cache_manager_config.swap_threadpool_size = 2;
     cache_manager_config.enable_prefix_caching = true;
 
     block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(group_1_config, memory_allocator_, context_,
@@ -157,128 +156,6 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_TRUE(status.OK());
 
   // All blocks except last should be on tree, check state of every block.
-  CheckCachedRequetBlocks(req_id);
-
-  // Check freeable block of this request.
-  size_t freeable_block_num;
-  status = cache_manager->GetRequestFreeableBlockNum(req_id, freeable_block_num);
-  EXPECT_TRUE(status.OK());
-  EXPECT_EQ(freeable_block_num, unique_block_num);
-
-  // Swap out this request.
-  size_t swapped_block_num = 0;
-  size_t free_block_num = 0;
-  std::vector<int> swapped_memory_block_ids;
-  std::vector<int> host_block_ids;
-  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num, swapped_memory_block_ids,
-                                              host_block_ids);
-  EXPECT_TRUE(status.OK());
-
-  // Check swapped and free block num.
-  EXPECT_EQ(swapped_block_num, unique_block_num);
-  EXPECT_EQ(free_block_num, 0);
-
-  // Wait swapout done, and merge it.
-  size_t left_req_num = 0;
-  std::vector<int64_t> req_ids;
-  status = cache_manager->WaitSwapoutRequests(req_ids, left_req_num, true);
-  EXPECT_TRUE(status.OK());
-
-  // All blocks should be on host, no parent, no children, no active reqeust, some inactive reqeust.
-  size_t req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
-  for (size_t i = 0; i < req_block_num; ++i) {
-    PrefixCachedBlock* cb = cache_manager->cached_requests_[req_id]->cached_blocks[i];
-
-    EXPECT_EQ(cb->parent, nullptr);
-    EXPECT_EQ(cb->children.size(), 0);
-    EXPECT_EQ(cb->active_requests.size(), 0);
-    if (cb->is_shareable) {
-      EXPECT_EQ(cb->inactive_requests.size(), 1);
-    } else {
-      EXPECT_EQ(cb->inactive_requests.size(), 0);
-    }
-    EXPECT_EQ(cb->is_device_location, false);
-    if (i != req_block_num - 1) {
-      EXPECT_EQ(cb->is_shareable, true);
-    } else {
-      EXPECT_EQ(cb->is_shareable, false);
-    }
-  }
-
-  // Recheck block num, the block is not usable before merged.
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - unique_block_num);
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - unique_block_num);
-
-  // Merge swapped blocks.
-  for (int64_t req_id : req_ids) {
-    status = cache_manager->MergeSwapoutRequest(req_id);
-    EXPECT_TRUE(status.OK());
-  }
-
-  // Recheck block num, now the block should usable again.
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num);
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - unique_block_num);
-
-  // Swap in request again.
-
-  size_t swapin_need_block_num;
-  status = cache_manager->GetRequestNeededBlockNumForOneNextToken(req_id, swapin_need_block_num);
-  EXPECT_TRUE(status.OK());
-
-  // Check needed block num.
-  EXPECT_EQ(swapin_need_block_num, unique_block_num);
-
-  // Start to swapin.
-  size_t swapin_block_num;
-  std::vector<int> swapped_in_memory_block_ids;
-  std::vector<int> swapin_host_block_ids;
-  status = cache_manager->SwapinRequestAsync(req_id, swapin_block_num, req_block_ids, swapped_in_memory_block_ids,
-                                             swapin_host_block_ids);
-  EXPECT_TRUE(status.OK());
-
-  // check swapin block num.
-  EXPECT_EQ(swapin_block_num, swapin_need_block_num);
-
-  // Check block is unusable at the begining of swapin.
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - unique_block_num);
-
-  // Wait swap in done
-  size_t swapin_left_req_num;
-  std::vector<int64_t> swapin_req_ids;
-  status = cache_manager->WaitSwapinRequests(swapin_req_ids, swapin_left_req_num, true);
-  EXPECT_TRUE(status.OK());
-
-  // All blocks should be on device, but no parent, no children, no active reqeust, some inactive reqeust.
-  req_block_num = cache_manager->cached_requests_[req_id]->cached_blocks.size();
-  for (size_t i = 0; i < req_block_num; ++i) {
-    PrefixCachedBlock* cb = cache_manager->cached_requests_[req_id]->cached_blocks[i];
-
-    EXPECT_EQ(cb->parent, nullptr);
-    EXPECT_EQ(cb->children.size(), 0);
-    EXPECT_EQ(cb->active_requests.size(), 0);
-    if (cb->is_shareable) {
-      EXPECT_EQ(cb->inactive_requests.size(), 1);
-    } else {
-      EXPECT_EQ(cb->inactive_requests.size(), 0);
-    }
-    EXPECT_EQ(cb->is_device_location, true);
-    if (i != req_block_num - 1) {
-      EXPECT_EQ(cb->is_shareable, true);
-    } else {
-      EXPECT_EQ(cb->is_shareable, false);
-    }
-  }
-
-  // Recheck block num, the host block is usable here.
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num);
-
-  // Merge swapin request.
-  for (int64_t req_id : swapin_req_ids) {
-    status = cache_manager->MergeSwapinRequest(req_id, req_block_ids, swa_req_block_ids, swa_block_idx_offset);
-    EXPECT_TRUE(status.OK());
-  }
-
-  // All block is on the tree again.
   CheckCachedRequetBlocks(req_id);
 
   // Finish request
@@ -418,143 +295,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(cache_manager->reusable_cached_blocks_.size(), 1);
   EXPECT_EQ(cache_manager->timed_cached_blocks_.size(), 4);
 
-  // Swap out req 2.
-  size_t freeable_block_num_2;
-  status = cache_manager->GetRequestFreeableBlockNum(req_id_2, freeable_block_num_2);
-  EXPECT_TRUE(status.OK());
-
-  // Here only 1 block could be freed, that is, the unique block of req 2.
-  EXPECT_EQ(freeable_block_num_2, 1);
-
-  size_t swapped_block_num_2 = 0;
-  size_t free_block_num_2 = 0;
-  std::vector<int> swapped_memory_block_ids_2;
-  std::vector<int> host_block_ids_2;
-  status = cache_manager->SwapoutRequestAsync(req_id_2, swapped_block_num_2, free_block_num_2,
-                                              swapped_memory_block_ids_2, host_block_ids_2);
-  EXPECT_TRUE(status.OK());
-
-  // Swap out req 3.
-  size_t freeable_block_num_3;
-  status = cache_manager->GetRequestFreeableBlockNum(req_id_3, freeable_block_num_3);
-  EXPECT_TRUE(status.OK());
-
-  // Here 4 block could be freed, that is, the 3 shared ones and 1 unique block.
-  EXPECT_EQ(freeable_block_num_3, 4);
-
-  size_t swapped_block_num_3 = 0;
-  size_t free_block_num_3 = 0;
-  std::vector<int> swapped_memory_block_ids_3;
-  std::vector<int> host_block_ids_3;
-  status = cache_manager->SwapoutRequestAsync(req_id_3, swapped_block_num_3, free_block_num_3,
-                                              swapped_memory_block_ids_3, host_block_ids_3);
-  EXPECT_TRUE(status.OK());
-
-  // 5 used, (2 shared) + (1 mergee) + 2 * (1 unique) = 5, the 1 unmatched was free when swapped out.
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - 5);
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - 5);
-
-  // Wait all requests merge done.
-  size_t left_req_num_2 = 0;
-  std::vector<int64_t> req_ids_2;
-  do {
-    status = cache_manager->WaitSwapoutRequests(req_ids_2, left_req_num_2, true);
-    EXPECT_TRUE(status.OK());
-
-    // Merge swapped blocks.
-    for (int64_t req_id : req_ids_2) {
-      status = cache_manager->MergeSwapoutRequest(req_id);
-      EXPECT_TRUE(status.OK());
-    }
-  } while (left_req_num_2 > 0);
-
-  // Now all block is usable.
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num);
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - 5);
-
-  // Create req 4 that have same sequence with 2 and 3.
-  std::vector<int> output_token_ids_4;
-  faked_token_generator->GeneratePromptTokens({std::make_pair(1, 36), std::make_pair(2, 18)}, output_token_ids_4);
-
-  int64_t req_id_4 = 4;
-  size_t shared_token_num_4 = 0;
-  size_t shared_block_num_4 = 0;
-  size_t unique_block_num_4 = 0;
-  cache_manager->GetRequestPrefixBlockNumber(req_id_4, output_token_ids_4, output_token_ids_4.size(),
-                                             shared_block_num_4, unique_block_num_4, shared_token_num_4);
-
-  std::vector<int> req_block_ids_4;
-  std::vector<int> swa_req_block_ids_4;
-  std::vector<size_t> swa_block_idx_offset_4;
-  status = cache_manager->AllocateRequestBlocks(req_id_4, unique_block_num_4, req_block_ids_4, swa_req_block_ids_4,
-                                                swa_block_idx_offset_4);
-  EXPECT_TRUE(status.OK());
-
-  // The req 4 have same data with req 2/3.
-  block_merged = false;
-  status =
-      cache_manager->UpdateRequestTokens(req_id_4, output_token_ids_4, output_token_ids_4.size() - 1, req_block_ids_4,
-                                         block_merged, swa_req_block_ids_4, swa_block_idx_offset_4);
-  EXPECT_TRUE(status.OK());
-
-  // Swap in req 2.
-  size_t swapin_need_block_num_2;
-  status = cache_manager->GetRequestNeededBlockNumForOneNextToken(req_id_2, swapin_need_block_num_2);
-  EXPECT_TRUE(status.OK());
-
-  size_t swapin_block_num_2;
-  std::vector<int> swapped_in_memory_block_ids_2;
-  std::vector<int> swapin_host_block_ids_2;
-  status = cache_manager->SwapinRequestAsync(req_id_2, swapin_block_num_2, req_block_ids_2,
-                                             swapped_in_memory_block_ids_2, swapin_host_block_ids_2);
-  EXPECT_TRUE(status.OK());
-
-  // Wait req 2 swapped in.
-  size_t swapin_left_req_num_2;
-  std::vector<int64_t> swapin_req_ids_2;
-  status = cache_manager->WaitSwapinRequests(swapin_req_ids_2, swapin_left_req_num_2, true);
-  EXPECT_TRUE(status.OK());
-
-  // 4 blocks for req 2 and req 4
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - (4 + 4));
-  // only 1 unqiue block for req 3 in host.
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - 1);
-
-  // Merge swapin req 2.
-  for (int64_t req_id : swapin_req_ids_2) {
-    status = cache_manager->MergeSwapinRequest(req_id, req_block_ids_2, swa_req_block_ids_2, swa_block_idx_offset_2);
-    EXPECT_TRUE(status.OK());
-  }
-
-  // Now req 2's leading 3 block was merge to req 4.
-  // and req 3 is shared the leading 3 block with req 2, so they should have 3 same blocks.
-  EXPECT_EQ(cache_manager->cached_requests_[req_id_2]->cached_blocks[0],
-            cache_manager->cached_requests_[req_id_3]->cached_blocks[0]);
-  EXPECT_EQ(cache_manager->cached_requests_[req_id_2]->cached_blocks[0],
-            cache_manager->cached_requests_[req_id_4]->cached_blocks[0]);
-  EXPECT_EQ(cache_manager->cached_requests_[req_id_2]->cached_blocks[1],
-            cache_manager->cached_requests_[req_id_3]->cached_blocks[1]);
-  EXPECT_EQ(cache_manager->cached_requests_[req_id_2]->cached_blocks[1],
-            cache_manager->cached_requests_[req_id_4]->cached_blocks[1]);
-  EXPECT_EQ(cache_manager->cached_requests_[req_id_2]->cached_blocks[2],
-            cache_manager->cached_requests_[req_id_3]->cached_blocks[2]);
-  EXPECT_EQ(cache_manager->cached_requests_[req_id_2]->cached_blocks[2],
-            cache_manager->cached_requests_[req_id_4]->cached_blocks[2]);
-
-  // 3 shared + 2 * (1 unique)
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - (3 + 1 + 1));
-  // 1 unqiue of req 3
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - 1);
-
-  // Drop swapped req 3.
-  cache_manager->DestroySwappedRequest(req_id_3);
-
-  // All host memory is usable.
-  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - (3 + 1 + 1));
-  EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num);
-
   cache_manager->DestroyFinishedRequest(req_id_2);
-  cache_manager->DestroyFinishedRequest(req_id_4);
+  cache_manager->DestroyFinishedRequest(req_id_3);
 
   // test: 1 block in req, 5 block in cache_manager, expect fill 4 block and append 2 new block
   constexpr int64_t req_id_6 = 6;
@@ -651,36 +393,6 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
     }
   }
 
-  // Swap out base request.
-  size_t swapped_block_num = 0;
-  size_t free_block_num = 0;
-  std::vector<int> swapped_memory_block_ids;
-  std::vector<int> host_block_ids;
-  status = cache_manager->SwapoutRequestAsync(req_id, swapped_block_num, free_block_num, swapped_memory_block_ids,
-                                              host_block_ids);
-  EXPECT_TRUE(status.OK());
-
-  // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_toeken|
-  // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_toeken|
-  for (int last_token_num = 1; last_token_num < block_token_num; last_token_num++) {
-    for (int delete_token_num = 1; delete_token_num <= block_token_num; delete_token_num++) {
-      std::vector<int> dst_tokens;
-      int src_token_index = 0;
-      for (; src_token_index < shared_token_num + last_token_num; src_token_index++) {
-        dst_tokens.push_back(output_token_ids[src_token_index]);
-      }
-      src_token_index += delete_token_num;
-      for (; src_token_index < output_token_ids.size(); src_token_index++) {
-        dst_tokens.push_back(output_token_ids[src_token_index]);
-      }
-      std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
-      size_t flexible_cache_len = 0;
-      cache_manager->UpdateFlexibleCache(req_id_2, dst_tokens, shared_token_num, flexible_cached_copy_tasks,
-                                         flexible_cache_len);
-      EXPECT_EQ(0, flexible_cached_copy_tasks.size());
-      EXPECT_EQ(0, flexible_cache_len);
-    }
-  }
   cache_manager->DestroyFinishedRequest(req_id);
   cache_manager->DestroyFinishedRequest(req_id_2);
 }
@@ -702,34 +414,6 @@ TEST_F(PrefixCacheManagerTest, InvalidRequestTest) {
   bool block_merged = false;
   status = cache_manager->UpdateRequestTokens(invalid_id, output_token_ids, 0, req_block_ids, block_merged,
                                               swa_req_block_ids, swa_block_idx_offset);
-  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
-
-  status = cache_manager->UpdateCachedRequestState(invalid_id, RequestState::kWaiting);
-  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
-
-  status = cache_manager->GetRequestFreeableBlockNum(invalid_id, unique_block_num);
-  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
-
-  status = cache_manager->GetRequestNeededBlockNumForOneNextToken(invalid_id, unique_block_num);
-  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
-
-  // Swap out this request.
-  size_t swapped_block_num = 0;
-  size_t free_block_num = 0;
-  std::vector<int> swapped_memory_block_ids;
-  std::vector<int> host_block_ids;
-  status = cache_manager->SwapoutRequestAsync(invalid_id, swapped_block_num, free_block_num, swapped_memory_block_ids,
-                                              host_block_ids);
-  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
-
-  size_t swapin_block_num;
-  std::vector<int> swapped_in_memory_block_ids;
-  std::vector<int> swapin_host_block_ids;
-  status = cache_manager->SwapinRequestAsync(invalid_id, swapin_block_num, req_block_ids, swapped_in_memory_block_ids,
-                                             swapin_host_block_ids);
-  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
-
-  status = cache_manager->MergeSwapinRequest(invalid_id, req_block_ids, swa_req_block_ids, swa_block_idx_offset);
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 }
 
@@ -777,7 +461,6 @@ class PrefixCacheManagerSWATest : public testing::Test {
 
     cache_manager_config_.block_token_num = block_token_num;
     cache_manager_config_.tensor_para_size = 2;
-    cache_manager_config_.swap_threadpool_size = 2;
     cache_manager_config_.enable_prefix_caching = true;
     cache_manager_config_.sliding_window_size = sliding_window_size;
 
@@ -1559,7 +1242,6 @@ class PrefixCacheManagerRemoteCacheTest : public testing::Test {
 
     cache_manager_config_.block_token_num = block_token_num;
     cache_manager_config_.tensor_para_size = 2;
-    cache_manager_config_.swap_threadpool_size = 2;
     cache_manager_config_.enable_prefix_caching = true;
     cache_manager_config_.sliding_window_size = sliding_window_size;
 

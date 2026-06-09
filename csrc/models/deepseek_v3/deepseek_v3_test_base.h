@@ -47,7 +47,7 @@ class DeepSeekV3Test : public testing::Test {
       expected_tokens = {{5306, 13245, 15354}, /*without fastmath*/ {5306, 13245, 536}, {28570, 27932, 4180}};
     }
 
-    const char* skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
+    const char *skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
     if (skip_env != nullptr && std::string(skip_env) == "1" && !std::filesystem::exists(model_path)) {
       GTEST_SKIP() << "Model path " << model_path << " not found, skipping test.";
     }
@@ -121,7 +121,6 @@ class DeepSeekV3Test : public testing::Test {
     CacheManagerConfig cache_manager_config;
     cache_manager_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
     cache_manager_config.tensor_para_size = 1;
-    cache_manager_config.swap_threadpool_size = 2;
     cache_manager_config.enable_prefix_caching = true;
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, engine_block_group);
 
@@ -159,7 +158,7 @@ class DeepSeekV3Test : public testing::Test {
 #endif
     std::filesystem::path model_path(model_config.path);
     if (!std::filesystem::exists(model_path)) {
-      const char* skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
+      const char *skip_env = std::getenv("SKIP_TEST_IF_MODEL_NOT_FOUND");
       if (skip_env != nullptr && std::string(skip_env) == "1") {
         GTEST_SKIP() << "Model path " << model_config.path << " not found, skipping test.";
       }

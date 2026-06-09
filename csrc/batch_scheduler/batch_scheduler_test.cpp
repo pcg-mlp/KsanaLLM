@@ -185,7 +185,7 @@ TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
   EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
-TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
+TEST_F(BatchSchedulerTest, RecomputeTriggeredPressTest) {
   CommonSetUp();
   ParallelTester tester(schedule_processor_, env_simulator_);
 
@@ -193,9 +193,7 @@ TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
   hooks.push_back(&default_hook);
 
-  // Run requests in parallel
-  // max output token are large, SwapOut/In will be triggered when there are multiple requests.
-  // exceed cache size, not exceed_batch size and max_step_size
+  // Run requests in parallel; cache pressure triggers recompute (swap removed).
   int request_num = 10;
   int client_num = 10;
   int min_expect_output_num = 1;
@@ -209,9 +207,9 @@ TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
 
   auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_GT(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapout_succ_num, 0);
   EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_GT(stat.swapin_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);
   EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
@@ -290,33 +288,19 @@ TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
   test_case.RunTestNoSwapTriggered();
 }
 
-TEST_F(BatchSchedulerTest, FixPrefixCacheSwapTriggeredTest) {
-  enable_prefix_cache_ = true;
-  FixPrefixCacheBlockLimitTriggeredTest();
-}
-
-TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheSwapTriggeredTest) {
-  enable_async_ = true;
-  enable_prefix_cache_ = true;
-  FixPrefixCacheBlockLimitTriggeredTest();
-}
-
 TEST_F(BatchSchedulerTest, FixPrefixCacheRecomputeTriggeredTest) {
   enable_prefix_cache_ = true;
-  enable_swap_ = false;
   FixPrefixCacheBlockLimitTriggeredTest();
 }
 
 TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheRecomputeTriggeredTest) {
   enable_async_ = true;
   enable_prefix_cache_ = true;
-  enable_swap_ = false;
   FixPrefixCacheBlockLimitTriggeredTest();
 }
 
 TEST_F(BatchSchedulerTest, MultiBatchFixPrefixCacheRecomputeTriggeredTest) {
   enable_prefix_cache_ = true;
-  enable_swap_ = false;
   max_pp_batch_num_ = 2;
   FixPrefixCacheBlockLimitTriggeredTest();
 }
@@ -324,7 +308,6 @@ TEST_F(BatchSchedulerTest, MultiBatchFixPrefixCacheRecomputeTriggeredTest) {
 TEST_F(BatchSchedulerTest, MultiBatchAsyncFixPrefixCacheRecomputeTriggeredTest) {
   enable_async_ = true;
   enable_prefix_cache_ = true;
-  enable_swap_ = false;
   max_pp_batch_num_ = 2;
   FixPrefixCacheBlockLimitTriggeredTest();
 }

@@ -11,7 +11,6 @@
 #include "configure/environment.h"
 #include "distributed/distributed_control_coordinator.h"
 #include "distributed/distributed_data_coordinator.h"
-#include "executor/executor_block_manager.h"
 #include "executor/model_runner.h"
 #include "global_cache_connector/global_cache_connector_interface.h"
 #include "ipc/ipc_func_wrapper.h"
@@ -77,7 +76,6 @@ class InferenceExecutor {
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
   // The SWA block allocator manager; nullptr when SWA is disabled.
   std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager_ = nullptr;
-  std::shared_ptr<ExecutorBlockManager> executor_block_manager_ = nullptr;
 
   // The executor runtime object.
   std::shared_ptr<ExecutorRuntime> executor_runtime_ = nullptr;

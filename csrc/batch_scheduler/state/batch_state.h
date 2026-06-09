@@ -4,15 +4,14 @@
 #pragma once
 
 #include <deque>
-#include <map>
 #include <memory>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
 
-#include "runtime/schedule_output.h"
 #include "runtime/infer_request.h"
 #include "runtime/request_state.h"
+#include "runtime/schedule_output.h"
 
 namespace ksana_llm {
 
@@ -75,19 +74,6 @@ struct BatchState {
     if (async_recomputed_reqs.size() > 0) {
       oss << ", async_recompute_req_size:" << async_recomputed_reqs.size();
     }
-    if (async_swapout_reqs.size() > 0) {
-      oss << ", async_swapout_reqs_size:" << async_swapout_reqs.size();
-    }
-    if (swapped_queue.size() > 0) {
-      oss << ", swapped_queue_size:" << swapped_queue.size();
-    }
-    if (swapin_pending_requests.size() > 0) {
-      oss << ", swapin_pending_requests_size:" << swapin_pending_requests.size();
-    }
-    if (swapout_pending_requests.size() > 0) {
-      oss << ", swapout_pending_requests_size:" << swapout_pending_requests.size();
-    }
-
     oss << ", step_sched_finish:" << step_sched_finish << ") ";
 
     if (include_details) {
@@ -107,24 +93,9 @@ struct BatchState {
         }
         oss << "]";
       }
-      if (swapped_queue.size() > 0) {
-        oss << ", swapped_queue:[";
-        for (const auto& req : swapped_queue) {
-          oss << req.second->req_id << " ";
-        }
-        oss << "]";
-      }
-
       if (async_recomputed_reqs.size() > 0) {
         oss << ", async_recomputed_reqs:[";
         for (const auto& req : async_recomputed_reqs) {
-          oss << req.second->req_id << " ";
-        }
-        oss << "]";
-      }
-      if (async_swapout_reqs.size() > 0) {
-        oss << ", async_swapout_reqs:[";
-        for (const auto& req : async_swapout_reqs) {
           oss << req.second->req_id << " ";
         }
         oss << "]";
@@ -162,14 +133,6 @@ struct BatchState {
   };
   std::unordered_map<int64_t, StoppedReqInfo> async_stoped_reqs;
   std::unordered_map<int64_t, std::shared_ptr<InferRequest>> async_recomputed_reqs;
-  std::unordered_map<int64_t, std::shared_ptr<InferRequest>> async_swapout_reqs;
-
-  // The swapped queue, sorted map.
-  std::map<int, std::shared_ptr<InferRequest>> swapped_queue;
-
-  // The pending requests used for swap in/out, unordered.
-  std::unordered_map<int, std::shared_ptr<InferRequest>> swapin_pending_requests;
-  std::unordered_map<int, std::shared_ptr<InferRequest>> swapout_pending_requests;
 
   // To guard queue.
   std::mutex queue_mutex;

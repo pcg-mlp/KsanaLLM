@@ -22,8 +22,6 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) override;
 
-  virtual void UpdateAsyncState() override;
-
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
@@ -48,17 +46,12 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   Status RecomputeMockRequest(std::shared_ptr<InferRequest> &req);
   bool ProcessAsyncRecomputeRequest(const std::shared_ptr<InferRequest> &req);
 
-  void SwapoutRequest(std::shared_ptr<InferRequest> req);
-  void SyncSwapoutRequest(std::shared_ptr<InferRequest> req);
-
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
   void SyncStopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
 
   void RecoverAsyncRecomputedRequests();
   bool ProcessAsyncStoppedRequest(std::shared_ptr<InferRequest> &req);
-  void RecoverAsyncSwapoutRequests();
-  bool ProcessAsyncSwapoutRequest(const std::shared_ptr<InferRequest> &req);
 
   // Check the running queue to determine whether it exceeds the
   // max_step_token_num. return [step_token_with_kv_cache,
@@ -66,14 +59,10 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   std::pair<size_t, size_t> CheckRunningQueueStepTokens(const std::vector<std::shared_ptr<InferRequest>> &checking_reqs,
                                                         std::vector<std::shared_ptr<InferRequest>> &passed_reqs);
 
-  // Schedule the running/swapped/waiting queue.
+  // Schedule the running/waiting queue.
   void ProcessDecodingQueue();
-  void ProcessSwappedQueue();
   void ProcessWaitingQueue();
   void ProcessTransferQueue();
-
-  Status MergePendingSwapinRequests(bool blocking, bool early_stop);
-  Status MergePendingSwapoutRequests(bool blocking, bool early_stop);
 
   /**
    * @brief 处理prefill节点的传输队列

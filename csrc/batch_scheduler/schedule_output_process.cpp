@@ -51,10 +51,6 @@ void MergeScheduleInfoForWorkers(const std::vector<ScheduleOutput*>& outputs, Sc
 
   merged_schedule_output.finish_req_ids.resize(outputs_size);
   merged_schedule_output.recompute_req_ids.resize(outputs_size);
-  merged_schedule_output.merged_swapout_req_ids.resize(outputs_size);
-  merged_schedule_output.merged_swapin_req_ids.resize(outputs_size);
-  merged_schedule_output.swapout_req_block_ids.resize(outputs_size);
-  merged_schedule_output.swapin_req_block_ids.resize(outputs_size);
 
   for (size_t attn_dp_idx = 0; attn_dp_idx < outputs_size; ++attn_dp_idx) {
     ScheduleOutput* schedule_output = outputs.at(attn_dp_idx);
@@ -67,18 +63,6 @@ void MergeScheduleInfoForWorkers(const std::vector<ScheduleOutput*>& outputs, Sc
     }
     if (!schedule_output->recompute_req_ids.empty()) {
       merged_schedule_output.recompute_req_ids[attn_dp_idx] = schedule_output->recompute_req_ids[0];
-    }
-    if (!schedule_output->merged_swapout_req_ids.empty()) {
-      merged_schedule_output.merged_swapout_req_ids[attn_dp_idx] = schedule_output->merged_swapout_req_ids[0];
-    }
-    if (!schedule_output->merged_swapin_req_ids.empty()) {
-      merged_schedule_output.merged_swapin_req_ids[attn_dp_idx] = schedule_output->merged_swapin_req_ids[0];
-    }
-    if (!schedule_output->swapout_req_block_ids.empty()) {
-      merged_schedule_output.swapout_req_block_ids[attn_dp_idx] = schedule_output->swapout_req_block_ids[0];
-    }
-    if (!schedule_output->swapin_req_block_ids.empty()) {
-      merged_schedule_output.swapin_req_block_ids[attn_dp_idx] = schedule_output->swapin_req_block_ids[0];
     }
     schedule_output->ResetDataForWorkers();
   }

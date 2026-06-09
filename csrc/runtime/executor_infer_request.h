@@ -199,9 +199,6 @@ class ExecutorInferRequest {
   // The offset for model forward's logits output.
   size_t logits_offset = 0;
 
-  // Whether the current req is in pending status of swappiness.
-  bool swap_pending = false;
-
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 

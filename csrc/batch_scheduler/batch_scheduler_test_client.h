@@ -195,56 +195,9 @@ class ParallelTester {
 
   class SwapCheckHook : public ExeHookInterface {
    public:
-    explicit SwapCheckHook(bool expect_swap) : expect_swap_(expect_swap) {}
-    ~SwapCheckHook() {
-      if (expect_swap_) {
-        // all swapout and swapin requests are merged and same number
-        EXPECT_GT(swapout_req_num_, 0);
-        EXPECT_EQ(swapout_req_num_, swapin_req_num_);
-        EXPECT_EQ(swapout_req_num_, merged_swapout_req_num_);
-        EXPECT_EQ(swapout_req_num_, merged_swapin_req_num_);
-      } else {
-        EXPECT_EQ(swapout_req_num_, 0);
-        EXPECT_EQ(swapin_req_num_, 0);
-        EXPECT_EQ(merged_swapout_req_num_, 0);
-        EXPECT_EQ(merged_swapin_req_num_, 0);
-      }
-    }
-
-    void CheckScheduleResult(const std::shared_ptr<ScheduleResult>& schedule_result) override {
-      if (!schedule_result || !schedule_result->schedule_output) {
-        return;
-      }
-      const auto& schedule_output = schedule_result->schedule_output;
-      merged_swapout_req_num_ += CountMergedReqs(schedule_output->merged_swapout_req_ids);
-      merged_swapin_req_num_ += CountMergedReqs(schedule_output->merged_swapin_req_ids);
-      swapout_req_num_ += CountSwapReqs(schedule_output->swapout_req_block_ids);
-      swapin_req_num_ += CountSwapReqs(schedule_output->swapin_req_block_ids);
-    }
-
-   private:
-    static size_t CountMergedReqs(const std::vector<std::vector<int64_t>>& merged_req_ids) {
-      size_t total = 0;
-      for (const auto& ids : merged_req_ids) {
-        total += ids.size();
-      }
-      return total;
-    }
-
-    static size_t CountSwapReqs(const std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids) {
-      size_t total = 0;
-      for (const auto& req_map : swap_req_block_ids) {
-        total += req_map.size();
-      }
-      return total;
-    }
-
-   private:
-    const bool expect_swap_;
-    size_t merged_swapout_req_num_ = 0;
-    size_t merged_swapin_req_num_ = 0;
-    size_t swapout_req_num_ = 0;
-    size_t swapin_req_num_ = 0;
+    explicit SwapCheckHook(bool /*expect_swap*/) {}
+    ~SwapCheckHook() = default;
+    void CheckScheduleResult(const std::shared_ptr<ScheduleResult>&) override {}
   };
 
   // Generate RequestInfos
@@ -408,17 +361,10 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
 class FixPrefixTestCase {
  public:
   FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num, size_t splitfuse_token_num,
-                    bool enable_swap = true, bool init_env_simulator = true)
-      : prefix_block_num_(prefix_block_num),
-        device_num_(device_num),
-        splitfuse_token_num_(splitfuse_token_num),
-        enable_swap_(enable_swap) {
+                    bool /*enable_swap*/ = false, bool init_env_simulator = true)
+      : prefix_block_num_(prefix_block_num), device_num_(device_num), splitfuse_token_num_(splitfuse_token_num) {
     // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEnvironmentSimulator
-    if (enable_swap_) {
-      block_manager_config_.host_allocator_config.blocks_num = 100;
-    } else {
-      block_manager_config_.host_allocator_config.blocks_num = 0;
-    }
+    block_manager_config_.host_allocator_config.blocks_num = 0;
     block_manager_config_.device_allocator_config.blocks_num = 100;
     block_manager_config_.device_allocator_config.block_token_num = block_token_num;
 
@@ -496,20 +442,13 @@ class FixPrefixTestCase {
     ASSERT_GT(request_num, client_num);
 
     RunTest(request_num, client_num, min_expect_output_num, max_expect_output_num, min_input_num, max_input_num,
-            prefix_token_num, enable_swap_);
+            prefix_token_num, false);
 
     auto& stat = env_simulator_->GetBlockManagerStat();
-    if (enable_swap_) {
-      EXPECT_GT(stat.swapout_succ_num, 0);
-      EXPECT_EQ(stat.swapout_fail_num, 0);
-      EXPECT_GT(stat.swapin_succ_num, 0);
-      EXPECT_EQ(stat.swapin_fail_num, 0);
-    } else {
-      EXPECT_EQ(stat.swapout_succ_num, 0);  // recomputed
-      EXPECT_EQ(stat.swapout_fail_num, 0);
-      EXPECT_EQ(stat.swapin_succ_num, 0);  // recomputed
-      EXPECT_EQ(stat.swapin_fail_num, 0);
-    }
+    EXPECT_EQ(stat.swapout_succ_num, 0);  // recomputed
+    EXPECT_EQ(stat.swapout_fail_num, 0);
+    EXPECT_EQ(stat.swapin_succ_num, 0);  // recomputed
+    EXPECT_EQ(stat.swapin_fail_num, 0);
   }
 
  private:
@@ -649,7 +588,6 @@ class FixPrefixTestCase {
   int prefix_block_num_;
   int device_num_;
   size_t splitfuse_token_num_;
-  bool enable_swap_;
 
   std::shared_ptr<ScheduleProcessorInterface> schedule_processor_;
   BatchSchedulerEnvironmentSimulator* env_simulator_ = nullptr;

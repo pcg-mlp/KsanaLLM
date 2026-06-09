@@ -37,13 +37,12 @@ class DirectCacheManagerTest : public testing::Test {
     context_ = std::make_shared<Context>();
     memory_allocator_ = std::make_shared<FakedMemoryAllocator>();
 
-    block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(
-        group_config, memory_allocator_, context_, block_allocator_creation_fn_);
+    block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(group_config, memory_allocator_, context_,
+                                                                        block_allocator_creation_fn_);
 
     CacheManagerConfig cfg;
     cfg.block_token_num = block_token_num_;
     cfg.tensor_para_size = 1;
-    cfg.swap_threadpool_size = 1;
     cfg.sliding_window_size = 0;  // SWA disabled
 
     cache_manager_ = std::make_unique<DirectCacheManager>(cfg, block_allocator_group_, nullptr);
@@ -75,19 +74,17 @@ class DirectCacheManagerTest : public testing::Test {
     context_ = std::make_shared<Context>();
     memory_allocator_ = std::make_shared<FakedMemoryAllocator>();
 
-    block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(
-        kv_group_config, memory_allocator_, context_, block_allocator_creation_fn_);
-    swa_block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(
-        swa_group_config, memory_allocator_, context_, block_allocator_creation_fn_);
+    block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(kv_group_config, memory_allocator_, context_,
+                                                                        block_allocator_creation_fn_);
+    swa_block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(swa_group_config, memory_allocator_,
+                                                                            context_, block_allocator_creation_fn_);
 
     CacheManagerConfig cfg;
     cfg.block_token_num = block_token_num_;
     cfg.tensor_para_size = 1;
-    cfg.swap_threadpool_size = 1;
     cfg.sliding_window_size = sliding_window_size_;
 
-    cache_manager_ =
-        std::make_unique<DirectCacheManager>(cfg, block_allocator_group_, swa_block_allocator_group_);
+    cache_manager_ = std::make_unique<DirectCacheManager>(cfg, block_allocator_group_, swa_block_allocator_group_);
     cache_manager_->InitializeCachedBlocks();
   }
 

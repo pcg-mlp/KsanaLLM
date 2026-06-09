@@ -170,26 +170,6 @@ class FakedBlockAllocatorGroup : public BlockAllocatorGroupInterface {
     return device_it->second;
   }
 
-  virtual Status SwapIn(int index, int device_block_id, int host_block_id) override { return Status(); }
-
-  virtual Status SwapOut(int index, int host_block_id, int device_block_id) override { return Status(); }
-
-  virtual Status BatchSwapOut(int index, const std::vector<int>& host_block_ids,
-                              const std::vector<int>& device_block_ids) override {
-    if (device_block_ids.size() != host_block_ids.size()) {
-      return Status(RET_RUNTIME_FAILED, "BatchSwapOut error, device and host block count mismatch.");
-    }
-    return Status();
-  }
-
-  virtual Status BatchSwapIn(int index, const std::vector<int>& device_block_ids,
-                             const std::vector<int>& host_block_ids) override {
-    if (device_block_ids.size() != host_block_ids.size()) {
-      return Status(RET_RUNTIME_FAILED, "BatchSwapIn error, device and host block count mismatch.");
-    }
-    return Status();
-  }
-
   virtual const BlockAllocatorGroupConfig& GetBlockAllocatorGroupConfig() const override {
     return block_allocator_group_config_;
   }

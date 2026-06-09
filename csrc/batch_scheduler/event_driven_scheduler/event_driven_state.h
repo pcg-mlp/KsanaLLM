@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "runtime/infer_request.h"
-#include "runtime/schedule_output.h"  // for SwapReqBlockInfo
+#include "runtime/schedule_output.h"
 
 namespace ksana_llm {
 
@@ -20,9 +20,6 @@ namespace ksana_llm {
 struct DpScheduleOpsInPlan {
   std::unordered_set<int64_t> stop_req_ids;
   std::unordered_set<int64_t> recompute_req_ids;
-
-  std::unordered_set<int64_t> swapout_req_ids;
-  std::unordered_set<int64_t> swapin_req_ids;
 };
 
 // 当前 DP 分组内需要通知后续node的调度操作，对齐ScheduleOutput中的内容。
@@ -30,18 +27,9 @@ struct DpScheduleOpsForNodes {
   std::vector<int64_t> stopped_req_ids;     // notify all nodes to stop requests
   std::vector<int64_t> recomputed_req_ids;  // notify all nodes to recompute requests
 
-  std::vector<int64_t> merged_swapout_req_ids;  // reqs whose swapout ops are finished on master node
-  std::vector<int64_t> merged_swapin_req_ids;   // reqs whose swapin ops are finished on master node
-  std::unordered_map<int64_t, SwapReqBlockInfo> swapout_req_block_infos;  // for async swapout on worker nodes
-  std::unordered_map<int64_t, SwapReqBlockInfo> swapin_req_block_infos;   // for async swapin on worker nodes
-
   void Reset() {
     stopped_req_ids.clear();
     recomputed_req_ids.clear();
-    merged_swapout_req_ids.clear();
-    merged_swapin_req_ids.clear();
-    swapout_req_block_infos.clear();
-    swapin_req_block_infos.clear();
   }
 
   std::string ToString() const {
@@ -53,18 +41,6 @@ struct DpScheduleOpsForNodes {
     if (!recomputed_req_ids.empty()) {
       oss << ", recomputed_req_ids=" << Vector2Str(recomputed_req_ids);
     }
-    if (!merged_swapout_req_ids.empty()) {
-      oss << ", merged_swapout_req_ids=" << Vector2Str(merged_swapout_req_ids);
-    }
-    if (!merged_swapin_req_ids.empty()) {
-      oss << ", merged_swapin_req_ids=" << Vector2Str(merged_swapin_req_ids);
-    }
-    if (!swapout_req_block_infos.empty()) {
-      oss << ", swapout_req_block_infos=" << swapout_req_block_infos.size();
-    }
-    if (!swapin_req_block_infos.empty()) {
-      oss << ", swapin_req_block_infos=" << swapin_req_block_infos.size();
-    }
     return oss.str();
   }
 };
@@ -74,7 +50,6 @@ struct DpScheduleState {
   std::unordered_map<int64_t, std::shared_ptr<InferRequest>> preprocessing_reqs;
   std::vector<std::shared_ptr<InferRequest>> prefilling_reqs;
   std::vector<std::shared_ptr<InferRequest>> decoding_reqs;
-  std::vector<std::shared_ptr<InferRequest>> swapped_reqs;
 
   DpScheduleOpsInPlan in_plan_schedule_ops;
   DpScheduleOpsForNodes schedule_ops_for_nodes;

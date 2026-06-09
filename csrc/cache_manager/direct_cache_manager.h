@@ -67,10 +67,6 @@ class DirectCacheManager : public CacheManagerInterface,
 
   std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const override;
 
-  // Get block number that not usable now, but will be usable in future.
-  // That is, the blocks used by swapout, but not merged yet.
-  size_t GetFutureFreeBlockNumber() override;
-
   // Get all usable block number, including free and reusable ones.
   size_t GetUsableBlockNumber() override;
 
@@ -106,9 +102,8 @@ class DirectCacheManager : public CacheManagerInterface,
                                                              size_t& swa_shared_token_num) override;
 
   // Not supported by DirectCacheManager; returns RET_RUNTIME_FAILED.
-  Status AllocateBlocksForRemoteCache(int64_t /*req_id*/, std::vector<int>& /*req_block_ids*/,
-                                      size_t /*fa_block_num*/, size_t /*swa_block_num*/,
-                                      std::vector<int>& /*remote_fa_block_ids*/,
+  Status AllocateBlocksForRemoteCache(int64_t /*req_id*/, std::vector<int>& /*req_block_ids*/, size_t /*fa_block_num*/,
+                                      size_t /*swa_block_num*/, std::vector<int>& /*remote_fa_block_ids*/,
                                       std::vector<int>& /*remote_swa_block_ids*/) override {
     return Status(RET_RUNTIME_FAILED, "AllocateBlocksForRemoteCache is not supported by DirectCacheManager.");
   }
@@ -133,38 +128,6 @@ class DirectCacheManager : public CacheManagerInterface,
   void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
                            std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
                            size_t& req_flexible_cache_len) override {}
-  // Get the freeable/needed block num if swap out/in a request.
-  Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) override;
-  Status GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num) override;
-  void SetSwapCallbackFunc(AsyncSwapCallbackFunc callback) override;
-
-  // Swap out/in specific request async.
-  Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
-                             std::vector<int>& swapped_memory_block_ids, std::vector<int>& host_block_ids) override;
-  Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<int>& req_block_ids,
-                            std::vector<int>& swapped_memory_block_ids, std::vector<int>& host_block_ids) override;
-
-  // Waiting until at lease on swap out/in task done, return the pending task number.
-  Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) override;
-  Status WaitSwapinRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) override;
-
-  // Waiting until at least one swap out/in tasks in waiting_req_ids, return the pending task number.
-  Status WaitSwapoutRequests(const std::unordered_set<int64_t>& waiting_req_ids, std::vector<int64_t>& req_ids,
-                             size_t& left_req_num, bool blocking = true) override;
-  Status WaitSwapinRequests(const std::unordered_set<int64_t>& waiting_req_ids, std::vector<int64_t>& req_ids,
-                            size_t& left_req_num, bool blocking = true) override;
-
-  // Merge the swapped out blocks to free list, no need to get host block ids.
-  // The swapout of the request's block must be done before call this.
-  Status MergeSwapoutRequest(int64_t req_id) override;
-
-  // Merge the swapped in block to the tree, update block ids for infer request.
-  // The swapin of the request's block must be done before call this.
-  Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids, std::vector<int>& swa_req_block_ids,
-                            std::vector<size_t>& swa_block_idx_offsets) override;
-
-  // Drop a swaped cached request.
-  void DestroySwappedRequest(int64_t req_id) override;
 
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id) override;
@@ -172,8 +135,6 @@ class DirectCacheManager : public CacheManagerInterface,
   bool IsPrefixCachingEnabled() override;
 
  private:
-  AsyncSwapCallbackFunc swap_callback_func_ = nullptr;
-
   // SWA cache manager; null when SWA is not configured.
   std::unique_ptr<SWACacheManager> swa_cache_manager_;
 

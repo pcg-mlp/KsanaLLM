@@ -18,8 +18,6 @@ namespace ksana_llm {
 
 namespace {
 
-EventDrivenScheduleProcessor* g_swap_callback_target = nullptr;
-
 bool HasReqInQueue(const std::vector<std::shared_ptr<InferRequest>>& queue, int64_t req_id) {
   for (const auto& req : queue) {
     if (req != nullptr && req->req_id == req_id) {
@@ -79,7 +77,6 @@ void EventDrivenScheduleProcessor::HandleHookFailAndEnd(const std::shared_ptr<In
   dp_state.preprocessing_reqs.erase(req->req_id);
   RemoveReqByIdFromQueue(dp_state.prefilling_reqs, req->req_id);
   RemoveReqByIdFromQueue(dp_state.decoding_reqs, req->req_id);
-  RemoveReqByIdFromQueue(dp_state.swapped_reqs, req->req_id);
 
   req->Stop();
   // 请求可能已被 GlobalCacheFetcher 拒绝并 Notify，需避免重复通知
@@ -132,105 +129,6 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
   dp_state.schedule_ops_for_nodes.recomputed_req_ids.push_back(req->req_id);
 }
 
-bool EventDrivenScheduleProcessor::HandleSwapoutRequest(const std::shared_ptr<InferRequest>& req, Status ret_status,
-                                                        size_t dp_idx) {
-  if (req == nullptr) {
-    KLLM_LOG_ERROR << "req is nullptr";
-    return false;
-  }
-  KLLM_CHECK_WITH_INFO(dp_idx < dp_cache_managers_.size(), "Invalid dp_idx for swapout request");
-
-  DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
-
-  if (req->IsStopped()) {
-    KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << " is stopped, drop swapout event";
-    dp_state.in_plan_schedule_ops.swapout_req_ids.erase(req->req_id);
-    return false;
-  }
-
-  auto& cache_manager = dp_cache_managers_[dp_idx];
-  KLLM_CHECK(cache_manager != nullptr);
-
-  size_t free_block_num = 0;
-  size_t swapped_block_num = 0;
-  std::vector<int> swapout_memory_blocks;
-  std::vector<int> swapout_host_block_ids;
-
-  Status swap_status = cache_manager->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num,
-                                                          swapout_memory_blocks, swapout_host_block_ids);
-  if (!swap_status.OK()) {
-    // when swapout cannot be started, fallback to recompute immediately.
-    KLLM_LOG_ERROR << "HandleSwapoutRequest error, fallback to recompute req_id=" << req->req_id
-                   << ", msg=" << swap_status.GetMessage();
-    dp_state.in_plan_schedule_ops.swapout_req_ids.erase(req->req_id);
-    dp_state.in_plan_schedule_ops.recompute_req_ids.insert(req->req_id);
-    HandleRecomputeRequest(req, ret_status, dp_idx);
-    return true;
-  }
-
-  SwapReqBlockInfo& swapout_info = dp_state.schedule_ops_for_nodes.swapout_req_block_infos[req->req_id];
-  swapout_info.dev_block_ids = std::move(swapout_memory_blocks);
-  swapout_info.host_block_ids = std::move(swapout_host_block_ids);
-  KLLM_LOG_SCHEDULER << "Start swapout for req_id=" << req->req_id;
-
-  // Structured generator state is not preserved by swap and should be recreated after swapin.
-  if (req->structured_generator_config.HasConstraint()) {
-    req->need_recreate_generator = true;
-  }
-  return false;
-}
-
-bool EventDrivenScheduleProcessor::HandleSwapinRequest(const std::shared_ptr<InferRequest>& req, Status ret_status,
-                                                       size_t dp_idx) {
-  if (req == nullptr) {
-    KLLM_LOG_ERROR << "req is nullptr";
-    return false;
-  }
-  KLLM_CHECK_WITH_INFO(dp_idx < dp_cache_managers_.size(), "Invalid dp_idx for swapin request");
-
-  DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
-
-  if (req->IsStopped()) {
-    KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << " is stopped, drop swapin event";
-    dp_state.in_plan_schedule_ops.swapin_req_ids.erase(req->req_id);
-    return false;
-  }
-
-  auto& cache_manager = dp_cache_managers_[dp_idx];
-  KLLM_CHECK(cache_manager != nullptr);
-
-  size_t swapin_block_num = 0;
-  Status needed_status = cache_manager->GetRequestNeededBlockNumForOneNextToken(req->req_id, swapin_block_num);
-  if (!needed_status.OK()) {
-    KLLM_LOG_ERROR << "GetRequestNeededBlockNumForOneNextToken failed for req_id=" << req->req_id
-                   << ", msg=" << needed_status.GetMessage();
-    dp_state.in_plan_schedule_ops.swapin_req_ids.erase(req->req_id);
-    dp_state.swapped_reqs.insert(dp_state.swapped_reqs.begin(),
-                                 req);  // keep request in swapped queue if failed to start swapin task.
-    return false;
-  }
-
-  std::vector<int> swapin_memory_blocks;
-  std::vector<int> swapin_host_block_ids;
-  Status swap_status = cache_manager->SwapinRequestAsync(req->req_id, swapin_block_num, req->kv_cache_blocks,
-                                                         swapin_memory_blocks, swapin_host_block_ids);
-  if (!swap_status.OK()) {
-    KLLM_LOG_ERROR << "HandleSwapinRequest failed for req_id=" << req->req_id << ", msg=" << swap_status.GetMessage();
-    dp_state.in_plan_schedule_ops.swapin_req_ids.erase(req->req_id);
-    dp_state.swapped_reqs.insert(dp_state.swapped_reqs.begin(),
-                                 req);  // keep request in swapped queue if failed to start swapin task.
-    return false;
-  }
-
-  SwapReqBlockInfo& swapin_info = dp_state.schedule_ops_for_nodes.swapin_req_block_infos[req->req_id];
-  swapin_info.dev_block_ids = std::move(swapin_memory_blocks);
-  swapin_info.host_block_ids = std::move(swapin_host_block_ids);
-
-  KLLM_LOG_SCHEDULER << "Start swapin for req_id=" << req->req_id;
-
-  return false;
-}
-
 bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events) {
   if (backend_events.empty()) {
     return false;
@@ -242,7 +140,6 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
     dp_state.preprocessing_reqs.erase(req_id);
     RemoveReqByIdFromQueue(dp_state.prefilling_reqs, req_id);
     RemoveReqByIdFromQueue(dp_state.decoding_reqs, req_id);
-    RemoveReqByIdFromQueue(dp_state.swapped_reqs, req_id);
 
     // Remove from all planning batches.
     for (const auto& pb : planning_batches_) {
@@ -274,20 +171,11 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
       continue;
     }
 
-    if (ev.type == ScheduleBackendEventType::kSwapinRequest) {
-      // Start swapin immediately and keep request out of swapped queue while pending.
-      RemoveReqByIdFromQueue(dp_state.swapped_reqs, req_id);
-      has_resource_released |= HandleSwapinRequest(req, ev.status, dp_idx);
-      continue;
-    }
-
-    // Stop/Recompute/Swapout 的请求级操作
-    // 需要确认是否要延迟到无 in-flight task 时执行。
-
+    // Stop/Recompute 的请求级操作
     // 立即从状态与 batch 中摘除，避免后续调度继续使用。
     remove_from_state_and_batches(dp_idx, req_id);
 
-    // Stop/Recompute/Swapout 的请求级操作延迟到无 in-flight task 时执行。
+    // Stop/Recompute 的请求级操作延迟到无 in-flight task 时执行。
     if (req->HasInflightTask()) {
       ScheduleBackendEvent delayed_ev;
       delayed_ev.type = ev.type;
@@ -301,8 +189,6 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
     } else if (ev.type == ScheduleBackendEventType::kRecomputeRequest) {
       HandleRecomputeRequest(req, ev.status, dp_idx);
       has_resource_released = true;
-    } else if (ev.type == ScheduleBackendEventType::kSwapoutRequest) {
-      has_resource_released |= HandleSwapoutRequest(req, ev.status, dp_idx);
     }
   }
   return has_resource_released;
@@ -335,10 +221,6 @@ bool EventDrivenScheduleProcessor::ProcessDelayedBackendEvents() {
     } else if (ev.type == ScheduleBackendEventType::kRecomputeRequest) {
       HandleRecomputeRequest(req, ev.status, dp_idx);
       has_resource_released = true;
-    } else if (ev.type == ScheduleBackendEventType::kSwapoutRequest) {
-      has_resource_released |= HandleSwapoutRequest(req, ev.status, dp_idx);
-    } else if (ev.type == ScheduleBackendEventType::kSwapinRequest) {
-      has_resource_released |= HandleSwapinRequest(req, ev.status, dp_idx);
     }
 
     delayed_backend_events_.erase(delayed_backend_events_.begin() + static_cast<ptrdiff_t>(i));
@@ -420,13 +302,6 @@ void EventDrivenScheduleProcessor::EnqueueAsyncTaskFinished(const EventAsyncTask
   event_queue_.Put(std::move(ev));
 }
 
-void EventDrivenScheduleProcessor::EnqueueSwapTaskFinished(const EventSwapTaskFinishedInfo& event_info) {
-  auto info = std::make_shared<EventSwapTaskFinishedInfo>();
-  *info = event_info;
-  SchedEvent ev(std::move(info));
-  event_queue_.Put(std::move(ev));
-}
-
 void EventDrivenScheduleProcessor::UpdateAfterAsyncTaskFinished(const EventAsyncTaskFinishedInfo& event_info) {
   if (event_info.task_results.empty()) {
     return;
@@ -489,9 +364,6 @@ void EventDrivenScheduleProcessor::Start() {
 
 void EventDrivenScheduleProcessor::Stop() {
   terminated_ = true;
-  if (g_swap_callback_target == this) {
-    g_swap_callback_target = nullptr;
-  }
   if (backend_) {
     backend_->Stop();
   }
@@ -578,15 +450,6 @@ void EventDrivenScheduleProcessor::DispatchEvent(SchedEvent& event) {
       OnEventAsyncTaskFinished(info);
       break;
     }
-    case SchedEventType::EventSwapTaskFinished: {
-      auto info = std::dynamic_pointer_cast<EventSwapTaskFinishedInfo>(event.event_info);
-      if (info == nullptr) {
-        KLLM_LOG_FATAL << "Event type/payload mismatch for EventSwapTaskFinished";
-        return;
-      }
-      OnEventSwapTaskFinished(info);
-      break;
-    }
     case SchedEventType::EventGetScheduleResult: {
       OnEventGetScheduleResult();
       break;
@@ -662,87 +525,6 @@ void EventDrivenScheduleProcessor::OnEventAsyncTaskFinished(const std::shared_pt
   UpdateAfterAsyncTaskFinished(*info);
 }
 
-void EventDrivenScheduleProcessor::OnEventSwapTaskFinished(const std::shared_ptr<EventSwapTaskFinishedInfo>& info) {
-  if (!info) {
-    return;
-  }
-  KLLM_LOG_SCHEDULER << "Swap task finished event, req_id=" << info->req_id
-                     << ", op=" << (info->is_swapout ? "swapout" : "swapin") << ", block_num=" << info->block_num;
-  if (!info->status.OK()) {
-    return;
-  }
-
-  auto req_it = schedule_state_.req_id_to_req_ptr.find(info->req_id);
-  if (req_it == schedule_state_.req_id_to_req_ptr.end() || req_it->second == nullptr) {
-    KLLM_LOG_WARNING << "Swap task finished for unknown req_id=" << info->req_id;
-    return;
-  }
-  const size_t dp_idx = static_cast<size_t>(req_it->second->attn_dp_group_id);
-  if (dp_idx >= schedule_state_.schedule_states.size()) {
-    KLLM_LOG_WARNING << "Invalid dp_idx in swap finished event, req_id=" << info->req_id << ", dp_idx=" << dp_idx;
-    return;
-  }
-  DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
-  if (info->is_swapout) {
-    // Swapout
-    std::unordered_set<int64_t> waiting_req_ids;
-    waiting_req_ids.insert(info->req_id);
-    std::vector<int64_t> finished_req_ids;
-    size_t left_req_num = 0;
-    Status wait_status =
-        dp_cache_managers_[dp_idx]->WaitSwapoutRequests(waiting_req_ids, finished_req_ids, left_req_num, true);
-    if (!wait_status.OK()) {
-      KLLM_LOG_ERROR << "WaitSwapoutRequests failed: " << wait_status.GetMessage();
-      return;
-    }
-    KLLM_LOG_SCHEDULER << "Swapout finished for req_id=" << info->req_id
-                       << ", finished_req_ids=" << Vector2Str(finished_req_ids) << ", left_req_num=" << left_req_num;
-    KLLM_CHECK(info->req_id == finished_req_ids[0]);
-    Status merge_status = dp_cache_managers_[dp_idx]->MergeSwapoutRequest(info->req_id);
-    if (!merge_status.OK()) {
-      KLLM_LOG_ERROR << "MergeSwapoutRequest failed for req_id=" << info->req_id
-                     << ", msg=" << merge_status.GetMessage();
-      return;
-    }
-    dp_state.in_plan_schedule_ops.swapout_req_ids.erase(info->req_id);
-    if (!HasReqInQueue(dp_state.swapped_reqs, info->req_id)) {
-      dp_state.swapped_reqs.push_back(req_it->second);
-    }
-    dp_state.schedule_ops_for_nodes.merged_swapout_req_ids.push_back(info->req_id);
-  } else {
-    // Swapin
-    std::unordered_set<int64_t> waiting_req_ids;
-    waiting_req_ids.insert(info->req_id);
-    std::vector<int64_t> finished_req_ids;
-    size_t left_req_num = 0;
-    Status wait_status =
-        dp_cache_managers_[dp_idx]->WaitSwapinRequests(waiting_req_ids, finished_req_ids, left_req_num, true);
-    if (!wait_status.OK()) {
-      KLLM_LOG_ERROR << "WaitSwapinRequests failed: " << wait_status.GetMessage();
-      return;
-    }
-    KLLM_LOG_SCHEDULER << "Swapin finished for req_id=" << info->req_id
-                       << ", finished_req_ids=" << Vector2Str(finished_req_ids) << ", left_req_num=" << left_req_num;
-    KLLM_CHECK(info->req_id == finished_req_ids[0]);
-
-    Status merge_status = dp_cache_managers_[dp_idx]->MergeSwapinRequest(
-        info->req_id, req_it->second->kv_cache_blocks, req_it->second->swa_kv_cache_blocks,
-        req_it->second->swa_kv_cache_block_idx_offsets);
-    if (!merge_status.OK()) {
-      KLLM_LOG_ERROR << "MergeSwapinRequest failed for req_id=" << info->req_id
-                     << ", msg=" << merge_status.GetMessage();
-      return;
-    }
-
-    dp_state.in_plan_schedule_ops.swapin_req_ids.erase(info->req_id);
-    RemoveReqByIdFromQueue(dp_state.swapped_reqs, info->req_id);
-    if (!HasReqInQueue(dp_state.decoding_reqs, info->req_id)) {
-      dp_state.decoding_reqs.push_back(req_it->second);
-    }
-    dp_state.schedule_ops_for_nodes.merged_swapin_req_ids.push_back(info->req_id);
-  }
-}
-
 void EventDrivenScheduleProcessor::RunScheduleForBatches() {
   PROFILE_EVENT_SCOPE(run_schedule_for_batches, "Engine.RunScheduleForBatches");
   KLLM_LOG_SCHEDULER << "enter";
@@ -789,10 +571,6 @@ bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleConte
   // Note: dp_batches[dp_idx].running_reqs is a map keyed by req_id.
   result->schedule_output->finish_req_ids.resize(dp_num_);
   result->schedule_output->recompute_req_ids.resize(dp_num_);
-  result->schedule_output->merged_swapin_req_ids.resize(dp_num_);
-  result->schedule_output->merged_swapout_req_ids.resize(dp_num_);
-  result->schedule_output->swapin_req_block_ids.resize(dp_num_);
-  result->schedule_output->swapout_req_block_ids.resize(dp_num_);
   for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
     for (auto it : planning_batch->dp_batches[dp_idx].running_reqs) {
       result->schedule_output->running_reqs.push_back(it.second);
@@ -801,10 +579,6 @@ bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleConte
     // Info for nodes
     result->schedule_output->finish_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.stopped_req_ids;
     result->schedule_output->recompute_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.recomputed_req_ids;
-    result->schedule_output->merged_swapin_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.merged_swapin_req_ids;
-    result->schedule_output->merged_swapout_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.merged_swapout_req_ids;
-    result->schedule_output->swapin_req_block_ids[dp_idx] = dp_state.schedule_ops_for_nodes.swapin_req_block_infos;
-    result->schedule_output->swapout_req_block_ids[dp_idx] = dp_state.schedule_ops_for_nodes.swapout_req_block_infos;
     KLLM_LOG_SCHEDULER << "dp_idx=" << dp_idx << ", dp_state=" << dp_state.schedule_ops_for_nodes.ToString();
     dp_state.schedule_ops_for_nodes.Reset();  // Clear after copying to output
   }
@@ -878,21 +652,6 @@ void EventDrivenScheduleProcessor::SetWorkloadBalancer(std::shared_ptr<WorkloadB
   }
 }
 
-void EventDrivenScheduleProcessor::UpdateAfterSwapTaskFinished(int64_t req_id, bool is_swapout, size_t block_num,
-                                                               const Status& status) {
-  EventDrivenScheduleProcessor* processor = g_swap_callback_target;
-  if (processor == nullptr) {
-    KLLM_LOG_WARNING << "Swap task callback dropped: processor is null, req_id=" << req_id;
-    return;
-  }
-  EventSwapTaskFinishedInfo event_info;
-  event_info.req_id = req_id;
-  event_info.is_swapout = is_swapout;
-  event_info.block_num = block_num;
-  event_info.status = status;
-  processor->EnqueueSwapTaskFinished(event_info);
-}
-
 void EventDrivenScheduleProcessor::SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
   global_cache_put_tracker_ = std::move(tracker);
   KLLM_LOG_SCHEDULER << "GlobalCachePutTracker set for EventDrivenScheduleProcessor";
@@ -903,11 +662,6 @@ void EventDrivenScheduleProcessor::SetCacheManagers(
   KLLM_LOG_SCHEDULER << "CacheManager number: " << dp_cache_managers.size();
   KLLM_CHECK(dp_cache_managers.size() == dp_num_);
   dp_cache_managers_ = std::move(dp_cache_managers);
-  g_swap_callback_target = this;
-  for (const auto& cache_manager : dp_cache_managers_) {
-    KLLM_CHECK(cache_manager != nullptr);
-    cache_manager->SetSwapCallbackFunc(&EventDrivenScheduleProcessor::UpdateAfterSwapTaskFinished);
-  }
 }
 
 }  // namespace ksana_llm

@@ -16,12 +16,8 @@ setting:
     max_token_len: 2048
     max_waiting_queue_len: 1200
     min_flexible_cache_num: 0
-    preempt_mode: 0
     schedule_strategy: 0
     split_fuse_token_num: 0
-    swap_threadpool_size: 8
-    swapin_block_threshold: 2.0
-    swapout_block_threshold: 1.0
     waiting_timeout_in_ms: 3600000
   block_manager:
     block_device_memory_ratio: 0.1

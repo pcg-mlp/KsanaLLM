@@ -25,7 +25,6 @@ class BaseSchedulerTest : public testing::Test {
     split_fuse_token_num_ = 0;
     enable_async_ = false;
     waiting_timeout_in_ms_ = 600000;
-    enable_swap_ = true;
     max_pp_batch_num_ = 1;
     sliding_window_size_ = 0;
   }
@@ -78,8 +77,7 @@ class BaseSchedulerTest : public testing::Test {
     int prefix_block_num = 30;
     int block_token_num = 6;
     int device_num = 4;
-    FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, enable_swap_,
-                                false);
+    FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false, false);
     test_case.SetScheduleProcessor(schedule_processor_);
     test_case.SetEnvSimulator(env_simulator_);
     test_case.RunTestSwapTriggered();
@@ -93,14 +91,7 @@ class BaseSchedulerTest : public testing::Test {
  protected:
   void InitDefaultConfig() {
     int device_block_num = 100;
-    if (enable_swap_) {
-      block_manager_config_.host_allocator_config.blocks_num =
-          device_block_num * runtime_config_.parallel_basic_config.tensor_parallel_size * 2;
-      batch_scheduler_config_.preempt_mode = SWAP;
-    } else {
-      block_manager_config_.host_allocator_config.blocks_num = 0;
-      batch_scheduler_config_.preempt_mode = RECOMPUTE;
-    }
+    block_manager_config_.host_allocator_config.blocks_num = 0;
     block_manager_config_.device_allocator_config.blocks_num = device_block_num;
     block_manager_config_.device_allocator_config.block_token_num = 6;
 
@@ -110,8 +101,6 @@ class BaseSchedulerTest : public testing::Test {
     batch_scheduler_config_.max_step_token_num = 4096;
     batch_scheduler_config_.max_batch_size = 8;
     batch_scheduler_config_.max_token_len = 1024;
-    batch_scheduler_config_.swapout_block_threshold = 1.0;
-    batch_scheduler_config_.swapin_block_threshold = 3.0;
     batch_scheduler_config_.launch_block_threshold = 4.0;
     batch_scheduler_config_.split_fuse_token_num = split_fuse_token_num_;
     batch_scheduler_config_.enable_async = enable_async_;
@@ -119,7 +108,6 @@ class BaseSchedulerTest : public testing::Test {
 
     cache_manager_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
     cache_manager_config.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
-    cache_manager_config.swap_threadpool_size = 8;
     cache_manager_config.enable_prefix_caching = enable_prefix_cache_;
     if (enable_flexible_cache_) {
       cache_manager_config.min_flexible_cache_num = cache_manager_config.block_token_num * 4;
@@ -148,7 +136,6 @@ class BaseSchedulerTest : public testing::Test {
   size_t split_fuse_token_num_;
   bool enable_async_;
   size_t waiting_timeout_in_ms_;
-  bool enable_swap_ = true;
   size_t max_pp_batch_num_;
   // SWA (Sliding Window Attention) configuration; 0 means SWA disabled.
   size_t sliding_window_size_ = 0;

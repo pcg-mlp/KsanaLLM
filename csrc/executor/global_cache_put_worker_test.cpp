@@ -96,7 +96,7 @@ TEST(PutWorkerTest, SubmitBatchPutFiltersDecodeRequests) {
   auto connector = std::make_shared<testing::NiceMock<MockPutConnector>>();
   // 不应调用 PutGlobalCacheBlocks（因为 block_allocator_manager 为空，会在 PutRequestKVCache 中 early return）
   EXPECT_CALL(*connector, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                testing::_, testing::_))
+                                               testing::_, testing::_))
       .Times(0);
 
   GlobalCachePutWorker worker(connector, nullptr, 0, 0, nullptr);
@@ -220,10 +220,6 @@ class MockBlockAllocatorGroup : public BlockAllocatorGroupInterface {
   MOCK_METHOD(std::vector<int>, GetBlockAllocatorDevices, (), (const, override));
   MOCK_METHOD(std::shared_ptr<BlockAllocatorInterface>, GetHostBlockAllocator, (), (const, override));
   MOCK_METHOD(std::shared_ptr<BlockAllocatorInterface>, GetDeviceBlockAllocator, (int), (const, override));
-  MOCK_METHOD(Status, SwapIn, (int, int, int), (override));
-  MOCK_METHOD(Status, SwapOut, (int, int, int), (override));
-  MOCK_METHOD(Status, BatchSwapOut, (int, const std::vector<int>&, const std::vector<int>&), (override));
-  MOCK_METHOD(Status, BatchSwapIn, (int, const std::vector<int>&, const std::vector<int>&), (override));
   MOCK_METHOD(const BlockAllocatorGroupConfig&, GetBlockAllocatorGroupConfig, (), (const, override));
 };
 

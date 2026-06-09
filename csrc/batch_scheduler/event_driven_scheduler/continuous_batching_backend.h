@@ -31,9 +31,7 @@ class ContinuousBatchingBackend : public ScheduleBackendInterface {
   void ProcessPrefillingQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
                               std::vector<ScheduleBackendEvent>& events,
                               std::unordered_set<uint64_t>& emitted_event_keys);
-  void ProcessSwappedQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
-                           std::vector<ScheduleBackendEvent>& events,
-                           std::unordered_set<uint64_t>& emitted_event_keys);
+
  private:
   std::atomic<bool> stopped_{false};
 };

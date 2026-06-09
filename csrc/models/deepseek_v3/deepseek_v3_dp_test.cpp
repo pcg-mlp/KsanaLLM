@@ -100,7 +100,6 @@ class DeepSeekV3DPTest : public testing::Test {
       CacheManagerConfig cache_manager_config;
       cache_manager_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
       cache_manager_config.tensor_para_size = 1;
-      cache_manager_config.swap_threadpool_size = 2;
       cache_manager_config.enable_prefix_caching = true;
       cache_managers.push_back(std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group));
     }

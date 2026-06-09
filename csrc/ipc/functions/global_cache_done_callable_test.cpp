@@ -99,7 +99,6 @@ class MockCacheManagerForDone : public CacheManagerInterface {
   MOCK_METHOD(void, InitializeCachedBlocks, (), (override));
   MOCK_METHOD(std::shared_ptr<BlockAllocatorGroupInterface>, GetBlockAllocatorGroup, (), (const, override));
   MOCK_METHOD(size_t, GetUsableBlockNumber, (), (override));
-  MOCK_METHOD(size_t, GetFutureFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetHostFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetUsedBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t), (override));
@@ -122,23 +121,6 @@ class MockCacheManagerForDone : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
-  MOCK_METHOD(Status, GetRequestFreeableBlockNum, (int64_t, size_t&), (override));
-  MOCK_METHOD(Status, GetRequestNeededBlockNumForOneNextToken, (int64_t, size_t&), (override));
-  MOCK_METHOD(void, SetSwapCallbackFunc, (AsyncSwapCallbackFunc), (override));
-  MOCK_METHOD(Status, SwapoutRequestAsync,
-              (int64_t, size_t&, size_t&, std::vector<int>&, std::vector<int>&), (override));
-  MOCK_METHOD(Status, SwapinRequestAsync,
-              (int64_t, size_t&, std::vector<int>&, std::vector<int>&, std::vector<int>&), (override));
-  MOCK_METHOD(Status, WaitSwapoutRequests, (std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapinRequests, (std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapoutRequests,
-              (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapinRequests,
-              (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, MergeSwapoutRequest, (int64_t), (override));
-  MOCK_METHOD(Status, MergeSwapinRequest, (int64_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&),
-              (override));
-  MOCK_METHOD(void, DestroySwappedRequest, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };
@@ -217,20 +199,16 @@ TEST(QueryDoneSerializationTest, RoundTrip) {
 
   std::vector<uint8_t> buffer(4096);
   size_t bytes = 0;
-  ASSERT_TRUE(
-      original.Serialize(buffer.data(), &bytes).OK());
+  ASSERT_TRUE(original.Serialize(buffer.data(), &bytes).OK());
   EXPECT_GT(bytes, 0u);
 
   GlobalCacheQueryDoneRequest restored;
-  ASSERT_TRUE(
-      restored.Deserialize(buffer.data()).OK());
+  ASSERT_TRUE(restored.Deserialize(buffer.data()).OK());
   EXPECT_EQ(restored.req_id, 99);
   EXPECT_EQ(restored.device_id, 3);
-  EXPECT_EQ(restored.matched_ranges,
-            original.matched_ranges);
+  EXPECT_EQ(restored.matched_ranges, original.matched_ranges);
   EXPECT_TRUE(restored.success);
-  EXPECT_EQ(restored.cached_tokens,
-            original.cached_tokens);
+  EXPECT_EQ(restored.cached_tokens, original.cached_tokens);
   EXPECT_TRUE(restored.has_cached_tokens);
 }
 
@@ -243,12 +221,10 @@ TEST(QueryDoneSerializationTest, EmptyFields) {
 
   std::vector<uint8_t> buffer(4096);
   size_t bytes = 0;
-  ASSERT_TRUE(
-      original.Serialize(buffer.data(), &bytes).OK());
+  ASSERT_TRUE(original.Serialize(buffer.data(), &bytes).OK());
 
   GlobalCacheQueryDoneRequest restored;
-  ASSERT_TRUE(
-      restored.Deserialize(buffer.data()).OK());
+  ASSERT_TRUE(restored.Deserialize(buffer.data()).OK());
   EXPECT_EQ(restored.req_id, -1);
   EXPECT_TRUE(restored.matched_ranges.empty());
   EXPECT_FALSE(restored.success);
@@ -263,13 +239,11 @@ TEST(PutDoneSerializationTest, RoundTrip) {
 
   std::vector<uint8_t> buffer(256);
   size_t bytes = 0;
-  ASSERT_TRUE(
-      original.Serialize(buffer.data(), &bytes).OK());
+  ASSERT_TRUE(original.Serialize(buffer.data(), &bytes).OK());
   EXPECT_GT(bytes, 0u);
 
   GlobalCachePutDoneRequest restored;
-  ASSERT_TRUE(
-      restored.Deserialize(buffer.data()).OK());
+  ASSERT_TRUE(restored.Deserialize(buffer.data()).OK());
   EXPECT_EQ(restored.device_id, 7);
   EXPECT_EQ(restored.req_id, 123);
 }
@@ -279,12 +253,10 @@ TEST(PutDoneSerializationTest, DefaultValues) {
 
   std::vector<uint8_t> buffer(256);
   size_t bytes = 0;
-  ASSERT_TRUE(
-      original.Serialize(buffer.data(), &bytes).OK());
+  ASSERT_TRUE(original.Serialize(buffer.data(), &bytes).OK());
 
   GlobalCachePutDoneRequest restored;
-  ASSERT_TRUE(
-      restored.Deserialize(buffer.data()).OK());
+  ASSERT_TRUE(restored.Deserialize(buffer.data()).OK());
   EXPECT_EQ(restored.device_id, -1);
   EXPECT_EQ(restored.req_id, -1);
 }

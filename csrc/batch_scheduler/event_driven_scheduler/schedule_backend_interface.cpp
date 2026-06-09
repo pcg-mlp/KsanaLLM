@@ -74,7 +74,7 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
     // This ensures aborted requests are cleaned up promptly regardless of which queue they reside in.
     std::unordered_set<int64_t> aborted_req_ids_seen;
     auto collect_aborted_req = [&events, dp_idx, &aborted_req_ids_seen,
-                                 &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
+                                &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
       if (req == nullptr || req->IsStopped()) return;
       if (!req->aborted) return;
       if (aborted_req_ids_seen.insert(req->req_id).second) {
@@ -101,9 +101,6 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
     }
     for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
       collect_aborted_req(running_kv.second);
-    }
-    for (const auto& req : dp_state.swapped_reqs) {
-      collect_aborted_req(req);
     }
   }
 }

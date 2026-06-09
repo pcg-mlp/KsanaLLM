@@ -3,10 +3,10 @@
 ==============================================================================*/
 #pragma once
 
+#include <atomic>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <atomic>
 
 #include "cache_manager/cache_manager_interface.h"
 #include "runtime/draft_generator/draft_tokens.h"
@@ -284,9 +284,6 @@ class InferRequest {
 
   // The offset for model forward's logits output.
   size_t logits_offset = 0;
-
-  // Whether the current req is in pending status of swappiness.
-  bool swap_pending = false;
 
   // The prefix cache tokens number
   int prefix_cache_len = 0;

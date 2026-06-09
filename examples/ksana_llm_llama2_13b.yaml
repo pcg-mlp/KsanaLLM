@@ -25,9 +25,7 @@ setting:
     # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
     max_token_len: 2048
     # 单个请求可用blck小于该值触发换出
-    swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入
-    swapin_block_threshold: 2.0
     # 单个请求可用block大于该值拉起新任务
     launch_block_threshold: 2.0
     # 是否开启自动前缀匹配
@@ -38,9 +36,7 @@ setting:
     # 控制此参数可以帮助平衡推理速度与资源消耗，特别是在处理长文本时。
     split_fuse_token_num: 256
     # 用于执行异步swap的线程池大小
-    swap_threadpool_size: 8
     # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
-    preempt_mode: 0
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数
@@ -72,7 +68,7 @@ setting:
       quant_method: auto
   # 性能统计相关配置
   profiler:
-    #metrics_export_url: "http://example.com/v1/metrics"
+    # metrics_export_url: "http://example.com/v1/metrics"
     export_interval_millis: 30000
     export_timeout_millis: 1000
     attributes:

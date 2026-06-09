@@ -72,19 +72,14 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   void OnEventAddRequest(const std::shared_ptr<EventAddRequestInfo>& info);
   void OnEventUpdateAfterGeneration(const std::shared_ptr<EventUpdateAfterGenerationInfo>& info);
   void OnEventAsyncTaskFinished(const std::shared_ptr<EventAsyncTaskFinishedInfo>& info);
-  void OnEventSwapTaskFinished(const std::shared_ptr<EventSwapTaskFinishedInfo>& info);
   void OnEventGetScheduleResult();  // 仅设置 pending_get_schedule_result_；在事件处理完后由 SchedulerLoop
                                     // 检查并尝试放入 launchable batch
   void EnqueueAsyncTaskFinished(const EventAsyncTaskFinishedInfo& event_info);
-  void EnqueueSwapTaskFinished(const EventSwapTaskFinishedInfo& event_info);
-  static void UpdateAfterSwapTaskFinished(int64_t req_id, bool is_swapout, size_t block_num, const Status& status);
 
   // Backend event application helpers.
   void HandleStopRequest(const std::shared_ptr<InferRequest>& req, Status ret_status, size_t dp_idx);
   void HandleHookFailAndEnd(const std::shared_ptr<InferRequest>& req, size_t dp_idx, const std::string& reason);
   void HandleRecomputeRequest(const std::shared_ptr<InferRequest>& req, Status ret_status, size_t dp_idx);
-  bool HandleSwapoutRequest(const std::shared_ptr<InferRequest>& req, Status ret_status, size_t dp_idx);
-  bool HandleSwapinRequest(const std::shared_ptr<InferRequest>& req, Status ret_status, size_t dp_idx);
 
   // return true if resource state changed.
   bool ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events);

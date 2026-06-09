@@ -19,13 +19,10 @@
 
 namespace ksana_llm {
 
-
 enum class ScheduleBackendEventType {
   kNone,
   kStopRequest,
   kRecomputeRequest,
-  kSwapoutRequest,
-  kSwapinRequest,
   // Notify processor to remove request from DpScheduleState and add to decoding queue.
   kMoveToDecode,
 };
@@ -38,10 +35,6 @@ inline std::string ScheduleBackendEventType2Str(ScheduleBackendEventType e) {
       return "kStopRequest";
     case ScheduleBackendEventType::kRecomputeRequest:
       return "kRecomputeRequest";
-    case ScheduleBackendEventType::kSwapoutRequest:
-      return "kSwapoutRequest";
-    case ScheduleBackendEventType::kSwapinRequest:
-      return "kSwapinRequest";
     case ScheduleBackendEventType::kMoveToDecode:
       return "kMoveToDecode";
     default:

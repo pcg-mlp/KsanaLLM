@@ -30,7 +30,6 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(void, InitializeCachedBlocks, (), (override));
   MOCK_METHOD(std::shared_ptr<BlockAllocatorGroupInterface>, GetBlockAllocatorGroup, (), (const, override));
   MOCK_METHOD(size_t, GetUsableBlockNumber, (), (override));
-  MOCK_METHOD(size_t, GetFutureFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetHostFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetUsedBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t), (override));
@@ -53,23 +52,6 @@ class MockCacheManager : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
-  MOCK_METHOD(Status, GetRequestFreeableBlockNum, (int64_t, size_t&), (override));
-  MOCK_METHOD(Status, GetRequestNeededBlockNumForOneNextToken, (int64_t, size_t&), (override));
-  MOCK_METHOD(void, SetSwapCallbackFunc, (AsyncSwapCallbackFunc), (override));
-  MOCK_METHOD(Status, SwapoutRequestAsync,
-              (int64_t, size_t&, size_t&, std::vector<int>&, std::vector<int>&), (override));
-  MOCK_METHOD(Status, SwapinRequestAsync,
-              (int64_t, size_t&, std::vector<int>&, std::vector<int>&, std::vector<int>&), (override));
-  MOCK_METHOD(Status, WaitSwapoutRequests, (std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapinRequests, (std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapoutRequests,
-              (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, WaitSwapinRequests,
-              (const std::unordered_set<int64_t>&, std::vector<int64_t>&, size_t&, bool), (override));
-  MOCK_METHOD(Status, MergeSwapoutRequest, (int64_t), (override));
-  MOCK_METHOD(Status, MergeSwapinRequest, (int64_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&),
-              (override));
-  MOCK_METHOD(void, DestroySwappedRequest, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };
@@ -135,9 +117,7 @@ TEST_F(PutTrackerTest, NoDeferWhenAllDoneBeforeReset) {
   EXPECT_FALSE(tracker_->HasDeferredRequests());
 }
 
-TEST_F(PutTrackerTest, UnknownReqIdPutDoneIgnored) {
-  tracker_->OnDevicePutDone(0, 999);
-}
+TEST_F(PutTrackerTest, UnknownReqIdPutDoneIgnored) { tracker_->OnDevicePutDone(0, 999); }
 
 TEST_F(PutTrackerTest, MultiplePrefillRequests) {
   auto req1 = MakeInferRequest(500, InferStage::kContext);

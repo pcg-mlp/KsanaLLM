@@ -51,11 +51,6 @@ size_t GetMaxRequiredTokenNum(size_t token_num, size_t mtp_step_num) {
   return token_num + mtp_step_num - std::min(mtp_step_num, static_cast<size_t>(1));
 }
 
-ScheduleBackendEventType GetAllocFailedEventType(const BatchSchedulerConfig& config) {
-  return (config.preempt_mode == RECOMPUTE) ? ScheduleBackendEventType::kRecomputeRequest
-                                            : ScheduleBackendEventType::kStopRequest;
-}
-
 bool IsDpBatchFull(const DpBatch& dp_batch, const BatchSchedulerConfig& config) {
   KLLM_CHECK(config.max_batch_size > 0);
   return dp_batch.running_reqs.size() >= static_cast<size_t>(config.max_batch_size);
@@ -93,7 +88,6 @@ void ContinuousBatchingBackend::Schedule(const ScheduleContext& context,
   std::unordered_set<uint64_t> emitted_event_keys;
   ProcessDecodingQueue(context, planning_batch, events, emitted_event_keys);
   ProcessPrefillingQueue(context, planning_batch, events, emitted_event_keys);
-  ProcessSwappedQueue(context, planning_batch, events, emitted_event_keys);
 }
 
 void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id,
@@ -261,8 +255,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
     // 1) Prefer recompute a prefilling request that already owns kv blocks.
     // 2) Otherwise recompute one decoding request.
     if (has_candidate && !has_success && (dp_batch.running_reqs.size() == 0) && in_plan_ops.stop_req_ids.empty() &&
-        in_plan_ops.recompute_req_ids.empty() && in_plan_ops.swapout_req_ids.empty()) {
-      bool is_chunk_prefill_request = false;
+        in_plan_ops.recompute_req_ids.empty()) {
       std::shared_ptr<InferRequest> recompute_candidate = nullptr;
       for (const auto& prefill_req : dp_state.prefilling_reqs) {
         if (prefill_req == nullptr || prefill_req->IsStopped()) {
@@ -273,7 +266,6 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
           batch_scheduler_config_.split_fuse_token_num = 0;
           KLLM_LOG_INFO << "Split fuse disabled due to allocation failure. Recompute prefilling request req_id="
                         << prefill_req->req_id << ", dp_idx=" << dp_idx;
-          is_chunk_prefill_request = true;
           break;
         }
       }
@@ -281,20 +273,9 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
         recompute_candidate = decoding_recompute_candidate;
       }
       if (recompute_candidate != nullptr) {
-        if (batch_scheduler_config_.preempt_mode == SWAP && !is_chunk_prefill_request) {
-          if (in_plan_ops.swapin_req_ids.empty()) {
-            EmitEventOnce(ScheduleBackendEventType::kSwapoutRequest, dp_idx, recompute_candidate, last_failed_status,
-                          events, emitted_event_keys);
-            in_plan_ops.swapout_req_ids.insert(recompute_candidate->req_id);
-          } else {
-            KLLM_LOG_SCHEDULER << "Skip swapout for req_id=" << recompute_candidate->req_id
-                               << " because there is already a swapin event in plan.";
-          }
-        } else {
-          EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, recompute_candidate, last_failed_status,
-                        events, emitted_event_keys);
-          in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);
-        }
+        EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, recompute_candidate, last_failed_status,
+                      events, emitted_event_keys);
+        in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);
       }
     }
   }
@@ -446,10 +427,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
     }
 
     // if this dp has launchable prefill requests but all allocations fail and no running request exists,
-    // trigger recompute/swapout chunk-prefilled requests to release memory.
+    // trigger recompute chunk-prefilled requests to release memory.
     if (has_candidate && !has_success && (dp_batch.running_reqs.size() == 0) && dp_state.decoding_reqs.empty() &&
-        in_plan_ops.stop_req_ids.empty() && in_plan_ops.recompute_req_ids.empty() &&
-        in_plan_ops.swapout_req_ids.empty()) {
+        in_plan_ops.stop_req_ids.empty() && in_plan_ops.recompute_req_ids.empty()) {
       std::shared_ptr<InferRequest> recompute_candidate = nullptr;
       for (const auto& prefill_req : dp_state.prefilling_reqs) {
         if (prefill_req == nullptr || prefill_req->IsStopped()) {
@@ -469,65 +449,6 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, recompute_candidate, last_failed_status,
                       events, emitted_event_keys);
         in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);
-      }
-    }
-  }
-}
-
-void ContinuousBatchingBackend::ProcessSwappedQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
-                                                    std::vector<ScheduleBackendEvent>& events,
-                                                    std::unordered_set<uint64_t>& emitted_event_keys) {
-  if (batch_scheduler_config_.preempt_mode != SWAP) {
-    return;
-  }
-
-  for (size_t dp_idx = 0; dp_idx < planning_batch.dp_batches.size(); ++dp_idx) {
-    const DpScheduleState& dp_state = context.GetDpScheduleState(dp_idx);
-    DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(dp_idx);
-    auto& dp_batch = planning_batch.dp_batches[dp_idx];
-    auto& cache_manager = context.GetDpCacheManager(dp_idx);
-
-    // Align with strategy behavior: do not start swapin while there are pending swapout operations.
-    if (!in_plan_ops.swapout_req_ids.empty()) {
-      continue;
-    }
-
-    for (const auto& req : dp_state.swapped_reqs) {
-      if (req == nullptr || req->IsStopped()) {
-        continue;
-      }
-      if (req->aborted) {
-        KLLM_LOG_WARNING << "client aborted in swapped queue, emit stop: req_id=" << req->req_id
-                         << " dp_idx=" << dp_idx;
-        EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
-                      Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
-        continue;
-      }
-
-      if (in_plan_ops.swapin_req_ids.find(req->req_id) != in_plan_ops.swapin_req_ids.end()) {
-        continue;
-      }
-
-      size_t swapin_needed_block_num = 0;
-      Status status = cache_manager->GetRequestNeededBlockNumForOneNextToken(req->req_id, swapin_needed_block_num);
-      if (!status.OK()) {
-        KLLM_LOG_SCHEDULER << "GetRequestNeededBlockNumForOneNextToken failed, req_id=" << req->req_id
-                           << ", msg=" << status.GetMessage();
-        continue;
-      }
-
-      const size_t swapin_block_threshold = static_cast<size_t>(
-          std::ceil(dp_state.decoding_reqs.size() * batch_scheduler_config_.swapin_block_threshold));
-      const size_t total_free_block_num = cache_manager->GetUsableBlockNumber();
-      const size_t max_required_token_num =
-          GetMaxRequiredTokenNum(req->GetPlanningSequenceLen(), batch_scheduler_config_.mtp_step_num);
-      const size_t step_needed_block_num =
-          cache_manager->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
-
-      if (swapin_needed_block_num + step_needed_block_num + swapin_block_threshold <= total_free_block_num) {
-        EmitEventOnce(ScheduleBackendEventType::kSwapinRequest, dp_idx, req, Status(RET_SUCCESS), events,
-                      emitted_event_keys);
-        in_plan_ops.swapin_req_ids.insert(req->req_id);
       }
     }
   }

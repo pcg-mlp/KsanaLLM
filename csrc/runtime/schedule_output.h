@@ -16,21 +16,12 @@
 
 namespace ksana_llm {
 
-struct SwapReqBlockInfo {
-  std::vector<int> dev_block_ids;
-  std::vector<int> host_block_ids;
-};
-
 // The scheduler output of every step.
 struct ScheduleOutput {
   // Make it empty again, but keep runing reqs, called only on master node.
   void ResetDataForWorkers() {
     finish_req_ids.clear();
     recompute_req_ids.clear();
-    merged_swapout_req_ids.clear();
-    merged_swapin_req_ids.clear();
-    swapout_req_block_ids.clear();
-    swapin_req_block_ids.clear();
     structured_generator_configs.clear();
     need_create_generator_req_ids.clear();
   }
@@ -83,14 +74,6 @@ struct ScheduleOutput {
 
   // recompute requests, should transfer the full struct.
   std::vector<std::vector<int64_t>> recompute_req_ids;
-
-  // NOTE(karlluo): merged requests ids, outer vector is for attention data parallelism.
-  std::vector<std::vector<int64_t>> merged_swapout_req_ids;
-  std::vector<std::vector<int64_t>> merged_swapin_req_ids;
-
-  // NOTE(karlluo): swapped requests ids, outer vector is for attention data parallelism.
-  std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>> swapout_req_block_ids;
-  std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>> swapin_req_block_ids;
 
   // running, for master node.
   std::vector<std::shared_ptr<InferRequest>> running_reqs;

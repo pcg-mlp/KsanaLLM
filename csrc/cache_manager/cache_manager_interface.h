@@ -15,8 +15,6 @@
 
 namespace ksana_llm {
 
-using AsyncSwapCallbackFunc = void (*)(int64_t req_id, bool is_swapout, size_t block_num, const Status& status);
-
 class CacheManagerInterface {
  public:
   // Initialize all the memory blocks.
@@ -26,10 +24,6 @@ class CacheManagerInterface {
 
   // Get all usable block number, including free and reusable ones.
   virtual size_t GetUsableBlockNumber() = 0;
-
-  // Get block number that not usable now, but will be usable in future.
-  // That is, the blocks used by swapout, but not merged yet.
-  virtual size_t GetFutureFreeBlockNumber() = 0;
 
   // The value is from block mamanger.
   virtual size_t GetHostFreeBlockNumber() = 0;
@@ -150,42 +144,6 @@ class CacheManagerInterface {
                                      size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids,
                                      bool& block_merged, std::vector<int>& swa_req_block_ids,
                                      std::vector<size_t>& swa_block_idx_offsets) = 0;
-
-  // Get the freeable/needed block num if swap out/in a request.
-  virtual Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) = 0;
-  virtual Status GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num) = 0;
-  // Swap out/in specific request async.
-  virtual void SetSwapCallbackFunc(AsyncSwapCallbackFunc callback) = 0;
-  virtual Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
-                                     std::vector<int>& swapped_memory_block_ids,
-                                     std::vector<int>& host_block_ids) = 0;
-  virtual Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<int>& req_block_ids,
-                                    std::vector<int>& swapped_memory_block_ids,
-                                    std::vector<int>& host_block_ids) = 0;
-
-  // Waiting until at lease on swap out/in task done, return the pending task number.
-  virtual Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) = 0;
-  virtual Status WaitSwapinRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) = 0;
-
-  // Waiting until at least one swap out/in tasks in waiting_req_ids, return the pending task number.
-  virtual Status WaitSwapoutRequests(const std::unordered_set<int64_t>& waiting_req_ids, std::vector<int64_t>& req_ids,
-                                     size_t& left_req_num, bool blocking = true) = 0;
-  virtual Status WaitSwapinRequests(const std::unordered_set<int64_t>& waiting_req_ids, std::vector<int64_t>& req_ids,
-                                    size_t& left_req_num, bool blocking = true) = 0;
-
-  // Merge the swapped out blocks to free list, no need to get host block ids.
-  // The swapout of the request's block must be done before call this.
-  virtual Status MergeSwapoutRequest(int64_t req_id) = 0;
-
-  // Merge the swapped in block to the tree, update block ids for infer request.
-  // The swapin of the request's block must be done before call this.
-  // swa_req_block_ids and swa_block_idx_offsets are updated only when swa_block_allocator_group is configured.
-  virtual Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids,
-                                    std::vector<int>& swa_req_block_ids,
-                                    std::vector<size_t>& swa_block_idx_offsets) = 0;
-
-  // Drop a swaped cached request.
-  virtual void DestroySwappedRequest(int64_t req_id) = 0;
 
   // Update internal state after request finished.
   virtual void DestroyFinishedRequest(int64_t req_id) = 0;

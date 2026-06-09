@@ -25,8 +25,6 @@ namespace ksana_llm {
 // Forward declare.
 class BaseModelCacheLayout;
 
-enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
-
 enum ScheduleStrategy { CONTINUOUS_BATCHING = 0 };
 
 enum class SchedulerType { DEFAULT = 0, EVENT_DRIVEN = 1 };
@@ -77,17 +75,8 @@ struct BatchSchedulerConfig {
   // Corresponds to prompt length + generated length (not generated-only length).
   size_t max_token_len = 2048;  // to be removed
 
-  // The swapin block threshold.
-  float swapout_block_threshold = 1.0;
-
-  // The swapout block threshold.
-  float swapin_block_threshold = 2.0;
-
   // The launch block threshold.
   float launch_block_threshold = 2.0;
-
-  // The preempt mode in case of insufficient GPU blocks.
-  PreemptMode preempt_mode = SWAP;
 
   // This parameter controls the maximum number of tokens processed in a single
   // inference round. Setting it to 256 means that during inference, each
@@ -186,9 +175,6 @@ struct CacheManagerConfig {
   // The minimum consecutive length of flexible cache instances that can be
   // queried.
   size_t min_flexible_cache_num = 0;
-
-  // The thread number used for async swap in/out.
-  size_t swap_threadpool_size = 2;
 
   // Whether enable prefix caching.
   bool enable_prefix_caching = false;

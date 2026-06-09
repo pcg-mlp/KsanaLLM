@@ -9,7 +9,6 @@
 #include "cache_manager/block_allocator/executor_block_allocator.h"
 #include "device/device_types.h"
 #include "fmt/format.h"
-#include "ipc/ipc_func_wrapper.h"
 #include "utils/status.h"
 
 namespace ksana_llm {
@@ -92,121 +91,6 @@ std::shared_ptr<BlockAllocatorInterface> BlockAllocatorGroup::GetDeviceBlockAllo
   return device_it->second;
 }
 
-Status BlockAllocatorGroup::SwapIn(int index, int device_block_id, int host_block_id) {
-  std::shared_ptr<BlockAllocatorInterface> host_allocator = GetHostBlockAllocator();
-  std::shared_ptr<BlockAllocatorInterface> device_allocator = GetDeviceBlockAllocator(index);
-
-  if (device_allocator == nullptr) {
-    return Status(RET_RUNTIME_FAILED, fmt::format("Swapin error, device index {} not found.", index));
-  }
-
-  int device_id = block_allocator_group_config_.devices[index];
-  SetDevice(device_id);
-
-  // Get host and device address.
-  std::vector<void*> host_addrs(1, nullptr);
-  STATUS_CHECK_FAILURE(host_allocator->GetBlockPtrs({host_block_id}, host_addrs));
-
-  std::vector<void*> device_addrs(1, nullptr);
-  STATUS_CHECK_FAILURE(device_allocator->GetBlockPtrs({device_block_id}, device_addrs));
-
-  // Copy from host to device.
-  Stream& stream = context_->device->GetH2DStream();
-  int block_size = block_allocator_group_config_.block_size;
-  memory_allocator_->MemcpyAsync(device_addrs[0], host_addrs[0], block_size, MEMCPY_HOST_TO_DEVICE, stream);
-  StreamSynchronize(stream);
-
-  return Status();
-}
-
-Status BlockAllocatorGroup::SwapOut(int index, int host_block_id, int device_block_id) {
-  std::shared_ptr<BlockAllocatorInterface> host_allocator = GetHostBlockAllocator();
-  std::shared_ptr<BlockAllocatorInterface> device_allocator = GetDeviceBlockAllocator(index);
-
-  if (device_allocator == nullptr) {
-    return Status(RET_RUNTIME_FAILED, fmt::format("Swapout error, device index {} not found.", index));
-  }
-
-  int device_id = block_allocator_group_config_.devices[index];
-  SetDevice(device_id);
-
-  // Get host and device address.
-  std::vector<void*> host_addrs(1, nullptr);
-  STATUS_CHECK_FAILURE(host_allocator->GetBlockPtrs({host_block_id}, host_addrs));
-
-  std::vector<void*> device_addrs(1, nullptr);
-  STATUS_CHECK_FAILURE(device_allocator->GetBlockPtrs({device_block_id}, device_addrs));
-
-  // Copy from device to host.
-  Stream& stream = context_->device->GetD2HStream();
-  int block_size = block_allocator_group_config_.block_size;
-  memory_allocator_->MemcpyAsync(host_addrs[0], device_addrs[0], block_size, MEMCPY_DEVICE_TO_HOST, stream);
-  StreamSynchronize(stream);
-
-  return Status();
-}
-
-Status BlockAllocatorGroup::BatchSwapOut(int index, const std::vector<int>& host_block_ids,
-                                         const std::vector<int>& device_block_ids) {
-  if (device_block_ids.size() != host_block_ids.size()) {
-    return Status(RET_RUNTIME_FAILED, "BatchSwapOut error, device and host block count mismatch.");
-  }
-
-  // If IPC is enabled, use IPC to send request to executor
-  if (ipc_func_wrapper_) {
-    return BatchSwapViaIpc(index, /*is_swapin=*/false, device_block_ids, host_block_ids);
-  }
-
-  // Local execution
-  for (size_t i = 0; i < device_block_ids.size(); ++i) {
-    Status status = SwapOut(index, host_block_ids[i], device_block_ids[i]);
-    if (!status.OK()) {
-      return status;
-    }
-  }
-
-  return Status();
-}
-
-Status BlockAllocatorGroup::BatchSwapIn(int index, const std::vector<int>& device_block_ids,
-                                        const std::vector<int>& host_block_ids) {
-  if (device_block_ids.size() != host_block_ids.size()) {
-    return Status(RET_RUNTIME_FAILED, "BatchSwapIn error, device and host block count mismatch.");
-  }
-
-  // If IPC is enabled, use IPC to send request to executor
-  if (ipc_func_wrapper_) {
-    return BatchSwapViaIpc(index, /*is_swapin=*/true, device_block_ids, host_block_ids);
-  }
-
-  // Local execution
-  for (size_t i = 0; i < device_block_ids.size(); ++i) {
-    Status status = SwapIn(index, device_block_ids[i], host_block_ids[i]);
-    if (!status.OK()) {
-      return status;
-    }
-  }
-
-  return Status();
-}
-
-void BlockAllocatorGroup::SetIpcFuncWrapper(std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper) {
-  ipc_func_wrapper_ = ipc_func_wrapper;
-}
-
-Status BlockAllocatorGroup::BatchSwapViaIpc(int index, bool is_swapin, const std::vector<int>& device_block_ids,
-                                            const std::vector<int>& host_block_ids) {
-  int executor_id = block_allocator_group_config_.devices[index];
-  KLLM_LOG_SCHEDULER << "BatchSwapViaIpc, index:" << index << ", is_swapin:" << is_swapin
-                << ", device_block_ids:" << device_block_ids << ", host_block_ids:" << host_block_ids;
-  if (!ipc_func_wrapper_) {
-    return Status(RET_RUNTIME_FAILED, "BatchSwapViaIpc error, IPC not configured.");
-  }
-
-  // IpcFuncWrapper::BatchSwap blocks until the swap completes on executor side.
-  return ipc_func_wrapper_->BatchSwap(executor_id, is_swapin, device_block_ids, host_block_ids);
-}
-
 const BlockAllocatorGroupConfig& BlockAllocatorGroup::GetBlockAllocatorGroupConfig() const {
   return block_allocator_group_config_;
 }
@@ -214,11 +98,9 @@ const BlockAllocatorGroupConfig& BlockAllocatorGroup::GetBlockAllocatorGroupConf
 BlockAllocatorManager::BlockAllocatorManager(bool is_engine, std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
                                              std::shared_ptr<Context> context,
                                              BlockAllocatorCreationFunc block_allocator_creation_fn,
-                                             BlockAllocatorGroupCreationFunc block_allocator_group_creation_fn,
-                                             std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper) {
+                                             BlockAllocatorGroupCreationFunc block_allocator_group_creation_fn) {
   memory_allocator_ = memory_allocator;
   context_ = context;
-  ipc_func_wrapper_ = ipc_func_wrapper;
 
   block_allocator_creation_fn_ = block_allocator_creation_fn;
   if (block_allocator_creation_fn_ == nullptr) {
@@ -256,10 +138,9 @@ BlockAllocatorManager::BlockAllocatorManager(bool is_engine,
                                              std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
                                              std::shared_ptr<Context> context,
                                              BlockAllocatorCreationFunc block_allocator_creation_fn,
-                                             BlockAllocatorGroupCreationFunc block_allocator_group_creation_fn,
-                                             std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper)
+                                             BlockAllocatorGroupCreationFunc block_allocator_group_creation_fn)
     : BlockAllocatorManager(is_engine, memory_allocator, context, block_allocator_creation_fn,
-                            block_allocator_group_creation_fn, ipc_func_wrapper) {
+                            block_allocator_group_creation_fn) {
   block_allocator_manager_config_ = block_allocator_manager_config;
   Initialize();
 }
@@ -273,14 +154,6 @@ void BlockAllocatorManager::Initialize() {
   for (const auto& [group_id, group_config] : block_allocator_manager_config_) {
     std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
         block_allocator_group_creation_fn_(group_config, memory_allocator_, context_, block_allocator_creation_fn_);
-
-    // Set IPC wrapper on engine-side BlockAllocatorGroup for BatchSwap operations
-    if (ipc_func_wrapper_) {
-      auto concrete_group = std::dynamic_pointer_cast<BlockAllocatorGroup>(block_allocator_group);
-      if (concrete_group) {
-        concrete_group->SetIpcFuncWrapper(ipc_func_wrapper_);
-      }
-    }
 
     allocator_groups_[group_id] = block_allocator_group;
   }

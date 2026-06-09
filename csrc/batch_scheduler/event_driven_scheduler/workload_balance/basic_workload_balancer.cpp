@@ -39,12 +39,10 @@ void BasicWorkloadBalancer::AddInferRequests(std::vector<InferRequestPtr>& reque
 
   std::lock_guard<std::mutex> guard(mu_);
   std::vector<size_t> dp_req_loads(dp_num_, 0);
-  std::vector<bool> dp_has_swapped(dp_num_, false);
   for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
     const DpScheduleState& dp_state = context.GetDpScheduleState(dp_idx);
     dp_req_loads[dp_idx] =
         dp_state.preprocessing_reqs.size() + dp_state.prefilling_reqs.size() + dp_state.decoding_reqs.size();
-    dp_has_swapped[dp_idx] = !dp_state.swapped_reqs.empty();
   }
 
   const auto get_rr_distance = [this](size_t dp_idx) { return (dp_idx + dp_num_ - next_dp_idx_) % dp_num_; };
@@ -59,12 +57,6 @@ void BasicWorkloadBalancer::AddInferRequests(std::vector<InferRequestPtr>& reque
       if (!has_best) {
         best_dp_idx = dp_idx;
         has_best = true;
-        continue;
-      }
-      if (dp_has_swapped[best_dp_idx] != dp_has_swapped[dp_idx]) {
-        if (!dp_has_swapped[dp_idx]) {
-          best_dp_idx = dp_idx;
-        }
         continue;
       }
       if (dp_req_loads[dp_idx] < dp_req_loads[best_dp_idx]) {

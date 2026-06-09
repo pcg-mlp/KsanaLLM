@@ -178,7 +178,6 @@ void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
       std::lock_guard<std::mutex> guard(schedule_mutex_);
       for (size_t i = 0; i < dp_num_; i++) {
         schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
-        schedule_strategies_[i]->UpdateAsyncState();
       }
     }
   }

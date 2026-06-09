@@ -61,9 +61,6 @@ struct PrefixCachedBlock {
   // The block could not be reuse if any swapped request reference it.
   // pair.first is position index of current block in request.
   std::unordered_map<int, std::pair<int, PrefixCachedRequest*>> inactive_requests;
-
-  // Used to protect swapin operation,
-  std::mutex swapin_mutex;
 };
 
 // Describe the cache information for a infer request.
@@ -143,10 +140,6 @@ class PrefixCacheManager : public CacheManagerInterface,
 
   std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const override;
 
-  // Get block number that not usable now, but will be usable in future.
-  // That is, the blocks used by swapout, but not merged yet.
-  size_t GetFutureFreeBlockNumber() override;
-
   // Get all usable block number, including free and reusable ones.
   size_t GetUsableBlockNumber() override;
 
@@ -206,39 +199,6 @@ class PrefixCacheManager : public CacheManagerInterface,
   Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
                              size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids, bool& block_merged,
                              std::vector<int>& swa_req_block_ids, std::vector<size_t>& swa_block_idx_offsets) override;
-
-  // Get the freeable/needed block num if swap out/in a request.
-  Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) override;
-  Status GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num) override;
-  void SetSwapCallbackFunc(AsyncSwapCallbackFunc callback) override;
-
-  // Swap out/in specific request async.
-  Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
-                             std::vector<int>& swapped_memory_block_ids, std::vector<int>& host_block_ids) override;
-  Status SwapinRequestAsync(int64_t req_id, size_t& block_num, std::vector<int>& req_block_ids,
-                            std::vector<int>& swapped_memory_block_ids, std::vector<int>& host_block_ids) override;
-
-  // Waiting until at lease on swap out/in task done, return the pending task number.
-  Status WaitSwapoutRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) override;
-  Status WaitSwapinRequests(std::vector<int64_t>& req_ids, size_t& left_req_num, bool blocking = true) override;
-
-  // Waiting until at least one swap out/in tasks in waiting_req_ids, return the pending task number.
-  Status WaitSwapoutRequests(const std::unordered_set<int64_t>& waiting_req_ids, std::vector<int64_t>& req_ids,
-                             size_t& left_req_num, bool blocking = true) override;
-  Status WaitSwapinRequests(const std::unordered_set<int64_t>& waiting_req_ids, std::vector<int64_t>& req_ids,
-                            size_t& left_req_num, bool blocking = true) override;
-
-  // Merge the swapped out blocks to free list, no need to get host block ids.
-  // The swapout of the request's block must be done before call this.
-  Status MergeSwapoutRequest(int64_t req_id) override;
-
-  // Merge the swapped in block to the tree, update block ids for infer request.
-  // The swapin of the request's block must be done before call this.
-  Status MergeSwapinRequest(int64_t req_id, std::vector<int>& req_block_ids, std::vector<int>& swa_req_block_ids,
-                            std::vector<size_t>& swa_block_idx_offsets) override;
-
-  // Drop a swapped cached request.
-  void DestroySwappedRequest(int64_t req_id) override;
 
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id) override;
@@ -337,17 +297,6 @@ class PrefixCacheManager : public CacheManagerInterface,
                                  PrefixCachedBlock* dst_cached_block, PrefixCachedBlock* src_cached_block,
                                  std::vector<int>& req_block_ids);
 
-  // Merge specific swapped in block to the tree.
-  Status AppendSwapinCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
-                                 PrefixCachedBlock* cached_block, std::vector<int>& req_block_ids);
-
-  // Merge two cached blocks.
-  Status MergeSwapinCachedBlocks(PrefixCachedRequest* cached_request, size_t block_index,
-                                 PrefixCachedBlock* dst_cached_block, PrefixCachedBlock* src_cached_block,
-                                 std::vector<int>& req_block_ids);
-
-  // Update the internal state and ref count of specific request.
-  Status UpdateCachedRequestState(int64_t req_id, RequestState req_state);
   void QueryIncompleteBlock(PrefixCachedBlock* last_block, const std::vector<int>& token_ids, int start_idx,
                             PrefixCachedBlock*& prefix_append_block, size_t& prefix_append_len);
   void EraseFlexibleCacheMap(PrefixCachedBlock* cached_block);
@@ -373,8 +322,6 @@ class PrefixCacheManager : public CacheManagerInterface,
   void TruncateRequestBlocks(PrefixCachedRequest* cached_request, size_t trunc_start_offset);
 
  private:
-  AsyncSwapCallbackFunc swap_callback_func_ = nullptr;
-
   // SWA cache manager; null when SWA is not configured.
   std::unique_ptr<SWACacheManager> swa_cache_manager_;
 

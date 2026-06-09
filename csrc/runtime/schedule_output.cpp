@@ -97,36 +97,6 @@ static Status DeserializeEmbeddingSlice(EmbeddingSlice& embedding_slice, const v
   return Status();
 }
 
-static void SerializeSwapReqBlockIds(
-    const std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids, void* ptr, size_t& offset) {
-  SerializePod<size_t>(swap_req_block_ids.size(), ptr, offset);
-  for (const auto& req_block_ids : swap_req_block_ids) {
-    SerializePod<size_t>(req_block_ids.size(), ptr, offset);
-    for (const auto& [req_id, block_ids] : req_block_ids) {
-      SerializePod<int64_t>(req_id, ptr, offset);
-      SerializeVector<int>(block_ids.dev_block_ids, ptr, offset);
-      SerializeVector<int>(block_ids.host_block_ids, ptr, offset);
-    }
-  }
-}
-
-static void DeserializeSwapReqBlockIds(std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids,
-                                       const void* ptr, size_t& offset) {
-  size_t outer_size = DeserializePod<size_t>(ptr, offset);
-  swap_req_block_ids.clear();
-  swap_req_block_ids.resize(outer_size);
-  for (size_t i = 0; i < outer_size; ++i) {
-    size_t map_size = DeserializePod<size_t>(ptr, offset);
-    auto& req_block_ids = swap_req_block_ids[i];
-    for (size_t j = 0; j < map_size; ++j) {
-      int64_t req_id = DeserializePod<int64_t>(ptr, offset);
-      auto& block_info = req_block_ids[req_id];
-      DeserializeVector<int>(block_info.dev_block_ids, ptr, offset);
-      DeserializeVector<int>(block_info.host_block_ids, ptr, offset);
-    }
-  }
-}
-
 static Status SerializeSamplingConfig(const SamplingConfig& sampling_config, void* ptr, size_t& offset) {
   // topk
   SerializePod<int>(sampling_config.topk, ptr, offset);
@@ -376,9 +346,6 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     // logits_offset
     SerializePod<size_t>(req->logits_offset, ptr, offset);
 
-    // swap_pending
-    SerializePod<bool>(req->swap_pending, ptr, offset);
-
     // prefix_cache_len
     SerializePod<int>(req->prefix_cache_len, ptr, offset);
 
@@ -518,9 +485,6 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
 
     // logits_offset
     req->logits_offset = DeserializePod<size_t>(ptr, offset);
-
-    // swap_pending
-    req->swap_pending = DeserializePod<bool>(ptr, offset);
 
     // prefix_cache_len
     req->prefix_cache_len = DeserializePod<int>(ptr, offset);
@@ -721,14 +685,6 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
     // recompute_req_ids（必须在 finish_req_ids 之后，反序列化顺序需保持一致）
     SerializeVectorOfVector<int64_t>(schedule_output->recompute_req_ids, ptr, *bytes);
 
-    // merged swapout/swapin req ids
-    SerializeVectorOfVector<int64_t>(schedule_output->merged_swapout_req_ids, ptr, *bytes);
-    SerializeVectorOfVector<int64_t>(schedule_output->merged_swapin_req_ids, ptr, *bytes);
-
-  // swapout/swapin req block ids
-  SerializeSwapReqBlockIds(schedule_output->swapout_req_block_ids, ptr, *bytes);
-  SerializeSwapReqBlockIds(schedule_output->swapin_req_block_ids, ptr, *bytes);
-
     // running reqs or executor running reqs.
     // NOTE: Use lock & unlock here, because running_reqs maybe modified in scheduler thread.
     // And this will cause wrong serialized bytes.
@@ -761,14 +717,6 @@ Status ScheduleOutputParser::DeserializeScheduleOutput(const void* ptr, Schedule
 
   // recompute_req_ids（与序列化顺序保持一致）
   DeserializeVectorOfVector<int64_t>(schedule_output->recompute_req_ids, ptr, offset);
-
-  // merged swapout/swapin req ids
-  DeserializeVectorOfVector<int64_t>(schedule_output->merged_swapout_req_ids, ptr, offset);
-  DeserializeVectorOfVector<int64_t>(schedule_output->merged_swapin_req_ids, ptr, offset);
-
-  // swapout/swapin req block ids
-  DeserializeSwapReqBlockIds(schedule_output->swapout_req_block_ids, ptr, offset);
-  DeserializeSwapReqBlockIds(schedule_output->swapin_req_block_ids, ptr, offset);
 
   // running reqs.
   {
