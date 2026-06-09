@@ -25,9 +25,7 @@ class StandardPagedAttentionMetaBuilder : public PagedAttentionMetaBuilder {
  protected:
   AttentionBuilderConfig config_;
 
-  // Template-method hooks — override in derived builders to customise per-model behaviour.
-
-  // Called during Build() to initialise layer_kv_cache_ptr and block_table.
+  // Template-method hook — override to customise layer_kv_cache_ptr capacity and block_table setup.
   // Default: standard capacity (layer_num_on_node × 2).
   virtual void OnPrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta);
 

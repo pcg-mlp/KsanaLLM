@@ -5,6 +5,8 @@
 #include "models/base/attention_meta/attention_meta_builder.h"
 
 #include <algorithm>
+#include <memory>
+#include <vector>
 
 #ifdef ENABLE_CUDA
 #  include "kernels/nvidia/kernel_wrapper.h"
@@ -17,6 +19,10 @@ namespace attention_meta_builder_detail {
 
 void PrepareKVCacheBlocks(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta,
                           const AttentionBuilderConfig& config) {
+  if (config.model_config.use_dsv4_attn) {  // dsv4 does not require non-contiguous KV lists
+    return;
+  }
+
   PROFILE_EVENT_SCOPE(PrepareKVCacheBlocks, "PrepareKVCacheBlocks", config.rank);
   const auto& reqs = meta.dp_reqs;
 
@@ -38,7 +44,7 @@ void PrepareKVCacheBlocks(StandardAttentionMeta& meta, StandardSharedAttentionMe
   const int total_block_num = kv_cache_offset_host.back();
   const bool host_fill_all_layers =
 #ifdef ENABLE_CUDA
-      config.model_config.use_dsv4_attn;
+      false;
 #else
       true;  // ASCEND already fills all layers on host.
 #endif

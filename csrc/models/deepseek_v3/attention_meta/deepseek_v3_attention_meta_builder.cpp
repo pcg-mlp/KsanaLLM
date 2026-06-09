@@ -21,10 +21,9 @@ void DeepSeekV3FlashAttentionMetaBuilder::OnPrepareKVCacheBlockTable(StandardAtt
   PrepareKVCacheBlockTable(meta, shared_meta, config_, layer_factor, kv_factor);
 }
 
-bool DeepSeekV3FlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta,
+void DeepSeekV3FlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta,
                                                 size_t dp_total_prefix_len) {
-  // super::Build() calls OnPrepareKVCacheBlockTable() virtually → dispatches to our override.
-  const bool use_cache = StandardFlashAttentionMetaBuilder::Build(meta, shared_meta, dp_total_prefix_len);
+  StandardFlashAttentionMetaBuilder::Build(meta, shared_meta, dp_total_prefix_len);
 
   auto& dsv3_meta = static_cast<DeepSeekV3FlashAttentionMeta&>(meta);
   auto& standard_meta = static_cast<StandardAttentionMeta&>(meta);
@@ -34,7 +33,7 @@ bool DeepSeekV3FlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, Shared
   if (config_.model_config.use_mla && config_.model_config.use_dsa) {
     PrepareFlashMla(dsv3_meta.mla, dsv3_meta.dsa, *shared_meta.GetMLA(), *shared_meta.GetDSA(), standard_meta, config_);
   }
-  if (use_cache && config_.model_config.use_dsa) {
+  if (meta.use_cache && config_.model_config.use_dsa) {
     PrepareStoreOutLoc(dsv3_meta.dsa, *shared_meta.GetDSA(), meta, config_);
     PrepareDSAExpandedBlockTable(dsv3_meta.dsa, *shared_meta.GetDSA(), meta, config_);
   }
@@ -45,8 +44,6 @@ bool DeepSeekV3FlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, Shared
   if (config_.model_config.use_dsa && !meta.dp_reqs.empty()) {
     PrepareFlashIndexer(dsv3_meta.indexer, *shared_meta.GetIndexer(), meta, config_);
   }
-
-  return use_cache;
 }
 
 // ── Paged builder ──────────────────────────────────────────────────────────
@@ -62,7 +59,6 @@ void DeepSeekV3PagedAttentionMetaBuilder::OnPrepareKVCacheBlockTable(StandardAtt
 }
 
 void DeepSeekV3PagedAttentionMetaBuilder::Build(PagedAttentionMeta& meta, SharedAttentionMeta& shared_meta) {
-  // super::Build() calls OnPrepareKVCacheBlockTable() virtually.
   StandardPagedAttentionMetaBuilder::Build(meta, shared_meta);
 
   auto& dsv3_meta = static_cast<DeepSeekV3PagedAttentionMeta&>(meta);

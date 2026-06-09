@@ -10,6 +10,7 @@
 
 #include "configure/environment.h"
 #include "device/device_utils.h"
+#include "models/deepseek_v4/attention_meta/prepare_dsv4_mqa_meta_dispatch.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
 
@@ -19,20 +20,11 @@ namespace {
 
 // ── Helper: physical-position calculators ────────────────────────────────────
 
-// Convert a logical token position to its physical cache position in the main KV pool.
-inline int GetPhysicalTokenPos(const std::vector<int32_t>& block_ids, int token_pos, int compress_ratio,
-                               int block_token_num) {
-  return token_pos < 0 ? -1
-                       : block_ids[token_pos / block_token_num] * (block_token_num / compress_ratio) +
-                             (token_pos / compress_ratio) % (block_token_num / compress_ratio);
-}
-
 // Map a logical token position to its physical slot in the SWA pool.
 // Assumes swa_kv_cache_block_idx_offsets are contiguous (offsets[i] == offsets[0] + i).
 // Returns -1 when token_pos falls outside the allocated SWA window (kernel skips -1).
-inline int GetSwaPoolTokenPos(const std::vector<int>& swa_block_ids,
-                              const std::vector<size_t>& swa_block_idx_offsets, int token_pos,
-                              int block_token_num) {
+inline int GetSwaPoolTokenPos(const std::vector<int>& swa_block_ids, const std::vector<size_t>& swa_block_idx_offsets,
+                              int token_pos, int block_token_num) {
   if (token_pos < 0) return -1;
   if (swa_block_idx_offsets.empty()) return -1;
   const int global_block_idx = token_pos / block_token_num;
@@ -45,8 +37,7 @@ inline int GetSwaPoolTokenPos(const std::vector<int>& swa_block_ids,
 // The buffer covers FA block indices [swa_start_block_idx, end_block_idx] contiguously.
 // Buffer slot for FA block g = req_buffer_start + (g - swa_start_block_idx).
 // Returns -1 when token_pos maps to a FA block index below swa_start_block_idx.
-inline int GetSwaBufferTokenPos(int token_pos, int block_token_num, int req_buffer_start,
-                                int swa_start_block_idx) {
+inline int GetSwaBufferTokenPos(int token_pos, int block_token_num, int req_buffer_start, int swa_start_block_idx) {
   if (token_pos < 0) return -1;
   const int global_block_idx = token_pos / block_token_num;
   const int buffer_local_block = global_block_idx - swa_start_block_idx;
@@ -165,93 +156,99 @@ void PrepareOutLoc(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_share
 }
 
 template <typename ReqPtrContainer>
-void PrepareBlockIndices(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared, const ReqPtrContainer& dp_reqs,
-                         size_t total_dp_input_ids_len, const AttentionBuilderConfig& config) {
-  const int block_token_num = mqa_shared.block_token_num;
-  const int attn_dp_rank_id = static_cast<int>(mqa_shared.attn_dp_rank_id);
-  constexpr int kSwaSize = static_cast<int>(MqaSharedAttentionMeta::kSwaSize);
-  constexpr int kC128Ratio = static_cast<int>(MqaSharedAttentionMeta::kC128Ratio);
-  constexpr int kTopkBlockSize = static_cast<int>(MqaSharedAttentionMeta::kTopkBlockSize);
+void PrepareBlockIndicesAndTopkLengths(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared,
+                                       const ReqPtrContainer& dp_reqs, size_t total_dp_input_ids_len,
+                                       const StandardAttentionMeta& standard_meta, const AttentionBuilderConfig& config,
+                                       bool is_flash) {
+  const size_t batch_size = dp_reqs.size();
+  constexpr int kTailStride = MqaSharedAttentionMeta::kSwaSize - 1;
 
+  mqa_shared.cu_extend_lens_host.assign(1, 0);
+  mqa_shared.cu_prefix_lens_host.assign(1, 0);
+  mqa_shared.swa_prefix_tail_block_indices_host.assign(batch_size * MqaSharedAttentionMeta::kSwaSize, -1);
+
+  int max_extend_len = 0;
   int c128_max_seq_len_clamp1 = 1;
-  for (const auto* req : dp_reqs) {
-    const int c128_seq_len = static_cast<int>(req->forwarding_tokens->size()) / kC128Ratio;
-    if (c128_seq_len > c128_max_seq_len_clamp1) c128_max_seq_len_clamp1 = c128_seq_len;
-  }
-  const int aligned_c128_max = RoundUp(c128_max_seq_len_clamp1, kTopkBlockSize);
-
   int req_buffer_start = mqa_meta.has_non_contiguous_swa ? 0 : -1;
+  size_t r = 0;
   for (const auto* req : dp_reqs) {
     const int extend_len = req->GetInputIdsLength();
     const int seq_len = static_cast<int>(req->forwarding_tokens->size());
+    const int c128_seq_len = seq_len / static_cast<int>(MqaSharedAttentionMeta::kC128Ratio);
     const int prefix_len = seq_len - extend_len;
-    const auto& block_ids = req->atb_kv_cache_base_blk_ids[attn_dp_rank_id];
+
+    if (extend_len > max_extend_len) {
+      max_extend_len = extend_len;
+    }
+    if (c128_seq_len > c128_max_seq_len_clamp1) {
+      c128_max_seq_len_clamp1 = c128_seq_len;
+    }
+
+    mqa_shared.cu_extend_lens_host.push_back(mqa_shared.cu_extend_lens_host.back() + extend_len);
+    mqa_shared.cu_prefix_lens_host.push_back(mqa_shared.cu_prefix_lens_host.back() + prefix_len);
+
+    // Per-req SWA prefix-tail row: kTailStride entries covering [prefix_len - kTailStride, prefix_len).
+    const int tail_first_j = prefix_len - kTailStride;
+    int* row = mqa_shared.swa_prefix_tail_block_indices_host.data() + r * MqaSharedAttentionMeta::kSwaSize;
     const auto& swa_block_ids = req->swa_kv_cache_blocks;
     const auto& swa_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
     const bool use_buffer = (req_buffer_start >= 0);
     int swa_start_blk = 0;
     int buffer_slots = 0;
     if (use_buffer) {
-      const auto range = ComputeSwaCacheBufferRange(req->kv_cached_token_num, seq_len, block_token_num);
+      const auto range = ComputeSwaCacheBufferRange(req->kv_cached_token_num, seq_len, mqa_shared.block_token_num);
       swa_start_blk = range.swa_start_blk;
       buffer_slots = range.slots;
     }
-    for (int i = prefix_len; i < seq_len; ++i) {
-      for (int j = i - kSwaSize + 1; j <= i; ++j) {
-        mqa_meta.swa_block_indices_host.push_back(
-            use_buffer ? GetSwaBufferTokenPos(j, block_token_num, req_buffer_start, swa_start_blk)
-                       : GetSwaPoolTokenPos(swa_block_ids, swa_block_idx_offsets, j, block_token_num));
-      }
-      int c128_len = 0;
-      for (int j = kC128Ratio - 1; j <= i; j += kC128Ratio) {
-        mqa_meta.c128_block_indices_host.push_back(GetPhysicalTokenPos(block_ids, j, kC128Ratio, block_token_num));
-        ++c128_len;
-      }
-      while (c128_len < aligned_c128_max) {
-        mqa_meta.c128_block_indices_host.push_back(-1);
-        ++c128_len;
-      }
+    for (int m = 0; m < kTailStride; ++m) {
+      row[m] =
+          use_buffer
+              ? GetSwaBufferTokenPos(tail_first_j + m, mqa_shared.block_token_num, req_buffer_start, swa_start_blk)
+              : GetSwaPoolTokenPos(swa_block_ids, swa_block_idx_offsets, tail_first_j + m, mqa_shared.block_token_num);
     }
-    if (use_buffer) req_buffer_start += buffer_slots;
+    if (use_buffer) {
+      req_buffer_start += buffer_slots;
+    }
+    ++r;
   }
 
-  mqa_meta.swa_block_indices_tensor = mqa_shared.swa_block_indices_tensor.GetView(
-      {mqa_meta.swa_block_indices_host.size()}, mqa_shared.swa_block_indices_tensor.shape[0]);
-  mqa_shared.swa_block_indices_tensor.shape[0] += mqa_meta.swa_block_indices_tensor.GetElementNumber();
-  MemcpyAsync(mqa_meta.swa_block_indices_tensor.GetPtr<void>(), mqa_meta.swa_block_indices_host.data(),
-              mqa_meta.swa_block_indices_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
+  MemcpyAsync(mqa_shared.cu_extend_lens_tensor.GetPtr<void>(), mqa_shared.cu_extend_lens_host.data(),
+              mqa_shared.cu_extend_lens_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
               config.context->device->GetH2DStream());
+  MemcpyAsync(mqa_shared.cu_prefix_lens_tensor.GetPtr<void>(), mqa_shared.cu_prefix_lens_host.data(),
+              mqa_shared.cu_prefix_lens_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+              config.context->device->GetH2DStream());
+  MemcpyAsync(mqa_shared.swa_prefix_tail_block_indices_tensor.GetPtr<void>(),
+              mqa_shared.swa_prefix_tail_block_indices_host.data(),
+              mqa_shared.swa_prefix_tail_block_indices_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+              config.context->device->GetH2DStream());
+
+  const int block_table_stride = static_cast<int>(standard_meta.block_table.shape[1]);
+  const int aligned_c128_max =
+      RoundUp(c128_max_seq_len_clamp1, static_cast<int>(MqaSharedAttentionMeta::kTopkBlockSize));
+
+  // Slice per-meta views from the shared backing tensors.
+  mqa_meta.swa_block_indices_tensor = mqa_shared.swa_block_indices_tensor.GetView(
+      {total_dp_input_ids_len, MqaSharedAttentionMeta::kSwaSize}, mqa_shared.swa_block_indices_tensor.shape[0]);
+  mqa_shared.swa_block_indices_tensor.shape[0] += mqa_meta.swa_block_indices_tensor.GetElementNumber();
 
   mqa_meta.c128_block_indices_tensor = mqa_shared.c128_block_indices_tensor.GetView(
-      {mqa_meta.c128_block_indices_host.size()}, mqa_shared.c128_block_indices_tensor.shape[0]);
+      {total_dp_input_ids_len, static_cast<size_t>(aligned_c128_max)}, mqa_shared.c128_block_indices_tensor.shape[0]);
   mqa_shared.c128_block_indices_tensor.shape[0] += mqa_meta.c128_block_indices_tensor.GetElementNumber();
-  MemcpyAsync(mqa_meta.c128_block_indices_tensor.GetPtr<void>(), mqa_meta.c128_block_indices_host.data(),
-              mqa_meta.c128_block_indices_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
-              config.context->device->GetH2DStream());
 
-  mqa_meta.swa_block_indices_tensor.shape = {total_dp_input_ids_len, MqaSharedAttentionMeta::kSwaSize};
-  mqa_meta.c128_block_indices_tensor.shape = {total_dp_input_ids_len, static_cast<size_t>(aligned_c128_max)};
-}
-
-template <typename ReqPtrContainer>
-void PrepareTopkLengths(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared, const ReqPtrContainer& dp_reqs,
-                        const AttentionBuilderConfig& config) {
-  constexpr int kC128Ratio = static_cast<int>(MqaSharedAttentionMeta::kC128Ratio);
-  for (const auto* req : dp_reqs) {
-    const int extend_len = req->GetInputIdsLength();
-    const int seq_len = static_cast<int>(req->forwarding_tokens->size());
-    const int c128_topk_len = seq_len / kC128Ratio;
-    for (int i = 0; i < extend_len; ++i) {
-      mqa_meta.c128_topk_lengths_host.push_back(c128_topk_len);
-    }
-  }
-
-  mqa_meta.c128_topk_lengths_tensor = mqa_shared.c128_topk_lengths_tensor.GetView(
-      {mqa_meta.c128_topk_lengths_host.size()}, mqa_shared.c128_topk_lengths_tensor.shape[0]);
+  mqa_meta.c128_topk_lengths_tensor =
+      mqa_shared.c128_topk_lengths_tensor.GetView({batch_size}, mqa_shared.c128_topk_lengths_tensor.shape[0]);
   mqa_shared.c128_topk_lengths_tensor.shape[0] += mqa_meta.c128_topk_lengths_tensor.GetElementNumber();
-  MemcpyAsync(mqa_meta.c128_topk_lengths_tensor.GetPtr<void>(), mqa_meta.c128_topk_lengths_host.data(),
-              mqa_meta.c128_topk_lengths_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
-              config.context->device->GetH2DStream());
+
+  PrepareDsv4MqaMeta(
+      mqa_shared.cu_extend_lens_tensor.GetPtr<const int32_t>(),
+      mqa_shared.cu_prefix_lens_tensor.GetPtr<const int32_t>(), standard_meta.block_table.GetPtr<const int32_t>(),
+      mqa_meta.raw_out_loc_tensor.GetPtr<const int32_t>(),
+      mqa_shared.swa_prefix_tail_block_indices_tensor.GetPtr<const int32_t>(), batch_size, mqa_shared.block_token_num,
+      block_table_stride, max_extend_len, mqa_meta.swa_block_indices_tensor.GetPtr<int32_t>(),
+      mqa_meta.c128_block_indices_tensor.GetPtr<int32_t>(), mqa_meta.c128_topk_lengths_tensor.GetPtr<int32_t>(),
+      MqaSharedAttentionMeta::kSwaSize, aligned_c128_max,
+      /*fill_topk_with_stride=*/is_flash, config.context->device->GetH2DStream());
 }
 
 void AssignTileSchedulerAndNumSplits(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared, size_t q_seq_len,
@@ -284,8 +281,8 @@ void AssignTileSchedulerAndNumSplits(MqaAttentionMeta& mqa_meta, MqaSharedAttent
 // newly-inserted blocks in [kv_cached_blk, end_blk] are written by the KV insert kernel
 // and then post-copied to the pool.
 template <typename ReqPtrContainer>
-void PrepareSwaCopyLists(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared,
-                         const ReqPtrContainer& dp_reqs, const AttentionBuilderConfig& config) {
+void PrepareSwaCopyLists(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared, const ReqPtrContainer& dp_reqs,
+                         const AttentionBuilderConfig& config) {
   const int block_token_num = mqa_shared.block_token_num;
   const size_t swa_block_size = static_cast<size_t>(mqa_shared.swa_block_size);
   // Each buffer slot stores one layer's SWA KV data (per_layer_swa_block_size bytes).
@@ -310,8 +307,7 @@ void PrepareSwaCopyLists(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa
       const int buffer_slot = req_buffer_start + (global_blk - range.swa_start_blk);
       const uint64_t pool_addr =
           reinterpret_cast<uint64_t>(pool_base + static_cast<size_t>(blocks[i]) * swa_block_size);
-      const uint64_t buf_addr =
-          reinterpret_cast<uint64_t>(buf_base + static_cast<size_t>(buffer_slot) * per_layer);
+      const uint64_t buf_addr = reinterpret_cast<uint64_t>(buf_base + static_cast<size_t>(buffer_slot) * per_layer);
 
       // Pre-copy any block that already has cached tokens (pool → buffer).
       // Use global_blk * block_token_num < kv_cached rather than global_blk < kv_cached_blk
@@ -390,8 +386,9 @@ void PrepareMqaFlash(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_sha
   }
 
   PrepareOutLoc(mqa_meta, mqa_shared, flash_meta.dp_reqs, config);
-  PrepareBlockIndices(mqa_meta, mqa_shared, flash_meta.dp_reqs, flash_meta.total_dp_input_ids_len, config);
-  PrepareTopkLengths(mqa_meta, mqa_shared, flash_meta.dp_reqs, config);
+  PrepareBlockIndicesAndTopkLengths(mqa_meta, mqa_shared, flash_meta.dp_reqs, flash_meta.total_dp_input_ids_len,
+                                    static_cast<const StandardAttentionMeta&>(flash_meta), config,
+                                    /*is_flash=*/true);
 
   // Flash uses the extra entry at the back (index == decode_token_num_threshold)
   const size_t flash_batch = flash_meta.dp_reqs.size();
@@ -407,8 +404,9 @@ void PrepareMqaPaged(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_sha
   InitSwaBasePointersIfNeeded(mqa_shared, paged_meta.dp_reqs);
 
   PrepareOutLoc(mqa_meta, mqa_shared, paged_meta.dp_reqs, config);
-  PrepareBlockIndices(mqa_meta, mqa_shared, paged_meta.dp_reqs, paged_meta.total_dp_input_ids_len, config);
-  PrepareTopkLengths(mqa_meta, mqa_shared, paged_meta.dp_reqs, config);
+  PrepareBlockIndicesAndTopkLengths(mqa_meta, mqa_shared, paged_meta.dp_reqs, paged_meta.total_dp_input_ids_len,
+                                    static_cast<const StandardAttentionMeta&>(paged_meta), config,
+                                    /*is_flash=*/false);
 
   const size_t paged_batch = paged_meta.dp_reqs.size();
   AssignTileSchedulerAndNumSplits(mqa_meta, mqa_shared, paged_meta.q_seq_len, paged_batch, /*is_flash=*/false);

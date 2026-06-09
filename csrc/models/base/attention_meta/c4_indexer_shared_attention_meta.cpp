@@ -21,7 +21,6 @@ void C4IndexerSharedAttentionMeta::Init(const ModelConfig& model_config, const R
 
   gathered_c4_out_loc_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {1});
   c4_seq_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
-  extend_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
   // Always allocate: q_seq_len > 1 can occur regardless of GetDecodeTokenNumThreshold().
   expanded_c4_seq_lens_tensor =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size, GetDecodeTokenNumThreshold()});

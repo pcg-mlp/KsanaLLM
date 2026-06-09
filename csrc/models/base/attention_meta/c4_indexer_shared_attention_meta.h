@@ -12,7 +12,6 @@ namespace ksana_llm {
 struct C4IndexerSharedAttentionMeta : public IndexerSharedAttentionMeta {
   // ── C4-specific shared device tensors ────────────────────────────────────
   Tensor c4_seq_lens_tensor;           // DEVICE, INT32, [max_batch_size]
-  Tensor extend_lens_tensor;           // DEVICE, INT32, [max_batch_size]
   // Allocated only when GetDecodeTokenNumThreshold() > 1.
   Tensor expanded_c4_seq_lens_tensor;  // DEVICE, INT32, [max_batch_size, decode_token_num_threshold]
   // Interface placeholder: indexer kernel parses inputs positionally so a valid tensor is required.

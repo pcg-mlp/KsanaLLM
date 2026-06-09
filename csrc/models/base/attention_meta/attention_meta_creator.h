@@ -64,8 +64,8 @@ class AttentionMetaCreator {
   // (e.g. Compressor: q_seq_len == 1 → paged, others → flash).
   // shared_meta is the current batch's shared attention meta; model-specific overrides may use
   // it to prepare embedded sub-metas (e.g. CompressorAttentionMeta) alongside routing.
-  virtual MetaArrays BuildAttentionMetas(const std::vector<ForwardRequest>& forward_reqs,
-                                         uint32_t attn_dp_group_id, SharedAttentionMeta& shared_meta);
+  virtual MetaArrays BuildAttentionMetas(const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
+                                         SharedAttentionMeta& shared_meta);
 
   // Builder factories: return the model-specific builder for the flash / paged attention paths.
   // The default implementations return Standard*Builder; model-specific creators override these
@@ -78,6 +78,9 @@ class AttentionMetaCreator {
 
  protected:
   void InitStandardSharedAttentionMeta(StandardSharedAttentionMeta& shared_meta);
+
+  // Decide whether the flash requests should populate kv-cache tensors.
+  virtual bool ShouldFlashUseCache(const FlashAttentionMeta& flash_meta) const;
 
   Config config_;
 };

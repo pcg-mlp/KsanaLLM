@@ -17,7 +17,7 @@ class DeepSeekV3FlashAttentionMetaBuilder : public StandardFlashAttentionMetaBui
  public:
   explicit DeepSeekV3FlashAttentionMetaBuilder(const AttentionBuilderConfig& config);
 
-  bool Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta, size_t dp_total_prefix_len) override;
+  void Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta, size_t dp_total_prefix_len) override;
 
  protected:
   // Use DSA/MLA-specific capacity factors for layer_kv_cache_ptr initialisation.

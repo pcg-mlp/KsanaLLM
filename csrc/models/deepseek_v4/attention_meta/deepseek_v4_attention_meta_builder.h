@@ -18,7 +18,7 @@ class DeepSeekV4FlashAttentionMetaBuilder : public StandardFlashAttentionMetaBui
  public:
   explicit DeepSeekV4FlashAttentionMetaBuilder(const AttentionBuilderConfig& config);
 
-  bool Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta, size_t dp_total_prefix_len) override;
+  void Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta, size_t dp_total_prefix_len) override;
 
  protected:
   void OnPrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta) override;

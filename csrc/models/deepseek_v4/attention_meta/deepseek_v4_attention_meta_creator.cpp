@@ -44,8 +44,7 @@ std::unique_ptr<PagedAttentionMeta> DeepSeekV4AttentionMetaCreator::CreatePagedA
 }
 
 AttentionMetaCreator::MetaArrays DeepSeekV4AttentionMetaCreator::BuildAttentionMetas(
-    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
-    SharedAttentionMeta& shared_meta) {
+    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id, SharedAttentionMeta& shared_meta) {
   // Reset MQA shared tensor shapes; must happen before the builders inspect them.
   auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(shared_meta);
   dsv4_shared.mqa.raw_out_loc_tensor.shape = {0};
@@ -63,7 +62,6 @@ AttentionMetaCreator::MetaArrays DeepSeekV4AttentionMetaCreator::BuildAttentionM
     dsv4_shared.c4_indexer.expanded_seq_len_tensor.shape = {0};
   }
   dsv4_shared.c4_indexer.c4_seq_lens_tensor.shape = {0};
-  dsv4_shared.c4_indexer.extend_lens_tensor.shape = {0};
   if (!dsv4_shared.c4_indexer.expanded_c4_seq_lens_tensor.shape.empty()) {
     dsv4_shared.c4_indexer.expanded_c4_seq_lens_tensor.shape = {0};
   }

@@ -90,7 +90,7 @@ struct MqaSharedAttentionMeta {
   Tensor raw_out_loc_tensor;         // DEVICE, INT32, [max_token_num]
   Tensor swa_block_indices_tensor;   // DEVICE, INT32, [max_token_num, kSwaSize]
   Tensor c128_block_indices_tensor;  // DEVICE, INT32, [max_token_num, aligned_max_c128_seq_len]
-  Tensor c128_topk_lengths_tensor;   // DEVICE, INT32, [max_token_num]
+  Tensor c128_topk_lengths_tensor;   // DEVICE, INT32, [max_batch_size]
 
   // tile_scheduler_metadatas (one entry per q_seq_len [1..threshold], plus one extra for flash prefill)
   std::vector<Tensor> c4_tile_scheduler_metadatas;
@@ -121,10 +121,18 @@ struct MqaSharedAttentionMeta {
   int per_layer_swa_block_size = 0;  // = swa_block_size / layer_num_on_node; stride per buffer slot
 
   // Backing device tensors for BatchMemoryD2D addr lists (per-batch views sliced from these).
-  Tensor swa_pre_copy_src_tensor;   // DEVICE, UINT64, [swa_buffer_num_blocks]
+  Tensor swa_pre_copy_src_tensor;  // DEVICE, UINT64, [swa_buffer_num_blocks]
   Tensor swa_pre_copy_dst_tensor;
   Tensor swa_post_copy_src_tensor;
   Tensor swa_post_copy_dst_tensor;
+
+  // Scratch tensors for the per-meta InvokePrepareDsv4MqaMeta GPU kernel.
+  Tensor cu_extend_lens_tensor;                 // DEVICE, INT32, [max_batch_size + 1]
+  Tensor cu_prefix_lens_tensor;                 // DEVICE, INT32, [max_batch_size + 1]
+  Tensor swa_prefix_tail_block_indices_tensor;  // DEVICE, INT32, [max_batch_size, kSwaSize]
+  std::vector<int> cu_extend_lens_host;
+  std::vector<int> cu_prefix_lens_host;
+  std::vector<int> swa_prefix_tail_block_indices_host;
 
   // Configuration (set by Init, read-only during Prepare*)
   int layer_num_on_node = 0;
@@ -213,15 +221,12 @@ struct MqaAttentionMeta {
 
   // Persistent host staging vectors (must outlive async H2D memcpy)
   std::vector<int> raw_out_loc_host;
-  std::vector<int> swa_block_indices_host;
-  std::vector<int> c128_block_indices_host;
-  std::vector<int> c128_topk_lengths_host;
 
   // Non-contiguous SWA cache buffer support.
   // True when any request in this flash batch has non-contiguous swa_kv_cache_block_idx_offsets.
   bool has_non_contiguous_swa = false;
   // Device tensor views (sliced from MqaSharedAttentionMeta backing tensors) for BatchMemoryD2D.
-  Tensor swa_pre_copy_src_tensor;   // pool blocks → buffer (historical SWA window)
+  Tensor swa_pre_copy_src_tensor;  // pool blocks → buffer (historical SWA window)
   Tensor swa_pre_copy_dst_tensor;
   Tensor swa_post_copy_src_tensor;  // buffer → pool blocks (new tokens written this step)
   Tensor swa_post_copy_dst_tensor;
@@ -233,9 +238,6 @@ struct MqaAttentionMeta {
 
   void Reset() {
     raw_out_loc_host.clear();
-    swa_block_indices_host.clear();
-    c128_block_indices_host.clear();
-    c128_topk_lengths_host.clear();
     has_non_contiguous_swa = false;
     swa_pre_copy_src_host.clear();
     swa_pre_copy_dst_host.clear();

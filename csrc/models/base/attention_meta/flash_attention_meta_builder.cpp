@@ -7,8 +7,6 @@
 #include <algorithm>
 #include <numeric>
 
-#include "profiler/profile_event.h"
-
 namespace ksana_llm {
 
 using namespace attention_meta_builder_detail;
@@ -16,45 +14,22 @@ using namespace attention_meta_builder_detail;
 StandardFlashAttentionMetaBuilder::StandardFlashAttentionMetaBuilder(const AttentionBuilderConfig& config)
     : config_(config) {}
 
-bool StandardFlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta,
+void StandardFlashAttentionMetaBuilder::Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta,
                                               size_t dp_total_prefix_len) {
-  auto& standard_shared = static_cast<StandardSharedAttentionMeta&>(shared_meta);
-  auto& standard_meta = static_cast<StandardAttentionMeta&>(meta);
-
-  const bool use_cache = PrepareUseCache(meta);
-
-  if (use_cache) {
+  if (meta.use_cache) {
+    auto& standard_shared = *shared_meta.GetStandard();
+    auto& standard_meta = static_cast<StandardAttentionMeta&>(meta);
     PrepareFlexibleCache(meta, shared_meta);
     PrepareKVCacheBlocks(standard_meta, standard_shared, config_);
     OnPrepareKVCacheBlockTable(standard_meta, standard_shared);
   }
 
   PrepareFlashRotary(meta, shared_meta, dp_total_prefix_len);
-
-  return use_cache;
 }
 
 void StandardFlashAttentionMetaBuilder::OnPrepareKVCacheBlockTable(StandardAttentionMeta& meta,
                                                                    StandardSharedAttentionMeta& shared_meta) {
   PrepareKVCacheBlockTable(meta, shared_meta, config_, config_.layer_num_on_node, 2);
-}
-
-bool StandardFlashAttentionMetaBuilder::PrepareUseCache(FlashAttentionMeta& meta) {
-  bool use_cache = config_.runtime_config.enable_prefix_caching || config_.runtime_config.enable_flexible_caching ||
-                   config_.runtime_config.separate_prefill_decode;
-  if (config_.enable_blocked_multi_token_forwarding_kv || config_.use_flashinfer_for_decode) {
-    use_cache = true;
-  }
-  if (use_cache) {
-    return true;
-  }
-
-  for (const ForwardRequest* dp_req : meta.dp_reqs) {
-    if (dp_req->sampling_config == nullptr || dp_req->sampling_config->max_new_tokens != 1) {
-      return true;
-    }
-  }
-  return false;
 }
 
 void StandardFlashAttentionMetaBuilder::PrepareFlexibleCache(FlashAttentionMeta& meta,
@@ -127,7 +102,6 @@ void StandardFlashAttentionMetaBuilder::PrepareFlashRotary(FlashAttentionMeta& m
   for (const auto& req : meta.dp_reqs) {
     total_input_len += req->forwarding_tokens->size();
   }
-  meta.total_dp_input_ids_len = total_input_len - dp_total_prefix_len;
 
   const size_t rotary_host_size =
       config_.enable_blocked_multi_token_forwarding_kv ? meta.total_dp_input_ids_len : total_input_len;

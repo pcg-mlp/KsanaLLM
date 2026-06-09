@@ -32,7 +32,7 @@ class DeepSeekV4AttentionMetaCreator : public AttentionMetaCreator {
   // Uses Compressor routing: q_seq_len==1 (decode) → paged, all others → flash.
   // Also calls PrepareCompressor to populate CompressorAttentionMeta fields.
   MetaArrays BuildAttentionMetas(const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
-                                  SharedAttentionMeta& shared_meta) override;
+                                 SharedAttentionMeta& shared_meta) override;
 
   // Returns DeepSeekV4-specific builders that handle MLA / DSA prepare steps.
   std::unique_ptr<FlashAttentionMetaBuilder> CreateFlashBuilder(const AttentionBuilderConfig& config) override;

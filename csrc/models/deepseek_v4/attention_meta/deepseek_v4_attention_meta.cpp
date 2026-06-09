@@ -169,12 +169,18 @@ void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
   const size_t max_seq_len = runtime_config.max_seq_len;
 
   raw_out_loc_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-  c128_topk_lengths_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
   swa_block_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, kSwaSize});
   c4_block_indices_tensor =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, static_cast<size_t>(index_topk)});
   c128_block_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
                                      {max_token_num, RoundUp(max_seq_len / kC128Ratio, kTopkBlockSize)});
+
+  const size_t max_batch_size = runtime_config.max_batch_size;
+  c128_topk_lengths_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
+  cu_extend_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1});
+  cu_prefix_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1});
+  swa_prefix_tail_block_indices_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size, kSwaSize});
 
   // layer_swa_kv_cache_ptr_tensor: slot 0 = device_block_num, slot 1 = swa_block_size, slot 2..N-1 = per-layer base
   layer_swa_kv_cache_ptr_tensor =

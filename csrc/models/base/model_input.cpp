@@ -897,7 +897,8 @@ void ModelInput::PreparePrefill() {
   }
 
   PROFILE_EVENT_SCOPE(PreparePrefill, "PreparePrefill", rank_);
-  use_cache = flash_builder_->Build(flash_meta, shared_attention_meta, dp_total_prefix_len);
+  flash_builder_->Build(flash_meta, shared_attention_meta, dp_total_prefix_len);
+  use_cache = flash_meta.use_cache;
 }
 
 void ModelInput::PrepareDecode() {
@@ -942,11 +943,11 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);
     dp_input_ids_lens[req.attn_dp_group_id] += input_ids_len;
+    input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_length);
+    input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back() + skip_token_num);
 
     if (req.GetType() == ForwardRequestType::kFlash) {
       multi_token_request_max_tokens = std::max(multi_token_request_max_tokens, input_length);
-      input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_length);
-      input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back() + skip_token_num);
       if (in_dp_group) {
         dp_multi_token_request_max_tokens = std::max(dp_multi_token_request_max_tokens, input_length);
         *(dp_prefill_q_offset_uint64_ptr + 1) = *dp_prefill_q_offset_uint64_ptr + input_ids_len;
@@ -957,8 +958,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
       }
     } else {
       single_token_request_max_tokens = std::max(single_token_request_max_tokens, input_length);
-      input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_ids_len);
-      input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back());
       if (in_dp_group) {
         dp_single_token_request_max_tokens = std::max(dp_single_token_request_max_tokens, input_length);
       }

@@ -79,7 +79,10 @@ struct StandardAttentionMeta : public AttentionMeta {
 };
 
 // Attention input for the flash (prefill) path.
-struct FlashAttentionMeta : public StandardAttentionMeta {};
+struct FlashAttentionMeta : public StandardAttentionMeta {
+  // Whether this prefill batch will populate the kv-cache tensors.
+  bool use_cache = true;
+};
 
 // Attention input for the paged (decode) path.
 struct PagedAttentionMeta : public StandardAttentionMeta {};

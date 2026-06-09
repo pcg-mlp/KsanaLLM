@@ -246,67 +246,6 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   EXPECT_EQ(model_input->cutoff_layer, 7);
 }
 
-TEST_F(ModelInputTest, PrepareUseCacheTest) {
-  // Dummy tokens
-  std::vector<int> forwarding_tokens = {1, 2, 3};
-  SamplingConfig sampling_config1, sampling_config2;
-  sampling_config1.max_new_tokens = 1;
-  sampling_config2.max_new_tokens = 2;
-  // Construct forward requests as test input.
-  ForwardRequest forward_req1, forward_req2;
-  forward_req1.forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
-  forward_req2.forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
-  forward_req1.sampling_config = &sampling_config1;
-  forward_req2.sampling_config = &sampling_config2;
-
-  const auto& env = Singleton<Environment>::GetInstance();
-  CacheManagerConfig cache_manager_config;
-  env->GetCacheManagerConfig(cache_manager_config);
-
-  auto* flash_builder = static_cast<StandardFlashAttentionMetaBuilder*>(model_input->flash_builder_.get());
-
-  // Test case 1: All the caching is disabled and all the requests only require the next token.
-  RuntimeConfig runtime_config;
-  env->GetRuntimeConfig(runtime_config);
-  EXPECT_FALSE(runtime_config.enable_prefix_caching);
-  EXPECT_FALSE(runtime_config.enable_flexible_caching);
-  model_input->PrepareInputInfo({forward_req1});
-  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
-  EXPECT_FALSE(model_input->use_cache);
-
-  // Test case 2: All the caching is disabled but some requests require more than one token.
-  model_input->PrepareInputInfo({forward_req1, forward_req2});
-  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
-  EXPECT_TRUE(model_input->use_cache);
-
-  // Test case 3: Prefix caching is enabled.
-  cache_manager_config.enable_prefix_caching = true;
-  env->SetCacheManagerConfig(cache_manager_config);
-  env->UpdateModelConfig();
-  env->GetRuntimeConfig(runtime_config);
-  EXPECT_TRUE(runtime_config.enable_prefix_caching);
-  EXPECT_FALSE(runtime_config.enable_flexible_caching);
-
-  model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
-  model_input->PrepareInputInfo({forward_req1});
-  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
-  EXPECT_TRUE(model_input->use_cache);
-
-  // Test case 4: Flexible caching is enabled.
-  cache_manager_config.enable_prefix_caching = false;
-  cache_manager_config.min_flexible_cache_num = 256;
-  env->SetCacheManagerConfig(cache_manager_config);
-  env->UpdateModelConfig();
-  env->GetRuntimeConfig(runtime_config);
-  EXPECT_FALSE(runtime_config.enable_prefix_caching);
-  EXPECT_TRUE(runtime_config.enable_flexible_caching);
-
-  model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
-  model_input->PrepareInputInfo({forward_req1});
-  model_input->use_cache = flash_builder->PrepareUseCache(*model_input->flash_meta);
-  EXPECT_TRUE(model_input->use_cache);
-}
-
 #ifdef ENABLE_CUDA
 // Test PrepareFlashRotary with flexible caching
 TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {

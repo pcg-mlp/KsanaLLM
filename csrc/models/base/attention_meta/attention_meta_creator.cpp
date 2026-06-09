@@ -67,24 +67,24 @@ std::unique_ptr<PagedAttentionMeta> AttentionMetaCreator::CreatePagedAttentionMe
 }
 
 AttentionMetaCreator::MetaArrays AttentionMetaCreator::BuildAttentionMetas(
-    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
-    SharedAttentionMeta& /*shared_meta*/) {
+    const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id, SharedAttentionMeta& /*shared_meta*/) {
   MetaArrays result;
   result.flash_meta = CreateFlashAttentionMeta();
   auto& flash_meta = *result.flash_meta;
 
   for (const auto& req : forward_reqs) {
+    const size_t input_ids_len = req.GetInputIdsLength();
     if (req.GetType() == ForwardRequestType::kFlash) {
       ++result.multi_token_request_num;
       if (req.attn_dp_group_id == attn_dp_group_id) {
         ++result.dp_multi_token_request_num;
         flash_meta.dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+        flash_meta.total_dp_input_ids_len += input_ids_len;
       }
     } else {  // ForwardRequestType::kPage
       ++result.single_token_request_num;
       if (req.attn_dp_group_id == attn_dp_group_id) {
         ++result.dp_single_token_request_num;
-        const size_t input_ids_len = req.GetInputIdsLength();
         if (result.page_metas.empty() || result.page_metas.back()->q_seq_len != input_ids_len) {
           // Requests in the same dp group are sorted in descending order by token count,
           // so a new bucket is always created when q_seq_len decreases.
@@ -95,10 +95,30 @@ AttentionMetaCreator::MetaArrays AttentionMetaCreator::BuildAttentionMetas(
           result.page_metas.back()->expanded_batch_size = (input_ids_len & 1 ? input_ids_len : input_ids_len >> 1);
         }
         result.page_metas.back()->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+        result.page_metas.back()->total_dp_input_ids_len += input_ids_len;
       }
     }
   }
+
+  flash_meta.use_cache = ShouldFlashUseCache(flash_meta);
+
   return result;
+}
+
+bool AttentionMetaCreator::ShouldFlashUseCache(const FlashAttentionMeta& flash_meta) const {
+  if (config_.runtime_config.enable_prefix_caching || config_.runtime_config.enable_flexible_caching ||
+      config_.runtime_config.separate_prefill_decode || config_.enable_blocked_multi_token_forwarding_kv ||
+      config_.runtime_config.attn_backend_config.use_flashinfer_for_decode) {
+    return true;
+  }
+
+  // Multi-token requests always use the cache when they will emit more than one token.
+  for (const auto* dp_req : flash_meta.dp_reqs) {
+    if (dp_req->sampling_config == nullptr || dp_req->sampling_config->max_new_tokens != 1) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::unique_ptr<FlashAttentionMetaBuilder> AttentionMetaCreator::CreateFlashBuilder(

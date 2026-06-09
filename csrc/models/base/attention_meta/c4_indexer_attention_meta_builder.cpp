@@ -21,21 +21,6 @@ static void HostToSharedDeviceC4(const std::vector<T>& host_vec, Tensor& shared_
               config.context->device->GetH2DStream());
 }
 
-// Build extend_lens (number of new tokens per flash request) and upload to device.
-// Mirrors C4IndexerMeta::PrepareExtendLens.
-static void PrepareFlashExtendLens(C4IndexerAttentionMeta& indexer_meta, C4IndexerSharedAttentionMeta& indexer_shared,
-                                    const std::vector<ForwardRequest*>& dp_reqs,
-                                    const AttentionBuilderConfig& config) {
-  indexer_meta.extend_lens_host.clear();
-  indexer_meta.extend_lens_host.reserve(dp_reqs.size());
-  for (const auto* req : dp_reqs) {
-    indexer_meta.extend_lens_host.push_back(static_cast<int>(req->GetInputIdsLength()));
-  }
-  KLLM_LOG_DEBUG << "extend_lens_host: " << indexer_meta.extend_lens_host;
-  HostToSharedDeviceC4(indexer_meta.extend_lens_host, indexer_shared.extend_lens_tensor,
-                       indexer_meta.extend_lens_tensor, config);
-}
-
 // Build c4_seq_lens (KV length in compressed space) and optionally expanded_c4_seq_lens.
 // Mirrors C4IndexerMeta::PrepareC4SeqLens.
 static void PrepareC4SeqLens(C4IndexerAttentionMeta& indexer_meta, C4IndexerSharedAttentionMeta& indexer_shared,
@@ -77,8 +62,6 @@ void PrepareFlashC4Indexer(C4IndexerAttentionMeta& indexer_meta, C4IndexerShared
     indexer_meta.total_dp_compressed_input_ids_len += compressed_extend_len;
     indexer_shared.dp_context_kv_tokens += compressed_extend_len;
   }
-
-  PrepareFlashExtendLens(indexer_meta, indexer_shared, flash_meta.dp_reqs, config);
 }
 
 void PreparePagedC4Indexer(C4IndexerAttentionMeta& indexer_meta, C4IndexerSharedAttentionMeta& indexer_shared,

@@ -57,7 +57,6 @@ void StandardPagedAttentionMetaBuilder::PrepareDecodeRotary(PagedAttentionMeta& 
   for (const auto& req : meta.dp_reqs) {
     total_input_len += req->forwarding_tokens->size() - req->kv_cached_token_num;
   }
-  meta.total_dp_input_ids_len = total_input_len;
 
   // prepare mask
   std::vector<int64_t> rotary_mask_host(total_input_len, 1);
