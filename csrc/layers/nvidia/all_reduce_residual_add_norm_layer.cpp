@@ -14,9 +14,11 @@ Status AllReduceResidualAddNormLayer::Init(const std::vector<std::any>& paramete
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
   rms_norm_weight_ = std::any_cast<Tensor>(parameters[parameter_index++]);
+#ifdef ENABLE_MULTICAST
   if (context_->device->ext->IsMulticastSupported()) {
     nvls_mcast_memory_ = NvlsMcastMemory::GetInstance();
   }
+#endif
   return Status();
 }
 
@@ -33,6 +35,7 @@ Status AllReduceResidualAddNormLayer::ForwardT(const Tensor& input, const Tensor
   // Step 1: tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0)
   // Step 2: add_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer)
   // Step 3 (optional): layernorm_layer_->Forward(residual_buffer, hidden_buffer_tensors_0)
+#ifdef ENABLE_MULTICAST
   if (nvls_mcast_memory_ != nullptr) {
     const size_t world_size = context_->global->GetTensorParallelSize();
     const size_t token_num_per_rank = (token_num + world_size - 1) / world_size;
@@ -55,6 +58,9 @@ Status AllReduceResidualAddNormLayer::ForwardT(const Tensor& input, const Tensor
                   context_->device->GetPrimaryComputeStream());
     }
   } else {
+#else
+  {
+#endif
     if (!is_init_) {
       InitTrtAllReduceWorkspace(
           rank_, context_->device->ext->GetTrtAllReduceBuffers(), context_->device->ext->GetTrtAllReduceFlags(),

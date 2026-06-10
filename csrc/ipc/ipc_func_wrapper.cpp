@@ -65,10 +65,12 @@ void IpcFuncWrapper::SetIpcFunctions() {
                                InitCustomCommunicationResponse, InitCustomCommunicationCallback>(
       IPC_FUNC_INIT_CUSTOM_COMMUNICATION);
 
+#ifdef ENABLE_MULTICAST
   // broadcast init mutlicast communications.
   ipc_func_proxy_->SetFuncInfo<InitMulticastCommunicationCallable, InitMulticastCommunicationRequest,
                                InitMulticastCommunicationResponse, InitMulticastCommunicationCallback>(
       IPC_FUNC_INIT_MULTICAST_COMMUNICATION);
+#endif
 
   // get device info.
   ipc_func_proxy_
@@ -260,6 +262,7 @@ Status IpcFuncWrapper::InitCustomCommunication() {
   return Status();
 }
 
+#ifdef ENABLE_MULTICAST
 Status IpcFuncWrapper::SetMulticastCommunicationContext(std::shared_ptr<Context> context) {
   auto callable = ipc_func_proxy_->GetSharedIpcFuncCallable<InitMulticastCommunicationCallable>(
       IPC_FUNC_INIT_MULTICAST_COMMUNICATION);
@@ -308,6 +311,10 @@ Status IpcFuncWrapper::InitMulticastCommunication() {
 
   return Status();
 }
+#else
+Status IpcFuncWrapper::SetMulticastCommunicationContext(std::shared_ptr<Context> context) { return Status(); }
+Status IpcFuncWrapper::InitMulticastCommunication() { return Status(); }
+#endif
 
 Status IpcFuncWrapper::GetDeviceMemory(size_t* device_free, size_t* device_total) {
   // Get from device 0.

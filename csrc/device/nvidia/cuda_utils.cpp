@@ -7,6 +7,7 @@
 
 namespace ksana_llm {
 
+#ifdef ENABLE_MULTICAST
 NvlsMcastMemory* NvlsMcastMemory::GetInstance() {
   static NvlsMcastMemory instance;
   return &instance;
@@ -249,5 +250,6 @@ void NvlsMcastMemory::FreeMcastMemory() {
   }
   CUDA_CHECK(cudaFree(signal_pads_dev_));
 }
+#endif
 
 }  // namespace ksana_llm

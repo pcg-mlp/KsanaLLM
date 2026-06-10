@@ -163,6 +163,7 @@ float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 1
   return cost_time / iterations;
 }
 
+#ifdef ENABLE_MULTICAST
 // File descriptor for local IPC or fabric handle for remote access
 union IpcMemHandle {
   uint64_t fd;
@@ -235,5 +236,6 @@ class NvlsMcastMemory {
 
   static constexpr size_t kSignalPadSize = 2048;
 };
+#endif
 
 }  // namespace ksana_llm

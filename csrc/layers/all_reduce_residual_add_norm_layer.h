@@ -39,7 +39,7 @@ class AllReduceResidualAddNormLayer : public BaseLayer {
   Tensor rms_norm_weight_;
   std::shared_ptr<TpCommunicator> tp_comm_;
   std::shared_ptr<AddNormLayer> add_norm_layer_;
-#ifdef ENABLE_CUDA
+#ifdef ENABLE_MULTICAST
   NvlsMcastMemory* nvls_mcast_memory_ = nullptr;
 #endif
 };

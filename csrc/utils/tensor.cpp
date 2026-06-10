@@ -89,7 +89,7 @@ void Tensor::AcquireImpl() {
       } else {
         Malloc(&data_ptr, total_bytes);
       }
-#ifdef ENABLE_CUDA
+#ifdef ENABLE_MULTICAST
     } else if (location == MemoryLocation::LOCATION_MULTICAST) {
       // NOTE: Use singleton to access NvlsMcastMemory without modifying base APIs
       auto nvls_mcast_memory = NvlsMcastMemory::GetInstance();
@@ -140,7 +140,7 @@ void Tensor::ReleaseImpl() {
       } else {
         Free(data_ptr);
       }
-#ifdef ENABLE_CUDA
+#ifdef ENABLE_MULTICAST
     } else if (location == MemoryLocation::LOCATION_MULTICAST) {
       NvlsMcastMemory::GetInstance()->FreeMcastMemory();
 #endif

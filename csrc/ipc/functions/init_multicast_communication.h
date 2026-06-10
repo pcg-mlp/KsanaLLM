@@ -11,6 +11,7 @@
 
 namespace ksana_llm {
 
+#ifdef ENABLE_MULTICAST
 class InitMulticastCommunicationRequest : public IpcRequest {
  public:
   virtual ~InitMulticastCommunicationRequest() {}
@@ -42,5 +43,6 @@ class InitMulticastCommunicationCallback : public IpcCallback, public IpcWaiter 
   virtual ~InitMulticastCommunicationCallback() {}
   virtual Status Call(const IpcResponse* response, IpcContext* context) override;
 };
+#endif
 
 }  // namespace ksana_llm

@@ -267,7 +267,7 @@ TEST_F(LayerTest, AllReduceResidualAddNormLayerTest) {
     GTEST_SKIP() << "Skip all reduce test since device count less than 2";
   }
   device_count = std::min(2, device_count);
-#ifdef ENABLE_CUDA
+#ifdef ENABLE_MULTICAST
   using dtype = half_float::half;
   for (int rank = 0; rank < device_count; rank++) {
     int multicast_supported = 0;

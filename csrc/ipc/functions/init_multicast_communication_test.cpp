@@ -2,15 +2,17 @@
 
 ==============================================================================*/
 
-#include <gtest/gtest.h>
+#ifdef ENABLE_MULTICAST
 
-#include <climits>
-#include <cstdint>
-#include <vector>
+#  include <gtest/gtest.h>
 
-#include "ipc/core/ipc_func_serialization.h"
-#include "ipc/functions/init_multicast_communication.h"
-#include "utils/random_generator.h"
+#  include <climits>
+#  include <cstdint>
+#  include <vector>
+
+#  include "ipc/core/ipc_func_serialization.h"
+#  include "ipc/functions/init_multicast_communication.h"
+#  include "utils/random_generator.h"
 
 namespace ksana_llm {
 
@@ -185,3 +187,5 @@ TEST(InitMulticastCommunicationTest, MaskingEdgeCases) {
 }
 
 }  // namespace ksana_llm
+
+#endif

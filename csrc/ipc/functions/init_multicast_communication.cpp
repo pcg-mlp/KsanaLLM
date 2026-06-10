@@ -4,6 +4,8 @@
 
 #include "ipc/functions/init_multicast_communication.h"
 
+#ifdef ENABLE_MULTICAST
+
 #include "ipc/core/ipc_func_serialization.h"
 #include "utils/logger.h"
 #include "utils/ret_code.h"
@@ -90,3 +92,5 @@ Status InitMulticastCommunicationCallback::Call(const IpcResponse* response, Ipc
 }
 
 }  // namespace ksana_llm
+
+#endif

@@ -16,7 +16,9 @@
 #include "cache_manager/block_allocator/block_allocator_manager.h"
 #include "ipc/core/ipc_func_types.h"
 #include "ipc/core/ipc_func_utils.h"
-#include "ipc/functions/init_multicast_communication.h"
+#ifdef ENABLE_MULTICAST
+#  include "ipc/functions/init_multicast_communication.h"
+#endif
 #include "ipc/ipc_func_wrapper.h"
 #include "utils/logger.h"
 #include "utils/memory_allocator.h"
@@ -49,10 +51,8 @@ class IpcFuncWrapperCommunicationTest : public ::testing::Test {
 // Basic Multicast Tests
 // ============================================================================
 
+#ifdef ENABLE_MULTICAST
 TEST_F(IpcFuncWrapperCommunicationTest, MulticastCommunicationTest) {
-  // TODO(yfnjin): error test uinit, fix it.
-  return;
-
   auto ExecutorFunc = [&](const int executor_id) {
     SetDevice(executor_id);
     auto executor_wrapper = std::make_shared<IpcFuncWrapper>(executor_num, false, executor_id);
@@ -162,7 +162,6 @@ TEST(InitMulticastCommunicationRequestTest, SerializationRoundTrip) {
   EXPECT_EQ(req2.broadcast_id, req.broadcast_id);
 }
 
-#ifdef ENABLE_CUDA
 // Direct unit test for InitMulticastCommunicationCallable::Call covering
 // the unique_op_id >= 0 branch (IPC socket init) and unique_op_id < 0 branch
 // (KLLM_CHECK_WITH_INFO on socket not null).

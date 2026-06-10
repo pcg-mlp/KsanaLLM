@@ -139,6 +139,7 @@ void NvidiaDeviceContextExtension<T>::Initialize() {
     is_full_nvlink_ = false;
   }
   // For performance reasons, enable multicast only when using more than 4 GPUs
+#ifdef ENABLE_MULTICAST
   is_multicast_supported_ = (node_device_num > 4);
   for (size_t worker_id = 0; worker_id < node_device_num && is_multicast_supported_; ++worker_id) {
     int multicast_supported = 0;
@@ -149,6 +150,9 @@ void NvidiaDeviceContextExtension<T>::Initialize() {
     // Init nvls mcast memory if required
     NvlsMcastMemory::GetInstance()->Initialize(node_device_num);
   }
+#else
+  is_multicast_supported_ = false;
+#endif
   KLLM_LOG_INFO << fmt::format("is_p2p_supported: {}, is_full_nvlink: {}, is_multicast_supported: {}",
                                is_p2p_supported_, is_full_nvlink_, is_multicast_supported_);
 }
