@@ -329,13 +329,13 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
         dp_context_tokens += req.GetInputIdsLength();
         dp_total_prefix_len += req.prefix_cache_len;
         context_kv_cache_block_num += req.kv_cache_ptrs.size();
-        has_request_target |= (req.request_target != nullptr);
       } else {  // req.GetType() == ForwardRequestType::kPage
         dp_decode_tokens += req.GetInputIdsLength();
         decode_kv_cache_block_num += req.kv_cache_ptrs.size();
       }
     }
     total_sampling_token_num_ += req.sampling_token_num;
+    has_request_target |= (req.request_target != nullptr && !req.request_target->empty());
   }
 
   KLLM_LOG_DEBUG << fmt::format(

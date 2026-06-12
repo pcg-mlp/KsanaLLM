@@ -13,8 +13,8 @@
 namespace ksana_llm {
 
 constexpr size_t kWrokspaceIntsPerBatch = 2 + 1024 * 2;
-
 constexpr size_t kTopkV2MetadataIntsPerBatch = 4;
+
 // -----------------------------------------------------------------------------
 // TopKLayer
 // -----------------------------------------------------------------------------
@@ -23,13 +23,22 @@ class TopKLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
+  // Unified entry: dispatches to ForwardV2 (when use_v2_ && k_ <= 1024) or ForwardRadix.
+  // scores, row_starts, row_ends, page_table required.
+  // workspace + metadata required for V2 path (may be nullptr for Radix-only k=2048).
+  // batch_indices optional (prefill path).
+  Status ForwardDispatch(const Tensor* scores, const Tensor* row_starts, const Tensor* row_ends,
+                         const Tensor* page_table, const Tensor* workspace, const Tensor* metadata, Tensor* output,
+                         const Tensor* batch_indices = nullptr, const LayerExecContext& exec_ctx = {});
+
   // Radix path: scores, row_starts, row_ends, page_table, optional batch_indices.
   Status ForwardRadix(const Tensor* scores, const Tensor* row_starts, const Tensor* row_ends, const Tensor* page_table,
                       Tensor* output, const Tensor* batch_indices = nullptr, const LayerExecContext& exec_ctx = {});
+
   // V2 path: workspace_stride_bytes is workspace.shape[1].
   Status ForwardV2(const Tensor* scores, const Tensor* seq_lens, const Tensor* page_table, const Tensor* workspace,
                    int64_t workspace_stride_bytes, const Tensor* metadata, Tensor* output,
-                   const LayerExecContext& exec_ctx = {});
+                   const Tensor* batch_indices = nullptr, const LayerExecContext& exec_ctx = {});
 
   void SetUseV2(bool use_v2) { use_v2_ = use_v2; }
 

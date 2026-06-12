@@ -182,6 +182,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     fparams.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr;
     fparams.chunk_token_starts_host = &shared_indexer.chunk_token_starts_host;
     fparams.chunk_kv_token_ranges_host = &shared_indexer.chunk_kv_token_ranges_host;
+    fparams.chunk_max_compressed_kv_lens_host = &shared_indexer.chunk_max_compressed_kv_lens_host;
     fparams.batch_size = static_cast<int>(attn_ctx.forward_shape.shape[7]);
     fparams.total_prefix_tokens = static_cast<int>(attn_ctx.forward_shape.shape[11]);
     STATUS_CHECK_RETURN(typed->Forward(fparams, &context_output_tensors[0]));
@@ -220,6 +221,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
       pparams.cu_seq_len_end = &page_indexer.cu_seq_len_end_tensor;
       pparams.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr;
       pparams.schedule_meta = &page_dsa.paged_schedule_meta;
+      pparams.max_compressed_seq_len_host = &shared_indexer.max_compressed_seq_len_host;
       pparams.sched_meta_initialized = (page_dsa.paged_schedule_meta.shape[2] != 0);
       STATUS_CHECK_RETURN(typed->Forward(pparams, &current_output_tensors[0]));
       page_dsa.paged_schedule_meta.shape[2] = 1;

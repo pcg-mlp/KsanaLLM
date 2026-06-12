@@ -34,16 +34,14 @@ void InitializeRuntime() {
   deep_gemm::KernelRuntime::prepare_init(DEEPGEMM_CUDA_HOME);
 }
 
-// 按设备初始化，确保当前 GPU 的 compiler/runtime 实例被创建
-void InitializeRuntimePerDevice(int num_sms) { deep_gemm::device_runtime->set_num_sms(num_sms); }
-
 void InitializeRuntimeWithDevice(int num_sms) {
   // 全局初始化只执行一次
   static std::once_flag common_flag;
   std::call_once(common_flag, InitializeRuntime);
 
   // 设备初始化每次都执行，支持多设备场景
-  InitializeRuntimePerDevice(num_sms);
+  deep_gemm::device_runtime->set_num_sms(num_sms);
+  deep_gemm::device_runtime->set_pdl(true);
 }
 
 }  // namespace

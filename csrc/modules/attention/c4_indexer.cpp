@@ -8,6 +8,7 @@
 
 #include "layers/flash_sparse_mla_indexer_layer.h"
 #include "layers/paged_sparse_mla_indexer_layer.h"
+#include "layers/topk_layer.h"
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "models/base/attention_meta/c4_indexer_attention_meta.h"
@@ -119,8 +120,12 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
   STATUS_CHECK_RETURN(wq_b_->Forward(qr, q_indexer_tensors));
 
   // Step 4: Process flash and paged attention separately for top-k token selection
-  // Use large enough workspace for quantization
-  Tensor quant_workspace = workspace.GetView({total_tokens * n_heads_ * head_dim_}, workspace_offset);
+  // Use large enough workspace for quantization and TopK V2 scratch.
+  const size_t topkv2_workspace_bytes = kWrokspaceIntsPerBatch * sizeof(int32_t);
+  const size_t topkv2_workspace_elements =
+      (topkv2_workspace_bytes + workspace.GetDTypeSize() - 1) / workspace.GetDTypeSize();
+  size_t quant_workspace_size = std::max(n_heads_ * head_dim_, topkv2_workspace_elements);
+  Tensor quant_workspace = workspace.GetView({total_tokens * quant_workspace_size}, workspace_offset);
   auto& attn_ctx = forwarding_context.GetAttentionForwardContext();
   const auto& model_input = forwarding_context.GetModelInput();
 
@@ -155,6 +160,7 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
         .layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
         .chunk_token_starts_host = &c4_shared_indexer.chunk_token_starts_host,
         .chunk_kv_token_ranges_host = &c4_shared_indexer.chunk_kv_token_ranges_host,
+        .chunk_max_compressed_kv_lens_host = &c4_shared_indexer.chunk_max_compressed_kv_lens_host,
         .batch_size = static_cast<int>(attn_ctx.forward_shape.shape[7]),
         .total_prefix_tokens = static_cast<int>(attn_ctx.forward_shape.shape[11]),
     };
@@ -193,6 +199,7 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
           .cu_seq_len_end = &page_c4_indexer.cu_seq_len_end_tensor,
           .layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
           .schedule_meta = &page_dsa.paged_schedule_meta,
+          .max_compressed_seq_len_host = &c4_shared_indexer.max_compressed_seq_len_host,
           .sched_meta_initialized = (page_dsa.paged_schedule_meta.shape[2] != 0),
       };
       Tensor current_output = topk_indices.GetView({current_tokens, index_topk_}, skip_tokens * index_topk_);

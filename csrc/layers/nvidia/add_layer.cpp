@@ -22,8 +22,11 @@ Status AddLayer::ForwardT(const Tensor* a, const Tensor* b, Tensor* output) {
     InvokeAddBiasResidual<T>(a_ptr, b_ptr, nullptr, static_cast<int>(a->shape[0]), static_cast<int>(a->shape[1]),
                              output->GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());
   } else {
-    InvokeAddBiasResidual<T>(a_ptr, nullptr, b_ptr, static_cast<int>(a->shape[0]), static_cast<int>(a->shape[1]),
-                             output->GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());
+    const int m = static_cast<int>(a->shape[0]);
+    const int n = static_cast<int>(a->shape[1]);
+    const int bias_stride = n * (m / static_cast<int>(b->shape[0]));
+    InvokeAddBiasResidual<T>(a_ptr, nullptr, b_ptr, m, n, bias_stride, output->GetPtr<void>(),
+                             context_->device->GetPrimaryComputeStream().Get());
   }
   output->shape = a->shape;
   output->dtype = a->dtype;

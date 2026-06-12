@@ -32,6 +32,17 @@ Status TopKLayer::Init(const std::vector<std::any>& parameters, const RuntimeCon
   return Status();
 }
 
+Status TopKLayer::ForwardDispatch(const Tensor* scores, const Tensor* row_starts, const Tensor* row_ends,
+                                  const Tensor* page_table, const Tensor* workspace, const Tensor* metadata,
+                                  Tensor* output, const Tensor* batch_indices, const LayerExecContext& exec_ctx) {
+  if (use_v2_ && k_ <= kTopK1024) {
+    const int64_t workspace_stride_bytes = static_cast<int64_t>(workspace->shape[1]) * sizeof(int32_t);
+    return ForwardV2(scores, row_ends, page_table, workspace, workspace_stride_bytes, metadata, output, batch_indices,
+                     exec_ctx);
+  }
+  return ForwardRadix(scores, row_starts, row_ends, page_table, output, batch_indices, exec_ctx);
+}
+
 // ---------------------------------------------------------------------------
 // Radix path (topk.cuh / topk_1024.cuh / InvokeFastTopK)
 // ---------------------------------------------------------------------------
@@ -107,12 +118,20 @@ Status TopKLayer::ForwardRadix(const Tensor* scores, const Tensor* row_starts, c
 // ---------------------------------------------------------------------------
 Status TopKLayer::ForwardV2(const Tensor* scores, const Tensor* seq_lens, const Tensor* page_table,
                             const Tensor* workspace, int64_t workspace_stride_bytes, const Tensor* metadata,
-                            Tensor* output, const LayerExecContext& exec_ctx) {
+                            Tensor* output, const Tensor* batch_indices, const LayerExecContext& exec_ctx) {
   const uint32_t num_works = static_cast<uint32_t>(scores->shape[0]);
   const int64_t score_stride = static_cast<int64_t>(scores->shape[1]);
   const uint32_t num_batches = static_cast<uint32_t>(page_table->shape[0]);
   const int64_t page_table_stride = static_cast<int64_t>(page_table->shape[1]);
-  const uint32_t extend_len = num_works / num_batches;
+
+  const int32_t* batch_indices_ptr = nullptr;
+  uint32_t extend_len;
+  if (batch_indices != nullptr) {
+    batch_indices_ptr = batch_indices->GetPtr<int32_t>();
+    extend_len = 0;
+  } else {
+    extend_len = num_works / num_batches;
+  }
 
   auto stream = context_->device->GetPrimaryComputeStream().Get();
 
@@ -120,7 +139,7 @@ Status TopKLayer::ForwardV2(const Tensor* scores, const Tensor* seq_lens, const 
                                            output->GetPtr<void>(), workspace->GetPtr<void>(), metadata->GetPtr<void>(),
                                            score_stride, page_table_stride, workspace_stride_bytes, num_works,
                                            page_bits_, /*max_seq_len*/ score_stride,
-                                           /*static_cluster_threshold=*/0, nullptr, extend_len, k_, stream);
+                                           /*static_cluster_threshold=*/0, batch_indices_ptr, extend_len, k_, stream);
 
   output->shape = {num_works, k_};
   output->dtype = DataType::TYPE_INT32;

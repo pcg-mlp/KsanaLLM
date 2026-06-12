@@ -34,6 +34,7 @@ class FlashSparseMlaIndexerLayer : public BaseLayer {
     const Tensor* layer_kv_cache_ptr;
     const Tensor* chunk_token_starts_host;
     const Tensor* chunk_kv_token_ranges_host;
+    const Tensor* chunk_max_compressed_kv_lens_host;
     // Scalars formerly encoded in forward_shape (input[14]):
     int batch_size;           // shape[7]
     int total_prefix_tokens;  // shape[11]
