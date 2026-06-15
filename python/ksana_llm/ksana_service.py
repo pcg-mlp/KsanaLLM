@@ -2,10 +2,12 @@
 #
 # ==============================================================================
 
+import asyncio
 import logging
 import os
 import signal
 import sys
+import time
 from typing import Dict
 
 import orjson
@@ -42,6 +44,9 @@ CONFIG = {
         'Content-Type'],
     "DEFAULT_LOG_LEVEL": "INFO",
 }
+
+# Health check timeout in seconds
+HEALTH_CHECK_TIMEOUT = 60
 
 
 class LLMService:
@@ -330,9 +335,65 @@ class LLMService:
                 },
             )
 
-    async def health_check(self) -> Dict[str, str]:
-        """健康检查接口"""
-        return {"status": "healthy"}
+    async def health_check(self, request: Request) -> Response:
+        """Health check endpoint.
+
+        Verifies the server is healthy by sending a minimal generation request
+        to the engine. If the engine responds within the timeout,
+        the server is considered healthy.
+
+        Similar to sglang's /health endpoint implementation.
+        """
+        # If the model is not yet initialized, return 503
+        if self.tokenizer is None or self.model is None:
+            return Response(status_code=503)
+
+        try:
+            # Use a small but sufficient token sequence for the health check.
+            # A single token like [0] can cause DeepGEMM CUDA errors (M dimension
+            # too small for MoE routing), so use a few tokens instead.
+            health_request_dict = {
+                "input_tokens": [1, 2, 3, 4],
+                "sampling_config": {
+                    "num_beams": 1,
+                    "topk": 1,
+                    "topp": 0.0,
+                    "temperature": 0.0,
+                    "max_new_tokens": 1,
+                    "repetition_penalty": 1.0,
+                    "length_penalty": 1.0,
+                },
+                "stream": False,
+            }
+            req_ctx = {"request-id": f"health_check_{int(time.time() * 1000)}"}
+
+            # Use asyncio.wait_for to enforce timeout
+            status, _, _ = await asyncio.wait_for(
+                self.model.generate(
+                    request_dict=health_request_dict,
+                    streamer=False,
+                    req_ctx=req_ctx,
+                ),
+                timeout=HEALTH_CHECK_TIMEOUT,
+            )
+
+            if status.OK():
+                return Response(status_code=200)
+            else:
+                logger.error(
+                    f"Health check failed: engine returned error: {status.GetMessage()}"
+                )
+                return Response(status_code=503)
+
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Health check failed: no response from engine within "
+                f"{HEALTH_CHECK_TIMEOUT} seconds."
+            )
+            return Response(status_code=503)
+        except (RuntimeError, OSError) as e:
+            logger.error(f"Health check failed with exception: {e}")
+            return Response(status_code=503)
 
 
 class KsanaService:
@@ -396,6 +457,51 @@ class KsanaService:
                 ssl_certfile=self._engine_args.ssl_certfile,
             )
         else:
+            # In multi-node cases, non-zero rank nodes launch a dummy health
+            # check server (similar to sglang) so that the load balancer /
+            # orchestrator can verify the worker is alive.
+            self._launch_dummy_health_check_server(
+                self._engine_args.host, self._engine_args.port
+            )
             print("Uvicorn running on NONE.")
             import threading
             threading.Event().wait()
+
+    @staticmethod
+    def _launch_dummy_health_check_server(host: str, port: int):
+        """Launch a lightweight HTTP server on worker nodes for health checks.
+
+        Similar to sglang's launch_dummy_health_check_server. Only provides
+        /health endpoint that always returns 200.
+        """
+        import threading
+
+        dummy_app = FastAPI()
+
+        @dummy_app.get("/health")
+        async def _health():
+            return Response(status_code=200)
+
+        config = uvicorn.Config(
+            dummy_app,
+            host=host,
+            port=port,
+            log_level="warning",
+            timeout_keep_alive=CONFIG["TIMEOUT_KEEP_ALIVE"],
+        )
+        server = uvicorn.Server(config=config)
+
+        def run_server():
+            try:
+                import asyncio
+                asyncio.run(server.serve())
+            except (RuntimeError, OSError) as e:
+                logger.error(f"Dummy health check server failed: {e}")
+
+        thread = threading.Thread(
+            target=run_server, daemon=True, name="dummy-health-check"
+        )
+        thread.start()
+        logger.info(
+            f"Dummy health check server started at {host}:{port} for worker node"
+        )

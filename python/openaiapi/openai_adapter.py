@@ -694,6 +694,23 @@ class KsanaOpenAIServing:
         if self.use_deepseek_v32_encoding or self.use_deepseek_v4_encoding:
             self.maybe_serialize_tool_calls(messages)
             conversation = messages
+
+            # dsv4/dsv32 are text-only and consume string content; flatten
+            # OpenAI parts-list content here so the encoder sees a plain string.
+            for i, msg in enumerate(conversation):
+                if isinstance(msg.get("content"), list):
+                    text_parts = []
+                    for chunk in msg["content"]:
+                        if isinstance(chunk, dict) and chunk.get("type") == "text":
+                            text_parts.append(chunk.get("text", ""))
+                    conversation[i]["content"] = (
+                        " ".join(text_parts) if text_parts else ""
+                    )
+
+            for msg in conversation:
+                if msg.get("content") is None:
+                    msg["content"] = ""
+
             mm_data_future = None
         else:
             resolved_content_format = resolve_chat_template_content_format(
