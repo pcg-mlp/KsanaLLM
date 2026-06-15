@@ -179,8 +179,19 @@ if(GIT_FOUND AND (ENABLE_FLASH_MLA STREQUAL "TRUE"))
   set(DEEPSEEK_FLASH_MLA_SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/FlashMLA/csrc)
 
   message(STATUS "Applying FlashMLA patch")
-  execute_process(COMMAND ${GIT_EXECUTABLE} apply ${PROJECT_SOURCE_DIR}/3rdparty/flashmla.patch
-    WORKING_DIRECTORY ${DEEPSEEK_FLASH_MLA_SOURCE_DIR})
+  execute_process(COMMAND ${GIT_EXECUTABLE} apply --check ${PROJECT_SOURCE_DIR}/3rdparty/flashmla.patch
+    WORKING_DIRECTORY ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}
+    RESULT_VARIABLE FLASHMLA_PATCH_CHECK_RESULT)
+  if(FLASHMLA_PATCH_CHECK_RESULT EQUAL "0")
+    execute_process(COMMAND ${GIT_EXECUTABLE} apply ${PROJECT_SOURCE_DIR}/3rdparty/flashmla.patch
+      WORKING_DIRECTORY ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}
+      RESULT_VARIABLE FLASHMLA_PATCH_RESULT)
+    if(NOT FLASHMLA_PATCH_RESULT EQUAL "0")
+      message(FATAL_ERROR "git apply flashmla.patch failed with ${FLASHMLA_PATCH_RESULT}")
+    endif()
+  else()
+    message(STATUS "FlashMLA patch already applied, skipping")
+  endif()
 
   file(GLOB_RECURSE DEEPSEEK_FLASH_MLA_SOURCES ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/*.cu)
   # exclude files in sm100 and cutlass

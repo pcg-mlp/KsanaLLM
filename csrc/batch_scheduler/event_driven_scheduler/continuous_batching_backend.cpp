@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "batch_scheduler/full_cache_hit_handler.h"
+#include "batch_scheduler/request_finish_checker.h"
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "configure/schedule_config_parser.h"
 #include "profiler/reporter.h"
@@ -54,15 +55,6 @@ size_t GetMaxRequiredTokenNum(size_t token_num, size_t mtp_step_num) {
 bool IsDpBatchFull(const DpBatch& dp_batch, const BatchSchedulerConfig& config) {
   KLLM_CHECK(config.max_batch_size > 0);
   return dp_batch.running_reqs.size() >= static_cast<size_t>(config.max_batch_size);
-}
-
-bool CheckRequestFinish(const std::shared_ptr<InferRequest>& req, const BatchSchedulerConfig& config) {
-  return req->IsEosGenerated() ||
-         (req->sampling_config.max_new_tokens > 0 &&
-          req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
-         // Keep the same semantics as ContinuousBatchingStrategy:
-         // max_token_len limits the total sequence length (prompt + generated tokens), not generated-only length.
-         req->output_tokens.size() >= config.max_token_len;
 }
 
 }  // namespace
@@ -151,7 +143,7 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
         continue;
       }
 
-      if (CheckRequestFinish(req, batch_scheduler_config_)) {
+      if (IsRequestFinished(req, batch_scheduler_config_)) {
         req->finish_status = Status(RET_SUCCESS);
         req->finished = true;
         EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req, Status(RET_SUCCESS), events,

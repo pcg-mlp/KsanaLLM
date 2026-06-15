@@ -198,6 +198,37 @@ TEST_F(EventDrivenSchedulerTest, RecomputeTriggeredPressTest) {
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
 }
 
+TEST_F(EventDrivenSchedulerTest, SplitFuseWithoutPrefixCacheTest) {
+  KLLM_LOG_INFO << "SplitFuseWithoutPrefixCacheTest start";
+  enable_prefix_cache_ = false;
+  split_fuse_token_num_ = 16;
+  CommonSetUp();
+
+  EXPECT_FALSE(cache_manager_config.enable_prefix_caching);
+  EXPECT_FALSE(cache_manager->IsPrefixCachingEnabled());
+  EXPECT_TRUE(runtime_config_.enable_prefix_caching);
+
+  ParallelTester tester(schedule_processor_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  ParallelTester::SplitFuseCheckHook split_fuse_check_hook(split_fuse_token_num_);
+  hooks.push_back(&default_hook);
+  hooks.push_back(&split_fuse_check_hook);
+
+  int request_num = 10;
+  int client_num = 10;
+  int min_expect_output_num = 1;
+  int max_expect_output_num = 40;
+  int min_input_num = 17;
+  int max_input_num = 60;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, min_expect_output_num, max_expect_output_num, min_input_num, max_input_num,
+                          req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
+}
+
 TEST_F(EventDrivenSchedulerTest, SplitFusePressTest) {
   KLLM_LOG_INFO << "SplitFusePressTest start";
   split_fuse_token_num_ = 16;

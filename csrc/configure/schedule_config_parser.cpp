@@ -394,10 +394,10 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
 
   // Load cache manager config
   batch_scheduler_config_.swa_block_num_ratio =
-      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.cache_manager.swa_block_num_ratio", 0.5f);
-  // Correct invalid values: if the user configured a non-positive ratio, fall back to the default 0.5.
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.cache_manager.swa_block_num_ratio", 0.1f);
+  // Correct invalid values: if the user configured a non-positive ratio, fall back to the default 0.1.
   if (batch_scheduler_config_.swa_block_num_ratio <= 0.0f) {
-    batch_scheduler_config_.swa_block_num_ratio = 0.5f;
+    batch_scheduler_config_.swa_block_num_ratio = 0.1f;
   }
   cache_manager_config_.min_flexible_cache_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.min_flexible_cache_num", 0);
@@ -423,13 +423,6 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       KLLM_LOG_WARNING << "SplitFuse not support Visual Model, will change split_fuse_token_num as 0";
       batch_scheduler_config_.split_fuse_token_num = 0;
     }
-  }
-
-  // TODO(zakwang): Implement support for cases where prefix caching is disabled while split_fuse_token_num is non-zero.
-  if (batch_scheduler_config_.split_fuse_token_num != 0 && !cache_manager_config_.enable_prefix_caching) {
-    KLLM_LOG_WARNING << "While prefix caching is disabled，split_fuse_token_num will always be disabled. So set "
-                        "split_fuse_token_num to 0.";
-    batch_scheduler_config_.split_fuse_token_num = 0;
   }
 
   // DSv4 模型要求 split_fuse_token_num 必须是 block_token_num 的整数倍, 原因:
@@ -871,7 +864,8 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
 
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);
   runtime_config_.is_decode_only = (connector_config_.group_role == GroupRole::DECODE);
-  runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
+  runtime_config_.enable_prefix_caching =
+      cache_manager_config_.enable_prefix_caching || batch_scheduler_config_.split_fuse_token_num > 0;
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
 
   // Propagate SWA sliding_window_size from DeepSeek v4 model config.

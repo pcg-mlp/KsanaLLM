@@ -76,6 +76,8 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, BasicTokenGenerationTest) {
   int input_token_num2 = 30;
 
   std::shared_ptr<Request> req1, req2, req2_same_seed, req2_diff_seed, req2_same20_diff30;
+  std::shared_ptr<KsanaPythonInput> python_input1, python_input2, python_input2_same_seed, python_input2_diff_seed,
+      python_input2_same20_diff30;
   std::shared_ptr<InferRequest> infer_req1, infer_req2, infer_req2_same_seed, infer_req2_diff_seed,
       infer_req2_same20_diff30;
 
@@ -83,32 +85,35 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, BasicTokenGenerationTest) {
   seeds.push_back(std::make_pair(0, 1));
   // Init req1
   std::vector<std::shared_ptr<InferRequest>> infer_req_list =
-      env_simulator->InitRequest(1, input_token_num1, expected_output_token_num1, req1, seeds);
+      env_simulator->InitRequest(1, input_token_num1, expected_output_token_num1, req1, python_input1, seeds);
   infer_req1 = infer_req_list[0];
   InitRequestBlock(infer_req1, expected_output_token_num1);
 
   // Init req2
   seeds[0].second = seed_0;
-  infer_req_list = env_simulator->InitRequest(2, input_token_num2, expected_output_token_num2, req2, seeds);
+  infer_req_list =
+      env_simulator->InitRequest(2, input_token_num2, expected_output_token_num2, req2, python_input2, seeds);
   infer_req2 = infer_req_list[0];
   InitRequestBlock(infer_req2, expected_output_token_num2);
 
   // Init req2_same_seed
   seeds.push_back(std::make_pair(input_token_num2, seed_0));
-  infer_req_list = env_simulator->InitRequest(3, input_token_num2, expected_output_token_num2, req2_same_seed, seeds);
+  infer_req_list = env_simulator->InitRequest(3, input_token_num2, expected_output_token_num2, req2_same_seed,
+                                              python_input2_same_seed, seeds);
   infer_req2_same_seed = infer_req_list[0];
   InitRequestBlock(infer_req2_same_seed, expected_output_token_num2);
 
   // Init req2_diff_seed
   seeds[1].second = seed_1;
-  infer_req_list = env_simulator->InitRequest(4, input_token_num2, expected_output_token_num2, req2_diff_seed, seeds);
+  infer_req_list = env_simulator->InitRequest(4, input_token_num2, expected_output_token_num2, req2_diff_seed,
+                                              python_input2_diff_seed, seeds);
   infer_req2_diff_seed = infer_req_list[0];
   InitRequestBlock(infer_req2_diff_seed, expected_output_token_num2);
 
   // Init req2_same20_diff30
   seeds.push_back(std::make_pair(input_token_num2 + seed_1_token_num, seed_2));
-  infer_req_list =
-      env_simulator->InitRequest(5, input_token_num2, expected_output_token_num2, req2_same20_diff30, seeds);
+  infer_req_list = env_simulator->InitRequest(5, input_token_num2, expected_output_token_num2, req2_same20_diff30,
+                                              python_input2_same20_diff30, seeds);
   infer_req2_same20_diff30 = infer_req_list[0];
   InitRequestBlock(infer_req2_same20_diff30, expected_output_token_num2);
 
@@ -455,10 +460,11 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, SwaBasicTokenGenerationTest) {
 
   // Init request
   std::shared_ptr<Request> req;
+  std::shared_ptr<KsanaPythonInput> python_input;
   std::vector<std::pair<int, int>> seeds;
   seeds.push_back(std::make_pair(0, 42));
   std::vector<std::shared_ptr<InferRequest>> infer_req_list =
-      env_simulator->InitRequest(1, input_token_num, expected_output_token_num, req, seeds);
+      env_simulator->InitRequest(1, input_token_num, expected_output_token_num, req, python_input, seeds);
   std::shared_ptr<InferRequest> infer_req = infer_req_list[0];
 
   // Allocate main KV cache blocks (enough for input + output)

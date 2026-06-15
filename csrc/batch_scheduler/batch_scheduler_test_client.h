@@ -114,6 +114,7 @@ class ParallelTester {
     int expect_output_token_num;
     int input_token_num;
     std::shared_ptr<Request> req;
+    std::shared_ptr<KsanaPythonInput> ksana_python_input;
     std::vector<std::shared_ptr<InferRequest>> infer_req_group;
   };
 
@@ -223,8 +224,9 @@ class ParallelTester {
     seeds[0].first = 0;
     for (auto& info : reqs) {
       seeds[0].second = info.req_id;
-      info.infer_req_group =
-          env_simulator_->InitRequest(info.req_id, info.input_token_num, info.expect_output_token_num, info.req, seeds);
+      info.infer_req_group = env_simulator_->InitRequest(info.req_id, info.input_token_num,
+                                                         info.expect_output_token_num, info.req,
+                                                         info.ksana_python_input, seeds);
     }
   }
 
@@ -553,8 +555,9 @@ class FixPrefixTestCase {
     seeds[1].first = prefix_token_num;
     for (auto& info : req_list) {
       seeds[1].second = info.req_id;
-      info.infer_req_group =
-          env_simulator_->InitRequest(info.req_id, info.input_token_num, info.expect_output_token_num, info.req, seeds);
+      info.infer_req_group = env_simulator_->InitRequest(info.req_id, info.input_token_num,
+                                                         info.expect_output_token_num, info.req,
+                                                         info.ksana_python_input, seeds);
     }
 
     tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);

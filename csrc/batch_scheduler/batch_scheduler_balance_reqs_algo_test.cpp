@@ -55,14 +55,18 @@ class BalanceReqsTest : public BatchSchedulerTest {
   }
 
   size_t InitReqs(int reqs_num, std::vector<std::shared_ptr<Request>>& src_reqs,
-                  std::vector<std::shared_ptr<InferRequest>>& requests, int token_num = 0) {
+                  std::vector<std::shared_ptr<InferRequest>>& requests,
+                  std::vector<std::shared_ptr<KsanaPythonInput>>& python_inputs, int token_num = 0) {
     size_t total_tokens = 0;
     for (int i = 0; i < reqs_num; i++) {
       int tokens = (token_num > 0) ? token_num : (i + 1);
       std::shared_ptr<Request> req;
+      std::shared_ptr<KsanaPythonInput> python_input;
       int input_tokens = i + tokens;
       int expect_output_tokens = tokens + 1;
-      auto infer_req_group = env_simulator_->InitRequest(i, input_tokens, expect_output_tokens, req, {{0, i}});
+      auto infer_req_group =
+          env_simulator_->InitRequest(i, input_tokens, expect_output_tokens, req, python_input, {{0, i}});
+      python_inputs.push_back(python_input);
       auto r = infer_req_group[0];
       r->kv_cached_token_num = i;
       r->forwarding_tokens.resize(i + tokens);
@@ -101,8 +105,9 @@ TEST_F(BalanceReqsTest, BasicAlgoTest) {
   // 创建一些请求
   std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
   int reqs_num = dp_num * 5 + 1;
-  size_t total_tokens = InitReqs(reqs_num, src_reqs, requests);
+  size_t total_tokens = InitReqs(reqs_num, src_reqs, requests, python_inputs);
   std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>> total_reqs;
   ReqsToPairs(requests, total_reqs);
 
@@ -143,9 +148,12 @@ TEST_F(BalanceReqsTest, EmptyRequestsTest) {
 
   // 确保每个组都有一些初始请求
   std::vector<std::vector<std::shared_ptr<InferRequest>>> dp_waiting_reqs;
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
   for (auto& group : dp_waiting_reqs) {
     std::shared_ptr<Request> req;
-    auto infer_req_group = env_simulator_->InitRequest(100, 10, 5, req, {{0, 100}});
+    std::shared_ptr<KsanaPythonInput> python_input;
+    auto infer_req_group = env_simulator_->InitRequest(100, 10, 5, req, python_input, {{0, 100}});
+    python_inputs.push_back(python_input);
     group.push_back(infer_req_group[0]);
   }
 
@@ -167,8 +175,9 @@ TEST_F(BalanceReqsTest, DifferentWorkloadsTest) {
 
   std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
   int token_num = 10;
-  InitReqs(20, src_reqs, requests, token_num);
+  InitReqs(20, src_reqs, requests, python_inputs, token_num);
   std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>> total_reqs;
   ReqsToPairs(requests, total_reqs);
 
@@ -195,7 +204,8 @@ TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   // 创建一些请求
   std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
-  InitReqs(dp_num * 5 + 1, src_reqs, requests);
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
+  InitReqs(dp_num * 5 + 1, src_reqs, requests, python_inputs);
   for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->decoding_queue.clear();
@@ -230,7 +240,8 @@ TEST_F(BalanceReqsTest, BalanceForwardEmptyTest) {
   // 创建一些请求
   std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
-  InitReqs(dp_num * 5 + 1, src_reqs, requests);
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
+  InitReqs(dp_num * 5 + 1, src_reqs, requests, python_inputs);
   for (std::shared_ptr<InferRequest> req : requests) {
     req->input_tokens.resize(req->forwarding_tokens.size());
     req->forwarding_tokens.clear();
@@ -277,10 +288,14 @@ TEST_F(BalanceReqsTest, BalanceADPRequestsBasicTest) {
   CommonSetUp(dp_num);
 
   // 创建测试用的推理请求
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
   auto CreateTestInferRequest = [&](int64_t req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
     std::shared_ptr<Request> req;
+    std::shared_ptr<KsanaPythonInput> python_input;
     int expect_output_tokens = 10;
-    auto infer_req_group = env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, {{0, 42}});
+    auto infer_req_group =
+        env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, python_input, {{0, 42}});
+    python_inputs.push_back(python_input);
     auto infer_req = infer_req_group[0];
     infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 0;
@@ -329,10 +344,14 @@ TEST_F(BalanceReqsTest, BalanceADPRequestsTimeoutTest) {
   CommonSetUp(dp_num);
 
   // 创建测试用的推理请求
+  std::vector<std::shared_ptr<KsanaPythonInput>> python_inputs;
   auto CreateTestInferRequest = [&](int64_t req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
     std::shared_ptr<Request> req;
+    std::shared_ptr<KsanaPythonInput> python_input;
     int expect_output_tokens = 10;
-    auto infer_req_group = env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, {{0, 42}});
+    auto infer_req_group =
+        env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, python_input, {{0, 42}});
+    python_inputs.push_back(python_input);
     auto infer_req = infer_req_group[0];
     infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 0;

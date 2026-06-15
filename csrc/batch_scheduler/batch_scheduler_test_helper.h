@@ -533,8 +533,8 @@ inline void GenerateFakeTokens(std::vector<int>& input_tokens, int output_token_
 
 inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
     int64_t req_id, int input_token_num, int expected_output_token_num, std::shared_ptr<Request>& req,
-    const std::vector<std::pair<int, int>>& seeds, const size_t tp_num, const size_t block_num,
-    std::shared_ptr<KsanaPythonInput>* python_input_out = nullptr) {
+    std::shared_ptr<KsanaPythonInput>& python_input_out, const std::vector<std::pair<int, int>>& seeds,
+    const size_t tp_num, const size_t block_num) {
   KLLM_LOG_SCHEDULER << "Init req_id=" << req_id << ", input_token_num=" << input_token_num
                      << ", expect_output_token_num=" << expected_output_token_num << ", seeds=" << Vector2Str(seeds)
                      << ", tp_num=" << tp_num << ", block_num=" << block_num;
@@ -552,10 +552,8 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
   req->output_tokens = req->input_tokens;
   req->sampling_config.stop_token_ids = {GetFakeEndId()};
 
-  // 如果调用方需要，将 ksana_python_input 返回
-  if (python_input_out) {
-    *python_input_out = ksana_python_input;
-  }
+  // Request 持有 KsanaPythonInput 的引用，调用方必须保存 python_input_out 以保持相同生命周期。
+  python_input_out = ksana_python_input;
 
   std::vector<std::shared_ptr<InferRequest>> infer_req_list;
   for (size_t i = 0; i < req->output_group.size(); i++) {
@@ -714,10 +712,11 @@ class BatchSchedulerEnvironmentSimulator {
 
   std::vector<std::shared_ptr<InferRequest>> InitRequest(int64_t req_id, int input_token_num,
                                                          int expected_output_token_num, std::shared_ptr<Request>& req,
+                                                         std::shared_ptr<KsanaPythonInput>& python_input_out,
                                                          const std::vector<std::pair<int, int>>& seeds) {
-    std::vector<std::shared_ptr<InferRequest>> infer_req_list =
-        InitFakeRequest(req_id, input_token_num, expected_output_token_num, req, seeds, tp_num_,
-                        block_manager_config_.device_allocator_config.block_token_num);
+    std::vector<std::shared_ptr<InferRequest>> infer_req_list = InitFakeRequest(
+        req_id, input_token_num, expected_output_token_num, req, python_input_out, seeds, tp_num_,
+        block_manager_config_.device_allocator_config.block_token_num);
     for (size_t i = 0; i < req->output_group.size(); i++) {
       std::shared_ptr<InferRequest> infer_req = infer_req_list[i];
       SetRequestOutputTokenNum(infer_req, expected_output_token_num);

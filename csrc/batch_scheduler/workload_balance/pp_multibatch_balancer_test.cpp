@@ -49,26 +49,29 @@ TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   constexpr size_t kBlockNum = 16;
 
   std::shared_ptr<Request> batch0_req0;
+  std::shared_ptr<KsanaPythonInput> batch0_req0_python_input;
   size_t batch1_req_num = 11;
   size_t batch1_decoding_req_num = 9;
   std::vector<std::shared_ptr<Request>> batch1_reqs{batch1_req_num};
+  std::vector<std::shared_ptr<KsanaPythonInput>> batch1_python_inputs{batch1_req_num};
   std::vector<std::shared_ptr<InferRequest>> infer_req_list, waiting_reqs;
   std::shared_ptr<Request> waiting_req;
+  std::shared_ptr<KsanaPythonInput> waiting_req_python_input;
   int64_t req_id = 0;
-  infer_req_list =
-      InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch0_req0, seeds, tp_num, kBlockNum);
+  infer_req_list = InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch0_req0,
+                                   batch0_req0_python_input, seeds, tp_num, kBlockNum);
   batch_states[0]->decoding_queue.push_back(infer_req_list[0]);
   for (size_t i = 0; i < batch1_req_num; i++) {
-    infer_req_list =
-        InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch1_reqs[i], seeds, tp_num, kBlockNum);
+    infer_req_list = InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch1_reqs[i],
+                                     batch1_python_inputs[i], seeds, tp_num, kBlockNum);
     if (i < batch1_decoding_req_num) {
       batch_states[1]->decoding_queue.push_back(infer_req_list[0]);
     } else {
       batch_states[1]->waiting_queue.push_back(infer_req_list[0]);
     }
   }
-  infer_req_list =
-      InitFakeRequest(req_id++, input_token_num, expected_output_token_num, waiting_req, seeds, tp_num, kBlockNum);
+  infer_req_list = InitFakeRequest(req_id++, input_token_num, expected_output_token_num, waiting_req,
+                                   waiting_req_python_input, seeds, tp_num, kBlockNum);
   waiting_reqs.push_back(infer_req_list[0]);
 
   PPMultibatchWorkloadBalancer balancer(PPMultibatchWBStrategy::WB_BATCH_REQ);

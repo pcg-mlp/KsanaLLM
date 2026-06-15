@@ -809,6 +809,119 @@ TEST_F(ScheduleConfigParserTest, ConnectorAllFieldsParsedCorrectly) {
   EXPECT_EQ(connector_config.communication_type, CommunicationType::ZMQ);
 }
 
+// Prefix cache 与 split fuse 配置解耦：split_fuse 不再依赖 prefix cache 开关。
+TEST_F(ScheduleConfigParserTest, SplitFuseOnlyPreservesSplitFuseAndEnablesRuntimePrefixPath) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/false, /*split_fuse_token_num=*/256);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  CacheManagerConfig cache_config;
+  parser_->GetCacheManagerConfig(cache_config);
+  EXPECT_FALSE(cache_config.enable_prefix_caching);
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 256u);
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_TRUE(runtime_config.enable_prefix_caching);
+}
+
+TEST_F(ScheduleConfigParserTest, PrefixCacheOnlyEnablesRuntimePrefixPath) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/0);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  CacheManagerConfig cache_config;
+  parser_->GetCacheManagerConfig(cache_config);
+  EXPECT_TRUE(cache_config.enable_prefix_caching);
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 0u);
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_TRUE(runtime_config.enable_prefix_caching);
+}
+
+TEST_F(ScheduleConfigParserTest, PrefixCacheAndSplitFuseBothDisabled) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/false, /*split_fuse_token_num=*/0);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  CacheManagerConfig cache_config;
+  parser_->GetCacheManagerConfig(cache_config);
+  EXPECT_FALSE(cache_config.enable_prefix_caching);
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 0u);
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_FALSE(runtime_config.enable_prefix_caching);
+}
+
+TEST_F(ScheduleConfigParserTest, PrefixCacheAndSplitFuseBothEnabled) {
+  std::string yaml_path = CreateTempYamlConfig(/*enable_prefix_caching=*/true, /*split_fuse_token_num=*/256);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  CacheManagerConfig cache_config;
+  parser_->GetCacheManagerConfig(cache_config);
+  EXPECT_TRUE(cache_config.enable_prefix_caching);
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 256u);
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_TRUE(runtime_config.enable_prefix_caching);
+}
+
 TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
   std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
   std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
@@ -854,6 +967,64 @@ TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_EQ(batch_config.split_fuse_token_num, 0)
       << "split_fuse_token_num should be 0 when PD separation + prefix_cache + split_fuse are all enabled";
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationPreservesSplitFuseWhenPrefixCacheDisabled) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files_.push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+  temp_dirs_.push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  ASSERT_TRUE(file.is_open());
+
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "    enable_auto_prefix_cache: false\n";
+  file << "    split_fuse_token_num: 256\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  connector:\n";
+  file << "    group_role: prefill\n";
+  file << "    router_addr: \"10.0.0.1:8080\"\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  CacheManagerConfig cache_config;
+  parser_->GetCacheManagerConfig(cache_config);
+  EXPECT_FALSE(cache_config.enable_prefix_caching);
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 256u)
+      << "split_fuse_token_num should be preserved when PD separation is enabled but prefix cache is disabled";
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_TRUE(runtime_config.enable_prefix_caching);
 }
 
 // ==================== GlobalCacheConnector 配置解析测试 ====================
@@ -994,11 +1165,11 @@ TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorDefaults) {
 
 // ==================== swa_block_num_ratio 配置解析与自动调整测试 ====================
 
-// Test: swa_block_num_ratio defaults to 0.0 when the key is absent from YAML,
-// and stays 0.0 for a non-SWA model (no auto-adjustment).
+// Test: swa_block_num_ratio defaults to 0.1 when the key is absent from YAML,
+// regardless of whether the model has SWA.
 TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioDefaultsToHalfWhenNotConfigured) {
   // Omit setting.cache_manager.swa_block_num_ratio from YAML (pass -1 sentinel);
-  // the default value is 0.5 regardless of whether the model has SWA.
+  // the default value is 0.1 regardless of whether the model has SWA.
   std::string yaml_path = CreateTempYamlConfigWithSwa(-1.0f);
   ASSERT_FALSE(yaml_path.empty());
 
@@ -1017,8 +1188,8 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioDefaultsToHalfWhenNotConfigured
 
   BatchSchedulerConfig batch_config;
   parser_->GetBatchSchedulerConfig(batch_config);
-  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
-      << "swa_block_num_ratio should default to 0.5 when not configured in YAML";
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.1f)
+      << "swa_block_num_ratio should default to 0.1 when not configured in YAML";
 }
 
 // Test: swa_block_num_ratio is read from YAML when explicitly set.
@@ -1078,7 +1249,7 @@ TEST_F(ScheduleConfigParserTest, NonContiguousSwaModeReadFromYaml) {
 }
 
 // Test: when the model has SWA and swa_block_num_ratio is not set in YAML,
-// it uses the default value of 0.5.
+// it uses the default value of 0.1.
 TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioDefaultsToHalfForSwaModel) {
   // Omit swa_block_num_ratio from YAML
   std::string yaml_path = CreateTempYamlConfigWithSwa(-1.0f);
@@ -1099,8 +1270,8 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioDefaultsToHalfForSwaModel) {
 
   BatchSchedulerConfig batch_config;
   parser_->GetBatchSchedulerConfig(batch_config);
-  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
-      << "swa_block_num_ratio should default to 0.5 for SWA model when not configured";
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.1f)
+      << "swa_block_num_ratio should default to 0.1 for SWA model when not configured";
 }
 
 // Test: when the model has SWA but swa_block_num_ratio is explicitly set to a
@@ -1129,7 +1300,7 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitNonZeroPreservedForSwaM
 }
 
 // Test: when swa_block_num_ratio is explicitly set to 0 in YAML, it is corrected
-// to the default 0.5 because 0 is not a valid ratio (<=0 triggers correction).
+// to the default 0.1 because 0 is not a valid ratio (<=0 triggers correction).
 TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitZeroCorrectedToDefault) {
   // Explicitly set swa_block_num_ratio to 0 in YAML
   std::string yaml_path = CreateTempYamlConfigWithSwa(0.0f);
@@ -1149,8 +1320,8 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitZeroCorrectedToDefault)
 
   BatchSchedulerConfig batch_config;
   parser_->GetBatchSchedulerConfig(batch_config);
-  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.5f)
-      << "swa_block_num_ratio=0 in YAML should be corrected to the default 0.5";
+  EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.1f)
+      << "swa_block_num_ratio=0 in YAML should be corrected to the default 0.1";
 }
 
 // max_chunked_kv_tokens 设置逻辑: 默认→max_step_token_num, 显式设置→保留, 小于 max_token_len→clamp.

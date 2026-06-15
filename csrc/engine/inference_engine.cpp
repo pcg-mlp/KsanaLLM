@@ -486,7 +486,7 @@ Status InferenceEngine::DoWarmupRun() {
   }
 
   pybind11::gil_scoped_release release;
-  KLLM_LOG_INFO << "Start to do warmup run";
+  KLLM_LOG_INFO << "Start to do warmup run, warmup req number=" << warmup_input_lengths.size();
 
   for (int input_length : warmup_input_lengths) {
     auto warmup_run_input = std::make_shared<KsanaPythonInput>();

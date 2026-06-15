@@ -14,6 +14,7 @@
 #include "batch_scheduler/full_cache_hit_handler.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/planning_workload_estimator.h"
+#include "batch_scheduler/request_finish_checker.h"
 #include "batch_scheduler/state/scheduler_tick_tok.h"
 #include "cache_manager/prefix_cache_manager.h"
 #include "profiler/reporter.h"
@@ -133,15 +134,14 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
     }
   }
 #endif
-  if (req->IsEosGenerated() ||
-      (req->sampling_config.max_new_tokens > 0 &&
-       req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
-      req->output_tokens.size() >= batch_scheduler_config_.max_token_len) {
-    stop_checker_->CheckCompleteStopStrings(req);
+  if (IsRequestFinished(req, batch_scheduler_config_)) {
     KLLM_LOG_SCHEDULER << "Request " << req->req_id << " had finished."
                        << " req output_tokens size: " << req->output_tokens.size()
                        << " input_tokens size: " << req->input_tokens.size();
     return true;
+  }
+  if (HasRemainingPrefillWorkload(req)) {
+    return false;
   }
   // TODO(robertyuan): User defined checking. Move this to PostGenHook
   // When stop strings are checked and matched, stop early

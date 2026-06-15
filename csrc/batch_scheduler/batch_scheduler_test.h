@@ -113,6 +113,9 @@ class BaseSchedulerTest : public testing::Test {
       cache_manager_config.min_flexible_cache_num = cache_manager_config.block_token_num * 4;
     }
     cache_manager_config.sliding_window_size = sliding_window_size_;
+
+    runtime_config_.enable_prefix_caching =
+        cache_manager_config.enable_prefix_caching || batch_scheduler_config_.split_fuse_token_num > 0;
   }
 
  protected:
