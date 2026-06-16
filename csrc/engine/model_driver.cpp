@@ -355,13 +355,22 @@ void ModelDriver::SetInferRequestTransferMode(std::shared_ptr<ScheduleOutput> sc
   }
 
   for (auto& req : schedule_output->running_reqs) {
+    bool patch_transfer = false;
     if (req_ids_cache.count(req->req_id) == 0) {
       req_ids_cache.insert(req->req_id);
       KLLM_LOG_DEBUG << "Cache req " << req->req_id << " to local cache.";
-      req->patch_transfer = false;
+      patch_transfer = false;
     } else {
       KLLM_LOG_DEBUG << "req " << req->req_id << " already in local cache.";
-      req->patch_transfer = true;
+      patch_transfer = true;
+    }
+    req->patch_transfer = patch_transfer;
+    // 将 patch_transfer 决策同步写入本 schedule 的 snapshot, 供异步 IPC 序列化读取
+    // (避免相邻 schedule_id 覆写 req->patch_transfer, 见 InferRequestSerializationSnapshot).
+    auto snap_it = schedule_output->req_serialization_snapshots.find(req->req_id);
+    if (snap_it != schedule_output->req_serialization_snapshots.end()) {
+      snap_it->second.patch_transfer = patch_transfer;
+      snap_it->second.patch_transfer_populated = true;
     }
   }
 }

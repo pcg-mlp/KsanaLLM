@@ -89,6 +89,35 @@ TEST_F(PlanningWorkloadEstimatorTest, LastPrefillSetsFull) {
   EXPECT_EQ(workload.draft_token_num, max_draft);
 }
 
+// build-ahead 第二步 schedule 时已有 decode inflight：应按 kStepGenerateTokenNum 估算 generated/draft。
+TEST_F(PlanningWorkloadEstimatorTest, DecodeInflightSetsWorkloadEstimation) {
+  auto req = CreateInferRequest({1, 2, 3});
+  req->output_tokens = {1, 2, 3};
+  req->ResetPrefillingTokens();
+  // 完成 prefill
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/3, /*prefill_start_offset=*/0);
+  req->generated_tokens = {10};
+  req->UpdateAfterInflightTaskFinished();
+  req->ResetInflightTask();
+
+  // 第一步 decode 已 launch，尚未 retire
+  ScheduleTaskWorkload decode_wl;
+  decode_wl.generated_token_num = 1;
+  decode_wl.draft_token_num = 0;
+  decode_wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(decode_wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask();
+  ASSERT_TRUE(req->HasInflightTask());
+
+  const size_t max_draft = 4;
+  EstimateRequestPlanningWorkload(req, max_draft);
+
+  const auto& planning = req->GetPlanningWorkload();
+  EXPECT_EQ(planning.generated_token_num, kStepGenerateTokenNum);
+  EXPECT_EQ(planning.draft_token_num, max_draft);
+}
+
 // Test: EstimateRequestPlanningWorkload with no inflight task just copies remaining workload.
 TEST_F(PlanningWorkloadEstimatorTest, NoInflightTask) {
   auto req = CreateInferRequest({1, 2, 3});

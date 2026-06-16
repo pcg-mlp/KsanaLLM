@@ -6,9 +6,9 @@
 #include <torch/torch.h>
 
 #include "batch_scheduler/schedule_processor_interface.h"
+#include "profiler/profile_event.h"
 #include "distributed/packet_util.h"
 #include "ipc/core/ipc_func_serialization.h"
-#include "profiler/profile_event.h"
 #include "runtime/executor_infer_request.h"
 #include "utils/status.h"
 #include "utils/string_utils.h"
@@ -95,6 +95,36 @@ static Status DeserializeEmbeddingSlice(EmbeddingSlice& embedding_slice, const v
   DeserializeVectorOfTensor(embedding_slice.additional_tensors, ptr, offset);
 
   return Status();
+}
+
+static void SerializeSwapReqBlockIds(
+    const std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids, void* ptr, size_t& offset) {
+  SerializePod<size_t>(swap_req_block_ids.size(), ptr, offset);
+  for (const auto& req_block_ids : swap_req_block_ids) {
+    SerializePod<size_t>(req_block_ids.size(), ptr, offset);
+    for (const auto& [req_id, block_ids] : req_block_ids) {
+      SerializePod<int64_t>(req_id, ptr, offset);
+      SerializeVector<int>(block_ids.dev_block_ids, ptr, offset);
+      SerializeVector<int>(block_ids.host_block_ids, ptr, offset);
+    }
+  }
+}
+
+static void DeserializeSwapReqBlockIds(std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids,
+                                       const void* ptr, size_t& offset) {
+  size_t outer_size = DeserializePod<size_t>(ptr, offset);
+  swap_req_block_ids.clear();
+  swap_req_block_ids.resize(outer_size);
+  for (size_t i = 0; i < outer_size; ++i) {
+    size_t map_size = DeserializePod<size_t>(ptr, offset);
+    auto& req_block_ids = swap_req_block_ids[i];
+    for (size_t j = 0; j < map_size; ++j) {
+      int64_t req_id = DeserializePod<int64_t>(ptr, offset);
+      auto& block_info = req_block_ids[req_id];
+      DeserializeVector<int>(block_info.dev_block_ids, ptr, offset);
+      DeserializeVector<int>(block_info.host_block_ids, ptr, offset);
+    }
+  }
 }
 
 static Status SerializeSamplingConfig(const SamplingConfig& sampling_config, void* ptr, size_t& offset) {
@@ -243,12 +273,28 @@ static Status DeserializeStructuredGeneratorConfig(StructuredGeneratorConfig& co
   return Status();
 }
 
-static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequest>>& infer_reqs, void* ptr,
-                                     size_t& offset) {
+// full transfer 序列化时优先读 Launch 时刻快照中的易竞态字段 (forwarding_tokens / kv_cached_token_num 等),
+// 避免异步序列化线程读到后续 LaunchPlanningTask 已修改的 req->*.
+static const InferRequestSerializationSnapshot* FindReqSnapshot(
+    const std::unordered_map<int64_t, InferRequestSerializationSnapshot>* req_snapshots, int64_t req_id) {
+  if (req_snapshots == nullptr) {
+    return nullptr;
+  }
+  auto it = req_snapshots->find(req_id);
+  if (it == req_snapshots->end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+static Status SerializeInferRequests(
+    const std::vector<std::shared_ptr<InferRequest>>& infer_reqs,
+    const std::unordered_map<int64_t, InferRequestSerializationSnapshot>* req_snapshots, void* ptr, size_t& offset) {
   // vec size
   SerializePod<size_t>(infer_reqs.size(), ptr, offset);
 
   for (auto req : infer_reqs) {
+    const InferRequestSerializationSnapshot* snap = FindReqSnapshot(req_snapshots, req->req_id);
     // req_id
     SerializePod<int64_t>(req->req_id, ptr, offset);
 
@@ -256,7 +302,7 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     SerializePod<size_t>(req->logits_custom_length, ptr, offset);
 
     // sampling_token_num
-    SerializePod<size_t>(req->sampling_token_num, ptr, offset);
+    SerializePod<size_t>(snap ? snap->sampling_token_num : req->sampling_token_num, ptr, offset);
 
     // last_step_token_num
     SerializePod<size_t>(req->last_step_token_num, ptr, offset);
@@ -286,7 +332,7 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     SerializeVector<int>(req->accepted_tokens, ptr, offset);
 
     // forwarding_tokens_draft_num
-    SerializePod<int64_t>(req->forwarding_tokens_draft_num, ptr, offset);
+    SerializePod<int64_t>(snap ? snap->forwarding_tokens_draft_num : req->forwarding_tokens_draft_num, ptr, offset);
 
     // generated_tokens
     SerializeVector<int>(req->generated_tokens, ptr, offset);
@@ -317,7 +363,11 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     SerializeString(req->kv_comm_group_key, ptr, offset);
 
     // forwarding_tokens
-    SerializeVector<int>(req->forwarding_tokens, ptr, offset);
+    if (snap) {
+      SerializeVector<int>(snap->forwarding_tokens, ptr, offset);
+    } else {
+      SerializeVector<int>(req->forwarding_tokens, ptr, offset);
+    }
 
     // sampling_result_tokens
     SerializeVector<int>(req->sampling_result_tokens, ptr, offset);
@@ -326,19 +376,31 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     SerializeEnum<InferStage>(req->infer_stage, ptr, offset);
 
     // step
-    SerializePod<int>(req->step, ptr, offset);
+    SerializePod<int>(snap ? snap->step : req->step, ptr, offset);
 
     // kv_cached_token_num
-    SerializePod<int>(req->kv_cached_token_num, ptr, offset);
+    SerializePod<int>(snap ? snap->kv_cached_token_num : req->kv_cached_token_num, ptr, offset);
 
     // kv_cache_blocks
-    SerializeVector<int>(req->kv_cache_blocks, ptr, offset);
+    if (snap) {
+      SerializeVector<int>(snap->kv_cache_blocks, ptr, offset);
+    } else {
+      SerializeVector<int>(req->kv_cache_blocks, ptr, offset);
+    }
 
     // swa_kv_cache_blocks
-    SerializeVector<int>(req->swa_kv_cache_blocks, ptr, offset);
+    if (snap) {
+      SerializeVector<int>(snap->swa_kv_cache_blocks, ptr, offset);
+    } else {
+      SerializeVector<int>(req->swa_kv_cache_blocks, ptr, offset);
+    }
 
     // swa_kv_cache_block_idx_offsets
-    SerializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
+    if (snap) {
+      SerializeVector<size_t>(snap->swa_kv_cache_block_idx_offsets, ptr, offset);
+    } else {
+      SerializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
+    }
 
     // block_token_num
     SerializePod<size_t>(req->block_token_num, ptr, offset);
@@ -347,7 +409,7 @@ static Status SerializeInferRequests(const std::vector<std::shared_ptr<InferRequ
     SerializePod<size_t>(req->logits_offset, ptr, offset);
 
     // prefix_cache_len
-    SerializePod<int>(req->prefix_cache_len, ptr, offset);
+    SerializePod<int>(snap ? snap->prefix_cache_len : req->prefix_cache_len, ptr, offset);
 
     // flexible_cached_copy_tasks, not supported
 
@@ -639,13 +701,20 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
     PROFILE_EVENT_SCOPE(serialize_lock_wait, "Engine.SerializeScheduleOutput.LockWait");
     schedule_processor_->Lock();
   }
-  // Process full and patch requests.
+  // 按 patch_transfer 分流: full transfer 走 InferRequest, 增量走 InferRequestPatch.
+  // patch_transfer 与 forwarding_tokens 等字段均优先读 req_serialization_snapshots (见 schedule_output.h).
   std::vector<std::shared_ptr<InferRequest>> full_running_reqs;
   std::vector<std::shared_ptr<InferRequestPatch>> patch_running_reqs;
   {
     PROFILE_EVENT_SCOPE(serialize_under_lock, "Engine.SerializeScheduleOutput.UnderLock");
     for (const auto& req : schedule_output->running_reqs) {
-      if (!req->patch_transfer) {
+      bool patch_transfer = req->patch_transfer;
+      auto snap_it_pt = schedule_output->req_serialization_snapshots.find(req->req_id);
+      if (snap_it_pt != schedule_output->req_serialization_snapshots.end() &&
+          snap_it_pt->second.patch_transfer_populated) {
+        patch_transfer = snap_it_pt->second.patch_transfer;
+      }
+      if (!patch_transfer) {
         full_running_reqs.push_back(req);
         continue;
       }
@@ -656,20 +725,31 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
       patch_req->req_id = req->req_id;
       patch_req->infer_stage = req->infer_stage;
       patch_req->prefix_cache_len = req->prefix_cache_len;
-      patch_req->kv_cached_token_num = req->kv_cached_token_num;
-      patch_req->forwarding_tokens_draft_num = req->forwarding_tokens_draft_num;
-      patch_req->sampling_token_num = req->sampling_token_num;
-
-      // TODO(yancyliu): transfer full forwarding_tokens & kv_cache_blocks now, change to incremental later.
       patch_req->forwarding_tokens_offset = 0;
-      patch_req->delta_forwarding_tokens = req->forwarding_tokens;
-
       patch_req->kv_cache_blocks_offset = 0;
-      patch_req->delta_kv_cache_blocks = req->kv_cache_blocks;
 
-      // Transfer full swa_kv_cache_blocks (SWA blocks are always sent in full).
-      patch_req->swa_kv_cache_blocks = req->swa_kv_cache_blocks;
-      patch_req->swa_kv_cache_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
+      auto snap_it = schedule_output->req_serialization_snapshots.find(req->req_id);
+      if (snap_it != schedule_output->req_serialization_snapshots.end()) {
+        const auto& snap = snap_it->second;
+        patch_req->kv_cached_token_num = snap.kv_cached_token_num;
+        patch_req->forwarding_tokens_draft_num = snap.forwarding_tokens_draft_num;
+        patch_req->sampling_token_num = snap.sampling_token_num;
+        patch_req->delta_forwarding_tokens = snap.forwarding_tokens;
+        patch_req->delta_kv_cache_blocks = snap.kv_cache_blocks;
+        patch_req->swa_kv_cache_blocks = snap.swa_kv_cache_blocks;
+        patch_req->swa_kv_cache_block_idx_offsets = snap.swa_kv_cache_block_idx_offsets;
+        patch_req->prefix_cache_len = snap.prefix_cache_len;
+        patch_req->step = snap.step;
+      } else {
+        patch_req->kv_cached_token_num = req->kv_cached_token_num;
+        patch_req->forwarding_tokens_draft_num = req->forwarding_tokens_draft_num;
+        patch_req->sampling_token_num = req->sampling_token_num;
+        // TODO(yancyliu): transfer full forwarding_tokens & kv_cache_blocks now, change to incremental later.
+        patch_req->delta_forwarding_tokens = req->forwarding_tokens;
+        patch_req->delta_kv_cache_blocks = req->kv_cache_blocks;
+        patch_req->swa_kv_cache_blocks = req->swa_kv_cache_blocks;
+        patch_req->swa_kv_cache_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
+      }
 
       patch_running_reqs.push_back(patch_req);
     }
@@ -690,7 +770,7 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
     // And this will cause wrong serialized bytes.
     {
       PROFILE_EVENT_SCOPE(serialize_full_reqs, "Engine.SerializeScheduleOutput.FullReqs");
-      SerializeInferRequests(full_running_reqs, ptr, *bytes);
+      SerializeInferRequests(full_running_reqs, &schedule_output->req_serialization_snapshots, ptr, *bytes);
     }
     {
       PROFILE_EVENT_SCOPE(serialize_patch_reqs, "Engine.SerializeScheduleOutput.PatchReqs");

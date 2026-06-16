@@ -91,6 +91,7 @@ class ModelBuilder {
  private:
   std::shared_ptr<Context> context_ = nullptr;
 
+
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
   // The SWA block allocator manager; nullptr when SWA is disabled.

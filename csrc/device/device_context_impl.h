@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <array>
 #include <unordered_map>
 
 #include "device/device_utils.h"
@@ -37,6 +38,12 @@ class DeviceContextT {
   Event& GetComputeSyncEvent() { return compute_sync_event_; }
 
   Stream& GetH2DStream() { return *h2d_stream_; }
+
+  // build-ahead 双 ModelInput slot：各 slot 独立 H2D stream，与 PrimaryComputeStream forward 并行构建 input。
+  void EnableDualH2DStreams(bool enabled) { dual_h2d_streams_enabled_ = enabled; }
+  bool IsDualH2DStreamsEnabled() const { return dual_h2d_streams_enabled_; }
+  Stream& GetH2DStreamForSlot(size_t slot);
+
   Stream& GetD2HStream() { return *d2h_stream_; }
   Stream& GetD2DStream() { return *d2d_stream_; }
 
@@ -89,6 +96,9 @@ class DeviceContextT {
 
   // memcpy
   std::shared_ptr<Stream> h2d_stream_ = nullptr;
+  // build-ahead ping-pong：slot 0/1 各一条 H2D stream（仅 dual_h2d_streams_enabled_ 时使用）。
+  std::array<std::shared_ptr<Stream>, 2> h2d_stream_slots_{nullptr, nullptr};
+  bool dual_h2d_streams_enabled_ = false;
   std::shared_ptr<Stream> d2h_stream_ = nullptr;
   std::shared_ptr<Stream> d2d_stream_ = nullptr;
 

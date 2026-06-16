@@ -18,6 +18,7 @@
 #include "runtime/draft_generator/asr_custom_generator.h"
 #include "runtime/draft_generator/ptp_generator.h"
 #include "runtime/draft_generator/trie_generator.h"
+#include "runtime/fast_path_controller.h"
 #include "runtime/weight_instance.h"
 #include "utils/host_memory_pool.h"
 #include "utils/memory_allocator.h"
@@ -108,6 +109,9 @@ Status InferenceExecutor::Initialize() {
   env_->SetBatchSchedulerConfig(batch_scheduler_config);
   KLLM_LOG_DEBUG << "Reset batch_scheduler_config, max_batch_size: " << max_batch_size
                  << ", max_vocab_size: " << max_vocab_size;
+
+  // 与 Engine 相同：在构造 ModelInstance / Sampler 之前完成启动期 gate 判定。
+  FastPathController::GetInstance().InitializeAtStartup(batch_scheduler_config, runtime_config, model_config);
 
   model_weight_ = std::make_shared<WeightInstance>(model_config, runtime_config, context_);
   ipc_func_wrapper_->SetWeightInstance(model_weight_);

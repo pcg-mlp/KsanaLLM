@@ -5,6 +5,10 @@
 #include "executor/model_builder.h"
 
 #include "profiler/profile_event.h"
+#include "runtime/fast_path_controller.h"
+#include "runtime/infer_stage.h"
+#include "utils/logger.h"
+#include "utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -67,7 +71,15 @@ void ModelBuilder::BuildForwardRequestFromInferRequest(ForwardRequest& forward_r
   forward_req.logits_offset = req_ptr->logits_offset;
   forward_req.request_target = std::make_shared<const decltype(req_ptr->request_target)>(req_ptr->request_target);
   forward_req.response = &req_ptr->response;
-  forward_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->forwarding_tokens);
+  // forwarding_tokens 绑定策略 (与 build_ahead 开关联动):
+  //   fast path: 深拷贝 — max_depth=2 时后续 schedule 会覆写 ExecutorInferRequest::forwarding_tokens,
+  //              已入队待 Forward 的 ForwardRequest 须与 live 向量隔离.
+  //   slow path: shared_ptr aliasing — 无并发 launch，无覆写风险。
+  if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+    forward_req.forwarding_tokens = std::make_shared<std::vector<int>>(req_ptr->forwarding_tokens);
+  } else {
+    forward_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->forwarding_tokens);
+  }
   forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
   forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
   forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
@@ -157,6 +169,7 @@ Status ModelBuilder::BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_ou
     ReorderInferRequests(model_input->schedule_output->executor_running_reqs);
   }
   BuildForwardRequests(model_input->schedule_output->executor_running_reqs, model_input->reqs);
+
   return Status();
 }
 

@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -35,8 +36,7 @@ size_t SelectEffectiveStepTokenNum(const RuntimeConfig& runtime_config,
 
 // 构造 decode-only buffer 缩减的日志文本，方便 ForwardingBuffers::Init 打印 & 单测校验。
 std::string FormatDecodeOnlyShrinkLog(const RuntimeConfig& runtime_config,
-                                      const BatchSchedulerConfig& batch_scheduler_config,
-                                      size_t effective_token_num);
+                                      const BatchSchedulerConfig& batch_scheduler_config, size_t effective_token_num);
 
 struct ForwardingBuffers {
   //  NOTE(karlluo): The following 4 buffers(3 different kinds) are used as temporary buffers during the whole model
@@ -91,13 +91,21 @@ class ForwardingContext {
             const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
             BufferManager* buffer_mgr, std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
 
-  void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
+  // 切换当前激活的 ModelInput 槽位（build-ahead 在 0/1 ping-pong，慢路径恒为 0）。
+  // 仅切 active_slot_，不做任何 device 操作；后续 GetModelInput() / UpdateBeforeForward 都基于该 slot。
+  void SetActiveModelInputSlot(size_t slot);
+
+  size_t GetActiveModelInputSlot() const { return active_slot_; }
+
+  // model_input_slot: 见 NewModelInput::slot_index 注释。slow path 默认 0。
+  void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
+                           size_t model_input_slot = 0, bool gpu_input_already_prepared = false);
+
+  // Preprocess 线程: 在 slot 对应 H2D stream 上完成 ParseFromRequests (与 Execute forward 重叠)。
+  void PrepareModelInputGpu(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
+                            size_t model_input_slot);
 
   void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
-
-  // Forwarder to ModelInput::EvictFinishedRequests; releases compressor slots for finished or
-  // recomputed requests. Safe for ranks that do not use CompressorMeta.
-  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
 
  public:
   ForwardingBuffers* GetForwardingBuffers() { return buffers_; }
@@ -108,9 +116,21 @@ class ForwardingContext {
 
   std::shared_ptr<ModelCommunicator>& GetModelCommunicator() { return model_communicator_; }
 
+  // Forwarder to ModelInput::EvictFinishedRequests; releases compressor slots for finished or
+  // recomputed requests.
+  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
+
   std::shared_ptr<ModelOutput>& GetModelOutput() { return model_output_; }
 
-  std::shared_ptr<ModelInput>& GetModelInput() { return model_input_; }
+  // 返回当前 active slot 对应的 ModelInput。
+  // 兼容旧调用: 不持有 slot 概念的代码会拿到 active_slot_ 所指的实例 (slow path 永远是 slot 0)。
+  std::shared_ptr<ModelInput>& GetModelInput() { return model_inputs_[active_slot_]; }
+
+  // 按 slot 显式获取，主要用于双 ModelInput 路径下的初始化/调试。
+  std::shared_ptr<ModelInput>& GetModelInput(size_t slot) { return model_inputs_[slot]; }
+
+  // 双 ModelInput 是否已分配（由 enable_executor_build_ahead 决定）。
+  bool HasDoubleModelInput() const { return model_inputs_[1] != nullptr; }
 
   std::shared_ptr<BaseModelCacheLayout>& GetBlockCacheLayout() { return block_cache_layout_; }
 
@@ -138,7 +158,12 @@ class ForwardingContext {
   std::shared_ptr<Context> context_;
 
   // The model input information.
-  std::shared_ptr<ModelInput> model_input_;
+  // 双 ModelInput：slot 0 为默认（慢路径唯一使用），slot 1 仅在 build-ahead 启用时分配。
+  // 物理隔离 device tensor, 不做 buffer 复用 (开发简洁优先, 可接受额外显存开销)。
+  std::array<std::shared_ptr<ModelInput>, 2> model_inputs_;
+
+  // 当前激活的 ModelInput 槽位编号。slow path 恒为 0。
+  size_t active_slot_ = 0;
 
   // The model output.
   std::shared_ptr<ModelOutput> model_output_;

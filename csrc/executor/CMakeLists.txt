@@ -39,3 +39,4 @@ set(EXECUTOR_TEST_DEPS executor batch_scheduler runtime device utils
 cpp_test(global_cache_put_worker_test
   SRCS ${PROJECT_SOURCE_DIR}/csrc/executor/global_cache_put_worker_test.cpp
   DEPS ${EXECUTOR_TEST_DEPS})
+

@@ -166,8 +166,24 @@ float* ModelInstance::GetLogitsPtr() { return model_instance_->GetLogitsPtr(); }
 
 Status ModelInstance::Forward(std::shared_ptr<BaseWeight> weight, InferStage stage,
                               std::vector<ForwardRequest>& forward_reqs, HiddenUnitDeviceBuffer* hidden_unit,
-                              RunMode run_mode) {
-  return model_instance_->Forward(weight, forward_reqs, hidden_unit, run_mode);
+                              RunMode run_mode, size_t model_input_slot, const int64_t* prev_ring_dev,
+                              bool gpu_input_already_prepared) {
+  return model_instance_->Forward(weight, forward_reqs, hidden_unit, run_mode, model_input_slot, prev_ring_dev,
+                                  gpu_input_already_prepared);
+}
+
+Status ModelInstance::PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
+                                           size_t model_input_slot) {
+  return model_instance_->PrepareModelInputGpu(forward_reqs, run_mode, model_input_slot);
+}
+
+void ModelInstance::GetCurBatchPairs(size_t model_input_slot, const int64_t** out_pairs_dev, int* out_batch_size) {
+  if (model_instance_ == nullptr) {
+    if (out_pairs_dev) *out_pairs_dev = nullptr;
+    if (out_batch_size) *out_batch_size = 0;
+    return;
+  }
+  model_instance_->GetCurBatchPairs(model_input_slot, out_pairs_dev, out_batch_size);
 }
 
 void ModelInstance::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {

@@ -43,8 +43,13 @@ class ExecutorRuntime {
 
   std::shared_ptr<GenerationController> GetGenerationController() { return generation_controller_; }
 
+  // 暴露 model_sampler，供 ModelRunner 在 build-ahead 同步路径（Forward→Sampling 同线程）使用。
+  std::shared_ptr<ModelSampler> GetModelSampler() const { return model_sampler_; }
+
   Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input,
                          const RunMode run_mode);
+  // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上 ParseFromRequests，与 Execute forward 重叠。
+  Status PrepareModelInputGpu(std::shared_ptr<NewModelInput> model_input);
   Status Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                  std::shared_ptr<NewModelOutput> model_output);
   Status Sampling(std::shared_ptr<NewModelOutput> model_output, std::shared_ptr<SamplingOutput> sampling_output);

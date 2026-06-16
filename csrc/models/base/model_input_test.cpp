@@ -81,7 +81,7 @@ class ModelInputTest : public testing::Test {
     RuntimeConfig runtime_config;
     env->GetRuntimeConfig(runtime_config);
     const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    std::string test_name = test_info->name();
+    const std::string test_name = test_info->name();
     if (test_name.find("PrepareFlashRotaryMlaFlexibleCacheTest") != std::string::npos) {
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
       runtime_config.enable_flexible_caching = true;

@@ -4,11 +4,16 @@
 
 #include "kernels/nvidia/basic_kernel_wrapper.h"
 
+#include <vector>
+
 #include "kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
 
 #include "device/device_types.h"
 #include "device/device_utils.h"
+#include "profiler/profile_event.h"
+#include "runtime/fast_path_controller.h"
+#include "utils/logger.h"
 
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
@@ -42,7 +47,6 @@
 #include "kernels/cast.h"
 
 #include "device/nvidia/cuda_utils.h"
-#include "utils/logger.h"
 #include "utils/search_status.h"
 
 namespace ksana_llm {
@@ -978,7 +982,18 @@ void CalcInputLogprobs(float* logits, float* temperatures, int vocab_size, int b
 template <typename T>
 Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
               void* buffer_ptr) {
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeArgMaxReduce(input, batch_size, vocab_size, result, stream.Get()));
+  (void)buffer_ptr;
+  const auto launch_argmax = [&]() {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeArgMaxReduce(input, batch_size, vocab_size, result, stream.Get()));
+  };
+
+  // build-ahead 路径增加 profiling；关闭时与基线一致，不包 scope。
+  if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+    PROFILE_EVENT_SCOPE(ArgMaxLaunch, "InvokeArgMaxReduce", 0);
+    launch_argmax();
+  } else {
+    launch_argmax();
+  }
   return Status();
 }
 

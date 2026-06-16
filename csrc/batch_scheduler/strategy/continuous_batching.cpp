@@ -253,9 +253,13 @@ bool ContinuousBatchingStrategy::ProcessAsyncStoppedRequest(std::shared_ptr<Infe
   if (it == batch_state_->async_stoped_reqs.end()) {
     return false;
   }
+  // build-ahead（max_depth=2）下 async stop 入队时可能仍有 inflight step，须等 drain 后再 SyncStop。
+  if (req->HasInflightTask()) {
+    KLLM_LOG_SCHEDULER << "Async stop deferred: req_id=" << req->req_id
+                       << " still has inflight (count=" << req->InflightCount() << ")";
+    return true;
+  }
   const auto &stop_info = it->second;
-
-  KLLM_CHECK(!req->HasInflightTask());
 
   KLLM_LOG_SCHEDULER << "Processing async stop request " << req->req_id;
   SyncStopRequest(req, stop_info.ret_status, stop_info.req_state);
@@ -286,8 +290,14 @@ bool ContinuousBatchingStrategy::ProcessAsyncRecomputeRequest(const std::shared_
     return false;
   }
 
+  // build-ahead（max_depth=2）下 preempt recompute 入队时可能仍有 inflight step，须等 drain 后再 SyncRecompute。
+  if (req->HasInflightTask()) {
+    KLLM_LOG_SCHEDULER << "Async recompute deferred: req_id=" << req->req_id
+                       << " still has inflight (count=" << req->InflightCount() << ")";
+    return true;
+  }
+
   if (!req->IsStopped()) {
-    KLLM_CHECK(!req->HasInflightTask());
     KLLM_LOG_SCHEDULER << "Processing async recompute request " << req->req_id;
     SyncRecomputeRequest(req);
   }

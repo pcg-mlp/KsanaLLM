@@ -328,6 +328,10 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   batch_scheduler_config_.enable_async =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_async", false);
 
+  // Executor 端 build-ahead + device 侧 token 替换总开关（默认关闭）。
+  batch_scheduler_config_.enable_executor_build_ahead = yaml_reader.GetScalar<bool>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_executor_build_ahead", false);
+
   // Parse ADP Balance Strategy configuration
   batch_scheduler_config_.attention_dp_lb_config.enable_balance = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.batch_scheduler.attention_dp_lb_config.enable_balance", false);
@@ -860,6 +864,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.max_chunked_kv_tokens = batch_scheduler_config_.max_chunked_kv_tokens;
   runtime_config_.mtp_step_num = batch_scheduler_config_.mtp_step_num;
   runtime_config_.enable_async = batch_scheduler_config_.enable_async;
+  runtime_config_.enable_executor_build_ahead = batch_scheduler_config_.enable_executor_build_ahead;
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
 
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);

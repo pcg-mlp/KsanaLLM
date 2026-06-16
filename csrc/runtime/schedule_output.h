@@ -16,22 +16,56 @@
 
 namespace ksana_llm {
 
+struct SwapReqBlockInfo {
+  std::vector<int> dev_block_ids;
+  std::vector<int> host_block_ids;
+};
+
+// Launch 时刻的 req 字段快照, 用于消除 LaunchPlanningTask 与异步 IPC 序列化之间的竞争.
+//
+// 背景: max_depth=2 时 schedule N+1 可在 N 的 IPC 发出前 launch, N+1 会修改 req->forwarding_tokens 等字段;
+//       若序列化仍读 live req->*, Executor 收到的 step N 数据会被 N+1 污染 (末位 placeholder/长度错位).
+// 用法: LaunchScheduleOutput 在持有 schedule_mutex_ 时深拷贝; SerializeScheduleOutput 优先读 snapshot.
+// slow path (max_depth=1) 虽无并发 launch, 同样走 snapshot 以保持路径统一且结果等价.
+struct InferRequestSerializationSnapshot {
+  std::vector<int> forwarding_tokens;
+  size_t kv_cached_token_num = 0;
+  size_t forwarding_tokens_draft_num = 0;
+  size_t sampling_token_num = 0;
+  std::vector<int> kv_cache_blocks;
+  std::vector<int> swa_kv_cache_blocks;
+  std::vector<size_t> swa_kv_cache_block_idx_offsets;
+  int prefix_cache_len = 0;
+  int step = 0;
+  // patch_transfer 由 ModelDriver::SetInferRequestTransferMode 决策; 相邻 schedule_id 会覆写 req->patch_transfer,
+  // 故序列化读 snapshot 而非 live 字段, 避免 prefill 首步误走 patch 路径.
+  bool patch_transfer = false;
+  bool patch_transfer_populated = false;
+};
+
 // The scheduler output of every step.
 struct ScheduleOutput {
   // Make it empty again, but keep runing reqs, called only on master node.
   void ResetDataForWorkers() {
     finish_req_ids.clear();
     recompute_req_ids.clear();
+    merged_swapout_req_ids.clear();
+    merged_swapin_req_ids.clear();
+    swapout_req_block_ids.clear();
+    swapin_req_block_ids.clear();
     structured_generator_configs.clear();
     need_create_generator_req_ids.clear();
+    req_serialization_snapshots.clear();
   }
 
-  bool IsLaunchable() {
-    for (auto req : running_reqs) {
+  // 检查 batch 内每个活跃 req 是否还能再 push 一个 inflight task.
+  // max_depth=1: 要求 inflight_count_==0 (slow path); max_depth=2: 允许 inflight_count_<=1 (fast path).
+  bool IsLaunchable(size_t max_depth = 1) const {
+    for (const auto& req : running_reqs) {
       if (req->IsStopped()) {
         continue;
       }
-      if (req->HasInflightTask()) {
+      if (!req->HasInflightCapacity(max_depth)) {
         return false;
       }
     }
@@ -44,14 +78,28 @@ struct ScheduleOutput {
     }
   }
 
-  // Try to launch schedule output if all running reqs do not have infight task.
-  void LaunchScheduleOutput() {
-    if (!IsLaunchable()) {
+  // 将 planning_task 推入各 req 的 inflight 队列并构造 forwarding_tokens.
+  // 若 req 已有在飞 step (HasInflightTask), 末位写 placeholder, 真实 token 由 Executor ReplaceKernel 回填;
+  // 否则直接 append generated_tokens (slow path 或 fast path 首步).
+  void LaunchScheduleOutput(size_t max_depth = 1) {
+    if (!IsLaunchable(max_depth)) {
       return;
     }
     for (const auto& req : running_reqs) {
       if (req->IsStopped()) continue;  // request may be finished in async mode.
-      req->LaunchPlanningTask();
+      const bool use_placeholder_for_last_token = req->HasInflightTask();
+      req->LaunchPlanningTask(use_placeholder_for_last_token);
+      // 在 schedule_mutex_ 保护下固化易竞态字段, 供后续异步 IPC 序列化使用 (见 InferRequestSerializationSnapshot).
+      auto& snap = req_serialization_snapshots[req->req_id];
+      snap.forwarding_tokens = req->forwarding_tokens;
+      snap.kv_cached_token_num = req->kv_cached_token_num;
+      snap.forwarding_tokens_draft_num = req->forwarding_tokens_draft_num;
+      snap.sampling_token_num = req->sampling_token_num;
+      snap.kv_cache_blocks = req->kv_cache_blocks;
+      snap.swa_kv_cache_blocks = req->swa_kv_cache_blocks;
+      snap.swa_kv_cache_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
+      snap.prefix_cache_len = req->prefix_cache_len;
+      snap.step = req->step;
     }
   }
 
@@ -75,6 +123,14 @@ struct ScheduleOutput {
   // recompute requests, should transfer the full struct.
   std::vector<std::vector<int64_t>> recompute_req_ids;
 
+  // NOTE(karlluo): merged requests ids, outer vector is for attention data parallelism.
+  std::vector<std::vector<int64_t>> merged_swapout_req_ids;
+  std::vector<std::vector<int64_t>> merged_swapin_req_ids;
+
+  // NOTE(karlluo): swapped requests ids, outer vector is for attention data parallelism.
+  std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>> swapout_req_block_ids;
+  std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>> swapin_req_block_ids;
+
   // running, for master node.
   std::vector<std::shared_ptr<InferRequest>> running_reqs;
 
@@ -90,6 +146,10 @@ struct ScheduleOutput {
 
   // Request IDs that need to create generators on Executor side
   std::unordered_set<int64_t> need_create_generator_req_ids;
+
+  // req_id → Launch 时刻快照 (见 InferRequestSerializationSnapshot).
+  // 仅 Engine 主进程填充; Executor 反序列化得到的 ScheduleOutput 中此 map 为空.
+  std::unordered_map<int64_t, InferRequestSerializationSnapshot> req_serialization_snapshots;
 };
 
 struct ScheduleOutputGroup {

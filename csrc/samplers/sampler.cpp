@@ -4,14 +4,18 @@
 
 #ifdef ENABLE_CUDA
 #  include <curand_kernel.h>
+#  include <nccl.h>
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/copy_elements.cuh"
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/decoding_common.h"
+#  include "device/nvidia/nccl_utils.h"
 #  include "kernels/nvidia/kernel_wrapper.h"
+#  include "layers/nvidia/replace_last_token.h"
 #endif
 
 #include "device/common_device.h"
 #include "device/device_utils.h"
 #include "profiler/profile_event.h"
+#include "runtime/fast_path_controller.h"
 #include "samplers/sampler.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
@@ -72,6 +76,38 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
   host_output_tokens_.resize(max_logits_num);
 
   topk_sampling_ = new TopkSampling(max_logits_num, batch_scheduler_config.max_vocab_size, device_curandstates_);
+
+  // build-ahead slot 1 buffer：仅 FastPathController 启动期 gate 通过时预分配。
+  if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+    AlignedMemoryQueue slot1_queue(kCudaMemAlignmentSize, [this](const size_t size) {
+      Malloc(&device_buffer_slot1_, size);
+      return device_buffer_slot1_;
+    });
+    slot1_queue.Add(device_output_tokens_slot1_, max_logits_num);
+    slot1_queue.Add(device_output_tokens_ptrs_slot1_, max_logits_num);
+    slot1_queue.AllocateAndAlign();
+
+    // Initialize slot1 device_output_tokens_ptrs (each ptr -> &device_output_tokens_slot1_[i]).
+    std::vector<uint32_t*> slot1_ptrs_host(max_logits_num);
+    iota(slot1_ptrs_host.begin(), slot1_ptrs_host.end(), device_output_tokens_slot1_);
+    MemcpyAsync(device_output_tokens_ptrs_slot1_, slot1_ptrs_host.data(),
+                sizeof(decltype(slot1_ptrs_host)::value_type) * slot1_ptrs_host.size(), MEMCPY_HOST_TO_DEVICE,
+                context_->device->GetH2DStream());
+
+    host_output_tokens_slot1_.resize(max_logits_num);
+    KLLM_LOG_INFO << "Sampler rank=" << rank_ << " allocated slot1 buffer (fast path enabled).";
+
+    // 分配双 slot 配对 ring buffer（int64）：[count, (req_id, token) * max_batch_size]。
+    // 初始化 count=0；首步即使误触 ReplaceKernel 也循环零次，placeholder 不变。
+    device_ring_capacity_ = 1 + 2 * batch_schedule_config_.max_batch_size;
+    const size_t ring_bytes = device_ring_capacity_ * sizeof(int64_t);
+    Malloc(reinterpret_cast<void**>(&device_ring_slot0_), ring_bytes);
+    Malloc(reinterpret_cast<void**>(&device_ring_slot1_), ring_bytes);
+    MemsetAsync(device_ring_slot0_, 0, ring_bytes, context_->device->GetH2DStream());
+    MemsetAsync(device_ring_slot1_, 0, ring_bytes, context_->device->GetH2DStream());
+    KLLM_LOG_INFO << "Sampler rank=" << rank_ << " allocated fast-path pair ring (cap=" << device_ring_capacity_
+                  << " int64 each slot).";
+  }
 }
 
 Sampler::~Sampler() {
@@ -83,6 +119,20 @@ Sampler::~Sampler() {
   if (device_buffer_ != nullptr) {
     Free(device_buffer_);
     device_buffer_ = nullptr;
+  }
+  // 释放 build-ahead slot 1 buffer（仅总开关打开时分配）。
+  if (device_buffer_slot1_ != nullptr) {
+    Free(device_buffer_slot1_);
+    device_buffer_slot1_ = nullptr;
+  }
+  // 释放 build-ahead 配对 ring buffer。
+  if (device_ring_slot0_ != nullptr) {
+    Free(device_ring_slot0_);
+    device_ring_slot0_ = nullptr;
+  }
+  if (device_ring_slot1_ != nullptr) {
+    Free(device_ring_slot1_);
+    device_ring_slot1_ = nullptr;
   }
 }
 
@@ -214,8 +264,48 @@ void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
   BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
 
+void Sampler::WriteRing(size_t slot, const int64_t* cur_pairs, int batch_size, Stream& stream) {
+  // 调用方 (ModelRunner::WriteBuildAheadRingAfterSampling) 仅在 build-ahead 启用时进入此函数。
+  // ring slot / device_output_tokens_slot1_ 必须已在构造函数按相同条件分配——任一缺失即配置不一致, hard fail.
+  // batch_size==0 是合法情况 (kernel 内 count=0, 仅写头部置零), 不视作错误.
+  int64_t* ring = GetRingSlot(slot);
+  KLLM_CHECK_WITH_INFO(
+      ring != nullptr,
+      fmt::format("Sampler::WriteRing slot {} ring not allocated (build_ahead config mismatch).", slot));
+  KLLM_CHECK_WITH_INFO(batch_size >= 0, fmt::format("Sampler::WriteRing got negative batch_size={}.", batch_size));
+  KLLM_CHECK_WITH_INFO(static_cast<size_t>(1 + 2 * batch_size) <= device_ring_capacity_,
+                       fmt::format("Sampler::WriteRing batch_size={} exceeds ring capacity={} (max_batch_size).",
+                                   batch_size, device_ring_capacity_));
+#ifdef ENABLE_CUDA
+  // sampling 输出在 device_output_tokens_<slot>; ring 与 sampling 用相同 slot, 写入即固化本步 (req_id, token).
+  uint32_t* sampled_tokens = GetDeviceOutputTokens(slot);
+  KLLM_CHECK_WITH_INFO(sampled_tokens != nullptr,
+                       fmt::format("Sampler::WriteRing slot {} output buffer is null.", slot));
+  LaunchWriteRingKernel(ring, cur_pairs, sampled_tokens, batch_size, stream.Get());
+#endif
+}
+
+void Sampler::BroadcastRingSlot(size_t slot, Stream& stream) {
+  if (device_ring_capacity_ == 0) {
+    return;
+  }
+  const size_t tp_size = context_->global->GetTensorParallelSize();
+  if (tp_size <= 1) {
+    return;
+  }
+#ifdef ENABLE_CUDA
+  int64_t* ring = GetRingSlot(slot);
+  KLLM_CHECK_WITH_INFO(
+      ring != nullptr,
+      fmt::format("Sampler::BroadcastRingSlot slot {} ring not allocated (build_ahead config mismatch).", slot));
+  // 固定广播整槽容量，避免按 B_cur 变长；rank 0 为 root（与 SelectTopkTokens / NCCL comm 一致）。
+  NCCL_CHECK(ncclBroadcast(ring, ring, device_ring_capacity_, ncclInt64, /*root=*/0,
+                           context_->device->ext->GetNCCLParam().nccl_comm, stream.Get()));
+#endif
+}
+
 void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
-                                        std::vector<std::vector<float>>& probs_output, Stream& stream) {
+                                        std::vector<std::vector<float>>& probs_output, Stream& stream, size_t slot) {
   PROFILE_EVENT_SCOPE(sampler_copy_probs_total, "Exec.Sampler.CopyProbsOutputToRequests.Total");
   auto copy_probs_after_synchronize = CopyProbsOutput(sampling_reqs, stream, probs_output);
   {
@@ -223,11 +313,12 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
     StreamSynchronize(stream);
   }
   copy_probs_after_synchronize();
+  // 根据 slot 选用对应的 host_output_tokens (slot 1 未分配时回落 slot 0).
+  std::vector<int>& host_out_tokens = GetHostOutputTokens(slot);
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
     auto& req = sampling_reqs[i];
-    req.sampling_result_tokens->insert(req.sampling_result_tokens->end(),
-                                       host_output_tokens_.begin() + req.logits_offset,
-                                       host_output_tokens_.begin() + req.logits_offset + req.sampling_token_num);
+    req.sampling_result_tokens->insert(req.sampling_result_tokens->end(), host_out_tokens.begin() + req.logits_offset,
+                                       host_out_tokens.begin() + req.logits_offset + req.sampling_token_num);
     if (req.request_target != nullptr) {
       auto it = req.request_target->find("logits");
       if (it != req.request_target->end()) {
@@ -247,7 +338,10 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
 }
 
 Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
-                                        SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
+                                        SamplingDeviceParameter& sampling_device_parameter, Stream& stream,
+                                        size_t /*slot*/) {
+  // 当前实现内部并未直接读写 device_output_tokens, 故 slot 仅用于接口对齐 (PrepareDeviceLogitsAndParameter
+  // 已通过 sampling_device_parameter.device_output_tokens_ptrs 间接选定 slot 的 buffer).
   if (rank_ != 0) {
     return Status();
   }
@@ -342,12 +436,14 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
 
 // Transfer sampling parameters to the device
 void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use_temperature,
-                                        SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
+                                        SamplingDeviceParameter& sampling_device_parameter, Stream& stream,
+                                        size_t slot) {
   if (use_top_k) {
     MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_device_parameter.bs, MEMCPY_HOST_TO_DEVICE,
                 stream);
     sampling_device_parameter.device_topKs = device_topKs_;
-    sampling_device_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
+    // 根据 slot 选用 device_output_tokens_ptrs (slot 1 未分配时回落 slot 0).
+    sampling_device_parameter.device_output_tokens_ptrs = GetDeviceOutputTokensPtrs(slot);
     sampling_device_parameter.device_curandstates = device_curandstates_;
   }
   if (use_top_p) {
@@ -364,7 +460,7 @@ void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use
 
 Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
                                                 SamplingDeviceParameter& sampling_device_parameter,
-                                                float*& device_logits, Stream& stream) {
+                                                float*& device_logits, Stream& stream, size_t slot) {
   PROFILE_EVENT_SCOPE(PrepareDeviceLogitsAndParameter, "PrepareDeviceLogitsAndParameter", rank_);
   bool use_top_k = false;
   bool use_top_p = false;
@@ -444,38 +540,53 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
   // top_p and temperature are applyed on the logits after softmax.
   sampling_device_parameter.logits_softmax |= use_top_p | use_temperature;
   sampling_device_parameter.logits_softmax &= (sampling_device_parameter.max_input_top_logprobs_num == 0);
-  SamplingParameterToDevice(use_top_k, use_top_p, use_temperature, sampling_device_parameter, stream);
+  SamplingParameterToDevice(use_top_k, use_top_p, use_temperature, sampling_device_parameter, stream, slot);
   return Status();
 }
 void Sampler::SelectTopkTokens(const SamplingDeviceParameter& sampling_device_parameter, float* const device_logits,
-                               Stream& stream) {
+                               Stream& stream, size_t slot) {
   if (!sampling_device_parameter.do_sampling) {
     return;
   }
 
-  if (rank_ == 0) {
-    STATUS_CHECK_FAILURE(topk_sampling_->Forward(device_logits, device_output_tokens_, nullptr,
-                                                 sampling_device_parameter, nullptr, stream));
-  }
+  const auto run_select = [&]() {
+    // 根据 slot 选用对应的 device/host buffer (slot 1 未分配时回落 slot 0).
+    uint32_t* dev_out_tokens = GetDeviceOutputTokens(slot);
+    std::vector<int>& host_out_tokens = GetHostOutputTokens(slot);
+
+    if (rank_ == 0) {
+      STATUS_CHECK_FAILURE(
+          topk_sampling_->Forward(device_logits, dev_out_tokens, nullptr, sampling_device_parameter, nullptr, stream));
+    }
 
 #ifdef ENABLE_CUDA
-  if (context_->global->GetTensorParallelSize() > 1 && context_->global->GetMtpStepNum() > 0) {
-    NCCL_CHECK(ncclBroadcast(device_output_tokens_, device_output_tokens_, sampling_device_parameter.bs, ncclUint32, 0,
-                             context_->device->ext->GetNCCLParam().nccl_comm, stream.Get()));
-  }
+    if (context_->global->GetTensorParallelSize() > 1 && context_->global->GetMtpStepNum() > 0) {
+      NCCL_CHECK(ncclBroadcast(dev_out_tokens, dev_out_tokens, sampling_device_parameter.bs, ncclUint32, 0,
+                               context_->device->ext->GetNCCLParam().nccl_comm, stream.Get()));
+    }
 #endif
 
-  MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_device_parameter.bs,
-              MEMCPY_DEVICE_TO_HOST, stream);
+    // D2H 在 PrimaryComputeStream 上异步完成; host 可读由 CopyProbsOutputToRequests 内 StreamSynchronize 保证.
+    MemcpyAsync(host_out_tokens.data(), dev_out_tokens, sizeof(uint32_t) * sampling_device_parameter.bs,
+                MEMCPY_DEVICE_TO_HOST, stream);
+  };
+
+  if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+    PROFILE_EVENT_SCOPE(SelectTopkTokens_, fmt::format("SelectTopkTokens_slot{}", slot), rank_);
+    run_select();
+  } else {
+    run_select();
+  }
 }
 
-Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
+Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream, size_t slot) {
   PROFILE_EVENT_SCOPE(Sampling_, fmt::format("Sampling_{}", rank_), rank_);
   float* device_logits = nullptr;
   SamplingDeviceParameter sampling_device_parameter;
-  STATUS_CHECK_RETURN(PrepareDeviceLogitsAndParameter(sampling_reqs, sampling_device_parameter, device_logits, stream));
+  STATUS_CHECK_RETURN(
+      PrepareDeviceLogitsAndParameter(sampling_reqs, sampling_device_parameter, device_logits, stream, slot));
 
-  SamplingAndCalcLogprobs(sampling_reqs, device_logits, sampling_device_parameter, stream);
+  SamplingAndCalcLogprobs(sampling_reqs, device_logits, sampling_device_parameter, stream, slot);
 
   // Apply grammar mask after logits processing
   ApplyGrammarMask(sampling_reqs, device_logits, sampling_device_parameter, stream);
@@ -524,10 +635,10 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
     }
   }
 
-  SelectTopkTokens(sampling_device_parameter, device_logits, stream);
+  SelectTopkTokens(sampling_device_parameter, device_logits, stream, slot);
 
   std::vector<std::vector<float>> probs_output(sampling_reqs.size());
-  CopyProbsOutputToRequests(sampling_reqs, probs_output, stream);
+  CopyProbsOutputToRequests(sampling_reqs, probs_output, stream, slot);
 
   // Update grammar state after sampling
   UpdateGrammarState(sampling_reqs);

@@ -5,6 +5,7 @@
 #include "batch_scheduler/schedule_processor.h"
 
 #include "batch_scheduler/schedule_output_process.h"
+#include "runtime/infer_request.h"
 #include "utils/logger.h"
 
 namespace ksana_llm {
@@ -51,8 +52,13 @@ void ScheduleProcessor::UpdateWithGenerationResult(const GenerationOutputGroup& 
     if (planning_sched_results_[multi_batch_id] != nullptr) {
       std::shared_ptr<ScheduleResult> result = planning_sched_results_[multi_batch_id];
       std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
-      KLLM_CHECK(
-          batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs));
+      bool launched =
+          batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs);
+      // launch 被拒绝时保留 planning_sched_results_, 等下一次 generation 回流后重试.
+      // 典型场景: pipeline 已满, 或 fast path 下某 req 仍有 inflight 暂不可 launch.
+      if (!launched) {
+        return;
+      }
       if (!result->schedule_output->running_reqs.empty()) {
         KLLM_LOG_SCHEDULER << "Put result running_reqs size=" << result->schedule_output->running_reqs.size();
         ProcessScheduleDataInternal(multi_batch_id, *result);

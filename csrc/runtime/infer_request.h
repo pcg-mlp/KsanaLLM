@@ -3,7 +3,8 @@
 ==============================================================================*/
 #pragma once
 
-#include <atomic>
+#include <array>
+#include <deque>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -229,6 +230,9 @@ class InferRequest {
   // data parallel id of this request.
   uint32_t attn_dp_group_id = 0;
 
+  // This is a unique ID for the KV transformer group.
+  int64_t kv_comm_request_id = 0;
+
   // This key for kv transformer group.
   std::string kv_comm_group_key;
 
@@ -285,6 +289,9 @@ class InferRequest {
   // The offset for model forward's logits output.
   size_t logits_offset = 0;
 
+  // Whether the current req is in pending status of swappiness.
+  bool swap_pending = false;
+
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 
@@ -321,19 +328,30 @@ class InferRequest {
   void ResetPrefillingTokens();
 
   const std::vector<int> &GetPrefillingTokens() const { return prefilling_tokens_; }
-  const ScheduleTask &GetInflightTask() const { return inflight_task_; }
+  // 返回 oldest（最先 launched / 最先回流）的 inflight task。
+  // 慢路径（深度 1）与原行为一致；build-ahead（深度 2）时即队首 inflight。
+  const ScheduleTask &GetInflightTask() const { return inflight_tasks_[0]; }
   const ScheduleTaskWorkload &GetRemainingWorkload() const { return remaining_workload_; }
   const ScheduleTaskWorkload &GetPlanningWorkload() const { return planning_workload_; }
 
-  bool HasInflightTask() const { return !inflight_task_.IsEmpty(); }
+  // 是否还有 inflight task（慢路径等价于队列非空）。
+  bool HasInflightTask() const { return inflight_count_ > 0; }
+  // 是否还能再容纳一个 inflight task（inflight_count_ < max_depth）。
+  // 慢路径传 max_depth=1；build-ahead 传 max_depth=2。
+  bool HasInflightCapacity(size_t max_depth) const { return inflight_count_ < max_depth; }
+  // 当前 inflight 个数（0/1/2），供 BatchScheduler 流水线深度统计。
+  size_t InflightCount() const { return inflight_count_; }
   bool HasPlanningTask() const { return !planning_task_.IsEmpty(); }
 
   // Returns true if the inflight task is a split-fuse prefill step that does NOT cover all remaining
   // prefilling tokens (i.e., there are more prefill chunks to come).
+  // 检查 oldest inflight 是否为 split-fuse prefill 中间步；build-ahead 稳态下 prefill 已收敛，通常不触发。
   bool IsSplitPrefillStep() const {
-    return inflight_task_.workload.prefill_token_num > 0 &&
-           (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset <
-            prefilling_tokens_.size());
+    if (inflight_count_ == 0) {
+      return false;
+    }
+    const auto &wl = inflight_tasks_[0].workload;
+    return wl.prefill_token_num > 0 && (wl.prefill_token_num + wl.prefill_start_offset < prefilling_tokens_.size());
   }
 
   void SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num);
@@ -342,13 +360,24 @@ class InferRequest {
   void SetPlanningWorkload(const ScheduleTaskWorkload &workload);
   void SetPlanningTask();
 
-  void ResetInflightTask() { inflight_task_.Reset(); }
+  // retire 队首（oldest）inflight task，FIFO 滑动后续 task；慢路径等价于清空唯一 inflight。
+  void ResetInflightTask();
 
   void UpdateAfterInflightTaskFinished();
 
   bool IsEosGenerated() const { return is_eos_generated_; }
 
-  void LaunchPlanningTask();
+  // 把当前 planning_task_ launch 为 inflight；按 inflight_count_ 写入对应 slot。
+  // use_placeholder_for_last_token=true（build-ahead 深度 2 的第二次 launch）：末位 generated_token 用占位符，
+  // 位置记入 pending_placeholder_positions_，oldest retire 时回填真实值。慢路径不传第二参数即可。
+  void LaunchPlanningTask(bool use_placeholder_for_last_token = false);
+
+  // forwarding_tokens 末位占位 token id（-1，便于与合法 vocab id 区分）。Executor ReplaceLastTokenKernel 必然覆盖。
+  // 复用 infer_stage.h 共享常量，Engine / Executor 两侧一致。
+  static constexpr int kFastPathPlaceholderTokenId = ::ksana_llm::kFastPathPlaceholderTokenId;
+  // 同时存在 inflight 的硬上限，与 BatchScheduler build-ahead 的 max_depth=2 对齐。
+  // FastPathController 启用 → 深度 2；禁用 → 实际只用 1。
+  static constexpr size_t kMaxInflightDepth = 2;
 
   // 将全局 cache 命中的生成 token(s) 追加到 output_tokens 和 prefilling_tokens_，
   // 供全命中后直接进入 decode 时使用（支持 MTP 多 token）。
@@ -363,9 +392,19 @@ class InferRequest {
  private:
   bool is_stopped_ = false;
   std::vector<int> prefilling_tokens_;
-  ScheduleTask inflight_task_;
+
+  // inflight tasks 队列（深度上限 kMaxInflightDepth=2）；慢路径只用 [0]。
+  // [0]=oldest（最先 launched/retire），[1]=newest（深度 2 时存在）。
+  // 与原 inflight_task_ 字段等价：GetInflightTask() 返回 [0]，ResetInflightTask() 弹出 [0] 并滑动 [1]。
+  std::array<ScheduleTask, kMaxInflightDepth> inflight_tasks_;
+  size_t inflight_count_ = 0;
+  // 兼容字段（历史声明，暂未使用）；保留以便后续估算分摊到 oldest inflight。
   size_t inflight_task_estimated_generated_token_num_ = 0;
   size_t inflight_task_estimated_draft_token_num_ = 0;
+
+  // 与 placeholder launch 的 inflight task 对应的 forwarding_tokens 末位下标（FIFO，大小 <= 1）。
+  // UpdateAfterInflightTaskFinished 在 oldest retire 时用 generated_tokens 回填。慢路径为空 deque，零开销。
+  std::deque<size_t> pending_placeholder_positions_;
 
   ScheduleTask planning_task_;
   ScheduleTaskWorkload planning_workload_;

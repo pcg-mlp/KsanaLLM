@@ -20,6 +20,9 @@ class ModelSampler {
 
   Status Sampling(std::shared_ptr<NewModelOutput> model_output, std::shared_ptr<SamplingOutput> sampling_output);
 
+  // 暴露 Sampler 实例，供 build-ahead 同步路径使用（ModelRunner::HandleExecute 取上一步 ring slot 的 device 指针）。
+  std::shared_ptr<Sampler> GetSampler() const { return sampler_; }
+
  private:
   // Build sampling request.
   void BuildSamplingRequest(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,

@@ -36,11 +36,21 @@ void DeviceContextT<T>::InitStreams() {
   dist_recv_comm_stream_ = std::make_shared<Stream>();
 
   h2d_stream_ = std::make_shared<Stream>();
+  h2d_stream_slots_[0] = std::make_shared<Stream>();
+  h2d_stream_slots_[1] = std::make_shared<Stream>();
   d2h_stream_ = std::make_shared<Stream>();
   d2d_stream_ = std::make_shared<Stream>();
 
   // Create event for multi-stream parallel synchronization.
   EventCreateWithFlags(&compute_sync_event_, EVENT_DISABLE_TIMING);
+}
+
+template <int T>
+Stream& DeviceContextT<T>::GetH2DStreamForSlot(size_t slot) {
+  if (dual_h2d_streams_enabled_) {
+    return *h2d_stream_slots_[slot % h2d_stream_slots_.size()];
+  }
+  return *h2d_stream_;
 }
 
 template <int T>
@@ -54,6 +64,8 @@ void DeviceContextT<T>::ClearStreams() {
   dist_recv_comm_stream_.reset();
 
   h2d_stream_.reset();
+  h2d_stream_slots_[0].reset();
+  h2d_stream_slots_[1].reset();
   d2h_stream_.reset();
   d2d_stream_.reset();
 }

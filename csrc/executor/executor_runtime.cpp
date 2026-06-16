@@ -161,6 +161,21 @@ Status ExecutorRuntime::BuildModelInput(std::shared_ptr<ScheduleOutput> schedule
   return model_builder_->BuildModelInput(schedule_output, model_input, run_mode);
 }
 
+Status ExecutorRuntime::PrepareModelInputGpu(std::shared_ptr<NewModelInput> model_input) {
+  if (model_instance_ == nullptr || model_input == nullptr) {
+    return Status(RET_INVALID_ARGUMENT, "PrepareModelInputGpu invalid argument.");
+  }
+  if (!context_->device->IsDualH2DStreamsEnabled()) {
+    return Status();
+  }
+  Status status =
+      model_instance_->PrepareModelInputGpu(model_input->reqs, model_input->run_mode, model_input->slot_index);
+  if (status.OK()) {
+    model_input->gpu_input_ready = true;
+  }
+  return status;
+}
+
 Status ExecutorRuntime::Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                                 std::shared_ptr<NewModelOutput> model_output) {
   // Serialize the main forward (RunMode::kMain) against the previous iteration's MtpForward

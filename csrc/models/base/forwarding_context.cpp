@@ -4,6 +4,7 @@
 
 #include "models/base/forwarding_context.h"
 
+#include "runtime/fast_path_controller.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {
@@ -307,7 +308,16 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
   attn_ctx_.forward_shape = forward_shape_buffer->GetTensors()[0];
 
   block_cache_layout_ = block_cache_layout;
-  model_input_ = std::make_shared<ModelInput>(model_config, runtime_config, rank_, context_, block_cache_layout_);
+  // slot 0：始终分配，慢路径与 build-ahead 偶数步共用。
+  model_inputs_[0] = std::make_shared<ModelInput>(model_config, runtime_config, rank_, context_, block_cache_layout_);
+
+  // slot 1：仅 FastPathController 启动期 gate 通过时分配；slot 间物理隔离，不复用 buffer。
+  if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+    model_inputs_[1] = std::make_shared<ModelInput>(model_config, runtime_config, rank_, context_, block_cache_layout_);
+    context_->device->EnableDualH2DStreams(true);
+    KLLM_LOG_INFO << "ForwardingContext rank=" << rank_ << " allocated dual ModelInput + dual H2D streams (fast path).";
+  }
+  active_slot_ = 0;
 
   attn_ctx_.flag_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_BOOL, {1});
 
@@ -328,39 +338,79 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
 }
 
 void ForwardingContext::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
-  if (model_input_) {
-    model_input_->EvictFinishedRequests(finished_req_ids);
+  for (auto& model_input : model_inputs_) {
+    if (model_input) {
+      model_input->EvictFinishedRequests(finished_req_ids);
+    }
   }
 }
 
-void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+void ForwardingContext::SetActiveModelInputSlot(size_t slot) {
+  KLLM_CHECK_WITH_INFO(slot < model_inputs_.size(),
+                       fmt::format("Invalid ModelInput slot {} (max {}).", slot, model_inputs_.size()));
+  KLLM_CHECK_WITH_INFO(model_inputs_[slot] != nullptr,
+                       fmt::format("ModelInput slot {} is not allocated (fast path likely disabled).", slot));
+  active_slot_ = slot;
+}
+
+void ForwardingContext::PrepareModelInputGpu(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
+                                             size_t model_input_slot) {
+  // build-ahead 启用时可传 slot=1；slot 未分配时 hard fail，避免 silent skip。
+  KLLM_CHECK_WITH_INFO(
+      model_input_slot < model_inputs_.size(),
+      fmt::format("PrepareModelInputGpu invalid slot {} (max {}).", model_input_slot, model_inputs_.size()));
+  KLLM_CHECK_WITH_INFO(
+      model_inputs_[model_input_slot] != nullptr,
+      fmt::format("PrepareModelInputGpu slot {} not allocated (enable_executor_build_ahead config mismatch).",
+                  model_input_slot));
+  model_inputs_[model_input_slot]->SetParseSlot(model_input_slot);
+  model_inputs_[model_input_slot]->ParseFromRequests(forward_reqs, run_mode);
+}
+
+void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
+                                            size_t model_input_slot, bool gpu_input_already_prepared) {
   PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
 
-  model_input_->ParseFromRequests(forward_reqs, run_mode);
+  // 慢路径 model_input_slot 恒为 0；build-ahead 传入实际 slot。
+  // slot 1 须在构造函数按相同条件分配，缺失即配置不一致，hard fail。
+  KLLM_CHECK_WITH_INFO(
+      model_input_slot < model_inputs_.size(),
+      fmt::format("UpdateBeforeForward invalid slot {} (max {}).", model_input_slot, model_inputs_.size()));
+  KLLM_CHECK_WITH_INFO(
+      model_inputs_[model_input_slot] != nullptr,
+      fmt::format("UpdateBeforeForward slot {} not allocated (enable_executor_build_ahead config mismatch).",
+                  model_input_slot));
+  active_slot_ = model_input_slot;
+  auto& model_input = model_inputs_[active_slot_];
+
+  if (!gpu_input_already_prepared) {
+    model_input->SetParseSlot(model_input_slot);
+    model_input->ParseFromRequests(forward_reqs, run_mode);
+  }
 
   // create forward shape tensor
   attn_ctx_.forward_shape.shape = {
-      model_input_->multi_token_request_num,          // request num use flash_attention kernel
-      model_input_->multi_token_request_max_tokens,   // max request tokens of request that use flash_attention kernel
-      model_input_->context_kv_cache_block_num,       // total kv cache block num that use flash_attention kernel
-      model_input_->single_token_request_num,         // request num use page_attention kernel
-      model_input_->single_token_request_max_tokens,  // max request tokens of request that use page_attention kernel
-      model_input_->decode_kv_cache_block_num,        // total kv cache block num that use page_attention kernel
-      model_input_->dp_max_forwarding_tokens,         // used for blocked_prefill
-      model_input_->dp_multi_token_request_num,
-      model_input_->dp_multi_token_request_max_tokens,
-      model_input_->dp_single_token_request_num,
-      model_input_->dp_single_token_request_max_tokens,
-      model_input_->dp_total_prefix_len,
-      model_input_->dp_decode_tokens};  // total decode token count (may differ from single_token_request_num in MTP)
+      model_input->multi_token_request_num,          // request num use flash_attention kernel
+      model_input->multi_token_request_max_tokens,   // max request tokens of request that use flash_attention kernel
+      model_input->context_kv_cache_block_num,       // total kv cache block num that use flash_attention kernel
+      model_input->single_token_request_num,         // request num use page_attention kernel
+      model_input->single_token_request_max_tokens,  // max request tokens of request that use page_attention kernel
+      model_input->decode_kv_cache_block_num,        // total kv cache block num that use page_attention kernel
+      model_input->dp_max_forwarding_tokens,         // used for blocked_prefill
+      model_input->dp_multi_token_request_num,
+      model_input->dp_multi_token_request_max_tokens,
+      model_input->dp_single_token_request_num,
+      model_input->dp_single_token_request_max_tokens,
+      model_input->dp_total_prefix_len,
+      model_input->dp_decode_tokens};  // total decode token count (may differ from single_token_request_num in MTP)
 #ifdef ENABLE_ACL
   attn_ctx_.forward_shape.shape = {
-      std::max(model_input_->multi_token_request_num, model_input_->single_token_request_num),
-      std::max(model_input_->multi_token_request_max_tokens, model_input_->single_token_request_max_tokens),
-      model_input_->context_kv_cache_block_num + model_input_->decode_kv_cache_block_num};
+      std::max(model_input->multi_token_request_num, model_input->single_token_request_num),
+      std::max(model_input->multi_token_request_max_tokens, model_input->single_token_request_max_tokens),
+      model_input->context_kv_cache_block_num + model_input->decode_kv_cache_block_num};
 #endif
   // Pass the `use_cache` flag to `flag_tensor_`.
-  attn_ctx_.flag_tensor.template GetPtr<bool>()[0] = model_input_->use_cache;
+  attn_ctx_.flag_tensor.template GetPtr<bool>()[0] = model_input->use_cache;
 }
 
 void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs) {

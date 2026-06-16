@@ -31,6 +31,9 @@ class ModelInput {
   // Parse forward request.
   void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
+  // build-ahead: 指定本 step 使用的 ModelInput slot，H2D 走对应 slot stream。
+  void SetParseSlot(size_t slot) { parse_slot_ = slot; }
+
   // Release the per-request state held by optional meta modules (currently only CompressorMeta) for
   // requests that have finished or are being recomputed. Safe to call with an empty list or with
   // req_ids unknown to this rank.
@@ -115,6 +118,11 @@ class ModelInput {
 
   // The input ids, int32
   Tensor input_ids;
+
+  // 本步 batch 的 (req_id, last_token_offset) 配对 tensor（int64，容量 2 * max_batch_size）。
+  // ReplaceLastTokenKernel 作查询键，WriteRingKernel 取 req_id（offset 部分忽略）。
+  // 慢路径不 launch 读它的 kernel，但 PrepareInputIds 仍 fill 一次 H2D 以简化分支。
+  Tensor cur_batch_pairs_tensor;
 
   // The ids offset tensor, uint64
   Tensor input_offset_uint64_tensor;
@@ -258,6 +266,13 @@ class ModelInput {
 
   // for nextn layer(MTP), record each req's first token index in hidden output
   std::unordered_map<size_t, size_t> mtp_req_id_to_pos_;
+
+  // host 侧缓冲，与 cur_batch_pairs_tensor 一一对应，layout [req_id_0, offset_0, ...]。
+  std::vector<int64_t> cur_batch_pairs_cpu_;
+
+  // ParseFromRequests 期间使用的 slot (决定 GetParseH2DStream).
+  size_t parse_slot_ = 0;
+  Stream& GetParseH2DStream();
 
   // Builders that construct flash_meta / page_metas for each forward step.
   // Initialized in the constructor with the standard implementations;

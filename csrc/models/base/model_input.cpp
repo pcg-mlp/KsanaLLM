@@ -15,9 +15,12 @@
 #include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
 #include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_builder.h"
 #include "profiler/profile_event.h"
+#include "runtime/fast_path_controller.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {
+
+Stream& ModelInput::GetParseH2DStream() { return context_->device->GetH2DStreamForSlot(parse_slot_); }
 
 ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                        std::shared_ptr<Context> context, std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
@@ -94,6 +97,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   KLLM_LOG_INFO << "max_table_block_num: " << max_table_block_num;
 
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
+  cur_batch_pairs_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {2 * max_batch_size});
   input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
   dp_input_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
   dp_input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
@@ -910,7 +914,15 @@ void ModelInput::PrepareDecode() {
 
 void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs) {
   PROFILE_EVENT_SCOPE(PrepareInputIds, "PrepareInputIds", rank_);
+  BatchSchedulerConfig batch_scheduler_config;
+  Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
+  const bool fill_cur_batch_pairs = FastPathController::GetInstance().IsEnabledAtStartup();
+
   input_ids_cpu.clear();
+  cur_batch_pairs_cpu_.clear();
+  if (fill_cur_batch_pairs) {
+    cur_batch_pairs_cpu_.reserve(2 * forward_reqs.size());
+  }
   input_offset_list_uint64.assign(1, 0);
   input_prefix_list_uint64.assign(1, 0);
   dp_input_prefix_list_uint64.assign(1, 0);
@@ -941,6 +953,12 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
                    << req.prefix_cache_len;
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
+    // build-ahead: 记录该 req 末位 token 在 flat input_ids 中的下标，供 Replace/WriteRing kernel 使用。
+    if (fill_cur_batch_pairs && input_ids_len > 0) {
+      const int64_t last_offset = static_cast<int64_t>(input_ids_cpu.size() - 1);
+      cur_batch_pairs_cpu_.push_back(req.req_id);
+      cur_batch_pairs_cpu_.push_back(last_offset);
+    }
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);
     dp_input_ids_lens[req.attn_dp_group_id] += input_ids_len;
     input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_length);
@@ -994,13 +1012,24 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   input_ids.dtype = TYPE_INT32;
   MemcpyAsync(input_ids.GetPtr<void>(), input_ids_cpu.data(),
               input_ids_cpu.size() * sizeof(decltype(input_ids_cpu)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
+              GetParseH2DStream());
+
+  if (fill_cur_batch_pairs) {
+    cur_batch_pairs_tensor.shape = {cur_batch_pairs_cpu_.size()};
+    cur_batch_pairs_tensor.dtype = TYPE_INT64;
+    if (!cur_batch_pairs_cpu_.empty()) {
+      MemcpyAsync(cur_batch_pairs_tensor.GetPtr<void>(), cur_batch_pairs_cpu_.data(),
+                  cur_batch_pairs_cpu_.size() * sizeof(int64_t), MEMCPY_HOST_TO_DEVICE, GetParseH2DStream());
+    }
+  } else {
+    cur_batch_pairs_tensor.shape = {0};
+  }
 
   logits_idx_uint64_tensor.shape = {logits_idx_list.size()};
   logits_idx_uint64_tensor.dtype = TYPE_UINT64;
   MemcpyAsync(logits_idx_uint64_tensor.GetPtr<void>(), logits_idx_list.data(),
               logits_idx_list.size() * sizeof(decltype(logits_idx_list)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
+              GetParseH2DStream());
 
   dp_prefill_q_offset_uint64_host.shape = {forward_reqs.size() + 1};
   dp_prefill_q_offset_uint64_tensor.shape = {dp_prefill_q_offset_uint64_host.shape[0]};
@@ -1039,10 +1068,10 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   }
   KLLM_LOG_DEBUG << "attn_dp_group_offsets_ " << attn_dp_group_offsets_;
 
-  EventRecord(input_ids_event, context_->device->GetH2DStream());
+  EventRecord(input_ids_event, GetParseH2DStream());
 #ifdef ENABLE_ACL
   // Event wait between streams seems not work, force sync here.
-  StreamSynchronize(context_->device->GetH2DStream());
+  StreamSynchronize(GetParseH2DStream());
 #endif
 }
 

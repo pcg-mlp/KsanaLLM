@@ -15,6 +15,7 @@
 #include "kernels/argmax.h"
 
 namespace ksana_llm {
+
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandState* device_curandstates)
     : BaseSampling(max_batch_size, max_vocab_size) {
 #ifdef ENABLE_CUDA

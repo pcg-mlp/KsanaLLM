@@ -227,7 +227,7 @@ void InferRequest::AppendCachedTokens(const std::vector<int> &tokens) {
 }
 
 void InferRequest::SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num) {
-  KLLM_CHECK(!inflight_task_.IsEmpty());
+  KLLM_CHECK(inflight_count_ > 0);
   planning_workload_.generated_token_num = generated_token_num;
   planning_workload_.draft_token_num = draft_token_num;
   remaining_workload_.generated_token_num = generated_token_num;
@@ -253,6 +253,25 @@ void InferRequest::SetPlanningTask() {
 }
 
 void InferRequest::UpdateAfterInflightTaskFinished() {
+  KLLM_CHECK(inflight_count_ > 0);
+  const ScheduleTask &oldest_inflight = inflight_tasks_[0];
+
+  // fast path 深度 2 下, step N 产出 EOS 后仍可能已 launch step N+1 (占位步).
+  // 丢弃该多余 step 的 token, 并同步 pop placeholder 队列, 避免 inflight 与 placeholder 长度失配.
+  // slow path 在 EOS 后 inflight 立即归零, 不会进入此分支.
+  if (is_eos_generated_) {
+    generated_tokens.clear();
+    accepted_tokens.clear();
+    draft_tokens.clear();
+    if (!pending_placeholder_positions_.empty()) {
+      pending_placeholder_positions_.pop_front();
+    }
+    return;
+  }
+
+  // placeholder 回填后需清空 generated_tokens, 防止下次 LaunchPlanningTask 重复 append (见函数末尾).
+  bool fast_path_placeholder_consumed = false;
+
   // If task is prefill task and not the last step, drop draft_tokens.
   // generated_tokens should be empty.
   if (IsSplitPrefillStep()) {
@@ -262,11 +281,21 @@ void InferRequest::UpdateAfterInflightTaskFinished() {
     infer_stage = InferStage::kDecode;
 
     output_mutex.lock();
-    if (inflight_task_.workload.draft_token_num > 0) {
+    if (oldest_inflight.workload.draft_token_num > 0) {
       // replace draft tokens with accepted tokens.
       forwarding_tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num + accepted_tokens.size());
       output_tokens.insert(output_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
       accepted_tokens.clear();
+    }
+
+    // fast path: launch 时写入的 placeholder 对应「下一 inflight step」的末位;
+    // 本函数 retire 的是 oldest inflight, 用其 generated_tokens[0] 回填 placeholder.
+    if (!pending_placeholder_positions_.empty() && !generated_tokens.empty()) {
+      const size_t pos = pending_placeholder_positions_.front();
+      pending_placeholder_positions_.pop_front();
+      KLLM_CHECK_WITH_INFO(pos < forwarding_tokens.size(), "Placeholder pos out of range" + ScheduleStateToStr());
+      forwarding_tokens[pos] = generated_tokens[0];
+      fast_path_placeholder_consumed = true;
     }
 
     // append new tokens to output_tokens
@@ -301,69 +330,118 @@ void InferRequest::UpdateAfterInflightTaskFinished() {
     planning_workload_.generated_token_num = generated_tokens.size();
     planning_workload_.draft_token_num = draft_tokens.size();
   }
+
+  // generated_tokens[0] 已写入 forwarding_tokens 对应位置, 须 clear:
+  // 否则下次 LaunchPlanningTask 会再次 append, 与 device 侧 ReplaceKernel 时序冲突导致 token 错乱.
+  if (fast_path_placeholder_consumed) {
+    generated_tokens.clear();
+  }
 }
 
-void InferRequest::LaunchPlanningTask() {
+void InferRequest::ResetInflightTask() {
+  // 队首 oldest inflight retire 后左滑队列; slow path (inflight_count_=1) 语义与原单槽 inflight_task_ 一致.
+  if (inflight_count_ == 0) {
+    return;
+  }
+  for (size_t i = 0; i + 1 < inflight_count_; ++i) {
+    inflight_tasks_[i] = inflight_tasks_[i + 1];
+  }
+  inflight_tasks_[inflight_count_ - 1].Reset();
+  --inflight_count_;
+  // pending_placeholder_positions_ 在 UpdateAfterInflightTaskFinished 中随 oldest retire 一并 pop, 此处不处理.
+}
+
+void InferRequest::LaunchPlanningTask(bool use_placeholder_for_last_token) {
   KLLM_CHECK_WITH_INFO(!planning_task_.IsEmpty(), "No planning_task" + ScheduleStateToStr());
-  KLLM_CHECK_WITH_INFO(inflight_task_.IsEmpty(), "Has inflight_task" + ScheduleStateToStr());
+  // inflight 容量由 BatchScheduler 的 max_depth 约束 (slow=1, fast=2).
+  // placeholder 仅当已有在飞 step: 其真实末位 token 尚未经 IPC 回到 Engine.
+  KLLM_CHECK_WITH_INFO(inflight_count_ < kMaxInflightDepth, "Inflight full" + ScheduleStateToStr());
+  if (use_placeholder_for_last_token) {
+    KLLM_CHECK_WITH_INFO(inflight_count_ > 0, "Placeholder launch requires existing inflight" + ScheduleStateToStr());
+  }
   assert(planning_task_.workload.GetTokenNum() > 0);
 
-  inflight_task_ = planning_task_;
+  // 选取要写入的 inflight slot.
+  ScheduleTask &new_inflight = inflight_tasks_[inflight_count_];
+  new_inflight = planning_task_;
   planning_task_.Reset();
   SetKvCachedTokenNum(forwarding_tokens.size());
-  if (inflight_task_.workload.prefill_token_num > 0) {
+  if (new_inflight.workload.prefill_token_num > 0) {
     size_t forwarded_token_num = forwarding_tokens.size();
-    if (forwarded_token_num == inflight_task_.workload.prefill_start_offset) {
+    if (forwarded_token_num == new_inflight.workload.prefill_start_offset) {
       forwarding_tokens.insert(
           forwarding_tokens.end(), prefilling_tokens_.begin() + forwarded_token_num,
-          prefilling_tokens_.begin() + forwarded_token_num + inflight_task_.workload.prefill_token_num);
+          prefilling_tokens_.begin() + forwarded_token_num + new_inflight.workload.prefill_token_num);
     } else {
       // Prefix cache hit
       forwarding_tokens.assign(prefilling_tokens_.begin(), prefilling_tokens_.begin() +
-                                                               inflight_task_.workload.prefill_start_offset +
-                                                               inflight_task_.workload.prefill_token_num);
-      SetKvCachedTokenNum(inflight_task_.workload.prefill_start_offset);
+                                                               new_inflight.workload.prefill_start_offset +
+                                                               new_inflight.workload.prefill_token_num);
+      SetKvCachedTokenNum(new_inflight.workload.prefill_start_offset);
     }
 
-    // Append draft tokens at the last step of prefill
+    // 末步 prefill 追加 draft; IsSplitPrefillStep 读 oldest inflight (slow path 下即本次新 push 的 task).
     if (!IsSplitPrefillStep()) {
       const std::vector<int> &all_draft_tokens = draft_tokens.GetDraftTokens();
       const size_t draft_token_num = all_draft_tokens.size();
       forwarding_tokens.insert(forwarding_tokens.end(), all_draft_tokens.begin(), all_draft_tokens.end());
-      inflight_task_.workload.draft_token_num = draft_token_num;
-      inflight_task_.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
+      new_inflight.workload.draft_token_num = draft_token_num;
+      new_inflight.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
     }
   } else {
     auto merged_draft_tokens = draft_tokens.GetDraftTokens();
-    size_t resource_ready_token_num =
-        inflight_task_.workload.generated_token_num + inflight_task_.workload.draft_token_num;
+    size_t resource_ready_token_num = new_inflight.workload.generated_token_num + new_inflight.workload.draft_token_num;
     KLLM_CHECK(generated_tokens.size() <= resource_ready_token_num);
-    forwarding_tokens.insert(forwarding_tokens.end(), generated_tokens.begin(), generated_tokens.end());
 
-    resource_ready_token_num -= generated_tokens.size();
+    // decode 末位 token 语义:
+    //   slow path — generated_tokens 已由上一步 IPC 回流, 直接 append;
+    //   fast path — 上一步采样结果尚在 device, Engine 用 placeholder 占位, Executor ReplaceKernel 回填.
+    // 当前版本 kStepGenerateTokenNum=1 (FastPathController 启动期约束), placeholder 仅占 1 位.
+    size_t effective_generated_num = generated_tokens.size();
+    if (use_placeholder_for_last_token) {
+      KLLM_CHECK_WITH_INFO(generated_tokens.size() <= 1,
+                           "Fast path placeholder currently only supports kStepGenerateTokenNum=1, generated_tokens>1" +
+                               ScheduleStateToStr());
+      if (generated_tokens.empty()) {
+        forwarding_tokens.push_back(kFastPathPlaceholderTokenId);
+        pending_placeholder_positions_.push_back(forwarding_tokens.size() - 1);
+        effective_generated_num = 1;  // workload 按 1 个 generated token 计
+      } else {
+        // 防御: 已有真实 token 时优先使用 (正常 fast path 流水线不应走到此分支).
+        forwarding_tokens.insert(forwarding_tokens.end(), generated_tokens.begin(), generated_tokens.end());
+      }
+    } else {
+      forwarding_tokens.insert(forwarding_tokens.end(), generated_tokens.begin(), generated_tokens.end());
+    }
+
+    // 资源 budget 用 effective_generated_num (placeholder 计 1, slow path 用 generated_tokens.size).
+    resource_ready_token_num -= effective_generated_num;
     size_t draft_token_num = std::min(resource_ready_token_num, merged_draft_tokens.size());
     forwarding_tokens.insert(forwarding_tokens.end(), merged_draft_tokens.begin(),
                              merged_draft_tokens.begin() + draft_token_num);
 
-    // Change inflight_task_ workload to real workload
-    inflight_task_.workload.generated_token_num = generated_tokens.size();
-    inflight_task_.workload.draft_token_num = draft_token_num;
-    inflight_task_.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
+    // Change new_inflight workload to real workload
+    // fast path placeholder 时 effective_generated_num=1 (代表 forward 处理 1 个 slot, 与 slow path 等价).
+    new_inflight.workload.generated_token_num = effective_generated_num;
+    new_inflight.workload.draft_token_num = draft_token_num;
+    new_inflight.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
     if (draft_token_num < merged_draft_tokens.size()) {
       draft_tokens.TruncDraft(draft_token_num);
     }
   }
-  sampling_token_num = inflight_task_.workload.sampling_token_num;
-  forwarding_tokens_draft_num = inflight_task_.workload.draft_token_num;
+  sampling_token_num = new_inflight.workload.sampling_token_num;
+  forwarding_tokens_draft_num = new_inflight.workload.draft_token_num;
+  ++inflight_count_;
   KLLM_LOG_SCHEDULER << ScheduleStateToStr();
-  assert(inflight_task_.workload.GetTokenNum() > 0);
+  assert(new_inflight.workload.GetTokenNum() > 0);
   assert(forwarding_tokens.size() > kv_cached_token_num);
 }
 
 std::string InferRequest::ScheduleStateToStr() const {
   std::stringstream ss;
   ss << " schedule_state={ req_id=" << req_id << ", is_stopped=" << is_stopped_
-     << ", inflight_task_=" << inflight_task_.workload.ToString()
+     << ", inflight_count_=" << inflight_count_ << ", inflight_tasks_[0]=" << inflight_tasks_[0].workload.ToString()
+     << ", inflight_tasks_[1]=" << inflight_tasks_[1].workload.ToString()
      << ", planning_task_=" << planning_task_.workload.ToString()
      << ", remaining_workload_=" << remaining_workload_.ToString()
      << ", planning_workload_= " << planning_workload_.ToString()

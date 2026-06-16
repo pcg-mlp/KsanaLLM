@@ -147,9 +147,11 @@ struct PlanningBatch {
   // Get total running request count across all dp batches.
   size_t GetRunningReqNum() const { return running_req_num; }
 
-  // Fast launchability check without copying running_reqs into ScheduleOutput.
-  // Equivalent to ScheduleOutput::IsLaunchable().
-  bool IsLaunchable() const {
+  // 快速可 launch 判定，不拷贝 running_reqs 到 ScheduleOutput；语义同 ScheduleOutput::IsLaunchable(max_depth)。
+  // max_depth=1（慢路径）: 任一 req 有 inflight 即不可 launch；
+  // max_depth=2（build-ahead）: 允许 inflight_count_<2 的 req 继续 launch。
+  // EventDrivenScheduler 尚未接入 build-ahead，保留默认值 max_depth=1 即可向后兼容。
+  bool IsLaunchable(size_t max_depth = 1) const {
     if (running_req_num == 0) {
       return false;
     }
@@ -160,7 +162,7 @@ struct PlanningBatch {
         if (req->IsStopped()) {
           continue;
         }
-        if (req->HasInflightTask()) {
+        if (!req->HasInflightCapacity(max_depth)) {
           return false;
         }
       }

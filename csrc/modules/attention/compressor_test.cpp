@@ -76,12 +76,12 @@ class CompressorTestModel : public CommonModel {
 
   // Drive Compressor.Forward end-to-end on a batch of forward requests.
   Status RunCompressor(const std::vector<ForwardRequest>& forward_reqs) {
-    forwarding_context_->model_input_->ParseFromRequests(forward_reqs);
+    forwarding_context_->GetModelInput()->ParseFromRequests(forward_reqs);
 
     // Build hidden states input [T, hidden_units] in BF16 with deterministic pseudo values.
     const size_t hidden_units = model_config_.hidden_units;
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->buffers_->hidden_buffer_0);
-    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0], hidden_units};
+    hidden_buffer_tensors_0[0].shape = {forwarding_context_->GetModelInput()->input_ids.shape[0], hidden_units};
     hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
 
     std::vector<bfloat16> input_bf16;
@@ -107,7 +107,7 @@ class CompressorTestModel : public CommonModel {
 
     // Output shape sanity: [total_tokens, head_dim]
     EXPECT_EQ(kv_compressed_output_tensor_.shape.size(), 2u);
-    EXPECT_EQ(kv_compressed_output_tensor_.shape[0], forwarding_context_->model_input_->input_ids.shape[0]);
+    EXPECT_EQ(kv_compressed_output_tensor_.shape[0], forwarding_context_->GetModelInput()->input_ids.shape[0]);
     EXPECT_EQ(kv_compressed_output_tensor_.shape[1], model_config_.size_per_head);
 
     // Verify a few output values are finite (not NaN / Inf).

@@ -162,30 +162,22 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
   Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                          const bool is_multi_token_forward, const std::vector<ForwardRequest>& forward_reqs) {
-    forwarding_context_->model_input_->ParseFromRequests(forward_reqs);
+    // ForwardingContext 改为按 active slot 持有 ModelInput; 单测通过 GetModelInput() 访问当前 slot.
+    auto& mi = forwarding_context_->GetModelInput();
+    mi->ParseFromRequests(forward_reqs);
 
     // create forward shape tensor
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {
-        forwarding_context_->model_input_->multi_token_request_num,
-        forwarding_context_->model_input_->multi_token_request_max_tokens,
-        forwarding_context_->model_input_->context_kv_cache_block_num,
-        forwarding_context_->model_input_->single_token_request_num,
-        forwarding_context_->model_input_->single_token_request_max_tokens,
-        forwarding_context_->model_input_->decode_kv_cache_block_num,
-        forwarding_context_->model_input_->dp_max_forwarding_tokens,
-        forwarding_context_->model_input_->dp_multi_token_request_num,
-        forwarding_context_->model_input_->dp_multi_token_request_max_tokens,
-        forwarding_context_->model_input_->dp_single_token_request_num,
-        forwarding_context_->model_input_->dp_single_token_request_max_tokens,
-        forwarding_context_->model_input_->dp_total_prefix_len};
+        mi->multi_token_request_num,     mi->multi_token_request_max_tokens,     mi->context_kv_cache_block_num,
+        mi->single_token_request_num,    mi->single_token_request_max_tokens,    mi->decode_kv_cache_block_num,
+        mi->dp_max_forwarding_tokens,    mi->dp_multi_token_request_num,         mi->dp_multi_token_request_max_tokens,
+        mi->dp_single_token_request_num, mi->dp_single_token_request_max_tokens, mi->dp_total_prefix_len};
 
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->buffers_->hidden_buffer_0);
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context_->buffers_->shared_buffer);
 
-    forwarding_context_->GetAttentionForwardContext().flag_tensor.template GetPtr<bool>()[0] =
-        forwarding_context_->model_input_->use_cache;
-    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0],
-                                        model_config_.hidden_units};
+    forwarding_context_->GetAttentionForwardContext().flag_tensor.template GetPtr<bool>()[0] = mi->use_cache;
+    hidden_buffer_tensors_0[0].shape = {mi->input_ids.shape[0], model_config_.hidden_units};
     hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
     std::vector<float> input_data;
     input_data.reserve(hidden_buffer_tensors_0[0].GetElementNumber());
@@ -221,7 +213,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
         // Prefill phase (no prefix cache for DSA test)
         // The numerical difference here is due to sparse mla applies weight absorption for prefill tokens,
         // while in this test, weights w_uk_t/w_uv and kv_b_nope_proj/v_head_proj are not equivalent
-        if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+        if (forwarding_context_->GetModelInput()->dp_total_prefix_len == 0) {
           if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_DS_MLA) {
             output = {1416, 65.5, -1248, -2672, 856, -692};
           } else {
@@ -231,19 +223,19 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
           output = {604, 880, 374, -474, 134, -708};
         }
       } else if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
-        if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+        if (forwarding_context_->GetModelInput()->dp_total_prefix_len == 0) {
           output = {-1984, 2096, -3392, 784, 117.5, -564};
         } else {
           output = {346, 588, -1008, 764, -648, 936};
         }
       } else if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_DS_MLA) {
-        if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+        if (forwarding_context_->GetModelInput()->dp_total_prefix_len == 0) {
           output = {-1976, 2096, -3392, 776, 126, -576};
         } else {
           output = {318, 632, -1032, 756, -672, 924};
         }
       } else {
-        if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+        if (forwarding_context_->GetModelInput()->dp_total_prefix_len == 0) {
           output = {-1977, 2088, -3386, 772.5, 125.75, -575.5};
         } else {
           output = {349, 585, -1004, 759, -643.5, 928};

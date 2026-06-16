@@ -231,4 +231,187 @@ TEST_F(InferRequestTest, IsSplitPrefillStep_SingleStepPrefill) {
   EXPECT_FALSE(req->IsSplitPrefillStep());
 }
 
+// =============================================================================
+// build-ahead inflight 深度与 placeholder 单测
+// -----------------------------------------------------------------------------
+// 共享 helper：让 req 进入 decode 稳态（prefill 已 retire，inflight_count_=0），
+// 之后可 SetupInflightDecodeTask + LaunchPlanningTask(use_placeholder=true) 模拟深度 2 push。
+// =============================================================================
+static std::shared_ptr<InferRequest> EnterDecodeSteadyState(InferRequestTest* fixture, int first_decoded_token) {
+  auto req = fixture->CreateInferRequest({1, 2, 3});
+  req->output_tokens = {1, 2, 3};
+  req->ResetPrefillingTokens();
+  // 一步 prefill 完成
+  fixture->SetupInflightPrefillTask(req, /*prefill_token_num=*/3, /*prefill_start_offset=*/0);
+  req->generated_tokens = {first_decoded_token};
+  req->UpdateAfterInflightTaskFinished();
+  req->ResetInflightTask();
+  EXPECT_EQ(req->infer_stage, InferStage::kDecode);
+  EXPECT_EQ(req->InflightCount(), 0u);
+  return req;
+}
+
+// 首步 decode launch（无 inflight）不应写 placeholder，直接 append generated_tokens。
+TEST_F(InferRequestTest, FastPath_FirstDecodeLaunchNoPlaceholder) {
+  auto req = EnterDecodeSteadyState(this, /*first_decoded_token=*/10);
+  ASSERT_EQ(req->InflightCount(), 0u);
+
+  req->generated_tokens = {88};
+  SetupInflightDecodeTask(req, /*generated_token_num=*/1, /*draft_token_num=*/0);
+  ASSERT_EQ(req->InflightCount(), 1u);
+  EXPECT_EQ(req->forwarding_tokens.back(), 88);
+  EXPECT_NE(req->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+}
+
+// placeholder 回填后 generated_tokens 必须清空，避免下次 launch 重复 append。
+TEST_F(InferRequestTest, FastPath_PlaceholderBackfillClearsGeneratedTokens) {
+  auto req = EnterDecodeSteadyState(this, /*first_decoded_token=*/10);
+  SetupInflightDecodeTask(req, 1, 0);
+
+  req->generated_tokens.clear();
+  ScheduleTaskWorkload wl;
+  wl.generated_token_num = 1;
+  wl.draft_token_num = 0;
+  wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask(/*use_placeholder_for_last_token=*/true);
+
+  req->generated_tokens = {66};
+  req->UpdateAfterInflightTaskFinished();
+  EXPECT_TRUE(req->generated_tokens.empty());
+}
+
+// ResetInflightTask 按 FIFO 弹出 oldest inflight（深度 2 时 [0] retire 后 [1] 滑到 [0]）。
+TEST_F(InferRequestTest, FastPath_ResetInflightTaskFifoOrder) {
+  auto req = EnterDecodeSteadyState(this, /*first_decoded_token=*/10);
+  SetupInflightDecodeTask(req, 1, 0);
+
+  req->generated_tokens.clear();
+  ScheduleTaskWorkload wl;
+  wl.generated_token_num = 1;
+  wl.draft_token_num = 0;
+  wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask(/*use_placeholder_for_last_token=*/true);
+  ASSERT_EQ(req->InflightCount(), 2u);
+
+  req->ResetInflightTask();
+  EXPECT_EQ(req->InflightCount(), 1u);
+  // 剩余 inflight 为 placeholder 步（step A 尚未 UpdateAfterInflightTaskFinished）
+  EXPECT_EQ(req->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+}
+
+// HasInflightCapacity：深度 2 下精确放行 1 步，第 2 步（N+2 须等 N 返回）必须被拦截。
+TEST_F(InferRequestTest, FastPath_HasInflightCapacityRespectsMaxDepth) {
+  auto req = EnterDecodeSteadyState(this, /*first_decoded_token=*/10);
+  // step k launched (slow path 风格, 不打 placeholder)
+  SetupInflightDecodeTask(req, /*generated_token_num=*/1, /*draft_token_num=*/0);
+  ASSERT_EQ(req->InflightCount(), 1u);
+
+  // slow path 视角: 已无 capacity (max_depth=1)
+  EXPECT_FALSE(req->HasInflightCapacity(1));
+  // build-ahead 视角：还能再 push 1 个（max_depth=2）
+  EXPECT_TRUE(req->HasInflightCapacity(2));
+
+  // step k+1 以 placeholder launch（深度 2 第二次 launch）。
+  // 真实场景：plan 阶段已 clear generated_tokens，step k 仍在 inflight、Tk 未回 Engine，故走 placeholder 路径。
+  req->generated_tokens.clear();
+  ScheduleTaskWorkload wl;
+  wl.generated_token_num = 1;
+  wl.draft_token_num = 0;
+  wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask(/*use_placeholder_for_last_token=*/true);
+
+  ASSERT_EQ(req->InflightCount(), 2u);
+  // 深度 2 下 capacity 已用完，N+2 须等 N retire 才能 launch
+  EXPECT_FALSE(req->HasInflightCapacity(2));
+}
+
+// LaunchPlanningTask(use_placeholder=true)：末尾写占位符并记录位置；
+// UpdateAfterInflightTaskFinished 用真实 generated_token 回填，验证替换不变量。
+TEST_F(InferRequestTest, FastPath_LaunchPlaceholderThenReplaceOnRetire) {
+  auto req = EnterDecodeSteadyState(this, /*first_decoded_token=*/10);
+  // step k launched: forwarding_tokens 末尾是真实 token 10 (来自 prefill retire)
+  SetupInflightDecodeTask(req, /*generated_token_num=*/1, /*draft_token_num=*/0);
+  ASSERT_EQ(req->InflightCount(), 1u);
+  ASSERT_EQ(req->forwarding_tokens.back(), 10);
+
+  // step k+1 launched with PLACEHOLDER (T_k 未回).
+  // 模拟 ScheduleProcessor 已经 clear generated_tokens (此时 step k 真实 token 还没回 Engine).
+  req->generated_tokens.clear();
+  ScheduleTaskWorkload wl;
+  wl.generated_token_num = 1;
+  wl.draft_token_num = 0;
+  wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask(/*use_placeholder_for_last_token=*/true);
+
+  // forwarding_tokens 末尾应是 kFastPathPlaceholderTokenId
+  ASSERT_EQ(req->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+  const size_t placeholder_pos = req->forwarding_tokens.size() - 1;
+
+  // step k IPC 回来: 真实 Tk = 55
+  req->generated_tokens = {55};
+  req->UpdateAfterInflightTaskFinished();
+
+  // placeholder 已经被替换为 55
+  EXPECT_EQ(req->forwarding_tokens[placeholder_pos], 55);
+
+  // retire oldest, inflight 滑动: 2 → 1
+  req->ResetInflightTask();
+  EXPECT_EQ(req->InflightCount(), 1u);
+}
+
+// build-ahead 下 step N 产出 EOS 后，N+1 占位步必须丢弃，不写 output_tokens、不回填 placeholder。
+TEST_F(InferRequestTest, FastPath_EosDropsExtraStep) {
+  const int eos = 999;
+  auto req = CreateInferRequest({1, 2, 3}, /*stop_token_ids=*/{eos});
+  req->output_tokens = {1, 2, 3};
+  req->ResetPrefillingTokens();
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/3, /*prefill_start_offset=*/0);
+  req->generated_tokens = {10};
+  req->UpdateAfterInflightTaskFinished();
+  req->ResetInflightTask();
+
+  // step k launched (decode, 真实 token=10 在末位)
+  SetupInflightDecodeTask(req, 1, 0);
+  ASSERT_EQ(req->InflightCount(), 1u);
+
+  // step k+1 launched with PLACEHOLDER. 模拟 ScheduleProcessor 已 clear generated_tokens.
+  req->generated_tokens.clear();
+  ScheduleTaskWorkload wl;
+  wl.generated_token_num = 1;
+  wl.draft_token_num = 0;
+  wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask(/*use_placeholder_for_last_token=*/true);
+  ASSERT_EQ(req->InflightCount(), 2u);
+
+  // step k retire: 真实 Tk = EOS
+  req->generated_tokens = {eos};
+  size_t output_before = req->output_tokens.size();
+  req->UpdateAfterInflightTaskFinished();
+  req->ResetInflightTask();
+  EXPECT_TRUE(req->IsEosGenerated());
+  EXPECT_EQ(req->output_tokens.back(), eos);
+  EXPECT_EQ(req->output_tokens.size(), output_before + 1);
+
+  // step k+1 retire: 应丢弃 (即使 generated_tokens 有值)
+  req->generated_tokens = {12345};
+  size_t output_before2 = req->output_tokens.size();
+  size_t fwd_before2 = req->forwarding_tokens.size();
+  req->UpdateAfterInflightTaskFinished();
+  req->ResetInflightTask();
+  EXPECT_EQ(req->InflightCount(), 0u);
+  // EOS 多算一步: output_tokens 不变, forwarding_tokens 不再被推进
+  EXPECT_EQ(req->output_tokens.size(), output_before2);
+  EXPECT_EQ(req->forwarding_tokens.size(), fwd_before2);
+}
+
 }  // namespace ksana_llm

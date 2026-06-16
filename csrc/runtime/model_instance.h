@@ -47,8 +47,18 @@ class ModelInstance {
   std::string name;
   std::string type;
 
+  // model_input_slot: 见 NewModelInput::slot_index 注释；slow path 默认 0。
+  // prev_ring_dev: 见 NewModelInput::prev_ring_dev 注释；非 nullptr 即触发 ReplaceLastTokenKernel (slow path 默认
+  // nullptr)。
   Status Forward(std::shared_ptr<BaseWeight> weight, InferStage stage, std::vector<ForwardRequest>& forward_reqs,
-                 HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode);
+                 HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode, size_t model_input_slot = 0,
+                 const int64_t* prev_ring_dev = nullptr, bool gpu_input_already_prepared = false);
+
+  Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode, size_t model_input_slot);
+
+  // 取本步 slot 对应 ModelInput 的 cur_batch_pairs_tensor 设备指针 + batch_size，
+  // 供 ModelExecutor::Forward 完成后透传到 NewModelOutput（WriteRing / ReplaceKernel 使用）。
+  void GetCurBatchPairs(size_t model_input_slot, const int64_t** out_pairs_dev, int* out_batch_size);
 
   // Release per-request state held by optional forward-meta modules (currently CompressorMeta) for
   // requests that have finished or are being recomputed. No-op when no underlying model is loaded

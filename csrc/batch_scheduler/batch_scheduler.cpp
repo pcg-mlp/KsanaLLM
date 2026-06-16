@@ -6,12 +6,10 @@
 
 #include <algorithm>
 #include <chrono>
-#include <ctime>
 #include <future>
 #include <iomanip>
 #include <memory>
 #include <numeric>
-#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -20,6 +18,7 @@
 #include "batch_scheduler/strategy/continuous_batching.h"
 #include "profiler/reporter.h"
 #include "profiler/sched_event_tracer.h"
+#include "runtime/fast_path_controller.h"
 #include "runtime/infer_request.h"
 #include "utils/channel.h"
 #include "utils/logger.h"
@@ -318,7 +317,14 @@ bool BatchScheduler::TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, Sch
                                                       std::vector<std::shared_ptr<InferRequest>>& stopped_reqs) {
   stopped_reqs.clear();
   std::lock_guard<std::mutex> guard(schedule_mutex_);
-  if (!planned_schedule_output.IsLaunchable()) {
+
+  // Executor build-ahead 流水线深度由 FastPathController 在 Engine 启动期一次性判定:
+  //   - 启用: max_depth=2, 允许同一 req 在上一 step 尚未 retire 时再 launch 一步 (占位 token + device 回填).
+  //   - 禁用: max_depth=1，等价于 build-ahead 关闭时的 async 深度。
+  const bool fast_path_active = FastPathController::GetInstance().IsEnabledAtStartup();
+  const size_t max_depth = fast_path_active ? 2 : 1;
+
+  if (!planned_schedule_output.IsLaunchable(max_depth)) {
     return false;
   }
 
@@ -340,20 +346,36 @@ bool BatchScheduler::TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, Sch
     return true;
   }
 
+  // per-req max_depth=2 只限制单请求 inflight 数, 不限制全局并发 launch 数.
+  // Executor 侧 ModelInput 仅双 slot, 需额外限制在途 schedule 不超过 kExecutorPipelineMaxDepth,
+  // 保证 launch(N+1) 前 N-1 已回流 (stop/EOS 决策可见), 且第三步不会抢占 ring slot.
+  if (fast_path_active && executor_pipeline_depth_ >= kExecutorPipelineMaxDepth) {
+    return false;
+  }
+
   std::vector<ScheduleOutput*> outputs;
   for (size_t i = 0; i < dp_num_; ++i) {
     outputs.push_back(batch_states_[i][multi_batch_id]->schedule_output);
   }
   MergeScheduleInfoForWorkers(outputs, planned_schedule_output);
 
-  // Launch running_reqs in schedule output
-  KLLM_CHECK(planned_schedule_output.IsLaunchable());
-  planned_schedule_output.LaunchScheduleOutput();
+  // 末位 token 占位 vs 真实 token 由 LaunchScheduleOutput 按 req 判定 (HasInflightTask),
+  // 不再要求 batch 成员/顺序与上一步一致.
+  KLLM_CHECK(planned_schedule_output.IsLaunchable(max_depth));
+  planned_schedule_output.LaunchScheduleOutput(max_depth);
+  if (fast_path_active) {
+    ++executor_pipeline_depth_;
+  }
+
   return true;
 }
 
 void BatchScheduler::UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup& generation_output) {
   std::lock_guard<std::mutex> guard(schedule_mutex_);
+  // generation 回流后释放一个全局 pipeline 槽位, 与 TryToLaunch 中的 ++ 配对.
+  if (FastPathController::GetInstance().IsEnabledAtStartup() && executor_pipeline_depth_ > 0) {
+    --executor_pipeline_depth_;
+  }
   uint64_t schedule_time_in_ms = GetCurrentTimeInMs();
   // Update running requests before workload balance
   for (size_t i = 0; i < dp_num_; i++) {

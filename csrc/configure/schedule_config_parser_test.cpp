@@ -191,6 +191,48 @@ class ScheduleConfigParserTest : public ::testing::Test {
     return temp_file_path.string();
   }
 
+  // 生成含 enable_executor_build_ahead / enable_async 的临时 YAML（fast-path 开关解析单测用）。
+  std::string CreateTempYamlConfigWithExecutorBuildAhead(bool enable_executor_build_ahead, bool enable_async = false) {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+    temp_files_.push_back(temp_file_path.string());
+
+    std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+    temp_dirs_.push_back(model_dir.string());
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    std::ofstream file(temp_file_path);
+    if (!file.is_open()) {
+      return "";
+    }
+
+    file << "setting:\n";
+    file << "  global:\n";
+    file << "    tensor_para_size: 1\n";
+    file << "    pipeline_para_size: 1\n";
+    file << "  batch_scheduler:\n";
+    file << "    max_waiting_queue_len: 100\n";
+    file << "    max_token_len: 4096\n";
+    file << "    max_step_tokens: 4096\n";
+    file << "    max_batch_size: 32\n";
+    file << "    enable_executor_build_ahead: " << (enable_executor_build_ahead ? "true" : "false") << "\n";
+    if (enable_async) {
+      file << "    enable_async: true\n";
+    }
+    file << "  block_manager:\n";
+    file << "    block_token_num: 16\n";
+    file << "    reserved_device_memory_ratio: 0.01\n";
+    file << "model_spec:\n";
+    file << "  base_model:\n";
+    file << "    model_dir: \"" << model_dir.string() << "\"\n";
+    file.close();
+    return temp_file_path.string();
+  }
+
   // Helper function to load ModelConfig from config.json
   ModelConfig LoadModelConfig(const std::string &model_dir, bool is_visual = false) {
     ModelConfig model_config;
@@ -1402,6 +1444,57 @@ TEST_F(ScheduleConfigParserTest, CompressorStateDtypeConfig) {
 
   run(true, TYPE_BF16);   // DSv4 → 自动设为 BF16
   run(false, TYPE_BF16);  // 非 DSv4 → 不改写, 保持结构体默认 BF16
+}
+
+// enable_executor_build_ahead 缺省为 false，并同步到 RuntimeConfig。
+TEST_F(ScheduleConfigParserTest, ExecutorBuildAheadDefaultsFalseWhenOmitted) {
+  std::string yaml_path = CreateTempYamlConfig(false, 0, false);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_FALSE(batch_config.enable_executor_build_ahead);
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_FALSE(runtime_config.enable_executor_build_ahead);
+}
+
+// yaml 显式开启时，BatchSchedulerConfig 与 RuntimeConfig 均应带上 enable_executor_build_ahead。
+TEST_F(ScheduleConfigParserTest, ExecutorBuildAheadYamlPropagatesToRuntimeConfig) {
+  std::string yaml_path = CreateTempYamlConfigWithExecutorBuildAhead(/*enable=*/true, /*enable_async=*/true);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.num_key_value_heads = 1;
+  model_config.max_training_seq_len = 4096;
+
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_TRUE(batch_config.enable_executor_build_ahead);
+  EXPECT_TRUE(batch_config.enable_async);
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_TRUE(runtime_config.enable_executor_build_ahead);
+  EXPECT_TRUE(runtime_config.enable_async);
 }
 
 }  // namespace ksana_llm

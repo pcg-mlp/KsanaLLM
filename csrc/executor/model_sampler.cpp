@@ -6,6 +6,8 @@
 
 #include <climits>
 
+#include "utils/logger.h"
+
 namespace ksana_llm {
 
 constexpr int kBitsPerInt = sizeof(int) * CHAR_BIT;
@@ -129,9 +131,6 @@ Status ModelSampler::Sampling(std::shared_ptr<NewModelOutput> model_output,
       // Dummy token for embedding requests — sampling is skipped, but downstream
       // SerializeSamplingOutput expects non-empty sampling_result_tokens.
       // Token 0 is a harmless placeholder; it is never exposed to the user.
-      // Dummy token for embedding requests — sampling is skipped, but downstream
-      // SerializeSamplingOutput expects non-empty sampling_result_tokens.
-      // Token 0 is a harmless placeholder; it is never exposed to the user.
       req->sampling_result_tokens = {0};
       SamplingRequest sampling_req;
       sampling_req.req_id = req->req_id;
@@ -145,10 +144,21 @@ Status ModelSampler::Sampling(std::shared_ptr<NewModelOutput> model_output,
   BuildSamplingRequest(model_output->schedule_output->executor_running_reqs, sampling_output->sampling_reqs,
                        model_output->run_mode == RunMode::kMain);
 
+  // 使用 ModelExecutor::Forward 时固化的 logits_offset (见 model_output->frozen_logits_offsets).
+  const auto& frozen_offsets = model_output->frozen_logits_offsets;
+  for (size_t i = 0; i < sampling_output->sampling_reqs.size(); ++i) {
+    if (i >= frozen_offsets.size()) {
+      break;
+    }
+    sampling_output->sampling_reqs[i].logits_offset = frozen_offsets[i];
+  }
+
   // Generate and apply bitmask from Executor-side generators
   GenerateAndApplyBitmask(model_output->schedule_output->executor_running_reqs, sampling_output->sampling_reqs);
 
-  sampler_->Sampling(sampling_output->sampling_reqs, context_->device->GetPrimaryComputeStream());
+  // 透传 slot: fast path 时 sampling 结果落到对应 slot 的 device/host buffer。
+  sampler_->Sampling(sampling_output->sampling_reqs, context_->device->GetPrimaryComputeStream(),
+                     model_output->slot_index);
   return Status();
 }
 

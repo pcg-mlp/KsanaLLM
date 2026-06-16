@@ -18,6 +18,10 @@
 #include "utils/singleton.h"
 #include "utils/string_utils.h"
 
+#ifdef ENABLE_CUDA
+#  include "layers/nvidia/replace_last_token.h"
+#endif
+
 namespace ksana_llm {
 
 void RecordRequestSchedEventWithFContext(ForwardingContext& forwarding_context, const char* type,
@@ -315,9 +319,42 @@ void CommonModel::SetHiddenUnitBufferTensors(HiddenUnitDeviceBuffer* const hidde
 #endif
 }
 
+Status CommonModel::PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
+                                         size_t model_input_slot) {
+  forwarding_context_->PrepareModelInputGpu(forward_reqs, run_mode, model_input_slot);
+  return Status();
+}
+
+void CommonModel::GetCurBatchPairs(size_t model_input_slot, const int64_t** out_pairs_dev, int* out_batch_size) {
+  if (out_pairs_dev) {
+    *out_pairs_dev = nullptr;
+  }
+  if (out_batch_size) {
+    *out_batch_size = 0;
+  }
+  if (forwarding_context_ == nullptr || model_input_slot > 1) {
+    return;
+  }
+  auto& mi = forwarding_context_->GetModelInput(model_input_slot);
+  if (mi == nullptr || mi->cur_batch_pairs_tensor.shape.empty()) {
+    return;
+  }
+  const int64_t total_elems = static_cast<int64_t>(mi->cur_batch_pairs_tensor.shape[0]);
+  if (total_elems <= 0 || (total_elems & 1) != 0) {
+    return;
+  }
+  if (out_pairs_dev) {
+    *out_pairs_dev = mi->cur_batch_pairs_tensor.GetPtr<int64_t>();
+  }
+  if (out_batch_size) {
+    *out_batch_size = static_cast<int>(total_elems / 2);
+  }
+}
+
 Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                             std::vector<ForwardRequest>& forward_reqs, HiddenUnitDeviceBuffer* hidden_unit,
-                            const RunMode run_mode) {
+                            RunMode run_mode, size_t model_input_slot, const int64_t* prev_ring_dev,
+                            bool gpu_input_already_prepared) {
   // Serialize against concurrent Forward() invocations on the same CommonModel instance.
   // Required on the sampling rank where HandleExecute (main, RunMode::kMain) and
   // HandlePostprocess -> MtpForward (RunMode::kNextN) can otherwise overlap under
@@ -338,11 +375,27 @@ Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                       forwarding_context_->GetCurrentRank());
 
   forwarding_context_->GetBatchRequestSchedInfo() = BuildBatchRequestSchedInfoFromForwardingReqs(forward_reqs);
-  forwarding_context_->UpdateBeforeForward(forward_reqs, run_mode);
+  forwarding_context_->UpdateBeforeForward(forward_reqs, run_mode, model_input_slot, gpu_input_already_prepared);
 
   if (!context_->global->IsDistributedWorker()) {
     RecordRequestSchedEventWithFContext(*forwarding_context_, "PrepareForwarding", RequestEventPhase::End);
   }
+
+#ifdef ENABLE_CUDA
+  // build-ahead: prev_ring_dev 非空时在 Embed 前 launch ReplaceLastTokenKernel 回填 placeholder。
+  if (prev_ring_dev != nullptr) {
+    auto& mi = forwarding_context_->GetModelInput();
+    KLLM_CHECK_WITH_INFO(mi != nullptr, "prev_ring_dev != nullptr but ModelInput is null in CommonModel::Forward.");
+    KLLM_CHECK_WITH_INFO(!forward_reqs.empty(),
+                         "prev_ring_dev != nullptr but forward_reqs is empty in CommonModel::Forward.");
+    StreamWaitEvent(context_->device->GetPrimaryComputeStream(), mi->input_ids_event);
+    PROFILE_EVENT_SCOPE(ReplaceLastToken_, fmt::format("ReplaceLastToken_slot{}", model_input_slot),
+                        forwarding_context_->GetCurrentRank());
+    LaunchReplaceLastTokenKernel(mi->input_ids.GetPtr<int32_t>(), mi->cur_batch_pairs_tensor.GetPtr<int64_t>(),
+                                 prev_ring_dev, static_cast<int>(forward_reqs.size()),
+                                 context_->device->GetPrimaryComputeStream().Get());
+  }
+#endif
 
   if (!context_->global->IsDistributedWorker() || (run_mode == RunMode::kNextN && context_->global->IsSamplingNode())) {
     RecordRequestSchedEventWithFContext(*forwarding_context_, "EmbLookup", RequestEventPhase::Begin);

@@ -240,6 +240,194 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(patch->sampling_token_num, patch_req->sampling_token_num);
 }
 
+// =============================================================================
+// build-ahead 相关：IsLaunchable(max_depth) / LaunchScheduleOutput placeholder / 序列化快照
+// =============================================================================
+
+// InferRequest 持有 Request 内部字段的引用；测试夹具须同时 pin 住 request 与 infer_req 生命周期。
+struct DecodeReadyInferRequestFixture {
+  std::shared_ptr<Request> request;
+  std::shared_ptr<InferRequest> infer_req;
+};
+
+// 构造已进入 decode 稳态的 InferRequest（prefill 已 retire，inflight_count_=0）。
+DecodeReadyInferRequestFixture BuildDecodeReadyInferRequest(int64_t req_id, int first_decoded_token = 10) {
+  auto input = std::make_shared<KsanaPythonInput>();
+  input->input_tokens = {1, 2, 3};
+  auto ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(input, ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->req_id = req_id;
+  req->output_tokens = {1, 2, 3};
+  req->ResetPrefillingTokens();
+
+  ScheduleTaskWorkload prefill_wl;
+  prefill_wl.prefill_token_num = 3;
+  prefill_wl.prefill_start_offset = 0;
+  prefill_wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(prefill_wl);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask();
+  req->generated_tokens = {first_decoded_token};
+  req->UpdateAfterInflightTaskFinished();
+  req->ResetInflightTask();
+  EXPECT_EQ(req->infer_stage, InferStage::kDecode);
+  EXPECT_EQ(req->InflightCount(), 0u);
+  return {request, req};
+}
+
+void ArmDecodePlanningWorkload(const std::shared_ptr<InferRequest>& req) {
+  ScheduleTaskWorkload wl;
+  wl.generated_token_num = 1;
+  wl.draft_token_num = 0;
+  wl.sampling_token_num = 1;
+  req->SetPlanningWorkload(wl);
+}
+
+TEST(ScheduleOutputTest, IsLaunchableRespectsMaxDepth) {
+  auto fixture = BuildDecodeReadyInferRequest(/*req_id=*/2001);
+  auto& req = fixture.infer_req;
+  ScheduleOutput output;
+  output.running_reqs = {req};
+
+  // 无 inflight 时 slow / fast 均可 launch
+  EXPECT_TRUE(output.IsLaunchable(/*max_depth=*/1));
+  EXPECT_TRUE(output.IsLaunchable(/*max_depth=*/2));
+
+  // 第一次 decode launch（无 placeholder）
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+  ASSERT_EQ(req->InflightCount(), 1u);
+
+  // max_depth=1 已满；max_depth=2 仍可再 push 一步
+  EXPECT_FALSE(output.IsLaunchable(/*max_depth=*/1));
+  EXPECT_TRUE(output.IsLaunchable(/*max_depth=*/2));
+
+  // 第二次 launch（build-ahead placeholder 步）
+  req->generated_tokens.clear();
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+  ASSERT_EQ(req->InflightCount(), 2u);
+  EXPECT_FALSE(output.IsLaunchable(/*max_depth=*/2));
+}
+
+TEST(ScheduleOutputTest, LaunchScheduleOutputUsesPlaceholderWhenInflight) {
+  auto fixture = BuildDecodeReadyInferRequest(/*req_id=*/2002, /*first_decoded_token=*/42);
+  auto& req = fixture.infer_req;
+  ScheduleOutput output;
+  output.running_reqs = {req};
+
+  // 首步 decode：无在飞 step，末位应为真实 token
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+  EXPECT_NE(req->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+  EXPECT_EQ(output.req_serialization_snapshots[req->req_id].forwarding_tokens.back(), 42);
+
+  // 二步 decode：已有 inflight，末位写 placeholder
+  req->generated_tokens.clear();
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+  EXPECT_EQ(req->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+  EXPECT_EQ(output.req_serialization_snapshots[req->req_id].forwarding_tokens.back(),
+            InferRequest::kFastPathPlaceholderTokenId);
+}
+
+// 多 req 各自独立 snapshot：后续 launch 只覆盖对应 req_id 的条目。
+TEST(ScheduleOutputTest, PerReqSnapshotsIndependentAcrossLaunches) {
+  auto fixture_a = BuildDecodeReadyInferRequest(/*req_id=*/2004, /*first_decoded_token=*/11);
+  auto fixture_b = BuildDecodeReadyInferRequest(/*req_id=*/2005, /*first_decoded_token=*/22);
+  auto& req_a = fixture_a.infer_req;
+  auto& req_b = fixture_b.infer_req;
+  ScheduleOutput output;
+  output.running_reqs = {req_a, req_b};
+
+  ArmDecodePlanningWorkload(req_a);
+  ArmDecodePlanningWorkload(req_b);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+
+  const auto snap_a_1 = output.req_serialization_snapshots[req_a->req_id].forwarding_tokens;
+  const auto snap_b_1 = output.req_serialization_snapshots[req_b->req_id].forwarding_tokens;
+  ASSERT_FALSE(snap_a_1.empty());
+  ASSERT_FALSE(snap_b_1.empty());
+  EXPECT_EQ(snap_a_1.back(), 11);
+  EXPECT_EQ(snap_b_1.back(), 22);
+
+  // 仅 req_a 进入第二步 placeholder launch（req_b 本步不 schedule，snapshot 应保持第一步）
+  req_a->generated_tokens.clear();
+  ArmDecodePlanningWorkload(req_a);
+  output.running_reqs = {req_a};
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+
+  EXPECT_EQ(output.req_serialization_snapshots[req_a->req_id].forwarding_tokens.back(),
+            InferRequest::kFastPathPlaceholderTokenId);
+  // req_b 未再 launch，snapshot 保持第一步
+  EXPECT_EQ(output.req_serialization_snapshots[req_b->req_id].forwarding_tokens, snap_b_1);
+}
+
+TEST(ScheduleOutputTest, SerializePreferSnapshotOverLiveForwardingTokens) {
+  auto scheduler = std::make_shared<DummyBatchScheduler>();
+  auto schedule_processor = std::make_shared<DummyScheduleProcessor>();
+  schedule_processor->Initialize(scheduler);
+  ScheduleOutputParser::SetScheduleProcessor(schedule_processor);
+
+  auto fixture = BuildDecodeReadyInferRequest(/*req_id=*/2003, /*first_decoded_token=*/77);
+  auto& req = fixture.infer_req;
+  ScheduleOutput output;
+  output.running_reqs = {req};
+  output.schedule_id = 99;
+
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+
+  const std::vector<int> snap_fwd = output.req_serialization_snapshots[req->req_id].forwarding_tokens;
+  ASSERT_FALSE(snap_fwd.empty());
+  EXPECT_EQ(snap_fwd.back(), 77);
+
+  // 模拟后续 schedule 步污染 live 字段；本 output 序列化应仍读 launch 时刻快照
+  req->forwarding_tokens.push_back(InferRequest::kFastPathPlaceholderTokenId);
+  req->forwarding_tokens.push_back(99999);
+
+  size_t bytes = ScheduleOutputParser::GetSerializedSize(&output);
+  std::vector<uint8_t> buffer(bytes);
+  size_t serialized_bytes = 0;
+  Status status = ScheduleOutputParser::SerializeScheduleOutput(&output, buffer.data(), &serialized_bytes);
+  EXPECT_TRUE(status.OK());
+
+  ScheduleOutput dst;
+  status = ScheduleOutputParser::DeserializeScheduleOutput(buffer.data(), &dst);
+  EXPECT_TRUE(status.OK());
+  ASSERT_EQ(dst.executor_running_reqs.size(), 1u);
+  EXPECT_EQ(dst.executor_running_reqs[0]->forwarding_tokens, snap_fwd);
+  EXPECT_NE(dst.executor_running_reqs[0]->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+}
+
+// stopped req 不参与 inflight capacity 检查，与 EventDrivenStateTest 语义对齐。
+TEST(ScheduleOutputTest, IsLaunchableSkipsStoppedReqAtMaxDepth) {
+  auto active_fixture = BuildDecodeReadyInferRequest(/*req_id=*/2010);
+  auto stopped_fixture = BuildDecodeReadyInferRequest(/*req_id=*/2011);
+  auto& active = active_fixture.infer_req;
+  auto& stopped = stopped_fixture.infer_req;
+  stopped->Stop();
+
+  ScheduleOutput output;
+  output.running_reqs = {active, stopped};
+
+  ArmDecodePlanningWorkload(active);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+  ASSERT_EQ(active->InflightCount(), 1u);
+
+  // active 在 max_depth=2 下仍可再 launch；stopped 已满 inflight 也不应阻塞。
+  EXPECT_TRUE(output.IsLaunchable(/*max_depth=*/2));
+}
+
 TEST(ScheduleOutputTest, ScheduleOutputPool) {
   auto scheduler = std::make_shared<DummyBatchScheduler>();
   auto schedule_processor = std::make_shared<DummyScheduleProcessor>();

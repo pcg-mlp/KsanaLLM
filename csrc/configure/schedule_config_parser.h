@@ -110,6 +110,11 @@ struct BatchSchedulerConfig {
 
   bool enable_async = false;
 
+  // 是否启用 Executor 端 build-ahead + device 侧 token 替换（默认关闭）。
+  // 仅在 enable_async=true 且 FastPathController 启动期硬条件全部满足时真正启用；
+  // 否则透明降级到原 enable_async 深度 1 路径。
+  bool enable_executor_build_ahead = false;
+
   bool enable_xgrammar = false;
 
   // Max total kv tokens per chunk when chunked KV is enabled. Must be >= max_seq_len
@@ -397,6 +402,10 @@ struct RuntimeConfig {
   std::string speculative_method;
 
   bool enable_async = false;
+
+  // Executor 端 build-ahead + device 侧 token 替换总开关（配置意图）。
+  // 运行时是否真正启用由 FastPathController 根据全部硬条件决定。
+  bool enable_executor_build_ahead = false;
 
   // TODO(robertyuan): No body set it?
   bool embed_tokens_use_cpu{false};  // Embed_tokens gather operation is processed on the CPU.

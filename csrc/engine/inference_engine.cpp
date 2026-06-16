@@ -24,6 +24,7 @@
 #include "periphery/version_reporter.h"
 #include "profiler/reporter.h"
 #include "runtime/draft_generator/trie_generator.h"
+#include "runtime/fast_path_controller.h"
 #include "runtime/infer_request.h"
 #include "runtime/weight_instance.h"
 #include "transfer/transfer_engine.h"
@@ -180,6 +181,9 @@ Status InferenceEngine::Initialize() {
     KLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size= " << batch_scheduler_config.max_batch_size
                    << ", Max Vocab Size= " << batch_scheduler_config.max_vocab_size
                    << ", max_pp_batch_num=" << batch_scheduler_config.max_pp_batch_num;
+
+    // 启动期硬条件 gate：yaml 总开关 + async/调度器/并行度/高级特性等约束。
+    FastPathController::GetInstance().InitializeAtStartup(batch_scheduler_config, runtime_config, model_config);
   }
 
   // Calc block number after model loaded.

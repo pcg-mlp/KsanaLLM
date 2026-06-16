@@ -102,6 +102,10 @@ setting:
       max_waiting_time_in_ms: 1000
     # 是否开启async模块，开启后将使用异步调度减少GPU空泡
     enable_async: false
+    # 是否启用 Executor 端 build-ahead + device 侧 token 替换（默认关闭）。
+    # 需 enable_async=true 且 FastPathController 启动期硬条件全部满足才真正启用；
+    # 否则透明降级到原异步深度 1 路径。
+    enable_executor_build_ahead: false
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

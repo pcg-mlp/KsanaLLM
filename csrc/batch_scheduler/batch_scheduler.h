@@ -157,6 +157,11 @@ class BatchScheduler : public BatchSchedulerInterface {
   size_t request_count_window_ = 0;
   double current_qps_ = 0.0;
   static constexpr size_t QPS_UPDATE_INTERVAL_SECONDS = 10;
+
+  // Executor 全局流水线深度（build-ahead 路径）: 已 LaunchScheduleOutput、尚未 sampling 回流的 schedule 数。
+  // 与 ModelInput 双 slot / max_depth=2 对齐：在途 launch 不得超过 2，launch(N+1) 前须 retire(N-1)。
+  size_t executor_pipeline_depth_ = 0;
+  static constexpr size_t kExecutorPipelineMaxDepth = 2;
 };
 
 }  // namespace ksana_llm

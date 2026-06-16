@@ -4,14 +4,19 @@
 
 #include "executor/model_runner.h"
 
-#include <unistd.h>
-
 #include <algorithm>
 
+#include "fmt/format.h"
+
+#include "device/device_utils.h"
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
+#include "executor/model_sampler.h"
 #include "profiler/profile_event.h"
+#include "runtime/fast_path_controller.h"
 #include "runtime/structured_generation/structured_generator_interface.h"
+#include "samplers/sampler.h"
+#include "utils/singleton.h"
 #include "utils/waiter.h"
 
 namespace ksana_llm {
@@ -22,6 +27,7 @@ ModelRunner::ModelRunner(std::shared_ptr<Context> context) : mtp_step_num_(conte
   schedule_output_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<ScheduleOutput>>>();
   model_input_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<NewModelInput>>>();
   model_output_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<NewModelOutput>>>();
+  sampling_output_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<SamplingOutput>>>();
 }
 
 void ModelRunner::SetIpcFuncWrapper(std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper) {
@@ -73,7 +79,13 @@ Status ModelRunner::Start() {
   execute_thread_ = std::thread(&ModelRunner::HandleExecute, this);
 
   if (context_->global->IsSamplingNode()) {
-    postprocess_thread_ = std::thread(&ModelRunner::HandlePostprocess, this);
+    if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+      // build-ahead: Forward/Sampling/WriteRing 在 Execute 线程串行, IPC 上报走独立线程.
+      result_report_thread_ = std::thread(&ModelRunner::HandleResultReportProcess, this);
+    } else {
+      // 慢路径: Preprocess / Execute / Postprocess 三线程（build-ahead 关闭时的默认模型）。
+      postprocess_thread_ = std::thread(&ModelRunner::HandlePostprocess, this);
+    }
   }
 
   return Status();
@@ -85,6 +97,7 @@ Status ModelRunner::Stop() {
   schedule_output_queue_->Stop();
   model_input_queue_->Stop();
   model_output_queue_->Stop();
+  sampling_output_queue_->Stop();
 
   // Wake the execute thread if it is currently parked inside ExecutorRuntime::Forward()'s wait for
   // the previous MtpForward Notify(); without this the join below could hang on a Notify that
@@ -101,6 +114,9 @@ Status ModelRunner::Stop() {
   }
   if (postprocess_thread_.joinable()) {
     postprocess_thread_.join();
+  }
+  if (result_report_thread_.joinable()) {
+    result_report_thread_.join();
   }
 
   return Status();
@@ -175,6 +191,26 @@ Status ModelRunner::HandlePreprocess() {
       executor_runtime_->BuildModelInput(schedule_output, model_input, RunMode::kMain);
     }
 
+    // ModelInput / ring 双 slot 乒乓翻转, 使 Preprocess 与 Execute 可重叠且互不覆写.
+    // 慢路径恒用 slot 0。
+    if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+      cur_ring_slot_ ^= 1u;
+      model_input->slot_index = cur_ring_slot_;
+    } else {
+      model_input->slot_index = 0;
+    }
+
+    // 双 H2D stream 开启时, 在 Preprocess 线程完成 ParseFromRequests, 与上一步 Forward 重叠.
+    model_input->gpu_input_ready = false;
+    if (context_->device->IsDualH2DStreamsEnabled()) {
+      Status prep_status = executor_runtime_->PrepareModelInputGpu(model_input);
+      if (!prep_status.OK()) {
+        KLLM_LOG_ERROR << "PrepareModelInputGpu failed: " << prep_status.ToString()
+                       << " schedule_id=" << schedule_output->schedule_id;
+        return prep_status;
+      }
+    }
+
     model_input_queue_->Put(model_input);
   }
   return Status();
@@ -195,6 +231,24 @@ Status ModelRunner::HandleExecute() {
     }
 
     PROFILE_EVENT_SCOPE(execute_iter, "Exec.HandleExecute.iter");
+
+    // 挂上一步 ring slot 指针, CommonModel::Forward 内 ReplaceLastTokenKernel 按 req_id 回填 placeholder.
+    // kernel 内自检 input_ids[i]==-1 且 ring count>0, 无占位/首步时自动 no-op.
+    if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+      const size_t prev_slot = model_input->slot_index ^ 1u;
+      auto model_sampler = executor_runtime_->GetModelSampler();
+      KLLM_CHECK_WITH_INFO(model_sampler != nullptr,
+                           "build_ahead_enabled but ModelSampler is null in HandleExecute (config inconsistency).");
+      auto sampler = model_sampler->GetSampler();
+      KLLM_CHECK_WITH_INFO(sampler != nullptr,
+                           "build_ahead_enabled but Sampler is null in HandleExecute (config inconsistency).");
+      int64_t* prev_ring = sampler->GetRingSlot(prev_slot);
+      KLLM_CHECK_WITH_INFO(
+          prev_ring != nullptr,
+          fmt::format("build_ahead_enabled but Sampler ring slot {} not allocated (config inconsistency).", prev_slot));
+      model_input->prev_ring_dev = prev_ring;
+    }
+
     std::shared_ptr<NewModelOutput> model_output = std::make_shared<NewModelOutput>();
 
     HiddenUnitDeviceBuffer* hidden_unit = nullptr;
@@ -234,7 +288,13 @@ Status ModelRunner::HandleExecute() {
 
     if (context_->global->IsSamplingNode()) {
       model_output->hidden_unit = hidden_unit;
-      model_output_queue_->Put(model_output);
+      if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+        // fast path: Forward 与 Sampling/WriteRing 同线程串行, 结果上报走独立线程.
+        HandlePostprocessInline(model_output);
+      } else {
+        // slow path: 三线程模型, Sampling 在 HandlePostprocess.
+        model_output_queue_->Put(model_output);
+      }
     } else {
       {
         PROFILE_EVENT_SCOPE(execute_stream_sync, "Exec.HandleExecute.NonSamplingStreamSync");
@@ -242,8 +302,25 @@ Status ModelRunner::HandleExecute() {
       }
       hidden_unit_buffer_pool_->FreeBuffer(hidden_unit);
     }
+
+    // TP: 采样卡 rank 0 WriteRing 后，所有 rank（含非采样 PP stage 上的 TP worker）必须参与 collective。
+    if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+      BroadcastBuildAheadRingSlot(model_output->slot_index);
+    }
   }
   return Status();
+}
+
+void ModelRunner::BroadcastBuildAheadRingSlot(size_t slot) {
+  if (context_->global->GetTensorParallelSize() <= 1) {
+    return;
+  }
+  auto model_sampler = executor_runtime_->GetModelSampler();
+  KLLM_CHECK_WITH_INFO(model_sampler != nullptr,
+                       "build_ahead_enabled but ModelSampler is null in BroadcastBuildAheadRingSlot.");
+  auto sampler = model_sampler->GetSampler();
+  KLLM_CHECK_WITH_INFO(sampler != nullptr, "build_ahead_enabled but Sampler is null in BroadcastBuildAheadRingSlot.");
+  sampler->BroadcastRingSlot(slot, context_->device->GetPrimaryComputeStream());
 }
 
 // TODO(robertyuan): Change serializing struct from SamplingOutput to GenerationResult.
@@ -258,9 +335,18 @@ Status ModelRunner::HandlePostprocess() {
   SetDevice(context_->device->GetDeviceId());
   while (!terminated_.load(std::memory_order_relaxed)) {
     std::shared_ptr<NewModelOutput> model_output;
-    {
-      PROFILE_EVENT_SCOPE(postprocess_output_get, "Exec.HandlePostprocess.OutputQueueGet");
-      model_output = model_output_queue_->Get();
+    // build-ahead：Execute 线程经 HandlePostprocessInline 注入本步输出，不经 model_output_queue_。
+    // 慢路径：独立 postprocess 线程消费 model_output_queue_，postprocess_one_shot_ 恒为 false。
+    bool one_shot_iteration = false;
+    if (postprocess_one_shot_) {
+      model_output = std::move(postprocess_one_shot_output_);
+      postprocess_one_shot_ = false;
+      one_shot_iteration = true;
+    } else {
+      {
+        PROFILE_EVENT_SCOPE(postprocess_output_get, "Exec.HandlePostprocess.OutputQueueGet");
+        model_output = model_output_queue_->Get();
+      }
     }
     if (!model_output) {
       KLLM_LOG_INFO << "HandlePostprocess stopped.";
@@ -273,6 +359,8 @@ Status ModelRunner::HandlePostprocess() {
       PROFILE_EVENT_SCOPE(postprocess_sampling, "Exec.HandlePostprocess.Sampling");
       executor_runtime_->Sampling(model_output, sampling_output);
     }
+    // build-ahead 专有：Sampling 后写 ring slot；慢路径 postprocess_enqueue_report_=false 时函数内直接返回。
+    WriteBuildAheadRingAfterSampling(model_output);
 
     auto generation_controller = executor_runtime_->GetGenerationController();
     {
@@ -305,6 +393,12 @@ Status ModelRunner::HandlePostprocess() {
       PROFILE_EVENT_SCOPE(postprocess_gen_draft, "Exec.HandlePostprocess.GenerateDraft");
       for (auto& req : model_output->schedule_output->executor_running_reqs) {
         generation_controller->GenerateDraft(req);
+        // build-ahead：Execute 与下一步 Forward 重叠，需把 draft 计入 sampling_token_num 供调度/workload 估算。
+        // 慢路径：Sampling 在独立线程，req 状态在入队前已定型，此处无需再改 sampling_token_num。
+        if (postprocess_enqueue_report_) {
+          size_t draft_token_num = req->draft_tokens.size();
+          req->sampling_token_num = kStepGenerateTokenNum + draft_token_num;
+        }
       }
     }
 
@@ -344,13 +438,79 @@ Status ModelRunner::HandlePostprocess() {
       SerializeGenerationResultToSamplingResult(generation_results, sampling_output);
     }
 
-    if (context_->device->GetDeviceId() == 0) {
+    // 结果出口：fast 入队给 HandleResultReportProcess，避免 Execute 线程阻塞 IPC；
+    // slow 在 postprocess 线程、device 0 上直接上报（三线程模型下无独立 report 线程）。
+    if (postprocess_enqueue_report_) {
+      sampling_output_queue_->Put(sampling_output);
+      postprocess_enqueue_report_ = false;
+    } else if (context_->device->GetDeviceId() == 0) {
       PROFILE_EVENT_SCOPE(postprocess_report, "Exec.HandlePostprocess.Report");
       if (context_->global->IsStandalone()) {
         ipc_func_wrapper_->ReportSamplingOutput(sampling_output);
       } else if (context_->global->IsDistributedResultReporter()) {
         sampling_output_pool_->PutSendSamplingOutput(sampling_output.get());
       }
+    }
+
+    // build-ahead：Execute 线程单次调用，处理完即返回；不进入下一轮 while（慢路径无此分支）。
+    if (one_shot_iteration) {
+      break;
+    }
+  }
+  return Status();
+}
+
+void ModelRunner::WriteBuildAheadRingAfterSampling(const std::shared_ptr<NewModelOutput>& model_output) {
+  if (!postprocess_enqueue_report_) {
+    return;
+  }
+  // 将本步采样结果写入 ring slot: 布局 [count, (req_id, token) * B_cur],
+  // 供下一步 ReplaceLastTokenKernel 按 req_id 回填 placeholder.
+  // 与 Sampling 同处 PrimaryComputeStream, FIFO 保证先采样后写 ring; B_cur=0 时 kernel 内 no-op.
+  if (FastPathController::GetInstance().IsEnabledAtStartup()) {
+    KLLM_CHECK_WITH_INFO(model_output->cur_pairs_dev != nullptr,
+                         "build-ahead enabled but model_output->cur_pairs_dev is null in HandlePostprocess.");
+    auto model_sampler = executor_runtime_->GetModelSampler();
+    KLLM_CHECK_WITH_INFO(model_sampler != nullptr,
+                         "build_ahead_enabled but ModelSampler is null in HandlePostprocess.");
+    auto sampler = model_sampler->GetSampler();
+    KLLM_CHECK_WITH_INFO(sampler != nullptr, "build_ahead_enabled but Sampler is null in HandlePostprocess.");
+    // TP 下仅 rank 0 持有有效 sampled_tokens；非 0 rank 不写 garbage，靠 BroadcastRingSlot 同步。
+    if (context_->device->GetDeviceId() == 0) {
+      sampler->WriteRing(model_output->slot_index, model_output->cur_pairs_dev, model_output->B_cur,
+                         context_->device->GetPrimaryComputeStream());
+    }
+  }
+}
+
+Status ModelRunner::HandlePostprocessInline(std::shared_ptr<NewModelOutput> model_output) {
+  // build-ahead：在 Execute 线程同步跑一轮 HandlePostprocess，与 Forward/WriteRing 同线程串行。
+  // 与慢路径 postprocess 线程互斥（Start 时二选一），共享同一套 postprocess 逻辑，无需加锁。
+  postprocess_one_shot_output_ = std::move(model_output);
+  postprocess_one_shot_ = true;
+  postprocess_enqueue_report_ = true;
+  return HandlePostprocess();
+}
+
+Status ModelRunner::HandleResultReportProcess() {
+  SetDevice(context_->device->GetDeviceId());
+
+  while (!terminated_.load(std::memory_order_relaxed)) {
+    std::shared_ptr<SamplingOutput> sampling_output = sampling_output_queue_->Get();
+    if (!sampling_output) {
+      KLLM_LOG_INFO << "HandleResultReportProcess stopped.";
+      break;
+    }
+
+    // Only device 0 need report sampling output.
+    if (context_->device->GetDeviceId() != 0) {
+      continue;
+    }
+
+    if (context_->global->IsStandalone()) {
+      ipc_func_wrapper_->ReportSamplingOutput(sampling_output);
+    } else if (context_->global->IsDistributedResultReporter()) {
+      sampling_output_pool_->PutSendSamplingOutput(sampling_output.get());
     }
   }
   return Status();

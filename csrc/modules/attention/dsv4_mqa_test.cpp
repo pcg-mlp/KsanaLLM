@@ -60,13 +60,13 @@ class Dsv4MqaTestModel : public CommonModel {
 
   Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                          const bool is_multi_token_forward, const std::vector<ForwardRequest>& forward_reqs) {
-    forwarding_context_->model_input_->ParseFromRequests(forward_reqs);
+    forwarding_context_->GetModelInput()->ParseFromRequests(forward_reqs);
 
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->buffers_->hidden_buffer_0);
 
     // Prepare input
     const size_t hidden_units = model_config_.hidden_units;
-    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0], hidden_units};
+    hidden_buffer_tensors_0[0].shape = {forwarding_context_->GetModelInput()->input_ids.shape[0], hidden_units};
     hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
 
     std::vector<bfloat16> input_bf16;
@@ -92,7 +92,7 @@ class Dsv4MqaTestModel : public CommonModel {
 
     // Output shape sanity: [total_tokens, hidden_units]
     EXPECT_EQ(hidden_buffer_tensors_0[0].shape.size(), 2u);
-    EXPECT_EQ(hidden_buffer_tensors_0[0].shape[0], forwarding_context_->model_input_->input_ids.shape[0]);
+    EXPECT_EQ(hidden_buffer_tensors_0[0].shape[0], forwarding_context_->GetModelInput()->input_ids.shape[0]);
     EXPECT_EQ(hidden_buffer_tensors_0[0].shape[1], hidden_units);
 
     // Verify output against reference values
@@ -104,7 +104,7 @@ class Dsv4MqaTestModel : public CommonModel {
 
     std::vector<float> expected;
     if (is_multi_token_forward) {
-      if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+      if (forwarding_context_->GetModelInput()->dp_total_prefix_len == 0) {
         if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
           expected = {1144, -676, -1176, -1448, 438, -25.5};
         } else {  // TYPE_FP8_DS_MLA
