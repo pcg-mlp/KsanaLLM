@@ -90,9 +90,8 @@ class CommonModel : public BaseModel {
   // 取本步 slot ModelInput 的 cur_batch_pairs_tensor 设备指针 + batch_size，供 Sampler::WriteRing 使用。
   void GetCurBatchPairs(size_t model_input_slot, const int64_t** out_pairs_dev, int* out_batch_size) override;
 
-  // Forwarder to ForwardingContext::EvictFinishedRequests. Drives release of compressor slots
-  // when the scheduler notifies finish/recompute events.
-  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) override;
+  // Propagate inflight resource manager reference down to ForwardingContext.
+  void SetInflightResourceManager(InflightResourceManager* mgr) override;
 
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);

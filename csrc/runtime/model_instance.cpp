@@ -156,6 +156,18 @@ void ModelInstance::Load() {
       KLLM_THROW(fmt::format("Model type {} is not supported.", unified_model_type));
     }
   }
+
+  // Register inflight resources now that the base model is ready.
+  // Precondition: SetInflightResourceManager() must have been called before Load()
+  // (ModelRunner::Start() is responsible for this). If not, registration would be
+  // silently skipped and PrepareCompressor would crash on the first forward step.
+  KLLM_CHECK_WITH_INFO(inflight_resource_mgr_ != nullptr,
+                       "ModelInstance::Load: inflight_resource_mgr_ is null. "
+                       "SetInflightResourceManager() must be called before Load(). "
+                       "Ensure ModelRunner::Start() runs before the LoadModel IPC request arrives.");
+  model_instance_->RegisterInflightResources(*inflight_resource_mgr_);
+  model_instance_->SetInflightResourceManager(inflight_resource_mgr_);
+  KLLM_LOG_INFO << "ModelInstance::Load: inflight resources registered";
 }
 
 void ModelInstance::SetBlockCacheLayout(std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
@@ -186,11 +198,10 @@ void ModelInstance::GetCurBatchPairs(size_t model_input_slot, const int64_t** ou
   model_instance_->GetCurBatchPairs(model_input_slot, out_pairs_dev, out_batch_size);
 }
 
-void ModelInstance::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
-  if (finished_req_ids.empty() || !model_instance_) {
-    return;
-  }
-  model_instance_->EvictFinishedRequests(finished_req_ids);
+void ModelInstance::SetInflightResourceManager(InflightResourceManager* mgr) {
+  // Store the pointer so Load() can use it for registration. Registration is
+  // always performed inside Load() once the base model is available.
+  inflight_resource_mgr_ = mgr;
 }
 
 }  // namespace ksana_llm

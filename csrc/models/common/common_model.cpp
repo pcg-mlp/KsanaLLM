@@ -171,9 +171,9 @@ float* CommonModel::GetLogitsPtr() {
   return forwarding_context_->GetModelOutput()->logits_tensor.template GetPtr<float>(false);
 }
 
-void CommonModel::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
+void CommonModel::SetInflightResourceManager(InflightResourceManager* mgr) {
   if (forwarding_context_) {
-    forwarding_context_->EvictFinishedRequests(finished_req_ids);
+    forwarding_context_->SetInflightResourceManager(mgr);
   }
 }
 

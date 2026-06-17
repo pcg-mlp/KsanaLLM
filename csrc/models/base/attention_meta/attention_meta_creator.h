@@ -14,6 +14,11 @@
 
 namespace ksana_llm {
 
+// Forward declaration: keeps models/base/ free of any executor/ dependency.
+// Full definition is only needed in model-specific creator .cpp files that
+// override WireInflightResources.
+class InflightResourceManager;
+
 // Factory interface for attention input meta objects owned by ModelInput.
 // All construction parameters are injected once at construction time via Config;
 // the factory methods themselves take no arguments.
@@ -75,6 +80,12 @@ class AttentionMetaCreator {
 
   // Expose the stored configuration so derived creators or ModelInput can access it.
   const Config& GetConfig() const { return config_; }
+
+  // Wire model-specific inflight resources into shared_meta.  Default is a no-op;
+  // model-specific creators override this to populate resource pointers cached
+  // directly on the shared meta (e.g. CompressorSlotResource for DeepSeekV4).
+  // Called once from ModelInput::SetInflightResourceManager after Load() completes.
+  virtual void WireInflightResources(InflightResourceManager* /*mgr*/, SharedAttentionMeta* /*shared_meta*/) {}
 
  protected:
   void InitStandardSharedAttentionMeta(StandardSharedAttentionMeta& shared_meta);

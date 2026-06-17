@@ -35,7 +35,7 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
   const size_t max_token_num = runtime_config.max_step_token_num;
   // The slot pool must hold every concurrently in-flight request across all PP batches.
   // Under max_pp_batch_num > 1, the same CompressorSharedAttentionMeta is shared between PP
-  // batches, and slots cannot be reclaimed until EvictFinishedRequests() is called.
+  // batches, and slots are reclaimed by InflightResourceManager::ProcessScheduleOutput.
   const size_t max_pp_batch_num = std::max<size_t>(runtime_config.max_pp_batch_num, 1);
   const size_t slot_pool_capacity = max_batch_size * max_pp_batch_num;
 
@@ -128,9 +128,8 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
       c4_layer_num_on_node, c4_slot_num, c128_layer_num_on_node, c128_slot_num, slot_pool_capacity, max_batch_size,
       max_pp_batch_num);
 
-  for (int i = 0; i < static_cast<int>(slot_pool_capacity); ++i) {
-    free_slot.push(i);
-  }
+  // Slot management has migrated to CompressorSlotResource / InflightResourceManager.
+  // See models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h.
 }
 
 void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
@@ -205,9 +204,8 @@ void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
     // Total across the batch: extend tokens ≤ max_step_token_num, so
     //   total ≤ max_step_token_num / block_token_num + (kSwaSize / block_token_num + 2) * max_batch_size + 1.
     const size_t kSwaWindowBlocks = kSwaSize / static_cast<size_t>(block_token_num) + 2;
-    swa_buffer_num_blocks =
-        static_cast<int>(runtime_config.max_step_token_num / static_cast<size_t>(block_token_num) +
-                         kSwaWindowBlocks * static_cast<size_t>(runtime_config.max_batch_size) + 1);
+    swa_buffer_num_blocks = static_cast<int>(runtime_config.max_step_token_num / static_cast<size_t>(block_token_num) +
+                                             kSwaWindowBlocks * static_cast<size_t>(runtime_config.max_batch_size) + 1);
     swa_cache_buffer =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8,
                {static_cast<size_t>(swa_buffer_num_blocks) * static_cast<size_t>(per_layer_swa_block_size)});

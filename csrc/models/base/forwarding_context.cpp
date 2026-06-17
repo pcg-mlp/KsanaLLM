@@ -337,14 +337,6 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
   }
 }
 
-void ForwardingContext::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
-  for (auto& model_input : model_inputs_) {
-    if (model_input) {
-      model_input->EvictFinishedRequests(finished_req_ids);
-    }
-  }
-}
-
 void ForwardingContext::SetActiveModelInputSlot(size_t slot) {
   KLLM_CHECK_WITH_INFO(slot < model_inputs_.size(),
                        fmt::format("Invalid ModelInput slot {} (max {}).", slot, model_inputs_.size()));

@@ -34,10 +34,9 @@ class ModelInput {
   // build-ahead: 指定本 step 使用的 ModelInput slot，H2D 走对应 slot stream。
   void SetParseSlot(size_t slot) { parse_slot_ = slot; }
 
-  // Release the per-request state held by optional meta modules (currently only CompressorMeta) for
-  // requests that have finished or are being recomputed. Safe to call with an empty list or with
-  // req_ids unknown to this rank.
-  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
+  // Propagate inflight resource manager to CompressorSharedAttentionMeta (DSv4-specific;
+  // no-op for other models). Called from ForwardingContext::SetInflightResourceManager.
+  void SetInflightResourceManager(InflightResourceManager* mgr);
 
  private:
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);

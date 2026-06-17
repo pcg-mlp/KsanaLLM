@@ -19,6 +19,9 @@
 
 namespace ksana_llm {
 
+// Forward declaration to avoid depending on executor/ from models/base/.
+class InflightResourceManager;
+
 // 计算 decode-only 节点的 forwarding buffer 所需 token 数。
 // decode-only 节点不做 prefill，单 step 产出的 token 数上界为
 //   max_batch_size * max_decode_tokens_per_req * attn_data_parallel_size
@@ -107,6 +110,19 @@ class ForwardingContext {
 
   void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
 
+  // Set the inflight resource manager reference, propagated from ExecutorRuntime.
+  void SetInflightResourceManager(InflightResourceManager* mgr) {
+    inflight_resource_mgr_ = mgr;
+    for (auto& model_input : model_inputs_) {
+      if (model_input) {
+        model_input->SetInflightResourceManager(mgr);
+      }
+    }
+  }
+
+  // Get the inflight resource manager reference. Returns nullptr when not set.
+  InflightResourceManager* GetInflightResourceManager() { return inflight_resource_mgr_; }
+
  public:
   ForwardingBuffers* GetForwardingBuffers() { return buffers_; }
 
@@ -115,10 +131,6 @@ class ForwardingContext {
   inline const size_t GetAttentionDataParallelSize() { return attn_data_parallel_size_; }
 
   std::shared_ptr<ModelCommunicator>& GetModelCommunicator() { return model_communicator_; }
-
-  // Forwarder to ModelInput::EvictFinishedRequests; releases compressor slots for finished or
-  // recomputed requests.
-  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
 
   std::shared_ptr<ModelOutput>& GetModelOutput() { return model_output_; }
 
@@ -197,5 +209,8 @@ class ForwardingContext {
 
   // mark state for sched event recording
   bool is_forwarding_layers_ = false;
+
+  // Inflight resource manager reference, set once before forward loops begin.
+  InflightResourceManager* inflight_resource_mgr_ = nullptr;
 };
 }  // namespace ksana_llm

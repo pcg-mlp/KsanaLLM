@@ -7,11 +7,13 @@
 #include <filesystem>
 
 #include "cache_manager/prefix_cache_manager.h"
+#include "executor/inflight_resource.h"
 #include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
 #include "models/common/common_model.h"
 #include "models/common/common_weight.h"
 #include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "modules/attention/compressor.h"
 #include "tests/test.h"
 #include "utils/attention_backend/attention_backend_manager.h"
@@ -319,10 +321,20 @@ class CompressorTest : public testing::Test {
     auto test_model =
         std::make_shared<CompressorTestModel>(model_config, runtime_config, 0, context, bs1, block_cache_layout_);
 
+    // Wire InflightResourceManager so PrepareCompressor can look up compressor slots.
+    auto inflight_mgr = std::make_shared<InflightResourceManager>();
+    auto slot_res = std::make_shared<CompressorSlotResource>();
+    slot_res->Init(runtime_config);
+    inflight_mgr->RegisterResource("compressor_slot", slot_res);
+    test_model->SetInflightResourceManager(inflight_mgr.get());
+
     std::vector<int> input_ids = {233, 1681};
     std::vector<FlexibleCachedCopyTask> flex_tasks;
     EmbeddingSlice slice;
     ForwardRequest forward = MakeRequest(input_ids, flex_tasks, slice);
+
+    // Allocate a compressor slot for this request before any ParseFromRequests call.
+    slot_res->Alloc(forward.req_id);
 
     // Prefill (context phase): two new tokens, no prefix.
     test_model->RunCompressor({forward});

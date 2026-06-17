@@ -40,3 +40,6 @@ cpp_test(global_cache_put_worker_test
   SRCS ${PROJECT_SOURCE_DIR}/csrc/executor/global_cache_put_worker_test.cpp
   DEPS ${EXECUTOR_TEST_DEPS})
 
+cpp_test(inflight_resource_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/executor/inflight_resource_test.cpp
+  DEPS ${EXECUTOR_TEST_DEPS})

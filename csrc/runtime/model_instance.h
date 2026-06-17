@@ -60,10 +60,9 @@ class ModelInstance {
   // 供 ModelExecutor::Forward 完成后透传到 NewModelOutput（WriteRing / ReplaceKernel 使用）。
   void GetCurBatchPairs(size_t model_input_slot, const int64_t** out_pairs_dev, int* out_batch_size);
 
-  // Release per-request state held by optional forward-meta modules (currently CompressorMeta) for
-  // requests that have finished or are being recomputed. No-op when no underlying model is loaded
-  // or when the model does not maintain such state.
-  void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids);
+  // Set the inflight resource manager through to the base model.
+  // If the model is already loaded, also triggers RegisterInflightResources.
+  void SetInflightResourceManager(InflightResourceManager* mgr);
 
   // Get  the data type.
   DataType GetWeightDataType() { return model_config_.weight_data_type; }
@@ -108,6 +107,10 @@ class ModelInstance {
   // The base modes
   std::shared_ptr<BaseModel> model_instance_;
   std::shared_ptr<ThreadPool> loader_models_threadpool_ = nullptr;
+
+  // Set once before or after model loading; used to auto-register inflight resources
+  // as soon as the base model becomes available.
+  InflightResourceManager* inflight_resource_mgr_ = nullptr;
 
   // The model-level cache layout (holds all block cache layouts keyed by type).
   std::shared_ptr<BaseModelCacheLayout> block_cache_layout_ = nullptr;

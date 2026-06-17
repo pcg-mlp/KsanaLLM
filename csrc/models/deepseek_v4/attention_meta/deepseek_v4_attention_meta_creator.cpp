@@ -4,6 +4,9 @@
 
 #include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
 
+#include "executor/inflight_resource.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
+
 namespace ksana_llm {
 
 std::unique_ptr<SharedAttentionMeta> DeepSeekV4AttentionMetaCreator::CreateSharedAttentionMeta() {
@@ -109,6 +112,17 @@ std::unique_ptr<FlashAttentionMetaBuilder> DeepSeekV4AttentionMetaCreator::Creat
 std::unique_ptr<PagedAttentionMetaBuilder> DeepSeekV4AttentionMetaCreator::CreatePagedBuilder(
     const AttentionBuilderConfig& config) {
   return std::make_unique<DeepSeekV4PagedAttentionMetaBuilder>(config);
+}
+
+void DeepSeekV4AttentionMetaCreator::WireInflightResources(InflightResourceManager* mgr,
+                                                           SharedAttentionMeta* shared_meta) {
+  if (!mgr || !shared_meta) {
+    return;
+  }
+  // Creator guarantees shared_meta is DeepSeekV4SharedAttentionMeta (created by
+  // CreateSharedAttentionMeta above), so static_cast is safe here.
+  auto* dsv4 = static_cast<DeepSeekV4SharedAttentionMeta*>(shared_meta);
+  dsv4->compressor.slot_resource_ = mgr->GetTypedResource<CompressorSlotResource>("compressor_slot");
 }
 
 }  // namespace ksana_llm

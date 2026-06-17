@@ -15,6 +15,9 @@
 
 namespace ksana_llm {
 
+// Forward declaration to avoid introducing a dependency from models/base/ to executor/.
+class InflightResourceManager;
+
 enum class RunMode {
   kMain,   // default
   kNextN,  // run MTP next n
@@ -50,10 +53,14 @@ class BaseModel {
   // The output logits pointer on device, used by sampler to avoid memory copy.
   virtual float* GetLogitsPtr() = 0;
 
-  // Release the per-request state held by the model's optional forward-meta modules (currently
-  // CompressorMeta for DSv4). Default is a no-op for models that do not maintain such state.
-  // Called by the scheduler when a request finishes or is recomputed.
-  virtual void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {}
+  // Register runtime inflight resources (e.g. compressor slots) with the central manager.
+  // Called once before the preprocess / execute threads start. Models that require per-request
+  // inflight resources override this to create and register their resource instances.
+  virtual void RegisterInflightResources(InflightResourceManager& mgr) {}
+
+  // Set the inflight resource manager reference, propagated from ExecutorRuntime through
+  // ModelInstance → CommonModel → ForwardingContext for downstream access in PrepareCompressor.
+  virtual void SetInflightResourceManager(InflightResourceManager* mgr) {}
 
   BufferManager* GetBufferManager() { return &buffer_mgr_; }
 

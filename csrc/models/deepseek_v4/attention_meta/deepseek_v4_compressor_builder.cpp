@@ -9,7 +9,9 @@
 
 #include "configure/environment.h"
 #include "device/device_utils.h"
+#include "executor/inflight_resource.h"
 #include "models/base/attention_meta/common.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
 
@@ -30,8 +32,8 @@ inline bool IsPaged(const ForwardRequest& req) { return req.GetInputIdsLength() 
 // blocks wide (typically 2-4 entries), so linear search is always O(1) in practice.
 // Returns -1 when global_block_idx is absent from swa_block_idx_offsets (no physical SWA
 // allocation for that FA block — callers must skip rather than write garbage).
-int MapGlobalBlockToSwa(const std::vector<int>& swa_block_ids,
-                        const std::vector<size_t>& swa_block_idx_offsets, int global_block_idx) {
+int MapGlobalBlockToSwa(const std::vector<int>& swa_block_ids, const std::vector<size_t>& swa_block_idx_offsets,
+                        int global_block_idx) {
   for (size_t i = 0; i < swa_block_idx_offsets.size(); ++i) {
     if (static_cast<int>(swa_block_idx_offsets[i]) == global_block_idx) {
       return swa_block_ids[i];
@@ -104,7 +106,8 @@ void PreparePrefillPlan(const std::vector<const ForwardRequest*>& dp_reqs,
 }
 
 void PrepareTailIndices(const std::vector<ForwardRequest>& reqs, const std::unordered_set<int64_t>& new_req_ids,
-                        CompressorSharedAttentionMeta& compressor_shared, std::shared_ptr<Context> context) {
+                        CompressorSharedAttentionMeta& compressor_shared, CompressorSlotResource* slot_resource,
+                        std::shared_ptr<Context> context) {
   if (compressor_shared.tail_read_block_tensor.shape.empty()) {
     return;
   }
@@ -125,13 +128,13 @@ void PrepareTailIndices(const std::vector<ForwardRequest>& reqs, const std::unor
       const int last_prefix_block_idx = (prefix_len - 1) / compressor_shared.block_token_num;
       const int tail_read_block_id =
           MapGlobalBlockToSwa(req.swa_kv_cache_blocks, req.swa_kv_cache_block_idx_offsets, last_prefix_block_idx);
-      KLLM_CHECK_WITH_INFO(tail_read_block_id >= 0,
-                           fmt::format("compressor tail read: global_block_idx {} not found in "
-                                       "swa_kv_cache_block_idx_offsets (req_id={} prefix_len={} swa_size={}).",
-                                       last_prefix_block_idx, req.req_id, prefix_len,
-                                       req.swa_kv_cache_block_idx_offsets.size()));
+      KLLM_CHECK_WITH_INFO(
+          tail_read_block_id >= 0,
+          fmt::format("compressor tail read: global_block_idx {} not found in "
+                      "swa_kv_cache_block_idx_offsets (req_id={} prefix_len={} swa_size={}).",
+                      last_prefix_block_idx, req.req_id, prefix_len, req.swa_kv_cache_block_idx_offsets.size()));
       tail_read_block_host.push_back(tail_read_block_id);
-      const int slot_id = compressor_shared.req_to_slot.at(req.req_id);
+      const int slot_id = slot_resource->GetUnderSchedulerInvariant(req.req_id);
       const int sub_slot_load =
           GetSubSlotId(prefix_len, kC4Ratio, compressor_shared.c4_slot_num, compressor_shared.c128_slot_num);
       tail_target_indices_host.push_back(
@@ -178,7 +181,7 @@ void PrepareTailIndices(const std::vector<ForwardRequest>& reqs, const std::unor
 }
 
 void PrepareIndices(CompressorAttentionMeta& compressor, CompressorSharedAttentionMeta& compressor_shared,
-                    bool is_paged, std::shared_ptr<Context> context) {
+                    bool is_paged, CompressorSlotResource* slot_resource, std::shared_ptr<Context> context) {
   // Local aliases so HOST_TO_SHARED_DEVICE macro resolves correctly.
   auto& context_ = context;
   auto& c4_indices_tensor = compressor_shared.c4_indices_tensor;
@@ -197,7 +200,7 @@ void PrepareIndices(CompressorAttentionMeta& compressor, CompressorSharedAttenti
     const int extend_len = static_cast<int>(req->GetInputIdsLength());
     const int prefix_len = seq_len - extend_len;
 
-    const int slot_id = compressor_shared.req_to_slot.at(req->req_id);
+    const int slot_id = slot_resource->GetUnderSchedulerInvariant(req->req_id);
     const int c4_curr_slot_id = GetSubSlotId(seq_len, kC4Ratio, c4_slot_num, c128_slot_num);
     const int c4_prev_slot_id = GetC4PrevSlotId(c4_curr_slot_id, c4_slot_num);
     const int c4_curr_page =
@@ -313,33 +316,57 @@ void PrepareCompressor(const std::vector<ForwardRequest>& forward_reqs,
     }
   }
 
-  // Free slots for requests no longer in flight
-  // NOTE: Slot eviction is intentionally NOT done here. Under max_pp_batch_num > 1, two PP batches
-  // share this CompressorSharedAttentionMeta but each call only sees its own subset of running
-  // requests, so evicting based on "not in current batch" would wrongly release slots that the
-  // other PP batch is still using. Eviction is driven by EvictFinishedRequests(), invoked when
-  // finish/recompute notifications arrive from the scheduler.
-
-  // Allocate slots for new requests
-  std::unordered_set<int64_t> new_req_ids;
-  for (const auto& req : forward_reqs) {
-    if (req.attn_dp_group_id != compressor_shared.attn_dp_group_id) continue;
-    if (compressor_shared.req_to_slot.find(req.req_id) != compressor_shared.req_to_slot.end()) {
-      continue;
-    }
-    KLLM_CHECK_WITH_INFO(
-        !compressor_shared.free_slot.empty(),
-        fmt::format("CompressorSharedAttentionMeta: free_slot pool exhausted (in-flight={}). "
-                    "Total concurrent compressor requests across all PP batches exceeded the slot pool "
-                    "size (max_batch_size * max_pp_batch_num). This usually means EvictFinishedRequests "
-                    "was not called for some finished/recomputed requests.",
-                    compressor_shared.req_to_slot.size()));
-    compressor_shared.req_to_slot.emplace(req.req_id, compressor_shared.free_slot.front());
-    compressor_shared.free_slot.pop();
-    new_req_ids.insert(req.req_id);
+  // Slot allocation and eviction is managed by InflightResourceManager::ProcessScheduleOutput
+  // in the preprocess thread. Here we only track which requests need tail index preparation
+  // (first time seen in PrepareCompressor).
+  // slot_resource_ is cached at registration time to avoid map lookup + RTTI on every step.
+  auto* slot_resource = compressor_shared.slot_resource_;
+  if (!slot_resource) {
+    KLLM_CHECK_WITH_INFO(false,
+                         "InflightResourceManager is not wired into PrepareCompressor. "
+                         "Ensure RegisterInflightResources + SetInflightResourceManager are called "
+                         "before worker threads start, and that ForwardingContext carries the reference.");
   }
 
-  PrepareTailIndices(forward_reqs, new_req_ids, compressor_shared, context);
+  // Build the set of currently active req_ids for this dp group from forward_reqs.
+  // This is used both to prune stale entries from tail_prepared_req_ids_ and to find
+  // new requests that need tail index preparation.  Using active_ids avoids acquiring
+  // the slot_resource shared_mutex for each entry — ProcessScheduleOutput guarantees
+  // that every req in executor_running_reqs already has a slot allocated.
+  std::unordered_set<int64_t> active_ids;
+  active_ids.reserve(forward_reqs.size());
+  for (const auto& req : forward_reqs) {
+    if (req.attn_dp_group_id == compressor_shared.attn_dp_group_id) {
+      active_ids.insert(req.req_id);
+    }
+  }
+
+  // Prune stale tail-prepared entries.  An entry is stale only when its slot has been freed
+  // (request finished or recomputed).  Two cases must be distinguished:
+  //   1. Entry IS in active_ids → current batch, definitely not stale → keep.
+  //   2. Entry NOT in active_ids but slot still EXISTS → belongs to another PP batch
+  //      (max_pp_batch_num > 1 shares this CompressorSharedAttentionMeta across batches) → keep.
+  //   3. Entry NOT in active_ids AND slot GONE → truly stale → erase.
+  // Using active_ids for case 1 avoids a Has() call for the majority of entries in steady state.
+  // Has() is only needed for case 2 entries (other-batch size ≈ (K-1)/K of total for K batches).
+  auto& tail_prepared = compressor_shared.tail_prepared_req_ids_;
+  for (auto it = tail_prepared.begin(); it != tail_prepared.end();) {
+    if (active_ids.count(*it) || slot_resource->Has(*it)) {
+      ++it;
+    } else {
+      it = tail_prepared.erase(it);
+    }
+  }
+
+  // Build new_req_ids: active requests not yet in tail_prepared need tail index preparation.
+  std::unordered_set<int64_t> new_req_ids;
+  for (int64_t id : active_ids) {
+    if (tail_prepared.insert(id).second) {
+      new_req_ids.insert(id);
+    }
+  }
+
+  PrepareTailIndices(forward_reqs, new_req_ids, compressor_shared, slot_resource, context);
 
   // Reset per-batch state
   flash_compressor.Reset();
@@ -372,7 +399,7 @@ void PrepareCompressor(const std::vector<ForwardRequest>& forward_reqs,
   auto& extend_lens_tensor = compressor_shared.extend_lens_tensor;
 
   if (!flash_compressor.dp_reqs.empty()) {
-    PrepareIndices(flash_compressor, compressor_shared, /*is_paged=*/false, context);
+    PrepareIndices(flash_compressor, compressor_shared, /*is_paged=*/false, slot_resource, context);
     PrepareOutLoc(flash_compressor, compressor_shared, context);
     for (const auto* req : flash_compressor.dp_reqs) {
       flash_compressor.seq_lens_host.push_back(static_cast<int>(req->forwarding_tokens->size()));
@@ -384,24 +411,12 @@ void PrepareCompressor(const std::vector<ForwardRequest>& forward_reqs,
   }
 
   if (!paged_compressor.dp_reqs.empty()) {
-    PrepareIndices(paged_compressor, compressor_shared, /*is_paged=*/true, context);
+    PrepareIndices(paged_compressor, compressor_shared, /*is_paged=*/true, slot_resource, context);
     PrepareOutLoc(paged_compressor, compressor_shared, context);
     for (const auto* req : paged_compressor.dp_reqs) {
       paged_compressor.seq_lens_host.push_back(static_cast<int>(req->forwarding_tokens->size()));
     }
     HOST_TO_SHARED_DEVICE(seq_lens, paged_compressor);
-  }
-}
-
-void EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids,
-                           CompressorSharedAttentionMeta& compressor_shared) {
-  for (int64_t req_id : finished_req_ids) {
-    auto it = compressor_shared.req_to_slot.find(req_id);
-    if (it == compressor_shared.req_to_slot.end()) {
-      continue;
-    }
-    compressor_shared.free_slot.push(it->second);
-    compressor_shared.req_to_slot.erase(it);
   }
 }
 

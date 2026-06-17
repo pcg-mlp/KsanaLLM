@@ -37,6 +37,10 @@ class DeepSeekV4AttentionMetaCreator : public AttentionMetaCreator {
   // Returns DeepSeekV4-specific builders that handle MLA / DSA prepare steps.
   std::unique_ptr<FlashAttentionMetaBuilder> CreateFlashBuilder(const AttentionBuilderConfig& config) override;
   std::unique_ptr<PagedAttentionMetaBuilder> CreatePagedBuilder(const AttentionBuilderConfig& config) override;
+
+  // Wire CompressorSlotResource into the DSv4 shared meta so PrepareCompressor
+  // can access it without a per-step map lookup. Overrides the base class no-op.
+  void WireInflightResources(InflightResourceManager* mgr, SharedAttentionMeta* shared_meta) override;
 };
 
 }  // namespace ksana_llm

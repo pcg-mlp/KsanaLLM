@@ -75,6 +75,19 @@ void ModelRunner::SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> 
 }
 
 Status ModelRunner::Start() {
+  // Store the inflight resource manager pointer in ModelInstance so that Load()
+  // can register resources once the base model is available. Both fields must
+  // be ready at this point: executor_runtime_ is constructed in Initialize()
+  // (which always runs before Start()), and model_instance_ is set via
+  // SetModelInstance() before Start() is called.
+  KLLM_CHECK_WITH_INFO(executor_runtime_ != nullptr, "executor_runtime_ must be set before Start()");
+  KLLM_CHECK_WITH_INFO(model_instance_ != nullptr, "model_instance_ must be set before Start()");
+  model_instance_->SetInflightResourceManager(executor_runtime_->GetInflightResourceManager().get());
+
+  // Cache raw pointer to avoid a shared_ptr copy (atomic refcount) on the hot preprocess path.
+  // Safe: executor_runtime_ outlives all worker threads started below.
+  inflight_resource_mgr_ = executor_runtime_->GetInflightResourceManager().get();
+
   preprocess_thread_ = std::thread(&ModelRunner::HandlePreprocess, this);
   execute_thread_ = std::thread(&ModelRunner::HandleExecute, this);
 
@@ -185,6 +198,14 @@ Status ModelRunner::HandlePreprocess() {
       }
     }
 
+    {
+      // Compressor slot alloc/free is now handled by InflightResourceManager::ProcessScheduleOutput,
+      // which must be called before BuildModelInput so that new running_reqs have their slots
+      // allocated and finished/recomputed reqs have their slots freed before PrepareCompressor runs.
+      PROFILE_EVENT_SCOPE(preprocess_inflight_resource, "Exec.HandlePreprocess.InflightResource");
+      inflight_resource_mgr_->ProcessScheduleOutput(*schedule_output);
+    }
+
     std::shared_ptr<NewModelInput> model_input = std::make_shared<NewModelInput>();
     {
       PROFILE_EVENT_SCOPE(preprocess_build_model_input, "Exec.HandlePreprocess.BuildModelInput");
@@ -258,24 +279,6 @@ Status ModelRunner::HandleExecute() {
     }
     GetHiddenShape(model_input->schedule_output, hidden_unit->tensor.shape);
     hidden_unit->tensor.dtype = GetHiddenDataType();
-
-    {
-      // Compressor slot eviction is intentionally done BEFORE Forward (i.e. before any Prepare()
-      // call inside the model) so that when a single schedule_output carries BOTH new running_reqs
-      // AND accumulated finish_req_ids / recompute_req_ids from prior steps, the freed slots are
-      // available for the upcoming Prepare() to consume. Doing this in the reverse order can
-      // exhaust the per-rank CompressorMeta slot pool whenever the master coalesces "finish a
-      // batch + start a new batch" into a single dispatch (the dominant failure mode after mass
-      // client aborts: running_reqs goes empty for one or more schedule rounds, finish_req_ids
-      // stays buffered in batch_state, and the next non-empty schedule round dispatches them
-      // together).
-      // Applied uniformly on sampling and non-sampling ranks; MTP on the sampling rank operates
-      // on executor_running_reqs of the same schedule_output, which never overlap with
-      // finish_req_ids of that schedule_output (a req cannot be simultaneously "forwarded this
-      // step" and "already finished in a prior step"), so MTP does not need a separate evict point.
-      PROFILE_EVENT_SCOPE(execute_evict_compressor, "Exec.HandleExecute.EvictCompressorSlots");
-      executor_runtime_->EvictCompletedCompressorSlots(model_input->schedule_output);
-    }
 
     {
       PROFILE_EVENT_SCOPE(execute_forward_launch, "Exec.HandleExecute.ForwardLaunch");

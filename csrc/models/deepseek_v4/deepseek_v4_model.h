@@ -92,6 +92,9 @@ class DeepSeekV4Model : public CommonModel {
 
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
+  // Register compressor slot resource (and any future DSv4 inflight resources).
+  void RegisterInflightResources(InflightResourceManager& mgr) override;
+
  protected:
   using CommonModel::GetHiddenUnitBufferTensors;
   using CommonModel::mhc_buffers_;

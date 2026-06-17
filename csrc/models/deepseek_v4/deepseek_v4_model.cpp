@@ -7,6 +7,7 @@
 #include "device/device_utils.h"
 #include "layers/assemble_tokens_hidden_layer.h"
 #include "layers/emb_lookup_layer.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "profiler/profile_event.h"
 #include "profiler/sched_event_tracer.h"
 
@@ -363,6 +364,12 @@ DeepSeekV4Model::DeepSeekV4Model(const ModelConfig& model_config, const RuntimeC
   model_run_config.position_encoding = PositionEncoding::ROPE;
 
   CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
+}
+
+void DeepSeekV4Model::RegisterInflightResources(InflightResourceManager& mgr) {
+  auto slot_res = std::make_shared<CompressorSlotResource>();
+  slot_res->Init(runtime_config_);
+  mgr.RegisterResource("compressor_slot", std::move(slot_res));
 }
 
 Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,

@@ -72,6 +72,12 @@ class ModelRunner {
   // The really executor runtime.
   std::shared_ptr<ExecutorRuntime> executor_runtime_ = nullptr;
 
+  // Raw pointer to the InflightResourceManager owned by executor_runtime_.
+  // Cached here to avoid a shared_ptr copy (and its atomic refcount operations)
+  // on the hot preprocess path. Lifetime: executor_runtime_ outlives all
+  // worker threads, so this pointer is valid throughout HandlePreprocess.
+  InflightResourceManager* inflight_resource_mgr_ = nullptr;
+
   std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool_ = nullptr;
 
   const size_t mtp_step_num_;

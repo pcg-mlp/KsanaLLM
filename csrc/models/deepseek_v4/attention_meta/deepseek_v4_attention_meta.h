@@ -17,6 +17,9 @@
 
 namespace ksana_llm {
 
+// Forward declaration to avoid depending on executor/ from models/deepseek_v4/.
+class CompressorSlotResource;
+
 // Compressor-specific shared tensors and persistent per-request state.
 // Pre-allocated once at model startup; shared tensors serve as the backing store
 // from which per-batch CompressorAttentionMeta tensor views are sliced.
@@ -54,10 +57,6 @@ struct CompressorSharedAttentionMeta {
   Tensor c4_indexer_state_buffer;
   Tensor c128_state_buffer;
 
-  // Persistent cross-batch slot management
-  std::unordered_map<int64_t, int> req_to_slot;
-  std::queue<int> free_slot;
-
   // Configuration fields (set by Init, used by PrepareCompressor*)
   int c4_slot_num = 2;
   int c128_slot_num = 1;
@@ -68,6 +67,16 @@ struct CompressorSharedAttentionMeta {
   int block_token_num = 0;
   uint32_t attn_dp_group_id = 0;
   uint32_t attn_dp_rank_id = 0;
+
+  // Cached at registration time; used directly by PrepareCompressor / PrepareIndices
+  // to avoid map lookup + dynamic_cast on every forward step.
+  CompressorSlotResource* slot_resource_ = nullptr;
+
+  // Tracks which requests have already had their tail indices prepared
+  // (used by PrepareTailIndices). Accessed exclusively from the execute thread,
+  // therefore no locking needed. Stale entries are lazily pruned in
+  // PrepareCompressor by checking whether the slot still exists.
+  std::unordered_set<int64_t> tail_prepared_req_ids_;
 
   // Allocates all tensors and initialises slot management.
   // No-op when use_dsv4_attn is false.

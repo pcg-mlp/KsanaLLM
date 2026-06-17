@@ -20,6 +20,10 @@ ExecutorRuntime::ExecutorRuntime(std::shared_ptr<Environment> env, std::shared_p
   // armed by Reset(1) inside Forward() and released by Notify() at the end of MtpForward().
   prev_mtp_done_ = std::make_shared<Waiter>(0);
 
+  // The inflight resource manager does not depend on any external objects; create it early so
+  // that it is always available regardless of whether Initialize() is called.
+  inflight_resource_mgr_ = std::make_shared<InflightResourceManager>();
+
   KLLM_LOG_INFO << "ExecutorRuntime serialize_main_mtp=" << serialize_main_mtp_
                 << " (IsSamplingNode=" << context_->global->IsSamplingNode()
                 << ", mtp_step_num=" << context_->global->GetMtpStepNum()
@@ -120,30 +124,6 @@ void ExecutorRuntime::UpdateCachedRequests(std::shared_ptr<ScheduleOutput> sched
   for (auto& req_patch : schedule_output->running_req_patches) {
     executor_request_manager_->UpdateInferRequest(req_patch->req_id, req_patch);
   }
-}
-
-void ExecutorRuntime::EvictCompletedCompressorSlots(const std::shared_ptr<ScheduleOutput>& schedule_output) {
-  // IMPORTANT: This must be called from the execute thread (in lock-step with Forward), NOT from
-  // the preprocess thread. Reason: HandlePreprocess and HandleExecute are pipelined threads; the
-  // preprocess thread can race ahead and queue several model_inputs while the execute thread is
-  // still forwarding earlier ones. If we evicted here in the preprocess path, a later SO's
-  // finish_req_ids could release a request's compressor slot before the execute thread reaches an
-  // earlier SO's Forward (which still needs that slot for Prepare()) — producing a spurious
-  // "req appears without a slot but kv > 0" assertion.
-  if (!model_instance_) {
-    return;
-  }
-  std::vector<int64_t> evicted_req_ids;
-  for (const auto& vec : schedule_output->finish_req_ids) {
-    evicted_req_ids.insert(evicted_req_ids.end(), vec.begin(), vec.end());
-  }
-  for (const auto& vec : schedule_output->recompute_req_ids) {
-    evicted_req_ids.insert(evicted_req_ids.end(), vec.begin(), vec.end());
-  }
-  if (evicted_req_ids.empty()) {
-    return;
-  }
-  model_instance_->EvictFinishedRequests(evicted_req_ids);
 }
 
 void ExecutorRuntime::RebuildScheduleOutput(std::shared_ptr<ScheduleOutput> schedule_output) {

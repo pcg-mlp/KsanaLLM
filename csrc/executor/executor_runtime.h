@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "executor/executor_request_manager.h"
+#include "executor/inflight_resource.h"
 #include "executor/model_builder.h"
 #include "executor/model_executor.h"
 #include "executor/model_sampler.h"
@@ -46,6 +47,10 @@ class ExecutorRuntime {
   // 暴露 model_sampler，供 ModelRunner 在 build-ahead 同步路径（Forward→Sampling 同线程）使用。
   std::shared_ptr<ModelSampler> GetModelSampler() const { return model_sampler_; }
 
+  // The inflight resource manager drives automatic allocation and release of per-request
+  // runtime resources (e.g. compressor slots). owned by ExecutorRuntime.
+  std::shared_ptr<InflightResourceManager> GetInflightResourceManager() { return inflight_resource_mgr_; }
+
   Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input,
                          const RunMode run_mode);
   // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上 ParseFromRequests，与 Execute forward 重叠。
@@ -61,12 +66,6 @@ class ExecutorRuntime {
 
   // Apply incremental patch, get full schedule_output again.
   void RebuildScheduleOutput(std::shared_ptr<ScheduleOutput> schedule_output);
-
-  // Release per-request state held by optional forward-meta modules (currently CompressorMeta for
-  // DSv4) for requests that have finished or are being recomputed in `schedule_output`. Must be
-  // invoked from the execute thread (in lock-step with Forward), not from the preprocess thread —
-  // see the implementation comment for details on the pipelining hazard.
-  void EvictCompletedCompressorSlots(const std::shared_ptr<ScheduleOutput>& schedule_output);
 
   // Wake any thread blocked inside Forward()'s prev_mtp_done_->Wait(). Must be called by the owner
   // (ModelRunner::Stop) after the input/output queues have been stopped, so that the execute thread
@@ -91,6 +90,9 @@ class ExecutorRuntime {
 
   // The hidden buffer used for manager.
   std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool_ = nullptr;
+
+  // The inflight resource manager.
+  std::shared_ptr<InflightResourceManager> inflight_resource_mgr_ = nullptr;
 
   // Cache all necessary request informations.
   std::shared_ptr<ExecutorRequestManager> executor_request_manager_ = nullptr;

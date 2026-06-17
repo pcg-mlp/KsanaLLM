@@ -12,8 +12,6 @@
 #include "device/device_types.h"
 #include "models/base/attention_meta/flash_attention_meta_builder.h"
 #include "models/base/attention_meta/paged_attention_meta_builder.h"
-#include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta.h"
-#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_builder.h"
 #include "profiler/profile_event.h"
 #include "runtime/fast_path_controller.h"
 #include "utils/singleton.h"
@@ -292,13 +290,9 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_req
   dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 }
 
-void ModelInput::EvictFinishedRequests(const std::vector<int64_t>& finished_req_ids) {
-  if (finished_req_ids.empty()) {
-    return;
-  }
-  auto* dsv4_shared = dynamic_cast<DeepSeekV4SharedAttentionMeta*>(shared_attention_meta.get());
-  if (dsv4_shared != nullptr) {
-    ::ksana_llm::EvictFinishedRequests(finished_req_ids, dsv4_shared->compressor);
+void ModelInput::SetInflightResourceManager(InflightResourceManager* mgr) {
+  if (attention_meta_creator_) {
+    attention_meta_creator_->WireInflightResources(mgr, shared_attention_meta.get());
   }
 }
 
