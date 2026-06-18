@@ -6,6 +6,9 @@
 
 #include "configure/environment.h"
 #include "configure/json_config_utils.h"
+#ifdef ENABLE_CUDA
+#include "device/nvidia/cuda_utils.h"
+#endif
 
 #include "utils/singleton.h"
 namespace ksana_llm {
@@ -74,12 +77,19 @@ Status Qwen3MoeConfigParser::ParseMoeConfig(const nlohmann::json &config_json,
   qwen3_moe_config->moe_config.router_aux_loss_coef = config_json.value("router_aux_loss_coef", 0.001f);
   qwen3_moe_config->moe_config.norm_topk_prob = config_json.value("norm_topk_prob", true);
 
+  // Triton fused_moe requires pre-compiled kernels that are only available on SM90+.
+#ifdef ENABLE_CUDA
+  if (GetCurrentDeviceSmVersion() >= kMinSmVersionForVllmMoe) {
+    qwen3_moe_config->moe_config.use_vllm_moe = true;
+  }
+#endif
+
   KLLM_LOG_INFO << fmt::format(
       "MoE Config: num_experts={}, num_experts_per_tok={}, moe_intermediate_size={}, "
-      "has_shared_experts={}, norm_topk_prob={}",
+      "has_shared_experts={}, norm_topk_prob={}, use_vllm_moe={}",
       qwen3_moe_config->moe_config.num_experts, qwen3_moe_config->moe_config.experts_topk,
       qwen3_moe_config->moe_config.moe_inter_size, qwen3_moe_config->has_shared_experts,
-      qwen3_moe_config->moe_config.norm_topk_prob);
+      qwen3_moe_config->moe_config.norm_topk_prob, qwen3_moe_config->moe_config.use_vllm_moe);
 
   return Status();
 }

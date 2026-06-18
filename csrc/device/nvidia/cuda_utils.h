@@ -99,6 +99,19 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
     }                                                                                                 \
   } while (0)
 
+// Minimum SM version for triton fused_moe pre-compiled kernels.
+static constexpr int kMinSmVersionForVllmMoe = 90;
+
+// Returns the SM version (major*10 + minor) of the current CUDA device.
+// Returns 0 on failure (no GPU, driver not initialized, etc.).
+inline int GetCurrentDeviceSmVersion() {
+  int device = 0;
+  if (cudaGetDevice(&device) != cudaSuccess) return 0;
+  cudaDeviceProp prop{};
+  if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) return 0;
+  return prop.major * 10 + prop.minor;
+}
+
 // Adapted from
 // https://github.com/NVIDIA/nvbench/blob/main/nvbench/detail/l2flush.cuh
 // Used to flush the L2 cache for more precise measurements

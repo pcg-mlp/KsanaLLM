@@ -49,12 +49,19 @@ class FusedMoeKernelTestSuit : public testing::Test {
   void SetUp() override {
     CUDA_CHECK(cudaGetDevice(&device));
     CUDA_CHECK(cudaStreamCreate(&stream));
-    CUDA_CHECK(cudaDeviceSynchronize());
+
+    int major = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+    if (major < 9) {
+      GTEST_SKIP() << "Skipping test because SM version is less than 90";
+    }
   }
 
   void TearDown() override {
     CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaDeviceSynchronize());
+    if (stream) {
+      CUDA_CHECK(cudaStreamDestroy(stream));
+    }
   }
 
  protected:
@@ -111,16 +118,6 @@ class FusedMoeKernelTestSuit : public testing::Test {
     }
 
     return true;
-  }
-
-  void ValidTestHardware() {
-    int major = 0, minor = 0;
-    CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-    CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
-    if (major < 9) {
-      GTEST_SKIP() << "Skipping test because SM version is less than 90";
-      return;
-    }
   }
 
   template <typename T>
@@ -305,22 +302,18 @@ class FusedMoeKernelTestSuit : public testing::Test {
 };
 
 TEST_F(FusedMoeKernelTestSuit, FusedMoeKernelFP16Test) {
-  ValidTestHardware();
   TestFusedMoeKernelPerformance<half>();
 }
 
 TEST_F(FusedMoeKernelTestSuit, FusedMoeKernelBF16Test) {
-  ValidTestHardware();
   TestFusedMoeKernelPerformance<__nv_bfloat16>();
 }
 
 TEST_F(FusedMoeKernelTestSuit, FusedMoeKernelComprehensiveFP16Test) {
-  ValidTestHardware();
   TestFusedMoeKernelCorrectness<half>();
 }
 
 TEST_F(FusedMoeKernelTestSuit, FusedMoeKernelComprehensiveBF16Test) {
-  ValidTestHardware();
   TestFusedMoeKernelCorrectness<__nv_bfloat16>();
 }
 

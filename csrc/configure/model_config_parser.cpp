@@ -7,6 +7,9 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#ifdef ENABLE_CUDA
+#include "device/nvidia/cuda_utils.h"
+#endif
 
 #include "fmt/core.h"
 
@@ -507,6 +510,13 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       PrepareGPT2Attributes(config_json, model_config);
     } else if (model_config.type == "qwen2_moe" || model_config.type == "qwen3_moe") {
       PrepareQwenMoeAttributes(config_json, model_config);
+      if (model_config.type == "qwen3_moe") {
+#ifdef ENABLE_CUDA
+        if (GetCurrentDeviceSmVersion() >= kMinSmVersionForVllmMoe) {
+          model_config.moe_config.use_vllm_moe = true;
+        }
+#endif
+      }
     } else if (model_config.type == "llama4") {
       config_json = config_json["text_config"];
       model_config.weight_data_type = GetModelDataType(config_json, model_config);

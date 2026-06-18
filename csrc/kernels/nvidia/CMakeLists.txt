@@ -17,9 +17,9 @@ target_link_libraries(llm_kernels_nvidia_kernel_triton PUBLIC utils ${TORCH_LIBR
 # cc_test(grouped_topk_test SRCS ${GROUPED_TOPK_TEST_SRCS} DEPS
 #     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 
-# file(GLOB_RECURSE FUSED_MOE_TEST_SRCS fused_moe_test.cpp)
-# cc_test(fused_moe_test SRCS ${FUSED_MOE_TEST_SRCS} DEPS
-#     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
+file(GLOB_RECURSE FUSED_MOE_TEST_SRCS fused_moe_test.cpp)
+cc_test(fused_moe_test SRCS ${FUSED_MOE_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
 # file(GLOB_RECURSE FUSED_MOE_GPTQ_AWQ_TEST_SRCS fused_moe_gptq_awq_test.cpp)
 # cc_test(fused_moe_gptq_awq_test SRCS ${FUSED_MOE_GPTQ_AWQ_TEST_SRCS} DEPS

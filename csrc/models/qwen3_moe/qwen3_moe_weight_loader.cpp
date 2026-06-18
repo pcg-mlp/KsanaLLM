@@ -89,9 +89,16 @@ Status Qwen3MoeWeightLoader::process_experts_proj(std::unordered_map<std::string
     const std::vector<std::string> weight_suffixs = {"weight"};
     for (const std::string& weight_suffix : weight_suffixs) {
       std::vector<std::string> concat_names;
+      // use_vllm_moe=true: layout is [gate, up] (vLLM convention); false: [up, gate].
+      // Tensor key "up_gate_proj" is a fixed storage name, independent of actual layout.
+      const bool use_vllm_moe = qwen3_moe_config->moe_config.use_vllm_moe;
       for (int expert_idx = 0; expert_idx < num_experts; expert_idx++) {
-        concat_names.push_back(fmt::format("{}{}.up_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
-        concat_names.push_back(fmt::format("{}{}.gate_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
+        const char* first = use_vllm_moe ? "gate_proj" : "up_proj";
+        const char* second = use_vllm_moe ? "up_proj" : "gate_proj";
+        concat_names.push_back(
+            fmt::format("{}{}.{}.{}", weight_prefix_name, expert_idx, first, weight_suffix));
+        concat_names.push_back(
+            fmt::format("{}{}.{}.{}", weight_prefix_name, expert_idx, second, weight_suffix));
       }
       common_weight_loader_->AutoMergeWeight(concat_names, gate_up_proj_name + weight_suffix, device_model_weights,
                                              dev_rank);
