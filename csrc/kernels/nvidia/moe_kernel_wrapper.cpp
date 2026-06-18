@@ -38,6 +38,7 @@
 #include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant_fp4.h"
 #include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/per_tensor_quant_by_scale.h"
 #include "csrc/kernels/nvidia/moe/moe_wna16/moe_wna16.h"
+#include "csrc/kernels/nvidia/moe_utils/moe_sum_vec.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
@@ -814,10 +815,31 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
       a2_scale += chunk_size * hidden_size * i * sizeof(float);
     }
     void* curr_out_hidden_states = output_hidden_states + sizeof(T) * chunk_size * hidden_size * i;
-    llm_kernels::nvidia::InvokeMoeSum<T, UseExpertParallel>(intermediate_cache3, curr_out_hidden_states, curr_topk_ids,
-                                                            tokens_in_chunk, topk, hidden_size, stream);
+    // scale=1.0f: routed_scaling_factor already applied in topk_weights via InvokeTopkGatingSoftmax;
+    // pass non-1.0 to activate InvokeMoeSumVec with fused scaling (e.g. for Qwen3 MOE).
+    InvokeMoeSumDispatch<T, UseExpertParallel>(intermediate_cache3, curr_out_hidden_states, curr_topk_ids,
+                                              tokens_in_chunk, topk, hidden_size, 1.0f, stream);
   }
 }
+
+template <typename T, bool UseExpertParallel>
+void InvokeMoeSumDispatch(void* input, void* output, void* topk_ids, int num_tokens, int topk, int hidden_size,
+                          float scale, cudaStream_t stream) {
+  if (scale != 1.0f) {
+    llm_kernels::nvidia::InvokeMoeSumVec<T>(input, output, num_tokens, topk, hidden_size, scale, stream);
+  } else {
+    llm_kernels::nvidia::InvokeMoeSum<T, UseExpertParallel>(input, output, topk_ids, num_tokens, topk, hidden_size,
+                                                            stream);
+  }
+}
+
+#define INVOKE_MOE_SUM_DISPATCH(T)                                                                          \
+  template void InvokeMoeSumDispatch<T, true>(void*, void*, void*, int, int, int, float, cudaStream_t);     \
+  template void InvokeMoeSumDispatch<T, false>(void*, void*, void*, int, int, int, float, cudaStream_t)
+INVOKE_MOE_SUM_DISPATCH(float);
+INVOKE_MOE_SUM_DISPATCH(half);
+INVOKE_MOE_SUM_DISPATCH(__nv_bfloat16);
+#undef INVOKE_MOE_SUM_DISPATCH
 
 #define FUSEDMOE(T)                                                                                                  \
   template void InvokeFusedMoe<T, true>(                                                                             \
