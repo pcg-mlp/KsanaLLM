@@ -21,13 +21,35 @@ def compile_cuda(prim_func,
     def fix_cuda_version():
         try:
             import cuda.bindings.driver as cuda
+            import subprocess
+            import re
+
             OLD_CUDA_VERSION = cuda.CUDA_VERSION
 
+            # Use nvcc to get the actual CUDA toolkit version (not cuda-python binding version).
+            # cuda-python may report a different version (e.g., CUDA 13.x) than the installed
+            # toolkit (e.g., CUDA 12.9), causing tilelang to select the wrong CCCL header path.
+            try:
+                result = subprocess.run(
+                    ["nvcc", "--version"], capture_output=True, text=True, check=True
+                )
+                match = re.search(r"release (\d+)\.(\d+)", result.stdout)
+                if match:
+                    major, minor = int(match.group(1)), int(match.group(2))
+                    version = major * 1000 + minor * 10
+                    cuda.CUDA_VERSION = version
+                    print(f"Reset CUDA_VERSION from {OLD_CUDA_VERSION} to {version}"
+                          f" (detected from nvcc {major}.{minor}) succ.")
+                    return
+            except (subprocess.SubprocessError, FileNotFoundError, AttributeError):
+                pass
+
+            # Fallback: use driver version if nvcc is not available
             err, = cuda.cuInit(0)
             err, version = cuda.cuDriverGetVersion()
             cuda.CUDA_VERSION = version
-            print(f"Reset CUDA_VERSION from {OLD_CUDA_VERSION} to {version} succ.")
-        except AttributeError:
+            print(f"Reset CUDA_VERSION from {OLD_CUDA_VERSION} to {version} (from driver) succ.")
+        except (AttributeError, ImportError):
             print("Reset CUDA_VERSION failed.")
 
     # Hack tilelang, so we can extract the shared memory size.

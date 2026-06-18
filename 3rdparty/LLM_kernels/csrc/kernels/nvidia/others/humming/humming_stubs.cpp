@@ -35,8 +35,8 @@ const KernelMeta* HummingJitCompiler::SelectKernel(int64_t, int64_t, int64_t, Ge
   return nullptr;
 }
 
-std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryH20Configs(int64_t, int64_t, int64_t,
-                                                                                  ComputeDtype, GemmType) {
+std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelConfigs(int64_t, int64_t, int64_t,
+                                                                                     ComputeDtype, GemmType) {
   return {};
 }
 

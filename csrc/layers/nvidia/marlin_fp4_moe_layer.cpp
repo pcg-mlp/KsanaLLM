@@ -203,6 +203,17 @@ template <typename T>
 Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
                                    const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
                                    const Tensor* e_score_bias, const Tensor* input_ids) {
+  // Lazy creation of profiling CUDA events (created once, reused across forwards)
+  bool do_profile = (perf_stats_ != nullptr);
+  if (do_profile) {
+    if (evt_gemm1_start_ == nullptr) {
+      cudaEventCreate(&evt_gemm1_start_);
+      cudaEventCreate(&evt_gemm1_end_);
+      cudaEventCreate(&evt_gemm2_start_);
+      cudaEventCreate(&evt_gemm2_end_);
+    }
+  }
+
   // Assign workspace pointers on first call
   if (set_workspace_buffer_info_) {
     set_workspace_buffer_info_ = false;
@@ -323,6 +334,8 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
       // Zero workspace locks before kernel launch to prevent deadlock from stale lock values
       cudaMemsetAsync(marlin_workspace_, 0, marlin_workspace_size, stream);
 
+      if (do_profile) cudaEventRecord(evt_gemm1_start_, stream);
+
       llm_kernels::nvidia::marlin_moe_wna16::moe_wna16_marlin_gemm(
           curr_hidden_states,                           // a
           intermediate_cache1_,                         // c
@@ -361,6 +374,8 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
           marlin_compute_dtype,                         // compute_dtype
           stream);
 
+      if (do_profile) cudaEventRecord(evt_gemm1_end_, stream);
+
       // ----- SiluAndMul: intermediate_cache1 → intermediate_cache2 -----
       const size_t elements_num = tokens_in_chunk * expert_topk_ * expert_inter_size_ * 2;
       if (use_expert_parallel) {
@@ -392,6 +407,8 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
 
       // Zero workspace locks before kernel launch to prevent deadlock from stale lock values
       cudaMemsetAsync(marlin_workspace_, 0, marlin_workspace_size, stream);
+
+      if (do_profile) cudaEventRecord(evt_gemm2_start_, stream);
 
       llm_kernels::nvidia::marlin_moe_wna16::moe_wna16_marlin_gemm(
           intermediate_cache2_,                                  // a
@@ -431,6 +448,8 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
           marlin_compute_dtype,                                  // compute_dtype
           stream);
 
+      if (do_profile) cudaEventRecord(evt_gemm2_end_, stream);
+
       // ----- MoeSum: intermediate_cache3 → output [tokens, hidden_size] -----
       if (use_expert_parallel) {
         llm_kernels::nvidia::InvokeMoeSum<T, true>(intermediate_cache3_, curr_output, curr_topk_ids,
@@ -440,6 +459,18 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
         llm_kernels::nvidia::InvokeMoeSum<T, false>(intermediate_cache3_, curr_output, curr_topk_ids,
                                                     static_cast<int>(tokens_in_chunk), static_cast<int>(expert_topk_),
                                                     static_cast<int>(hidden_size), stream);
+      }
+
+      // Accumulate per-chunk GEMM times
+      // NOTE: need to sync the latest event before reading elapsed times — all prior stream
+      // events are guaranteed complete once the last event is done since kernels execute in order.
+      if (do_profile) {
+        cudaEventSynchronize(evt_gemm2_end_);
+        float gemm1_ms = 0.f, gemm2_ms = 0.f;
+        cudaEventElapsedTime(&gemm1_ms, evt_gemm1_start_, evt_gemm1_end_);
+        cudaEventElapsedTime(&gemm2_ms, evt_gemm2_start_, evt_gemm2_end_);
+        perf_stats_->gemm1_time_ms += gemm1_ms;
+        perf_stats_->gemm2_time_ms += gemm2_ms;
       }
     }
   };

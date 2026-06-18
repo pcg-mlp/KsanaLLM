@@ -5,7 +5,7 @@
 #
 # Subcommands:
 #   generate       Generate a humming GEMM kernel .cu source file
-#   query-configs  Query H20 heuristic for recommended kernel configurations
+#   query-configs  Query humming heuristic for recommended kernel configurations
 #
 # Usage:
 #   python3 humming_tool.py generate --size_n 7168 --size_k 2048 ...
@@ -43,6 +43,7 @@ sys.modules["humming.ops.input"] = types.ModuleType("humming.ops.input")
 sys.modules["humming.ops.moe"] = types.ModuleType("humming.ops.moe")
 sys.modules["humming.ops.weight"] = types.ModuleType("humming.ops.weight")
 sys.modules["humming.ops.bench"] = types.ModuleType("humming.ops.bench")
+sys.modules["humming.ops.hadamard"] = types.ModuleType("humming.ops.hadamard")
 
 # ════════════════════════════════════════════════════════════════════════════════
 # Shared humming imports and helpers
@@ -62,7 +63,7 @@ def _import_humming():
         from humming.kernel.humming import HummingKernel, KernelRuntime
         from humming.config.enum import GemmType, MmaType, WeightScaleType
         from humming import dtypes
-        from humming.tune.sm90_h20 import Sm90H20Heuristics
+        from humming.tune import get_heuristics_class
         from humming.layer import HummingLayerMeta
     except ImportError as e:
         print(f"ERROR: Failed to import humming package: {e}", file=sys.stderr)
@@ -76,7 +77,7 @@ def _import_humming():
         "MmaType": MmaType,
         "WeightScaleType": WeightScaleType,
         "dtypes": dtypes,
-        "Sm90H20Heuristics": Sm90H20Heuristics,
+        "get_heuristics_class": get_heuristics_class,
         "HummingLayerMeta": HummingLayerMeta,
     }
     return _humming_imports
@@ -160,7 +161,7 @@ def _cmd_generate(args):
 
     meta = _build_layer_meta(args, a_dtype, use_fused_e8m0_scale, weight_scale_type)
 
-    config = m["Sm90H20Heuristics"].get_config(meta, shape_m=args.block_m, gemm_type=gemm_type)
+    config = m["get_heuristics_class"]().get_config(meta, shape_m=args.block_m, gemm_type=gemm_type)
 
     kernel = m["HummingKernel"](
         shape_n=args.size_n,
@@ -226,7 +227,7 @@ def _cmd_generate(args):
 
 def _add_query_configs_args(subparsers):
     p = subparsers.add_parser("query-configs",
-                              help="Query H20 heuristic for recommended kernel configs")
+                              help="Query humming heuristic for recommended kernel configs")
     p.add_argument("--size_n", type=int, required=True, help="GEMM N dimension")
     p.add_argument("--size_k", type=int, required=True, help="GEMM K dimension")
     p.add_argument("--num_experts", type=int, required=True, help="Number of experts")
@@ -243,8 +244,7 @@ def _cmd_query_configs(args):
 
         meta = _build_layer_meta(args, a_dtype, use_fused_e8m0_scale, weight_scale_type)
 
-        h = m["Sm90H20Heuristics"]()
-        configs = h.get_configs(meta, gemm_type=m["GemmType"].INDEXED)
+        configs = m["get_heuristics_class"]().get_configs(meta, gemm_type=m["GemmType"].INDEXED)
 
         results = []
         for entry in configs:

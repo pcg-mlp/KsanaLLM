@@ -61,7 +61,7 @@ class HummingJitCompiler {
   HummingJitCompiler& operator=(const HummingJitCompiler&) = delete;
 
   /// Compile and load all kernel variants for a given problem shape.
-  /// Internally queries H20 heuristic, generates/compiles/loads each variant.
+  /// Internally queries humming heuristic, generates/compiles/loads each variant.
   /// Thread-safe and multi-process safe. No-op if this shape was already compiled.
   void CompileKernels(int64_t size_n, int64_t size_k, int64_t num_experts, ComputeDtype compute_dtype,
                       GemmType gemm_type);
@@ -80,10 +80,10 @@ class HummingJitCompiler {
   const std::vector<KernelMeta>& GetKernelTable() const { return kernel_table_; }
 
  private:
-  /// Query humming H20 heuristic for optimal kernel configs for a given problem.
+  /// Query humming heuristic for optimal kernel configs for a given problem.
   /// Falls back to block_m={64,128} if the Python query fails.
-  std::vector<KernelConfig> QueryH20Configs(int64_t size_n, int64_t size_k, int64_t num_experts,
-                                            ComputeDtype compute_dtype, GemmType gemm_type);
+  std::vector<KernelConfig> QueryKernelConfigs(int64_t size_n, int64_t size_k, int64_t num_experts,
+                                               ComputeDtype compute_dtype, GemmType gemm_type);
 
   /// Step 1: Call humming_tool.py generate to produce .cu source.
   void GenerateSource(const KernelConfig& config, const std::string& output_path);
@@ -135,7 +135,7 @@ class HummingJitCompiler {
   std::set<std::string> loaded_keys_;
 
   // Set of (size_n, size_k, num_experts, compute_dtype, gemm_type) tuples
-  // for shapes that have already been compiled.  Prevents redundant H20 queries
+  // for shapes that have already been compiled.  Prevents redundant heuristic queries
   // and compilation when CompileKernels(shape) is called from multiple layers.
   std::set<std::tuple<int64_t, int64_t, int64_t, int, int>> compiled_shapes_;
 

@@ -384,7 +384,7 @@ struct RuntimeConfig {
   W4AFP8_MOE_BACKEND w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
 
   // Backend type of FP4 MoE (for DeepSeek V4 FP4 models)
-  FP4_MOE_BACKEND_TYPE fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4Marlin;
+  FP4_MOE_BACKEND_TYPE fp4_moe_backend = FP4_MOE_BACKEND_TYPE::FP4HummingW4A8;
 
   // Whether to normalize q and k before rotary position embedding in attention.
   // bool enable_qk_pre_norm_before_rotary_pos = false;

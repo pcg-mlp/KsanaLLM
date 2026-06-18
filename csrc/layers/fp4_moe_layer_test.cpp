@@ -22,9 +22,25 @@
 #  include "layers/marlin_fp4_moe_layer.h"
 #  include "layers/moe_layer.h"
 #  include "layers/moe_layer_factory.h"
+#  include "layers/moe_perf_stats.h"
 #  include "utils/tensor.h"
 
 namespace ksana_llm {
+
+// ===========================================================================
+// Benchmark result for one (layer, token_count) pair
+// ===========================================================================
+struct BenchResult {
+  float total_ms;
+  float gemm1_ms;
+  float gemm2_ms;
+  double gemm1_flops;
+  double gemm2_flops;
+  double total_flops;
+  double gemm1_bytes;
+  double gemm2_bytes;
+  double total_bytes;
+};
 
 // ===========================================================================
 // Backend enum
@@ -53,7 +69,7 @@ static const Fp4MoeTestConfig kProEP8 = {"Pro_EP8", 7168, 3072, 384, 1, 8};
 // NOTE(jinxcwu) 可以多加一点做完整的性能测试覆盖，目前为了节省测试时间设置的比较小
 // ===========================================================================
 static const std::vector<size_t> kTokenSizes = {1, 4, 16};
-// static const std::vector<size_t> kTokenSizes = {16, 32, 64, 128, 256, 512, 1024};
+// static const std::vector<size_t> kTokenSizes = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
 
 static constexpr int kWarmupIters = 20;
 static constexpr int kBenchIters = 50;
@@ -438,20 +454,145 @@ std::vector<Tensor> SetupPersistentInputs(const ProcessedWeights& pw, Fp4Backend
   return inputs;
 }
 // ===========================================================================
+// Compute FLOPs for the GEMM kernels in a single MoE Forward.
+//
+// NOTE: These formulas assume ALL topk-selected tokens are computed on the
+// current rank, which holds for TP-only configurations.  Under Expert
+// Parallelism (EP, expert_para_size > 1) each rank only processes tokens
+// routed to its local expert subset, so the effective FLOPs depend on the
+// actual token-expert distribution and cannot be computed from static config
+// alone.  The driver therefore skips TFLOPS output for EP configs.
+//
+//   gemm1: 2 * M * topk * hidden * (inter * 2 / moe_tp)
+//   gemm2: 2 * M * topk * hidden * (inter / moe_tp)
+//   total: gemm1 + gemm2   (non-GEMM FLOPs are negligible)
+// ===========================================================================
+void ComputeFlops(const Fp4MoeTestConfig& cfg, size_t num_tokens, double& gemm1_flops, double& gemm2_flops,
+                  double& total_flops) {
+  size_t moe_tp = ComputeMoeTp(cfg);
+  size_t inter_per_rank = ComputeInterPerRank(cfg);
+  size_t K = cfg.hidden_size;
+  double M = static_cast<double>(num_tokens);
+  double topk = 6.0;  // expert_topk
+
+  // GEMM1: [M, K] × [E, K, inter*2/moe_tp] → [M*topk, inter*2/moe_tp]
+  double gemm1_m = M * topk;  // gates
+  double gemm1_k = K;
+  double gemm1_n = static_cast<double>(inter_per_rank) * 2.0;  // fused gate+up
+  gemm1_flops = 2.0 * gemm1_m * gemm1_k * gemm1_n;             // multiply-add counted as 2 operations
+
+  // GEMM2: [M*topk, inter/moe_tp] × [E, inter/moe_tp, K] → [M*topk, K]
+  double gemm2_m = M * topk;
+  double gemm2_k = static_cast<double>(inter_per_rank);
+  double gemm2_n = K;
+  gemm2_flops = 2.0 * gemm2_m * gemm2_k * gemm2_n;
+
+  total_flops = gemm1_flops + gemm2_flops;
+}
+
+// ===========================================================================
+// Compute memory bytes moved for the GEMM kernels in a single MoE Forward.
+//
+// Same TP-only assumption as ComputeFlops.  Bytes counted:
+//   - FP4 weights: 0.5 bytes/element
+//   - E8M0 scales: 1 byte per 32 weight elements
+//   - BF16 activations: 2 bytes/element (input read + output write)
+//
+// EP configs are skipped (same reason as TFLOPS — actual per-rank work
+// depends on token-expert distribution).
+// ===========================================================================
+void ComputeBytes(const Fp4MoeTestConfig& cfg, size_t num_tokens, double& gemm1_bytes, double& gemm2_bytes,
+                  double& total_bytes) {
+  size_t E = ComputeExpertsPerRank(cfg);
+  size_t inter_per_rank = ComputeInterPerRank(cfg);
+  size_t K = cfg.hidden_size;
+  double M = static_cast<double>(num_tokens);
+  double topk = 6.0;  // expert_topk
+
+  constexpr double kFp4Bytes = 0.5;         // 4 bits per element
+  constexpr double kScaleBytes = 1.0 / 32;  // 1 byte (E8M0) per 32 elements
+  constexpr double kBF16Bytes = 2.0;
+
+  // Only experts that actually receive tokens have their weights loaded.
+  // With M tokens × topk selections, at most min(M*topk, E) distinct experts
+  // are accessed; each accessed expert's weight is loaded once from HBM and
+  // reused by all tokens routed to it.
+  double experts_accessed = std::min(M * topk, static_cast<double>(E));
+
+  // GEMM1: [M*topk, K] × [experts_accessed, K, N1] → [M*topk, N1],  N1 = inter*2
+  double gemm1_m = M * topk;
+  double gemm1_n = static_cast<double>(inter_per_rank) * 2.0;
+  gemm1_bytes = experts_accessed * gemm1_n * K * (kFp4Bytes + kScaleBytes)  // weights + scales
+                + gemm1_m * K * kBF16Bytes                                  // input
+                + gemm1_m * gemm1_n * kBF16Bytes;                           // output
+
+  // GEMM2: [M*topk, N] × [experts_accessed, K, N] → [M*topk, K],  N = inter
+  double gemm2_m = M * topk;
+  double gemm2_n = static_cast<double>(inter_per_rank);
+  gemm2_bytes = experts_accessed * K * gemm2_n * (kFp4Bytes + kScaleBytes)  // weights + scales
+                + gemm2_m * gemm2_n * kBF16Bytes                            // input
+                + gemm2_m * K * kBF16Bytes;                                 // output
+
+  total_bytes = gemm1_bytes + gemm2_bytes;
+}
+
+// ===========================================================================
+// Measure one (num_tokens, layer) configuration.
+// Encapsulates warmup + benchmark + per-GEMM timing, similar in spirit to
+// MeasureCudaExecutionTime but also harvests MoePerfStats from the layer.
+// ===========================================================================
+template <typename Func>
+BenchResult MeasureMoeCudaExecutionTime(Func&& forward, MoePerfStats* perf_stats, cudaStream_t stream,
+                                        const Fp4MoeTestConfig& cfg, size_t num_tokens, int warmups, int iterations) {
+  // Warmup
+  for (int i = 0; i < warmups; ++i) forward();
+  cudaDeviceSynchronize();
+
+  // Reset perf stats after warmup so only benchmark iterations count
+  perf_stats->Reset();
+
+  // Benchmark: measure total GPU time with stream events
+  cudaEvent_t begin, end;
+  cudaEventCreate(&begin);
+  cudaEventCreate(&end);
+
+  cudaEventRecord(begin, stream);
+  for (int i = 0; i < iterations; ++i) forward();
+  cudaEventRecord(end, stream);
+  cudaEventSynchronize(end);
+
+  float total_ms;
+  cudaEventElapsedTime(&total_ms, begin, end);
+  cudaEventDestroy(begin);
+  cudaEventDestroy(end);
+
+  BenchResult br;
+  br.total_ms = total_ms / iterations;
+  br.gemm1_ms = perf_stats->gemm1_time_ms / iterations;
+  br.gemm2_ms = perf_stats->gemm2_time_ms / iterations;
+  ComputeFlops(cfg, num_tokens, br.gemm1_flops, br.gemm2_flops, br.total_flops);
+  ComputeBytes(cfg, num_tokens, br.gemm1_bytes, br.gemm2_bytes, br.total_bytes);
+
+  return br;
+}
+
 // ===========================================================================
 // Run benchmark across all token sizes for one (layer, inputs) pair.
-// Slices from pre-generated hs_full / gate_full so every backend sees the
-// same input data for each M.  Uses MeasureCudaExecutionTime for warmup+timing.
+// Templated on the concrete layer type so we can call SetPerfStats directly.
 // ===========================================================================
-std::vector<float> RunBenchmark(BaseMoeLayer* layer, std::vector<Tensor>& persistent_inputs,
-                                const Fp4MoeTestConfig& cfg, cudaStream_t stream, const void* hs_full,
-                                const void* gate_full) {
+template <typename LayerT>
+std::vector<BenchResult> RunBenchmark(LayerT* layer, std::vector<Tensor>& persistent_inputs,
+                                      const Fp4MoeTestConfig& cfg, cudaStream_t stream, const void* hs_full,
+                                      const void* gate_full) {
+  static constexpr size_t kBytesPerBF16 = 2;
   size_t K = cfg.hidden_size;
   size_t E = cfg.num_experts;
-  static constexpr size_t kBytesPerBF16 = 2;
 
-  std::vector<float> times;
-  times.reserve(kTokenSizes.size());
+  MoePerfStats perf_stats;
+  layer->SetPerfStats(&perf_stats);
+
+  std::vector<BenchResult> results;
+  results.reserve(kTokenSizes.size());
 
   for (size_t num_tokens : kTokenSizes) {
     persistent_inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, K});
@@ -462,38 +603,118 @@ std::vector<float> RunBenchmark(BaseMoeLayer* layer, std::vector<Tensor>& persis
                     cudaMemcpyDeviceToDevice, stream);
 
     Tensor output(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, K});
-    Tensor eplb_map;   // empty: eplb not active in benchmark
-    Tensor workspace;  // empty: workspace pre-allocated via SetWorkspaceBuffer
+    Tensor eplb_map;
+    Tensor workspace;
 
     auto forward = [&]() {
       layer->Forward(&persistent_inputs[0], &persistent_inputs[1], &persistent_inputs[2], &persistent_inputs[3],
                      &eplb_map, &output, &workspace);
     };
-    times.push_back(MeasureCudaExecutionTime(forward, stream, kWarmupIters, kBenchIters));
+
+    results.push_back(
+        MeasureMoeCudaExecutionTime(forward, &perf_stats, stream, cfg, num_tokens, kWarmupIters, kBenchIters));
   }
 
-  return times;
+  layer->SetPerfStats(nullptr);
+  return results;
 }
 
 // ===========================================================================
-// Print performance table.  Marlin is always present as the accuracy reference.
+// Compute TFLOPS from FLOPs and time
 // ===========================================================================
-void PrintResults(const std::string& config_name, const std::vector<std::vector<float>>& all_times, bool h16_available,
-                  bool h8_available) {
-  std::cout << "\n=== " << config_name << " Performance (ms) ===" << std::endl;
+inline double ComputeTFLOPS(double flops, float time_ms) {
+  return time_ms > 0.f ? (flops / (time_ms / 1e3)) / 1e12 : 0.;
+}
+
+// ===========================================================================
+// Compute bandwidth (GB/s) from bytes and time
+// ===========================================================================
+inline double ComputeBandwidthGBps(double bytes, float time_ms) {
+  return time_ms > 0.f ? bytes / (time_ms / 1e3) / 1e9 : 0.;
+}
+
+// ===========================================================================
+// Print latency table.  Marlin is always present as the accuracy reference.
+// ===========================================================================
+void PrintLatencyTable(const std::string& config_name, const std::vector<std::vector<BenchResult>>& all_results) {
+  std::cout << "\n=== " << config_name << " Latency (ms) ===" << std::endl;
   std::cout << " " << std::setw(10) << "tokens";
   std::cout << std::setw(16) << "Marlin";
-  if (h16_available) std::cout << std::setw(18) << "HummingW4A16";
-  if (h8_available) std::cout << std::setw(18) << "HummingW4A8";
+  std::cout << std::setw(18) << "HummingW4A16";
+  std::cout << std::setw(18) << "HummingW4A8";
   std::cout << std::endl;
 
   for (size_t i = 0; i < kTokenSizes.size(); ++i) {
     std::cout << " " << std::setw(10) << kTokenSizes[i];
-    for (size_t b = 0; b < all_times.size(); ++b) {
-      if (i < all_times[b].size()) {
-        std::cout << std::setw(16) << std::fixed << std::setprecision(4) << all_times[b][i];
+    for (size_t b = 0; b < all_results.size(); ++b) {
+      if (i < all_results[b].size()) {
+        std::cout << std::setw(16) << std::fixed << std::setprecision(4) << all_results[b][i].total_ms;
       } else {
         std::cout << std::setw(16) << "N/A";
+      }
+    }
+    std::cout << std::endl;
+  }
+}
+
+// ===========================================================================
+// Print a single TFLOPS table with format "g1/g2/total" per cell.
+// Marlin is always present as the accuracy reference.
+// ===========================================================================
+void PrintTFLOPS(const std::string& config_name, const std::vector<std::vector<BenchResult>>& all_results) {
+  static constexpr int kCellW = 24;  // "xx.xx/xx.xx/xx.xx" fits in 24 chars
+
+  // Header
+  std::cout << "\n=== " << config_name << " TFLOPS (GEMM1 / GEMM2 / Total) ===" << std::endl;
+  std::cout << " " << std::setw(10) << "tokens";
+  std::cout << std::setw(kCellW) << "Marlin";
+  std::cout << std::setw(kCellW) << "HummingW4A16";
+  std::cout << std::setw(kCellW) << "HummingW4A8";
+  std::cout << std::endl;
+
+  for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    std::cout << " " << std::setw(10) << kTokenSizes[i];
+    for (size_t b = 0; b < all_results.size(); ++b) {
+      if (i < all_results[b].size()) {
+        const auto& r = all_results[b][i];
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(2) << ComputeTFLOPS(r.gemm1_flops, r.gemm1_ms) << "/"
+            << ComputeTFLOPS(r.gemm2_flops, r.gemm2_ms) << "/" << ComputeTFLOPS(r.total_flops, r.total_ms);
+        std::cout << std::setw(kCellW) << oss.str();
+      } else {
+        std::cout << std::setw(kCellW) << "N/A";
+      }
+    }
+    std::cout << std::endl;
+  }
+}
+
+// ===========================================================================
+// Print a single Bandwidth table with format "g1/g2/total" per cell (GB/s).
+// ===========================================================================
+void PrintBandwidth(const std::string& config_name, const std::vector<std::vector<BenchResult>>& all_results) {
+  static constexpr int kCellW = 24;  // "xx.xx/xx.xx/xx.xx" fits in 24 chars
+
+  // Header
+  std::cout << "\n=== " << config_name << " Bandwidth (GB/s, GEMM1 / GEMM2 / Total) ===" << std::endl;
+  std::cout << " " << std::setw(10) << "tokens";
+  std::cout << std::setw(kCellW) << "Marlin";
+  std::cout << std::setw(kCellW) << "HummingW4A16";
+  std::cout << std::setw(kCellW) << "HummingW4A8";
+  std::cout << std::endl;
+
+  for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    std::cout << " " << std::setw(10) << kTokenSizes[i];
+    for (size_t b = 0; b < all_results.size(); ++b) {
+      if (i < all_results[b].size()) {
+        const auto& r = all_results[b][i];
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(0) << ComputeBandwidthGBps(r.gemm1_bytes, r.gemm1_ms) << "/"
+            << ComputeBandwidthGBps(r.gemm2_bytes, r.gemm2_ms) << "/"
+            << ComputeBandwidthGBps(r.total_bytes, r.total_ms);
+        std::cout << std::setw(kCellW) << oss.str();
+      } else {
+        std::cout << std::setw(kCellW) << "N/A";
       }
     }
     std::cout << std::endl;
@@ -510,6 +731,10 @@ void PrintResults(const std::string& config_name, const std::vector<std::vector<
 // ===========================================================================
 void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context> context,
                            RuntimeConfig& base_runtime_config) {
+  if (context->device->ext->GetComputeCapacity() != 90) {
+    GTEST_SKIP() << "Requires SM90+";
+  }
+
   constexpr int kDeviceRank = 0;
   cudaStream_t stream = GetStream(context);
   size_t K = cfg.hidden_size;
@@ -536,7 +761,7 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
   torch::cuda::manual_seed(42);
   auto bf16_opt = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kBFloat16);
   torch::Tensor hs_full = torch::randn({static_cast<int64_t>(max_ntok), static_cast<int64_t>(K)}, bf16_opt);
-  torch::Tensor gate_full = torch::randn({static_cast<int64_t>(max_ntok), static_cast<int64_t>(E)}, bf16_opt);
+  torch::Tensor gate_full = torch::rand({static_cast<int64_t>(max_ntok), static_cast<int64_t>(E)}, bf16_opt);
 
   const void* hs_ptr = hs_full.data_ptr();
   const void* gate_ptr = gate_full.data_ptr();
@@ -546,9 +771,7 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
   // =========================================================================
   auto params = BuildMoeParams(cfg, max_ntok);
 
-  std::vector<std::vector<float>> all_times;
-  bool h16_available = false;
-  bool h8_available = false;
+  std::vector<std::vector<BenchResult>> all_results;
 
   // =========================================================================
   // 4. Marlin
@@ -563,55 +786,60 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
 
     auto inputs = SetupPersistentInputs(pw, Fp4Backend::kMarlin, stream);
     cudaDeviceSynchronize();
-    all_times.push_back(RunBenchmark(static_cast<BaseMoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
+    all_results.push_back(
+        RunBenchmark(static_cast<MarlinFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
   }  // ~pw, ~layer, ~inputs
 
   // =========================================================================
   // 5. HummingW4A16
   // =========================================================================
   {
-    try {
-      ProcessedWeights pw = ProcessWeightsHummingW4A16(base, cfg, stream);
-      StreamSynchronize(context->device->GetPrimaryComputeStream());
+    ProcessedWeights pw = ProcessWeightsHummingW4A16(base, cfg, stream);
+    StreamSynchronize(context->device->GetPrimaryComputeStream());
 
-      RuntimeConfig rc = base_runtime_config;
-      rc.inter_data_type = TYPE_BF16;
-      auto layer = CreateLayer(Fp4Backend::kHummingW4A16, params, rc, context, kDeviceRank);
+    RuntimeConfig rc = base_runtime_config;
+    rc.inter_data_type = TYPE_BF16;
+    auto layer = CreateLayer(Fp4Backend::kHummingW4A16, params, rc, context, kDeviceRank);
 
-      auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A16, stream);
-      cudaDeviceSynchronize();
-      all_times.push_back(RunBenchmark(static_cast<BaseMoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
-      h16_available = true;
-    } catch (const std::exception& e) {
-      std::cout << "\n[WARNING] Humming backend unavailable: " << e.what()
-                << "\n  Skipping HummingW4A16/HummingW4A8 benchmarks." << std::endl;
-    }
+    auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A16, stream);
+    cudaDeviceSynchronize();
+    all_results.push_back(
+        RunBenchmark(static_cast<HummingFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
   }
 
   // =========================================================================
   // 6. HummingW4A8
   // =========================================================================
-  if (h16_available) {
-    try {
-      ProcessedWeights pw = ProcessWeightsHummingW4A8(base, cfg, stream);
-      StreamSynchronize(context->device->GetPrimaryComputeStream());
+  {
+    ProcessedWeights pw = ProcessWeightsHummingW4A8(base, cfg, stream);
+    StreamSynchronize(context->device->GetPrimaryComputeStream());
 
-      RuntimeConfig rc = base_runtime_config;
-      rc.inter_data_type = TYPE_BF16;
-      auto layer = CreateLayer(Fp4Backend::kHummingW4A8, params, rc, context, kDeviceRank);
+    RuntimeConfig rc = base_runtime_config;
+    rc.inter_data_type = TYPE_BF16;
+    auto layer = CreateLayer(Fp4Backend::kHummingW4A8, params, rc, context, kDeviceRank);
 
-      auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A8, stream);
-      cudaDeviceSynchronize();
-      all_times.push_back(RunBenchmark(static_cast<BaseMoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
-      h8_available = true;
-    } catch (const std::exception& e) {
-    }
+    auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A8, stream);
+    cudaDeviceSynchronize();
+    all_results.push_back(
+        RunBenchmark(static_cast<HummingFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
   }
 
   // =========================================================================
   // 7. Print results
   // =========================================================================
-  PrintResults(cfg.name, all_times, h16_available, h8_available);
+  PrintLatencyTable(cfg.name, all_results);
+
+  // TFLOPS are only meaningful for TP-only configs. Under EP the current rank
+  // processes only tokens routed to its local expert subset, so the static
+  // 2*M*topk*K*N formula overestimates actual work.
+  const bool is_ep = (cfg.expert_para_size > 1);
+  if (!is_ep) {
+    PrintTFLOPS(cfg.name, all_results);
+    PrintBandwidth(cfg.name, all_results);
+  } else {
+    std::cout << "\n=== " << cfg.name << " TFLOPS: SKIPPED (EP — per-rank FLOPs depend on "
+              << "token-expert distribution)" << std::endl;
+  }
 }  // TEST_F cases
 // ===========================================================================
 

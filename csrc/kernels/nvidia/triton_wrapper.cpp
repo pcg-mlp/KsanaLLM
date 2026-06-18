@@ -33,6 +33,18 @@ namespace ksana_llm {
 
 inline size_t CeilDiv(size_t a, size_t b) { return (a + b - 1) / b; }
 
+// Triton >= 3.x appends two implicit CUdeviceptr params (global_scratch,
+// profile_scratch) to the compiled kernel's .param list; supplying NULL is
+// safe for kernels that don't reference them. The value is zero and never
+// modified, so all callers may share a single instance.
+static CUdeviceptr kTritonScratchZero = 0;
+
+// Append the two Triton >= 3.x implicit scratch params to an args[] list.
+// Usage:
+//   void* args[] = { TRITON_ARGS(&a, &b, &n) };
+// Expands in place; no runtime overhead vs. hand-writing the two extra slots.
+#define TRITON_ARGS(...) __VA_ARGS__, &kTritonScratchZero, &kTritonScratchZero
+
 template <typename T>
 inline std::string GetComputeType() {
   if (std::is_same<T, float>::value) {
@@ -249,31 +261,8 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
                                          std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_kernel";
 
-  // Triton >= 3.x (NVIDIA backend) appends two implicit CUdeviceptr params at the tail of every
-  // compiled kernel's .param list: `global_scratch` and `profile_scratch`. See
-  // triton/backends/nvidia/driver.py: _launch(... CUdeviceptr global_scratch, CUdeviceptr profile_scratch, ...).
-  // If the C++ wrapper does not supply these, cuLaunchKernel reads past args[] on the stack and
-  // libcuda segfaults (observed as CUDA_ERROR_INVALID_VALUE followed by GPF in dmesg). Pass NULL
-  // for both; the current fused_moe_kernel does not reference either scratch buffer.
-  CUdeviceptr global_scratch = 0;
-  CUdeviceptr profile_scratch = 0;
-  void* args[] = {
-      &a,
-      &b,
-      &c,
-      &a_scale,
-      &b_scale,
-      &topk_weights,
-      &sorted_token_ids,
-      &expert_ids,
-      &num_tokens_post_padded,
-      &n,
-      &k,
-      &max_num_tokens_padded,
-      &numel,
-      &global_scratch,
-      &profile_scratch,
-  };
+  void* args[] = {TRITON_ARGS(&a, &b, &c, &a_scale, &b_scale, &topk_weights, &sorted_token_ids, &expert_ids,
+                              &num_tokens_post_padded, &n, &k, &max_num_tokens_padded, &numel)};
   std::unordered_map<std::string, std::string> map = {{"group_n", ConvertToString(block_shape0)},
                                                       {"group_k", ConvertToString(block_shape1)},
                                                       {"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
@@ -311,28 +300,8 @@ void TritonWrapper::InvokeFusedMoeGptqAwqKernel(
     bool has_zp, int weight_bits, int group_size, std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_gptq_awq_kernel";
 
-  // Triton >= 3.x appends two implicit CUdeviceptr params at the tail of the
-  // compiled kernel's parameter list. The kernel does not reference them, so
-  // NULL scratch buffers are sufficient.
-  CUdeviceptr global_scratch = 0;
-  CUdeviceptr profile_scratch = 0;
-  void* args[] = {
-      &a,
-      &b,
-      &c,
-      &b_scale,
-      &b_zp,
-      &topk_weights,
-      &sorted_token_ids,
-      &expert_ids,
-      &num_tokens_post_padded,
-      &n,
-      &k,
-      &max_num_tokens_padded,
-      &numel,
-      &global_scratch,
-      &profile_scratch,
-  };
+  void* args[] = {TRITON_ARGS(&a, &b, &c, &b_scale, &b_zp, &topk_weights, &sorted_token_ids, &expert_ids,
+                              &num_tokens_post_padded, &n, &k, &max_num_tokens_padded, &numel)};
   std::unordered_map<std::string, std::string> map = {{"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
                                                       {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},
                                                       {"BLOCK_SIZE_K", ConvertToString(config["block_size_k"])},
@@ -369,28 +338,8 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
   std::string kernel_name = "fused_moe_gptq_int4_fp8_kernel";
   (void)num_experts;
 
-  // Triton >= 3.x appends two implicit CUdeviceptr params at the tail of the
-  // compiled kernel's parameter list. The kernel does not reference them, so
-  // NULL scratch buffers are sufficient.
-  CUdeviceptr global_scratch = 0;
-  CUdeviceptr profile_scratch = 0;
-  void* args[] = {
-      &a,
-      &b,
-      &c,
-      &a_scale,
-      &b_scale,
-      &topk_weights,
-      &sorted_token_ids,
-      &expert_ids,
-      &num_tokens_post_padded,
-      &n,
-      &k,
-      &max_num_tokens_padded,
-      &numel,
-      &global_scratch,
-      &profile_scratch,
-  };
+  void* args[] = {TRITON_ARGS(&a, &b, &c, &a_scale, &b_scale, &topk_weights, &sorted_token_ids, &expert_ids,
+                              &num_tokens_post_padded, &n, &k, &max_num_tokens_padded, &numel)};
   std::unordered_map<std::string, std::string> map = {{"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
                                                       {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},
                                                       {"BLOCK_SIZE_K", ConvertToString(config["block_size_k"])},
@@ -423,30 +372,8 @@ void TritonWrapper::InvokeFusedMoeWfp4Afp8Kernel(void* a, void* b, void* c, void
                                                  std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_wfp4afp8_kernel";
 
-  // Triton >= 3.x (NVIDIA backend) appends two implicit CUdeviceptr params at the tail of every
-  // compiled kernel's .param list: `global_scratch` and `profile_scratch`. The wfp4afp8 cubin is
-  // built with newer Triton; without supplying these tails, cuLaunchKernelEx reads past args[]
-  // and libcuda returns CUDA_ERROR_INVALID_VALUE. The kernel itself does not reference either
-  // scratch buffer, so passing NULL is safe.
-  CUdeviceptr global_scratch = 0;
-  CUdeviceptr profile_scratch = 0;
-  void* args[] = {
-      &a,
-      &b,
-      &c,
-      &a_scale,
-      &b_scale,
-      &topk_weights,
-      &sorted_token_ids,
-      &expert_ids,
-      &num_tokens_post_padded,
-      &n,
-      &k,
-      &max_num_tokens_padded,
-      &numel,
-      &global_scratch,
-      &profile_scratch,
-  };
+  void* args[] = {TRITON_ARGS(&a, &b, &c, &a_scale, &b_scale, &topk_weights, &sorted_token_ids, &expert_ids,
+                              &num_tokens_post_padded, &n, &k, &max_num_tokens_padded, &numel)};
   std::unordered_map<std::string, std::string> map = {{"BLOCK_SIZE_M", ConvertToString(config["block_size_m"])},
                                                       {"BLOCK_SIZE_N", ConvertToString(config["block_size_n"])},
                                                       {"BLOCK_SIZE_K", ConvertToString(config["block_size_k"])},
@@ -475,12 +402,6 @@ void TritonWrapper::InvokeHummingFp8Quant(const T* input, float* scale, void* ou
                                           cudaStream_t stream) {
   std::string kernel_name = "_quant_tensor_kernel";
 
-  // The cubin's .param list (verified against generated PTX):
-  //   param 0: x_ptr     (u64)
-  //   param 1: xq_ptr    (u64)
-  //   param 2: scale_ptr (u64)
-  //   param 3: stride_x  (u32)
-  //   param 4: num_blocks (u32)
   int stride_x = hidden_size;
   int num_blocks = num_tokens;
 
@@ -488,9 +409,7 @@ void TritonWrapper::InvokeHummingFp8Quant(const T* input, float* scale, void* ou
   void* xq_ptr = output;
   void* scale_ptr = scale;
 
-  void* args[] = {
-      &x_ptr, &xq_ptr, &scale_ptr, &stride_x, &num_blocks,
-  };
+  void* args[] = {TRITON_ARGS(&x_ptr, &xq_ptr, &scale_ptr, &stride_x, &num_blocks)};
 
   std::unordered_map<std::string, std::string> map = {{"N", ConvertToString(hidden_size)}};
 
@@ -531,33 +450,31 @@ void TritonWrapper::InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void*
                                 a_scale_stride1, a_scale_stride2, b_scale_stride0, b_scale_stride1, b_scale_stride2);
 
   // TODO(zezhao): 折叠不必要的多余参数，释放寄存器
-  void* args[] = {
-      &a,                  // param_0: a_ptr
-      &b,                  // param_1: b_ptr
-      &c,                  // param_2: c_ptr
-      &expert_num_tokens,  // param_3: expert_num_tokens
-      &max_num_tokens,     // param_4: max_num_tokens (u32)
-      &k,                  // param_5: K (u32)
-      &n,                  // param_6: N (u32)
-      &a_scale,            // param_7: a_scale_ptr
-      &b_scale,            // param_8: b_scale_ptr
-      &b_zp,               // param_9: b_zp_ptr
-      &a_stride0,          // param_10: stride_ae (u64)
-      &a_stride1,          // param_11: stride_am (u64)
-      &a_stride2,          // param_12: stride_ak (u64)
-      &b_stride0,          // param_13: stride_be (u64)
-      &b_stride2,          // param_14: stride_bk (u64)
-      &b_stride1,          // param_15: stride_bn (u64)
-      &c_stride0,          // param_16: stride_ce (u64)
-      &c_stride1,          // param_17: stride_cm (u64)
-      &c_stride2,          // param_18: stride_cn (u64)
-      &a_scale_stride0,    // param_19: stride_ase (u64)
-      &a_scale_stride1,    // param_20: stride_asm (u64)
-      &a_scale_stride2,    // param_21: stride_ask (u64)
-      &b_scale_stride0,    // param_22: stride_bse (u64)
-      &b_scale_stride1,    // param_23: stride_bsk (u64)
-      &b_scale_stride2,    // param_24: stride_bsn (u64)
-  };
+  void* args[] = {TRITON_ARGS(&a,                  // param_0: a_ptr
+                              &b,                  // param_1: b_ptr
+                              &c,                  // param_2: c_ptr
+                              &expert_num_tokens,  // param_3: expert_num_tokens
+                              &max_num_tokens,     // param_4: max_num_tokens (u32)
+                              &k,                  // param_5: K (u32)
+                              &n,                  // param_6: N (u32)
+                              &a_scale,            // param_7: a_scale_ptr
+                              &b_scale,            // param_8: b_scale_ptr
+                              &b_zp,               // param_9: b_zp_ptr
+                              &a_stride0,          // param_10: stride_ae (u64)
+                              &a_stride1,          // param_11: stride_am (u64)
+                              &a_stride2,          // param_12: stride_ak (u64)
+                              &b_stride0,          // param_13: stride_be (u64)
+                              &b_stride2,          // param_14: stride_bk (u64)
+                              &b_stride1,          // param_15: stride_bn (u64)
+                              &c_stride0,          // param_16: stride_ce (u64)
+                              &c_stride1,          // param_17: stride_cm (u64)
+                              &c_stride2,          // param_18: stride_cn (u64)
+                              &a_scale_stride0,    // param_19: stride_ase (u64)
+                              &a_scale_stride1,    // param_20: stride_asm (u64)
+                              &a_scale_stride2,    // param_21: stride_ask (u64)
+                              &b_scale_stride0,    // param_22: stride_bse (u64)
+                              &b_scale_stride1,    // param_23: stride_bsk (u64)
+                              &b_scale_stride2)};  // param_24: stride_bsn (u64)
 
   std::unordered_map<std::string, std::string> map = {{"group_n", ConvertToString(block_shape0)},
                                                       {"group_k", ConvertToString(block_shape1)},
@@ -595,10 +512,8 @@ void TritonWrapper::InvokeMhcPreBigFuseKernel(void* gemm_out_mul, void* gemm_out
                                               int sinkhorn_repeat, int n_splits, int mhc_mult, cudaStream_t stream) {
   std::string kernel_name = "mhc_pre_big_fuse_kernel";
 
-  void* args[] = {
-      &comb_mix,  &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base,
-      &mhc_scale, &post_mix,     &residual,        &num_tokens,
-  };
+  void* args[] = {TRITON_ARGS(&comb_mix, &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base, &mhc_scale,
+                              &post_mix, &residual, &num_tokens)};
   std::unordered_map<std::string, std::string> map = {{"hidden_size", ConvertToString(hidden_size)},
                                                       {"rms_eps", ConvertToString(rms_eps)},
                                                       {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},
@@ -629,10 +544,8 @@ void TritonWrapper::InvokeMhcPreBigFuseWithNormKernel(void* gemm_out_mul, void* 
   std::string kernel_name = "mhc_pre_big_fuse_with_norm_kernel";
 
   // TileLang lowers `T.prim_func` params in alphabetical order; mirror that.
-  void* args[] = {
-      &comb_mix,  &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base,
-      &mhc_scale, &norm_weight,  &post_mix,        &residual,    &num_tokens,
-  };
+  void* args[] = {TRITON_ARGS(&comb_mix, &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base, &mhc_scale,
+                              &norm_weight, &post_mix, &residual, &num_tokens)};
   std::unordered_map<std::string, std::string> map = {{"hidden_size", ConvertToString(hidden_size)},
                                                       {"rms_eps", ConvertToString(rms_eps)},
                                                       {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},
@@ -661,8 +574,7 @@ void TritonWrapper::InvokeMhcHeadBigFuseKernel(void* gemm_out_mul, void* gemm_ou
 
   // TileLang lowers `T.prim_func` params in alphabetical order; mirror that.
   void* args[] = {
-      &gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base, &mhc_scale, &residual, &num_tokens,
-  };
+      TRITON_ARGS(&gemm_out_mul, &gemm_out_sqrsum, &layer_input, &mhc_base, &mhc_scale, &residual, &num_tokens)};
   std::unordered_map<std::string, std::string> map = {{"hidden_size", ConvertToString(hidden_size)},
                                                       {"rms_eps", ConvertToString(rms_eps)},
                                                       {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},

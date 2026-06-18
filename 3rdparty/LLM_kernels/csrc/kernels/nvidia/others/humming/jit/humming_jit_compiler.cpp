@@ -332,7 +332,7 @@ HummingJitCompiler::HummingJitCompiler() : nvcc_path_(FindNvcc()), force_regener
   KLLM_KERNEL_CHECK_WITH_INFO(!include_dir_.empty(),
                               "humming-kernels pip package not detected at runtime. "
                               "Set $HUMMING_INCLUDE_DIR or install:\n"
-                              "  pip install git+https://github.com/inclusionAI/humming.git@a373046\n"
+                              "  pip install git+https://github.com/inclusionAI/humming.git@d596b9f\n"
                               "  pip install triton==3.2.0");
 
   // ── 3. Cache dir: KSANA_HUMMING_KERNEL_PATH env, or ~/.cache/KsanaLLM/humming_kernel_files ──
@@ -527,8 +527,8 @@ void HummingJitCompiler::CompileKernels(int64_t size_n, int64_t size_k, int64_t 
               << " dt=" << static_cast<int>(compute_dtype) << std::endl;
   }
 
-  // Query H20 heuristic (now private)
-  auto configs = QueryH20Configs(size_n, size_k, num_experts, compute_dtype, gemm_type);
+  // Query humming heuristic
+  auto configs = QueryKernelConfigs(size_n, size_k, num_experts, compute_dtype, gemm_type);
 
   // Compile all configs (vector overload — handles cache/load dedup internally)
   CompileKernels(configs);
@@ -555,7 +555,7 @@ const KernelMeta* HummingJitCompiler::SelectKernel(int64_t size_m, int64_t size_
     if (meta.gemm_type != gemm_type) continue;
     if (meta.compute_dtype != compute_dtype) continue;
 
-    // If this kernel has a shape_m range from H20 heuristic, prefer range-based selection
+    // If this kernel has a shape_m range from heuristic, prefer range-based selection
     if (meta.min_shape_m > 1 || meta.max_shape_m < INT64_MAX) {
       // Range-based: check if size_m falls within this kernel's optimal range
       if (size_m >= meta.min_shape_m && size_m <= meta.max_shape_m) {
@@ -724,7 +724,7 @@ void HummingJitCompiler::LoadAndRegister(const KernelConfig& config, const std::
   KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS, "cuFuncSetAttribute (smem=%d) failed (CUresult=%d) for: %s",
                               meta.smem_size, static_cast<int>(cu_ret), cubin_path.c_str());
 
-  // Store the shape_m range from the config (H20 heuristic range metadata)
+  // Store the shape_m range from the config (heuristic range metadata)
   meta.min_shape_m = config.min_shape_m;
   meta.max_shape_m = config.max_shape_m;
 
@@ -741,14 +741,14 @@ void HummingJitCompiler::LoadAndRegister(const KernelConfig& config, const std::
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// Public: QueryH20Configs
+// Public: QueryKernelConfigs
 // ════════════════════════════════════════════════════════════════════════════════
 
-std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryH20Configs(int64_t size_n, int64_t size_k,
-                                                                                  int64_t num_experts,
-                                                                                  ComputeDtype compute_dtype,
-                                                                                  GemmType gemm_type) {
-  // Call Python script to query humming H20 heuristic
+std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelConfigs(int64_t size_n, int64_t size_k,
+                                                                                     int64_t num_experts,
+                                                                                     ComputeDtype compute_dtype,
+                                                                                     GemmType gemm_type) {
+  // Call Python script to query humming heuristic
   std::ostringstream cmd;
   cmd << "python3 " << humming_tool_path_ << " query-configs"
       << " --size_n " << size_n << " --size_k " << size_k << " --num_experts " << num_experts << " --compute_dtype "
@@ -756,7 +756,7 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryH20Config
 
   if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
-    std::cout << "[HUMMING JIT] QueryH20Configs: N=" << size_n << " K=" << size_k << " E=" << num_experts
+    std::cout << "[HUMMING JIT] QueryKernelConfigs: N=" << size_n << " K=" << size_k << " E=" << num_experts
               << " dt=" << static_cast<int>(compute_dtype) << std::endl;
   }
 
@@ -812,13 +812,13 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryH20Config
     // Fallback
     if (verbose_) {
       std::lock_guard<std::mutex> _ll(log_mutex_);
-      std::cout << "[HUMMING JIT]   H20 query returned empty, using fallback configs" << std::endl;
+      std::cout << "[HUMMING JIT]   heuristic query returned empty, using fallback configs" << std::endl;
     }
     configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 1, 64});
     configs.push_back({size_n, size_k, num_experts, 128, gemm_type, compute_dtype, 65, INT64_MAX});
   } else if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
-    std::cout << "[HUMMING JIT]   H20 returned " << configs.size() << " config(s)" << std::endl;
+    std::cout << "[HUMMING JIT]   heuristic returned " << configs.size() << " config(s)" << std::endl;
   }
 
   return configs;

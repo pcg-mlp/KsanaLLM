@@ -10,6 +10,7 @@
 #include "configure/schedule_config_parser.h"
 #include "device/device_utils.h"
 #include "ipc/core/ipc_process_watchdog.h"
+#include "pybind11/pybind11.h"
 #include "utils/logger.h"
 #include "utils/ret_code.h"
 #include "utils/status.h"
@@ -108,7 +109,10 @@ Status InferenceSupervisor::InitExecutor() {
   ipc_func_wrapper_->AddExecutor();
 
   // Never return.
-  inference_executor_->BlockingForever();
+  {
+    pybind11::gil_scoped_release release;
+    inference_executor_->BlockingForever();
+  }
   return Status();
 }
 

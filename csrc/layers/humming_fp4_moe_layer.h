@@ -16,6 +16,7 @@
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_moe_layer.h"
+#include "layers/moe_perf_stats.h"
 #include "layers/topk_softplus_sqrt_layer.h"
 #include "models/base/base_weight.h"
 #include "models/common_moe/moe_config.h"
@@ -39,6 +40,10 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
                          const Tensor* eplb_map, Tensor* output, Tensor* workspace,
                          const Tensor* e_score_bias = nullptr, const Tensor* input_ids = nullptr,
                          const LayerExecContext& exec_ctx = {}) override;
+
+  // Attach a profiling stats output (nullptr = disabled, default).
+  // Non-virtual — HummingFp4MoeLayer owns this API directly.
+  void SetPerfStats(MoePerfStats* stats) { perf_stats_ = stats; }
 
  private:
   template <typename T>
@@ -139,6 +144,15 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   // JIT compiler — shared across all HummingFp4MoeLayer instances
   static std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler> jit_compiler_;
   static std::mutex jit_mutex_;
+
+  // GPU events for per-kernel timing (created lazily, reused across forwards)
+  cudaEvent_t evt_gemm1_start_ = nullptr;
+  cudaEvent_t evt_gemm1_end_ = nullptr;
+  cudaEvent_t evt_gemm2_start_ = nullptr;
+  cudaEvent_t evt_gemm2_end_ = nullptr;
+
+  // Profiling output (nullptr = disabled)
+  MoePerfStats* perf_stats_ = nullptr;
 };
 #endif
 

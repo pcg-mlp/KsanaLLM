@@ -21,7 +21,9 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -40,9 +42,41 @@
 
 #ifdef _WIN32
 #  include <windows.h>
+#else
+#  include <dirent.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
 #endif
 
 namespace deep_gemm::jit {
+
+inline bool removeDirectoryRecursive(std::string const& path) {
+  struct stat st;
+  if (lstat(path.c_str(), &st) != 0) {
+    return true;
+  }
+  if (!S_ISDIR(st.st_mode)) {
+    return unlink(path.c_str()) == 0;
+  }
+  DIR* dir = opendir(path.c_str());
+  if (dir == nullptr) {
+    return false;
+  }
+  bool success = true;
+  struct dirent* entry;
+  while ((entry = readdir(dir)) != nullptr) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    std::string child = path + "/" + entry->d_name;
+    if (!removeDirectoryRecursive(child)) {
+      success = false;
+    }
+  }
+  closedir(dir);
+  if (rmdir(path.c_str()) != 0) {
+    success = false;
+  }
+  return success;
+}
 
 // Generate a unique ID for temporary directories to avoid collisions
 inline std::string generateUniqueId() {
@@ -139,9 +173,9 @@ inline std::vector<std::filesystem::path> getJitIncludeDirs() {
 }
 
 inline std::string generateKernel(uint32_t const shape_n, uint32_t const shape_k, uint32_t const block_m,
-                           uint32_t const block_n, uint32_t const block_k, uint32_t const num_groups,
-                           uint32_t const num_stages, uint32_t const num_tma_multicast,
-                           deep_gemm::GemmType const gemm_type, bool swapAB = false) {
+                                  uint32_t const block_n, uint32_t const block_k, uint32_t const num_groups,
+                                  uint32_t const num_stages, uint32_t const num_tma_multicast,
+                                  deep_gemm::GemmType const gemm_type, bool swapAB = false) {
   constexpr uint32_t kNumTMAThreads = 128;
   constexpr uint32_t kNumMathThreadsPerGroup = 128;
 
@@ -453,7 +487,7 @@ class Compiler {
 
     // Clean up temporary directory after successful compilation
     try {
-      std::filesystem::remove_all(tmpPath);
+      removeDirectoryRecursive(tmpPath.string());
     } catch (std::exception const& e) {
       printf("Warning: Failed to clean up temporary directory: %s\n", e.what());
     }

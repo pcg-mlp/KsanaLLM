@@ -18,24 +18,28 @@ if(HUMMING_PREPROCESS_SRCS)
     message(FATAL_ERROR "python3 interpreter not found, required for humming-kernels installation")
   endif()
 
-  message(STATUS "Installing humming from git+https://github.com/inclusionAI/humming.git@a373046 ...")
-  execute_process(
-    COMMAND ${_HUMMING_PYTHON} -m pip install git+https://github.com/inclusionAI/humming.git@a373046
-    RESULT_VARIABLE HUMMING_INSTALL_RESULT
-  )
-  if(NOT HUMMING_INSTALL_RESULT EQUAL 0)
-    message(FATAL_ERROR "Failed to install humming-kernels (exit code: ${HUMMING_INSTALL_RESULT}). "
-                        "Please install manually: pip install git+https://github.com/inclusionAI/humming.git@a373046")
-  endif()
+  if(DEFINED ENV{DISABLE_FORCE_INSTALL_HUMMING})
+    message(STATUS "DISABLE_FORCE_INSTALL_HUMMING is set, skipping auto-install of humming and triton")
+  else()
+    message(STATUS "Installing humming from git+https://github.com/inclusionAI/humming.git@d596b9f ...")
+    execute_process(
+      COMMAND ${_HUMMING_PYTHON} -m pip install git+https://github.com/inclusionAI/humming.git@d596b9f
+      RESULT_VARIABLE HUMMING_INSTALL_RESULT
+    )
+    if(NOT HUMMING_INSTALL_RESULT EQUAL 0)
+      message(FATAL_ERROR "Failed to install humming-kernels (exit code: ${HUMMING_INSTALL_RESULT}). "
+                          "Please install manually: pip install git+https://github.com/inclusionAI/humming.git@d596b9f")
+    endif()
 
-  message(STATUS "Installing triton==3.2.0 ...")
-  execute_process(
-    COMMAND ${_HUMMING_PYTHON} -m pip install triton==3.2.0
-    RESULT_VARIABLE TRITON_INSTALL_RESULT
-  )
-  if(NOT TRITON_INSTALL_RESULT EQUAL 0)
-    message(FATAL_ERROR "Failed to install triton==3.2.0 (exit code: ${TRITON_INSTALL_RESULT}). "
-                        "Please install manually: pip install triton==3.2.0")
+    message(STATUS "Installing triton==3.2.0 ...")
+    execute_process(
+      COMMAND ${_HUMMING_PYTHON} -m pip install triton==3.2.0
+      RESULT_VARIABLE TRITON_INSTALL_RESULT
+    )
+    if(NOT TRITON_INSTALL_RESULT EQUAL 0)
+      message(FATAL_ERROR "Failed to install triton==3.2.0 (exit code: ${TRITON_INSTALL_RESULT}). "
+                          "Please install manually: pip install triton==3.2.0")
+    endif()
   endif()
 
   execute_process(
@@ -49,10 +53,15 @@ if(HUMMING_PREPROCESS_SRCS)
   if(HUMMING_PIP_RESULT EQUAL 0 AND HUMMING_PIP_INCLUDE_DIR)
     set(HUMMING_INCLUDE_DIR "${HUMMING_PIP_INCLUDE_DIR}")
     message(STATUS "Using humming pip package include: ${HUMMING_INCLUDE_DIR}")
+  elseif(DEFINED ENV{DISABLE_FORCE_INSTALL_HUMMING})
+    message(FATAL_ERROR "humming-kernels not found and DISABLE_FORCE_INSTALL_HUMMING is set. "
+                        "Please install humming manually or unset DISABLE_FORCE_INSTALL_HUMMING:\n"
+                        "  pip install git+https://github.com/inclusionAI/humming.git@d596b9f\n"
+                        "  pip install triton==3.2.0")
   else()
     message(FATAL_ERROR "humming-kernels import failed after installation (${HUMMING_PIP_ERROR}). "
                         "Please install manually:\n"
-                        "  pip install git+https://github.com/inclusionAI/humming.git@a373046\n"
+                        "  pip install git+https://github.com/inclusionAI/humming.git@d596b9f\n"
                         "  pip install triton==3.2.0")
   endif()
 

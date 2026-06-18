@@ -27,6 +27,7 @@ class OptionalFile {
       return;
     }
 
+    PyGILState_STATE gstate = PyGILState_Ensure();
     PyObject* sysPath = PySys_GetObject("path");
     if (sysPath && PyList_Check(sysPath)) {
       // Search within the ksana_llm packages
@@ -35,6 +36,7 @@ class OptionalFile {
         std::string python_dir(PyBytes_AsString(PyUnicode_AsUTF8String(pathObj)));
         target_file = python_dir + "/" + path_name + "/" + file_name;
         if (FileExists()) {
+          PyGILState_Release(gstate);
           return;
         }
       }
@@ -49,12 +51,14 @@ class OptionalFile {
               python_dir.substr(python_dir.length() - package_suffix.length()) == package_suffix) {
             target_file = python_dir + "/ksana_llm/" + path_name + "/" + file_name;
             if (FileExists()) {
+              PyGILState_Release(gstate);
               return;
             }
           }
         }
       }
     }
+    PyGILState_Release(gstate);
 
     // Not Found
     target_file = "";

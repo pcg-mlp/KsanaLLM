@@ -6,9 +6,9 @@
 |------|------|
 | 原始项目 | [inclusionAI/humming](https://github.com/inclusionAI/humming) |
 | pip 包名 | `humming-kernels` |
-| 迁移时版本 | `0.1.0` |
-| 源码 commit | `13c42d05d27b9e4186500da98cda2a484686fa44` |
-| 安装来源 | `pip install git+https://github.com/inclusionAI/humming.git@13c42d05` |
+| 迁移时版本 | `0.1.0` → `0.1.3` → **`0.1.5`** |
+| 源码 commit | `d596b9f` (0.1.5), migrated from `a373046` (0.1.3) |
+| 安装来源 | `pip install git+https://github.com/inclusionAI/humming.git@d596b9f` |
 | 迁移日期 | 2026-05-16 |
 | 目标分支 | `integrate-humming` |
 | License | 见原始仓库 LICENSE |
@@ -119,7 +119,7 @@ HUMMING_TEST_SOURCE_DIR=<path_to_humming_dir> ./bin/llm_kernels_nvidia_kernel_hu
 # 7. 如果 humming Python API 有变化，需同步修改 humming_tool.py
 # 主要关注:
 #   - HummingKernel 构造函数参数
-#   - Sm90H20Heuristics.get_config() 接口
+#   - get_heuristics_class() 工厂函数
 #   - kernel.code 输出格式
 #   - kernel.kernel_expr 格式
 ```
@@ -129,7 +129,7 @@ HUMMING_TEST_SOURCE_DIR=<path_to_humming_dir> ./bin/llm_kernels_nvidia_kernel_hu
 | humming 组件 | 当前使用方式 | 变化风险 |
 |-------------|-------------|---------|
 | `HummingKernel.__init__()` | flat params (block_shape, warp_shape, ...) | 中：参数可能增减 |
-| `Sm90H20Heuristics.get_config()` | classmethod, returns dict | 低：稳定接口 |
+| `get_heuristics_class()` | factory, returns DeviceHeuristics subclass | 低：动态调度，自动适配 GPU |
 | `HummingLayerMeta` | from `humming.layer` | 低 |
 | `kernel.code` | 完整 .cu 源码字符串 | 低：核心功能 |
 | `kernel.kernel_expr` | 模板实例化表达式 | 中：可能随模板参数变化 |
@@ -164,3 +164,5 @@ KernelRuntime.init_sm_version = lambda self: None
 | 2026-05-16 | 初始迁移 | humming-kernels 0.1.0 @ 13c42d05 |
 | 2026-05-28 | 移除本地 .cuh 副本 | Headers 改为编译时从 pip 包 include 路径引用，支持 `$HUMMING_INCLUDE_DIR` 覆盖 |
 | 2026-06-03 | 版本升级适配 | humming-kernels 0.1.0→0.1.3 (13c42d05→a373046)。适配: process_mxfp4_w4a8.cu (max_range 12→11, +1步, global_scale /2), repack_weight.cu (+interleave_mode参数) |
+| 2026-06-12 | H200 支持修复 | humming_tool.py: 硬编码 Sm90H20Heuristics → humming.tune.get_heuristics_class() 动态调度。C++ 侧 QueryH20Configs → QueryKernelConfigs 重命名，清理 H20 引用。 |
+| 2026-06-12 | 版本升级适配 | humming-kernels 0.1.3→0.1.5 (a373046→d596b9f)。适配: humming_jit_compiler.cpp error消息更新版本引用, humming_tool.py 新增 humming.ops.hadamard stub, CMakeLists.txt 更新 commit ref。无需更新 .cuh header (仍通过 pip 包 include 自动引用)。humming API (HummingKernel, KernelRuntime, get_heuristics_class, LayerMeta) 未变。预处理 header (process.cuh, process_mxfp4.cuh, pack_weight.cuh) 未变。 |

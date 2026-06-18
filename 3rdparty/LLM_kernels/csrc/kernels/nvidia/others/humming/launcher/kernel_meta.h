@@ -47,7 +47,7 @@ struct KernelMeta {
   bool use_fused_e8m0_scale;
   GemmType gemm_type;
   ComputeDtype compute_dtype;
-  // Range of shape_m values for which this kernel is optimal (from H20 heuristic)
+  // Range of shape_m values for which this kernel is optimal (from heuristic)
   int64_t min_shape_m = 1;
   int64_t max_shape_m = INT64_MAX;
 };

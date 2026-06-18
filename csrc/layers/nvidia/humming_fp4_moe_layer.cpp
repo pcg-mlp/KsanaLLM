@@ -19,7 +19,7 @@ std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler> HummingFp4MoeL
 std::mutex HummingFp4MoeLayer::jit_mutex_;
 
 // Maximum moe_block_size for workspace pre-allocation (actual value is determined at runtime).
-// Must be >= the largest possible BLOCK_SHAPE_M from the H20 heuristic (currently 64).
+// Must be >= the largest possible BLOCK_SHAPE_M from the humming heuristic (currently 64).
 static constexpr int64_t kHummingMoeMaxBlockSize = 64;
 
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
@@ -209,6 +209,17 @@ template <typename T>
 Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
                                     const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
                                     const Tensor* e_score_bias, const Tensor* input_ids) {
+  // Lazy creation of profiling CUDA events (created once, reused across forwards)
+  bool do_profile = (perf_stats_ != nullptr);
+  if (do_profile) {
+    if (evt_gemm1_start_ == nullptr) {
+      cudaEventCreate(&evt_gemm1_start_);
+      cudaEventCreate(&evt_gemm1_end_);
+      cudaEventCreate(&evt_gemm2_start_);
+      cudaEventCreate(&evt_gemm2_end_);
+    }
+  }
+
   // Assign workspace pointers on first call
   if (set_workspace_buffer_info_) {
     set_workspace_buffer_info_ = false;
@@ -350,6 +361,8 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
     // Zero locks buffer before kernel launch to prevent deadlock from stale lock values
     cudaMemsetAsync(humming_locks_, 0, humming_locks_size_, stream);
 
+    if (do_profile) cudaEventRecord(evt_gemm1_start_, stream);
+
     llm_kernels::nvidia::humming::humming_moe_gemm(gemm1_a,                  // a
                                                    w1_ptr,                   // b (FP4 WGMMA layout)
                                                    intermediate_cache1_,     // c
@@ -374,6 +387,8 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
                                                    static_cast<int64_t>(expert_topk_),          // top_k
                                                    32,                                          // group_size
                                                    stream);
+
+    if (do_profile) cudaEventRecord(evt_gemm1_end_, stream);
 
     const size_t elements_num = total_tokens * expert_topk_ * expert_inter_size_ * 2;
     if (use_expert_parallel) {
@@ -419,6 +434,8 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
     // Zero locks buffer before kernel launch to prevent deadlock from stale lock values
     cudaMemsetAsync(humming_locks_, 0, humming_locks_size_, stream);
 
+    if (do_profile) cudaEventRecord(evt_gemm2_start_, stream);
+
     // NOTE: For GEMM2, top_k must be 1 (not expert_topk_). The activation tensor
     // intermediate_cache2 is already expanded to [tokens*topk, inter_size] — each row is
     // one token-expert pair. With top_k=1, the kernel uses sorted_ids[i] directly as the
@@ -450,6 +467,8 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
         stream,
         moe_block_size_i32);  // required_block_m: use same as GEMM1
 
+    if (do_profile) cudaEventRecord(evt_gemm2_end_, stream);
+
     // ----- Fused MulTopkWeight + Sum: intermediate_cache3 → output [tokens, hidden_size] -----
     if (use_expert_parallel) {
       llm_kernels::nvidia::InvokeMoeFusedMulSum<T, true>(
@@ -459,6 +478,17 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
       llm_kernels::nvidia::InvokeMoeFusedMulSum<T, false>(
           intermediate_cache3_, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
           static_cast<int>(total_tokens), static_cast<int>(expert_topk_), static_cast<int>(hidden_size), stream);
+    }
+
+    // Record per-GEMM times (humming has no chunk loop, single set of events per Forward;
+    // accumulate across Forward calls so the caller can sum over a benchmark loop)
+    if (do_profile) {
+      cudaEventSynchronize(evt_gemm2_end_);
+      float gemm1_ms = 0.f, gemm2_ms = 0.f;
+      cudaEventElapsedTime(&gemm1_ms, evt_gemm1_start_, evt_gemm1_end_);
+      cudaEventElapsedTime(&gemm2_ms, evt_gemm2_start_, evt_gemm2_end_);
+      perf_stats_->gemm1_time_ms += gemm1_ms;
+      perf_stats_->gemm2_time_ms += gemm2_ms;
     }
   };
 
