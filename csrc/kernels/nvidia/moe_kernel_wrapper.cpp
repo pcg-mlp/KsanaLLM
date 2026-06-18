@@ -18,6 +18,7 @@
 #include "utils/singleton.h"
 
 #include "kernels/nvidia/triton_wrapper.h"
+#include "kernels/nvidia/fused_moe_tuned_config.h"
 
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
@@ -689,10 +690,8 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
     }
     config = {{"block_size_m", block_size_m}, {"group_size_m", 1}};
   } else {
-    config = {{"block_size_m", 64}, {"block_size_n", 64}, {"block_size_k", 32}, {"group_size_m", 8}};
-    if (M <= num_experts_per_node || (M <= 32 && is_marlin)) {
-      config = {{"block_size_m", 16}, {"block_size_n", 32}, {"block_size_k", 64}, {"group_size_m", 1}};
-    }
+    // BF16 non-quantized fused_moe: prefer H20/Qwen3 deep_tune config; fall back to default if not matched.
+    GetFusedMoeConfig(num_experts_per_node, inter_size, M, is_marlin, config);
   }
 
   // reserve for fill_info
