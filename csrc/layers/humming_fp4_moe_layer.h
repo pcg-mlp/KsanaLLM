@@ -7,12 +7,15 @@
 #include <mutex>
 
 #ifdef ENABLE_CUDA
+#  include <torch/torch.h>
+
 #  include "csrc/kernels/nvidia/moe/expert_map/expert_map.h"
 #  include "csrc/kernels/nvidia/others/humming/jit/humming_jit_compiler.h"
 #  include "csrc/kernels/nvidia/others/humming/launcher/kernel_meta.h"
 #  include "csrc/kernels/nvidia/others/humming/ops/ops.h"
 #  include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
 #  include "csrc/utils/nvidia/workspace.h"
+#  include "csrc/utils/search_status.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_moe_layer.h"
@@ -26,6 +29,13 @@ namespace ksana_llm {
 #ifdef ENABLE_CUDA
 class HummingFp4MoeLayer : public BaseMoeLayer {
  public:
+  virtual ~HummingFp4MoeLayer() {
+    if (evt_gemm1_start_) cudaEventDestroy(evt_gemm1_start_);
+    if (evt_gemm1_end_) cudaEventDestroy(evt_gemm1_end_);
+    if (evt_gemm2_start_) cudaEventDestroy(evt_gemm2_start_);
+    if (evt_gemm2_end_) cudaEventDestroy(evt_gemm2_end_);
+  }
+
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
@@ -50,6 +60,9 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                std::shared_ptr<Context> context, int rank);
 
+  // Initialize TopKSoftplusSqrt gating sub-layer and query its workspace size.
+  void InitTopkSoftplusSqrt(const RuntimeConfig& runtime_config, int rank);
+
   template <typename T>
   size_t GetWorkspaceSizeT();
 
@@ -67,12 +80,76 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
 
   Status DumpEplbData(Tensor& topk_ids);
 
+  // --- Deduplicated helpers used by both Forward and Profiling ---
+
+  // Select GEMM kernel meta: profiled lookup with heuristic fallback.
+  // Returns meta=nullptr with required_block_m>0 when no profiled/heuristic match
+  // is found, triggering block_m-based fallback search in humming_moe_gemm.
+  struct GemmMetaSelection {
+    const llm_kernels::nvidia::humming::KernelMeta* meta = nullptr;
+    int32_t block_m = 0;
+    int32_t required_block_m = 0;  // >0 when meta is null → block_m-based fallback search
+  };
+  GemmMetaSelection SelectGemmMeta(int64_t size_n, int64_t size_k, int64_t size_m) const;
+
+  // Invoke MoE align block size kernel (encapsulates >=224 and EP branching).
+  void InvokeAlignBlockSize(int32_t* topk_ids, int32_t* sorted_ids, int32_t* expert_ids, int32_t* num_tokens_post_pad,
+                            int32_t* cumsum, int32_t max_num_tokens_padded, size_t numel, int32_t moe_block_size,
+                            int32_t top_k, bool use_expert_parallel, int32_t expert_para_size, int rank,
+                            cudaStream_t stream);
+
+  // Fill the fill_info buffer for MoE align (experts < 224 path only).
+  void InvokeFillInfo(int32_t* fused_id_buffer, void* fill_info_device, int id_offset, int max_num_tokens_padded,
+                      int numel, cudaStream_t stream);
+
+  // Quantize activations to FP8 (W4A8 path). Returns true if quantization was performed.
+  // On success, out_a and out_a_scale point to the internal FP8 activation/scale buffers.
+  template <typename T>
+  bool QuantizeToFp8(const void* input, int size_k, int num_tokens, cudaStream_t stream, const void*& out_a,
+                     const void*& out_a_scale);
+
+  // Prepared dummy weights for profiling (generated once per GEMM shape, reused across buckets).
+  struct ProfWeights {
+    torch::Tensor b;             // WGMMA-repacked weight [E, N, K/2] uint8
+    torch::Tensor b_scale;       // processed scales [E, K/32, N] uint8
+    torch::Tensor global_scale;  // [E] float (W4A8 only; empty for W4A16)
+  };
+
+  // Per-block_m align buffer set for profiling: sorted_ids, expert_ids, num_tokens_post_pad.
+  struct ProfAlignBuffers {
+    torch::Tensor sorted_ids;
+    torch::Tensor expert_ids;
+    torch::Tensor num_tokens_post_pad;
+    torch::Tensor cumsum;  // Only used for SglMoeAlignBlockSize (num_experts >= 224)
+    ProfAlignBuffers(int64_t max_num_tokens_padded, int64_t max_num_m_blocks, int64_t num_experts);
+  };
+
+  // Generate dummy FP4 weights + scales and process them through the same
+  // pipeline as test (repack_weight_wgmma + process_scales / process_mxfp4_w4a8_weight).
+  // Called once per GEMM shape, reused across all buckets.
+  ProfWeights PrepareDummyWeights(int64_t size_n, int64_t size_k, int64_t num_experts, cudaStream_t stream);
+
+  // Prepare dummy topk_ids with uniform distribution to experts.
+  // topk_ids[i * topk + j] = (i + j) % num_experts — ensures each expert gets tokens.
+  static torch::Tensor MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts);
+
+  // Profile a single GEMM shape at a given size_m with pre-prepared dummy weights.
+  // Tests all matching candidate kernels, returns the fastest KernelMeta*.
+  const llm_kernels::nvidia::humming::KernelMeta* ProfileSingleGemm(int64_t size_m, int64_t size_n, int64_t size_k,
+                                                                    int64_t num_experts, int64_t top_k, size_t warmup,
+                                                                    size_t profile_iters, cudaStream_t stream,
+                                                                    const ProfWeights& weights);
+
+  // Profile all token buckets for one GEMM shape, returning size_m→KernelMeta* schedule.
+  HummingMoeSearchStatus::ProfiledSchedule ProfileAllBuckets(int64_t n, int64_t k, int64_t e, int64_t top_k,
+                                                             size_t warmup, size_t profile_iters,
+                                                             int64_t size_m_multiplier);
+
  protected:
   bool set_workspace_buffer_info_ = true;
 
   // MoE configuration
   MoeScaleNormMode moe_scale_norm_mode_;
-  size_t max_ws_bytes_ = 0;
   size_t max_token_num_;
   size_t expert_num_per_node_;
   size_t expert_hidden_size_;
@@ -90,34 +167,65 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   bool has_swiglu_limit_ = false;
   float swiglu_limit_ = 0.0f;
 
-  // Workspace pointers and sizes
-  void* topk_weights_ptr_ = nullptr;
-  size_t topk_weights_ptr_size_ = 0;
-  void* topk_ids_ptr_ = nullptr;
-  size_t topk_ids_ptr_size_ = 0;
-  void* fused_id_buffer_ = nullptr;
-  size_t max_fused_id_buffer_size_ = 0;
-  void* fused_id_buffer_w2_ = nullptr;
-  size_t max_fused_id_buffer_w2_size_ = 0;
-  void* intermediate_cache1_ = nullptr;
-  size_t intermediate_cache1_size_ = 0;
-  void* intermediate_cache2_ = nullptr;
-  size_t intermediate_cache2_size_ = 0;
-  void* intermediate_cache3_ = nullptr;
-  size_t intermediate_cache3_size_ = 0;
-
-  // Humming-specific workspace
   llm_kernels::nvidia::humming::ComputeDtype humming_compute_dtype_;
-  int32_t* humming_locks_ = nullptr;
-  size_t humming_locks_size_ = 0;
-  void* humming_workspace_ = nullptr;
-  size_t humming_workspace_size_ = 0;
 
-  // W4A8 FP8 activation buffers (workspace pointers, assigned in ForwardT)
-  void* fp8_activation_buffer_ = nullptr;  // [max(M*K, M*topk*inter)] FP8 uint8
-  float* fp8_scale_buffer_ = nullptr;      // [M*topk] float per-token scale
-  size_t fp8_activation_buffer_size_ = 0;
-  size_t fp8_scale_buffer_size_ = 0;
+  // --- Workspace layout (all carved from a single contiguous workspace_buffer_) ---
+  // Layout order:
+  //   [gating.topk_weights] [gating.topk_ids]
+  //   [align_gemm1] [align_gemm2]
+  //   [cache.gemm1_output / cache.gemm2_output (shared)] [cache.silu_output]
+  //   [kernel.locks] [kernel.tma_descriptors]
+  //   [fp8.activation] [fp8.scales]
+  //   ← softplus_sqrt slice from tail (overlaps fp8, time-safe: gating runs before ProcessTokens) →
+
+  struct GatingWorkspace {
+    void* topk_weights = nullptr;  // [M*topk] float
+    void* topk_ids = nullptr;      // [M*topk] int32
+    size_t topk_weights_size = 0;
+    size_t topk_ids_size = 0;
+  };
+
+  struct AlignWorkspace {
+    void* base = nullptr;  // [fill_info(4) + sorted_ids + expert_ids + ntpp + cumsum] int32
+    size_t total_size = 0;
+  };
+
+  struct ActivationCache {
+    void* gemm1_output = nullptr;  // cache1: [M*topk, inter*2] — GEMM1 output
+    void* silu_output = nullptr;   // cache2: [M*topk, inter] — SiluAndMul output
+    void* gemm2_output = nullptr;  // cache3: [M*topk, hidden] — GEMM2 output (reuses gemm1_output)
+    size_t gemm1_size = 0;
+    size_t silu_size = 0;
+    size_t gemm2_size = 0;
+  };
+
+  struct HummingKernelWorkspace {
+    int32_t* locks = nullptr;         // stream-K sync locks
+    void* tma_descriptors = nullptr;  // TMA descriptor buffer
+    size_t locks_size = 0;
+    size_t tma_size = 0;
+  };
+
+  struct Fp8QuantWorkspace {
+    void* activation = nullptr;  // [max(M*K, M*topk*inter)] FP8 uint8 (W4A8 only)
+    float* scales = nullptr;     // [M*topk] float per-token scale (W4A8 only)
+    size_t activation_size = 0;
+    size_t scale_size = 0;
+  };
+
+  struct HummingWorkspace {
+    GatingWorkspace gating;
+    AlignWorkspace align_gemm1;
+    AlignWorkspace align_gemm2;
+    ActivationCache cache;
+    HummingKernelWorkspace kernel;
+    Fp8QuantWorkspace fp8;
+    size_t softplus_sqrt_size = 0;  // aligned size for tail slice (set in GetWorkspaceSizeT)
+    size_t total_size = 0;          // total workspace bytes
+  };
+
+  HummingWorkspace ws_;
+  size_t softplus_sqrt_workspace_size_ = 0;  // raw size from topk layer (set in InitT)
 
   // W4A8 per-expert global_scale (device memory, allocated during weight loading)
   float* w1_global_scale_ = nullptr;  // [num_experts] float
@@ -131,7 +239,6 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   bool use_hash_ = false;
   uint32_t num_hash_layers_ = 0;
   uint32_t vocab_size_ = 0;
-  size_t softplus_sqrt_workspace_size_ = 0;
 
   bool enable_load_eplb_config_ = false;
   bool enable_dump_eplb_data_ = false;

@@ -42,6 +42,11 @@ class HummingJitCompiler {
     int64_t min_shape_m = 1;
     int64_t max_shape_m = INT64_MAX;
 
+    // Override fields (0/false = use heuristic default)
+    bool force_stream_k = false;
+    int force_block_n = 0;   // 0 = heuristic, >0 = override
+    int force_stages = 0;    // 0 = heuristic, >0 = override
+
     /// Returns a unique string key for cache directory naming.
     std::string CacheKey() const;
   };
@@ -49,9 +54,9 @@ class HummingJitCompiler {
   /// @brief Constructs the JIT compiler with self-resolving paths.
   ///
   /// Path resolution order:
-  ///   base_dir: $KSANA_HUMMING_BASE_DIR, or derived from __FILE__
+  ///   base_dir: $KSANA_HUMMING_BASE_DIR (for humming_tool.py), or derived from __FILE__
   ///   cache_dir: $KSANA_HUMMING_KERNEL_PATH, or "~/.cache/KsanaLLM/humming_kernel_files"
-  ///   include_dir: $HUMMING_INCLUDE_DIR, or auto-detect via python3, or base_dir + "/include"
+  ///   include_dir: $HUMMING_INCLUDE_DIR, or derived from __FILE__ + "/include" (local copy of humming headers)
   ///   script_dir: base_dir + "/jit"
   HummingJitCompiler();
   ~HummingJitCompiler();

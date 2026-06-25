@@ -1,6 +1,7 @@
 /* Copyright 2026 Tencent Inc.  All rights reserved.
 ==============================================================================*/
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -115,7 +116,7 @@ void DeepCopyTensorInto(const Tensor& src, Tensor& dst, cudaStream_t stream);
 // ===========================================================================
 // Weight generation — base FP4 weights (all backends start from same data)
 // ===========================================================================
-ProcessedWeights GenerateBaseWeights(const Fp4MoeTestConfig& cfg) {
+ProcessedWeights GenerateBaseWeights(const Fp4MoeTestConfig& cfg, int scale_lo, int scale_hi) {
   ProcessedWeights base;
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);  // inter_per_rank
@@ -133,7 +134,7 @@ ProcessedWeights GenerateBaseWeights(const Fp4MoeTestConfig& cfg) {
   base.w1_scales = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {E, N * 2, K / 32});
   torch::from_blob(base.w1_scales.GetPtr<void>(),
                    {static_cast<int64_t>(E), static_cast<int64_t>(N * 2), static_cast<int64_t>(K / 32)}, uint8_opt)
-      .random_(0, 256);
+      .random_(scale_lo, scale_hi);
 
   // w2 (down): [E, K, N/2] uint8 — FP4 packed
   base.w2 = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {E, K, N / 2});
@@ -145,7 +146,7 @@ ProcessedWeights GenerateBaseWeights(const Fp4MoeTestConfig& cfg) {
   base.w2_scales = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {E, K, N / 32});
   torch::from_blob(base.w2_scales.GetPtr<void>(),
                    {static_cast<int64_t>(E), static_cast<int64_t>(K), static_cast<int64_t>(N / 32)}, uint8_opt)
-      .random_(0, 256);
+      .random_(scale_lo, scale_hi);
 
   return base;
 }
@@ -261,7 +262,7 @@ ProcessedWeights ProcessWeightsHummingW4A16(const ProcessedWeights& base, const 
 
   out.w2_scales = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {E, static_cast<size_t>(N / 32), K});
   process_scales(stream, base.w2_scales.GetPtr<void>(), out.w2_scales.GetPtr<void>(), static_cast<int64_t>(E), K1,
-                 static_cast<int64_t>(N), 128, ComputeDtype::BF16);
+                 static_cast<int64_t>(N), 32, ComputeDtype::BF16);
   out.w2.weight_scales = &out.w2_scales;
 
   return out;
@@ -302,7 +303,7 @@ ProcessedWeights ProcessWeightsHummingW4A8(const ProcessedWeights& base, const F
 
     out.w1_scales =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {E, static_cast<size_t>(K / 32), static_cast<size_t>(N1)});
-    process_scales(stream, s1_copy.GetPtr<void>(), out.w1_scales.GetPtr<void>(), static_cast<int64_t>(E), N1, K1, 128,
+    process_scales(stream, s1_copy.GetPtr<void>(), out.w1_scales.GetPtr<void>(), static_cast<int64_t>(E), N1, K1, 32,
                    ComputeDtype::FP8);
     out.w1.weight_scales = &out.w1_scales;
   }
@@ -327,7 +328,7 @@ ProcessedWeights ProcessWeightsHummingW4A8(const ProcessedWeights& base, const F
 
     out.w2_scales = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {E, static_cast<size_t>(N / 32), K});
     process_scales(stream, s2_copy.GetPtr<void>(), out.w2_scales.GetPtr<void>(), static_cast<int64_t>(E), K1,
-                   static_cast<int64_t>(N), 128, ComputeDtype::FP8);
+                   static_cast<int64_t>(N), 32, ComputeDtype::FP8);
     out.w2.weight_scales = &out.w2_scales;
   }
 
@@ -347,9 +348,152 @@ void DeepCopyTensorInto(const Tensor& src, Tensor& dst, cudaStream_t stream) {
 }
 
 // ===========================================================================
+// FP4 weight dequantization on GPU (torch vectorized ops)
+//
+// Input:  w_gpu [E, N, K/2] uint8 (FP4 packed, low nibble first)
+//         s_gpu [E, N, K/32] uint8 (E8M0 scales)
+// Output: [E, N, K] float32 GPU tensor
+// Formula: value = Fp4Lut[nibble] * 2^(scale_byte - 127)  per group of 32
+//
+// Uses standard torch GPU ops (gather, pow, repeat_interleave) — independent
+// code path from Humming/Marlin fused FP4 kernels, so still a valid reference.
+// ===========================================================================
+torch::Tensor DequantFp4WeightGpu(const Tensor& w_gpu, const Tensor& s_gpu, size_t E, size_t N, size_t K) {
+  auto u8_opt = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kUInt8);
+  auto f32_opt = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kFloat32);
+
+  auto w = torch::from_blob(w_gpu.GetPtr<void>(),
+                            {static_cast<int64_t>(E), static_cast<int64_t>(N), static_cast<int64_t>(K / 2)}, u8_opt);
+  auto s = torch::from_blob(s_gpu.GetPtr<void>(),
+                            {static_cast<int64_t>(E), static_cast<int64_t>(N), static_cast<int64_t>(K / 32)}, u8_opt);
+
+  // FP4 E2M1 LUT
+  static const float kFp4Lut[16] = {0.0f,  0.5f,  1.0f,  1.5f,  2.0f,  3.0f,  4.0f,  6.0f,
+                                    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f};
+  auto lut = torch::from_blob(const_cast<float*>(kFp4Lut), {16}, torch::TensorOptions().dtype(torch::kFloat32))
+                 .to(torch::kCUDA, /*non_blocking=*/true);
+
+  // Split low/high nibbles: [E, N, K/2] -> gather LUT -> [E, N, K/2]
+  auto w_i32 = w.to(torch::kInt32);
+  auto low = w_i32 & 0xF;                                  // [E, N, K/2]
+  auto high = torch::bitwise_right_shift(w_i32, 4) & 0xF;  // [E, N, K/2]
+
+  // LUT lookup via gather, then interleave into [E, N, K]
+  auto low_vals = lut.index_select(0, low.reshape(-1))
+                      .reshape({static_cast<int64_t>(E), static_cast<int64_t>(N), static_cast<int64_t>(K / 2)});
+  auto high_vals = lut.index_select(0, high.reshape(-1))
+                       .reshape({static_cast<int64_t>(E), static_cast<int64_t>(N), static_cast<int64_t>(K / 2)});
+
+  // Interleave: result[..., 2*i] = low_vals[..., i], result[..., 2*i+1] = high_vals[..., i]
+  auto values = torch::empty({static_cast<int64_t>(E), static_cast<int64_t>(N), static_cast<int64_t>(K)}, f32_opt);
+  auto view2 = values.view({static_cast<int64_t>(E), static_cast<int64_t>(N), static_cast<int64_t>(K / 2), 2});
+  view2.select(-1, 0).copy_(low_vals);
+  view2.select(-1, 1).copy_(high_vals);
+
+  // Scale: 2^(byte - 127), per group of 32
+  auto scales = torch::pow(2.0f, s.to(torch::kFloat32) - 127.0f);  // [E, N, K/32]
+  scales = scales.repeat_interleave(32, /*dim=*/-1);               // [E, N, K]
+
+  return values * scales;  // [E, N, K] float32 on GPU
+}
+
+// ===========================================================================
+// FP8 E4M3 quantize-dequantize on GPU (matches Triton _quant_tensor_kernel)
+//
+// Per-token: scale = max(|x|, 1e-30) / 448
+//            x_fp8 = cast_to_fp8_e4m3fn_rne_sat(x / scale)
+//            x_dequant = fp8_to_float(x_fp8) * scale
+// ===========================================================================
+torch::Tensor Fp8QuantDequantGpu(torch::Tensor x) {
+  auto absmax = std::get<0>(x.abs().max(-1)).clamp_min(1e-30);
+  auto scale = absmax / 448.0f;
+  auto x_scaled = x / scale.unsqueeze(-1);
+  auto x_fp8 = x_scaled.to(torch::kFloat8_e4m3fn);
+  return x_fp8.to(torch::kFloat32) * scale.unsqueeze(-1);
+}
+
+// ===========================================================================
+// GPU reference FP4 MOE forward — computes from pre-dequantized FP32 weights
+//
+// Pipeline: TopK gating -> GEMM1 -> SwiGLU(limit) -> GEMM2 -> weighted sum
+// For W4A8: activations are FP8-quantized before each GEMM
+//
+// All ops use standard torch GPU kernels (cuBLAS matmul, element-wise) — a
+// completely independent code path from Humming/Marlin fused FP4 kernels.
+// Accepts pre-dequantized weights to avoid redundant dequant across token sizes.
+// ===========================================================================
+torch::Tensor GpuRefFp4MoeForward(const torch::Tensor& w1_dequant, const torch::Tensor& w2_dequant,
+                                  const Fp4MoeTestConfig& cfg, torch::Tensor hs_gpu, torch::Tensor gate_gpu,
+                                  Fp4Backend backend, float swiglu_limit) {
+  size_t E = ComputeExpertsPerRank(cfg);
+  size_t N = ComputeInterPerRank(cfg);
+  size_t K = cfg.hidden_size;
+  size_t topk = 6;
+  int64_t M = hs_gpu.size(0);
+
+  // 1. TopK gating: scores = sqrt(softplus(gate))
+  auto gate_f32 = gate_gpu.to(torch::kFloat32);
+  auto scores = torch::sqrt(torch::nn::functional::softplus(gate_f32));
+  auto topk_result = torch::topk(scores, static_cast<int64_t>(topk), /*dim=*/-1, /*largest=*/true, /*sorted=*/true);
+  auto topk_weights = std::get<0>(topk_result).to(torch::kFloat32);  // [M, topk]
+  auto topk_ids = std::get<1>(topk_result).to(torch::kInt64);        // [M, topk]
+
+  // Flatten routing indices for per-expert grouping
+  auto flat_ids = topk_ids.reshape(-1);  // [M*topk]
+  auto flat_m = torch::arange(M, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt64))
+                    .unsqueeze(1)
+                    .expand({M, static_cast<int64_t>(topk)})
+                    .reshape(-1);  // [M*topk]
+
+  // 2. GEMM1: per-expert batched matmul
+  auto x = hs_gpu.to(torch::kFloat32);  // [M, K]
+  if (backend == Fp4Backend::kHummingW4A8) {
+    x = Fp8QuantDequantGpu(x);
+  }
+  auto cache1 = torch::zeros({M * static_cast<int64_t>(topk), static_cast<int64_t>(N * 2)},
+                             torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
+  for (int64_t e = 0; e < static_cast<int64_t>(E); ++e) {
+    auto mask = (flat_ids == e);
+    if (!mask.any().item<bool>()) continue;
+    auto row_idx = mask.nonzero().squeeze(1);      // [num_rows]
+    auto m_idx = flat_m.index_select(0, row_idx);  // [num_rows]
+    auto x_e = x.index_select(0, m_idx);           // [num_rows, K]
+    cache1.index_copy_(0, row_idx, x_e.matmul(w1_dequant[e].t()));
+  }
+
+  // 3. SwiGLU with limit
+  auto gate_part = cache1.slice(1, 0, static_cast<int64_t>(N));
+  auto up_part = cache1.slice(1, static_cast<int64_t>(N), static_cast<int64_t>(N * 2));
+  gate_part = torch::clamp_max(gate_part, swiglu_limit);
+  up_part = torch::clamp(up_part, -swiglu_limit, swiglu_limit);
+  auto cache2 = torch::nn::functional::silu(gate_part) * up_part;  // [M*topk, N]
+
+  // 4. GEMM2: per-expert batched matmul
+  auto x2 = cache2;
+  if (backend == Fp4Backend::kHummingW4A8) {
+    x2 = Fp8QuantDequantGpu(x2);
+  }
+  auto cache3 = torch::zeros({M * static_cast<int64_t>(topk), static_cast<int64_t>(K)},
+                             torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
+  for (int64_t e = 0; e < static_cast<int64_t>(E); ++e) {
+    auto mask = (flat_ids == e);
+    if (!mask.any().item<bool>()) continue;
+    auto row_idx = mask.nonzero().squeeze(1);
+    auto m_idx = flat_m.index_select(0, row_idx);
+    auto x2_e = x2.index_select(0, row_idx);  // [num_rows, N]
+    cache3.index_copy_(0, row_idx, x2_e.matmul(w2_dequant[e].t()));
+  }
+
+  // 5. Final reduce: output[m] = sum_k topk_weights[m,k] * cache3[m*topk+k]
+  auto topk_w = topk_weights.reshape({-1, 1});                                               // [M*topk, 1]
+  auto weighted = cache3 * topk_w;                                                           // [M*topk, K]
+  return weighted.reshape({M, static_cast<int64_t>(topk), static_cast<int64_t>(K)}).sum(1);  // [M, K]
+}
+
+// ===========================================================================
 // Build 24-parameter Init list
 // ===========================================================================
-std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_token_num) {
+std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_token_num, float swiglu_limit) {
   size_t inter_per_rank = ComputeInterPerRank(cfg);
   size_t experts_per_rank = ComputeExpertsPerRank(cfg);
   size_t moe_tp = ComputeMoeTp(cfg);
@@ -376,7 +520,7 @@ std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_tok
   params.push_back(DataType::TYPE_FP4_E2M1FN_x2);  // 18: int_weight_dtype
   params.push_back(128);                           // 19: group_size
   params.push_back(false);                         // 20: apply_weight
-  params.push_back(0.0f);                          // 21: swiglu_limit
+  params.push_back(swiglu_limit);                  // 21: swiglu_limit
   params.push_back(uint32_t(0));                   // 22: num_hash_layers
   params.push_back(uint32_t(0));                   // 23: vocab_size
   return params;
@@ -579,11 +723,14 @@ BenchResult MeasureMoeCudaExecutionTime(Func&& forward, MoePerfStats* perf_stats
 // ===========================================================================
 // Run benchmark across all token sizes for one (layer, inputs) pair.
 // Templated on the concrete layer type so we can call SetPerfStats directly.
+// Also captures the last forward output per token size for accuracy checking.
 // ===========================================================================
 template <typename LayerT>
-std::vector<BenchResult> RunBenchmark(LayerT* layer, std::vector<Tensor>& persistent_inputs,
-                                      const Fp4MoeTestConfig& cfg, cudaStream_t stream, const void* hs_full,
-                                      const void* gate_full) {
+std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(LayerT* layer,
+                                                                             std::vector<Tensor>& persistent_inputs,
+                                                                             const Fp4MoeTestConfig& cfg,
+                                                                             cudaStream_t stream, const void* hs_full,
+                                                                             const void* gate_full) {
   static constexpr size_t kBytesPerBF16 = 2;
   size_t K = cfg.hidden_size;
   size_t E = cfg.num_experts;
@@ -593,6 +740,8 @@ std::vector<BenchResult> RunBenchmark(LayerT* layer, std::vector<Tensor>& persis
 
   std::vector<BenchResult> results;
   results.reserve(kTokenSizes.size());
+  std::vector<torch::Tensor> outputs;
+  outputs.reserve(kTokenSizes.size());
 
   for (size_t num_tokens : kTokenSizes) {
     persistent_inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, K});
@@ -613,10 +762,17 @@ std::vector<BenchResult> RunBenchmark(LayerT* layer, std::vector<Tensor>& persis
 
     results.push_back(
         MeasureMoeCudaExecutionTime(forward, &perf_stats, stream, cfg, num_tokens, kWarmupIters, kBenchIters));
+
+    // Capture output as FP32 on GPU for accuracy verification
+    cudaStreamSynchronize(stream);
+    auto gpu_out = torch::from_blob(output.GetPtr<void>(), {static_cast<int64_t>(num_tokens), static_cast<int64_t>(K)},
+                                    torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kBFloat16))
+                       .to(torch::kFloat32);
+    outputs.push_back(std::move(gpu_out));
   }
 
   layer->SetPerfStats(nullptr);
-  return results;
+  return {results, outputs};
 }
 
 // ===========================================================================
@@ -722,12 +878,24 @@ void PrintBandwidth(const std::string& config_name, const std::vector<std::vecto
 }
 
 // ===========================================================================
-// Full benchmark driver for one config.
+// Cosine similarity helper for flattened tensors
+// ===========================================================================
+inline float CosineSim(const torch::Tensor& a, const torch::Tensor& b) {
+  return torch::nn::functional::cosine_similarity(a.flatten().unsqueeze(0), b.flatten().unsqueeze(0)).item<float>();
+}
+
+// ===========================================================================
+// Full benchmark + accuracy driver for one config.
 //
 // Serialized design: base weights + max-size input data are generated once,
 // then each backend is tested independently and its resources freed before
-// the next backend starts.  Peak GPU memory = base weights + one backend's
-// weights (~6 GB).
+// the next backend starts.  After perf measurement, dequantized FP32 weights
+// are computed for accuracy reference (TP configs only).
+//
+// Uses accuracy-friendly data (constrained E8M0 scales [119,123), swiglu_limit=10)
+// so that GPU reference comparison can run alongside performance measurement.
+// Accuracy verification is skipped for EP configs (expert_map remapping not
+// modeled in the GPU reference).
 // ===========================================================================
 void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context> context,
                            RuntimeConfig& base_runtime_config) {
@@ -735,11 +903,28 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
     GTEST_SKIP() << "Requires SM90+";
   }
 
+  // QUANT_PROFILE controls profiling in cutlass/humming MoE layers.
+  // If the user has set it externally, respect their choice (enables profiling tests).
+  // Otherwise default to 0 (profiling disabled) for fast, deterministic baseline tests.
+  if (std::getenv("QUANT_PROFILE") == nullptr) {
+    setenv("QUANT_PROFILE", "0", 1);
+  }
+
   constexpr int kDeviceRank = 0;
   cudaStream_t stream = GetStream(context);
   size_t K = cfg.hidden_size;
   size_t E = cfg.num_experts;
+  size_t E_local = ComputeExpertsPerRank(cfg);
+  size_t N = ComputeInterPerRank(cfg);
   size_t max_ntok = kTokenSizes.back();
+  const bool is_ep = (cfg.expert_para_size > 1);
+
+  // Accuracy constants (applied to all configs; EP skips comparison)
+  constexpr float kSwigluLimit = 10.0f;
+  constexpr int kScaleLo = 119;
+  constexpr int kScaleHi = 123;
+  constexpr float kCosSimBF16 = 0.95f;  // Marlin & W4A16 (BF16 compute)
+  constexpr float kCosSimFP8 = 0.90f;   // W4A8 (FP8 quant residual)
 
   // Configure EP so layers properly simulate expert parallelism:
   // sets global_expert_para_size_ = ep_size * expert_world_size, triggers EP
@@ -747,92 +932,81 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
   base_runtime_config.parallel_basic_config.expert_parallel_size = cfg.expert_para_size;
 
   // =========================================================================
-  // 1. Generate base weights once (seed 123, shared across all backends)
+  // 1. Generate base weights once (seed 777, constrained scales for accuracy)
   // =========================================================================
-  torch::manual_seed(123);
-  torch::cuda::manual_seed(123);
-  ProcessedWeights base = GenerateBaseWeights(cfg);
+  torch::manual_seed(777);
+  torch::cuda::manual_seed(777);
+  ProcessedWeights base = GenerateBaseWeights(cfg, kScaleLo, kScaleHi);
 
   // =========================================================================
-  // 2. Pre-generate max-size input data (seed 42).
+  // 2. Pre-generate max-size input data (seed 888).
   //    All backends slice from these, guaranteeing identical inputs per M.
   // =========================================================================
-  torch::manual_seed(42);
-  torch::cuda::manual_seed(42);
+  torch::manual_seed(888);
+  torch::cuda::manual_seed(888);
   auto bf16_opt = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kBFloat16);
   torch::Tensor hs_full = torch::randn({static_cast<int64_t>(max_ntok), static_cast<int64_t>(K)}, bf16_opt);
-  torch::Tensor gate_full = torch::rand({static_cast<int64_t>(max_ntok), static_cast<int64_t>(E)}, bf16_opt);
+  torch::Tensor gate_full = torch::randn({static_cast<int64_t>(max_ntok), static_cast<int64_t>(E)}, bf16_opt);
 
   const void* hs_ptr = hs_full.data_ptr();
   const void* gate_ptr = gate_full.data_ptr();
 
   // =========================================================================
-  // 3. Shared params
+  // 3. Shared params (swiglu_limit for accuracy; perf unaffected)
   // =========================================================================
-  auto params = BuildMoeParams(cfg, max_ntok);
+  auto params = BuildMoeParams(cfg, max_ntok, kSwigluLimit);
 
   std::vector<std::vector<BenchResult>> all_results;
+  std::vector<std::vector<torch::Tensor>> all_outputs;  // [backend][token_size]
 
   // =========================================================================
-  // 4. Marlin
+  // 4-6. Run each backend (serialized)
   // =========================================================================
-  {
-    ProcessedWeights pw = ProcessWeightsMarlin(base, cfg, stream);
+  auto run_backend = [&](Fp4Backend backend) {
+    ProcessedWeights pw;
+    switch (backend) {
+      case Fp4Backend::kMarlin:
+        pw = ProcessWeightsMarlin(base, cfg, stream);
+        break;
+      case Fp4Backend::kHummingW4A16:
+        pw = ProcessWeightsHummingW4A16(base, cfg, stream);
+        break;
+      case Fp4Backend::kHummingW4A8:
+        pw = ProcessWeightsHummingW4A8(base, cfg, stream);
+        break;
+      default:
+        KLLM_THROW(fmt::format("Unsupported backend: {}", static_cast<int>(backend)));
+    }
     StreamSynchronize(context->device->GetPrimaryComputeStream());
 
     RuntimeConfig rc = base_runtime_config;
     rc.inter_data_type = TYPE_BF16;
-    auto layer = CreateLayer(Fp4Backend::kMarlin, params, rc, context, kDeviceRank);
+    auto layer = CreateLayer(backend, params, rc, context, kDeviceRank);
 
-    auto inputs = SetupPersistentInputs(pw, Fp4Backend::kMarlin, stream);
-    cudaDeviceSynchronize();
-    all_results.push_back(
-        RunBenchmark(static_cast<MarlinFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
-  }  // ~pw, ~layer, ~inputs
+    auto inputs = SetupPersistentInputs(pw, backend, stream);
+    cudaStreamSynchronize(stream);
 
-  // =========================================================================
-  // 5. HummingW4A16
-  // =========================================================================
-  {
-    ProcessedWeights pw = ProcessWeightsHummingW4A16(base, cfg, stream);
-    StreamSynchronize(context->device->GetPrimaryComputeStream());
+    if (backend == Fp4Backend::kMarlin) {
+      auto [results, outputs] =
+          RunBenchmark(static_cast<MarlinFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr);
+      all_results.push_back(std::move(results));
+      all_outputs.push_back(std::move(outputs));
+    } else {
+      auto [results, outputs] =
+          RunBenchmark(static_cast<HummingFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr);
+      all_results.push_back(std::move(results));
+      all_outputs.push_back(std::move(outputs));
+    }
+  };
 
-    RuntimeConfig rc = base_runtime_config;
-    rc.inter_data_type = TYPE_BF16;
-    auto layer = CreateLayer(Fp4Backend::kHummingW4A16, params, rc, context, kDeviceRank);
-
-    auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A16, stream);
-    cudaDeviceSynchronize();
-    all_results.push_back(
-        RunBenchmark(static_cast<HummingFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
-  }
+  run_backend(Fp4Backend::kMarlin);
+  run_backend(Fp4Backend::kHummingW4A16);
+  run_backend(Fp4Backend::kHummingW4A8);
 
   // =========================================================================
-  // 6. HummingW4A8
-  // =========================================================================
-  {
-    ProcessedWeights pw = ProcessWeightsHummingW4A8(base, cfg, stream);
-    StreamSynchronize(context->device->GetPrimaryComputeStream());
-
-    RuntimeConfig rc = base_runtime_config;
-    rc.inter_data_type = TYPE_BF16;
-    auto layer = CreateLayer(Fp4Backend::kHummingW4A8, params, rc, context, kDeviceRank);
-
-    auto inputs = SetupPersistentInputs(pw, Fp4Backend::kHummingW4A8, stream);
-    cudaDeviceSynchronize();
-    all_results.push_back(
-        RunBenchmark(static_cast<HummingFp4MoeLayer*>(layer.get()), inputs, cfg, stream, hs_ptr, gate_ptr));
-  }
-
-  // =========================================================================
-  // 7. Print results
+  // 7. Print performance results
   // =========================================================================
   PrintLatencyTable(cfg.name, all_results);
-
-  // TFLOPS are only meaningful for TP-only configs. Under EP the current rank
-  // processes only tokens routed to its local expert subset, so the static
-  // 2*M*topk*K*N formula overestimates actual work.
-  const bool is_ep = (cfg.expert_para_size > 1);
   if (!is_ep) {
     PrintTFLOPS(cfg.name, all_results);
     PrintBandwidth(cfg.name, all_results);
@@ -840,8 +1014,48 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
     std::cout << "\n=== " << cfg.name << " TFLOPS: SKIPPED (EP — per-rank FLOPs depend on "
               << "token-expert distribution)" << std::endl;
   }
-}  // TEST_F cases
-// ===========================================================================
+
+  // =========================================================================
+  // 8. Accuracy verification (TP configs only)
+  //    All three backends independently compared against GPU torch reference.
+  // =========================================================================
+  if (is_ep) {
+    return;
+  }
+
+  // Dequant FP4 weights to FP32 on GPU for accuracy reference (after backend
+  // runs to avoid increasing peak memory during perf measurement)
+  torch::Tensor w1_dequant = DequantFp4WeightGpu(base.w1, base.w1_scales, E_local, N * 2, K);  // [E, N*2, K]
+  torch::Tensor w2_dequant = DequantFp4WeightGpu(base.w2, base.w2_scales, E_local, K, N);      // [E, K, N]
+
+  // all_outputs indices: 0=Marlin, 1=W4A16, 2=W4A8
+  const struct {
+    const char* name;
+    float threshold;
+  } backend_info[] = {{"Marlin", kCosSimBF16}, {"HummingW4A16", kCosSimBF16}, {"HummingW4A8", kCosSimFP8}};
+
+  for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    size_t M = kTokenSizes[i];
+    auto hs_m = hs_full.slice(0, 0, static_cast<int64_t>(M));
+    auto gate_m = gate_full.slice(0, 0, static_cast<int64_t>(M));
+
+    // BF16 reference (for Marlin and W4A16)
+    auto ref_bf16 = GpuRefFp4MoeForward(w1_dequant, w2_dequant, cfg, hs_m, gate_m, Fp4Backend::kMarlin, kSwigluLimit);
+    // FP8 reference (for W4A8)
+    auto ref_fp8 =
+        GpuRefFp4MoeForward(w1_dequant, w2_dequant, cfg, hs_m, gate_m, Fp4Backend::kHummingW4A8, kSwigluLimit);
+
+    torch::Tensor refs[3] = {ref_bf16, ref_bf16, ref_fp8};
+
+    for (int b = 0; b < 3; ++b) {
+      float cos = CosineSim(all_outputs[b][i], refs[b]);
+      bool has_nan = refs[b].isnan().any().item<bool>() || all_outputs[b][i].isnan().any().item<bool>();
+      EXPECT_TRUE(cos > backend_info[b].threshold && !has_nan)
+          << cfg.name << " " << backend_info[b].name << " M=" << M << " cos_sim=" << cos << " (threshold "
+          << backend_info[b].threshold << ")";
+    }
+  }
+}
 
 // NOTE(jinxcwu) 完整性能测试时可以打开所有情况的测试，目前为了节省测试时间只打开一个
 TEST_F(LayerTest, Flash_TP4) { RunBenchmarkForConfig(kFlashTP4, context_, runtime_config); }

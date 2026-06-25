@@ -42,33 +42,12 @@ if(HUMMING_PREPROCESS_SRCS)
     endif()
   endif()
 
-  execute_process(
-    COMMAND ${_HUMMING_PYTHON} -c "import humming; import os; print(os.path.join(os.path.dirname(humming.__file__), 'include'))"
-    OUTPUT_VARIABLE HUMMING_PIP_INCLUDE_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE HUMMING_PIP_RESULT
-    ERROR_VARIABLE HUMMING_PIP_ERROR
-  )
-
-  if(HUMMING_PIP_RESULT EQUAL 0 AND HUMMING_PIP_INCLUDE_DIR)
-    set(HUMMING_INCLUDE_DIR "${HUMMING_PIP_INCLUDE_DIR}")
-    message(STATUS "Using humming pip package include: ${HUMMING_INCLUDE_DIR}")
-  elseif(DEFINED ENV{DISABLE_FORCE_INSTALL_HUMMING})
-    message(FATAL_ERROR "humming-kernels not found and DISABLE_FORCE_INSTALL_HUMMING is set. "
-                        "Please install humming manually or unset DISABLE_FORCE_INSTALL_HUMMING:\n"
-                        "  pip install git+https://github.com/inclusionAI/humming.git@d596b9f\n"
-                        "  pip install triton==3.2.0")
-  else()
-    message(FATAL_ERROR "humming-kernels import failed after installation (${HUMMING_PIP_ERROR}). "
-                        "Please install manually:\n"
-                        "  pip install git+https://github.com/inclusionAI/humming.git@d596b9f\n"
-                        "  pip install triton==3.2.0")
-  endif()
+  message(STATUS "Using humming local include: ${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
   target_include_directories(llm_kernels_nvidia_kernel_humming_preprocess PUBLIC
     ${PROJECT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${HUMMING_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
   )
   target_link_libraries(llm_kernels_nvidia_kernel_humming_preprocess PUBLIC
     -lcudart llm_kernels_nvidia_utils ${TORCH_LIBRARIES})

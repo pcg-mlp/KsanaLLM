@@ -49,12 +49,12 @@ static HummingJitCompiler* g_jit_compiler = nullptr;
 void SetJitCompiler(HummingJitCompiler* compiler) { g_jit_compiler = compiler; }
 HummingJitCompiler* GetJitCompiler() { return g_jit_compiler; }
 
-int32_t get_kernel_block_m(int64_t, int64_t, int64_t, GemmType, ComputeDtype) { return 8; }
+int32_t get_kernel_block_m(int64_t, int64_t, int64_t, GemmType, ComputeDtype, const KernelMeta**) { return 8; }
 
 void humming_moe_gemm(const void*, const void*, void*, const void*, const void*, const void*, const void*, const void*,
                       const int32_t*, const int32_t*, const int32_t*, const int32_t*, const float*, int32_t*, void*,
                       GemmType, ComputeDtype, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, cudaStream_t,
-                      int32_t) {
+                      int32_t, const KernelMeta*) {
   fprintf(stderr, "ERROR: humming_moe_gemm called on non-SM90 platform — not supported.\n");
 }
 

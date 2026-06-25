@@ -147,6 +147,12 @@ def _add_generate_args(subparsers):
                    help="0=BF16, 1=FP8")
     p.add_argument("--output", type=str, required=True, help="Output .cu file path")
     p.add_argument("--meta_output", type=str, default=None, help="Output kernel metadata JSON path")
+    p.add_argument("--force_stream_k", type=int, default=-1,
+                   help="Override use_stream_k: -1=heuristic, 0=false, 1=true")
+    p.add_argument("--force_block_n", type=int, default=0,
+                   help="Override block_shape N: 0=heuristic, >0=override")
+    p.add_argument("--force_stages", type=int, default=0,
+                   help="Override num_stages: 0=heuristic, >0=override")
     return p
 
 
@@ -162,6 +168,14 @@ def _cmd_generate(args):
     meta = _build_layer_meta(args, a_dtype, use_fused_e8m0_scale, weight_scale_type)
 
     config = m["get_heuristics_class"]().get_config(meta, shape_m=args.block_m, gemm_type=gemm_type)
+
+    # Apply overrides from CLI args
+    if args.force_stream_k >= 0:
+        config["use_stream_k"] = bool(args.force_stream_k)
+    if args.force_block_n > 0:
+        config["block_shape"] = [config["block_shape"][0], args.force_block_n, config["block_shape"][2]]
+    if args.force_stages > 0:
+        config["num_stages"] = args.force_stages
 
     kernel = m["HummingKernel"](
         shape_n=args.size_n,

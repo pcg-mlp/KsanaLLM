@@ -277,24 +277,34 @@ std::string GetDefaultHummingToolPath() {
   return "";
 }
 
-/// Resolve humming pip package include directory.
+/// Derive the humming operator base directory from compile-time source file location.
+/// __FILE__ -> .../humming/jit/humming_jit_compiler.cpp -> .../humming
+/// This is the parent of the local include/ directory containing the .cuh headers.
+std::string GetDefaultBaseDir() {
+  std::string file_path(__FILE__);
+  size_t pos = file_path.rfind("/jit/");
+  if (pos != std::string::npos) {
+    return file_path.substr(0, pos);
+  }
+  return "";
+}
+
+/// Resolve the local humming include directory.
 /// 1. $HUMMING_INCLUDE_DIR env var (explicit override)
-/// 2. Auto-detect via python3 -c "import humming; ..."
+/// 2. base_dir + "/include" where base_dir is derived from __FILE__
 /// 3. Falls back to empty string (caller should handle)
-std::string ResolvePipIncludeDir() {
+///
+/// Note: $KSANA_HUMMING_BASE_DIR is intentionally NOT used here. In the
+/// constructor it has different semantics (points at the jit/ subdirectory
+/// for humming_tool.py), so reusing it for include resolution would yield
+/// a wrong path. Use $HUMMING_INCLUDE_DIR to override the include dir directly.
+std::string ResolveLocalIncludeDir() {
   const char* env = std::getenv("HUMMING_INCLUDE_DIR");
   if (env && env[0] != '\0') return env;
 
-  std::string output;
-  int ret = ExecuteCommand(
-      "python3 -c \"import humming; import os; "
-      "print(os.path.join(os.path.dirname(humming.__file__), 'include'))\"",
-      &output);
-  if (ret == 0 && !output.empty()) {
-    while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) output.pop_back();
-    if (output != "None") return output;
-  }
-  return "";
+  std::string base_dir = GetDefaultBaseDir();
+  if (base_dir.empty()) return "";
+  return base_dir + "/include";
 }
 
 }  // anonymous namespace
@@ -307,6 +317,9 @@ std::string HummingJitCompiler::KernelConfig::CacheKey() const {
   std::ostringstream oss;
   oss << "n" << size_n << "_k" << size_k << "_e" << num_experts << "_bm" << block_m << "_gt"
       << static_cast<int>(gemm_type) << "_dt" << static_cast<int>(compute_dtype);
+  if (force_stream_k) oss << "_fsk1";
+  if (force_block_n > 0) oss << "_fbn" << force_block_n;
+  if (force_stages > 0) oss << "_fns" << force_stages;
   return oss.str();
 }
 
@@ -327,13 +340,18 @@ HummingJitCompiler::HummingJitCompiler() : nvcc_path_(FindNvcc()), force_regener
                                 __FILE__);
   }
 
-  // ── 2. Resolve include dir ──
-  include_dir_ = ResolvePipIncludeDir();
+  // ── 2. Resolve include dir: local copy of humming headers ──
+  include_dir_ = ResolveLocalIncludeDir();
   KLLM_KERNEL_CHECK_WITH_INFO(!include_dir_.empty(),
-                              "humming-kernels pip package not detected at runtime. "
-                              "Set $HUMMING_INCLUDE_DIR or install:\n"
-                              "  pip install git+https://github.com/inclusionAI/humming.git@d596b9f\n"
-                              "  pip install triton==3.2.0");
+                              "Cannot resolve local humming include directory. "
+                              "Set $HUMMING_INCLUDE_DIR environment variable. "
+                              "Expected .cuh headers under <base_dir>/include/humming/.");
+  // Sentinel check: verify the local headers are actually present.
+  KLLM_KERNEL_CHECK_WITH_INFO(FileExists(include_dir_ + "/humming/kernel/humming.cuh"),
+                              "Local humming include directory '%s' does not contain "
+                              "humming/kernel/humming.cuh. Expected the 0.1.5 .cuh headers under "
+                              "<base_dir>/include/humming/. Set $HUMMING_INCLUDE_DIR to override.",
+                              include_dir_.c_str());
 
   // ── 3. Cache dir: KSANA_HUMMING_KERNEL_PATH env, or ~/.cache/KsanaLLM/humming_kernel_files ──
   const char* cache_env = std::getenv("KSANA_HUMMING_KERNEL_PATH");
@@ -591,6 +609,9 @@ void HummingJitCompiler::GenerateSource(const KernelConfig& config, const std::s
       << " --size_n " << config.size_n << " --size_k " << config.size_k << " --num_experts " << config.num_experts
       << " --block_m " << config.block_m << " --gemm_type " << static_cast<int>(config.gemm_type) << " --compute_dtype "
       << static_cast<int>(config.compute_dtype) << " --output " << output_path << " --meta_output " << meta_path;
+  if (config.force_stream_k) cmd << " --force_stream_k 1";
+  if (config.force_block_n > 0) cmd << " --force_block_n " << config.force_block_n;
+  if (config.force_stages > 0) cmd << " --force_stages " << config.force_stages;
 
   if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
@@ -806,6 +827,99 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelCon
     configs.push_back({size_n, size_k, num_experts, block_m, gemm_type, compute_dtype, min_m, max_m});
 
     pos = (max_pos != std::string::npos) ? max_pos + 1 : comma + 1;
+  }
+
+  // GEMM2 optimization: detect small-K large-N shapes and inject optimized configs.
+  // The Python heuristic disables stream-K for K<=1024 and always uses block_n=128,
+  // both suboptimal for GEMM2's (small K, large N) shape at small-medium M.
+  // For large M (3073+), the heuristic configs (block_n=128, stream_k=false, stages=4)
+  // are already near-optimal, so we keep them and only override small-medium M.
+  if (size_k <= 512 && size_n >= 4096) {
+    // Remove heuristic configs for small-medium M (they use stream_k=false, block_n=128)
+    // Keep heuristic configs for large M (3073+) — they're optimal for large M
+    configs.erase(
+        std::remove_if(configs.begin(), configs.end(), [](const KernelConfig& c) { return c.max_shape_m <= 3072; }),
+        configs.end());
+
+    // Add optimized configs for small-medium M only
+    // Small M (1-64 tokens, M_eff=6-384): block_m=64, stream-K, block_n=256, stages=3
+    configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 1, 384, true, 256, 3});
+    // Medium M (65-512 tokens, M_eff=390-3072): block_m=64, stream-K, block_n=256, stages=3
+    configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 385, 3072, true, 256, 3});
+
+    if (verbose_) {
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cout << "[HUMMING JIT]   GEMM2 override: " << configs.size()
+                << " config(s) (small-M stream_k=true, block_n=256; large-M heuristic)" << std::endl;
+    }
+  }
+
+  // ── Variant config generation ──────────────────────────────────────────
+  // Generate variant configs to expand the candidate space for profile-based
+  // kernel selection. The profiler uses real weights (not dummy), so TMA
+  // descriptor layout is correct for all block_n/block_k combinations.
+  // For each heuristic config, generate up to 3 variants by flipping dimensions
+  // the heuristic may have chosen suboptimally for H20. Priority order:
+  //   1. stream_k variant (force stream_k ON; flip false→true only)
+  //   2. block_n variant (try 256 instead of heuristic 128)
+  //   3. stages variant (try stages=3 as alternative)
+  // Generate up to 3 variants per source config (dedup may reduce count).
+  // Hard cap: 25 total configs (enforced by dedup + truncation below).
+  {
+    std::vector<KernelConfig> base_configs = configs;  // snapshot before adding variants
+    for (const auto& base : base_configs) {
+      std::vector<KernelConfig> variants;
+      // 1. stream_k variant (force stream_k ON)
+      // Only flip false→true: force_stream_k==false means "use heuristic" (not
+      // "force off") since GenerateSource only emits --force_stream_k 1 when
+      // true. Flipping true→false would just reproduce the heuristic default
+      // and likely duplicate an existing config.
+      if (!base.force_stream_k) {
+        KernelConfig v = base;
+        v.force_stream_k = true;
+        // Keep heuristic block_n/stages by leaving force_block_n/force_stages as inherited
+        // (force_stream_k overrides use_stream_k in GenerateSource)
+        variants.push_back(v);
+      }
+      // 2. block_n variant (try 256 instead of heuristic 128)
+      {
+        KernelConfig v = base;
+        // Heuristic default is 128 for these shapes; 256 may improve large-N
+        // throughput by reducing block count.
+        v.force_block_n = 256;
+        variants.push_back(v);
+      }
+      // 3. stages variant (try stages=3 as alternative)
+      {
+        KernelConfig v = base;
+        // We don't know the heuristic stages here; pick stages=3 as a common alternative
+        v.force_stages = 3;
+        variants.push_back(v);
+      }
+
+      // Dedup variants against existing configs (by block_m, force_stream_k, force_block_n, force_stages)
+      for (auto& v : variants) {
+        if (configs.size() >= 25) break;  // hard cap
+        bool dup = false;
+        for (const auto& c : configs) {
+          if (c.block_m == v.block_m && c.force_stream_k == v.force_stream_k && c.force_block_n == v.force_block_n &&
+              c.force_stages == v.force_stages) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) {
+          configs.push_back(v);
+        }
+      }
+      if (configs.size() >= 25) break;
+    }
+
+    if (verbose_) {
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cout << "[HUMMING JIT]   variant generation: " << configs.size() << " config(s) total (heuristic + variants)"
+                << std::endl;
+    }
   }
 
   if (configs.empty()) {
