@@ -55,6 +55,7 @@ TEST_F(BasicWorkloadBalancerTest, SingleDpBatchAssembleRespectsBatchLimits) {
 
   ScheduleState schedule_state;
   schedule_state.schedule_states.resize(1);
+  schedule_state.schedule_states[0].resize(1);
   ScheduleContext context;
   context.SetScheduleState(&schedule_state);
 
@@ -87,10 +88,11 @@ TEST_F(BasicWorkloadBalancerTest, MultiDpAssignAndQuotaFollowLoadBalance) {
                                  /*max_step_token_num=*/12);
 
   ScheduleState schedule_state;
-  schedule_state.schedule_states.resize(3);
-  schedule_state.schedule_states[0].decoding_reqs.push_back(CreateInferRequest(1, 1, 1));
-  schedule_state.schedule_states[0].decoding_reqs.push_back(CreateInferRequest(2, 1, 1));
-  schedule_state.schedule_states[2].decoding_reqs.push_back(CreateInferRequest(3, 1, 1));
+  schedule_state.schedule_states.resize(1);
+  schedule_state.schedule_states[0].resize(3);
+  schedule_state.schedule_states[0][0].decoding_reqs.push_back(CreateInferRequest(1, 1, 1));
+  schedule_state.schedule_states[0][0].decoding_reqs.push_back(CreateInferRequest(2, 1, 1));
+  schedule_state.schedule_states[0][2].decoding_reqs.push_back(CreateInferRequest(3, 1, 1));
 
   ScheduleContext context;
   context.SetScheduleState(&schedule_state);

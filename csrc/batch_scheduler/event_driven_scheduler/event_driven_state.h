@@ -57,12 +57,20 @@ struct DpScheduleState {
 
 // 调度器全局状态（设计文档 3.2）
 struct ScheduleState {
-  // One entry per dp_idx. The vector is indexed directly by dp_idx.
-  std::vector<DpScheduleState> schedule_states;
+  // 2D matrix: schedule_states_[multi_batch_id][dp_idx].
+  // Each multi_batch_id has its own independent set of DpScheduleState entries.
+  // When max_pp_batch_num == 1, schedule_states_[0][dp_idx] is equivalent to old schedule_states_[dp_idx].
+  std::vector<std::vector<DpScheduleState>> schedule_states;
 
   // Global request index: req_id -> InferRequest.
   // Used to locate request pointer when only req_id is available (e.g. async hook next_steps).
   std::unordered_map<int64_t, std::shared_ptr<InferRequest>> req_id_to_req_ptr;
+
+  // Map from req_id to PP batch index. Used by event handlers to locate which batch a request belongs to.
+  // Invariant: if req_id appears in any schedule_states[*][*] queue, req_to_batch_idx MUST contain it.
+  // Immutable after assignment: a request MUST NOT be moved to a different batch once assigned.
+  // This prevents state interference between independently-scheduled PP batches.
+  std::unordered_map<int64_t, size_t> req_to_batch_idx;
 };
 
 // 当前在一个 DP 内已规划的 Batch（设计文档 3.3）

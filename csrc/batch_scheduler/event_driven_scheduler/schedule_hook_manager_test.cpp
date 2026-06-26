@@ -230,12 +230,16 @@ TEST(ScheduleHookManagerTest, UpdateAsyncResultContinuesFromCorrectHookIndex) {
 
   ScheduleState schedule_state;
   schedule_state.schedule_states.resize(1);
+  schedule_state.schedule_states[0].resize(1);
   schedule_state.req_id_to_req_ptr[1] = req1;
   schedule_state.req_id_to_req_ptr[2] = req2;
   schedule_state.req_id_to_req_ptr[3] = req3;
-  schedule_state.schedule_states[0].preprocessing_reqs[1] = req1;
-  schedule_state.schedule_states[0].preprocessing_reqs[2] = req2;
-  schedule_state.schedule_states[0].preprocessing_reqs[3] = req3;
+  schedule_state.req_to_batch_idx[1] = 0;
+  schedule_state.req_to_batch_idx[2] = 0;
+  schedule_state.req_to_batch_idx[3] = 0;
+  schedule_state.schedule_states[0][0].preprocessing_reqs[1] = req1;
+  schedule_state.schedule_states[0][0].preprocessing_reqs[2] = req2;
+  schedule_state.schedule_states[0][0].preprocessing_reqs[3] = req3;
 
   ScheduleContext context;
   context.SetScheduleState(&schedule_state);

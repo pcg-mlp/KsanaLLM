@@ -15,8 +15,8 @@
 #include <vector>
 
 #include "batch_scheduler/full_cache_hit_handler.h"
-#include "batch_scheduler/request_finish_checker.h"
 #include "batch_scheduler/planning_workload_estimator.h"
+#include "batch_scheduler/request_finish_checker.h"
 #include "configure/schedule_config_parser.h"
 #include "profiler/reporter.h"
 #include "runtime/schedule_output.h"
@@ -74,8 +74,9 @@ void ContinuousBatchingBackend::Schedule(const ScheduleContext& context,
 
   KLLM_CHECK(!planning_batches.empty());
 
-  // TODO(robertyuan): support multi-batch
-  PlanningBatch& planning_batch = *planning_batches[0];
+  size_t multi_batch_id = context.GetCurrentMultiBatchId();
+  KLLM_CHECK(multi_batch_id < planning_batches.size());
+  PlanningBatch& planning_batch = *planning_batches[multi_batch_id];
 
   std::unordered_set<uint64_t> emitted_event_keys;
   ProcessDecodingQueue(context, planning_batch, events, emitted_event_keys);
@@ -170,8 +171,8 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
   for (const WorkloadQuota& quota : dp_scheduling_order) {
     const size_t dp_idx = quota.dp_idx;
     KLLM_CHECK(dp_idx < planning_batch.dp_batches.size());
-    const DpScheduleState& dp_state = context.GetDpScheduleState(dp_idx);
-    DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(dp_idx);
+    const DpScheduleState& dp_state = context.GetDpScheduleState(context.GetCurrentMultiBatchId(), dp_idx);
+    DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(context.GetCurrentMultiBatchId(), dp_idx);
     auto& dp_batch = planning_batch.dp_batches[dp_idx];
     auto& cache_manager = context.GetDpCacheManager(dp_idx);
 
@@ -281,8 +282,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
   for (const WorkloadQuota& quota : dp_scheduling_order) {
     const size_t dp_idx = quota.dp_idx;
     KLLM_CHECK(dp_idx < planning_batch.dp_batches.size());
-    const DpScheduleState& dp_state = context.GetDpScheduleState(dp_idx);
-    DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(dp_idx);
+    const DpScheduleState& dp_state = context.GetDpScheduleState(context.GetCurrentMultiBatchId(), dp_idx);
+    DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(context.GetCurrentMultiBatchId(), dp_idx);
 
     auto& dp_batch = planning_batch.dp_batches[dp_idx];
     auto& cache_manager = context.GetDpCacheManager(dp_idx);

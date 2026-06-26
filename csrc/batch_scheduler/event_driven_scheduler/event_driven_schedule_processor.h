@@ -17,6 +17,7 @@
 #include "batch_scheduler/event_driven_scheduler/schedule_context.h"
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager.h"
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager_interface.h"
+#include "batch_scheduler/event_driven_scheduler/workload_balance/pp_batch_distributor.h"
 #include "batch_scheduler/event_driven_scheduler/workload_balance/workload_balancer_interface.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/schedule_processor_interface.h"
@@ -59,6 +60,7 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   // 设置时会自动将 UpdateAfterAsyncTaskFinished 注册为该管理器的异步完成回调。
   void SetScheduleHookManager(std::shared_ptr<ScheduleHookManagerInterface> hook_manager);
   void SetWorkloadBalancer(std::shared_ptr<WorkloadBalancerInterface> workload_balancer);
+  void SetPpBatchDistributor(std::shared_ptr<PpBatchDistributor> distributor);
 
   // 设置全局 cache put 追踪器。设置后 HandleStopRequest 等会在释放 block 前
   // 检查是否有 pending put 操作，避免 put 正在进行时释放 block 导致 use-after-free。
@@ -80,6 +82,11 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   void HandleStopRequest(const std::shared_ptr<InferRequest>& req, Status ret_status, size_t dp_idx);
   void HandleHookFailAndEnd(const std::shared_ptr<InferRequest>& req, size_t dp_idx, const std::string& reason);
   void HandleRecomputeRequest(const std::shared_ptr<InferRequest>& req, Status ret_status, size_t dp_idx);
+
+  // Look up the PP batch index for req_id in req_to_batch_idx.
+  // Throws KLLM_THROW with caller_prefix if not found (state machine bug).
+  // The req_to_batch_idx mapping is immutable after assignment — see event_driven_state.h.
+  size_t LookupReqBatchIdx(int64_t req_id, const char* caller) const;
 
   // return true if resource state changed.
   bool ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events);
@@ -105,6 +112,7 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
 
   std::shared_ptr<ScheduleHookManagerInterface> schedule_hook_manager_ = nullptr;
   std::shared_ptr<WorkloadBalancerInterface> workload_balancer_ = nullptr;
+  std::shared_ptr<PpBatchDistributor> pp_batch_distributor_ = nullptr;
 
   // EventGetScheduleResult 时若无 launchable batch 则置 true；事件队列排空并执行 Schedule 后尝试放入 result_queue_
   bool pending_get_schedule_result_ = false;
@@ -117,6 +125,12 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
 
   // 外部 Lock/Unlock 与主线程修改 InferRequest 的互斥控制。
   std::mutex infer_request_mutex_;
+
+  // Global pipeline depth counter. Limits the number of in-flight ScheduleResult batches
+  // to prevent exceeding the executor's ModelInput slot count (max 2).
+  // Protected by the single-threaded AsyncSchedulerLoop — no atomic needed.
+  static constexpr size_t kMaxPipelineDepth = 2;
+  size_t pipeline_depth_{0};
 
   // 延迟执行的 Stop/Recompute 请求级操作（等待 HasInflightTask()==false）。
   std::vector<ScheduleBackendEvent> delayed_backend_events_;

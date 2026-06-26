@@ -43,8 +43,16 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
     KLLM_LOG_FATAL << "req is nullptr";
     return;
   }
+  // Repeat Stop events: request already stopped and cleaned up, nothing to do.
+  if (req->IsStopped()) {
+    KLLM_LOG_SCHEDULER << "HandleStopRequest: req_id=" << req->req_id << " already stopped, skip";
+    return;
+  }
   KLLM_LOG_SCHEDULER << "HandleStopRequest: req_id=" << req->req_id << " dp_idx=" << dp_idx;
-  DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
+
+  // Look up which PP batch this request belongs to.
+  size_t multi_batch_id = LookupReqBatchIdx(req->req_id, "HandleStopRequest");
+  DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
 
   // Stop request is now actually applied, remove it from in-plan ops.
   dp_state.in_plan_schedule_ops.stop_req_ids.erase(req->req_id);
@@ -63,8 +71,9 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
   // Record stopped reqs for workers
   dp_state.schedule_ops_for_nodes.stopped_req_ids.push_back(req->req_id);
 
-  // Remove from global req index when stop is actually applied.
+  // Remove from global req index and batch index when stop is actually applied.
   schedule_state_.req_id_to_req_ptr.erase(req->req_id);
+  schedule_state_.req_to_batch_idx.erase(req->req_id);
 }
 
 void EventDrivenScheduleProcessor::HandleHookFailAndEnd(const std::shared_ptr<InferRequest>& req, size_t dp_idx,
@@ -73,7 +82,15 @@ void EventDrivenScheduleProcessor::HandleHookFailAndEnd(const std::shared_ptr<In
     KLLM_LOG_ERROR << "HandleHookFailAndEnd: req is nullptr";
     return;
   }
-  DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
+  // Already stopped — nothing to clean up.
+  if (req->IsStopped()) {
+    KLLM_LOG_SCHEDULER << "HandleHookFailAndEnd: req_id=" << req->req_id << " already stopped, skip";
+    return;
+  }
+
+  // Look up which PP batch this request belongs to.
+  size_t multi_batch_id = LookupReqBatchIdx(req->req_id, "HandleHookFailAndEnd");
+  DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
   dp_state.preprocessing_reqs.erase(req->req_id);
   RemoveReqByIdFromQueue(dp_state.prefilling_reqs, req->req_id);
   RemoveReqByIdFromQueue(dp_state.decoding_reqs, req->req_id);
@@ -91,6 +108,7 @@ void EventDrivenScheduleProcessor::HandleHookFailAndEnd(const std::shared_ptr<In
     req->Notify();
   }
   schedule_state_.req_id_to_req_ptr.erase(req->req_id);
+  schedule_state_.req_to_batch_idx.erase(req->req_id);
   KLLM_LOG_WARNING << "Hook fail-and-end req_id=" << req->req_id << ", reason=" << reason;
 }
 
@@ -101,14 +119,17 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
     return;
   }
 
-  DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
-
-  // Recompute request is now actually applied, remove it from in-plan ops.
-  dp_state.in_plan_schedule_ops.recompute_req_ids.erase(req->req_id);
   if (req->IsStopped()) {
     KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << " is stopped, drop recompute event";
     return;
   }
+
+  // Look up which PP batch this request belongs to.
+  size_t multi_batch_id = LookupReqBatchIdx(req->req_id, "HandleRecomputeRequest");
+  DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
+
+  // Recompute request is now actually applied, remove it from in-plan ops.
+  dp_state.in_plan_schedule_ops.recompute_req_ids.erase(req->req_id);
   req->ResetInflightTask();
   req->Restart();
   req->ResetPrefillingTokens();
@@ -129,6 +150,14 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
   dp_state.schedule_ops_for_nodes.recomputed_req_ids.push_back(req->req_id);
 }
 
+size_t EventDrivenScheduleProcessor::LookupReqBatchIdx(int64_t req_id, const char* caller) const {
+  auto it = schedule_state_.req_to_batch_idx.find(req_id);
+  if (it == schedule_state_.req_to_batch_idx.end()) {
+    KLLM_THROW(FormatStr("%s: req_id=%ld not found in req_to_batch_idx_, state machine bug", caller, req_id));
+  }
+  return it->second;
+}
+
 bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events) {
   if (backend_events.empty()) {
     return false;
@@ -136,7 +165,8 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
   bool has_resource_released = false;
   KLLM_LOG_SCHEDULER << "ApplyBackendEventsToState: " << backend_events.size() << " events";
   auto remove_from_state_and_batches = [this](size_t dp_idx, int64_t req_id) {
-    DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
+    size_t multi_batch_id = LookupReqBatchIdx(req_id, "remove_from_state_and_batches");
+    DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
     dp_state.preprocessing_reqs.erase(req_id);
     RemoveReqByIdFromQueue(dp_state.prefilling_reqs, req_id);
     RemoveReqByIdFromQueue(dp_state.decoding_reqs, req_id);
@@ -150,11 +180,12 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
         pb->RemoveRunningReq(dp_idx, req_id);
       }
     }
+    // NOTE: req_to_batch_idx_ is NOT cleared here. It is cleared by HandleStopRequest/HandleRecomputeRequest
+    // after the delayed event is actually applied.
   };
 
   for (const auto& ev : backend_events) {
     const size_t dp_idx = ev.dp_idx;
-    DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
     std::shared_ptr<InferRequest> req = ev.req_ptr;
     if (req == nullptr) {
       KLLM_LOG_ERROR << "Invalid backend event: null req_ptr, dp_idx=" << dp_idx;
@@ -163,7 +194,9 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
     const int64_t req_id = req->req_id;
 
     if (ev.type == ScheduleBackendEventType::kMoveToDecode) {
-      // Move request from prefilling queue to decoding queue.
+      // Move request from prefilling queue to decoding queue in its assigned batch.
+      size_t multi_batch_id = LookupReqBatchIdx(req_id, "kMoveToDecode");
+      DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
       RemoveReqByIdFromQueue(dp_state.prefilling_reqs, req_id);
       if (!HasReqInQueue(dp_state.decoding_reqs, req_id)) {
         dp_state.decoding_reqs.push_back(req);
@@ -229,7 +262,7 @@ bool EventDrivenScheduleProcessor::ProcessDelayedBackendEvents() {
 }
 
 EventDrivenScheduleProcessor::EventDrivenScheduleProcessor(size_t dp_num, size_t max_pp_batch_num)
-    : dp_num_(dp_num), max_pp_batch_num_(max_pp_batch_num) {}
+    : max_pp_batch_num_(max_pp_batch_num), dp_num_(dp_num) {}
 
 EventDrivenScheduleProcessor::~EventDrivenScheduleProcessor() { Stop(); }
 
@@ -237,12 +270,16 @@ void EventDrivenScheduleProcessor::Initialize(std::shared_ptr<BatchSchedulerInte
   batch_scheduler_ = batch_scheduler;  // 满足基类 ScheduleProcessorInterface 的接口约定
 
   schedule_state_.schedule_states.clear();
-  schedule_state_.schedule_states.resize(dp_num_);
+  schedule_state_.schedule_states.resize(max_pp_batch_num_);
+  for (size_t bid = 0; bid < max_pp_batch_num_; ++bid) {
+    schedule_state_.schedule_states[bid].resize(dp_num_);
+  }
 
   // Initialize reusable data structures once and reuse them afterwards.
   planning_batches_.assign(max_pp_batch_num_, nullptr);
   for (size_t batch_idx = 0; batch_idx < max_pp_batch_num_; ++batch_idx) {
     planning_batches_[batch_idx] = std::make_shared<PlanningBatch>();
+    planning_batches_[batch_idx]->batch_idx = static_cast<int>(batch_idx);
     planning_batches_[batch_idx]->dp_batches.assign(dp_num_, DpBatch{});
   }
   schedule_context_.SetScheduleState(&schedule_state_);
@@ -321,7 +358,10 @@ void EventDrivenScheduleProcessor::UpdateAfterAsyncTaskFinished(const EventAsync
     const std::shared_ptr<InferRequest>& req_ptr = req_it->second;
 
     const size_t dp_idx = static_cast<size_t>(req_ptr->attn_dp_group_id);
-    DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
+
+    // Look up which PP batch this request belongs to.
+    size_t multi_batch_id = LookupReqBatchIdx(req_id, "UpdateAfterAsyncTaskFinished");
+    DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
 
     switch (step.action) {
       case NextStepAction::kContinue: {
@@ -481,25 +521,66 @@ void EventDrivenScheduleProcessor::OnEventAddRequest(const std::shared_ptr<Event
   if (workload_balancer_ != nullptr) {
     workload_balancer_->AddInferRequests(requests, schedule_context_);
   }
+
+  // Distribute requests across PP batches via PpBatchDistributor.
+  // Requests are placed into schedule_states_[multi_batch_id][dp_idx].prefilling_reqs
+  // and req_to_batch_idx is populated.
+  // IMPORTANT: once assigned, a request MUST NOT be moved to a different batch.
+  // req_to_batch_idx is immutable after this point; all subsequent event handlers
+  // (HandleStopRequest, HandleRecomputeRequest, kMoveToDecode, etc.) operate on
+  // the same batch as determined here.
+  if (pp_batch_distributor_ != nullptr) {
+    pp_batch_distributor_->DistributeRequests(requests, max_pp_batch_num_, dp_num_, schedule_state_.schedule_states,
+                                              schedule_state_.req_to_batch_idx);
+  } else {
+    // Without distributor (max_pp_batch_num == 1), all requests go to batch 0.
+    // Populate req_to_batch_idx so event handlers (kMoveToDecode, remove_from_state_and_batches, etc.)
+    // can rely on it unconditionally.
+    for (const auto& req : requests) {
+      if (req != nullptr) {
+        schedule_state_.req_to_batch_idx[req->req_id] = 0;
+      }
+    }
+  }
+
   ReqIdToNextStep next_steps = schedule_hook_manager_->Process(requests, schedule_context_);
   for (auto& req : info->reqs) {
     const size_t dp_idx = static_cast<size_t>(req->attn_dp_group_id);
-    DpScheduleState& dp_state = schedule_state_.schedule_states[dp_idx];
+    // Determine which PP batch this request was assigned to.
+    // req_to_batch_idx is always populated: distributor sets it, or we default to 0 above.
+    size_t multi_batch_id = 0;
+    auto batch_it = schedule_state_.req_to_batch_idx.find(req->req_id);
+    if (batch_it != schedule_state_.req_to_batch_idx.end()) {
+      multi_batch_id = batch_it->second;
+    }
+    DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
     auto ns = next_steps.find(req->req_id);
     if (ns == next_steps.end()) {
       KLLM_LOG_WARNING << "req_id: " << req->req_id << " has no next_step, default continue";
-      dp_state.prefilling_reqs.push_back(req);
+      // Request was already placed in prefilling_reqs by distributor.
+      // If no distributor, manually add to prefilling.
+      if (pp_batch_distributor_ == nullptr) {
+        dp_state.prefilling_reqs.push_back(req);
+      }
       continue;
     }
     if (ns->second.action == NextStepAction::kContinue) {
       KLLM_LOG_SCHEDULER << "req_id: " << req->req_id << " continue, added to prefilling_reqs. dp_idx=" << dp_idx
                          << ", " << req->ScheduleStateToStr()
                          << ", stop_tokens=" << Vector2Str(req->sampling_config.stop_token_ids);
-      dp_state.prefilling_reqs.push_back(req);
+      // If distributor already placed it, nothing to do. Otherwise add manually.
+      if (pp_batch_distributor_ == nullptr) {
+        dp_state.prefilling_reqs.push_back(req);
+      }
     } else if (ns->second.action == NextStepAction::kWaitAsyncResult) {
-      KLLM_LOG_SCHEDULER << "req_id: " << req->req_id << " wait async result, added to preprocessing_reqs";
+      KLLM_LOG_SCHEDULER << "req_id: " << req->req_id << " wait async result, moved to preprocessing_reqs";
+      // If distributor placed request in prefilling, move it to preprocessing.
+      if (pp_batch_distributor_ != nullptr) {
+        RemoveReqByIdFromQueue(dp_state.prefilling_reqs, req->req_id);
+      }
       dp_state.preprocessing_reqs[req->req_id] = req;
     } else if (ns->second.action == NextStepAction::kFailAndEnd) {
+      // If distributor placed request in prefilling, HandleHookFailAndEnd will clean it up.
       HandleHookFailAndEnd(req, dp_idx, "hook processing failed on add request");
     }
   }
@@ -516,6 +597,11 @@ void EventDrivenScheduleProcessor::OnEventUpdateAfterGeneration(
 
   // Some delayed events can be processed after inflight tasks are finished.
   ProcessDelayedBackendEvents();
+
+  // Release one pipeline slot when a generation result comes back.
+  if (pipeline_depth_ > 0) {
+    --pipeline_depth_;
+  }
 }
 
 void EventDrivenScheduleProcessor::OnEventAsyncTaskFinished(const std::shared_ptr<EventAsyncTaskFinishedInfo>& info) {
@@ -533,14 +619,19 @@ void EventDrivenScheduleProcessor::RunScheduleForBatches() {
     has_resource_released = false;
     const int64_t schedule_start_time_in_ms = ProfileTimer::GetCurrentTimeInMs();
     schedule_context_.SetScheduleStartTimeInMs(schedule_start_time_in_ms);
+
+    // PreSchedule timeout/abort scan runs once, covering ALL batches.
+    // Done outside the per-batch loop to avoid N×N redundant scans.
+    std::vector<ScheduleBackendEvent> pre_schedule_events;
+    {
+      PROFILE_EVENT_SCOPE(pre_schedule, "Engine.RunScheduleForBatches.PreSchedule");
+      backend_->PreSchedule(schedule_context_, planning_batches_, pre_schedule_events);
+    }
+    has_resource_released |= ApplyBackendEventsToState(pre_schedule_events);
+
+    // Schedule each PP batch independently.
     for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
-      std::vector<ScheduleBackendEvent> pre_schedule_events;
-      {
-        PROFILE_EVENT_SCOPE(pre_schedule, "Engine.RunScheduleForBatches.PreSchedule");
-        backend_->PreSchedule(schedule_context_, planning_batches_, pre_schedule_events);
-      }
-      bool resource_released = ApplyBackendEventsToState(pre_schedule_events);
-      has_resource_released |= resource_released;
+      schedule_context_.SetCurrentMultiBatchId(multi_batch_id);
 
       std::vector<ScheduleBackendEvent> backend_events;
       {
@@ -548,73 +639,92 @@ void EventDrivenScheduleProcessor::RunScheduleForBatches() {
         backend_->Schedule(schedule_context_, planning_batches_, backend_events);
       }
 
-      resource_released = ApplyBackendEventsToState(backend_events);
-      has_resource_released |= resource_released;
+      has_resource_released |= ApplyBackendEventsToState(backend_events);
     }
   } while (has_resource_released);
 }
 
 bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleContext& ctx) {
   PROFILE_EVENT_SCOPE(try_build_and_launch, "Engine.TryBuildAndLaunchScheduleResult");
-  PlanningBatch* planning_batch = planning_batches_[0].get();
+  static constexpr size_t kMaxPipelineDepth = 2;
 
-  if (!planning_batch->IsLaunchable()) {
-    return false;
-  }
+  bool any_launched = false;
+  bool any_pending = false;  // IsLaunchable but blocked by pipeline depth.
 
-  size_t multi_batch_id = planning_batch->batch_idx;
+  for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
+    PlanningBatch* planning_batch = planning_batches_[multi_batch_id].get();
 
-  std::shared_ptr<ScheduleResult> result = std::make_shared<ScheduleResult>();
-  result->schedule_output = std::make_shared<ScheduleOutput>();
-
-  // Batch insert all dp_batches[*].running_reqs into schedule_output->running_reqs.
-  // Note: dp_batches[dp_idx].running_reqs is a map keyed by req_id.
-  result->schedule_output->finish_req_ids.resize(dp_num_);
-  result->schedule_output->recompute_req_ids.resize(dp_num_);
-  for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
-    for (auto it : planning_batch->dp_batches[dp_idx].running_reqs) {
-      result->schedule_output->running_reqs.push_back(it.second);
+    if (!planning_batch->IsLaunchable()) {
+      continue;
     }
-    auto& dp_state = schedule_state_.schedule_states[dp_idx];
-    // Info for nodes
-    result->schedule_output->finish_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.stopped_req_ids;
-    result->schedule_output->recompute_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.recomputed_req_ids;
-    KLLM_LOG_SCHEDULER << "dp_idx=" << dp_idx << ", dp_state=" << dp_state.schedule_ops_for_nodes.ToString();
-    dp_state.schedule_ops_for_nodes.Reset();  // Clear after copying to output
-  }
 
-  result->schedule_output->schedule_id = schedule_id_++;
-
-  result->generation_output_group.multi_batch_id = multi_batch_id;
-  result->generation_output_group.reqs.resize(dp_num_);
-  for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
-    for (const auto& r : planning_batch->dp_batches[dp_idx].running_reqs) {
-      result->generation_output_group.reqs[dp_idx].push_back(r.second);
-      r.second->LaunchPlanningTask();
+    if (pipeline_depth_ >= kMaxPipelineDepth) {
+      any_pending = true;
+      continue;
     }
+
+    std::shared_ptr<ScheduleResult> result = std::make_shared<ScheduleResult>();
+    result->schedule_output = std::make_shared<ScheduleOutput>();
+
+    // Batch insert all dp_batches[*].running_reqs into schedule_output->running_reqs.
+    result->schedule_output->finish_req_ids.resize(dp_num_);
+    result->schedule_output->recompute_req_ids.resize(dp_num_);
+    for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
+      for (auto it : planning_batch->dp_batches[dp_idx].running_reqs) {
+        result->schedule_output->running_reqs.push_back(it.second);
+      }
+      auto& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
+      // Info for nodes — per-batch schedule ops.
+      result->schedule_output->finish_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.stopped_req_ids;
+      result->schedule_output->recompute_req_ids[dp_idx] = dp_state.schedule_ops_for_nodes.recomputed_req_ids;
+      KLLM_LOG_SCHEDULER << "multi_batch_id=" << multi_batch_id << " dp_idx=" << dp_idx
+                         << ", dp_state=" << dp_state.schedule_ops_for_nodes.ToString();
+      dp_state.schedule_ops_for_nodes.Reset();
+    }
+
+    result->schedule_output->schedule_id = schedule_id_++;
+
+    result->generation_output_group.multi_batch_id = multi_batch_id;
+    result->generation_output_group.reqs.resize(dp_num_);
+    for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
+      for (const auto& r : planning_batch->dp_batches[dp_idx].running_reqs) {
+        result->generation_output_group.reqs[dp_idx].push_back(r.second);
+        r.second->LaunchPlanningTask();
+      }
+    }
+
+    // 为本轮 batch 中的 prefill 请求注册 pending put 计数
+    if (global_cache_put_tracker_ && !result->schedule_output->running_reqs.empty()) {
+      global_cache_put_tracker_->OnBatchDispatched(result->schedule_output->running_reqs);
+    }
+
+    ProcessScheduleDataInternal(multi_batch_id, *result);
+    KLLM_LOG_SCHEDULER << "Built ScheduleResult for multi_batch_id=" << multi_batch_id
+                       << ", schedule_id=" << result->schedule_output->schedule_id
+                       << ", num_reqs=" << result->schedule_output->running_reqs.size();
+
+    result_queue_.Put(result);
+    if (workload_balancer_ != nullptr) {
+      workload_balancer_->RecordInflightBatch(*planning_batch, ctx);
+    }
+
+    ++pipeline_depth_;
+    planning_batch->Reset();
+    any_launched = true;
   }
 
-  // 为本轮 batch 中的 prefill 请求注册 pending put 计数
-  if (global_cache_put_tracker_ && !result->schedule_output->running_reqs.empty()) {
-    global_cache_put_tracker_->OnBatchDispatched(result->schedule_output->running_reqs);
+  // If any batch is launchable but blocked by pipeline depth, keep the flag so
+  // AsyncSchedulerLoop will retry after a generation result comes back.
+  // If at least one batch was launched, clear the flag.
+  // If nothing was launchable at all, leave the flag unchanged — the caller
+  // (OnEventGetScheduleResult) will set it to true for the next retry.
+  if (any_pending) {
+    pending_get_schedule_result_ = true;
+  } else if (any_launched) {
+    pending_get_schedule_result_ = false;
   }
 
-  ProcessScheduleDataInternal(multi_batch_id, *result);
-  KLLM_LOG_SCHEDULER << "Built ScheduleResult for multi_batch_id=" << multi_batch_id
-                     << ", schedule_id=" << result->schedule_output->schedule_id
-                     << ", num_reqs=" << result->schedule_output->running_reqs.size();
-
-  // Clear the flag before putting result into queue to avoid racing condition
-  pending_get_schedule_result_ = false;
-
-  result_queue_.Put(result);
-  if (workload_balancer_ != nullptr) {
-    workload_balancer_->RecordInflightBatch(*planning_batch, ctx);
-  }
-
-  // Clear for next batch
-  planning_batch->Reset();
-  return true;
+  return any_launched;
 }
 
 Status EventDrivenScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result) {
@@ -655,6 +765,11 @@ void EventDrivenScheduleProcessor::SetWorkloadBalancer(std::shared_ptr<WorkloadB
 void EventDrivenScheduleProcessor::SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
   global_cache_put_tracker_ = std::move(tracker);
   KLLM_LOG_SCHEDULER << "GlobalCachePutTracker set for EventDrivenScheduleProcessor";
+}
+
+void EventDrivenScheduleProcessor::SetPpBatchDistributor(std::shared_ptr<PpBatchDistributor> distributor) {
+  pp_batch_distributor_ = std::move(distributor);
+  KLLM_LOG_SCHEDULER << "PpBatchDistributor set for EventDrivenScheduleProcessor";
 }
 
 void EventDrivenScheduleProcessor::SetCacheManagers(

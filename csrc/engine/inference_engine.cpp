@@ -10,6 +10,7 @@
 #include "batch_scheduler/event_driven_scheduler/global_cache_query_hook.h"
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager.h"
 #include "batch_scheduler/event_driven_scheduler/workload_balance/basic_workload_balancer.h"
+#include "batch_scheduler/event_driven_scheduler/workload_balance/pp_batch_distributor.h"
 #include "batch_scheduler/global_cache_fetcher.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/schedule_processor.h"
@@ -374,12 +375,18 @@ Status InferenceEngine::Initialize() {
         global_cache_fetcher->Start();
 
         // 创建全局 cache 查询 Hook（hook_idx=0，第一个添加的 hook）
-        auto global_cache_hook =
-            std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config, /*hook_idx=*/0);
-        hook_manager->AddHook(global_cache_hook);
+        const char *enable_global_cache_hook_env = std::getenv("ENABLE_GLOBAL_CACHE_HOOK");
+        if (enable_global_cache_hook_env != nullptr && std::string(enable_global_cache_hook_env) == "1") {
+          auto global_cache_hook =
+              std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config, /*hook_idx=*/0);
+          hook_manager->AddHook(global_cache_hook);
 
-        KLLM_LOG_INFO << "GlobalCacheQueryHook created and added to event-driven scheduler, device_count="
-                      << device_count << ", global_cache_enabled=" << (global_cache_connector_ != nullptr);
+          KLLM_LOG_INFO << "GlobalCacheQueryHook created and added to event-driven scheduler, device_count="
+                        << device_count << ", global_cache_enabled=" << (global_cache_connector_ != nullptr);
+        } else {
+          KLLM_LOG_INFO << "GlobalCacheQueryHook disabled (ENABLE_GLOBAL_CACHE_HOOK="
+                        << (enable_global_cache_hook_env ? enable_global_cache_hook_env : "not set") << ")";
+        }
       }
 
       // 创建 GlobalCachePutTracker，防止 put 进行中释放 block 导致 use-after-free
@@ -398,6 +405,15 @@ Status InferenceEngine::Initialize() {
           attn_dp_size, static_cast<size_t>(batch_scheduler_config.max_batch_size),
           static_cast<size_t>(batch_scheduler_config.max_decode_tokens_per_req),
           static_cast<size_t>(batch_scheduler_config.max_step_token_num)));
+
+      // Create PpBatchDistributor for PP multi-batch request distribution.
+      if (batch_scheduler_config.max_pp_batch_num > 1) {
+        auto distributor = std::make_shared<PpBatchDistributor>(batch_scheduler_config.pp_multibatch_wb_strategy);
+        event_driven_schedule_processor->SetPpBatchDistributor(distributor);
+        KLLM_LOG_INFO << "PpBatchDistributor created for event-driven scheduler, max_pp_batch_num="
+                      << batch_scheduler_config.max_pp_batch_num
+                      << ", strategy=" << static_cast<int>(batch_scheduler_config.pp_multibatch_wb_strategy);
+      }
 
       schedule_processor_ = event_driven_schedule_processor;
       schedule_processor_->Initialize(nullptr);

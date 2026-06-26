@@ -16,8 +16,7 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
                                            const std::vector<std::shared_ptr<PlanningBatch>>& planning_batches,
                                            std::vector<ScheduleBackendEvent>& events) {
   events.clear();
-  // TOOD(robertyuan): support multi-batch
-  if (planning_batches.empty() || planning_batches[0] == nullptr) {
+  if (planning_batches.empty()) {
     return;
   }
 
@@ -33,74 +32,80 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
     return schedule_start_time_in_ms > deadline_ms;
   };
 
-  const PlanningBatch* base_batch = planning_batches[0].get();  // TODO(robertyuan): support multi-batch
-  for (size_t dp_idx = 0; dp_idx < base_batch->dp_batches.size(); ++dp_idx) {
-    const DpScheduleState& dp_state = context.GetDpScheduleState(dp_idx);
-    DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(dp_idx);
-    std::unordered_set<int64_t> timeout_req_ids_seen;
-    auto collect_timeout_req = [&events, dp_idx, &timeout_req_ids_seen, &is_timeout,
-                                &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
-      if (!is_timeout(req)) {
-        return;
+  // 2D traversal: scan all batches × all DP slots for timeout/abort events.
+  for (size_t multi_batch_id = 0; multi_batch_id < planning_batches.size(); ++multi_batch_id) {
+    const PlanningBatch* base_batch = planning_batches[multi_batch_id].get();
+    if (base_batch == nullptr) {
+      continue;
+    }
+    for (size_t dp_idx = 0; dp_idx < base_batch->dp_batches.size(); ++dp_idx) {
+      const DpScheduleState& dp_state = context.GetDpScheduleState(multi_batch_id, dp_idx);
+      DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(multi_batch_id, dp_idx);
+      std::unordered_set<int64_t> timeout_req_ids_seen;
+      auto collect_timeout_req = [&events, dp_idx, &timeout_req_ids_seen, &is_timeout,
+                                  &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
+        if (!is_timeout(req)) {
+          return;
+        }
+        if (timeout_req_ids_seen.insert(req->req_id).second) {
+          ScheduleBackendEvent timeout_event;
+          timeout_event.type = ScheduleBackendEventType::kStopRequest;
+          timeout_event.dp_idx = dp_idx;
+          timeout_event.req_ptr = req;
+          timeout_event.status = Status(RET_REQUEST_TIMEOUT, "timeout in running.");
+          events.push_back(std::move(timeout_event));
+
+          // Mark stop op in plan so later planning stages can observe it.
+          in_plan_ops.stop_req_ids.insert(req->req_id);
+        }
+      };
+
+      for (const auto& req_kv : dp_state.preprocessing_reqs) {
+        collect_timeout_req(req_kv.second);
       }
-      if (timeout_req_ids_seen.insert(req->req_id).second) {
-        ScheduleBackendEvent timeout_event;
-        timeout_event.type = ScheduleBackendEventType::kStopRequest;
-        timeout_event.dp_idx = dp_idx;
-        timeout_event.req_ptr = req;
-        timeout_event.status = Status(RET_REQUEST_TIMEOUT, "timeout in running.");
-        events.push_back(std::move(timeout_event));
-
-        // Mark stop op in plan so later planning stages can observe it.
-        in_plan_ops.stop_req_ids.insert(req->req_id);
+      for (const auto& req : dp_state.prefilling_reqs) {
+        collect_timeout_req(req);
       }
-    };
-
-    for (const auto& req_kv : dp_state.preprocessing_reqs) {
-      collect_timeout_req(req_kv.second);
-    }
-    for (const auto& req : dp_state.prefilling_reqs) {
-      collect_timeout_req(req);
-    }
-    for (const auto& req : dp_state.decoding_reqs) {
-      collect_timeout_req(req);
-    }
-
-    for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
-      collect_timeout_req(running_kv.second);
-    }
-
-    // Scan all queues for aborted requests and emit kStopRequest events, mirroring the timeout pattern.
-    // This ensures aborted requests are cleaned up promptly regardless of which queue they reside in.
-    std::unordered_set<int64_t> aborted_req_ids_seen;
-    auto collect_aborted_req = [&events, dp_idx, &aborted_req_ids_seen,
-                                &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
-      if (req == nullptr || req->IsStopped()) return;
-      if (!req->aborted) return;
-      if (aborted_req_ids_seen.insert(req->req_id).second) {
-        ScheduleBackendEvent abort_event;
-        abort_event.type = ScheduleBackendEventType::kStopRequest;
-        abort_event.dp_idx = dp_idx;
-        abort_event.req_ptr = req;
-        abort_event.status = Status(RET_REQUEST_TERMINATED, "req aborted in queue.");
-        events.push_back(std::move(abort_event));
-        in_plan_ops.stop_req_ids.insert(req->req_id);
-        KLLM_LOG_WARNING << "req aborted in queue, dp_idx=" << dp_idx << ", req_id=" << req->req_id;
-        REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
+      for (const auto& req : dp_state.decoding_reqs) {
+        collect_timeout_req(req);
       }
-    };
 
-    for (const auto& req_kv : dp_state.preprocessing_reqs) {
-      collect_aborted_req(req_kv.second);
-    }
-    for (const auto& req : dp_state.prefilling_reqs) {
-      collect_aborted_req(req);
-    }
-    for (const auto& req : dp_state.decoding_reqs) {
-      collect_aborted_req(req);
-    }
-    for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
-      collect_aborted_req(running_kv.second);
+      for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
+        collect_timeout_req(running_kv.second);
+      }
+
+      // Scan all queues for aborted requests and emit kStopRequest events, mirroring the timeout pattern.
+      // This ensures aborted requests are cleaned up promptly regardless of which queue they reside in.
+      std::unordered_set<int64_t> aborted_req_ids_seen;
+      auto collect_aborted_req = [&events, dp_idx, &aborted_req_ids_seen,
+                                  &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
+        if (req == nullptr || req->IsStopped()) return;
+        if (!req->aborted) return;
+        if (aborted_req_ids_seen.insert(req->req_id).second) {
+          ScheduleBackendEvent abort_event;
+          abort_event.type = ScheduleBackendEventType::kStopRequest;
+          abort_event.dp_idx = dp_idx;
+          abort_event.req_ptr = req;
+          abort_event.status = Status(RET_REQUEST_TERMINATED, "req aborted in queue.");
+          events.push_back(std::move(abort_event));
+          in_plan_ops.stop_req_ids.insert(req->req_id);
+          KLLM_LOG_WARNING << "req aborted in queue, dp_idx=" << dp_idx << ", req_id=" << req->req_id;
+          REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
+        }
+      };
+
+      for (const auto& req_kv : dp_state.preprocessing_reqs) {
+        collect_aborted_req(req_kv.second);
+      }
+      for (const auto& req : dp_state.prefilling_reqs) {
+        collect_aborted_req(req);
+      }
+      for (const auto& req : dp_state.decoding_reqs) {
+        collect_aborted_req(req);
+      }
+      for (const auto& running_kv : base_batch->dp_batches[dp_idx].running_reqs) {
+        collect_aborted_req(running_kv.second);
+      }
     }
   }
 }

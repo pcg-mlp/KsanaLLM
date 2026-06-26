@@ -28,6 +28,11 @@ class LoggerTest : public ::testing::Test {
 
     // 重置 logger 状态
     ClearDetailLevels();
+
+    // 清理环境变量避免测试间互相干扰
+    unsetenv("KLLM_LOG_FILE");
+    unsetenv("WORLD_SIZE");
+    unsetenv("NODE_RANK");
   }
 
   void TearDown() override {
@@ -37,6 +42,9 @@ class LoggerTest : public ::testing::Test {
 
     // 清理环境变量
     unsetenv("KLLM_LOG_LEVEL");
+    unsetenv("KLLM_LOG_FILE");
+    unsetenv("WORLD_SIZE");
+    unsetenv("NODE_RANK");
   }
 
   // 辅助函数：读取文件内容
@@ -61,23 +69,82 @@ class LoggerTest : public ::testing::Test {
 TEST_F(LoggerTest, SetLogFile_Engine) {
   SetLogFile("_engine");
   std::string log_file = GetLogFile();
-  EXPECT_TRUE(log_file.find("ksana_engine.log") != std::string::npos);
+  EXPECT_TRUE(log_file.find("ksana_llm_engine.log") != std::string::npos);
 }
 
 TEST_F(LoggerTest, SetLogFile_Executor) {
   SetLogFile("_executor0");
-  EXPECT_TRUE(GetLogFile().find("ksana_executor0.log") != std::string::npos);
+  EXPECT_TRUE(GetLogFile().find("ksana_llm_executor0.log") != std::string::npos);
 
   SetLogFile("_executor1");
-  EXPECT_TRUE(GetLogFile().find("ksana_executor1.log") != std::string::npos);
+  EXPECT_TRUE(GetLogFile().find("ksana_llm_executor1.log") != std::string::npos);
 }
 
 TEST_F(LoggerTest, SetLogFile_Python) {
   SetLogFile("_python");
-  EXPECT_TRUE(GetLogFile().find("ksana_python.log") != std::string::npos);
+  EXPECT_TRUE(GetLogFile().find("ksana_llm_python.log") != std::string::npos);
 
   SetLogFile("");
-  EXPECT_TRUE(GetLogFile().find("ksana_python.log") != std::string::npos);
+  EXPECT_TRUE(GetLogFile().find("ksana_llm_python.log") != std::string::npos);
+}
+
+// ============== SetLogFile with KLLM_LOG_FILE environment variable ==============
+
+TEST_F(LoggerTest, SetLogFile_WithKLLMLogFile_Engine) {
+  setenv("KLLM_LOG_FILE", "log/myapp.log", 1);
+  SetLogFile("_engine");
+  std::string log_file = GetLogFile();
+  EXPECT_TRUE(log_file.find("myapp_engine.log") != std::string::npos);
+}
+
+TEST_F(LoggerTest, SetLogFile_WithKLLMLogFile_Executor) {
+  setenv("KLLM_LOG_FILE", "log/myapp.log", 1);
+  SetLogFile("_executor0");
+  EXPECT_TRUE(GetLogFile().find("myapp_executor0.log") != std::string::npos);
+
+  SetLogFile("_executor1");
+  EXPECT_TRUE(GetLogFile().find("myapp_executor1.log") != std::string::npos);
+}
+
+TEST_F(LoggerTest, SetLogFile_WithKLLMLogFile_Python) {
+  setenv("KLLM_LOG_FILE", "log/myapp.log", 1);
+  SetLogFile("_python");
+  EXPECT_TRUE(GetLogFile().find("myapp_python.log") != std::string::npos);
+
+  SetLogFile("");
+  EXPECT_TRUE(GetLogFile().find("myapp_python.log") != std::string::npos);
+}
+
+TEST_F(LoggerTest, SetLogFile_DefaultBasename_Engine) {
+  // No KLLM_LOG_FILE set, should use default "ksana_llm".
+  SetLogFile("_engine");
+  std::string log_file = GetLogFile();
+  EXPECT_TRUE(log_file.find("ksana_llm_engine.log") != std::string::npos);
+}
+
+TEST_F(LoggerTest, SetLogFile_PPRank_Engine) {
+  setenv("WORLD_SIZE", "2", 1);
+  setenv("NODE_RANK", "0", 1);
+  SetLogFile("_engine");
+  std::string log_file = GetLogFile();
+  EXPECT_TRUE(log_file.find("ksana_llm_rank0_engine.log") != std::string::npos);
+}
+
+TEST_F(LoggerTest, SetLogFile_PPRank_Executor) {
+  setenv("WORLD_SIZE", "2", 1);
+  setenv("NODE_RANK", "1", 1);
+  SetLogFile("_executor0");
+  std::string log_file = GetLogFile();
+  EXPECT_TRUE(log_file.find("ksana_llm_rank1_executor0.log") != std::string::npos);
+}
+
+TEST_F(LoggerTest, SetLogFile_NoPPWhenSingleNode) {
+  // WORLD_SIZE is 1 or not set, should not contain _rank suffix.
+  setenv("NODE_RANK", "0", 1);
+  SetLogFile("_engine");
+  std::string log_file = GetLogFile();
+  // Should not have rank suffix since WORLD_SIZE is not > 1.
+  EXPECT_TRUE(log_file.find("_rank") == std::string::npos);
 }
 
 // ============== ParseFileSize 测试 ==============

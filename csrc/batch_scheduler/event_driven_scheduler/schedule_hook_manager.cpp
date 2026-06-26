@@ -27,8 +27,7 @@ void ScheduleHookManager::SetAsyncTaskFinishedCallback(AsyncTaskFinishedCallback
   }
 }
 
-ReqIdToNextStep ScheduleHookManager::Process(const std::vector<InferRequestPtr>& requests,
-                                             ScheduleContext& context) {
+ReqIdToNextStep ScheduleHookManager::Process(const std::vector<InferRequestPtr>& requests, ScheduleContext& context) {
   return ProcessInternal(requests, context, std::unordered_map<int64_t, size_t>{});
 }
 
@@ -115,8 +114,8 @@ ReqIdToNextStep ScheduleHookManager::ProcessInternal(
   return result;
 }
 
-ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(
-    const std::vector<AsyncTaskResult>& finished_tasks, ScheduleContext& context) {
+ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(const std::vector<AsyncTaskResult>& finished_tasks,
+                                                       ScheduleContext& context) {
   ReqIdToNextStep result;
   if (finished_tasks.empty()) {
     return result;
@@ -128,7 +127,8 @@ ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(
       return nullptr;
     }
     const size_t dp_idx = static_cast<size_t>(req->attn_dp_group_id);
-    const DpScheduleState& dp_state = context.GetDpScheduleState(dp_idx);
+    size_t multi_batch_id = context.GetReqBatchIdx(req_id);
+    const DpScheduleState& dp_state = context.GetDpScheduleState(multi_batch_id, dp_idx);
     auto req_it = dp_state.preprocessing_reqs.find(req_id);
     if (req_it != dp_state.preprocessing_reqs.end()) {
       return req_it->second;
@@ -152,8 +152,8 @@ ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(
     for (auto& kv : next_steps) {
       InferRequestPtr req = find_preprocessing_req(kv.first);
       if (req == nullptr) {
-        KLLM_LOG_ERROR << "Invalid async finished state: req_id " << kv.first
-                       << " from hook_idx " << hook_idx << " is not in preprocessing_reqs";
+        KLLM_LOG_ERROR << "Invalid async finished state: req_id " << kv.first << " from hook_idx " << hook_idx
+                       << " is not in preprocessing_reqs";
         continue;
       }
       if (kv.second.action == NextStepAction::kContinue) {

@@ -41,14 +41,34 @@ static std::vector<std::string>& GetEarlyLogBuffer() {
 }
 static std::mutex s_early_log_mutex;
 
+// Get user-specified log basename from KLLM_LOG_FILE environment variable.
+// Strips directory prefix and .log suffix. Returns "ksana_llm" if not set.
+static std::string GetUserLogBasename() {
+  const char* kllm_log_file = std::getenv("KLLM_LOG_FILE");
+  if (kllm_log_file == nullptr || kllm_log_file[0] == '\0') {
+    return "ksana_llm";
+  }
+  std::string path(kllm_log_file);
+  // Extract filename part (remove directory).
+  size_t last_slash = path.find_last_of('/');
+  std::string basename = (last_slash != std::string::npos) ? path.substr(last_slash + 1) : path;
+  // Strip .log suffix.
+  const std::string log_suffix = ".log";
+  if (basename.size() > log_suffix.size() &&
+      basename.compare(basename.size() - log_suffix.size(), log_suffix.size(), log_suffix) == 0) {
+    basename = basename.substr(0, basename.size() - log_suffix.size());
+  }
+  return basename;
+}
+
 static std::string GetLogBasename() {
   const char* world_size_env = std::getenv("WORLD_SIZE");
   const char* node_rank = std::getenv("NODE_RANK");
-  if (world_size_env != nullptr && world_size_env[0] != '\0' && std::stoi(world_size_env) > 1 &&
-      node_rank != nullptr && node_rank[0] != '\0') {
-    return std::string("ksana_llm_rank") + node_rank;
+  if (world_size_env != nullptr && world_size_env[0] != '\0' && std::stoi(world_size_env) > 1 && node_rank != nullptr &&
+      node_rank[0] != '\0') {
+    return GetUserLogBasename() + "_rank" + node_rank;
   }
-  return "ksana_llm";
+  return GetUserLogBasename();
 }
 
 // 打开或重新打开日志文件
@@ -187,14 +207,26 @@ void SetLogFile(const std::string& postfix) {
   // 使用配置的日志目录，默认 "log/"
   std::string log_dir = s_log_config_set.load(std::memory_order_acquire) ? s_log_config.log_dir : "log/";
 
-  // 根据 postfix 生成日志文件名，固定使用 "ksana" 前缀
+  // Get user-specified basename from KLLM_LOG_FILE, default "ksana_llm".
+  std::string basename = GetUserLogBasename();
+
+  // In PP mode, insert rank suffix between basename and role postfix.
+  std::string rank_suffix;
+  const char* world_size_env = std::getenv("WORLD_SIZE");
+  const char* node_rank = std::getenv("NODE_RANK");
+  if (world_size_env != nullptr && world_size_env[0] != '\0' && std::stoi(world_size_env) > 1 && node_rank != nullptr &&
+      node_rank[0] != '\0') {
+    rank_suffix = std::string("_rank") + node_rank;
+  }
+
+  // Build log filename: basename + rank_suffix + postfix + ".log".
   std::string log_name;
   if (postfix.empty() || postfix == "_python") {
-    log_name = "ksana_python.log";
+    log_name = basename + rank_suffix + "_python.log";
   } else if (postfix.size() > 1 && postfix[0] == '_') {
-    log_name = "ksana" + postfix + ".log";
+    log_name = basename + rank_suffix + postfix + ".log";
   } else {
-    log_name = "ksana_" + postfix + ".log";
+    log_name = basename + rank_suffix + "_" + postfix + ".log";
   }
 
   std::string log_filename = log_dir + log_name;

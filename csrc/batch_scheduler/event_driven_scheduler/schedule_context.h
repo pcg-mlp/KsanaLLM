@@ -32,18 +32,32 @@ class ScheduleContext {
   int64_t GetScheduleStartTimeInMs() const { return schedule_start_time_in_ms_; }
 
   // 一个 DP 对应一个 cache manager，索引即 dp_idx。
-  void SetDpCacheManagers(
-      const std::vector<std::shared_ptr<CacheManagerInterface>>* dp_cache_managers) {
+  void SetDpCacheManagers(const std::vector<std::shared_ptr<CacheManagerInterface>>* dp_cache_managers) {
     dp_cache_managers_ = dp_cache_managers;
   }
 
-  // 1) 输入 dp_idx 获取 const DpScheduleState 引用。
-  const DpScheduleState& GetDpScheduleState(size_t dp_idx) const {
+  // ---- multi_batch_id context ----
+
+  // Set/get the PP batch index currently being scheduled (used inside RunScheduleForBatches loop).
+  void SetCurrentMultiBatchId(size_t multi_batch_id) { current_multi_batch_id_ = multi_batch_id; }
+  size_t GetCurrentMultiBatchId() const { return current_multi_batch_id_; }
+
+  // ---- DpScheduleState access ----
+
+  // 输入 multi_batch_id + dp_idx 获取 const DpScheduleState 引用。
+  // 旧的 1D 签名 GetDpScheduleState(size_t dp_idx) 已删除，强制所有调用点显式传递 multi_batch_id。
+  const DpScheduleState& GetDpScheduleState(size_t multi_batch_id, size_t dp_idx) const {
     assert(schedule_state_ != nullptr);
-    return schedule_state_->schedule_states.at(dp_idx);
+    return schedule_state_->schedule_states.at(multi_batch_id).at(dp_idx);
   }
 
-  // 2) 输入 req_id 获取对应 InferRequestPtr。
+  // Return the number of PP batches (max_pp_batch_num).
+  size_t GetNumPpBatches() const {
+    assert(schedule_state_ != nullptr);
+    return schedule_state_->schedule_states.size();
+  }
+
+  // 输入 req_id 获取对应 InferRequestPtr。
   std::shared_ptr<InferRequest> GetReqById(int64_t req_id) const {
     if (schedule_state_ == nullptr) {
       return nullptr;
@@ -55,21 +69,42 @@ class ScheduleContext {
     return it->second;
   }
 
-  // 3) 输入 dp_idx 获取对应的 std::shared_ptr<CacheManagerInterface> 引用。
+  // 输入 dp_idx 获取对应的 std::shared_ptr<CacheManagerInterface> 引用。
   const std::shared_ptr<CacheManagerInterface>& GetDpCacheManager(size_t dp_idx) const {
     KLLM_CHECK_WITH_INFO(dp_cache_managers_ != nullptr, "dp_cache_managers_ is nullptr");
     return dp_cache_managers_->at(dp_idx);
   }
 
-  // 4) 输入 dp_idx 获取对应的可修改 DpScheduleState.in_plan_schedule_ops 引用。
-  DpScheduleOpsInPlan& GetMutableInPlanScheduleOps(size_t dp_idx) const {
-    return schedule_state_->schedule_states[dp_idx].in_plan_schedule_ops;
+  // 输入 multi_batch_id + dp_idx 获取对应的可修改 DpScheduleState.in_plan_schedule_ops 引用。
+  // 旧的 1D 签名 GetMutableInPlanScheduleOps(size_t dp_idx) 已删除。
+  DpScheduleOpsInPlan& GetMutableInPlanScheduleOps(size_t multi_batch_id, size_t dp_idx) const {
+    return schedule_state_->schedule_states[multi_batch_id][dp_idx].in_plan_schedule_ops;
   }
+
+  // ---- req_to_batch_idx helpers ----
+
+  // Look up which PP batch a request belongs to. Returns multi_batch_id if found.
+  // Callers MUST check existence first; missing entry means state machine bug → KLLM_THROW.
+  size_t GetReqBatchIdx(int64_t req_id) const {
+    assert(schedule_state_ != nullptr);
+    auto it = schedule_state_->req_to_batch_idx.find(req_id);
+    if (it == schedule_state_->req_to_batch_idx.end()) {
+      KLLM_THROW(FormatStr("req_id=%ld not found in req_to_batch_idx_, state machine bug", req_id));
+    }
+    return it->second;
+  }
+
+  void SetReqBatchIdx(int64_t req_id, size_t multi_batch_id) {
+    schedule_state_->req_to_batch_idx[req_id] = multi_batch_id;
+  }
+
+  void RemoveReqBatchIdx(int64_t req_id) { schedule_state_->req_to_batch_idx.erase(req_id); }
 
  private:
   ScheduleState* schedule_state_ = nullptr;
   int64_t schedule_start_time_in_ms_ = 0;
   const std::vector<std::shared_ptr<CacheManagerInterface>>* dp_cache_managers_ = nullptr;
+  size_t current_multi_batch_id_ = 0;
 };
 
 }  // namespace ksana_llm
