@@ -20,7 +20,7 @@ class SamplerTest : public testing::Test {
 
     std::vector<float> GetHostTemperatures() const { return host_temperatures_; }
     std::vector<float> GetNorepeatNgrams() const { return norepeat_ngrams_; }
-    std::vector<float> GetInvRepeatPenalty() const { return inv_repetition_penalties_; }
+    std::vector<float> GetInvRepeatPenalty() const { return repetition_penalties_; }
   };
 
  protected:
@@ -394,20 +394,25 @@ TEST_F(SamplerTest, MTPSampleTest) {
   float *device_logits = nullptr;
   SamplingDeviceParameter sampling_device_parameter;
 
-  // For Repetition Penalty
+  // First call: forwarding_tokens->size() == input_tokens->size() (prefill-like step).
+  // NoRepeatNgram builds the full ngram_dict for all input tokens here.
   sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
                                             context_->device->GetPrimaryComputeStream());
-  std::vector<float> inv_repetition_penalties = sampler_->GetInvRepeatPenalty();
-  for (int token_id : token_ids_) {
-    EXPECT_NEAR(2.0f, inv_repetition_penalties[token_id], 1e-6);
-  }
+  std::vector<float> repetition_penalties = sampler_->GetInvRepeatPenalty();
+  // input_tokens last token should have repetition_penalty applied
+  EXPECT_NEAR(0.5f, repetition_penalties[token_ids_.back()], 1e-6);
 
-  // For NoRepeatNgram
+  // Second call: push tokens so that forwarding_tokens->size() > input_tokens->size() (MTP-like step).
+  // This also covers the repetition penalty branch at sampler.cpp:148.
   sample_reqs[0].last_step_token_num = 2;
   sample_reqs[0].forwarding_tokens->push_back(6);
   sample_reqs[0].forwarding_tokens->push_back(7);
   sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
                                             context_->device->GetPrimaryComputeStream());
+  // forwarding_tokens tokens beyond input_tokens_size should also have repetition_penalty applied (sampler.cpp:148)
+  repetition_penalties = sampler_->GetInvRepeatPenalty();
+  EXPECT_NEAR(0.5f, repetition_penalties[6], 1e-6);
+  EXPECT_NEAR(0.5f, repetition_penalties[7], 1e-6);
   std::vector<float> norepeat_ngrams = sampler_->GetNorepeatNgrams();
   for (int token_id : forward_token_ids_) {
     EXPECT_EQ(-std::numeric_limits<float>::infinity(), norepeat_ngrams[token_id]);

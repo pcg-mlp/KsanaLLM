@@ -7,6 +7,7 @@
 #  include <nccl.h>
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/copy_elements.cuh"
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/decoding_common.h"
+#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/repetition_penalty.h"
 #  include "device/nvidia/nccl_utils.h"
 #  include "kernels/nvidia/kernel_wrapper.h"
 #  include "layers/nvidia/replace_last_token.h"
@@ -61,7 +62,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
 
   aligned_memory_queue.AllocateAndAlign();
 
-  inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
+  repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
   norepeat_ngrams_.resize(batch_schedule_config_.max_vocab_size);
 
   std::vector<uint32_t*> output_tokens_ptrs_host(max_logits_num);
@@ -136,24 +137,26 @@ Sampler::~Sampler() {
   }
 }
 
-void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
+void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* forwarding_tokens,
                                      const int vocab_size, const float repetition_penalty, Stream& stream) {
-  // inv_repetition_penalties_ is filled with 1.0f
-  std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
-  // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
-  const float inv_repetition_penalty = 1.0f / repetition_penalty;
-  for (size_t i = 0; i < input_tokens->size(); ++i) {
-    inv_repetition_penalties_[input_tokens->at(i)] = inv_repetition_penalty;
+  // repetition_penalties_ is filled with 1.0f
+  std::fill(repetition_penalties_.begin(), repetition_penalties_.end(), 1.0f);
+  // If a token has appeared before, repetition_penalty is applied.
+  const int input_tokens_size = input_tokens->size();
+  repetition_penalties_[input_tokens->back()] = repetition_penalty;
+
+  if (forwarding_tokens->size() > input_tokens_size) {
+    for (size_t i = input_tokens_size; i < forwarding_tokens->size(); ++i) {
+      repetition_penalties_[forwarding_tokens->at(i)] = repetition_penalty;
+    }
   }
-  for (size_t i = 0; i < output_tokens->size(); ++i) {
-    inv_repetition_penalties_[output_tokens->at(i)] = inv_repetition_penalty;
-  }
-  // copy inv_repetition_penalties_ to device
-  MemcpyAsync(device_repetition_processor_, inv_repetition_penalties_.data(), sizeof(float) * vocab_size,
+
+  // copy repetition_penalties_ to device
+  MemcpyAsync(device_repetition_processor_, repetition_penalties_.data(), sizeof(float) * vocab_size,
               MEMCPY_HOST_TO_DEVICE, stream);
-  // logits = mul(logits, device_repetition_processor_)
 #ifdef ENABLE_CUDA
-  InvokeMul(logits, device_repetition_processor_, logits, vocab_size, rank_);
+  llm_kernels::nvidia::InvokeRepetitionPenalty<float>(logits, device_repetition_processor_, logits, vocab_size,
+                                                      stream.Get());
 #endif
 }
 
@@ -511,7 +514,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     if (sampling_config->repetition_penalty != 1.0f) {
       for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
         ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req.input_tokens.get(),
-                               sampling_req.sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
+                               sampling_req.forwarding_tokens, vocab_size, sampling_config->repetition_penalty,
                                stream);
       }
     }
