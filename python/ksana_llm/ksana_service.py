@@ -349,11 +349,9 @@ class LLMService:
             return Response(status_code=503)
 
         try:
-            # Use a small but sufficient token sequence for the health check.
-            # A single token like [0] can cause DeepGEMM CUDA errors (M dimension
-            # too small for MoE routing), so use a few tokens instead.
+            # Use a small token sequence for the health check.
             health_request_dict = {
-                "input_tokens": [1, 2, 3, 4],
+                "input_tokens": [1],
                 "sampling_config": {
                     "num_beams": 1,
                     "topk": 1,

@@ -350,6 +350,45 @@ TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsCompressedLogits) {
   EXPECT_TRUE(has_finite) << "Compressed logits should produce finite values in [0, max_seqlen_k) range";
 }
 
+TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsEmptyKv) {
+  // Edge case: kv_fp8 has zero length (seq_len_kv == 0).
+  // All cu_seq_len_k_start/end entries are 0, so every query token has an empty
+  // visible KV range.
+  auto wrapper = DeepSeekDeepGEMMWrapper::GetInstance();
+
+  constexpr int seq_len = 1024;
+  constexpr int seq_len_kv = 0;  // <-- zero-length KV
+  constexpr int num_heads = 64;
+  constexpr int head_dim = 128;
+
+  auto q_bf16 = torch::randn({seq_len, num_heads, head_dim}, torch::kBFloat16).to(device_);
+  auto weights = torch::randn({seq_len, num_heads}, torch::kFloat32).to(device_);
+
+  // Empty KV tensors. kv_fp8 is [0, head_dim], scales is [0].
+  auto kv_fp8 = torch::empty({seq_len_kv, head_dim}, torch::kFloat8_e4m3fn).to(device_);
+  auto kv_scales = torch::empty({seq_len_kv}, torch::kFloat32).to(device_);
+
+  // Both boundaries are zero -> no token attends to anything.
+  auto cu_seq_len_k_start = torch::zeros({seq_len}, torch::kInt32).to(device_);
+  auto cu_seq_len_k_end = torch::zeros({seq_len}, torch::kInt32).to(device_);
+
+  auto q_fp8 = q_bf16.to(torch::kFloat8_e4m3fn);
+
+  // max_seqlen_k must stay > 0 (kernel asserts this), so allocate a small
+  // logits buffer aligned to block_kv = 256.
+  const int max_seqlen_k = 1;
+  const int stride_logits = GetFp8MqaLogitsStrideLogits(max_seqlen_k);
+  const int aligned_seq_len = GetFp8MqaLogitsAlignedSeqLen(seq_len, num_heads);
+
+  // Pre-fill with a sentinel so we can detect any writes.
+  constexpr float kSentinel = -12345.0f;
+  auto logits = torch::full({aligned_seq_len, stride_logits}, kSentinel, torch::kFloat32).to(device_);
+
+  EXPECT_NO_THROW(wrapper->Fp8MqaLogits(q_fp8, {kv_fp8, kv_scales}, weights, cu_seq_len_k_start, cu_seq_len_k_end,
+                                        logits, max_seqlen_k, at::cuda::getCurrentCUDAStream().stream()));
+  cudaDeviceSynchronize();
+}
+
 TEST_F(DeepSeekDeepGEMMWrapperTest, Fp8MqaLogitsLargeScale) {
   auto wrapper = DeepSeekDeepGEMMWrapper::GetInstance();
 

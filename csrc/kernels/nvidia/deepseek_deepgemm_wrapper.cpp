@@ -67,6 +67,11 @@ void DeepSeekDeepGEMMWrapper::Fp8MqaLogits(const torch::Tensor& q_fp8,
                                            const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                                            const torch::Tensor& cu_seq_len_k_end, torch::Tensor& logits,
                                            int max_seqlen_k, cudaStream_t stream) {
+  // Return early if kv is empty
+  if (kv_fp8.first.numel() == 0) {
+    return;
+  }
+
 #if ENABLE_DEEPSEEK_DEEPGEMM
   // Save current torch CUDA stream and set to the passed-in stream
   auto original_stream = at::cuda::getCurrentCUDAStream();
@@ -372,8 +377,7 @@ void DeepSeekDeepGEMMWrapper::Fp8BlockGemm(void* a_q, void* a_s, void* b, void* 
   auto sfb_tensor = torch::from_blob(b_s, {n_groups, k_groups}, {k_groups, 1}, f32_opts);
   auto d_tensor = torch::from_blob(out, {m, n}, {n, 1}, bf16_opts);
 
-  CUDA_CHECK_LAST_ERROR(
-      deepseek::Sm90Fp8Gemm1D2D(a_tensor, sfa_tensor, b_tensor, sfb_tensor, d_tensor, m, n, k, "nk"));
+  CUDA_CHECK_LAST_ERROR(deepseek::Sm90Fp8Gemm1D2D(a_tensor, sfa_tensor, b_tensor, sfb_tensor, d_tensor, m, n, k, "nk"));
 
   at::cuda::setCurrentCUDAStream(original_stream);
 #else
