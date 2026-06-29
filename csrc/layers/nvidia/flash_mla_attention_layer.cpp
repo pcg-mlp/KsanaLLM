@@ -58,14 +58,13 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
     k_ptr = latent_buffer;
     v_ptr = k_ptr + k_size;
 
-    const size_t chunk_prefix_tokens = chunk_kv_tokens - chunk_q_tokens;
-    if (chunk_prefix_tokens > 0) {
-      if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
-        // get latent and k_rope from cache block (include prefix and new)
-        CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaGetFromCompressedCache<SCALAR_T, CACHE_T, KV_DTYPE>(
-            k_rope_buffer, latent_buffer, k_list, chunk_kv_tokens, seqlens_with_prefix_ptr, block_offsets, block_size,
-            qk_rope_head_dim, kv_lora_rank, stream, chunk_kv_tokens_offset));
-      } else {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
+      // get latent and k_rope from cache block (include prefix and new)
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaGetFromCompressedCache<SCALAR_T, CACHE_T, KV_DTYPE>(
+          k_rope_buffer, latent_buffer, k_list, chunk_kv_tokens, seqlens_with_prefix_ptr, block_offsets, block_size,
+          qk_rope_head_dim, kv_lora_rank, stream, chunk_kv_tokens_offset));
+    } else {
+      if (chunk_q_tokens < chunk_kv_tokens) {
         // If prefix length > 0, we holds a new buffer to store total kv (include prefix and new).
         // For fp8 kv cache, we dequantize the prefix part from cache block, and copy the new part from existing buffer.
         // Dequantize and copy the prefix part from cache block.
@@ -73,16 +72,13 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
             reinterpret_cast<SCALAR_T*>(k_rope_buffer), reinterpret_cast<SCALAR_T*>(latent_buffer), k_list,
             prefix_offsets, seqlens_with_prefix_ptr, block_offsets, block_size, chunk_kv_tokens, qk_rope_head_dim,
             kv_lora_rank, k_scale, v_scale, stream, chunk_kv_tokens_offset));
-        // Copy the new (without prefix) part from existing buffer to avoid loss of percision.
-        CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaFlashWithoutPrefixKVCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
-            reinterpret_cast<SCALAR_T*>(k_rope_buffer), reinterpret_cast<SCALAR_T*>(latent_buffer),
-            reinterpret_cast<SCALAR_T*>(k_pe_ptr), reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), prefix_offsets,
-            seqlens_without_prefix_ptr, chunk_q_tokens, qk_rope_head_dim, kv_lora_rank, stream, chunk_q_tokens_offset,
-            chunk_kv_tokens_offset));
       }
-    } else {
-      k_rope_buffer = k_pe_ptr;
-      latent_buffer = compressed_kv_ptr;
+      // Copy the new (without prefix) part from existing buffer to avoid loss of percision.
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaFlashWithoutPrefixKVCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+          reinterpret_cast<SCALAR_T*>(k_rope_buffer), reinterpret_cast<SCALAR_T*>(latent_buffer),
+          reinterpret_cast<SCALAR_T*>(k_pe_ptr), reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), prefix_offsets,
+          seqlens_without_prefix_ptr, chunk_q_tokens, qk_rope_head_dim, kv_lora_rank, stream, chunk_q_tokens_offset,
+          chunk_kv_tokens_offset));
     }
 
     if constexpr (KV_DTYPE != llm_kernels::utils::KVCacheType::kFp8DsMla) {
