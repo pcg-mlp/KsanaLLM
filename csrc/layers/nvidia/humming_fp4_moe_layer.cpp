@@ -7,9 +7,11 @@
 #include <torch/torch.h>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
@@ -30,6 +32,11 @@ namespace ksana_llm {
 // Static member definitions
 std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler> HummingFp4MoeLayer::jit_compiler_;
 std::mutex HummingFp4MoeLayer::jit_mutex_;
+
+const std::vector<llm_kernels::nvidia::humming::KernelMeta>* HummingFp4MoeLayer::GetJitKernelTable() {
+  if (!jit_compiler_) return nullptr;
+  return &jit_compiler_->GetKernelTable();
+}
 
 // Maximum moe_block_size for workspace pre-allocation (actual value is determined at runtime).
 // Must be >= the largest possible BLOCK_SHAPE_M from the humming heuristic (currently 64).
@@ -110,6 +117,13 @@ Status HummingFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const 
                                ? llm_kernels::nvidia::humming::ComputeDtype::FP8
                                : llm_kernels::nvidia::humming::ComputeDtype::BF16;
 
+  // Read profiling iteration count once here (default 15).  When 0, profiling is
+  // disabled and only heuristic kernels are compiled (no extend/variant configs).
+  // Preprocess() reuses profile_iters_/warmup_iters_ instead of re-reading the env.
+  profile_iters_ = static_cast<size_t>(GetEnvAsPositiveInt("QUANT_PROFILE", 15));
+  warmup_iters_ = std::max(1UL, profile_iters_ / 3);
+  const bool compile_extend = (profile_iters_ != 0);
+
   // Initialize JIT compiler (lazy singleton with mutex).
   // W4A16 and W4A8 share the same compiler but need different compute_dtype kernels.
   // The first Init creates the compiler; subsequent Inits add their own kernels.
@@ -126,8 +140,10 @@ Status HummingFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const 
   int64_t n2 = expert_hidden_size_, k2 = expert_inter_size_;      // w2: down
   auto gemm_type = llm_kernels::nvidia::humming::GemmType::INDEXED;
 
-  jit_compiler_->CompileKernels(n1, k1, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type);
-  jit_compiler_->CompileKernels(n2, k2, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type);
+  jit_compiler_->CompileKernels(n1, k1, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type,
+                                compile_extend);
+  jit_compiler_->CompileKernels(n2, k2, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type,
+                                compile_extend);
 
   KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer Init", rank_);
   return Status();
@@ -237,12 +253,11 @@ size_t HummingFp4MoeLayer::GetWorkspaceSizeT() {
 }
 
 Status HummingFp4MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
-  const size_t profile_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 15);
-  if (profile_iters == 0) {
+  // Reuse profile_iters_/warmup_iters_ read in Init() to avoid inconsistent reads of QUANT_PROFILE.
+  if (profile_iters_ == 0) {
     KLLM_LOG_DEBUG << "QUANT_PROFILE==0, skipping humming profiling";
     return Status();
   }
-  const size_t warmup_iters = std::max(1UL, profile_iters / 3);
 
   static std::mutex g_mtx;  // process-level serialization, mirrors cutlass
   std::lock_guard<std::mutex> guard(g_mtx);
@@ -255,7 +270,7 @@ Status HummingFp4MoeLayer::Preprocess(const ModelConfig& model_config, const Run
   int64_t n1 = static_cast<int64_t>(expert_inter_size_ * 2);
   int64_t k1 = static_cast<int64_t>(expert_hidden_size_);
   if (!Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n1, k1, E, dt, gt)) {
-    auto schedule = ProfileAllBuckets(n1, k1, E, expert_topk_, warmup_iters, profile_iters, /*size_m_multiplier=*/1);
+    auto schedule = ProfileAllBuckets(n1, k1, E, expert_topk_, warmup_iters_, profile_iters_, /*size_m_multiplier=*/1);
     Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n1, k1, E, dt, gt, schedule);
     KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer GEMM1 profiled (N={},K={})", rank_, n1, k1);
   } else {
@@ -267,7 +282,7 @@ Status HummingFp4MoeLayer::Preprocess(const ModelConfig& model_config, const Run
   int64_t k2 = static_cast<int64_t>(expert_inter_size_);
   if (!Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n2, k2, E, dt, gt)) {
     auto schedule =
-        ProfileAllBuckets(n2, k2, E, /*top_k=*/1, warmup_iters, profile_iters, /*size_m_multiplier=*/expert_topk_);
+        ProfileAllBuckets(n2, k2, E, /*top_k=*/1, warmup_iters_, profile_iters_, /*size_m_multiplier=*/expert_topk_);
     Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n2, k2, E, dt, gt, schedule);
     KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer GEMM2 profiled (N={},K={})", rank_, n2, k2);
   } else {
@@ -286,11 +301,17 @@ HummingFp4MoeLayer::ProfAlignBuffers::ProfAlignBuffers(int64_t max_num_tokens_pa
 }
 
 torch::Tensor HummingFp4MoeLayer::MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts) {
+  // Random uniform sampling with fixed seed — matches the benchmark's expert distribution
+  // (benchmark uses torch::randn for gate values, then topk → random uniform expert assignment).
+  // The previous round-robin distribution (i+j)%E was perfectly uniform, which is unrealistic:
+  // at small M most experts get 0 tokens in practice, and at large M the distribution converges
+  // to uniform only statistically. Random sampling naturally produces this behavior without
+  // parameter tuning. Fixed seed ensures reproducibility across runs.
+  std::mt19937 rng(42);
+  std::uniform_int_distribution<int32_t> dist(0, static_cast<int32_t>(num_experts - 1));
   std::vector<int32_t> host_ids(num_tokens * top_k);
-  for (int64_t i = 0; i < num_tokens; ++i) {
-    for (int64_t j = 0; j < top_k; ++j) {
-      host_ids[i * top_k + j] = static_cast<int32_t>((i + j) % num_experts);
-    }
+  for (int64_t i = 0; i < num_tokens * top_k; ++i) {
+    host_ids[i] = dist(rng);
   }
   auto cpu_opts = torch::TensorOptions().dtype(torch::kInt32);
   auto gpu_opts = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
@@ -407,11 +428,16 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFp4MoeLayer::ProfileSingl
   using namespace llm_kernels::nvidia::humming;
 
   // 1. Filter candidates by (N, K, gemm_type, dtype)
+  // Also filter by heuristic M range: skip candidates whose max_shape_m < size_m.
+  // This prevents small-M kernels (e.g. block_m=8 with range [1,384]) from being
+  // selected at large M where they're suboptimal, even if profiling noise makes
+  // them appear faster.
   std::vector<const KernelMeta*> candidates;
   for (const auto& meta : jit_compiler_->GetKernelTable()) {
     if (meta.size_n != size_n || meta.size_k != size_k) continue;
     if (meta.gemm_type != GemmType::INDEXED) continue;
     if (meta.compute_dtype != humming_compute_dtype_) continue;
+    if (meta.max_shape_m < size_m) continue;
     candidates.push_back(&meta);
   }
   if (candidates.empty()) return nullptr;
@@ -531,8 +557,11 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFp4MoeLayer::ProfileSingl
         best_latency = latency_ms;
         best_meta = meta;
       }
-    } catch (const std::exception&) {
-      // Launch failed (smem exceeded, etc.) — skip this candidate
+    } catch (const std::exception& e) {
+      // Launch failed (smem exceeded, illegal memory access, etc.) — skip this candidate.
+      // Must clear the sticky CUDA error so subsequent candidate tests are not affected.
+      cudaDeviceSynchronize();
+      cudaGetLastError();
     }
   }
 
@@ -549,10 +578,13 @@ HummingMoeSearchStatus::ProfiledSchedule HummingFp4MoeLayer::ProfileAllBuckets(i
   HummingMoeSearchStatus::ProfiledSchedule result;
   cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
 
-  // Search points: 1, 2, 4, ..., 8192 (× size_m_multiplier for GEMM2).
-  // To add finer granularity (e.g. 384, 768), just add to this list.
-  constexpr int kMaxBucketPower = 13;  // 2^13 = 8192
-  int num_buckets = kMaxBucketPower + 1;
+  // Search points: mixed power-of-2 + intermediate values (× size_m_multiplier for GEMM2).
+  // Intermediate values (3, 6, 12, 24, 48, 96) cover common decode batch sizes;
+  // midpoints (192, 384, 768, 1536, 3072, 6144) halve the right-align gap.
+  static constexpr std::array<int64_t, 26> kBuckets = {1,   2,    3,    4,    6,    8,    12,   16,  24,
+                                                       32,  48,   64,   96,   128,  192,  256,  384, 512,
+                                                       768, 1024, 1536, 2048, 3072, 4096, 6144, 8192};
+  int num_buckets = static_cast<int>(kBuckets.size());
 
   KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer profiling {} buckets for N={} K={}", rank_, num_buckets, n,
                                k);
@@ -560,14 +592,15 @@ HummingMoeSearchStatus::ProfiledSchedule HummingFp4MoeLayer::ProfileAllBuckets(i
   // Prepare dummy weights once — repack/process is expensive and only depends on (N, K, E, dtype).
   ProfWeights weights = PrepareDummyWeights(n, k, e, stream);
 
-  for (int p = 0; p <= kMaxBucketPower; ++p) {
-    int64_t rep_m = (1LL << p) * size_m_multiplier;
+  for (int64_t bucket : kBuckets) {
+    int64_t rep_m = bucket * size_m_multiplier;
 
     const llm_kernels::nvidia::humming::KernelMeta* best =
         ProfileSingleGemm(rep_m, n, k, e, top_k, warmup, profile_iters, stream, weights);
     if (best != nullptr) {
       result.size_ms.push_back(rep_m);
       result.metas.push_back(best);
+      result.block_ms.push_back(best->block_m);
     }
     KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFp4MoeLayer rep_m={} done best={}", rank_, rep_m,
                                  static_cast<const void*>(best));
@@ -582,12 +615,7 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
   // Lazy creation of profiling CUDA events (created once, reused across forwards)
   bool do_profile = (perf_stats_ != nullptr);
   if (do_profile) {
-    if (evt_gemm1_start_ == nullptr) {
-      cudaEventCreate(&evt_gemm1_start_);
-      cudaEventCreate(&evt_gemm1_end_);
-      cudaEventCreate(&evt_gemm2_start_);
-      cudaEventCreate(&evt_gemm2_end_);
-    }
+    EnsureProfilingEvents();
   }
 
   // Assign workspace pointers on first call
@@ -633,8 +661,16 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
   const size_t hidden_size = hidden_states->shape[1];
 
   // Execute TopK gating (sqrtsoftplus only)
+  if (do_profile) {
+    cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
+    RecordEvent(Evt::GateStart, stream);
+  }
   STATUS_CHECK_RETURN(
       ExecuteTopkSoftplusSqrt<T>(hidden_states, gating_output, eplb_map, workspace, e_score_bias, input_ids));
+  if (do_profile) {
+    cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
+    RecordEvent(Evt::GateEnd, stream);
+  }
 
   // Get weight pointers
   void* w1_ptr = w1->GetPtr<void>();
@@ -669,6 +705,13 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
     int32_t moe_block_size_i32 = sel1.block_m;
     int64_t moe_block_size = static_cast<int64_t>(moe_block_size_i32);
 
+    // Pre-compute GEMM2's block_m to enable merged align
+    int64_t size_n_w2 = static_cast<int64_t>(hidden_size);
+    int64_t size_k_w2 = static_cast<int64_t>(expert_inter_size_);
+    int64_t size_m_gemm2 = static_cast<int64_t>(total_tokens * expert_topk_);
+    auto sel2 = SelectGemmMeta(size_n_w2, size_k_w2, size_m_gemm2);
+    int32_t moe_block_size_gemm2 = sel2.block_m;
+
     int64_t numel = static_cast<int64_t>(total_tokens * expert_topk_);
     int64_t max_num_tokens_padded = numel + expert_num_per_node_ * (moe_block_size - 1);
     int64_t max_num_m_blocks = (max_num_tokens_padded + moe_block_size - 1) / moe_block_size;
@@ -681,21 +724,74 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
 
     int32_t* sorted_ids_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
 
-    InvokeFillInfo(reinterpret_cast<int32_t*>(curr_fused_id_buffer), fill_info_buffer_on_device, id_buffer_offset,
-                   static_cast<int>(max_num_tokens_padded), static_cast<int>(numel), stream);
-    id_buffer_offset += max_num_tokens_padded;
+    // Declare GEMM1 align output pointers (used by both merged and non-merged paths)
+    int32_t* expert_ids_ptr = nullptr;
+    int32_t* num_tokens_post_pad_ptr = nullptr;
+    int32_t* cumsum_ptr = nullptr;
 
-    int32_t* expert_ids_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
-    id_buffer_offset += max_num_m_blocks;
+    // Prepare GEMM2 align buffers (needed if block_m differs)
+    int64_t max_num_tokens_padded_g2 = numel + expert_num_per_node_ * (moe_block_size_gemm2 - 1);
+    int64_t max_num_m_blocks_g2 = (max_num_tokens_padded_g2 + moe_block_size_gemm2 - 1) / moe_block_size_gemm2;
 
-    int32_t* num_tokens_post_pad_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
-    int32_t* cumsum_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset + 1;
+    void* fill_info_g2 = ws_.align_gemm2.base;
+    void* curr_fused_g2 = static_cast<char*>(fill_info_g2) + SGL_MOE_ALIGN_BLOCK_VEC_SIZE * sizeof(int32_t);
+    int id_off_g2 = 0;
+    int32_t* sorted_ids_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2;
+    int32_t* expert_ids_gemm2;
+    int32_t* num_tokens_post_pad_gemm2;
+    int32_t* cumsum_g2;
 
-    InvokeAlignBlockSize(reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_ptr, expert_ids_ptr,
-                         num_tokens_post_pad_ptr, cumsum_ptr, static_cast<int32_t>(max_num_tokens_padded),
-                         static_cast<size_t>(numel), static_cast<int32_t>(moe_block_size),
-                         static_cast<int32_t>(expert_topk_), use_expert_parallel,
-                         static_cast<int32_t>(global_expert_para_size_), rank_, stream);
+    const bool use_merged_align = (moe_block_size_gemm2 != moe_block_size_i32) && (expert_num_per_node_ >= 224);
+
+    if (use_merged_align) {
+      // Merged align: compute both GEMM1 and GEMM2 alignment in one launch
+      if (do_profile) RecordEvent(Evt::Align1Start, stream);
+      InvokeFillInfo(reinterpret_cast<int32_t*>(curr_fused_id_buffer), fill_info_buffer_on_device, id_buffer_offset,
+                     static_cast<int>(max_num_tokens_padded), static_cast<int>(numel), stream);
+      id_buffer_offset += max_num_tokens_padded;
+      expert_ids_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
+      id_buffer_offset += max_num_m_blocks;
+      num_tokens_post_pad_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
+      cumsum_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset + 1;
+
+      InvokeFillInfo(reinterpret_cast<int32_t*>(curr_fused_g2), fill_info_g2, id_off_g2,
+                     static_cast<int>(max_num_tokens_padded_g2), static_cast<int>(numel), stream);
+      id_off_g2 += max_num_tokens_padded_g2;
+      expert_ids_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2;
+      id_off_g2 += max_num_m_blocks_g2;
+      num_tokens_post_pad_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2;
+      cumsum_g2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2 + 1;
+
+      llm_kernels::nvidia::InvokeSglMoeAlignBlockSizeMerged<int32_t>(
+          reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_ptr, expert_ids_ptr, num_tokens_post_pad_ptr,
+          sorted_ids_gemm2, expert_ids_gemm2, num_tokens_post_pad_gemm2, static_cast<int32_t>(max_num_tokens_padded),
+          static_cast<int32_t>(max_num_tokens_padded_g2), static_cast<int32_t>(expert_num_per_node_),
+          moe_block_size_i32, moe_block_size_gemm2, static_cast<size_t>(numel), cumsum_ptr, cumsum_g2, stream);
+      if (do_profile) RecordEvent(Evt::Align1End, stream);
+      if (do_profile) RecordEvent(Evt::Align2Start, stream);
+      if (do_profile) RecordEvent(Evt::Align2End, stream);
+    } else {
+      // Original path: separate align for GEMM1, GEMM2 align deferred
+      if (do_profile) RecordEvent(Evt::Align1Start, stream);
+      InvokeFillInfo(reinterpret_cast<int32_t*>(curr_fused_id_buffer), fill_info_buffer_on_device, id_buffer_offset,
+                     static_cast<int>(max_num_tokens_padded), static_cast<int>(numel), stream);
+      id_buffer_offset += max_num_tokens_padded;
+      expert_ids_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
+      id_buffer_offset += max_num_m_blocks;
+      num_tokens_post_pad_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
+      cumsum_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset + 1;
+
+      InvokeAlignBlockSize(reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_ptr, expert_ids_ptr,
+                           num_tokens_post_pad_ptr, cumsum_ptr, static_cast<int32_t>(max_num_tokens_padded),
+                           static_cast<size_t>(numel), static_cast<int32_t>(moe_block_size),
+                           static_cast<int32_t>(expert_topk_), use_expert_parallel,
+                           static_cast<int32_t>(global_expert_para_size_), rank_, stream);
+      if (do_profile) RecordEvent(Evt::Align1End, stream);
+      // GEMM2 align will be done later if block_m differs
+      sorted_ids_gemm2 = sorted_ids_ptr;
+      expert_ids_gemm2 = nullptr;  // will be set in deferred align
+      num_tokens_post_pad_gemm2 = nullptr;
+    }
 
     // ----- GEMM 1: hidden_states × w1 → intermediate_cache1 [tokens*topk, inter_size*2] -----
 
@@ -704,15 +800,20 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
     const void* gemm1_a_scale = nullptr;
     const void* gemm1_global_scale = nullptr;
 
+    if (do_profile) RecordEvent(Evt::Quant1Start, stream);
     if (QuantizeToFp8<T>(hidden_states_ptr, static_cast<int>(size_k_w1), static_cast<int>(total_tokens), stream,
                          gemm1_a, gemm1_a_scale)) {
       gemm1_global_scale = w1_global_scale_;
     }
+    if (do_profile) RecordEvent(Evt::Quant1End, stream);
 
     // Zero locks buffer before kernel launch to prevent deadlock from stale lock values
     cudaMemsetAsync(ws_.kernel.locks, 0, ws_.kernel.locks_size, stream);
 
-    if (do_profile) cudaEventRecord(evt_gemm1_start_, stream);
+    if (do_profile) {
+      RecordEvent(Evt::Gemm1Start, stream);
+      perf_stats_->last_gemm1_meta = sel1.meta;
+    }
 
     llm_kernels::nvidia::humming::humming_moe_gemm(
         gemm1_a,                                            // a
@@ -741,10 +842,19 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
         sel1.required_block_m,  // >0 falls back to block_m search when no meta
         sel1.meta);             // forced_meta (profiled/selected, or nullptr)
 
-    if (do_profile) cudaEventRecord(evt_gemm1_end_, stream);
+    if (do_profile) RecordEvent(Evt::Gemm1End, stream);
 
     const size_t elements_num = total_tokens * expert_topk_ * expert_inter_size_ * 2;
-    if (use_expert_parallel) {
+    const bool use_fused_silu_quant = (humming_compute_dtype_ == llm_kernels::nvidia::humming::ComputeDtype::FP8);
+    if (do_profile) RecordEvent(Evt::SiluStart, stream);
+    if (use_fused_silu_quant) {
+      // W4A8: fused SiluAndMul + FP8 Quant in one Triton kernel.
+      // Reads [M*topk, inter*2] BF16, writes [M*topk, inter] FP8 + [M*topk] FP32 scale.
+      const int num_silu_tokens = static_cast<int>(total_tokens * expert_topk_);
+      Singleton<TritonWrapper>::GetInstance()->InvokeHummingFusedSiluAndMulFp8Quant<T>(
+          reinterpret_cast<const T*>(ws_.cache.gemm1_output), ws_.fp8.scales, ws_.fp8.activation,
+          static_cast<int>(expert_inter_size_), num_silu_tokens, swiglu_limit_, stream);
+    } else if (use_expert_parallel) {
       if (has_swiglu_limit_) {
         llm_kernels::nvidia::InvokeSiluAndMul<T, true, true>(
             reinterpret_cast<const T*>(ws_.cache.gemm1_output), reinterpret_cast<T*>(ws_.cache.silu_output),
@@ -765,50 +875,49 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
             reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, 0.0f, stream);
       }
     }
+    if (do_profile) RecordEvent(Evt::SiluEnd, stream);
 
     // ----- GEMM 2: intermediate_cache2 × w2 → intermediate_cache3 [tokens*topk, hidden_size] -----
-    int64_t size_k_w2 = static_cast<int64_t>(expert_inter_size_);
-    int64_t size_n_w2 = static_cast<int64_t>(hidden_size);
+    // size_k_w2, size_n_w2, size_m_gemm2, sel2, moe_block_size_gemm2 already computed above
 
-    // ----- GEMM2 block_m decoupling: compute GEMM2's own block_m and re-align if needed -----
-    int64_t size_m_gemm2 = static_cast<int64_t>(total_tokens * expert_topk_);
+    // GEMM2 alignment: if merged align was used, buffers are already set.
+    // If not merged and block_m differs, do deferred align now.
+    if (!use_merged_align) {
+      if (do_profile) RecordEvent(Evt::Align2Start, stream);
+      if (moe_block_size_gemm2 != moe_block_size_i32) {
+        int64_t numel_g2 = static_cast<int64_t>(total_tokens * expert_topk_);
+        int64_t max_num_tokens_padded_g2_def = numel_g2 + expert_num_per_node_ * (moe_block_size_gemm2 - 1);
+        int64_t max_num_m_blocks_g2_def =
+            (max_num_tokens_padded_g2_def + moe_block_size_gemm2 - 1) / moe_block_size_gemm2;
 
-    // Profiled kernel selection for GEMM2: right-align lookup.
-    auto sel2 = SelectGemmMeta(size_n_w2, size_k_w2, size_m_gemm2);
-    int32_t moe_block_size_gemm2 = sel2.block_m;
+        void* fill_info_g2_def = ws_.align_gemm2.base;
+        void* curr_fused_g2_def = static_cast<char*>(fill_info_g2_def) + SGL_MOE_ALIGN_BLOCK_VEC_SIZE * sizeof(int32_t);
+        int id_off_g2_def = 0;
 
-    // GEMM2 alignment buffers (may differ from GEMM1 if block_m differs)
-    int32_t* sorted_ids_gemm2 = sorted_ids_ptr;
-    int32_t* expert_ids_gemm2 = expert_ids_ptr;
-    int32_t* num_tokens_post_pad_gemm2 = num_tokens_post_pad_ptr;
+        sorted_ids_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2_def) + id_off_g2_def;
 
-    if (moe_block_size_gemm2 != moe_block_size_i32) {
-      // Re-run alignment with GEMM2's block_m using the separate w2 buffer
-      int64_t numel_g2 = static_cast<int64_t>(total_tokens * expert_topk_);
-      int64_t max_num_tokens_padded_g2 = numel_g2 + expert_num_per_node_ * (moe_block_size_gemm2 - 1);
-      int64_t max_num_m_blocks_g2 = (max_num_tokens_padded_g2 + moe_block_size_gemm2 - 1) / moe_block_size_gemm2;
+        InvokeFillInfo(reinterpret_cast<int32_t*>(curr_fused_g2_def), fill_info_g2_def, id_off_g2_def,
+                       static_cast<int>(max_num_tokens_padded_g2_def), static_cast<int>(numel_g2), stream);
+        id_off_g2_def += max_num_tokens_padded_g2_def;
 
-      void* fill_info_g2 = ws_.align_gemm2.base;
-      void* curr_fused_g2 = static_cast<char*>(fill_info_g2) + SGL_MOE_ALIGN_BLOCK_VEC_SIZE * sizeof(int32_t);
-      int id_off_g2 = 0;
+        expert_ids_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2_def) + id_off_g2_def;
+        id_off_g2_def += max_num_m_blocks_g2_def;
 
-      sorted_ids_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2;
+        num_tokens_post_pad_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2_def) + id_off_g2_def;
+        int32_t* cumsum_g2_def = reinterpret_cast<int32_t*>(curr_fused_g2_def) + id_off_g2_def + 1;
 
-      InvokeFillInfo(reinterpret_cast<int32_t*>(curr_fused_g2), fill_info_g2, id_off_g2,
-                     static_cast<int>(max_num_tokens_padded_g2), static_cast<int>(numel_g2), stream);
-      id_off_g2 += max_num_tokens_padded_g2;
-
-      expert_ids_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2;
-      id_off_g2 += max_num_m_blocks_g2;
-
-      num_tokens_post_pad_gemm2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2;
-      int32_t* cumsum_g2 = reinterpret_cast<int32_t*>(curr_fused_g2) + id_off_g2 + 1;
-
-      InvokeAlignBlockSize(reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_gemm2, expert_ids_gemm2,
-                           num_tokens_post_pad_gemm2, cumsum_g2, static_cast<int32_t>(max_num_tokens_padded_g2),
-                           static_cast<size_t>(numel_g2), static_cast<int32_t>(moe_block_size_gemm2),
-                           static_cast<int32_t>(expert_topk_), use_expert_parallel,
-                           static_cast<int32_t>(global_expert_para_size_), rank_, stream);
+        InvokeAlignBlockSize(reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_gemm2, expert_ids_gemm2,
+                             num_tokens_post_pad_gemm2, cumsum_g2_def,
+                             static_cast<int32_t>(max_num_tokens_padded_g2_def), static_cast<size_t>(numel_g2),
+                             static_cast<int32_t>(moe_block_size_gemm2), static_cast<int32_t>(expert_topk_),
+                             use_expert_parallel, static_cast<int32_t>(global_expert_para_size_), rank_, stream);
+      } else {
+        // block_m same: reuse GEMM1's buffers
+        sorted_ids_gemm2 = sorted_ids_ptr;
+        expert_ids_gemm2 = expert_ids_ptr;
+        num_tokens_post_pad_gemm2 = num_tokens_post_pad_ptr;
+      }
+      if (do_profile) RecordEvent(Evt::Align2End, stream);
     }
 
     // W4A8: Quantize activations to FP8 before GEMM2
@@ -816,15 +925,26 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
     const void* gemm2_a_scale = nullptr;
     const void* gemm2_global_scale = nullptr;
 
-    if (QuantizeToFp8<T>(ws_.cache.silu_output, static_cast<int>(size_k_w2),
-                         static_cast<int>(total_tokens * expert_topk_), stream, gemm2_a, gemm2_a_scale)) {
+    if (do_profile) RecordEvent(Evt::Quant2Start, stream);
+    if (use_fused_silu_quant) {
+      // Fused path: SiluAndMul + FP8 quant already done above.
+      // Quant2Start/Quant2End are back-to-back (0 interval) — quant work is fused into Silu phase.
+      gemm2_a = ws_.fp8.activation;
+      gemm2_a_scale = ws_.fp8.scales;
+      gemm2_global_scale = w2_global_scale_;
+    } else if (QuantizeToFp8<T>(ws_.cache.silu_output, static_cast<int>(size_k_w2),
+                                static_cast<int>(total_tokens * expert_topk_), stream, gemm2_a, gemm2_a_scale)) {
       gemm2_global_scale = w2_global_scale_;
     }
+    if (do_profile) RecordEvent(Evt::Quant2End, stream);
 
     // Zero locks buffer before kernel launch to prevent deadlock from stale lock values
     cudaMemsetAsync(ws_.kernel.locks, 0, ws_.kernel.locks_size, stream);
 
-    if (do_profile) cudaEventRecord(evt_gemm2_start_, stream);
+    if (do_profile) {
+      RecordEvent(Evt::Gemm2Start, stream);
+      perf_stats_->last_gemm2_meta = sel2.meta;
+    }
 
     // NOTE: For GEMM2, top_k must be 1 (not expert_topk_). The activation tensor
     // intermediate_cache2 is already expanded to [tokens*topk, inter_size] — each row is
@@ -859,9 +979,10 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
         sel2.required_block_m,  // >0 falls back to block_m search when no meta
         sel2.meta);             // forced_meta (profiled/selected, or nullptr)
 
-    if (do_profile) cudaEventRecord(evt_gemm2_end_, stream);
+    if (do_profile) RecordEvent(Evt::Gemm2End, stream);
 
     // ----- Fused MulTopkWeight + Sum: intermediate_cache3 → output [tokens, hidden_size] -----
+    if (do_profile) RecordEvent(Evt::MulSumStart, stream);
     if (use_expert_parallel) {
       llm_kernels::nvidia::InvokeMoeFusedMulSum<T, true>(
           ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
@@ -871,16 +992,21 @@ Status HummingFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* g
           ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
           static_cast<int>(total_tokens), static_cast<int>(expert_topk_), static_cast<int>(hidden_size), stream);
     }
+    if (do_profile) RecordEvent(Evt::MulSumEnd, stream);
 
     // Record per-GEMM times (humming has no chunk loop, single set of events per Forward;
     // accumulate across Forward calls so the caller can sum over a benchmark loop)
     if (do_profile) {
-      cudaEventSynchronize(evt_gemm2_end_);
-      float gemm1_ms = 0.f, gemm2_ms = 0.f;
-      cudaEventElapsedTime(&gemm1_ms, evt_gemm1_start_, evt_gemm1_end_);
-      cudaEventElapsedTime(&gemm2_ms, evt_gemm2_start_, evt_gemm2_end_);
-      perf_stats_->gemm1_time_ms += gemm1_ms;
-      perf_stats_->gemm2_time_ms += gemm2_ms;
+      cudaEventSynchronize(events_[static_cast<int>(Evt::MulSumEnd)]);
+      perf_stats_->gating_time_ms += ElapsedMs(Evt::GateStart, Evt::GateEnd);
+      perf_stats_->align_time_ms +=
+          ElapsedMs(Evt::Align1Start, Evt::Align1End) + ElapsedMs(Evt::Align2Start, Evt::Align2End);
+      perf_stats_->quant_time_ms +=
+          ElapsedMs(Evt::Quant1Start, Evt::Quant1End) + ElapsedMs(Evt::Quant2Start, Evt::Quant2End);
+      perf_stats_->gemm1_time_ms += ElapsedMs(Evt::Gemm1Start, Evt::Gemm1End);
+      perf_stats_->silu_time_ms += ElapsedMs(Evt::SiluStart, Evt::SiluEnd);
+      perf_stats_->gemm2_time_ms += ElapsedMs(Evt::Gemm2Start, Evt::Gemm2End);
+      perf_stats_->mulsum_time_ms += ElapsedMs(Evt::MulSumStart, Evt::MulSumEnd);
     }
   };
 

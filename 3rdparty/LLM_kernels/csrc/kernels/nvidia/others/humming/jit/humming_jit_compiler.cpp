@@ -31,6 +31,8 @@
 
 #include "csrc/utils/nvidia/assert.h"
 
+#include <nlohmann/json.hpp>
+
 namespace llm_kernels {
 namespace nvidia {
 namespace humming {
@@ -42,13 +44,13 @@ namespace humming {
 // section for a given cache directory.
 
 std::mutex HummingJitCompiler::dir_mutexes_mutex_;
-std::unordered_map<std::string, std::mutex*> HummingJitCompiler::dir_mutexes_;
+std::unordered_map<std::string, std::unique_ptr<std::mutex>> HummingJitCompiler::dir_mutexes_;
 
 std::mutex* HummingJitCompiler::GetDirMutex(const std::string& dir) {
   std::lock_guard<std::mutex> lg(dir_mutexes_mutex_);
   auto& ptr = dir_mutexes_[dir];
-  if (!ptr) ptr = new std::mutex();
-  return ptr;
+  if (!ptr) ptr = std::make_unique<std::mutex>();
+  return ptr.get();
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -236,6 +238,11 @@ int ExecuteCommand(const std::string& cmd, std::string* output = nullptr) {
 }
 
 /// Create directory recursively (like mkdir -p).
+// NOTE: std::filesystem::create_directories would be cleaner, but we keep the
+// shell-based approach for now.  See the note at the rm -rf cleanup below for
+// the libtorch.so std::filesystem symbol conflict that affects this codebase.
+// Once the symbol conflict is resolved, migrate both MkdirP and the rm -rf
+// cleanup to std::filesystem.
 void MkdirP(const std::string& path) {
   std::string cmd = "mkdir -p \"" + path + "\"";
   int ret = ExecuteCommand(cmd);
@@ -310,20 +317,6 @@ std::string ResolveLocalIncludeDir() {
 }  // anonymous namespace
 
 // ════════════════════════════════════════════════════════════════════════════════
-// KernelConfig
-// ════════════════════════════════════════════════════════════════════════════════
-
-std::string HummingJitCompiler::KernelConfig::CacheKey() const {
-  std::ostringstream oss;
-  oss << "n" << size_n << "_k" << size_k << "_e" << num_experts << "_bm" << block_m << "_gt"
-      << static_cast<int>(gemm_type) << "_dt" << static_cast<int>(compute_dtype);
-  if (force_stream_k) oss << "_fsk1";
-  if (force_block_n > 0) oss << "_fbn" << force_block_n;
-  if (force_stages > 0) oss << "_fns" << force_stages;
-  return oss.str();
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
 // Constructor / Destructor
 // ════════════════════════════════════════════════════════════════════════════════
 
@@ -393,20 +386,33 @@ HummingJitCompiler::~HummingJitCompiler() {
 // Public API
 // ════════════════════════════════════════════════════════════════════════════════
 
-void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs) {
+void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs, bool compile_extend_configs) {
+  // When compile_extend_configs is false, skip extend/variant configs to save
+  // compilation time.  Only heuristic configs (is_heuristic == true) are compiled.
+  // The caller (MoE layer) decides this based on whether profiling is enabled
+  // (QUANT_PROFILE != 0), keeping environment-variable reading out of the JIT
+  // compiler for clean separation of concerns.
+  std::vector<const KernelConfig*> filtered_configs;
+  for (const auto& config : configs) {
+    if (!compile_extend_configs && !config.is_heuristic) continue;
+    filtered_configs.push_back(&config);
+  }
+
+  if (filtered_configs.empty()) return;
+
   if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
-    std::cout << "[HUMMING JIT] CompileKernels: " << configs.size() << " config(s)"
+    std::cout << "[HUMMING JIT] CompileKernels: " << filtered_configs.size() << " config(s)"
               << (force_regenerate_ ? " (force regenerate)" : "") << std::endl;
   }
 
   // Phase 1: Separate cached vs. uncached configs
   std::vector<const KernelConfig*> cached, uncached;
-  for (const auto& config : configs) {
-    if (!force_regenerate_ && CacheExists(config)) {
-      cached.push_back(&config);
+  for (const auto* config : filtered_configs) {
+    if (!force_regenerate_ && CacheExists(*config)) {
+      cached.push_back(config);
     } else {
-      uncached.push_back(&config);
+      uncached.push_back(config);
     }
   }
 
@@ -416,7 +422,7 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
 
   // Phase 2: Fast path — load already-cached cubins in main thread
   for (const auto* config : cached) {
-    std::string key = config->CacheKey();
+    std::string key = config->cache_key;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (loaded_keys_.count(key)) continue;  // already loaded from a prior CompileKernels call
@@ -451,7 +457,7 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
 
         if (verbose_) {
           std::lock_guard<std::mutex> _ll(log_mutex_);
-          std::cout << "[HUMMING JIT]   [build] " << config->CacheKey() << std::endl;
+          std::cout << "[HUMMING JIT]   [build] " << config->cache_key << std::endl;
         }
 
         // Intra-process lock: flock() does NOT block sibling threads in the
@@ -480,27 +486,36 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
         try {
           GenerateSource(*config, source_path);
           CompileCubin(source_path, cubin_path, include_dir_);
-        } catch (...) {
+        } catch (const std::exception& e) {
           ReleaseLock(lock_fd);
-          throw;
+          // Compilation failure (e.g., insufficient registers, smem limit) —
+          // log warning and skip this config. Not fatal: the profiler will
+          // just have fewer candidates to choose from.
+          if (verbose_) {
+            std::lock_guard<std::mutex> _ll(log_mutex_);
+            std::cerr << "[HUMMING JIT] WARNING: Compilation failed for " << config->cache_key
+                      << ", skipping. Error: " << e.what() << std::endl;
+          }
+          --active_count;
+          return;
         }
         ReleaseLock(lock_fd);
         // Defer loading to Phase 4 (main thread has CUDA context)
 
+        --active_count;
         if (verbose_) {
-          --active_count;
           std::lock_guard<std::mutex> _ll(log_mutex_);
           std::cout << "[HUMMING JIT]     compiled (" << active_count.load() << " remaining)" << std::endl;
         }
       } catch (const std::exception& e) {
         if (!has_error.exchange(true)) {
           std::lock_guard<std::mutex> lg(error_mutex);
-          error_msg = std::string(e.what()) + " (config: " + config->CacheKey() + ")";
+          error_msg = std::string(e.what()) + " (config: " + config->cache_key + ")";
         }
       } catch (...) {
         if (!has_error.exchange(true)) {
           std::lock_guard<std::mutex> lg(error_mutex);
-          error_msg = "Unknown exception (config: " + config->CacheKey() + ")";
+          error_msg = "Unknown exception (config: " + config->cache_key + ")";
         }
       }
     });
@@ -517,12 +532,13 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
   // Spawned threads (Phase 3) do not inherit the main thread's CUDA context,
   // so we load here where the context is guaranteed to be active.
   for (const auto* config : uncached) {
-    std::string key = config->CacheKey();
+    std::string key = config->cache_key;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (loaded_keys_.count(key)) continue;  // already loaded from a prior CompileKernels call
     }
     std::string cubin_path = GetCacheDir(*config) + "/kernel.cubin";
+    if (!FileExists(cubin_path)) continue;  // skip configs that failed to compile in Phase 3
     LoadAndRegister(*config, cubin_path);
     std::lock_guard<std::mutex> lock(mutex_);
     loaded_keys_.insert(key);
@@ -530,7 +546,7 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
 }
 
 void HummingJitCompiler::CompileKernels(int64_t size_n, int64_t size_k, int64_t num_experts, ComputeDtype compute_dtype,
-                                        GemmType gemm_type) {
+                                        GemmType gemm_type, bool compile_extend_configs) {
   // Fast path: skip if this shape has already been compiled
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -549,7 +565,7 @@ void HummingJitCompiler::CompileKernels(int64_t size_n, int64_t size_k, int64_t 
   auto configs = QueryKernelConfigs(size_n, size_k, num_experts, compute_dtype, gemm_type);
 
   // Compile all configs (vector overload — handles cache/load dedup internally)
-  CompileKernels(configs);
+  CompileKernels(configs, compile_extend_configs);
 
   // Mark shape as compiled
   {
@@ -607,24 +623,30 @@ void HummingJitCompiler::GenerateSource(const KernelConfig& config, const std::s
   std::ostringstream cmd;
   cmd << "python3 " << humming_tool_path_ << " generate"
       << " --size_n " << config.size_n << " --size_k " << config.size_k << " --num_experts " << config.num_experts
-      << " --block_m " << config.block_m << " --gemm_type " << static_cast<int>(config.gemm_type) << " --compute_dtype "
-      << static_cast<int>(config.compute_dtype) << " --output " << output_path << " --meta_output " << meta_path;
-  if (config.force_stream_k) cmd << " --force_stream_k 1";
-  if (config.force_block_n > 0) cmd << " --force_block_n " << config.force_block_n;
-  if (config.force_stages > 0) cmd << " --force_stages " << config.force_stages;
+      << " --compute_dtype " << static_cast<int>(config.compute_dtype) << " --gemm_type "
+      << static_cast<int>(config.gemm_type) << " --block_m " << config.block_m << " --block_n " << config.block_n
+      << " --block_k " << config.block_k << " --warp_shape_m " << config.warp_shape[0] << " --warp_shape_n "
+      << config.warp_shape[1] << " --warp_shape_k " << config.warp_shape[2] << " --use_stream_k "
+      << (config.use_stream_k ? 1 : 0) << " --num_stages " << config.num_stages << " --num_ctas_per_sm "
+      << config.num_ctas_per_sm << " --use_tma_a " << (config.use_tma_a ? 1 : 0) << " --use_tma_b "
+      << (config.use_tma_b ? 1 : 0) << " --use_tma_c " << (config.use_tma_c ? 1 : 0) << " --use_tma_bs "
+      << (config.use_tma_bs ? 1 : 0) << " --use_mbarrier " << (config.use_mbarrier ? 1 : 0) << " --use_warp_spec "
+      << (config.use_warp_spec ? 1 : 0) << " --use_f16_accum " << (config.use_f16_accum ? 1 : 0) << " --output "
+      << output_path << " --meta_output " << meta_path;
 
   if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
     std::cout << "[HUMMING JIT]     python: humming_tool.py generate"
               << " N=" << config.size_n << " K=" << config.size_k << " E=" << config.num_experts
-              << " block_m=" << config.block_m << " gt=" << static_cast<int>(config.gemm_type)
-              << " dt=" << static_cast<int>(config.compute_dtype) << std::endl;
+              << " block_m=" << config.block_m << " block_n=" << config.block_n << " block_k=" << config.block_k
+              << " sk=" << config.use_stream_k << " stages=" << config.num_stages << " ctas=" << config.num_ctas_per_sm
+              << std::endl;
   }
 
   std::string output;
   int ret = ExecuteCommand(cmd.str(), &output);
   KLLM_KERNEL_CHECK_WITH_INFO(ret == 0, "humming_tool.py generate failed (exit=%d) for config %s.\nOutput: %s", ret,
-                              config.CacheKey().c_str(), output.c_str());
+                              config.cache_key.c_str(), output.c_str());
   KLLM_KERNEL_CHECK_WITH_INFO(FileExists(output_path), "humming_tool.py generate did not produce output file: %s",
                               output_path.c_str());
 }
@@ -690,11 +712,20 @@ void HummingJitCompiler::LoadAndRegister(const KernelConfig& config, const std::
   // CUDA_ERROR_INVALID_IMAGE (201) usually means the cubin was corrupted by a
   // prior buggy parallel compilation.  Delete it so the next run regenerates.
   if (cu_ret == 201) {
-    std::cerr << "[HUMMING JIT] WARNING: Corrupted cubin detected (CUresult=201), "
-              << "deleting: " << cubin_path << std::endl;
-    std::cerr << "[HUMMING JIT] This was likely caused by a prior race condition. "
-              << "Please re-run to regenerate." << std::endl;
-    // Delete the cached files for this config so next run regenerates them
+    if (verbose_) {
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cerr << "[HUMMING JIT] WARNING: Corrupted cubin detected (CUresult=201), "
+                << "deleting: " << cubin_path << std::endl;
+      std::cerr << "[HUMMING JIT] This was likely caused by a prior race condition. "
+                << "Please re-run to regenerate." << std::endl;
+    }
+    // Delete the cached files for this config so next run regenerates them.
+    // NOTE: Uses shell "rm -rf" instead of std::filesystem::remove_all because
+    // libtorch.so exports a buggy std::filesystem::remove_all symbol that
+    // overrides the standard library version via symbol interposition, causing
+    // SIGSEGV (null function pointer dereference).  See DeepGEMM's
+    // removeDirectoryRecursive in compiler.cuh for the same issue.  Once the
+    // symbol conflict is resolved, switch to std::filesystem::remove_all.
     std::string dir = cubin_path.substr(0, cubin_path.rfind('/'));
     std::string rm_cmd = "rm -rf \"" + dir + "\" 2>/dev/null";
     ExecuteCommand(rm_cmd);
@@ -769,7 +800,7 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelCon
                                                                                      int64_t num_experts,
                                                                                      ComputeDtype compute_dtype,
                                                                                      GemmType gemm_type) {
-  // Call Python script to query humming heuristic
+  // Call Python script to query humming heuristic + generate variants
   std::ostringstream cmd;
   cmd << "python3 " << humming_tool_path_ << " query-configs"
       << " --size_n " << size_n << " --size_k " << size_k << " --num_experts " << num_experts << " --compute_dtype "
@@ -784,155 +815,132 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelCon
   std::string output;
   int ret = ExecuteCommand(cmd.str(), &output);
 
+  // Helper lambda to parse a single config from JSON
+  auto parse_config = [&](const nlohmann::json& item) {
+    KernelConfig cfg;
+    cfg.size_n = size_n;
+    cfg.size_k = size_k;
+    cfg.num_experts = num_experts;
+    cfg.gemm_type = gemm_type;
+    cfg.compute_dtype = compute_dtype;
+    cfg.min_shape_m = item.at("min_shape_m").get<int64_t>();
+    cfg.max_shape_m = item.at("max_shape_m").get<int64_t>();
+    cfg.block_m = item.at("block_m").get<int>();
+    cfg.block_n = item.at("block_n").get<int>();
+    cfg.block_k = item.at("block_k").get<int>();
+    const auto& ws = item.at("warp_shape");
+    cfg.warp_shape = {ws[0].get<int>(), ws[1].get<int>(), ws[2].get<int>()};
+    cfg.use_stream_k = item.at("use_stream_k").get<bool>();
+    cfg.num_stages = item.at("num_stages").get<int>();
+    cfg.num_ctas_per_sm = item.at("num_ctas_per_sm").get<int>();
+    cfg.use_tma_a = item.at("use_tma_a").get<bool>();
+    cfg.use_tma_b = item.at("use_tma_b").get<bool>();
+    cfg.use_tma_c = item.at("use_tma_c").get<bool>();
+    cfg.use_tma_bs = item.at("use_tma_bs").get<bool>();
+    cfg.use_mbarrier = item.at("use_mbarrier").get<bool>();
+    cfg.use_warp_spec = item.at("use_warp_spec").get<bool>();
+    cfg.use_f16_accum = item.at("use_f16_accum").get<bool>();
+    cfg.cache_key = item.at("cache_key").get<std::string>();
+    cfg.is_heuristic = item.at("is_heuristic").get<bool>();
+    return cfg;
+  };
+
   std::vector<KernelConfig> configs;
 
   if (ret != 0 || output.empty()) {
     // Fallback: use default block_m={64, 128}
-    configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 1, 64});
-    configs.push_back({size_n, size_k, num_experts, 128, gemm_type, compute_dtype, 65, INT64_MAX});
+    if (verbose_) {
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cout << "[HUMMING JIT]   query-configs failed (exit=" << ret << "), using fallback" << std::endl;
+    }
+    for (int bm : {64, 128}) {
+      KernelConfig cfg;
+      cfg.size_n = size_n;
+      cfg.size_k = size_k;
+      cfg.num_experts = num_experts;
+      cfg.gemm_type = gemm_type;
+      cfg.compute_dtype = compute_dtype;
+      cfg.block_m = bm;
+      cfg.min_shape_m = (bm == 64) ? 1 : 65;
+      cfg.max_shape_m = (bm == 64) ? 64 : INT64_MAX;
+      cfg.block_n = 128;
+      cfg.block_k = 64;
+      cfg.warp_shape = {16, 128, 64};
+      cfg.use_stream_k = true;
+      cfg.num_stages = 3;
+      cfg.num_ctas_per_sm = 1;
+      cfg.use_tma_a = true;
+      cfg.use_tma_b = true;
+      cfg.use_tma_c = true;
+      cfg.use_tma_bs = true;
+      cfg.use_mbarrier = true;
+      cfg.use_warp_spec = false;
+      cfg.use_f16_accum = false;
+      cfg.is_heuristic = true;
+      std::ostringstream oss;
+      oss << "n" << size_n << "_k" << size_k << "_e" << num_experts << "_dt" << static_cast<int>(compute_dtype) << "_gt"
+          << static_cast<int>(gemm_type) << "_bm" << bm
+          << "_bn128_bk64_wp16x128x64_sk1_stages3_ctas1_tma1111_mbar1_wspec0_f16acc0";
+      cfg.cache_key = oss.str();
+      configs.push_back(cfg);
+    }
     return configs;
   }
 
-  // Parse JSON output: [{"shape_m_representative": N, "min_shape_m": M1, "max_shape_m": M2, ...}, ...]
-  // Simple JSON parsing (no external dependency)
-  size_t pos = 0;
-  while ((pos = output.find("\"shape_m_representative\"", pos)) != std::string::npos) {
-    // Extract shape_m_representative (used as --block_m in humming_tool.py generate)
-    size_t colon = output.find(':', pos);
-    size_t comma = output.find_first_of(",}", colon);
-    std::string val_str = output.substr(colon + 1, comma - colon - 1);
-    // Trim whitespace
-    val_str.erase(0, val_str.find_first_not_of(" \t\n\r"));
-    val_str.erase(val_str.find_last_not_of(" \t\n\r") + 1);
-    int block_m = std::stoi(val_str);
+  try {
+    auto parsed = nlohmann::json::parse(output);
+    const auto& heuristic = parsed["heuristic_configs"];
+    const auto& extend = parsed["extend_configs"];
 
-    // Extract min_shape_m
-    size_t min_pos = output.find("\"min_shape_m\"", pos);
-    colon = output.find(':', min_pos);
-    comma = output.find_first_of(",}", colon);
-    val_str = output.substr(colon + 1, comma - colon - 1);
-    val_str.erase(0, val_str.find_first_not_of(" \t\n\r"));
-    val_str.erase(val_str.find_last_not_of(" \t\n\r") + 1);
-    int64_t min_m = std::stoll(val_str);
-
-    // Extract max_shape_m
-    size_t max_pos = output.find("\"max_shape_m\"", pos);
-    colon = output.find(':', max_pos);
-    comma = output.find_first_of(",}", colon);
-    val_str = output.substr(colon + 1, comma - colon - 1);
-    val_str.erase(0, val_str.find_first_not_of(" \t\n\r"));
-    val_str.erase(val_str.find_last_not_of(" \t\n\r") + 1);
-    int64_t max_m = std::stoll(val_str);
-
-    configs.push_back({size_n, size_k, num_experts, block_m, gemm_type, compute_dtype, min_m, max_m});
-
-    pos = (max_pos != std::string::npos) ? max_pos + 1 : comma + 1;
-  }
-
-  // GEMM2 optimization: detect small-K large-N shapes and inject optimized configs.
-  // The Python heuristic disables stream-K for K<=1024 and always uses block_n=128,
-  // both suboptimal for GEMM2's (small K, large N) shape at small-medium M.
-  // For large M (3073+), the heuristic configs (block_n=128, stream_k=false, stages=4)
-  // are already near-optimal, so we keep them and only override small-medium M.
-  if (size_k <= 512 && size_n >= 4096) {
-    // Remove heuristic configs for small-medium M (they use stream_k=false, block_n=128)
-    // Keep heuristic configs for large M (3073+) — they're optimal for large M
-    configs.erase(
-        std::remove_if(configs.begin(), configs.end(), [](const KernelConfig& c) { return c.max_shape_m <= 3072; }),
-        configs.end());
-
-    // Add optimized configs for small-medium M only
-    // Small M (1-64 tokens, M_eff=6-384): block_m=64, stream-K, block_n=256, stages=3
-    configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 1, 384, true, 256, 3});
-    // Medium M (65-512 tokens, M_eff=390-3072): block_m=64, stream-K, block_n=256, stages=3
-    configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 385, 3072, true, 256, 3});
-
-    if (verbose_) {
-      std::lock_guard<std::mutex> _ll(log_mutex_);
-      std::cout << "[HUMMING JIT]   GEMM2 override: " << configs.size()
-                << " config(s) (small-M stream_k=true, block_n=256; large-M heuristic)" << std::endl;
+    for (const auto& item : heuristic) {
+      configs.push_back(parse_config(item));
     }
-  }
-
-  // ── Variant config generation ──────────────────────────────────────────
-  // Generate variant configs to expand the candidate space for profile-based
-  // kernel selection. The profiler uses real weights (not dummy), so TMA
-  // descriptor layout is correct for all block_n/block_k combinations.
-  // For each heuristic config, generate up to 3 variants by flipping dimensions
-  // the heuristic may have chosen suboptimally for H20. Priority order:
-  //   1. stream_k variant (force stream_k ON; flip false→true only)
-  //   2. block_n variant (try 256 instead of heuristic 128)
-  //   3. stages variant (try stages=3 as alternative)
-  // Generate up to 3 variants per source config (dedup may reduce count).
-  // Hard cap: 25 total configs (enforced by dedup + truncation below).
-  {
-    std::vector<KernelConfig> base_configs = configs;  // snapshot before adding variants
-    for (const auto& base : base_configs) {
-      std::vector<KernelConfig> variants;
-      // 1. stream_k variant (force stream_k ON)
-      // Only flip false→true: force_stream_k==false means "use heuristic" (not
-      // "force off") since GenerateSource only emits --force_stream_k 1 when
-      // true. Flipping true→false would just reproduce the heuristic default
-      // and likely duplicate an existing config.
-      if (!base.force_stream_k) {
-        KernelConfig v = base;
-        v.force_stream_k = true;
-        // Keep heuristic block_n/stages by leaving force_block_n/force_stages as inherited
-        // (force_stream_k overrides use_stream_k in GenerateSource)
-        variants.push_back(v);
-      }
-      // 2. block_n variant (try 256 instead of heuristic 128)
-      {
-        KernelConfig v = base;
-        // Heuristic default is 128 for these shapes; 256 may improve large-N
-        // throughput by reducing block count.
-        v.force_block_n = 256;
-        variants.push_back(v);
-      }
-      // 3. stages variant (try stages=3 as alternative)
-      {
-        KernelConfig v = base;
-        // We don't know the heuristic stages here; pick stages=3 as a common alternative
-        v.force_stages = 3;
-        variants.push_back(v);
-      }
-
-      // Dedup variants against existing configs (by block_m, force_stream_k, force_block_n, force_stages)
-      for (auto& v : variants) {
-        if (configs.size() >= 25) break;  // hard cap
-        bool dup = false;
-        for (const auto& c : configs) {
-          if (c.block_m == v.block_m && c.force_stream_k == v.force_stream_k && c.force_block_n == v.force_block_n &&
-              c.force_stages == v.force_stages) {
-            dup = true;
-            break;
-          }
-        }
-        if (!dup) {
-          configs.push_back(v);
-        }
-      }
-      if (configs.size() >= 25) break;
+    for (const auto& item : extend) {
+      configs.push_back(parse_config(item));
     }
 
     if (verbose_) {
       std::lock_guard<std::mutex> _ll(log_mutex_);
-      std::cout << "[HUMMING JIT]   variant generation: " << configs.size() << " config(s) total (heuristic + variants)"
+      std::cout << "[HUMMING JIT]   heuristic: " << heuristic.size() << ", extend: " << extend.size() << " config(s)"
                 << std::endl;
     }
-  }
-
-  if (configs.empty()) {
-    // Fallback
+  } catch (const nlohmann::json::exception& e) {
+    // JSON parse error — fallback
     if (verbose_) {
       std::lock_guard<std::mutex> _ll(log_mutex_);
-      std::cout << "[HUMMING JIT]   heuristic query returned empty, using fallback configs" << std::endl;
+      std::cout << "[HUMMING JIT]   JSON parse error: " << e.what() << ", using fallback" << std::endl;
     }
-    configs.push_back({size_n, size_k, num_experts, 64, gemm_type, compute_dtype, 1, 64});
-    configs.push_back({size_n, size_k, num_experts, 128, gemm_type, compute_dtype, 65, INT64_MAX});
-  } else if (verbose_) {
-    std::lock_guard<std::mutex> _ll(log_mutex_);
-    std::cout << "[HUMMING JIT]   heuristic returned " << configs.size() << " config(s)" << std::endl;
+    for (int bm : {64, 128}) {
+      KernelConfig cfg;
+      cfg.size_n = size_n;
+      cfg.size_k = size_k;
+      cfg.num_experts = num_experts;
+      cfg.gemm_type = gemm_type;
+      cfg.compute_dtype = compute_dtype;
+      cfg.block_m = bm;
+      cfg.min_shape_m = (bm == 64) ? 1 : 65;
+      cfg.max_shape_m = (bm == 64) ? 64 : INT64_MAX;
+      cfg.block_n = 128;
+      cfg.block_k = 64;
+      cfg.warp_shape = {16, 128, 64};
+      cfg.use_stream_k = true;
+      cfg.num_stages = 3;
+      cfg.num_ctas_per_sm = 1;
+      cfg.use_tma_a = true;
+      cfg.use_tma_b = true;
+      cfg.use_tma_c = true;
+      cfg.use_tma_bs = true;
+      cfg.use_mbarrier = true;
+      cfg.use_warp_spec = false;
+      cfg.use_f16_accum = false;
+      cfg.is_heuristic = true;
+      std::ostringstream oss;
+      oss << "n" << size_n << "_k" << size_k << "_e" << num_experts << "_dt" << static_cast<int>(compute_dtype) << "_gt"
+          << static_cast<int>(gemm_type) << "_bm" << bm
+          << "_bn128_bk64_wp16x128x64_sk1_stages3_ctas1_tma1111_mbar1_wspec0_f16acc0";
+      cfg.cache_key = oss.str();
+      configs.push_back(cfg);
+    }
   }
 
   return configs;
@@ -948,7 +956,7 @@ bool HummingJitCompiler::CacheExists(const KernelConfig& config) const {
 }
 
 std::string HummingJitCompiler::GetCacheDir(const KernelConfig& config) const {
-  return cache_dir_ + "/" + config.CacheKey();
+  return cache_dir_ + "/" + config.cache_key;
 }
 
 // ════════════════════════════════════════════════════════════════════════════════

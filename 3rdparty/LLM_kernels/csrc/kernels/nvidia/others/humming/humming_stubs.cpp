@@ -23,13 +23,11 @@ namespace humming {
 // HummingJitCompiler stubs
 // ============================================================================
 
-std::string HummingJitCompiler::KernelConfig::CacheKey() const { return "stub"; }
-
 HummingJitCompiler::HummingJitCompiler() {}
 HummingJitCompiler::~HummingJitCompiler() {}
 
-void HummingJitCompiler::CompileKernels(int64_t, int64_t, int64_t, ComputeDtype, GemmType) {}
-void HummingJitCompiler::CompileKernels(const std::vector<HummingJitCompiler::KernelConfig>&) {}
+void HummingJitCompiler::CompileKernels(int64_t, int64_t, int64_t, ComputeDtype, GemmType, bool) {}
+void HummingJitCompiler::CompileKernels(const std::vector<HummingJitCompiler::KernelConfig>&, bool) {}
 
 const KernelMeta* HummingJitCompiler::SelectKernel(int64_t, int64_t, int64_t, GemmType, ComputeDtype) const {
   return nullptr;

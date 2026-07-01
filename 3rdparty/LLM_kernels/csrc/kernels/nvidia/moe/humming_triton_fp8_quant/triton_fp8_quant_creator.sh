@@ -39,6 +39,11 @@ for N in "${!N_SET[@]}"; do
     python "${DIR}/generate_triton_fp8_quant.py" \
         --n "${N}" \
         --output_dir "${OUTPUT_DIR}"
+
+    echo "Generating triton fused SiluAndMul+FP8 quant kernel for N=${N}..."
+    python "${DIR}/generate_triton_silu_mul_quant.py" \
+        --n "${N}" \
+        --output_dir "${OUTPUT_DIR}"
 done
 
 echo "Done. Generated kernels for ${#N_SET[@]} N values."

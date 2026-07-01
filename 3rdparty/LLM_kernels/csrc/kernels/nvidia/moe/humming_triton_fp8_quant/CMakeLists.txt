@@ -3,6 +3,7 @@
 file(GLOB_RECURSE TRITON_FP8_QUANT_ALL_FILES
   triton_fp8_quant_creator.sh
   generate_triton_fp8_quant.py
+  generate_triton_silu_mul_quant.py
 )
 
 set(TRITON_FP8_QUANT_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/triton_fp8_quant_md5_sum)

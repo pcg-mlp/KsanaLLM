@@ -1,0 +1,10 @@
+# clangd configuration for KsanaLLM
+# Docs: https://clangd.llvm.org/config
+
+CompileFlags:
+  CompilationDatabase: build/
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes

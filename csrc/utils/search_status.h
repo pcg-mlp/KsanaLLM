@@ -145,6 +145,7 @@ class HummingMoeSearchStatus {
   struct ProfiledSchedule {
     std::vector<int64_t> size_ms;
     std::vector<const llm_kernels::nvidia::humming::KernelMeta*> metas;
+    std::vector<int> block_ms;  // parallel to metas: block_m of each profiled kernel (for tile-waste calc)
   };
 
   bool IsProfiled(int64_t n, int64_t k, int64_t e, int dt, int gt) const {
@@ -161,18 +162,39 @@ class HummingMoeSearchStatus {
   // If requested > max profiled, returns the largest profiled entry (large-M trend is consistent).
   // Returns nullptr if this (N,K,E,dt,gt) has not been profiled.
   const llm_kernels::nvidia::humming::KernelMeta* GetProfiledMeta(int64_t n, int64_t k, int64_t e, int dt, int gt,
-                                                                  int64_t size_m) const {
+                                                                   int64_t size_m) const {
     std::string key = fmt::format("({},{},{},{},{})", n, k, e, dt, gt);
     auto it = humming_moe_schedule_cache_.find(key);
     if (it == humming_moe_schedule_cache_.end()) return nullptr;
     const auto& sched = it->second;
     if (sched.size_ms.empty()) return nullptr;
-    // Binary search: first size_m >= requested
+    // Right-align: find smallest profiled size_m >= requested
     auto idx_it = std::lower_bound(sched.size_ms.begin(), sched.size_ms.end(), size_m);
+    size_t idx;
     if (idx_it != sched.size_ms.end()) {
-      return sched.metas[std::distance(sched.size_ms.begin(), idx_it)];
+      idx = static_cast<size_t>(std::distance(sched.size_ms.begin(), idx_it));
+    } else {
+      return sched.metas.back();  // requested > max → use largest
     }
-    return sched.metas.back();  // requested > max → use largest
+    // Tile-waste-aware: if right-aligned kernel has >25% padding waste at actual M,
+    // check the next-lower bucket. Pick whichever has less waste.
+    // This corrects the right-align bias toward larger block_m kernels that waste
+    // more on padding at the actual (smaller) M.
+    if (idx < sched.block_ms.size() && sched.block_ms[idx] > 0 && size_m > 0) {
+      int64_t block_m_right = sched.block_ms[idx];
+      int64_t padded_right = ((size_m + block_m_right - 1) / block_m_right) * block_m_right;
+      double waste_right = static_cast<double>(padded_right - size_m) / static_cast<double>(size_m);
+      if (waste_right > 0.25 && idx > 0 && (idx - 1) < sched.block_ms.size() && sched.block_ms[idx - 1] > 0) {
+        int64_t block_m_left = sched.block_ms[idx - 1];
+        int64_t padded_left = ((size_m + block_m_left - 1) / block_m_left) * block_m_left;
+        double waste_left = static_cast<double>(padded_left - size_m) / static_cast<double>(size_m);
+        // Prefer left only if it has meaningfully less waste (>5pp difference)
+        if (waste_left < waste_right - 0.05) {
+          return sched.metas[idx - 1];
+        }
+      }
+    }
+    return sched.metas[idx];
   }
 
   void ClearHummingMoeSchedule() { humming_moe_schedule_cache_.clear(); }

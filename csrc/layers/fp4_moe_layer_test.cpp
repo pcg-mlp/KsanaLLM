@@ -35,6 +35,20 @@ struct BenchResult {
   float total_ms;
   float gemm1_ms;
   float gemm2_ms;
+  float nogemm_ms;  // total - gemm1 - gemm2 (driver-computed)
+  // Humming-only sub-phase breakdown (0 for marlin)
+  float gating_ms = 0.f;
+  float align_ms = 0.f;
+  float quant_ms = 0.f;
+  float silu_ms = 0.f;
+  float mulsum_ms = 0.f;
+  // Humming-only: selected JIT kernel meta (copied by value; the shared static
+  // jit_compiler_'s kernel_table_ vector may reallocate when a later backend
+  // compiles its kernels, invalidating raw pointers captured by an earlier backend).
+  bool has_gemm1_meta = false;
+  llm_kernels::nvidia::humming::KernelMeta gemm1_meta{};
+  bool has_gemm2_meta = false;
+  llm_kernels::nvidia::humming::KernelMeta gemm2_meta{};
   double gemm1_flops;
   double gemm2_flops;
   double total_flops;
@@ -714,6 +728,24 @@ BenchResult MeasureMoeCudaExecutionTime(Func&& forward, MoePerfStats* perf_stats
   br.total_ms = total_ms / iterations;
   br.gemm1_ms = perf_stats->gemm1_time_ms / iterations;
   br.gemm2_ms = perf_stats->gemm2_time_ms / iterations;
+  br.nogemm_ms = br.total_ms - br.gemm1_ms - br.gemm2_ms;
+  // Humming-only sub-phase times (0 for marlin — fields stay at default)
+  br.gating_ms = perf_stats->gating_time_ms / iterations;
+  br.align_ms = perf_stats->align_time_ms / iterations;
+  br.quant_ms = perf_stats->quant_time_ms / iterations;
+  br.silu_ms = perf_stats->silu_time_ms / iterations;
+  br.mulsum_ms = perf_stats->mulsum_time_ms / iterations;
+  // Humming-only: selected kernel meta (nullptr for marlin — same meta across all iters).
+  // Copy by value: the meta pointer points into the static jit_compiler_'s
+  // kernel_table_, which may be reallocated when a subsequent backend compiles.
+  if (perf_stats->last_gemm1_meta != nullptr) {
+    br.gemm1_meta = *perf_stats->last_gemm1_meta;
+    br.has_gemm1_meta = true;
+  }
+  if (perf_stats->last_gemm2_meta != nullptr) {
+    br.gemm2_meta = *perf_stats->last_gemm2_meta;
+    br.has_gemm2_meta = true;
+  }
   ComputeFlops(cfg, num_tokens, br.gemm1_flops, br.gemm2_flops, br.total_flops);
   ComputeBytes(cfg, num_tokens, br.gemm1_bytes, br.gemm2_bytes, br.total_bytes);
 
@@ -790,23 +822,30 @@ inline double ComputeBandwidthGBps(double bytes, float time_ms) {
 }
 
 // ===========================================================================
-// Print latency table.  Marlin is always present as the accuracy reference.
+// Print latency table.  Cell format: "g1/g2/nogemm/total" (ms, 4 decimals).
+// nogemm = total - gemm1 - gemm2 (driver-computed; works for all backends).
 // ===========================================================================
 void PrintLatencyTable(const std::string& config_name, const std::vector<std::vector<BenchResult>>& all_results) {
-  std::cout << "\n=== " << config_name << " Latency (ms) ===" << std::endl;
+  static constexpr int kCellW = 32;  // "0.0123/0.0456/0.0789/0.1368" fits in 32 chars
+
+  std::cout << "\n=== " << config_name << " Latency (ms, GEMM1 / GEMM2 / NoGEMM / Total) ===" << std::endl;
   std::cout << " " << std::setw(10) << "tokens";
-  std::cout << std::setw(16) << "Marlin";
-  std::cout << std::setw(18) << "HummingW4A16";
-  std::cout << std::setw(18) << "HummingW4A8";
+  std::cout << std::setw(kCellW) << "Marlin";
+  std::cout << std::setw(kCellW) << "HummingW4A16";
+  std::cout << std::setw(kCellW) << "HummingW4A8";
   std::cout << std::endl;
 
   for (size_t i = 0; i < kTokenSizes.size(); ++i) {
     std::cout << " " << std::setw(10) << kTokenSizes[i];
     for (size_t b = 0; b < all_results.size(); ++b) {
       if (i < all_results[b].size()) {
-        std::cout << std::setw(16) << std::fixed << std::setprecision(4) << all_results[b][i].total_ms;
+        const auto& r = all_results[b][i];
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(4) << r.gemm1_ms << "/" << r.gemm2_ms << "/" << r.nogemm_ms << "/"
+            << r.total_ms;
+        std::cout << std::setw(kCellW) << oss.str();
       } else {
-        std::cout << std::setw(16) << "N/A";
+        std::cout << std::setw(kCellW) << "N/A";
       }
     }
     std::cout << std::endl;
@@ -874,6 +913,130 @@ void PrintBandwidth(const std::string& config_name, const std::vector<std::vecto
       }
     }
     std::cout << std::endl;
+  }
+}
+
+// ===========================================================================
+// Print JIT-compiled kernel table (humming only).
+// Lists all kernel variants compiled by HummingJitCompiler for this process.
+// Called once per config, after the performance tables.
+// ===========================================================================
+void PrintJitKernelTable(const std::string& config_name, const Fp4MoeTestConfig& cfg) {
+  const auto* table = HummingFp4MoeLayer::GetJitKernelTable();
+  if (table == nullptr || table->empty()) {
+    std::cout << "\n=== " << config_name << " JIT Kernel Table: EMPTY (no JIT compiler) ===" << std::endl;
+    return;
+  }
+
+  // Problem shape header
+  size_t E = ComputeExpertsPerRank(cfg);
+  size_t N = ComputeInterPerRank(cfg);
+  size_t K = cfg.hidden_size;
+  std::cout << "\n=== " << config_name << " Problem Shapes ===" << std::endl;
+  std::cout << "  experts_per_rank=" << E << "  topk=" << 6 << "  hidden=" << K << "  inter_per_rank=" << N
+            << std::endl;
+  std::cout << "  GEMM1: N=" << N * 2 << "  K=" << K << std::endl;
+  std::cout << "  GEMM2: N=" << K << "  K=" << N << std::endl;
+
+  std::cout << "\n=== " << config_name << " JIT Kernel Table ===" << std::endl;
+  // Header
+  std::cout << " " << std::setw(6) << "dtype" << std::setw(8) << "N" << std::setw(8) << "K" << std::setw(16)
+            << "blkMxNxK" << std::setw(6) << "stg" << std::setw(6) << "cta" << std::setw(14) << "TMA(ABCS)"
+            << std::setw(6) << "SK" << std::setw(6) << "WS" << std::setw(6) << "E8M0" << std::setw(22)
+            << "shapeM[min..max]" << std::endl;
+
+  // Sort by (compute_dtype, size_n) for readable output
+  std::vector<llm_kernels::nvidia::humming::KernelMeta> sorted_table(table->begin(), table->end());
+  std::sort(sorted_table.begin(), sorted_table.end(),
+            [](const llm_kernels::nvidia::humming::KernelMeta& a, const llm_kernels::nvidia::humming::KernelMeta& b) {
+              if (a.compute_dtype != b.compute_dtype) return a.compute_dtype < b.compute_dtype;
+              return a.size_n < b.size_n;
+            });
+
+  for (const auto& m : sorted_table) {
+    std::string dtype_str = (m.compute_dtype == llm_kernels::nvidia::humming::ComputeDtype::FP8) ? "FP8" : "BF16";
+    std::string blk_str = std::to_string(m.block_m) + "x" + std::to_string(m.block_n) + "x" + std::to_string(m.block_k);
+    std::string tma_str = std::string(m.use_tma_a ? "1" : "0") + std::string(m.use_tma_b ? "1" : "0") +
+                          std::string(m.use_tma_c ? "1" : "0") + std::string(m.use_tma_bs ? "1" : "0");
+    std::string shape_str = "[" + std::to_string(m.min_shape_m) + ".." + std::to_string(m.max_shape_m) + "]";
+
+    std::cout << " " << std::setw(6) << dtype_str << std::setw(8) << m.size_n << std::setw(8) << m.size_k
+              << std::setw(16) << blk_str << std::setw(6) << m.num_stages << std::setw(6) << m.num_ctas_per_sm
+              << std::setw(14) << tma_str << std::setw(6) << (m.use_stream_k ? "Y" : "N") << std::setw(6)
+              << (m.use_warp_spec ? "Y" : "N") << std::setw(6) << (m.use_fused_e8m0_scale ? "Y" : "N") << std::setw(22)
+              << shape_str << std::endl;
+  }
+}
+
+// ===========================================================================
+// Print selected kernel schedule (humming only).
+// For each token size, shows the actual KernelMeta selected at runtime for
+// GEMM1 and GEMM2 by SelectGemmMeta (profiled right-align or heuristic fallback).
+// ===========================================================================
+void PrintSelectedKernels(const std::string& config_name, const std::vector<std::vector<BenchResult>>& all_results) {
+  // Backend indices: 0=Marlin (skip), 1=HummingW4A16, 2=HummingW4A8
+  const char* humming_names[] = {"HummingW4A16", "HummingW4A8"};
+  const int humming_indices[] = {1, 2};
+
+  for (int hi = 0; hi < 2; ++hi) {
+    int b = humming_indices[hi];
+    if (b >= static_cast<int>(all_results.size())) continue;
+
+    std::cout << "\n=== " << config_name << " Selected Kernels — " << humming_names[hi] << " ===" << std::endl;
+    std::cout << " " << std::setw(10) << "tokens" << std::setw(36) << "GEMM1" << std::setw(36) << "GEMM2" << std::endl;
+
+    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+      if (i >= all_results[b].size()) break;
+      const auto& r = all_results[b][i];
+
+      auto format_meta = [](const llm_kernels::nvidia::humming::KernelMeta* m) -> std::string {
+        if (m == nullptr) return "nullptr(heuristic)";
+        std::ostringstream oss;
+        oss << m->block_m << "x" << m->block_n << "x" << m->block_k << " S" << m->num_stages << " C"
+            << m->num_ctas_per_sm << (m->use_stream_k ? " [SK]" : "");
+        return oss.str();
+      };
+
+      std::cout << " " << std::setw(10) << kTokenSizes[i] << std::setw(36)
+                << format_meta(r.has_gemm1_meta ? &r.gemm1_meta : nullptr) << std::setw(36)
+                << format_meta(r.has_gemm2_meta ? &r.gemm2_meta : nullptr) << std::endl;
+    }
+  }
+}
+
+// ===========================================================================
+// Print non-GEMM kernel breakdown (humming only).
+// For each token size, shows per-phase times: gating, align, quant, silu,
+// mulsum, other (residual), nogemm (total-gemm1-gemm2), nogemm%.
+// other = nogemm - (gating + align + quant + silu + mulsum) — captures memsets + gaps.
+// ===========================================================================
+void PrintHummingNonGemmBreakdown(const std::string& config_name,
+                                  const std::vector<std::vector<BenchResult>>& all_results) {
+  const char* humming_names[] = {"HummingW4A16", "HummingW4A8"};
+  const int humming_indices[] = {1, 2};
+
+  for (int hi = 0; hi < 2; ++hi) {
+    int b = humming_indices[hi];
+    if (b >= static_cast<int>(all_results.size())) continue;
+
+    std::cout << "\n=== " << config_name << " Non-GEMM Breakdown (ms) — " << humming_names[hi] << " ===" << std::endl;
+    std::cout << " " << std::setw(10) << "tokens" << std::setw(10) << "gating" << std::setw(10) << "align"
+              << std::setw(10) << "quant" << std::setw(10) << "silu" << std::setw(10) << "mulsum" << std::setw(10)
+              << "other" << std::setw(10) << "nogemm" << std::setw(10) << "nogemm%" << std::endl;
+
+    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+      if (i >= all_results[b].size()) break;
+      const auto& r = all_results[b][i];
+
+      float measured = r.gating_ms + r.align_ms + r.quant_ms + r.silu_ms + r.mulsum_ms;
+      float other = r.nogemm_ms - measured;
+      float nogemm_pct = (r.total_ms > 0.f) ? (r.nogemm_ms / r.total_ms * 100.f) : 0.f;
+
+      std::cout << " " << std::setw(10) << kTokenSizes[i] << std::fixed << std::setprecision(4) << std::setw(10)
+                << r.gating_ms << std::setw(10) << r.align_ms << std::setw(10) << r.quant_ms << std::setw(10)
+                << r.silu_ms << std::setw(10) << r.mulsum_ms << std::setw(10) << other << std::setw(10) << r.nogemm_ms
+                << std::setw(9) << std::setprecision(1) << nogemm_pct << "%" << std::endl;
+    }
   }
 }
 
@@ -1014,6 +1177,11 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
     std::cout << "\n=== " << cfg.name << " TFLOPS: SKIPPED (EP — per-rank FLOPs depend on "
               << "token-expert distribution)" << std::endl;
   }
+
+  // Humming-only detailed analysis (printed for all configs, TP and EP)
+  PrintJitKernelTable(cfg.name, cfg);
+  PrintSelectedKernels(cfg.name, all_results);
+  PrintHummingNonGemmBreakdown(cfg.name, all_results);
 
   // =========================================================================
   // 8. Accuracy verification (TP configs only)

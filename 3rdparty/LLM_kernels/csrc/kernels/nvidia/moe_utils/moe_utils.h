@@ -42,6 +42,15 @@ void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t*
                                 const int32_t num_experts, const int32_t block_size, const size_t numel,
                                 int32_t* cumsum, const cudaStream_t& stream);
 
+// Merged align for two block_m values (saves one topk_ids read + one align kernel launch)
+template <typename T>
+void InvokeSglMoeAlignBlockSizeMerged(T* topk_ids, int32_t* sorted_token_ids1, int32_t* expert_ids1,
+                                      int32_t* total_tokens_post_pad1, int32_t* sorted_token_ids2, int32_t* expert_ids2,
+                                      int32_t* total_tokens_post_pad2, const int32_t max_num_tokens_padded1,
+                                      const int32_t max_num_tokens_padded2, const int32_t num_experts,
+                                      const int32_t block_size1, const int32_t block_size2, const size_t numel,
+                                      int32_t* cumsum1, int32_t* cumsum2, const cudaStream_t& stream);
+
 template <typename T>
 void InvokeDynamicPerTokenScaledFP8Quant(const T* input, const float* scale, const void* scale_ub, void* output,
                                          const int hidden_size, const int num_tokens, const cudaStream_t& stream);
@@ -85,9 +94,8 @@ void InvokeFillIntToBuffer(int* output, void* fill_info, int* fill_info_on_host,
 // input: [num_tokens * topk, hidden_size], topk_weights: [num_tokens * topk] (flat float)
 // topk_ids: [num_tokens, topk] (int, for EP mask), output: [num_tokens, hidden_size]
 template <typename T, bool UseExpertParallel>
-void InvokeMoeFusedMulSum(const void* input, const float* topk_weights, const void* topk_ids,
-                          void* output, int num_tokens, int topk, int hidden_size,
-                          const cudaStream_t& stream);
+void InvokeMoeFusedMulSum(const void* input, const float* topk_weights, const void* topk_ids, void* output,
+                          int num_tokens, int topk, int hidden_size, const cudaStream_t& stream);
 
 // 根据 topk_ids 构建 active expert mask，用于 fused MoE 离线反量化路径跳过未命中专家。
 //   topk_ids: int32_t[numel]  - 每个 (token, topk-rank) 槽位上的专家 id

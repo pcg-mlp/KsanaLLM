@@ -30,10 +30,9 @@ namespace ksana_llm {
 class HummingFp4MoeLayer : public BaseMoeLayer {
  public:
   virtual ~HummingFp4MoeLayer() {
-    if (evt_gemm1_start_) cudaEventDestroy(evt_gemm1_start_);
-    if (evt_gemm1_end_) cudaEventDestroy(evt_gemm1_end_);
-    if (evt_gemm2_start_) cudaEventDestroy(evt_gemm2_start_);
-    if (evt_gemm2_end_) cudaEventDestroy(evt_gemm2_end_);
+    for (auto& e : events_) {
+      if (e) cudaEventDestroy(e);
+    }
   }
 
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -54,6 +53,11 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   // Attach a profiling stats output (nullptr = disabled, default).
   // Non-virtual — HummingFp4MoeLayer owns this API directly.
   void SetPerfStats(MoePerfStats* stats) { perf_stats_ = stats; }
+
+  // Expose the JIT compiler's kernel table for test/inspection (nullptr if no compiler).
+  // The table contains all JIT-compiled kernel variants for all shapes/dtypes compiled
+  // by any HummingFp4MoeLayer instance (jit_compiler_ is static, shared across instances).
+  static const std::vector<llm_kernels::nvidia::humming::KernelMeta>* GetJitKernelTable();
 
  private:
   template <typename T>
@@ -92,6 +96,46 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   };
   GemmMetaSelection SelectGemmMeta(int64_t size_n, int64_t size_k, int64_t size_m) const;
 
+  // --- Profiling event infrastructure ---
+  // 18 markers covering the full Forward pipeline with no gaps:
+  //   Gate | Align1 | Quant1 | Gemm1 | Silu | Align2 | Quant2 | Gemm2 | MulSum
+  // Each phase has a Start and End marker. Phases that don't apply (e.g. quant
+  // for W4A16, align2 when block_m matches GEMM1) have back-to-back markers → 0 interval.
+  enum class Evt : int {
+    GateStart,
+    GateEnd,
+    Align1Start,
+    Align1End,
+    Quant1Start,
+    Quant1End,
+    Gemm1Start,
+    Gemm1End,
+    SiluStart,
+    SiluEnd,
+    Align2Start,
+    Align2End,
+    Quant2Start,
+    Quant2End,
+    Gemm2Start,
+    Gemm2End,
+    MulSumStart,
+    MulSumEnd,
+    kCount
+  };
+
+  void EnsureProfilingEvents() {
+    if (events_.empty()) {
+      events_.resize(static_cast<size_t>(Evt::kCount));
+      for (auto& e : events_) cudaEventCreate(&e);
+    }
+  }
+  void RecordEvent(Evt e, cudaStream_t stream) { cudaEventRecord(events_[static_cast<int>(e)], stream); }
+  float ElapsedMs(Evt a, Evt b) const {
+    float ms = 0.f;
+    cudaEventElapsedTime(&ms, events_[static_cast<int>(a)], events_[static_cast<int>(b)]);
+    return ms;
+  }
+
   // Invoke MoE align block size kernel (encapsulates >=224 and EP branching).
   void InvokeAlignBlockSize(int32_t* topk_ids, int32_t* sorted_ids, int32_t* expert_ids, int32_t* num_tokens_post_pad,
                             int32_t* cumsum, int32_t max_num_tokens_padded, size_t numel, int32_t moe_block_size,
@@ -129,8 +173,11 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   // Called once per GEMM shape, reused across all buckets.
   ProfWeights PrepareDummyWeights(int64_t size_n, int64_t size_k, int64_t num_experts, cudaStream_t stream);
 
-  // Prepare dummy topk_ids with uniform distribution to experts.
-  // topk_ids[i * topk + j] = (i + j) % num_experts — ensures each expert gets tokens.
+  // Prepare dummy topk_ids with random uniform expert distribution (fixed seed=42).
+  // Matches the benchmark's expert distribution (benchmark uses torch::randn for gate
+  // values, then topk → random uniform expert assignment). At small M this naturally
+  // produces sparse/skewed load (most experts get 0 tokens), at large M it converges
+  // to uniform. Fixed seed ensures reproducibility across runs.
   static torch::Tensor MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts);
 
   // Profile a single GEMM shape at a given size_m with pre-prepared dummy weights.
@@ -168,6 +215,11 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   float swiglu_limit_ = 0.0f;
 
   llm_kernels::nvidia::humming::ComputeDtype humming_compute_dtype_;
+
+  // Profiling iteration count (read once from QUANT_PROFILE env in Init).
+  // When 0, profiling is disabled and only heuristic kernels are compiled.
+  size_t profile_iters_ = 15;
+  size_t warmup_iters_ = 5;
 
   // --- Workspace layout (all carved from a single contiguous workspace_buffer_) ---
   // Layout order:
@@ -252,11 +304,9 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   static std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler> jit_compiler_;
   static std::mutex jit_mutex_;
 
-  // GPU events for per-kernel timing (created lazily, reused across forwards)
-  cudaEvent_t evt_gemm1_start_ = nullptr;
-  cudaEvent_t evt_gemm1_end_ = nullptr;
-  cudaEvent_t evt_gemm2_start_ = nullptr;
-  cudaEvent_t evt_gemm2_end_ = nullptr;
+  // GPU events for per-phase timing (18 events, created lazily, reused across forwards).
+  // Indexed by Evt enum; see EnsureProfilingEvents().
+  std::vector<cudaEvent_t> events_;
 
   // Profiling output (nullptr = disabled)
   MoePerfStats* perf_stats_ = nullptr;

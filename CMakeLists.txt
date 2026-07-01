@@ -65,6 +65,9 @@ endif()
 # Build external libraries statically by default
 set(BUILD_SHARED_LIBS OFF)
 
+# Export compile commands for clangd / IDE support (Ninja & Makefile generators)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(WITH_CUDA)
   # support NVIDIA GPU
   project(ksana_llm LANGUAGES CXX CUDA)
