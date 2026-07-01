@@ -33,6 +33,11 @@
 #  include <cassert>
 #  include <cuda/barrier>
 #  include <stdexcept>
+// CUDA 13.0 removed the unversioned PFN_cuTensorMapEncodeTiled typedef;
+// only the versioned _v12000 variant remains. Alias it for backward compat.
+#  if CUDA_VERSION >= 13000
+using PFN_cuTensorMapEncodeTiled = PFN_cuTensorMapEncodeTiled_v12000;
+#  endif
 #endif
 
 #include <cuda_fp8.h>

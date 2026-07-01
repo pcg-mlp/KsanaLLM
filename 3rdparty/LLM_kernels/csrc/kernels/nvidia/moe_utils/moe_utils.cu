@@ -31,6 +31,7 @@
 #include <flashinfer/activation.cuh>
 
 #include "csrc/kernels/nvidia/common/vec_dtypes.cuh"
+#include "csrc/utils/nvidia/cub_compat.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels {

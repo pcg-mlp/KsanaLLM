@@ -30,16 +30,6 @@ if(HUMMING_PREPROCESS_SRCS)
       message(FATAL_ERROR "Failed to install humming-kernels (exit code: ${HUMMING_INSTALL_RESULT}). "
                           "Please install manually: pip install git+https://github.com/inclusionAI/humming.git@d596b9f")
     endif()
-
-    message(STATUS "Installing triton==3.2.0 ...")
-    execute_process(
-      COMMAND ${_HUMMING_PYTHON} -m pip install triton==3.2.0
-      RESULT_VARIABLE TRITON_INSTALL_RESULT
-    )
-    if(NOT TRITON_INSTALL_RESULT EQUAL 0)
-      message(FATAL_ERROR "Failed to install triton==3.2.0 (exit code: ${TRITON_INSTALL_RESULT}). "
-                          "Please install manually: pip install triton==3.2.0")
-    endif()
   endif()
 
   message(STATUS "Using humming local include: ${CMAKE_CURRENT_SOURCE_DIR}/../include")

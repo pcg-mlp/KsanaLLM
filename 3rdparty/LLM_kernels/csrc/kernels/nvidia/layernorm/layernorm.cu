@@ -8,6 +8,7 @@
 
 #include "csrc/kernels/nvidia/common/reduce_kernel_utils.cuh"
 #include "csrc/utils/nvidia/cuda_type_utils.cuh"
+#include "csrc/utils/nvidia/cub_compat.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
 #include <flashinfer/norm.cuh>

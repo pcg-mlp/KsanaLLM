@@ -24,6 +24,12 @@
 #include <cuda/barrier>
 #include <cute/arch/util.hpp>
 
+// CUDA 13.0 removed the unversioned PFN_cuTensorMapEncodeTiled typedef;
+// only the versioned _v12000 variant remains. Alias it for backward compat.
+#if CUDA_VERSION >= 13000
+using PFN_cuTensorMapEncodeTiled = PFN_cuTensorMapEncodeTiled_v12000;
+#endif
+
 namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::fp8_blockscale_gemm {
 
 template <class T>

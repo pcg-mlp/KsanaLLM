@@ -62,6 +62,8 @@
 #  include "3rdparty/cub/util_type.cuh"
 #endif
 
+#include "csrc/utils/nvidia/cub_compat.cuh"
+
 using namespace llm_kernels::nvidia;
 using namespace llm_kernels::utils;
 

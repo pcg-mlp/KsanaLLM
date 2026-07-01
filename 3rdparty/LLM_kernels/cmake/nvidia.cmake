@@ -209,6 +209,18 @@ set(CUDA_INC_DIRS
   ${CUDA_PATH}/include
 )
 
+# CUDA 13.0+ relocated CCCL headers (thrust, cub, nv) under a cccl/ subdirectory.
+# Detect and expose the path so that #include <thrust/...> / <cub/...> resolves.
+# On CUDA <= 12.x the headers stay at ${CUDA_PATH}/include and this block is a no-op.
+if(EXISTS "${CUDA_PATH}/include/cccl/thrust/version.h")
+  list(APPEND CUDA_INC_DIRS "${CUDA_PATH}/include/cccl")
+  set(THRUST_INCLUDE_DIR "${CUDA_PATH}/include/cccl" CACHE PATH "Thrust headers")
+  message(STATUS "Detected CCCL headers under ${CUDA_PATH}/include/cccl (CUDA 13.0+)")
+  # Make the path visible to subdirectories configured before the directory-level
+  # include_directories() call in CMakeLists.txt (e.g. flashinfer).
+  include_directories(BEFORE "${CUDA_PATH}/include/cccl")
+endif()
+
 set(CUDA_LIB_DIRS
   ${CUDA_PATH}/lib64
 )
