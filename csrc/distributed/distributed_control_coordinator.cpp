@@ -31,21 +31,48 @@ Status DistributedControlCoordinator::InitializeCluster() {
                                                    : !context_->global->IsDistributedWorker();
 
   if (is_chief) {
-    Status status = control_channel_->Listen();
-    if (!status.OK()) {
-      throw std::runtime_error(fmt::format("Listen on {}:{} error: {}", context_->global->GetMasterHost(),
-                                           context_->global->GetMasterPort(), status.GetMessage()));
+    // Port maybe not released yet by previous process, try listen at most 600 seconds.
+    const int max_try_times = 600;
+    int try_times = max_try_times;
+    while (--try_times >= 0) {
+      Status status = control_channel_->Listen();
+      if (status.OK()) {
+        break;
+      }
+
+      if (try_times == max_try_times - 1) {
+        KLLM_LOG_WARNING << "Listen on " << context_->global->GetMasterHost() << ":"
+                         << context_->global->GetMasterPort() << " failed: " << status.GetMessage()
+                         << ", will retry in " << max_try_times << " seconds.";
+      }
+
+      if (try_times == 0) {
+        KLLM_LOG_ERROR << "Listen on " << context_->global->GetMasterHost() << ":" << context_->global->GetMasterPort()
+                       << " failed after " << max_try_times << " retries: " << status.GetMessage();
+        throw std::runtime_error(fmt::format("Listen on {}:{} error: {}", context_->global->GetMasterHost(),
+                                             context_->global->GetMasterPort(), status.GetMessage()));
+      }
+      std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   } else {
     // Server maybe not ready, try connection at most 600 seconds.
-    int try_times = 600;
+    const int max_try_times = 600;
+    int try_times = max_try_times;
     while (--try_times >= 0) {
       Status status = control_channel_->Connect();
       if (status.OK()) {
         break;
       }
 
+      if (try_times == max_try_times - 1) {
+        KLLM_LOG_WARNING << "Connect to " << context_->global->GetMasterHost() << ":"
+                         << context_->global->GetMasterPort() << " failed: " << status.GetMessage()
+                         << ", will retry in " << max_try_times << " seconds.";
+      }
+
       if (try_times == 0) {
+        KLLM_LOG_ERROR << "Connect to " << context_->global->GetMasterHost() << ":" << context_->global->GetMasterPort()
+                       << " failed after " << max_try_times << " retries: " << status.GetMessage();
         throw std::runtime_error(fmt::format("Connect to {}:{} error: {}", context_->global->GetMasterHost(),
                                              context_->global->GetMasterPort(), status.GetMessage()));
       }

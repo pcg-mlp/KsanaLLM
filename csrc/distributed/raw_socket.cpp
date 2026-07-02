@@ -300,6 +300,9 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
     return Status(RET_RUNTIME_FAILED, "Create socket error.");
   }
 
+  int opt = 1;
+  setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
   struct sockaddr_in srv_address;
   srv_address.sin_family = AF_INET;
   srv_address.sin_addr.s_addr = inet_addr(host.c_str());
