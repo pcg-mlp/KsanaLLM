@@ -8,6 +8,7 @@
 
 #include "distributed/control_message.h"
 #include "profiler/profile_event.h"
+#include "runtime/profile_metrics.h"
 
 namespace ksana_llm {
 
@@ -447,6 +448,9 @@ Status ModelDriver::HandleSchedule() {
     // 少一次 BlockingQueue Put/Get 带来的线程唤醒延迟。
     {
       PROFILE_EVENT_SCOPE(handle_schedule_dispatch, "Engine.HandleSchedule.Dispatch");
+      if (schedule_output->enable_profile_metrics) {
+        schedule_output->schedule_dispatch_time_ns = ModelPerfNowNs();
+      }
       ipc_func_wrapper_->DispatchScheduleOutput(schedule_output);
     }
     if (context_->global->IsDistributedMaster()) {
@@ -524,6 +528,12 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
   if (transfer_engine_ && !reqs_transfer_tokens.empty()) {
     transfer_engine_->Send(reqs_transfer_tokens);
     KLLM_LOG_DEBUG << "UpdateSamplingOutput: sent tokens for " << reqs_transfer_tokens.size() << " requests";
+  }
+
+  // Forward batch-level profile metrics from SamplingOutput to GenerationOutputGroup.
+  if (sampling_output->has_profile_metrics) {
+    schedule_result->generation_output_group.has_profile_metrics = true;
+    schedule_result->generation_output_group.profile_metrics = sampling_output->profile_metrics;
   }
 
   {

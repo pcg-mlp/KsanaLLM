@@ -1,0 +1,7 @@
+{
+  "output_file": "model_perf_result.json",
+  "output_level": "detail",
+  "metrics_granularity": "batch",
+  "token_seed": 42,
+  "batch_config": "../examples/model_perf/batch_config.json"
+}

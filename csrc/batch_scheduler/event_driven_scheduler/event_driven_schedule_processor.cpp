@@ -506,6 +506,7 @@ void EventDrivenScheduleProcessor::OnEventGetScheduleResult() {
   }
 }
 
+
 void EventDrivenScheduleProcessor::OnEventAddRequest(const std::shared_ptr<EventAddRequestInfo>& info) {
   if (!info || info->reqs.empty()) {
     return;
@@ -683,6 +684,7 @@ bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleConte
     }
 
     result->schedule_output->schedule_id = schedule_id_++;
+    result->schedule_output->enable_profile_metrics = planning_batch->enable_profile_metrics;
 
     result->generation_output_group.multi_batch_id = multi_batch_id;
     result->generation_output_group.reqs.resize(dp_num_);

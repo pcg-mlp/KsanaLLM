@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "runtime/draft_generator/draft_tokens.h"
+#include "runtime/profile_metrics.h"
 #include "runtime/sampling_request.h"
 #include "runtime/schedule_output.h"
 #include "utils/logger.h"
@@ -72,6 +73,10 @@ class SamplingOutput {
 
   // The target responses.
   std::unordered_map<int64_t, std::unordered_map<std::string, PythonTensor>> target_responses;
+
+  // Batch-level performance metrics (only populated when enable_profile_metrics=true).
+  bool has_profile_metrics = false;
+  ProfileMetrics profile_metrics;
 };
 
 class SamplingOutputParser {

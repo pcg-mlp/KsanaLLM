@@ -177,6 +177,13 @@ void CommonModel::SetInflightResourceManager(InflightResourceManager* mgr) {
   }
 }
 
+void CommonModel::SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current) {
+  if (forwarding_context_) {
+    forwarding_context_->profile_metrics = pm;
+    forwarding_context_->current_forward_metrics = current;
+  }
+}
+
 Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
                                       ForwardingContext& forwarding_context) {
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();

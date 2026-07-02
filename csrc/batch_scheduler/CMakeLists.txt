@@ -31,6 +31,7 @@ cpp_test(global_cache_fetcher_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_schedul
 cpp_test(global_cache_query_hook_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/global_cache_query_hook_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(planning_workload_estimator_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/planning_workload_estimator_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(event_driven_state_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/event_driven_state_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(model_perf_backend_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/model_perf/model_perf_backend_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(full_cache_hit_handler_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/full_cache_hit_handler_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
 cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/strategy/continuous_batching_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

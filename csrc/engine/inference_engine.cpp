@@ -4,10 +4,16 @@
 
 #include "engine/inference_engine.h"
 
+#include <unistd.h>
+
+#include <iostream>
+
 #include "batch_scheduler/batch_scheduler.h"
 #include "batch_scheduler/event_driven_scheduler/continuous_batching_backend.h"
 #include "batch_scheduler/event_driven_scheduler/event_driven_schedule_processor.h"
 #include "batch_scheduler/event_driven_scheduler/global_cache_query_hook.h"
+#include "batch_scheduler/event_driven_scheduler/model_perf/model_perf_backend.h"
+#include "batch_scheduler/event_driven_scheduler/model_perf/model_perf_workload_balancer.h"
 #include "batch_scheduler/event_driven_scheduler/schedule_hook_manager.h"
 #include "batch_scheduler/event_driven_scheduler/workload_balance/basic_workload_balancer.h"
 #include "batch_scheduler/event_driven_scheduler/workload_balance/pp_batch_distributor.h"
@@ -356,8 +362,12 @@ Status InferenceEngine::Initialize() {
       auto event_driven_schedule_processor =
           std::make_shared<EventDrivenScheduleProcessor>(attn_dp_size, batch_scheduler_config.max_pp_batch_num);
 
-      event_driven_schedule_processor->SetScheduleBackend(
-          std::make_shared<ContinuousBatchingBackend>(batch_scheduler_config));
+      const bool use_model_perf_backend =
+          InitModelPerfBackend(event_driven_schedule_processor, batch_scheduler_config);
+      if (!use_model_perf_backend) {
+        event_driven_schedule_processor->SetScheduleBackend(
+            std::make_shared<ContinuousBatchingBackend>(batch_scheduler_config));
+      }
       event_driven_schedule_processor->SetCacheManagers(cache_managers_);
 
       auto hook_manager = std::make_shared<ScheduleHookManager>();
@@ -401,13 +411,16 @@ Status InferenceEngine::Initialize() {
 
       event_driven_schedule_processor->SetScheduleHookManager(hook_manager);
 
-      event_driven_schedule_processor->SetWorkloadBalancer(std::make_shared<BasicWorkloadBalancer>(
-          attn_dp_size, static_cast<size_t>(batch_scheduler_config.max_batch_size),
-          static_cast<size_t>(batch_scheduler_config.max_decode_tokens_per_req),
-          static_cast<size_t>(batch_scheduler_config.max_step_token_num)));
+      if (!use_model_perf_backend) {
+        event_driven_schedule_processor->SetWorkloadBalancer(std::make_shared<BasicWorkloadBalancer>(
+            attn_dp_size, static_cast<size_t>(batch_scheduler_config.max_batch_size),
+            static_cast<size_t>(batch_scheduler_config.max_decode_tokens_per_req),
+            static_cast<size_t>(batch_scheduler_config.max_step_token_num)));
+      }
 
       // Create PpBatchDistributor for PP multi-batch request distribution.
-      if (batch_scheduler_config.max_pp_batch_num > 1) {
+      // ModelPerfBackend 不使用 PP 分发（自行控制 multi_batch_id=0）
+      if (!use_model_perf_backend && batch_scheduler_config.max_pp_batch_num > 1) {
         auto distributor = std::make_shared<PpBatchDistributor>(batch_scheduler_config.pp_multibatch_wb_strategy);
         event_driven_schedule_processor->SetPpBatchDistributor(distributor);
         KLLM_LOG_INFO << "PpBatchDistributor created for event-driven scheduler, max_pp_batch_num="
@@ -565,6 +578,53 @@ Status InferenceEngine::DoWarmupRun() {
   return Status();
 }
 
+bool InferenceEngine::InitModelPerfBackend(
+    std::shared_ptr<EventDrivenScheduleProcessor> event_driven_schedule_processor,
+    const BatchSchedulerConfig& batch_scheduler_config) {
+  const char* enable_model_perf_env = std::getenv("ENABLE_MODEL_PERF");
+  const char* model_perf_config_env = std::getenv("MODEL_PERF_CONFIG");
+  const bool use_model_perf =
+      (enable_model_perf_env != nullptr && std::string(enable_model_perf_env) == "1") &&
+      (model_perf_config_env != nullptr && std::string(model_perf_config_env).size() > 0);
+
+  if (!use_model_perf) {
+    return false;
+  }
+
+  KLLM_LOG_INFO << "ModelPerfBackend activated. config=" << model_perf_config_env;
+
+  ModelConfig model_config;
+  Status model_config_status = env_->GetModelConfig(model_config);
+  if (!model_config_status.OK()) {
+    KLLM_THROW(fmt::format("ModelPerfBackend: failed to get ModelConfig: {}", model_config_status.GetMessage()));
+  }
+  if (model_config.vocab_size == 0) {
+    KLLM_THROW("ModelPerfBackend: ModelConfig.vocab_size is 0");
+  }
+
+  RuntimeConfig runtime_config;
+  Status runtime_config_status = env_->GetRuntimeConfig(runtime_config);
+  if (!runtime_config_status.OK()) {
+    KLLM_THROW(
+        fmt::format("ModelPerfBackend: failed to get RuntimeConfig: {}", runtime_config_status.GetMessage()));
+  }
+
+  auto model_perf_backend = std::make_shared<ModelPerfBackend>(
+      batch_scheduler_config, std::string(model_perf_config_env), model_config.vocab_size,
+      runtime_config.attn_backend_config.block_token_num);
+  event_driven_schedule_processor->SetScheduleBackend(model_perf_backend);
+
+  // 使用专用 balancer（透传 attn_dp_group_id，不做轮询覆写）
+  const size_t attn_dp_size = context_->global->GetAttentionDataParallelSize();
+  auto model_perf_balancer = std::make_shared<ModelPerfWorkloadBalancer>(attn_dp_size);
+  event_driven_schedule_processor->SetWorkloadBalancer(model_perf_balancer);
+
+  // SetWorkloadBalancer 完成后，将 processor 注入 backend
+  model_perf_backend->SetScheduleProcessor(event_driven_schedule_processor);
+  model_perf_backend_ = model_perf_backend;
+  return true;
+}
+
 Status InferenceEngine::Start() {
   // NOTE(jinxcwu)
   // 在处理请求之前初始化 host 内存池。
@@ -596,8 +656,14 @@ Status InferenceEngine::Start() {
     KLLM_LOG_INFO << "All Nodes are ready, ready to server";
   }
 #ifndef ENABLE_ACL
-  // Start warmup run (auto-detects embedding vs LLM mode).
-  if (!context_->global->IsDistributedWorker()) {
+  // ModelPerfBackend 模式：执行性能测试（阻塞直到所有 batch 完成）；否则执行正常 warmup。
+  if (model_perf_backend_ != nullptr) {
+    KLLM_LOG_INFO << "ModelPerfBackend active: starting performance profiling (replacing DoWarmupRun)";
+    model_perf_backend_->StartPerf();
+    KLLM_LOG_INFO << "ModelPerfBackend: profiling complete, exiting";
+    std::cout << "ModelPerfBackend: profiling complete, exiting." << std::endl;
+    _exit(0);
+  } else if (!context_->global->IsDistributedWorker()) {
     DoWarmupRun();
   }
 #endif

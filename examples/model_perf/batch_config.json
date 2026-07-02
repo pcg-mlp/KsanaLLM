@@ -1,0 +1,70 @@
+{
+  "batches": [
+    {
+      "batch_id": "prefill_2req_dp0",
+      "warmup_rounds": 1,
+      "stat_rounds": 3,
+      "dp_batches": [
+        {
+          "dp_id": 0,
+          "requests": [
+            {
+              "input_token_len": 512,
+              "query_token_num": 512,
+              "req_num": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "batch_id": "prefill_mixed_dp0",
+      "warmup_rounds": 1,
+      "stat_rounds": 3,
+      "dp_batches": [
+        {
+          "dp_id": 0,
+          "requests": [
+            {
+              "input_token_len": 256,
+              "query_token_num": 256,
+              "req_num": 1
+            },
+            {
+              "input_token_len": 512,
+              "query_token_num": 512,
+              "req_num": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "batch_id": "prefill_multi_dp",
+      "warmup_rounds": 1,
+      "stat_rounds": 3,
+      "dp_batches": [
+        {
+          "dp_id": 0,
+          "requests": [
+            {
+              "input_token_len": 128,
+              "query_token_num": 256,
+              "req_num": 1
+            }
+          ]
+        },
+        {
+          "dp_id": 1,
+          "requests": [
+            {
+              "input_token_len": 128,
+              "query_token_num": 256,
+              "req_num": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "device/common_device.h"
+#include "runtime/profile_metrics.h"
 #include "fmt/core.h"
 #include "runtime/infer_stage.h"
 #include "utils/logger.h"
@@ -74,8 +75,10 @@ Status SimpleDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const b
   }
 
   // MultiHeadAttention
+  MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, attn_t);
   STATUS_CHECK_RETURN(
       mha_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
+  MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kAttn, attn_t);
 
   // AllReduce Fused Norm Add
   STATUS_CHECK_RETURN(fused_all_reduce_norm_add_post_attn_->Forward(
@@ -83,8 +86,10 @@ Status SimpleDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const b
       /*need_add_residual*/ true));
 
   // Common mlp
+  MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, ffn_t);
   STATUS_CHECK_RETURN(
       mlps_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
+  MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kFfn, ffn_t);
 
   if (need_add_residual_after_mlp_) {
     // AllReduce Fused Add

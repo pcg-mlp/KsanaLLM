@@ -10,6 +10,7 @@
 #include "profiler/profile_event.h"
 #include "runtime/forward_request.h"
 #include "runtime/hidden_unit_buffer.h"
+#include "runtime/profile_metrics.h"
 #include "utils/status.h"
 #include "utils/tensor.h"
 
@@ -61,6 +62,9 @@ class BaseModel {
   // Set the inflight resource manager reference, propagated from ExecutorRuntime through
   // ModelInstance → CommonModel → ForwardingContext for downstream access in PrepareCompressor.
   virtual void SetInflightResourceManager(InflightResourceManager* mgr) {}
+
+  // 设置 / 清除 ForwardingContext 中的 ProfileMetrics 及当前子 metrics 指针。
+  virtual void SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current) {}
 
   BufferManager* GetBufferManager() { return &buffer_mgr_; }
 

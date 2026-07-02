@@ -15,6 +15,7 @@
 #include "runtime/forward_request.h"
 #include "runtime/hidden_unit_buffer.h"
 #include "runtime/infer_stage.h"
+#include "runtime/profile_metrics.h"
 #include "runtime/threadpool.h"
 #include "runtime/weight_instance_inferface.h"
 #include "utils/search_path.h"
@@ -63,6 +64,9 @@ class ModelInstance {
   // Set the inflight resource manager through to the base model.
   // If the model is already loaded, also triggers RegisterInflightResources.
   void SetInflightResourceManager(InflightResourceManager* mgr);
+
+  // 将 ProfileMetrics 及当前子 metrics 指针透传到底层 BaseModel。
+  void SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current);
 
   // Get  the data type.
   DataType GetWeightDataType() { return model_config_.weight_data_type; }

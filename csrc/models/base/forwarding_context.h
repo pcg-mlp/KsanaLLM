@@ -10,6 +10,7 @@
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/base/layer_creation_context.h"
 #include "profiler/profile_event.h"
+#include "runtime/profile_metrics.h"
 #include "utils/tensor.h"
 
 #include "models/base/model_communicator.h"
@@ -159,6 +160,13 @@ class ForwardingContext {
   inline int GetCurrentRank() const { return rank_; }
 
   inline void SetCurrentRank(const int rank) { rank_ = rank; }
+
+ public:
+  // step 级 aggregate（整个 decode step 共用，含 main + speculative 子项）
+  ProfileMetrics* profile_metrics = nullptr;
+
+  // 当前 forward 正在写入的子 metrics（ModelExecutor 在 forward 前设置，结束后清空）
+  ForwardPerfMetrics* current_forward_metrics = nullptr;
 
   inline const PipelineConfig& GetPipelineConfig() { return pipeline_config_; }
 

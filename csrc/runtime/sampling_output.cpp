@@ -64,6 +64,17 @@ Status SamplingOutputParser::SerializeSamplingOutput(const SamplingOutput* sampl
     }
   }
 
+  // has_profile_metrics + profile_metrics（batch 级别，enable_profile_metrics=true 时填充）
+  SerializePod<bool>(sampling_output->has_profile_metrics, ptr, *bytes);
+  if (sampling_output->has_profile_metrics) {
+    std::vector<int> pm_buf;
+    sampling_output->profile_metrics.SerializeTo(pm_buf);
+    SerializePod<size_t>(pm_buf.size(), ptr, *bytes);
+    for (int v : pm_buf) {
+      SerializePod<int>(v, ptr, *bytes);
+    }
+  }
+
   return Status();
 }
 
@@ -116,6 +127,18 @@ Status SamplingOutputParser::DeserializeSamplingOutput(const void* ptr, Sampling
       req_logprobs.emplace_back(std::move(topk_logprobs));
     }
     sampling_output->target_logprobs.emplace(req_id, std::move(req_logprobs));
+  }
+
+  // has_profile_metrics + profile_metrics
+  sampling_output->has_profile_metrics = DeserializePod<bool>(ptr, offset);
+  sampling_output->profile_metrics = ProfileMetrics{};
+  if (sampling_output->has_profile_metrics) {
+    const size_t pm_size = DeserializePod<size_t>(ptr, offset);
+    std::vector<int> pm_buf(pm_size);
+    for (size_t i = 0; i < pm_size; i++) {
+      pm_buf[i] = DeserializePod<int>(ptr, offset);
+    }
+    ProfileMetrics::DeserializeFrom(pm_buf, 0, sampling_output->profile_metrics);
   }
 
   return Status();

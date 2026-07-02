@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "runtime/profile_metrics.h"
 #include "runtime/schedule_output.h"
 
 namespace ksana_llm {
@@ -35,6 +36,14 @@ class NewModelOutput {
   // build-ahead 下本步 Sampling 可能晚于下一步 Preprocess，若直接读 req 字段会错位。
   // Forward 时从 model_input->reqs 固化到此，Sampling 只读此快照。
   std::vector<size_t> frozen_logits_offsets;
+
+  // 性能指标（仅 schedule_output->enable_profile_metrics=true 时填充）。
+  // ModelExecutor::Forward 按 RunMode 写入 profile_metrics.forward_metrics 中对应子项。
+  ProfileMetrics profile_metrics;
+
+  // step 级 ProfileMetrics 聚合区指针；非空时 forward 写入该对象而非 profile_metrics。
+  // 由 schedule_output->step_metrics 透传，或由调用方直接设置。
+  ProfileMetrics* step_metrics = nullptr;
 };
 
 }  // namespace ksana_llm

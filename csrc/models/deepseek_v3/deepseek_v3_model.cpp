@@ -12,6 +12,7 @@
 #include "modules/basic/layernorm.h"
 #include "profiler/profile_event.h"
 #include "profiler/sched_event_tracer.h"
+#include "runtime/profile_metrics.h"
 
 namespace ksana_llm {
 
@@ -96,7 +97,9 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   }
 
   // Mla
+  MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, attn_t);
   mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
+  MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kAttn, attn_t);
   if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
     std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
     post_attention_add_norm_->Forward(&hidden_buffer_tensors_0[0], &residual_buffer[0], &hidden_buffer_tensors_0[0]);
@@ -130,8 +133,10 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
 
   // Common mlp/moe
   AcquireMoeBuffers(forwarding_context);
+  MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, ffn_t);
   STATUS_CHECK_RETURN(
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
+  MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kFfn, ffn_t);
   ReleaseMoeBuffers();
 
   // When using Expert-Parallel (EP) parallelism, Data-Parallel (DP) parallelism is enabled by default.

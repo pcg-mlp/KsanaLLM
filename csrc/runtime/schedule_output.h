@@ -10,6 +10,7 @@
 #include "distributed/raw_packet.h"
 #include "runtime/executor_infer_request.h"
 #include "runtime/infer_request.h"
+#include "runtime/profile_metrics.h"
 #include "utils/blocking_queue.h"
 #include "utils/request.h"
 #include "utils/status.h"
@@ -116,6 +117,20 @@ struct ScheduleOutput {
   }
 
   size_t schedule_id = DEFAULT_SCHEDULE_ID;
+
+  // 当激活 ModelPerfBackend 时置为 true，通知 Executor 采集并回传 ProfileMetrics。
+  // 仅 Engine 主进程填充；Executor 反序列化后的 ScheduleOutput 中该字段也会保留。
+  bool enable_profile_metrics = false;
+
+  // Engine 侧在 DispatchScheduleOutput 前记录的 CPU 时间戳（纳秒）。
+  // 仅 enable_profile_metrics=true 时有意义；Executor 在首次 forward 开始时读取，
+  // 计算 profile_metrics.schedule_forward_interval_ns。
+  int64_t schedule_dispatch_time_ns = 0;
+
+  // step 级 ProfileMetrics 聚合区指针（Executor 本地设置，不参与 IPC 序列化）。
+  // 主 forward 为 nullptr，MTP postprocess 指向 sampling_output->profile_metrics，供多次 forward 累加 speculative
+  // 子项。
+  ProfileMetrics* step_metrics = nullptr;
 
   // NOTE(karlluo): finished req ids, outer vector is for attention data parallelism.
   std::vector<std::vector<int64_t>> finish_req_ids;
@@ -228,7 +243,15 @@ struct GenerationOutputGroup {
 
   std::vector<std::vector<std::shared_ptr<InferRequest>>> reqs;
 
-  void Reset() { reqs.clear(); }
+  // Batch-level performance metrics forwarded from SamplingOutput.
+  bool has_profile_metrics = false;
+  ProfileMetrics profile_metrics;
+
+  void Reset() {
+    reqs.clear();
+    has_profile_metrics = false;
+    profile_metrics = ProfileMetrics{};
+  }
 
   void BuildFromScheduleOutputGroup(const ScheduleOutputGroup& schedule_output_group) {
     reqs.resize(schedule_output_group.outputs.size());

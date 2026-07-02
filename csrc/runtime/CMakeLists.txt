@@ -42,6 +42,8 @@ cpp_test(sampling_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/sampling_o
 
 cpp_test(infer_request_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/infer_request_test.cpp DEPS ${MODELS_TEST_DEPS} ipc LIBS ${MODELS_TEST_LIBS})
 
+cpp_test(profile_metrics_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/profile_metrics_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
 # Fast-path controller 启动 check 单测。
 # 虽然 controller 自身只依赖配置层 + ScheduleOutput 头, 但 runtime 库引入了 executor/layer_progress_tracker
 # 等组件的 transitive 依赖 (ipc), 因此 test 链接时需要补齐, 与 generation_controller_test 同模式。

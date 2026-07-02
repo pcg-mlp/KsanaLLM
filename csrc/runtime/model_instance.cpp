@@ -204,4 +204,10 @@ void ModelInstance::SetInflightResourceManager(InflightResourceManager* mgr) {
   inflight_resource_mgr_ = mgr;
 }
 
+void ModelInstance::SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current) {
+  if (model_instance_) {
+    model_instance_->SetForwardProfileMetrics(pm, current);
+  }
+}
+
 }  // namespace ksana_llm

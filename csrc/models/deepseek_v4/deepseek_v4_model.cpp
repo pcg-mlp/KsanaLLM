@@ -10,6 +10,7 @@
 #include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "profiler/profile_event.h"
 #include "profiler/sched_event_tracer.h"
+#include "runtime/profile_metrics.h"
 
 namespace ksana_llm {
 
@@ -83,10 +84,10 @@ Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   pre_attention_mhc_->PreForwardWithNorm(residual_buffer, hidden_buffer_tensors_0);
 
   // ATTN core
+  MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, attn_t);
   mqa_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, forwarding_context);
-
-  // ATTN allreduce
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
+  MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kAttn, attn_t);
 
   // ATTN mhc post
   pre_attention_mhc_->PostForward(hidden_buffer_tensors_0, residual_buffer);
@@ -131,6 +132,7 @@ Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   EventRecord(sync_event, primary_stream);
 
   // FFN core — routed-expert gating + MoE + shared MLP + fusion add.
+  MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, ffn_t);
   STATUS_CHECK_RETURN(
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
 
@@ -149,8 +151,8 @@ Status DeepSeekV4DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
     residual_buffer[0].shape = hidden_buffer_tensors_0[0].shape;
   }
 
-  // FFN allreduce
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
+  MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kFfn, ffn_t);
 
   // FFN mhc post
   post_attention_mhc_->PostForward(hidden_buffer_tensors_0, residual_buffer);

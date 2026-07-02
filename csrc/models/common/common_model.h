@@ -93,6 +93,9 @@ class CommonModel : public BaseModel {
   // Propagate inflight resource manager reference down to ForwardingContext.
   void SetInflightResourceManager(InflightResourceManager* mgr) override;
 
+  // 设置/清除 ForwardingContext 中的 ProfileMetrics 及当前子 metrics 指针。
+  void SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current) override;
+
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
 

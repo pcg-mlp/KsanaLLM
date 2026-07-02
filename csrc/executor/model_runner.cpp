@@ -373,6 +373,7 @@ Status ModelRunner::HandlePostprocess() {
 
     std::unordered_map<int64_t, GenerationResult> generation_results;
     std::vector<int64_t> finished_req_ids;
+    const bool has_profile = model_output->schedule_output && model_output->schedule_output->enable_profile_metrics;
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
       auto& result = generation_results[req->req_id];
       result.generated_tokens = req->generated_tokens;
@@ -381,6 +382,11 @@ Status ModelRunner::HandlePostprocess() {
       if (req->structured_generator && req->structured_generator->IsTerminated()) {
         finished_req_ids.push_back(req->req_id);
       }
+    }
+    // Batch-level profile metrics: write once to SamplingOutput, not per-request.
+    if (has_profile) {
+      sampling_output->has_profile_metrics = true;
+      sampling_output->profile_metrics = model_output->profile_metrics;
     }
 
     if (!finished_req_ids.empty() && generation_controller) {
@@ -409,8 +415,12 @@ Status ModelRunner::HandlePostprocess() {
       PROFILE_EVENT_SCOPE(postprocess_mtp_forward, "Exec.HandlePostprocess.MtpForward");
       GetHiddenShape(model_output->schedule_output, hidden_unit->tensor.shape);
       hidden_unit->tensor.dtype = GetHiddenDataType();
+      if (has_profile) {
+        model_output->schedule_output->step_metrics = &sampling_output->profile_metrics;
+      }
       executor_runtime_->MtpForward(mtp_step_num_, model_output->schedule_output->executor_running_reqs, hidden_unit,
                                     model_output->schedule_output);
+      model_output->schedule_output->step_metrics = nullptr;
     }
 
     // Compressor slot eviction has been moved to the start of HandleExecute (before the main

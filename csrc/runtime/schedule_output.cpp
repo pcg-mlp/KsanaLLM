@@ -759,6 +759,10 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
     // schedule_id
     SerializePod<size_t>(schedule_output->schedule_id, ptr, *bytes);
 
+    // enable_profile_metrics + schedule_dispatch_time_ns
+    SerializePod<bool>(schedule_output->enable_profile_metrics, ptr, *bytes);
+    SerializePod<int64_t>(schedule_output->schedule_dispatch_time_ns, ptr, *bytes);
+
     // finish_req_ids
     SerializeVectorOfVector(schedule_output->finish_req_ids, ptr, *bytes);
 
@@ -791,6 +795,10 @@ Status ScheduleOutputParser::DeserializeScheduleOutput(const void* ptr, Schedule
 
   // schedule_id
   schedule_output->schedule_id = DeserializePod<size_t>(ptr, offset);
+
+  // enable_profile_metrics + schedule_dispatch_time_ns
+  schedule_output->enable_profile_metrics = DeserializePod<bool>(ptr, offset);
+  schedule_output->schedule_dispatch_time_ns = DeserializePod<int64_t>(ptr, offset);
 
   // finish_req_ids
   DeserializeVectorOfVector(schedule_output->finish_req_ids, ptr, offset);

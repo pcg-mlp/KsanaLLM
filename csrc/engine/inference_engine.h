@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "batch_scheduler/event_driven_scheduler/model_perf/model_perf_backend.h"
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "cache_manager/cache_manager_interface.h"
 #include "distributed/distributed_control_coordinator.h"
@@ -18,6 +19,10 @@
 #include "utils/status.h"
 
 namespace ksana_llm {
+
+// Forward declarations
+class EventDrivenScheduleProcessor;
+struct BatchSchedulerConfig;
 
 // The serving engine define.
 class InferenceEngine {
@@ -42,6 +47,11 @@ class InferenceEngine {
   // Do warmup run.
   Status DoWarmupRun();
 
+  // 初始化 ModelPerfBackend（仅在环境变量 ENABLE_MODEL_PERF=1 + MODEL_PERF_CONFIG 有效时调用）。
+  // 返回是否成功激活了 ModelPerfBackend。
+  bool InitModelPerfBackend(std::shared_ptr<EventDrivenScheduleProcessor> event_driven_schedule_processor,
+                            const BatchSchedulerConfig& batch_scheduler_config);
+
  private:
   std::shared_ptr<Environment> env_;
   std::shared_ptr<Context> context_;
@@ -54,6 +64,9 @@ class InferenceEngine {
 
   // The scheduler used for inference engine.
   std::shared_ptr<ScheduleProcessorInterface> schedule_processor_ = nullptr;
+
+  // 仅在 ENABLE_MODEL_PERF=1 时非空；用于在 Start() 中跳过 warmup。
+  std::shared_ptr<ModelPerfBackend> model_perf_backend_ = nullptr;
 
   // object pool of schedule and sampling output buffer.
   std::shared_ptr<ScheduleOutputPool> schedule_output_pool_ = nullptr;

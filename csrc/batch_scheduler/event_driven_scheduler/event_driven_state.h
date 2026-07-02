@@ -113,11 +113,16 @@ struct PlanningBatch {
   size_t running_step_token_num = 0;
   size_t running_step_logits_num = 0;
 
+  // 由 ModelPerfBackend::Schedule 置为 true；TryBuildAndLaunchScheduleResult 据此
+  // 在 ScheduleOutput 中设置 enable_profile_metrics，通知 Executor 采集 ProfileMetrics。
+  bool enable_profile_metrics = false;
+
   // Reset planning state for reuse.
   void Reset() {
     running_req_num = 0;
     running_step_token_num = 0;
     running_step_logits_num = 0;
+    enable_profile_metrics = false;
     for (auto& dp_batch : dp_batches) {
       dp_batch.Reset();
     }
