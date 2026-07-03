@@ -55,7 +55,11 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
   DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
 
   // Stop request is now actually applied, remove it from in-plan ops.
+  // Also clear recompute_req_ids in case this request had a pending recompute that was delayed:
+  // the delayed HandleRecomputeRequest will see IsStopped()=true and return early without
+  // clearing recompute_req_ids, which would permanently block future OOM-triggered recomputes.
   dp_state.in_plan_schedule_ops.stop_req_ids.erase(req->req_id);
+  dp_state.in_plan_schedule_ops.recompute_req_ids.erase(req->req_id);
 
   req->Stop();
 
@@ -131,6 +135,7 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
   // Recompute request is now actually applied, remove it from in-plan ops.
   dp_state.in_plan_schedule_ops.recompute_req_ids.erase(req->req_id);
   req->ResetInflightTask();
+  req->ResetPlanningTask();
   req->Restart();
   req->ResetPrefillingTokens();
   if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
@@ -210,6 +215,9 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
 
     // Stop/Recompute 的请求级操作延迟到无 in-flight task 时执行。
     if (req->HasInflightTask()) {
+      KLLM_LOG_SCHEDULER << "Delaying " << (ev.type == ScheduleBackendEventType::kStopRequest ? "Stop" : "Recompute")
+                         << " event for req_id=" << req_id << " dp_idx=" << dp_idx
+                         << " (HasInflightTask=true, inflight_count=" << req->GetInflightCount() << ")";
       ScheduleBackendEvent delayed_ev;
       delayed_ev.type = ev.type;
       delayed_ev.dp_idx = dp_idx;

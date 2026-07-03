@@ -73,7 +73,7 @@ TEST_F(EventDrivenStateTest, PlanningBatchIsLaunchableRespectsMaxDepth) {
   ArmDecodePlanning(req);
   req->SetPlanningTask();
   req->LaunchPlanningTask();
-  ASSERT_EQ(req->InflightCount(), 1u);
+  ASSERT_EQ(req->GetInflightCount(), 1u);
 
   EXPECT_FALSE(batch.IsLaunchable(/*max_depth=*/1));
   EXPECT_TRUE(batch.IsLaunchable(/*max_depth=*/2));
@@ -82,7 +82,7 @@ TEST_F(EventDrivenStateTest, PlanningBatchIsLaunchableRespectsMaxDepth) {
   ArmDecodePlanning(req);
   req->SetPlanningTask();
   req->LaunchPlanningTask(/*use_placeholder_for_last_token=*/true);
-  ASSERT_EQ(req->InflightCount(), 2u);
+  ASSERT_EQ(req->GetInflightCount(), 2u);
   EXPECT_FALSE(batch.IsLaunchable(/*max_depth=*/2));
 }
 
@@ -108,7 +108,7 @@ TEST_F(EventDrivenStateTest, PlanningBatchSkipsStoppedReqInCapacityCheck) {
   ArmDecodePlanning(active);
   active->SetPlanningTask();
   active->LaunchPlanningTask();
-  ASSERT_EQ(active->InflightCount(), 1u);
+  ASSERT_EQ(active->GetInflightCount(), 1u);
 
   // stopped req 跳过检查；active 在 max_depth=2 下仍可再 launch
   EXPECT_TRUE(batch.IsLaunchable(/*max_depth=*/2));

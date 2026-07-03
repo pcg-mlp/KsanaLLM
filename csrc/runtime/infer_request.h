@@ -340,8 +340,9 @@ class InferRequest {
   // 慢路径传 max_depth=1；build-ahead 传 max_depth=2。
   bool HasInflightCapacity(size_t max_depth) const { return inflight_count_ < max_depth; }
   // 当前 inflight 个数（0/1/2），供 BatchScheduler 流水线深度统计。
-  size_t InflightCount() const { return inflight_count_; }
+  size_t GetInflightCount() const { return inflight_count_; }
   bool HasPlanningTask() const { return !planning_task_.IsEmpty(); }
+  void ResetPlanningTask() { planning_task_.Reset(); }
 
   // Returns true if the inflight task is a split-fuse prefill step that does NOT cover all remaining
   // prefilling tokens (i.e., there are more prefill chunks to come).

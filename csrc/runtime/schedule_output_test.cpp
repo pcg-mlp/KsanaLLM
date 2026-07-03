@@ -272,7 +272,7 @@ DecodeReadyInferRequestFixture BuildDecodeReadyInferRequest(int64_t req_id, int 
   req->UpdateAfterInflightTaskFinished();
   req->ResetInflightTask();
   EXPECT_EQ(req->infer_stage, InferStage::kDecode);
-  EXPECT_EQ(req->InflightCount(), 0u);
+  EXPECT_EQ(req->GetInflightCount(), 0u);
   return {request, req};
 }
 
@@ -298,7 +298,7 @@ TEST(ScheduleOutputTest, IsLaunchableRespectsMaxDepth) {
   ArmDecodePlanningWorkload(req);
   output.SetPlanningTask();
   output.LaunchScheduleOutput(/*max_depth=*/2);
-  ASSERT_EQ(req->InflightCount(), 1u);
+  ASSERT_EQ(req->GetInflightCount(), 1u);
 
   // max_depth=1 已满；max_depth=2 仍可再 push 一步
   EXPECT_FALSE(output.IsLaunchable(/*max_depth=*/1));
@@ -309,7 +309,7 @@ TEST(ScheduleOutputTest, IsLaunchableRespectsMaxDepth) {
   ArmDecodePlanningWorkload(req);
   output.SetPlanningTask();
   output.LaunchScheduleOutput(/*max_depth=*/2);
-  ASSERT_EQ(req->InflightCount(), 2u);
+  ASSERT_EQ(req->GetInflightCount(), 2u);
   EXPECT_FALSE(output.IsLaunchable(/*max_depth=*/2));
 }
 
@@ -422,7 +422,7 @@ TEST(ScheduleOutputTest, IsLaunchableSkipsStoppedReqAtMaxDepth) {
   ArmDecodePlanningWorkload(active);
   output.SetPlanningTask();
   output.LaunchScheduleOutput(/*max_depth=*/2);
-  ASSERT_EQ(active->InflightCount(), 1u);
+  ASSERT_EQ(active->GetInflightCount(), 1u);
 
   // active 在 max_depth=2 下仍可再 launch；stopped 已满 inflight 也不应阻塞。
   EXPECT_TRUE(output.IsLaunchable(/*max_depth=*/2));

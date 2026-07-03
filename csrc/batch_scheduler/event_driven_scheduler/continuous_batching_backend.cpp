@@ -139,6 +139,12 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
           req->req_id, req->forwarding_tokens, req->kv_cached_token_num, req->kv_cache_blocks, block_merged,
           req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
       if (!update_status.OK()) {
+        KLLM_LOG_SCHEDULER << "UpdateRequestTokens failed for req_id=" << req->req_id
+                           << ", dp_idx=" << dp_idx << ", status=" << update_status.GetMessage()
+                           << ", forwarding_tokens.size=" << req->forwarding_tokens.size()
+                           << ", kv_cached_token_num=" << req->kv_cached_token_num
+                           << ", kv_cache_blocks.size=" << req->kv_cache_blocks.size()
+                           << " => emitting kRecomputeRequest";
         EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, req, update_status, events,
                       emitted_event_keys);
         continue;
@@ -178,7 +184,9 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
 
     KLLM_LOG_SCHEDULER << "ProcessDecodingQueue: dp_idx=" << dp_idx
                        << ", decoding_reqs=" << dp_state.decoding_reqs.size()
-                       << ", running_reqs=" << dp_batch.running_reqs.size();
+                       << ", running_reqs=" << dp_batch.running_reqs.size()
+                       << ", in_plan_recompute_ids=" << in_plan_ops.recompute_req_ids.size()
+                       << ", in_plan_stop_ids=" << in_plan_ops.stop_req_ids.size();
 
     bool has_candidate = false;
     bool has_success = false;
@@ -226,6 +234,11 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       const bool request_acceptable =
           workload_balancer_->IsRequestAcceptable(req, planning_batch, quota, max_required_token_num);
       if (!request_acceptable) {
+        KLLM_LOG_SCHEDULER << "Skip decoding req_id=" << req->req_id
+                           << ": IsRequestAcceptable=false, running_req_num=" << planning_batch.GetRunningReqNum()
+                           << ", max_batch_size=" << batch_scheduler_config_.max_batch_size
+                           << ", max_required_token_num=" << max_required_token_num
+                           << ", sampling_token_num=" << req->sampling_token_num;
         continue;
       }
 
@@ -240,7 +253,15 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
                            << ", add to batch, " << req->ScheduleStateToStr();
       } else {
         last_failed_status = status;
+        KLLM_LOG_SCHEDULER << "AllocateRequestBlocks failed for decoding req_id=" << req->req_id
+                           << ", req_step_block_num=" << req_step_block_num
+                           << ", status=" << status.GetMessage();
       }
+    }
+
+    if (!has_candidate) {
+      KLLM_LOG_SCHEDULER << "ProcessDecodingQueue: no candidate found for dp_idx=" << dp_idx
+                         << ", all " << dp_state.decoding_reqs.size() << " decoding reqs were skipped";
     }
 
     // If decoding queue has no launchable request and current dp batch is empty, and no async recompute/stop
@@ -270,6 +291,10 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
                       events, emitted_event_keys);
         in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);
       }
+    } else if (has_candidate && !has_success && dp_batch.running_reqs.size() == 0) {
+      KLLM_LOG_SCHEDULER << "ProcessDecodingQueue: decode OOM but skip recompute trigger: dp_idx=" << dp_idx
+                         << ", stop_req_ids=" << in_plan_ops.stop_req_ids.size()
+                         << ", recompute_req_ids=" << in_plan_ops.recompute_req_ids.size();
     }
   }
 }
@@ -290,7 +315,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
 
     KLLM_LOG_SCHEDULER << "ProcessPrefillingQueue: dp_idx=" << dp_idx
                        << ", prefilling_reqs=" << dp_state.prefilling_reqs.size()
-                       << ", running_reqs=" << dp_batch.running_reqs.size();
+                       << ", running_reqs=" << dp_batch.running_reqs.size()
+                       << ", in_plan_recompute_ids=" << in_plan_ops.recompute_req_ids.size()
+                       << ", in_plan_stop_ids=" << in_plan_ops.stop_req_ids.size();
 
     bool has_candidate = false;
     bool has_success = false;
@@ -335,6 +362,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
             cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->GetPrefillingTokens(), seq_token_num,
                                                        shared_block_num, req_step_block_num, shared_token_num);
         if (!status.OK()) {
+          KLLM_LOG_SCHEDULER << "Skip prefilling req_id=" << req->req_id
+                             << ": GetRequestPrefixBlockNumber failed: " << status.GetMessage();
           continue;
         }
       } else {
@@ -360,6 +389,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       const bool request_acceptable =
           workload_balancer_->IsRequestAcceptable(req, planning_batch, quota, req_step_token_num);
       if (!request_acceptable) {
+        KLLM_LOG_SCHEDULER << "Skip prefilling req_id=" << req->req_id
+                           << ": IsRequestAcceptable=false, running_req_num=" << planning_batch.GetRunningReqNum()
+                           << ", req_step_token_num=" << req_step_token_num;
         continue;
       }
 
@@ -371,6 +403,10 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
           static_cast<size_t>(std::ceil(dp_batch.running_reqs.size() * batch_scheduler_config_.launch_block_threshold));
       const size_t total_free_block_num = cache_manager->GetRequestUsableBlockNumber(req->req_id);
       if (req_step_block_num + launch_block_threshold > total_free_block_num) {
+        KLLM_LOG_SCHEDULER << "Skip prefilling req_id=" << req->req_id
+                           << ": block threshold check failed, req_step_block_num=" << req_step_block_num
+                           << ", launch_block_threshold=" << launch_block_threshold
+                           << ", total_free_block_num=" << total_free_block_num;
         continue;
       }
 
@@ -421,6 +457,11 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
 
     // if this dp has launchable prefill requests but all allocations fail and no running request exists,
     // trigger recompute chunk-prefilled requests to release memory.
+    if (!has_candidate && !dp_state.prefilling_reqs.empty()) {
+      KLLM_LOG_SCHEDULER << "ProcessPrefillingQueue: no candidate found for dp_idx=" << dp_idx
+                         << ", all " << dp_state.prefilling_reqs.size() << " prefilling reqs were skipped";
+    }
+
     if (has_candidate && !has_success && (dp_batch.running_reqs.size() == 0) && dp_state.decoding_reqs.empty() &&
         in_plan_ops.stop_req_ids.empty() && in_plan_ops.recompute_req_ids.empty()) {
       std::shared_ptr<InferRequest> recompute_candidate = nullptr;
@@ -442,6 +483,11 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
                       events, emitted_event_keys);
         in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);
       }
+    } else if (has_candidate && !has_success && dp_batch.running_reqs.size() == 0) {
+      KLLM_LOG_SCHEDULER << "ProcessPrefillingQueue: prefill OOM but skip recompute trigger: dp_idx=" << dp_idx
+                         << ", decoding_reqs=" << dp_state.decoding_reqs.size()
+                         << ", stop_req_ids=" << in_plan_ops.stop_req_ids.size()
+                         << ", recompute_req_ids=" << in_plan_ops.recompute_req_ids.size();
     }
   }
 }
