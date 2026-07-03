@@ -539,6 +539,8 @@ class PrefixCacheManagerSWATest : public testing::Test {
   const size_t block_token_num = 16;
   const size_t sliding_window_size = 32;
   const size_t sliding_window_blocks = 2;  // ceil(32/16)
+  // SWA 全命中规避：check_token_num 为 block 整数倍时，shared 会比 FA 满命中少 1 个 block。
+  const size_t kFullHitSharedBlockShortfall = 1;
 
   const size_t fa_device_block_num = 100;
   const size_t fa_host_block_num = 100;
@@ -602,8 +604,7 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockAllocatedWithFABlock) {
 }
 
 // Test: Normal prefix cache hit with SWA enabled (design doc §5.1).
-// Request A fills 8 blocks; Request B has the same tokens and should get
-// shared_block_num = 8 with SWA window blocks registered.
+// Request A fills 8 blocks; Request B has the same tokens.  SWA 全命中规避下 shared 为 7 非 8。
 TEST_F(PrefixCacheManagerSWATest, NormalPrefixCacheHitWithSWA) {
   // 8 full blocks = 128 tokens.
   std::vector<int> token_ids;
@@ -612,22 +613,22 @@ TEST_F(PrefixCacheManagerSWATest, NormalPrefixCacheHitWithSWA) {
   // Request A: fill the prefix tree.
   RunFullRequest(1, token_ids);
 
-  // Request B: same tokens, should hit all 8 blocks.
+  // Request B: same tokens, should hit prefix cache (SWA 规避全命中路径).
   int64_t req_id_b = 2;
   size_t shared_block_num = 0, unique_block_num = 0, shared_token_num = 0;
   cache_manager_->GetRequestPrefixBlockNumber(req_id_b, token_ids, token_ids.size(), shared_block_num, unique_block_num,
                                               shared_token_num);
 
-  // All 8 blocks should be shared (SWA cache is valid for all of them).
-  EXPECT_EQ(shared_block_num, 8u);
-  EXPECT_EQ(unique_block_num, 0u);
-  EXPECT_EQ(shared_token_num, 128u);
+  const size_t total_blocks = token_ids.size() / block_token_num;
+  const size_t expected_shared = total_blocks - kFullHitSharedBlockShortfall;
+  EXPECT_EQ(shared_block_num, expected_shared);
+  EXPECT_EQ(unique_block_num, kFullHitSharedBlockShortfall);
+  EXPECT_EQ(shared_token_num, expected_shared * block_token_num);
 
-  // Phase 2 should have registered sliding_window_blocks + 1 (3) blocks for full hit
-  // (the extra block covers the rollback by HandleFullPrefixCacheHit).
-  EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids.size(), sliding_window_blocks + 1);
+  // 非 is_full_hit 窗口：仅覆盖 sliding_window_blocks 个 block。
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids.size(), sliding_window_blocks);
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_block_idxs.front(),
-            8u - (sliding_window_blocks + 1));
+            expected_shared - sliding_window_blocks);
 
   cache_manager_->DestroyFinishedRequest(req_id_b);
 }
@@ -647,41 +648,32 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockEvictionTruncatesPrefixCache) {
   // Collect the FA block ids for blocks 0-7 from the prefix tree.
   // After DestroyFinishedRequest the blocks are in reusable_cached_blocks_.
   // We can find them by walking the prefix tree from root.
-  // Use a second request to get the cached_blocks list.
+  // Probe with 120 tokens (7 blocks) to avoid SWA 全命中规避，再在可见范围内驱逐 SWA。
   int64_t req_id_probe = 99;
   size_t sb = 0, ub = 0, st = 0;
-  cache_manager_->GetRequestPrefixBlockNumber(req_id_probe, token_ids, token_ids.size(), sb, ub, st);
-  ASSERT_EQ(sb, 8u);
+  constexpr size_t k_probe_tokens = 120;  // 7 * block_token_num
+  cache_manager_->GetRequestPrefixBlockNumber(req_id_probe, token_ids, k_probe_tokens, sb, ub, st);
+  ASSERT_EQ(sb, 7u);
 
-  // Evict the SWA block for block index 5 (fa_block_id of cached_blocks[5]).
+  // Evict the SWA block for block index 5.
   size_t evict_fa_block_id = cache_manager_->cached_requests_[req_id_probe]->cached_blocks[5]->block_id;
-  // Mark it reclaimable first (simulating that no request holds it), then free it.
   cache_manager_->swa_cache_manager_->SetReclaimable(req_id_probe, evict_fa_block_id);
   cache_manager_->swa_cache_manager_->FreeSWABlock(evict_fa_block_id);
 
-  // Also evict block index 7 to create a second gap.
-  size_t evict_fa_block_id_7 = cache_manager_->cached_requests_[req_id_probe]->cached_blocks[7]->block_id;
-  cache_manager_->swa_cache_manager_->SetReclaimable(req_id_probe, evict_fa_block_id_7);
-  cache_manager_->swa_cache_manager_->FreeSWABlock(evict_fa_block_id_7);
+  // Evict block index 6 (probe 仅匹配 7 个 block，无 index 7)。
+  size_t evict_fa_block_id_6 = cache_manager_->cached_requests_[req_id_probe]->cached_blocks[6]->block_id;
+  cache_manager_->swa_cache_manager_->SetReclaimable(req_id_probe, evict_fa_block_id_6);
+  cache_manager_->swa_cache_manager_->FreeSWABlock(evict_fa_block_id_6);
 
   cache_manager_->DestroyFinishedRequest(req_id_probe);
 
-  // Request C: same tokens.
-  // SWA state: blocks 0-4 valid, block 5 evicted, block 6 valid, block 7 evicted.
-  // sliding_window_blocks = 2.
-  // Streak analysis (design doc §4.4 example):
-  //   i=0..4: streak grows to 5, last_swa_valid_idx=5
-  //   i=5: invalid → streak=0
-  //   i=6: valid → streak=1 (<2, no update)
-  //   i=7: invalid → streak=0
-  // → last_swa_valid_idx = 5, shared_block_num = 5.
+  // Request C: same tokens (128). 块 5/6 的 SWA 已驱逐，last_swa_valid_idx 停在 5。
   int64_t req_id_c = 3;
   cache_manager_->GetRequestPrefixBlockNumber(req_id_c, token_ids, token_ids.size(), sb, ub, st);
 
   EXPECT_EQ(sb, 5u);
-  EXPECT_EQ(ub, 3u);  // 8 - 5 = 3 unique blocks needed
+  EXPECT_EQ(ub, 3u);
 
-  // Phase 2 window: [5-2, 5) = [3, 5), so blocks 3 and 4 are registered.
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_fa_block_ids.size(), sliding_window_blocks);
   EXPECT_EQ(cache_manager_->cached_requests_[req_id_c]->swa_window_block_idxs.front(), 3u);
 
@@ -797,28 +789,17 @@ TEST_F(PrefixCacheManagerSWATest, DestroyFinishedRequestReleasesSWAWindow) {
   EXPECT_GE(available, 2u);
 }
 
-// Test: SWA block merge path — when AppendFilledCachedBlock merges a new FA block
-// into an existing tree node, the new FA block's SWA block is freed immediately.
-//
-// Scenario 1 (original): Request A fills the prefix tree; Request B has the same
-// tokens and gets shared_block_num=4, unique_block_num=0.  Since ub=0,
-// AllocateRequestBlocks allocates no new FA/SWA blocks.  After allocation we
-// verify that Request B's cached_blocks and swa_window_fa_block_ids match
-// Request A's (i.e. they share the same tree nodes and SWA blocks).
-//
-// Scenario 2 (new): Two independent requests (A and B) are created with the same
-// tokens BEFORE either has been committed to the prefix tree.  Both allocate their
-// own unique FA and SWA blocks.  After both call UpdateRequestTokens the duplicate
-// FA block is merged: the second request's last block pointer is replaced by the
-// first request's last block pointer, and the redundant SWA block is freed.
+// Scenario 1: Request A fills the prefix tree; Request B 同 token 全命中时因 SWA 规避
+// shared=3/ub=1，前 3 个 FA block 共享，第 4 个需新分配。
+// Scenario 2: 两路独立请求在 merge 时释放冗余 SWA block（不变）。
 TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
   // 4 full blocks = 64 tokens.
   std::vector<int> token_ids;
   faked_token_generator_->GeneratePromptTokens({{1, 64}}, token_ids);
 
   // -----------------------------------------------------------------------
-  // Scenario 1: Request A fills the prefix tree first; Request B then hits
-  // the full prefix cache (ub=0) and should share all FA and SWA blocks.
+  // Scenario 1: Request A fills the prefix tree first; Request B hits prefix
+  // cache with SWA 全命中规避（shared=3, unique=1）。
   // -----------------------------------------------------------------------
 
   // Request A fills the prefix tree.
@@ -826,22 +807,18 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
     std::vector<int> rbi_a, srbi_a;
     std::vector<size_t> sbo_a;
     RunRequestUntilUpdate(1, token_ids, rbi_a, srbi_a, sbo_a);
-    // Collect the FA block ids and SWA window block ids from request A before destroy.
     std::vector<PrefixCachedBlock*> blocks_a = cache_manager_->cached_requests_[1]->cached_blocks;
-    std::vector<size_t> swa_window_a = cache_manager_->cached_requests_[1]->swa_window_fa_block_ids;
     cache_manager_->DestroyFinishedRequest(1);
 
-    // Record SWA free count after Request A is destroyed (window blocks become reclaimable).
     size_t swa_free_before_b = swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber();
 
-    // Request B has the same tokens.  All 4 FA blocks will be found in the tree
-    // (shared_block_num=4, unique_block_num=0), so AllocateRequestBlocks allocates
-    // 0 new FA blocks and 0 new SWA blocks.
     int64_t req_id_b = 2;
     size_t sb = 0, ub = 0, st = 0;
     cache_manager_->GetRequestPrefixBlockNumber(req_id_b, token_ids, token_ids.size(), sb, ub, st);
-    EXPECT_EQ(sb, 4u);
-    EXPECT_EQ(ub, 0u);
+    const size_t total_blocks = token_ids.size() / block_token_num;
+    const size_t expected_shared = total_blocks - kFullHitSharedBlockShortfall;
+    EXPECT_EQ(sb, expected_shared);
+    EXPECT_EQ(ub, kFullHitSharedBlockShortfall);
 
     std::vector<int> req_block_ids_b;
     std::vector<int> swa_req_block_ids_b;
@@ -850,27 +827,23 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
                                                           swa_block_idx_offset_b);
     EXPECT_TRUE(status.OK());
 
-    // No new SWA blocks should have been allocated (no new FA blocks).
+    // 需为最后 1 个 block 新分配 1 个 SWA block。
     size_t swa_free_after_b = swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber();
-    EXPECT_EQ(swa_free_before_b, swa_free_after_b);
+    EXPECT_EQ(swa_free_before_b, swa_free_after_b + 1);
 
-    // Request B's cached_blocks must point to the same tree nodes as Request A's.
-    ASSERT_EQ(cache_manager_->cached_requests_[req_id_b]->cached_blocks.size(), blocks_a.size());
-    for (size_t i = 0; i < blocks_a.size(); ++i) {
+    // 前 expected_shared 个 FA block 与 Request A 相同；最后一个为新分配。
+    ASSERT_EQ(cache_manager_->cached_requests_[req_id_b]->cached_blocks.size(), total_blocks);
+    for (size_t i = 0; i < expected_shared; ++i) {
       EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->cached_blocks[i], blocks_a[i])
           << "FA block mismatch at index " << i;
     }
+    EXPECT_NE(cache_manager_->cached_requests_[req_id_b]->cached_blocks[total_blocks - 1], blocks_a[total_blocks - 1]);
 
-    // Request B's SWA window covers sliding_window_blocks + 1 = 3 blocks for full hit
-    // (the extra block covers the rollback by HandleFullPrefixCacheHit).
-    // The window spans blocks [1, 2, 3] while Request A's post-slide window was [2, 3].
-    EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids.size(), sliding_window_blocks + 1);
+    // Phase 2 窗口 2 个 block；Allocate 为第 4 个 FA block 再追加 1 个 SWA → 共 3 个。
+    EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids.size(),
+              sliding_window_blocks + 1);
     EXPECT_EQ(cache_manager_->cached_requests_[req_id_b]->swa_window_block_idxs.front(),
-              4u - (sliding_window_blocks + 1));
-    // The tail of B's window (last sliding_window_blocks entries) must still match A's window.
-    const auto& b_window = cache_manager_->cached_requests_[req_id_b]->swa_window_fa_block_ids;
-    std::vector<size_t> b_window_tail(b_window.end() - sliding_window_blocks, b_window.end());
-    EXPECT_EQ(b_window_tail, swa_window_a);
+              expected_shared - sliding_window_blocks);
 
     cache_manager_->DestroyFinishedRequest(req_id_b);
   }
@@ -1165,30 +1138,32 @@ TEST_F(PrefixCacheManagerSWATest, HitCountIncrementedOnPrefixCacheHit) {
   // Request A fills the prefix tree.
   RunFullRequest(1, token_ids);
 
-  // Collect FA block ids for blocks 2 and 3 (the SWA window for a 4-block prefix).
+  // Collect FA block ids for blocks 1 and 2（规避后 SWA 窗口为 [1,2]）。
   int64_t req_id_probe = 99;
   size_t sb = 0, ub = 0, st = 0;
   cache_manager_->GetRequestPrefixBlockNumber(req_id_probe, token_ids, token_ids.size(), sb, ub, st);
-  ASSERT_EQ(sb, 4u);
+  const size_t total_blocks = token_ids.size() / block_token_num;
+  const size_t expected_shared = total_blocks - kFullHitSharedBlockShortfall;
+  ASSERT_EQ(sb, expected_shared);
 
+  size_t fa_id_1 = cache_manager_->cached_requests_[req_id_probe]->cached_blocks[1]->block_id;
   size_t fa_id_2 = cache_manager_->cached_requests_[req_id_probe]->cached_blocks[2]->block_id;
-  size_t fa_id_3 = cache_manager_->cached_requests_[req_id_probe]->cached_blocks[3]->block_id;
 
   // hit_count should be 1 after the first GetRequestPrefixBlockNumber call
   // (Phase 2 of req_id_probe incremented it).
+  EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_1)->hit_count, 1u);
   EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_2)->hit_count, 1u);
-  EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_3)->hit_count, 1u);
 
   cache_manager_->DestroyFinishedRequest(req_id_probe);
 
   // Request B: same tokens again.
   int64_t req_id_b = 2;
   cache_manager_->GetRequestPrefixBlockNumber(req_id_b, token_ids, token_ids.size(), sb, ub, st);
-  ASSERT_EQ(sb, 4u);
+  ASSERT_EQ(sb, expected_shared);
 
   // hit_count should now be 2.
+  EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_1)->hit_count, 2u);
   EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_2)->hit_count, 2u);
-  EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_3)->hit_count, 2u);
 
   cache_manager_->DestroyFinishedRequest(req_id_b);
 }

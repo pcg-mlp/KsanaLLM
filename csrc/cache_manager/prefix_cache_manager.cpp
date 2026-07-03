@@ -231,6 +231,11 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
     //   - If the new block has a valid SWA entry, extend the streak.
     //   - Otherwise the streak is broken; reset to 0.
     if (swa_cache_manager_->IsSWABlockValid(cur_block->block_id)) {
+      // SWA 场景下 prefix cache 全命中存在已知缺陷；已覆盖全部待查 token 时提前结束，规避该路径。
+      if ((i + 1) * block_token_num >= check_token_num) {
+        KLLM_LOG_DEBUG << " full hit detected, break";
+        break;
+      }
       ++swa_valid_in_window;
     } else {
       swa_valid_in_window = 0;
@@ -849,6 +854,9 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
       if (mem_id >= 0) {
         swa_req_block_ids.push_back(mem_id);
         swa_block_idx_offsets.push_back(cached_request->swa_window_block_idxs[i]);
+      } else {
+        KLLM_LOG_ERROR << "Failed to get SWA memory block id for fa_block_id="
+                       << cached_request->swa_window_fa_block_ids[i];
       }
     }
   }
