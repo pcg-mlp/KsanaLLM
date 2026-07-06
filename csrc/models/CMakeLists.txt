@@ -78,6 +78,7 @@ if(WITH_STANDALONE_TEST)
 
       cpp_test(deepseek_v3_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v3/deepseek_v3_model_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(deepseek_v3_w4afp8_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v3/deepseek_v3_w4afp8_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+      cpp_test(deepseek_v4_weight_loader_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v4/deepseek_v4_weight_loader_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(glm4_moe_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/glm4_moe/glm4_moe_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       # cpp_test(deepseek_v3_dp_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v3/deepseek_v3_dp_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(arc_hunyuan_video_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/arc_hunyuan_video/arc_hunyuan_video_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

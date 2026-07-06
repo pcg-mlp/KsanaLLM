@@ -6,6 +6,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "device/device_types.h"
@@ -274,6 +275,14 @@ struct Dsv4AttnConfig {
   std::vector<uint32_t> compress_ratios;
 };
 
+// The DSpark (Draft Speculation with Parallel Ranking/Knowledge) config.
+struct DsparkConfig {
+  uint32_t dspark_block_size = 0;  // 0 means DSpark is disabled.
+  uint32_t dspark_noise_token_id = 0;
+  std::unordered_set<uint32_t> dspark_target_layer_ids;
+  uint32_t dspark_markov_rank = 256;
+};
+
 // The model informations.
 struct ModelConfig {
   // The model name.
@@ -376,6 +385,8 @@ struct ModelConfig {
   // For mhc model
   bool use_mhc = false;
   MhcConfig mhc_config;
+  // For dspark model
+  DsparkConfig dspark_config;
 
   // For arc-hunyuan-video
   // TODO(jinxcwu) 后续要简化下，不是所有都需要的

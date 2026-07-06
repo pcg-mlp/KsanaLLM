@@ -113,5 +113,12 @@
     "^mtp\\.(\\d+)\\.hc_ffn_scale$": "model.mtp.$1.hc_ffn_scale",
     "^mtp\\.(\\d+)\\.hc_head_base$": "model.mtp.$1.hc_head_base",
     "^mtp\\.(\\d+)\\.hc_head_fn$": "model.mtp.$1.hc_head_fn",
-    "^mtp\\.(\\d+)\\.hc_head_scale$": "model.mtp.$1.hc_head_scale"
+    "^mtp\\.(\\d+)\\.hc_head_scale$": "model.mtp.$1.hc_head_scale",
+
+    "^mtp\\.(\\d+)\\.main_proj\\.weight$": "model.mtp.$1.main_proj.weight",
+    "^mtp\\.(\\d+)\\.main_proj\\.scale$": "model.mtp.$1.main_proj.weight_scale_inv",
+    "^mtp\\.(\\d+)\\.main_norm\\.weight$": "model.mtp.$1.main_norm.weight",
+    "^mtp\\.(\\d+)\\.markov_head\\.markov_w1\\.weight$": "model.mtp.$1.markov_head.markov_w1.weight",
+    "^mtp\\.(\\d+)\\.markov_head\\.markov_w2\\.weight$": "model.mtp.$1.markov_head.markov_w2.weight",
+    "^mtp\\.(\\d+)\\.confidence_head\\.proj\\.weight$": "model.mtp.$1.confidence_head.proj.weight"
 }

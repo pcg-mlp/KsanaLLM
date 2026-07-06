@@ -3,13 +3,84 @@
 ==============================================================================*/
 #pragma once
 
+#include <fstream>
 #include <regex>
+#include <set>
+#include <string>
 
 #include "models/base/base_model_config.h"
 #include "models/deepseek_v3/deepseek_v3_config.h"
 #include "nlohmann/json.hpp"
+#include "utils/logger.h"
 
 namespace ksana_llm {
+
+// Infer DSpark stage count from local checkpoint metadata.
+//
+// The public DSpark top-level config currently keeps num_nextn_predict_layers=1
+// even though the attached DSpark module has three mtp.N stages. The HF inference
+// directory carries n_mtp_layers; if unavailable, fall back to the safetensors index.
+inline int ReadDsparkNumLayers(const std::string& model_path, int default_value) {
+  // 1. Try inference/config.json -> "n_mtp_layers"
+  const std::string inference_config = model_path + "/inference/config.json";
+  {
+    std::ifstream file(inference_config);
+    if (file.is_open()) {
+      try {
+        nlohmann::json json_data;
+        file >> json_data;
+        if (json_data.contains("n_mtp_layers") && !json_data["n_mtp_layers"].is_null()) {
+          int n_layers = json_data["n_mtp_layers"].get<int>();
+          if (n_layers > 0) {
+            return n_layers;
+          }
+        }
+      } catch (const std::exception& e) {
+        KLLM_LOG_WARNING << fmt::format("Failed to parse {}: {}", inference_config, e.what());
+      }
+    }
+  }
+
+  // 2. Fall back to model.safetensors.index.json -> count distinct mtp.<N> stages
+  const std::string index_path = model_path + "/model.safetensors.index.json";
+  {
+    std::ifstream file(index_path);
+    if (file.is_open()) {
+      try {
+        nlohmann::json json_data;
+        file >> json_data;
+        if (json_data.contains("weight_map")) {
+          std::set<int> stage_ids;
+          for (auto it = json_data["weight_map"].begin(); it != json_data["weight_map"].end(); ++it) {
+            const std::string& name = it.key();
+            // Split by '.' and check pattern "mtp.<N>.xxx"
+            size_t first_dot = name.find('.');
+            if (first_dot == std::string::npos || name.substr(0, first_dot) != "mtp") {
+              continue;
+            }
+            size_t second_dot = name.find('.', first_dot + 1);
+            if (second_dot == std::string::npos) {
+              continue;
+            }
+            const std::string stage_str = name.substr(first_dot + 1, second_dot - first_dot - 1);
+            try {
+              stage_ids.insert(std::stoi(stage_str));
+            } catch (const std::exception&) {
+              // Ignore non-integer stage ids.
+            }
+          }
+          if (!stage_ids.empty()) {
+            return *stage_ids.rbegin() + 1;
+          }
+        }
+      } catch (const std::exception& e) {
+        KLLM_LOG_WARNING << fmt::format("Failed to parse {}: {}", index_path, e.what());
+      }
+    }
+  }
+
+  return default_value;
+}
 
 inline void PrepareDeepSeekV4Attributes(const nlohmann::json& config_json, ModelConfig& model_config) {
   PrepareDeepSeekV3Attributes(config_json, model_config);
@@ -50,6 +121,21 @@ inline void PrepareDeepSeekV4Attributes(const nlohmann::json& config_json, Model
   model_config.moe_config.shared_expert_inter_size = model_config.moe_config.moe_inter_size;
 
   model_config.swiglu_limit = config_json.value("swiglu_limit", 10.0f);
+
+  // For dspark config
+  model_config.dspark_config.dspark_block_size = config_json.value("dspark_block_size", 0u);
+  model_config.dspark_config.dspark_noise_token_id = config_json.value("dspark_noise_token_id", 0u);
+  if (config_json.contains("dspark_target_layer_ids")) {
+    auto vec = config_json["dspark_target_layer_ids"].get<std::vector<uint32_t>>();
+    model_config.dspark_config.dspark_target_layer_ids =
+        std::unordered_set<uint32_t>(vec.begin(), vec.end());
+  }
+  model_config.dspark_config.dspark_markov_rank = config_json.value("dspark_markov_rank", 256u);
+
+  // Infer DSpark stage count from local checkpoint metadata.
+  model_config.num_nextn_predict_layers =
+      ReadDsparkNumLayers(model_config.path, model_config.num_nextn_predict_layers);
+  KLLM_LOG_INFO << fmt::format("Inferred dsv4 num_nextn_predict_layers: {}", model_config.num_nextn_predict_layers);
 }
 
 struct DeepSeekV4Config : public DeepSeekV3Config {
@@ -62,6 +148,8 @@ struct DeepSeekV4Config : public DeepSeekV3Config {
 
   bool use_mhc = false;
   MhcConfig mhc_config;
+
+  DsparkConfig dspark_config;
 };
 
 }  // namespace ksana_llm

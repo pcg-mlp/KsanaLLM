@@ -40,7 +40,9 @@ Status DeepSeekV4ConfigParser::ParseModelConfig(const nlohmann::json &config_jso
   // deepseek_v4_config->inter_size = config_json.value("intermediate_size", 11008);
   deepseek_v4_config->vocab_size = config_json.value("vocab_size", 129280);
   deepseek_v4_config->num_layer = config_json.value("num_hidden_layers", 43);
-  deepseek_v4_config->num_nextn_predict_layers = config_json.value("num_nextn_predict_layers", 1);
+  deepseek_v4_config->num_nextn_predict_layers =
+      ReadDsparkNumLayers(model_dir, config_json.value("num_nextn_predict_layers", 1));
+  KLLM_LOG_INFO << "dsv4 num_nextn_predict_layers: " << deepseek_v4_config->num_nextn_predict_layers;
   deepseek_v4_config->hidden_units = config_json.value("hidden_size", 4096);
   deepseek_v4_config->rope_theta = config_json.value("rope_theta", 10000.0f);
   deepseek_v4_config->layernorm_eps = config_json.value("rms_norm_eps", 1e-6);
@@ -162,7 +164,22 @@ Status DeepSeekV4ConfigParser::ParseModelConfig(const nlohmann::json &config_jso
                                deepseek_v4_config->mhc_config.hc_mult, deepseek_v4_config->mhc_config.hc_sinkhorn_iters,
                                deepseek_v4_config->mhc_config.hc_eps);
 
-  // 6. Parse quantization config
+  // 6. Parse dspark config
+  deepseek_v4_config->dspark_config.dspark_block_size = config_json.value("dspark_block_size", 0u);
+  deepseek_v4_config->dspark_config.dspark_noise_token_id = config_json.value("dspark_noise_token_id", 0u);
+  if (config_json.contains("dspark_target_layer_ids")) {
+    auto vec = config_json["dspark_target_layer_ids"].get<std::vector<uint32_t>>();
+    deepseek_v4_config->dspark_config.dspark_target_layer_ids =
+        std::unordered_set<uint32_t>(vec.begin(), vec.end());
+  }
+  deepseek_v4_config->dspark_config.dspark_markov_rank = config_json.value("dspark_markov_rank", 256u);
+  KLLM_LOG_INFO << fmt::format("DSpark config: block_size: {}, noise_token_id: {}, markov_rank: {}, target_layers: {}",
+                               deepseek_v4_config->dspark_config.dspark_block_size,
+                               deepseek_v4_config->dspark_config.dspark_noise_token_id,
+                               deepseek_v4_config->dspark_config.dspark_markov_rank,
+                               deepseek_v4_config->dspark_config.dspark_target_layer_ids.size());
+
+  // 7. Parse quantization config
   ParseQuantConfig(config_json, deepseek_v4_config, env->GetYamlWeightQuantMethod(), env->GetYamlGptqBackend());
   return Status();
 }

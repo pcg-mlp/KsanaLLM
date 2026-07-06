@@ -347,7 +347,8 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
                                 global_expert_para_size);
   KLLM_LOG_DEBUG << fmt::format("In rank {} node_rank {}, valid experts is [{}, {})", dev_rank, expert_node_rank,
                                 expert_start_id, expert_end_id);
-  KLLM_LOG_DEBUG << fmt::format("V4: num_layers={}", num_layers);
+  KLLM_LOG_DEBUG << fmt::format("V4: num_layers={}, upper_nextn_layer_idx={}, lower_nextn_layer_idx={}", num_layers,
+                                pipeline_config_.upper_nextn_layer_idx, pipeline_config_.lower_nextn_layer_idx);
 
   // MoE shape calculations
   size_t moe_inter_size_per_rank =
@@ -663,6 +664,38 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       }
       CombineWeightByRow(file_weight_name, host_weight_tensor, "attn.wq_a", "attn.wkv", "attn.wqkv_a",
                          device_model_weights, dev_rank, loaded_first_dim);
+
+      // For DSpark MTP layers (layer_id >= num_layer), after fusing wqkv_a, also expose
+      // attn.wkv as a separate entry pointing to the wkv portion inside the fused wqkv_a tensor.
+      // This avoids extra device memory allocation — the wkv view shares the same
+      // underlying buffer as wqkv_a, offset by the wq_a portion's byte size.
+      if (deepseek_v4_config_->dspark_config.dspark_block_size > 0 &&
+          file_weight_name.find("attn.wkv") != std::string::npos &&
+          extracted_layer_idx >= static_cast<int>(deepseek_v4_config_->num_layer)) {
+        // Construct the fused name to look up the already-allocated wqkv_a tensor.
+        std::string fused_name = file_weight_name;
+        auto wkv_pos = fused_name.find("attn.wkv.");
+        if (wkv_pos != std::string::npos) {
+          fused_name.replace(wkv_pos, strlen("attn.wkv."), "attn.wqkv_a.");
+          auto fused_it = device_model_weights.find(fused_name);
+          if (fused_it != device_model_weights.end()) {
+            const Tensor& fused_tensor = fused_it->second;
+            // wkv portion starts after the wq_a portion: offset in bytes = fused_total - wkv_size
+            size_t wkv_bytes = host_weight_tensor.GetTotalBytes();
+            size_t fused_total_bytes = fused_tensor.GetTotalBytes();
+            size_t offset_bytes = fused_total_bytes - wkv_bytes;
+            size_t elem_size = GetTypeSize(host_weight_tensor.dtype);
+            size_t offset_elems = offset_bytes / elem_size;
+            // Create a view with the original wkv shape, sharing the fused tensor's memory.
+            Tensor wkv_view = fused_tensor.GetView(host_weight_tensor.shape, offset_elems);
+            // Construct the wkv name from the original file_weight_name (it already contains attn.wkv).
+            device_model_weights[file_weight_name] = wkv_view;
+            KLLM_LOG_DEBUG << fmt::format(
+                "V4: Dev_rank: {}, [DSpark wkv view] stored: {}, shape: {}, offset_bytes: {}, dtype: {}", dev_rank,
+                file_weight_name, Vector2Str(std::vector<size_t>(wkv_view.shape)), offset_bytes, wkv_view.dtype);
+          }
+        }
+      }
       continue;
     }
 
@@ -808,6 +841,56 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [MTP e/h_proj] stored: {}, shape: {}, dtype: {}", dev_rank,
                                     file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
                                     dev_tensor.dtype);
+      continue;
+    }
+
+    // =====================================================================
+    // 8b. DSpark MTP weights (main_proj, markov_head, confidence_head)
+    // =====================================================================
+    // main_proj: direct copy to each device, no TP split
+    if (file_weight_name.find("main_proj.weight") != std::string::npos) {
+      Tensor dev_tensor;
+      CopyToDevice(host_weight_tensor, dev_tensor, context_);
+      device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark main_proj] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
+      continue;
+    }
+
+    // markov_head.markov_w1: split along dim 1 (TransSplitOptTrans)
+    if (file_weight_name.find("markov_head.markov_w1.weight") != std::string::npos) {
+      Tensor dev_tensor;
+      size_t tensor_para_size = context_->global->GetTensorParallelSize();
+      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, tensor_para_size, true);
+      device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark markov_w1] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
+      continue;
+    }
+
+    // markov_head.markov_w2: split along dim 0 (SplitOptTrans)
+    if (file_weight_name.find("markov_head.markov_w2.weight") != std::string::npos) {
+      Tensor dev_tensor;
+      size_t tensor_para_size = context_->global->GetTensorParallelSize();
+      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, tensor_para_size, true);
+      device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark markov_w2] stored: {}, shape: {}, dtype: {}", dev_rank,
+                                    file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
+      continue;
+    }
+
+    // confidence_head.proj: no TP split, copy then transpose
+    if (file_weight_name.find("confidence_head.proj.weight") != std::string::npos) {
+      Tensor dev_tensor;
+      CopyToDevice(host_weight_tensor, dev_tensor, context_);
+      weight_impl_->PermuteWeight(dev_tensor, {1, 0}, dev_rank);
+      device_model_weights[file_weight_name] = dev_tensor;
+      KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark confidence_head] stored: {}, shape: {}, dtype: {}",
+                                    dev_rank, file_weight_name,
+                                    Vector2Str(std::vector<size_t>(dev_tensor.shape)), dev_tensor.dtype);
       continue;
     }
 
