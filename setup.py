@@ -259,6 +259,12 @@ class BuildExt(build_ext_orig):
         dst_dir = extdir.parent / "ksana_llm" / "deep_gemm"
         shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
+        # Copy humming package
+        src_dir = (cwd / "3rdparty" / "LLM_kernels" / "csrc" / "kernels" / "nvidia" /
+                   "others" / "humming" / "include" / "humming")
+        dst_dir = extdir.parent / "ksana_llm" / "humming"
+        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
         # Copy humming jit Python file
         src_file = (cwd / "3rdparty" / "LLM_kernels" / "csrc" / "kernels" / "nvidia" /
                     "others" / "humming" / "jit" / "humming_tool.py")
