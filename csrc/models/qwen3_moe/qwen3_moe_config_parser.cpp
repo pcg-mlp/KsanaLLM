@@ -6,6 +6,7 @@
 
 #include "configure/environment.h"
 #include "configure/json_config_utils.h"
+#include "configure/quant_config_parser.h"
 #ifdef ENABLE_CUDA
 #include "device/nvidia/cuda_utils.h"
 #endif
@@ -103,20 +104,8 @@ Status Qwen3MoeConfigParser::ParseQuantConfig(const nlohmann::json &config_json,
   if (qwen3_moe_config->is_quant) {
     std::string quant_method = config_json["quantization_config"].at("quant_method");
     if (quant_method == "fp8") {
-      // Handle static FP8 quantization from checkpoint
-      qwen3_moe_config->quant_config.method = QUANT_FP8_E4M3;
-      qwen3_moe_config->quant_config.is_checkpoint_fp8_serialized = true;
-      qwen3_moe_config->quant_config.is_activation_scheme_static =
-          config_json["quantization_config"].value("activation_scheme", "") == "static";
-      if (!qwen3_moe_config->quant_config.is_activation_scheme_static) {
-        KLLM_LOG_ERROR << "dynamic activation quant scheme is not supported for qwen3-moe FP8 quantization.";
-        return Status(RET_MODEL_LOAD_FAILED,
-                      "dynamic activation quant scheme is not supported for qwen3-moe FP8 quantization.");
-      }
-      KLLM_LOG_INFO << fmt::format(
-          "using static fp8 quant model, is_checkpoint_fp8_serialized: {}, is_activation_scheme_static: {}",
-          qwen3_moe_config->quant_config.is_checkpoint_fp8_serialized,
-          qwen3_moe_config->quant_config.is_activation_scheme_static);
+      ParseFP8QuantConfig(config_json["quantization_config"], qwen3_moe_config->is_moe,
+                          qwen3_moe_config->quant_config);
     } else {
       KLLM_LOG_ERROR << fmt::format("unsupported quant method: {}", quant_method);
       return Status(RET_MODEL_LOAD_FAILED, fmt::format("unsupported quant method: {}", quant_method));

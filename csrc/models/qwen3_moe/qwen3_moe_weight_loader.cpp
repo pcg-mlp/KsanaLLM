@@ -4,6 +4,8 @@
 
 #include "models/qwen3_moe/qwen3_moe_weight_loader.h"
 
+#include <torch/torch.h>
+
 #include "model_loader/model_loader_utils.h"
 #include "models/qwen3_moe/qwen3_moe_config.h"
 
@@ -18,7 +20,9 @@ Qwen3MoeWeightLoader::Qwen3MoeWeightLoader(std::shared_ptr<BaseModelConfig> mode
   tp_ = runtime_config_.parallel_basic_config.tensor_parallel_size;
   weight_method_ = std::make_shared<WeightMethod>(common_weight_loader_, tp_);
   std::shared_ptr<Qwen3MoeConfig> qwen3_moe_config = std::dynamic_pointer_cast<Qwen3MoeConfig>(model_config);
-  if (qwen3_moe_config && qwen3_moe_config->is_quant && qwen3_moe_config->quant_config.method == QUANT_FP8_E4M3) {
+  if (qwen3_moe_config && qwen3_moe_config->is_quant &&
+      (qwen3_moe_config->quant_config.method == QUANT_FP8_E4M3 ||
+       qwen3_moe_config->quant_config.method == QUANT_BLOCK_FP8_E4M3)) {
     weight_method_ = std::make_shared<WeightMethod>(common_weight_loader_, tp_, qwen3_moe_config->quant_config);
   } else {
     weight_method_ = std::make_shared<WeightMethod>(common_weight_loader_, tp_);
@@ -130,6 +134,60 @@ Status Qwen3MoeWeightLoader::process_experts_proj(std::unordered_map<std::string
       device_model_weights.at(down_proj_name + weight_suffix).shape = new_shape;
     }
   }
+  // Block-wise FP8: concat per-expert block scales into batched scales matching the merged
+  // up_gate_proj/down_proj weights and bind them. Activation is dynamic (no input_scale in
+  // checkpoint), so input_scales is left null. No-op for non-block (BF16 / static-FP8) checkpoints.
+  if (qwen3_moe_config->quant_config.is_fp8_blockwise) {
+    const bool use_vllm_moe = qwen3_moe_config->moe_config.use_vllm_moe;
+    const std::string first_proj = use_vllm_moe ? "gate_proj" : "up_proj";
+    const std::string second_proj = use_vllm_moe ? "up_proj" : "gate_proj";
+
+    torch::Tensor first_scale = common_weight_loader_->GetTorchTensorFromTensor(
+        device_model_weights.at(fmt::format("{}0.{}.weight_scale", weight_prefix_name, first_proj)));
+    const int64_t scale_rows = first_scale.size(0);
+    const int64_t scale_cols = first_scale.size(1);
+    std::vector<torch::Tensor> expert_up_gate_scales;
+    for (int expert_idx = 0; expert_idx < num_experts; expert_idx++) {
+      torch::Tensor s0 = common_weight_loader_->GetTorchTensorFromTensor(device_model_weights.at(
+          fmt::format("{}{}.{}.weight_scale", weight_prefix_name, expert_idx, first_proj)));
+      torch::Tensor s1 = common_weight_loader_->GetTorchTensorFromTensor(device_model_weights.at(
+          fmt::format("{}{}.{}.weight_scale", weight_prefix_name, expert_idx, second_proj)));
+      expert_up_gate_scales.push_back(torch::cat({s0, s1}, 0));
+    }
+    torch::Tensor batched_up_gate_scale = torch::stack(expert_up_gate_scales, 0).contiguous();
+    const std::string up_gate_scale_name = weight_prefix_name + "up_gate_proj.weight_scale";
+    device_model_weights[up_gate_scale_name] = Tensor(
+        MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
+        {static_cast<size_t>(num_experts), static_cast<size_t>(2 * scale_rows), static_cast<size_t>(scale_cols)});
+    common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[up_gate_scale_name])
+        .copy_(batched_up_gate_scale);
+    device_model_weights[weight_prefix_name + "up_gate_proj.weight"].weight_scales =
+        &device_model_weights[up_gate_scale_name];
+
+    std::vector<torch::Tensor> expert_down_scales;
+    for (int expert_idx = 0; expert_idx < num_experts; expert_idx++) {
+      expert_down_scales.push_back(common_weight_loader_->GetTorchTensorFromTensor(device_model_weights.at(
+          fmt::format("{}{}.down_proj.weight_scale", weight_prefix_name, expert_idx))));
+    }
+    torch::Tensor batched_down_scale = torch::stack(expert_down_scales, 0).contiguous();
+    const std::string down_scale_name = weight_prefix_name + "down_proj.weight_scale";
+    device_model_weights[down_scale_name] = Tensor(
+        MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
+        {static_cast<size_t>(num_experts), static_cast<size_t>(batched_down_scale.size(1)),
+         static_cast<size_t>(batched_down_scale.size(2))});
+    common_weight_loader_->GetTorchTensorFromTensor(device_model_weights[down_scale_name]).copy_(batched_down_scale);
+    device_model_weights[weight_prefix_name + "down_proj.weight"].weight_scales =
+        &device_model_weights[down_scale_name];
+
+    for (int expert_idx = 0; expert_idx < num_experts; expert_idx++) {
+      device_model_weights.erase(
+          fmt::format("{}{}.{}.weight_scale", weight_prefix_name, expert_idx, first_proj));
+      device_model_weights.erase(
+          fmt::format("{}{}.{}.weight_scale", weight_prefix_name, expert_idx, second_proj));
+      device_model_weights.erase(fmt::format("{}{}.down_proj.weight_scale", weight_prefix_name, expert_idx));
+    }
+  }
+
   return Status();
 }
 
@@ -147,7 +205,8 @@ Status Qwen3MoeWeightLoader::PreProcessModelWeights(const std::unordered_map<std
 #define REGISTER_CUSTOM(key, weight_name) \
   weight_method_->GetRegistry()[#key][#weight_name].Add(this, &Qwen3MoeWeightLoader::key##_##weight_name)
 
-  if (qwen3_moe_config->quant_config.method == QUANT_FP8_E4M3) {
+  if (qwen3_moe_config->quant_config.method == QUANT_FP8_E4M3 ||
+      qwen3_moe_config->quant_config.method == QUANT_BLOCK_FP8_E4M3) {
     REGISTER_FP8E4M3(load, attn_q_k_v_proj);
     REGISTER_FP8E4M3(load, attn_o_proj);
     REGISTER_FP8E4M3(load, mlp_gate_up_proj);
@@ -265,6 +324,19 @@ Status Qwen3MoeWeightLoader::PostProcessModelWeights(std::unordered_map<std::str
   // 3. lm_head weights
   const std::string lm_head_name = "lm_head.";
   registry["lm_head"].Run<Status>(dev_weights_map, lm_head_name, dev_rank);
+
+  // FP8 checkpoints store non-quantized weights (e.g. mlp.gate, embed, norm) as FP32; cast them to
+  // weight_data_type so downstream matmul/layer layers see BF16. No-op for non-quant (BF16) checkpoints
+  // (is_quant is false) and for already-BF16 weights.
+  std::shared_ptr<Qwen3MoeConfig> qwen3_moe_config = std::dynamic_pointer_cast<Qwen3MoeConfig>(model_config_);
+  if (qwen3_moe_config && qwen3_moe_config->is_quant &&
+      qwen3_moe_config->weight_data_type != DataType::TYPE_FP32) {
+    for (auto& [name, tensor] : dev_weights_map) {
+      if (tensor.dtype != DataType::TYPE_FP32) continue;
+      if (name.find("weight_scale") != std::string::npos || name.find("input_scale") != std::string::npos) continue;
+      CastDeviceTensorType(tensor, qwen3_moe_config->weight_data_type, dev_rank);
+    }
+  }
 
   return Status();
 }
