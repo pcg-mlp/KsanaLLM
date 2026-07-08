@@ -268,6 +268,9 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
 template <typename scalar_t>
 __global__ void sgl_moe_token_sort_kernel(const scalar_t* __restrict__ topk_ids, int32_t* __restrict__ sorted_token_ids,
                                           int32_t* __restrict__ cumsum, size_t numel) {
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.wait;");
+#endif
   const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   const size_t stride = blockDim.x * gridDim.x;
 
@@ -276,6 +279,9 @@ __global__ void sgl_moe_token_sort_kernel(const scalar_t* __restrict__ topk_ids,
     int32_t rank_post_pad = atomicAdd(&cumsum[expert_id], 1);
     sorted_token_ids[rank_post_pad] = i;
   }
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.launch_dependents;");
+#endif
 }
 
 __device__ __forceinline__ int warp_exclusive_scan(int v, const unsigned mask = 0xffffffffu) {
@@ -297,6 +303,9 @@ __global__ void sgl_moe_align_block_size_kernel(
     const scalar_t* __restrict__ topk_ids, int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
     int32_t* __restrict__ total_tokens_post_pad, const int32_t max_num_tokens_padded, const int32_t num_experts,
     const int32_t block_size, const size_t numel, int32_t* __restrict__ cumsum, const int32_t scan_size) {
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.wait;");
+#endif
   // Threads in blocks with indices `> 0` just perform `sorted_ids.fill_(numel)`
   if (blockIdx.x > 0) {
     const int32_t fill_val = static_cast<int32_t>(numel);
@@ -316,6 +325,9 @@ __global__ void sgl_moe_align_block_size_kernel(
          i += stride) {
       sorted_token_ids[i] = fill_val;
     }
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    asm volatile("griddepcontrol.launch_dependents;");
+#endif
     return;
   }
 
@@ -423,6 +435,9 @@ __global__ void sgl_moe_align_block_size_kernel(
     }
     expert_ids[i] = left - 1;
   }
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.launch_dependents;");
+#endif
 }
 
 // Merged align kernel: computes alignment for two block_m values in a single launch.
@@ -1007,14 +1022,17 @@ void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t*
       std::min(max_blocks, 1 + CEILDIV(max_num_tokens_padded / SGL_MOE_ALIGN_BLOCK_VEC_SIZE, align_block_threads));
   const size_t scan_size = llm_kernels::utils::NextPow2(num_experts);
   const size_t shared_mem_size = (num_experts + (num_experts + 1) + scan_size + WARP_SIZE) * sizeof(int32_t);
-  sgl_moe_align_block_size_kernel<T><<<align_num_blocks, align_block_threads, shared_mem_size, stream>>>(
-      topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, max_num_tokens_padded, num_experts, block_size,
-      numel, cumsum, scan_size);
+
+  LAUNCH_KERNEL_WITH_PDL(sgl_moe_align_block_size_kernel<T>, align_num_blocks, align_block_threads, shared_mem_size,
+      stream, topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, max_num_tokens_padded, num_experts,
+      block_size, numel, cumsum, static_cast<int32_t>(scan_size));
 
   const int block_threads = 256;
   const int num_blocks = (numel + block_threads - 1) / block_threads;
   const int actual_blocks = std::min(num_blocks, max_blocks);
-  sgl_moe_token_sort_kernel<T><<<actual_blocks, block_threads, 0, stream>>>(topk_ids, sorted_token_ids, cumsum, numel);
+
+  LAUNCH_KERNEL_WITH_PDL(sgl_moe_token_sort_kernel<T>, actual_blocks, block_threads, 0, stream, topk_ids,
+      sorted_token_ids, cumsum, numel);
 }
 #define INVOKE_SGL_MOE_ALIGN_BLOCK_SIZE(T)                                                                             \
   template void InvokeSglMoeAlignBlockSize<T>(T * topk_ids, int32_t * sorted_token_ids, int32_t * expert_ids,          \
@@ -1322,10 +1340,12 @@ template <typename T>
 void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
                           const cudaStream_t& stream) {
   size_t num_tokens = elements_num / 2 / inter_size;
-  dim3 grid(num_tokens);
   uint32_t vec_size = 16 / sizeof(T);
-  dim3 block(std::min(inter_size / vec_size, static_cast<size_t>(1024)));
-  flashinfer::activation::act_and_mul_kernel<T, silu><<<grid, block, 0, stream>>>(output, input, inter_size);
+  uint32_t block_dim = std::min(inter_size / vec_size, static_cast<size_t>(1024));
+
+  constexpr auto kernel = flashinfer::activation::act_and_mul_kernel<T, silu>;
+  LAUNCH_KERNEL_WITH_PDL(kernel, static_cast<uint32_t>(num_tokens), block_dim, 0, stream, output, input,
+      static_cast<int>(inter_size));
 }
 
 #define FLASHINFER_SILU_AND_MUL(T)                                                                           \

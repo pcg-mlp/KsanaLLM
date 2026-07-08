@@ -21,6 +21,8 @@
 #include <cuda_runtime.h>
 #include <type_traits>
 
+#include "csrc/utils/nvidia/cuda_utils.h"
+
 namespace llm_kernels {
 namespace nvidia {
 
@@ -81,6 +83,10 @@ __launch_bounds__(WARPS_PER_CTA * kWarpSize) __global__ void TopkGatingSoftmaxKe
   const int warp_base_row = cta_base_row + threadIdx.y * ROWS_PER_WARP;
   const int thread_row_in_warp = threadIdx.x / THREADS_PER_ROW;
   const int thread_row = warp_base_row + thread_row_in_warp;
+
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.wait;");
+#endif
 
   if (thread_row >= num_rows) return;
 
@@ -201,6 +207,10 @@ __launch_bounds__(WARPS_PER_CTA * kWarpSize) __global__ void TopkGatingSoftmaxKe
       }
     }
   }
+
+#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  asm volatile("griddepcontrol.launch_dependents;");
+#endif
 }
 
 // ============================================================================
@@ -234,8 +244,9 @@ void TopkGatingSoftmaxLaunch(const T* input, float* output, int32_t* indices, in
   const int num_blocks = (num_warps + WARPS_PER_TB - 1) / WARPS_PER_TB;
   dim3 block_dim(kWarpSize, WARPS_PER_TB);
 
-  TopkGatingSoftmaxKernel<T, VPT, EXPERTS, WARPS_PER_TB, BYTES_PER_LDG>
-      <<<num_blocks, block_dim, 0, stream>>>(input, output, num_rows, indices, k, renormalize, routed_scaling_factor);
+  constexpr auto kernel = TopkGatingSoftmaxKernel<T, VPT, EXPERTS, WARPS_PER_TB, BYTES_PER_LDG>;
+  LAUNCH_KERNEL_WITH_PDL(kernel, num_blocks, block_dim, 0, stream,
+      input, output, num_rows, indices, k, renormalize, routed_scaling_factor);
 }
 
 #define LAUNCH_TOPK_GATING(T_TYPE, NUM_EXPERTS, WARPS)                                                 \
