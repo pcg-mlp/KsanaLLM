@@ -739,6 +739,12 @@ class KsanaOpenAIServing:
         )
         _chat_template_kwargs.update(chat_template_kwargs or {})
 
+        # Pass reasoning_effort to chat template for models that support it (e.g. Qwen3, GLM).
+        # deepseek_v32/deepseek_v4 branches don't use _chat_template_kwargs and handle it separately.
+        reasoning_effort = getattr(request, "reasoning_effort", None)
+        if reasoning_effort is not None:
+            _chat_template_kwargs["reasoning_effort"] = reasoning_effort
+
         request_prompt: Union[str, list[int]]
 
         if isinstance(tokenizer, MistralTokenizer):
