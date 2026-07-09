@@ -12,7 +12,7 @@ add_library(runtime STATIC ${runtime_SRCS})
 add_dependencies(runtime utils fmt gflags)
 target_link_libraries(runtime PUBLIC
   -lpthread -ldl gflags ${runtime_nvidia_LIBS} ${runtime_ascend_LIBS}
-  model_loader models utils transfer
+  model_loader models utils transfer pd_v2_public
 )
 
 # for test

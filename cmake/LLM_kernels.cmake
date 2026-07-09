@@ -5,6 +5,12 @@
 # prepare cutlass
 message(STATUS "Running submodule build to fetch LLM_kernels")
 
+# LLM_kernels/tools/search_best_gemm_algo includes gflags/gflags.h and links
+# against `gflags`. Make sure this is the CMake target from our external module
+# before the LLM_kernels subdirectory is added; otherwise CMake treats `gflags`
+# as a plain linker name and no include directory is propagated.
+include(external/gflags)
+
 # Suppress all warnings from LLM_kernels compilation
 set(CMAKE_CXX_FLAGS_SAVED "${CMAKE_CXX_FLAGS}")
 set(CMAKE_C_FLAGS_SAVED "${CMAKE_C_FLAGS}")

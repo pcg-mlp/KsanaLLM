@@ -3,6 +3,8 @@
 ==============================================================================*/
 #pragma once
 
+#include <functional>
+
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/environment.h"
 #include "distributed/control_message.h"
@@ -57,6 +59,16 @@ enum {
   IPC_FUNC_GLOBAL_CACHE_QUERY,
   IPC_FUNC_GLOBAL_CACHE_QUERY_DONE,
   IPC_FUNC_GLOBAL_CACHE_PUT_DONE,
+
+  // pd_v2: engine asks executor[rank] for its Mooncake-registered KV
+  // pool base VA + shape. One round-trip per rank at first SubmitPrefill
+  // call, cached afterwards.
+  IPC_FUNC_PD_V2_GET_KV_POOL_BASE_VA,
+
+  // pd_v2: executor → engine async report that all in-flight Mooncake
+  // submitTransfer batches for a request have drained (sender-side
+  // barrier). Engine then sends PrefillRequestComplete back to peer.
+  IPC_FUNC_PD_V2_BARRIER_DONE,
 };
 
 // Used to call some pre-defined functions in different process.
@@ -163,6 +175,26 @@ class IpcFuncWrapper {
 
   // 设置 GlobalCachePutDone callable 的 tracker 依赖
   void SetGlobalCachePutDoneCallableTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
+
+  // pd_v2: engine queries executor[rank] for its Mooncake-registered KV
+  // pool base VA + shape. Wired by MooncakeEngineConnector::GetKvBufferVa.
+  Status PdV2GetKvPoolBaseVa(int rank, uint64_t* kv_pool_base_va, uint64_t* total_bytes, uint64_t* block_size,
+                             uint64_t* num_blocks, uint64_t* num_layers);
+  // Bind the executor-side answerer (called by the pd_v2 executor
+  // connector during its SetIpcFuncWrapper override). Engine-side
+  // process must NOT call this.
+  void SetPdV2KvPoolQueryFn(std::function<bool(uint64_t*, uint64_t*, uint64_t*, uint64_t*, uint64_t*)> fn);
+
+  // pd_v2: executor → engine async barrier-done report. Status: 0 = kOk,
+  // 1 = kFailed (any in-flight batch terminated FAILED/TIMEOUT/CANCELED).
+  // Called by PdV2KvBarrier post-forward when all batches have drained.
+  // Fire-and-forget (is_async=true, is_oneway=true).
+  Status ReportPdV2BarrierDone(int64_t req_id, uint8_t status);
+
+  // Engine-side: register the callback that PdV2BarrierDoneCallable
+  // invokes when an executor reports barrier-done. Wired in
+  // inference_engine.cpp from PdV2PrefillIntakeWrapper.
+  void SetPdV2BarrierDoneCallback(std::function<void(int64_t /*req_id*/, uint8_t /*status*/)> cb);
 
 #ifdef ENABLE_CUDA
   // Connector NCCL operations through IPC - Engine to executor

@@ -43,6 +43,7 @@ class PyAsyncStreamingIterator:
         input_tokens: int = 0,
         headers_info: str = "",
         plugin_timing_metrics: PluginTimingMetrics = None,
+        access_log_enabled: bool = True,
     ):
         self._serving_iterator = serving_iterator
         self._ksana_plugin = ksana_plugin
@@ -51,6 +52,7 @@ class PyAsyncStreamingIterator:
         self._input_tokens = input_tokens
         self._headers_info = headers_info
         self._output_tokens = 0
+        self._access_log_enabled = access_log_enabled
         self.plugin_timing_metrics = plugin_timing_metrics or PluginTimingMetrics()
 
     def __aiter__(self):
@@ -87,22 +89,37 @@ class PyAsyncStreamingIterator:
             )
             # 累加输出 token 数（每次迭代返回的是新增的 token）
             if hasattr(ksana_python_output, 'output_tokens') and ksana_python_output.output_tokens:
-                self._output_tokens += len(ksana_python_output.output_tokens)
+                # output_tokens is List[List[int]] (per-beam); use beam-0 token count.
+                self._output_tokens = len(ksana_python_output.output_tokens[0])
             return ksana_python_output
         elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
             # If the iteration has finished, log completion and raise StopAsyncIteration
             elapsed_ms = (time.time() - self._start_time) * 1000
-            logger.info(f"ACCESS| streaming=true input_tokens={self._input_tokens} "
-                       f"output_tokens={self._output_tokens} status=OK elapsed={elapsed_ms:.2f}ms {self._headers_info}")
+            if self._access_log_enabled:
+                # Re-snapshot timestamps so we capture finish_time_us, which is stamped
+                # only after the worker calls SyncStopRequest (after the last GetNext).
+                final_snapshot = self._serving_iterator.SnapshotTimestamps()
+                timing = KsanaLLMEngine._format_access_log_timing(final_snapshot, self._output_tokens)
+                logger.info(
+                    f"ACCESS| streaming=true input_tokens={self._input_tokens} "
+                    f"output_tokens={self._output_tokens} status=OK elapsed={elapsed_ms:.2f}ms "
+                    f"{timing} {self._headers_info}"
+                )
             raise StopAsyncIteration(
                 f"Iterator finished, ret code {status.GetCode()}, message {status.GetMessage()}."
             )
         else:
             # If an error occurred during iteration, log error and raise RuntimeError
             elapsed_ms = (time.time() - self._start_time) * 1000
-            logger.info(f"ACCESS| streaming=true input_tokens={self._input_tokens} "
-                       f"output_tokens={self._output_tokens} status=FAILED "
-                       f"elapsed={elapsed_ms:.2f}ms {self._headers_info}")
+            if self._access_log_enabled:
+                final_snapshot = self._serving_iterator.SnapshotTimestamps()
+                timing = KsanaLLMEngine._format_access_log_timing(final_snapshot, self._output_tokens)
+                status_str = KsanaLLMEngine._format_access_log_status(status)
+                logger.info(
+                    f"ACCESS| streaming=true input_tokens={self._input_tokens} "
+                    f"output_tokens={self._output_tokens} status={status_str} "
+                    f"elapsed={elapsed_ms:.2f}ms {timing} {self._headers_info}"
+                )
             raise KsanaEngineError(status.GetMessage(), status.GetCode().value)
 
 
@@ -161,6 +178,7 @@ class KsanaLLMEngine:
         self._serving.endpoint_config.host = endpoint_config.host
         self._serving.endpoint_config.port = endpoint_config.port
         self._serving.endpoint_config.access_log = endpoint_config.access_log
+        self._access_log_enabled = endpoint_config.access_log
 
         self.pre_post_processor = pre_post_processor
         self.tokenizer = self.pre_post_processor.inner_tokenizer
@@ -499,7 +517,7 @@ class KsanaLLMEngine:
         # 要记录的 header 字段
         header_fields = [
             "x-remote-ip",
-            "kv-comm-group-key", 
+            "kv-comm-group-key",
             "request-id",
             "traceparent",
         ]
@@ -512,6 +530,117 @@ class KsanaLLMEngine:
             parts.append(f"{key}={value}")
 
         return " ".join(parts)
+
+    @staticmethod
+    def _format_access_log_status(status) -> str:
+        """Render access-log status as OK or FAILED:<RetCode>."""
+        if status is None:
+            return "FAILED:-"
+        if status.OK():
+            return "OK"
+        return f"FAILED:{int(status.GetCode())}"
+
+    @staticmethod
+    def _format_pd_v2_access_fields(output) -> str:
+        """pd_v2 Decode-side phase breakdown for the access log.
+
+        Absolute decode-clock timestamps (us) are kept for correlation/ordering; the segments
+        are also emitted as ready-to-read ms deltas so no hand math is needed:
+          admit_ms      arrive -> blocks allocated (decode admission / KV-pool wait)
+          remote_rtt_ms prefill dispatched -> PrefillComplete (full remote round trip, decode clock)
+          pf_queue_ms / pf_compute_ms / pf_send_ms  peer-Prefill's own-clock segments
+          kv_transfer_ms  remote_rtt - (pf_queue+compute+send): network + KV-transfer residual
+          decode_queue_ms first_token -> scheduled: the request already streamed its first
+                          token (produced by the remote Prefill and delivered via PdV2DecodeHook's
+                          NotifyStep) but still waits in the Decode node's decoding queue for a
+                          running-batch slot (max_batch_size / logits budget / KV-block) before
+                          token #2 is generated. This is the "stall after first token" gap and,
+                          unlike waiting_ms, it is the part of the wait that happens AFTER TTFT.
+                          Note: because in pd_v2 the first token comes from Prefill before local
+                          decode is scheduled, scheduled >= first_token, so this is >= 0 while a
+                          negative value (-1.00) means the request never entered the running batch.
+        Durations subtract fine across nodes (same tick rate); only absolute us are non-comparable.
+        For local prefill (prefill_dispatch_us=0) the remote-only fields render -1.00.
+        """
+        arrive = getattr(output, "arrive_time_us", 0)
+        blocks_alloc = getattr(output, "pd_v2_blocks_allocated_time_us", 0)
+        dispatch = getattr(output, "pd_v2_prefill_dispatched_time_us", 0)
+        complete = getattr(output, "pd_v2_prefill_complete_time_us", 0)
+        scheduled = getattr(output, "scheduled_time_us", 0)
+        first_token = getattr(output, "first_token_time_us", 0)
+        peer = getattr(output, "pd_v2_prefill_peer", "") or "-"
+        pf_prefix = getattr(output, "pd_v2_pf_prefix_cache_hit_tokens", 0)
+        pf_queue_ms = getattr(output, "pd_v2_pf_queue_us", 0) / 1000.0
+        pf_compute_ms = getattr(output, "pd_v2_pf_compute_us", 0) / 1000.0
+        pf_send_ms = getattr(output, "pd_v2_pf_send_us", 0) / 1000.0
+
+        def _ms(end: int, start: int) -> float:
+            return (end - start) / 1000.0 if end and start and end >= start else -1.0
+
+        admit_ms = _ms(blocks_alloc, arrive)
+        remote_rtt_ms = _ms(complete, dispatch)
+        kv_transfer_ms = (remote_rtt_ms - pf_queue_ms - pf_compute_ms - pf_send_ms
+                          if remote_rtt_ms >= 0 else -1.0)
+        decode_queue_ms = _ms(scheduled, first_token)
+
+        return (f"blocks_alloc_us={blocks_alloc} prefill_dispatch_us={dispatch} "
+                f"prefill_complete_us={complete} prefill_peer={peer} "
+                f"pf_prefix_cache_hit_tokens={pf_prefix} "
+                f"admit_ms={admit_ms:.2f} remote_rtt_ms={remote_rtt_ms:.2f} "
+                f"pf_queue_ms={pf_queue_ms:.2f} pf_compute_ms={pf_compute_ms:.2f} "
+                f"pf_send_ms={pf_send_ms:.2f} kv_transfer_ms={kv_transfer_ms:.2f} "
+                f"decode_queue_ms={decode_queue_ms:.2f}")
+
+    @staticmethod
+    def _format_access_log_timing(output, output_tokens: int) -> str:
+        """Format C++ scheduler timestamps into waiting/ttft/tpot/total fields,
+        plus draft hit rate and prefix cache hit tokens.
+
+        Always emits the same field layout; missing data renders as 0 (timestamps /
+        counts) or -1.00 (deltas / hit rate) so log parsers see a fixed schema across
+        OK / failed / early-failure paths.
+        """
+        if output is None or not hasattr(output, "arrive_time_us"):
+            return ("arrive_us=0 waiting_ms=-1.00 "
+                    "ttft_ms=-1.00 tpot_ms=-1.00 total_ms=-1.00 "
+                    "draft_hit_rate=-1.00 draft_hit_tokens=0 draft_tokens=0 "
+                    "prefix_cache_hit_tokens=0 "
+                    "blocks_alloc_us=0 prefill_dispatch_us=0 prefill_complete_us=0 prefill_peer=- "
+                    "pf_prefix_cache_hit_tokens=0 admit_ms=-1.00 remote_rtt_ms=-1.00 "
+                    "pf_queue_ms=0.00 pf_compute_ms=0.00 pf_send_ms=0.00 kv_transfer_ms=-1.00 "
+                    "decode_queue_ms=-1.00")
+        arrive = output.arrive_time_us
+        sched = output.scheduled_time_us
+        ftt = output.first_token_time_us
+        fin = output.finish_time_us
+
+        # Human-readable request arrival wall-clock (arrive_us is epoch microseconds). The log
+        # preamble shows completion time (the line is written when the request finishes); this
+        # adds when it actually arrived, in the same MM-DD HH:MM:SS.mmm format.
+        def _delta_ms(end: int, start: int) -> float:
+            return (end - start) / 1000.0 if end and start and end >= start else -1.0
+
+        waiting_ms = _delta_ms(sched, arrive)
+        ttft_ms = _delta_ms(ftt, arrive)
+        total_ms = _delta_ms(fin, arrive)
+        # TPOT excludes the first token from the denominator.
+        if fin and ftt and fin >= ftt and output_tokens > 1:
+            tpot_ms = (fin - ftt) / 1000.0 / (output_tokens - 1)
+        else:
+            tpot_ms = -1.0
+
+        # Draft acceptance hit rate; -1.00 when no draft tokens were proposed.
+        draft_hit_tokens = getattr(output, "draft_hit_tokens", 0)
+        draft_tokens = getattr(output, "draft_tokens", 0)
+        draft_hit_rate = draft_hit_tokens / draft_tokens if draft_tokens > 0 else -1.0
+        prefix_cache_hit_tokens = getattr(output, "prefix_cache_hit_tokens", 0)
+
+        return (f"arrive_us={arrive} waiting_ms={waiting_ms:.2f} "
+                f"ttft_ms={ttft_ms:.2f} tpot_ms={tpot_ms:.2f} total_ms={total_ms:.2f} "
+                f"draft_hit_rate={draft_hit_rate:.2f} draft_hit_tokens={draft_hit_tokens} "
+                f"draft_tokens={draft_tokens} "
+                f"prefix_cache_hit_tokens={prefix_cache_hit_tokens} "
+                f"{KsanaLLMEngine._format_pd_v2_access_fields(output)}")
 
     async def generate(
         self,
@@ -560,15 +689,22 @@ class KsanaLLMEngine:
 
             if not status.OK():
                 elapsed_ms = (time.time() - start_time) * 1000
-                logger.info(f"ACCESS| streaming=true input_tokens={input_tokens} "
-                           f"status=FAILED elapsed={elapsed_ms:.2f}ms {headers_info}")
+                if self._access_log_enabled:
+                    status_str = self._format_access_log_status(status)
+                    timing = self._format_access_log_timing(None, 0)
+                    logger.info(
+                        f"ACCESS| streaming=true input_tokens={input_tokens} "
+                        f"output_tokens=0 status={status_str} "
+                        f"elapsed={elapsed_ms:.2f}ms {timing} {headers_info}"
+                    )
                 return status, None, plugin_timing_metrics
 
             # streaming 模式返回迭代器，完成日志在迭代器结束时记录
             return status, PyAsyncStreamingIterator(
                 streaming_iterator, self._ksana_plugin, ksana_python_input,
                 start_time=start_time, input_tokens=input_tokens, headers_info=headers_info,
-                plugin_timing_metrics=plugin_timing_metrics
+                plugin_timing_metrics=plugin_timing_metrics,
+                access_log_enabled=self._access_log_enabled,
             ), plugin_timing_metrics
 
         status, ksana_python_output = await loop.run_in_executor(
@@ -581,19 +717,32 @@ class KsanaLLMEngine:
         elapsed_ms = (time.time() - start_time) * 1000
 
         if not status.OK():
-            logger.info(f"ACCESS| streaming=false input_tokens={input_tokens} "
-                       f"output_tokens=0 status=FAILED elapsed={elapsed_ms:.2f}ms {headers_info}")
+            if self._access_log_enabled:
+                status_str = self._format_access_log_status(status)
+                timing = self._format_access_log_timing(ksana_python_output, 0)
+                logger.info(
+                    f"ACCESS| streaming=false input_tokens={input_tokens} "
+                    f"output_tokens=0 status={status_str} elapsed={elapsed_ms:.2f}ms "
+                    f"{timing} {headers_info}"
+                )
             return status, None, plugin_timing_metrics
 
         self._ksana_plugin.postprocess(ksana_python_input, ksana_python_output)
 
-        # 获取输出 token 数量
-        output_tokens = len(ksana_python_output.output_tokens) \
-            if hasattr(ksana_python_output, 'output_tokens') \
-                and ksana_python_output.output_tokens else 0
+        # 获取输出 token 数量（output_tokens 是 List[List[int]]，取 beam-0 长度）
+        output_tokens = (
+            len(ksana_python_output.output_tokens[0])
+            if hasattr(ksana_python_output, 'output_tokens') and ksana_python_output.output_tokens
+            else 0
+        )
 
-        logger.info(f"ACCESS| streaming=false input_tokens={input_tokens} "
-                   f"output_tokens={output_tokens} status=OK elapsed={elapsed_ms:.2f}ms {headers_info}")
+        if self._access_log_enabled:
+            timing = self._format_access_log_timing(ksana_python_output, output_tokens)
+            logger.info(
+                f"ACCESS| streaming=false input_tokens={input_tokens} "
+                f"output_tokens={output_tokens} status=OK elapsed={elapsed_ms:.2f}ms "
+                f"{timing} {headers_info}"
+            )
 
         return status, ksana_python_output, plugin_timing_metrics
 

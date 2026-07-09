@@ -10,6 +10,7 @@
 
 #include "cache_manager/block_allocator/block_allocator_manager.h"
 #include "runtime/infer_stage.h"
+#include "utils/logger.h"
 #include "utils/request.h"
 
 namespace ksana_llm {
@@ -33,6 +34,23 @@ struct ForwardRequest {
 
   // The number of tokens whose kv caches have been generated.
   int kv_cached_token_num = 0;
+
+  // pd_v2: peer Prefill RDMA-wrote the K/V for the cached prefix; trust
+  // the InferRequest's kv_cached_token_num + infer_stage as set by the
+  // hook and route straight to kPage. Mirrors InferRequest::kv_from_remote;
+  // propagated by model_builder. See InferRequest's longer
+  // comment for the full lifecycle. Future short-request locally-completed
+  // path keeps this false → falls through to the standard Type computation.
+  bool kv_from_remote = false;
+
+  // pd_v2 Prefill node: this req must RDMA-write its K/V to a Decode peer
+  // (set iff InferRequest::pd_v2_decode_targets is non-empty). The per-layer
+  // KV-dispatch hook (RecordLayerProgress) lives ONLY in the flash/context
+  // attention path; without forcing kFlash, a full-prefix-hit req
+  // (input_ids_len <= GetDecodeTokenNumThreshold(), kv_cached_token_num > 0)
+  // would fall through to kPage (decode kernel), the hook would never fire,
+  // and the Decode peer would wait forever for KV + PREFILL_RETURN.
+  bool kv_to_remote = false;
 
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
@@ -153,6 +171,31 @@ struct ForwardRequest {
 
   // Get the request type, flash for prefill, page for decode
   ForwardRequestType GetType() const {
+    // pd_v2 fast-path: peer Prefill staged the K/V; this is the first
+    // decode-step after PrefillComplete, NOT a fresh prefill. Force
+    // kPage so the model picks paged_mla (decode kernel) instead of
+    // flash_mla (prefill kernel). If we let kFlash fire, Decode's own
+    // prefill would recompute K/V over the bytes Prefill RDMA'd into
+    // the KV pool, producing degenerate output (bytes arrive byte-perfect,
+    // but model overwrites them).
+    //
+    // The kv_from_remote flag is the contract; future "short-request
+    // locally completed on Decode without forwarding to Prefill"
+    // feature can reuse this kPage path or fall through to kFlash
+    // depending on whether KV is local-vs-remote — that distinction
+    // lives entirely on this flag.
+    if (kv_from_remote) {
+      return ForwardRequestType::kPage;
+    }
+    // pd_v2 Prefill node: a req destined for a Decode peer must run the
+    // flash/context kernel so the per-layer KV-dispatch hook
+    // (RecordLayerProgress -> PdV2KvDispatcher) fires and the K/V is RDMA'd to
+    // Decode. Full-prefix-hit reqs (1 sampler token over a fully-cached
+    // prompt) have GetInputIdsLength() <= threshold and would otherwise hit
+    // the kPage branch below — which has no dispatch hook — orphaning Decode.
+    if (kv_to_remote) {
+      return ForwardRequestType::kFlash;
+    }
     if (GetInputIdsLength() <= GetDecodeTokenNumThreshold() && kv_cached_token_num > 0) {
       return ForwardRequestType::kPage;
     } else {

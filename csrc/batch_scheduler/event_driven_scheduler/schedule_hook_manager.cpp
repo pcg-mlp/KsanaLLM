@@ -27,6 +27,14 @@ void ScheduleHookManager::SetAsyncTaskFinishedCallback(AsyncTaskFinishedCallback
   }
 }
 
+void ScheduleHookManager::OnEvent(const HookEvent& event) {
+  for (auto& hook : hooks_) {
+    if (hook != nullptr) {
+      hook->OnEvent(event);
+    }
+  }
+}
+
 ReqIdToNextStep ScheduleHookManager::Process(const std::vector<InferRequestPtr>& requests, ScheduleContext& context) {
   return ProcessInternal(requests, context, std::unordered_map<int64_t, size_t>{});
 }
@@ -124,6 +132,8 @@ ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(const std::vector<AsyncTa
   auto find_preprocessing_req = [&context](int64_t req_id) -> InferRequestPtr {
     InferRequestPtr req = context.GetReqById(req_id);
     if (req == nullptr) {
+      KLLM_LOG_INFO << "ScheduleHookManager::find_preprocessing_req req_id=" << req_id
+                    << " GetReqById returned nullptr";
       return nullptr;
     }
     const size_t dp_idx = static_cast<size_t>(req->attn_dp_group_id);
@@ -133,6 +143,9 @@ ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(const std::vector<AsyncTa
     if (req_it != dp_state.preprocessing_reqs.end()) {
       return req_it->second;
     }
+    KLLM_LOG_INFO << "ScheduleHookManager::find_preprocessing_req req_id=" << req_id << " dp_idx=" << dp_idx
+                  << " not in preprocessing_reqs (size=" << dp_state.preprocessing_reqs.size() << ")"
+                  << " prefilling=" << dp_state.prefilling_reqs.size() << " decoding=" << dp_state.decoding_reqs.size();
     return nullptr;
   };
 
@@ -149,7 +162,11 @@ ReqIdToNextStep ScheduleHookManager::UpdateAsyncResult(const std::vector<AsyncTa
     }
 
     ReqIdToNextStep next_steps = hooks_[hook_idx]->UpdateAsyncResult(tasks_for_hook, context);
+    KLLM_LOG_INFO << "ScheduleHookManager::UpdateAsyncResult hook_idx=" << hook_idx
+                  << " next_steps.size=" << next_steps.size();
     for (auto& kv : next_steps) {
+      KLLM_LOG_INFO << "ScheduleHookManager::UpdateAsyncResult req_id=" << kv.first
+                    << " action=" << static_cast<int>(kv.second.action);
       InferRequestPtr req = find_preprocessing_req(kv.first);
       if (req == nullptr) {
         KLLM_LOG_ERROR << "Invalid async finished state: req_id " << kv.first << " from hook_idx " << hook_idx

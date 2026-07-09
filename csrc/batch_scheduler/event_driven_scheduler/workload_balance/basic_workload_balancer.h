@@ -32,7 +32,8 @@ class BasicWorkloadBalancer : public WorkloadBalancerInterface {
 
   // Check whether request can be accepted into the target dp batch.
   virtual bool IsRequestAcceptable(const InferRequestPtr& req, const PlanningBatch& batch,
-                                   const WorkloadQuota& workload_quota, size_t seq_token_num) const override;
+                                   const WorkloadQuota& workload_quota, size_t seq_token_num,
+                                   size_t per_dp_step_token_num) const override;
 
  private:
   size_t dp_num_ = 0;

@@ -34,7 +34,7 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(size_t, GetUsableBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetHostFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetUsedBlockNumber, (), (override));
-  MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t), (override));
+  MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t, size_t), (override));
   MOCK_METHOD(size_t, GetRequestStepBlockNumberForOneNextToken, (int64_t), (override));
   MOCK_METHOD(size_t, GetRequestUsableBlockNumber, (int64_t), (override));
   MOCK_METHOD(Status, GetRequestPrefixBlockNumber,
@@ -87,7 +87,7 @@ class QueryHookTest : public ::testing::Test {
     ON_CALL(*mock_cm_,
             GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
-    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_)).WillByDefault(testing::Return(2));
+    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(2));
     ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
 
@@ -228,10 +228,9 @@ TEST_F(QueryHookTest, UpdateAsyncResultWithActualCompletedRequests) {
   EXPECT_EQ(result[700].action, NextStepAction::kContinue);
 }
 
-// ==================== Decode 角色 Hook 测试 ====================
-// 补充 sync rejected 路径（kFailAndEnd）和 UpdateAsyncResult rejected 路径。
+// ==================== PD-disagg Prefill Hook 测试 ====================
 
-class QueryHookDecodeTest : public ::testing::Test {
+class QueryHookPdDisaggPrefillTest : public ::testing::Test {
  protected:
   void SetUp() override {
     mock_cm_ = std::make_shared<testing::NiceMock<MockCacheManager>>();
@@ -239,12 +238,11 @@ class QueryHookDecodeTest : public ::testing::Test {
     ON_CALL(*mock_cm_,
             GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
-    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_)).WillByDefault(testing::Return(2));
+    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(2));
     ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
 
-    // decode 角色的 fetcher（同步模式，无 IPC）
-    fetcher_ = std::make_shared<GlobalCacheFetcher>(1, nullptr, "decode");
+    fetcher_ = std::make_shared<GlobalCacheFetcher>(1, nullptr, /*role=*/"pd_v2_prefill");
     fetcher_->Start();
 
     BatchSchedulerConfig config;
@@ -263,38 +261,217 @@ class QueryHookDecodeTest : public ::testing::Test {
   std::vector<std::shared_ptr<CacheManagerInterface>> dp_cache_managers_;
 };
 
-TEST_F(QueryHookDecodeTest, SyncDecodeRejectReturnsFailAndEnd) {
-  // decode 角色 + 无全命中 → 请求被 fetcher 拒绝 → Process 返回 kFailAndEnd
-  auto req = MakeHookTestRequest(800);
-  auto result = hook_->Process({req}, context_);
-
-  ASSERT_EQ(result.size(), 1u);
-  EXPECT_EQ(result[800].action, NextStepAction::kFailAndEnd);
-}
-
-TEST_F(QueryHookDecodeTest, UpdateAsyncResultWithRejectedRequests) {
-  // 手动插入 pending，decode partial hit → rejected，
-  // UpdateAsyncResult 应取出 rejected 并返回 kFailAndEnd。
-  auto req = MakeHookTestRequest(900, 10);
+TEST_F(QueryHookPdDisaggPrefillTest, FullGlobalHitStaysContext) {
+  auto req = MakeHookTestRequest(800, 20);
   GlobalCacheFetcher::PendingRequest pending;
   pending.req = req;
   pending.devices_completed = 0;
   pending.total_devices = 1;
-  fetcher_->pending_requests_[900] = std::move(pending);
+  fetcher_->pending_requests_[800] = std::move(pending);
 
-  // partial hit: [0,4] = 5 tokens，seq=10 → decode 拒绝
   GlobalCacheQueryResult r0;
-  r0.req_id = 900;
+  r0.req_id = 800;
   r0.device_id = 0;
   r0.success = true;
-  r0.matched_ranges = {0, 4};
+  r0.matched_ranges = {0, 19};
+  r0.cached_tokens = {42};
+  r0.has_cached_tokens = true;
   fetcher_->OnDeviceComplete(r0);
 
   AsyncTaskResult task_result;
   task_result.hook_idx = 0;
   auto result = hook_->UpdateAsyncResult({task_result}, context_);
   ASSERT_EQ(result.size(), 1u);
-  EXPECT_EQ(result[900].action, NextStepAction::kFailAndEnd);
+  EXPECT_EQ(result[800].action, NextStepAction::kContinue);
+
+  // UpdateAsyncResult already drained completed_requests_ via TakeCompletedRequests
+  // (see GlobalCacheQueryHook::UpdateAsyncResult), so assert on the req object
+  // directly instead of taking from the fetcher a second time (mirrors the
+  // UpdateAsyncResultWithActualCompletedRequests pattern). A full global cache
+  // hit on a pd_v2 Prefill node must keep the request in Context: Prefill still
+  // has to run to RDMA the KV back to its Decode peer.
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);
+}
+
+// Local full prefix-cache hit on a pd_v2 Prefill node must NOT flip to decode.
+TEST_F(QueryHookPdDisaggPrefillTest, LocalFullPrefixHitStaysContext) {
+  ON_CALL(*mock_cm_,
+          GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([](int64_t, const std::vector<int>&, size_t seq, size_t& shared_block_num,
+                        size_t& req_step_block_num, size_t& shared_token_num) {
+        shared_block_num = 2;
+        req_step_block_num = 1;
+        shared_token_num = seq;  // full hit
+        return Status();
+      });
+  auto req = MakeHookTestRequest(810, 12);
+  hook_->Process({req}, context_);
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);  // prefill node never flips
+}
+
+// ==================== Local full prefix-cache hit (standalone) ====================
+
+TEST_F(QueryHookTest, LocalFullPrefixHitFlipsToDecode) {
+  ON_CALL(*mock_cm_,
+          GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([](int64_t, const std::vector<int>&, size_t seq, size_t& shared_block_num,
+                        size_t& req_step_block_num, size_t& shared_token_num) {
+        shared_block_num = 2;
+        req_step_block_num = 1;
+        shared_token_num = seq;  // full hit on full sequence
+        return Status();
+      });
+  auto req = MakeHookTestRequest(900, 12);
+  hook_->Process({req}, context_);
+  EXPECT_EQ(req->infer_stage, InferStage::kDecode);  // non-pd_v2 full hit flips to decode
+}
+
+// ==================== pd_v2 Decode admission-gate (defer mode) ====================
+
+class QueryHookDeferTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    mock_cm_ = std::make_shared<testing::NiceMock<MockCacheManager>>();
+    ON_CALL(*mock_cm_,
+            GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(Status()));
+    ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(2));
+    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(Status()));
+    // Plenty of usable blocks by default; individual tests lower this to force a defer.
+    ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(1000));
+
+    fetcher_ = std::make_shared<GlobalCacheFetcher>(1, nullptr);
+    fetcher_->Start();
+
+    BatchSchedulerConfig config;
+    config.max_batch_size = 2;  // -> max_inflight_reqs_ = 4, reserve = 2
+    hook_ = std::make_unique<GlobalCacheQueryHook>(fetcher_, config, /*hook_idx=*/0,
+                                                   /*defer_admission_on_block_full=*/true);
+    dp_cache_managers_ = {mock_cm_};
+    context_.SetDpCacheManagers(&dp_cache_managers_);
+  }
+  void TearDown() override { fetcher_->Stop(); }
+
+  std::shared_ptr<testing::NiceMock<MockCacheManager>> mock_cm_;
+  std::shared_ptr<GlobalCacheFetcher> fetcher_;
+  std::unique_ptr<GlobalCacheQueryHook> hook_;
+  ScheduleContext context_;
+  std::vector<std::shared_ptr<CacheManagerInterface>> dp_cache_managers_;
+};
+
+TEST_F(QueryHookDeferTest, DeferWhenUsableBlocksLow) {
+  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));  // < need+reserve
+  auto req = MakeHookTestRequest(1000);
+  auto result = hook_->Process({req}, context_);
+  ASSERT_EQ(result.size(), 1u);
+  EXPECT_EQ(result[1000].action, NextStepAction::kWaitAsyncResult);
+  EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
+}
+
+TEST_F(QueryHookDeferTest, AdmitSucceedsWhenBlocksAvailable) {
+  auto req = MakeHookTestRequest(1001);
+  auto result = hook_->Process({req}, context_);
+  ASSERT_EQ(result.size(), 1u);
+  EXPECT_EQ(result[1001].action, NextStepAction::kContinue);  // sync fetcher completes immediately
+  EXPECT_EQ(hook_->DeferredCountForTest(), 0u);
+}
+
+TEST_F(QueryHookDeferTest, InflightCapDefersBeyondLimit) {
+  // max_inflight_reqs_ = 4. Admit 4, then the 5th is deferred purely by the cap.
+  std::vector<std::shared_ptr<InferRequest>> admitted;
+  for (int i = 0; i < 4; ++i) admitted.push_back(MakeHookTestRequest(2000 + i));
+  hook_->Process(admitted, context_);
+  EXPECT_EQ(hook_->DeferredCountForTest(), 0u);
+
+  auto over = MakeHookTestRequest(2099);
+  auto result = hook_->Process({over}, context_);
+  EXPECT_EQ(result[2099].action, NextStepAction::kWaitAsyncResult);
+  EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
+}
+
+TEST_F(QueryHookDeferTest, NotifyBlocksFreedFiresSentinelWhenPending) {
+  bool fired = false;
+  int seen_task_id = 0;
+  hook_->SetAsyncTaskFinishedCallback([&](const EventAsyncTaskFinishedInfo& info) {
+    fired = true;
+    ASSERT_FALSE(info.task_results.empty());
+    seen_task_id = info.task_results[0].task_id;
+  });
+  // Force one parked request.
+  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
+  hook_->Process({MakeHookTestRequest(3000)}, context_);
+  ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
+
+  hook_->OnEvent(HookEvent(HookEventType::kBlocksFreed));
+  EXPECT_TRUE(fired);
+  EXPECT_EQ(seen_task_id, -1);  // sentinel
+}
+
+TEST_F(QueryHookDeferTest, NotifyBlocksFreedNoopWhenEmpty) {
+  bool fired = false;
+  hook_->SetAsyncTaskFinishedCallback([&](const EventAsyncTaskFinishedInfo&) { fired = true; });
+  hook_->OnEvent(HookEvent(HookEventType::kBlocksFreed));  // nothing pending -> no-op
+  EXPECT_FALSE(fired);
+}
+
+TEST_F(QueryHookDeferTest, OnRequestExitedReleasesSlotAndWakes) {
+  bool fired = false;
+  hook_->SetAsyncTaskFinishedCallback([&](const EventAsyncTaskFinishedInfo&) { fired = true; });
+  // Admit one (enters in_flight_admitted_). Keep it alive so its AddOnDestroy
+  // hook does NOT fire OnRequestExited early and free the slot under us.
+  auto admitted = MakeHookTestRequest(4000);
+  hook_->Process({admitted}, context_);
+  // Park one (pending non-empty so the wake fires the callback).
+  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
+  hook_->Process({MakeHookTestRequest(4001)}, context_);
+  ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
+
+  hook_->OnEvent(HookEvent(HookEventType::kRequestExited, 4000));  // erases slot -> wake deferred admission
+  EXPECT_TRUE(fired);
+}
+
+TEST_F(QueryHookDeferTest, UpdateAsyncResultDrainsAndAdmits) {
+  // Park a request (low usable), then make blocks available and drain via UpdateAsyncResult.
+  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
+  hook_->Process({MakeHookTestRequest(5000)}, context_);
+  ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
+
+  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(1000));
+  AsyncTaskResult tr;
+  tr.hook_idx = 0;
+  tr.task_id = -1;
+  auto result = hook_->UpdateAsyncResult({tr}, context_);
+  EXPECT_EQ(hook_->DeferredCountForTest(), 0u);  // drained + admitted
+  ASSERT_EQ(result.size(), 1u);
+  EXPECT_EQ(result[5000].action, NextStepAction::kContinue);  // sync fetcher completed it
+}
+
+TEST_F(QueryHookDeferTest, UpdateAsyncResultRetryStillFailsRequeues) {
+  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
+  hook_->Process({MakeHookTestRequest(5001)}, context_);
+  ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
+
+  AsyncTaskResult tr;
+  tr.hook_idx = 0;
+  tr.task_id = -1;
+  hook_->UpdateAsyncResult({tr}, context_);  // usable still 0 -> requeued
+  EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
+}
+
+TEST_F(QueryHookDeferTest, AllocFailureDefersInDeferMode) {
+  // Block-usable check passes, but AllocateRequestBlocks fails -> deferred (not fallback).
+  ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "oom")));
+  auto result = hook_->Process({MakeHookTestRequest(6000)}, context_);
+  EXPECT_EQ(result[6000].action, NextStepAction::kWaitAsyncResult);
+  EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
+}
+
+// kRequestExited event on a non-defer hook is a no-op (early return).
+TEST_F(QueryHookTest, OnRequestExitedNoopWhenNotDeferMode) {
+  hook_->OnEvent(HookEvent(HookEventType::kRequestExited, 12345));  // defer_admission_on_block_full_ == false
+  SUCCEED();
 }
 
 }  // namespace

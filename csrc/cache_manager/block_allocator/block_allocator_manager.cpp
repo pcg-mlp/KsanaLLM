@@ -25,10 +25,27 @@ BlockAllocatorGroup::BlockAllocatorGroup(const BlockAllocatorGroupConfig& block_
   Initialize();
 }
 
+BlockAllocatorGroup::BlockAllocatorGroup(const BlockAllocatorGroupConfig& block_allocator_group_config,
+                                         std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
+                                         std::shared_ptr<Context> context,
+                                         BlockAllocatorCreationFunc block_allocator_creation_fn,
+                                         std::shared_ptr<BlockAllocatorInterface> shared_host_allocator) {
+  block_allocator_group_config_ = block_allocator_group_config;
+  memory_allocator_ = memory_allocator;
+  context_ = context;
+  block_allocator_creation_fn_ = block_allocator_creation_fn;
+  host_allocator = shared_host_allocator;
+  host_allocator_is_shared_ = (shared_host_allocator != nullptr);
+
+  Initialize();
+}
+
 void BlockAllocatorGroup::Initialize() {
-  host_allocator = block_allocator_creation_fn_(
-      MemoryLocation::LOCATION_HOST, block_allocator_group_config_.host_block_num,
-      block_allocator_group_config_.block_size, /*device_id*/ 0, memory_allocator_, context_);
+  if (host_allocator == nullptr) {
+    host_allocator = block_allocator_creation_fn_(
+        MemoryLocation::LOCATION_HOST, block_allocator_group_config_.host_block_num,
+        block_allocator_group_config_.block_size, /*device_id*/ 0, memory_allocator_, context_);
+  }
   for (int device_id : block_allocator_group_config_.devices) {
     dev_allocators[device_id] =
         block_allocator_creation_fn_(MemoryLocation::LOCATION_DEVICE, block_allocator_group_config_.device_block_num,
@@ -38,16 +55,18 @@ void BlockAllocatorGroup::Initialize() {
   std::vector<std::thread> threads;
   threads.reserve(block_allocator_group_config_.devices.size() + 1);
 
-  threads.emplace_back([this]() {
-    KLLM_LOG_INFO << "Start to preallocate host blocks, block_num:" << block_allocator_group_config_.host_block_num
-                  << ", block_size:" << block_allocator_group_config_.block_size;
+  if (!host_allocator_is_shared_) {
+    threads.emplace_back([this]() {
+      KLLM_LOG_INFO << "Start to preallocate host blocks, block_num:" << block_allocator_group_config_.host_block_num
+                    << ", block_size:" << block_allocator_group_config_.block_size;
 #if defined(ENABLE_ACL)
-    // For ascend device, clrtMallocHost will be failed if aclrtSetDevice() is not invoked.
-    SetDevice(block_allocator_group_config_.devices.front());
+      // For ascend device, clrtMallocHost will be failed if aclrtSetDevice() is not invoked.
+      SetDevice(block_allocator_group_config_.devices.front());
 #endif
-    host_allocator->PreAllocateBlocks();
-    KLLM_LOG_INFO << "Finish to preallocate host blocks.";
-  });
+      host_allocator->PreAllocateBlocks();
+      KLLM_LOG_INFO << "Finish to preallocate host blocks.";
+    });
+  }
   for (int device_id : block_allocator_group_config_.devices) {
     threads.emplace_back([this, device_id]() {
       if (context_->device) {
@@ -121,6 +140,7 @@ BlockAllocatorManager::BlockAllocatorManager(bool is_engine, std::shared_ptr<Mem
     };
   }
 
+  is_default_group_factory_ = (block_allocator_group_creation_fn == nullptr);
   block_allocator_group_creation_fn_ = block_allocator_group_creation_fn;
   if (block_allocator_group_creation_fn_ == nullptr) {
     block_allocator_group_creation_fn_ = [](const BlockAllocatorGroupConfig& block_allocator_group_config,
@@ -151,9 +171,52 @@ void BlockAllocatorManager::Initialize(const BlockAllocatorManagerConfig& block_
 }
 
 void BlockAllocatorManager::Initialize() {
+  // Detect whether all group configs agree on (host_block_num, block_size).
+  // Every executor process serves a single device yet gets the full topology
+  // config (one entry per attn-DP group) from inference_engine.cpp, all carrying
+  // the same total host_block_num. Without sharing, each group's
+  // PreAllocateBlocks duplicates the entire host pool inside this one process
+  // (8× on attn_dp=8). When configs match, collapse to one shared host allocator
+  // + one PreAllocateBlocks call. Sharing is intra-process only; the separate
+  // card processes still each hold their own host pool.
+  bool host_uniform = false;
+  size_t shared_host_block_num = 0;
+  size_t shared_block_size = 0;
+  if (is_default_group_factory_ && !block_allocator_manager_config_.empty()) {
+    host_uniform = true;
+    auto it = block_allocator_manager_config_.begin();
+    shared_host_block_num = it->second.host_block_num;
+    shared_block_size = it->second.block_size;
+    for (++it; it != block_allocator_manager_config_.end(); ++it) {
+      if (it->second.host_block_num != shared_host_block_num || it->second.block_size != shared_block_size) {
+        host_uniform = false;
+        break;
+      }
+    }
+  }
+
+  if (host_uniform) {
+    shared_host_allocator_ =
+        block_allocator_creation_fn_(MemoryLocation::LOCATION_HOST, shared_host_block_num, shared_block_size,
+                                     /*rank*/ 0, memory_allocator_, context_);
+    KLLM_LOG_INFO << "Start to preallocate shared host blocks, block_num:" << shared_host_block_num
+                  << ", block_size:" << shared_block_size << ", groups:" << block_allocator_manager_config_.size();
+    shared_host_allocator_->PreAllocateBlocks();
+    KLLM_LOG_INFO << "Finish to preallocate shared host blocks.";
+  }
+
   for (const auto& [group_id, group_config] : block_allocator_manager_config_) {
-    std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
-        block_allocator_group_creation_fn_(group_config, memory_allocator_, context_, block_allocator_creation_fn_);
+    std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
+    if (shared_host_allocator_ != nullptr) {
+      // Default-factory uniform path: bypass the typedef and use the shared
+      // host directly. Test paths with custom factory still go through the
+      // legacy lambda below.
+      block_allocator_group = std::make_shared<BlockAllocatorGroup>(
+          group_config, memory_allocator_, context_, block_allocator_creation_fn_, shared_host_allocator_);
+    } else {
+      block_allocator_group =
+          block_allocator_group_creation_fn_(group_config, memory_allocator_, context_, block_allocator_creation_fn_);
+    }
 
     allocator_groups_[group_id] = block_allocator_group;
   }

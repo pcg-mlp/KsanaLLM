@@ -37,6 +37,8 @@ Status GlobalCacheQueryRequest::Deserialize(const void* ptr) {
 
 Status GlobalCacheQueryCallable::Call(const IpcRequest* request, IpcResponse* response, IpcContext* context) {
   const GlobalCacheQueryRequest* real_req = reinterpret_cast<const GlobalCacheQueryRequest*>(request);
+  // 仅 V1 "decode" role 触发 retry-until-full-hit + token retry. pd_v2_decode 走 standalone
+  // 风格的单次查询: peer Prefill 通过 RDMA 兜底 partial / miss, 不需要在这里阻塞重试.
   const bool is_decode_role = (role_ == "decode");
 
   KLLM_LOG_SCHEDULER << "device_id=" << device_id_ << " received global cache query"

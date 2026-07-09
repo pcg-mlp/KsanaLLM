@@ -133,6 +133,7 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
     const auto finish_status =
         Status(RET_INPUT_LENGTH_EXCEEDED, "input length or logits_custom_length exceeds the limit.");
     infer_request->finish_status = finish_status;
+    StampOnce(infer_request->finish_time_us);
     for (auto& infer_request : infer_request_group) {
       infer_request->finished = true;
     }
@@ -194,6 +195,7 @@ Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<Inf
 
     auto finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
     infer_request->finish_status = finish_status;
+    StampOnce(infer_request->finish_time_us);
     for (auto& req : infer_request_group) {
       req->finished = true;
     }

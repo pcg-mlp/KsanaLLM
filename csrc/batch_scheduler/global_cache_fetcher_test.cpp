@@ -51,9 +51,7 @@ class ContiguousPrefixLenTest : public ::testing::Test {
   }
 };
 
-TEST_F(ContiguousPrefixLenTest, EmptyDeviceRanges) {
-  EXPECT_EQ(Compute({}, 0), 0u);
-}
+TEST_F(ContiguousPrefixLenTest, EmptyDeviceRanges) { EXPECT_EQ(Compute({}, 0), 0u); }
 
 TEST_F(ContiguousPrefixLenTest, SingleDeviceSingleRange) {
   // 设备 0 覆盖 [0, 9]，从位置 0 开始
@@ -118,9 +116,7 @@ class FetcherSyncTest : public ::testing::Test {
   std::unique_ptr<GlobalCacheFetcher> fetcher_;
 };
 
-TEST_F(FetcherSyncTest, IsAsyncReturnsFalseWithoutIpc) {
-  EXPECT_FALSE(fetcher_->IsAsync());
-}
+TEST_F(FetcherSyncTest, IsAsyncReturnsFalseWithoutIpc) { EXPECT_FALSE(fetcher_->IsAsync()); }
 
 TEST_F(FetcherSyncTest, SubmitRequestSyncCompletesImmediately) {
   auto req = MakeFetcherTestRequest(100, InferStage::kContext);
@@ -162,22 +158,6 @@ TEST_F(FetcherSyncTest, TakeCompletedClearsList) {
 TEST_F(FetcherSyncTest, TakeRejectedEmpty) {
   auto rejected = fetcher_->TakeRejectedRequests();
   EXPECT_TRUE(rejected.empty());
-}
-
-// ==================== Prefill 角色测试 ====================
-
-TEST(FetcherPrefillRole, SetsMaxNewTokensToOne) {
-  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "prefill");
-  fetcher->Start();
-
-  auto req = MakeFetcherTestRequest(500, InferStage::kContext);
-  req->sampling_config.max_new_tokens = 100;
-  fetcher->SubmitRequest(req);
-
-  auto completed = fetcher->TakeCompletedRequests();
-  ASSERT_EQ(completed.size(), 1u);
-  EXPECT_EQ(completed[0]->sampling_config.max_new_tokens, 1u);
-  fetcher->Stop();
 }
 
 // ==================== OnDeviceComplete 测试 ====================
@@ -319,15 +299,15 @@ class UpdateWorkloadTest : public ::testing::Test {
  protected:
   void SetUp() override { fetcher_ = std::make_unique<GlobalCacheFetcher>(1, nullptr); }
 
-  void CallUpdate(std::shared_ptr<InferRequest>& req, size_t new_cached_len,
-                  const std::vector<int>& cached_tokens = {}, bool has_cached_tokens = false) {
+  void CallUpdate(std::shared_ptr<InferRequest>& req, size_t new_cached_len, const std::vector<int>& cached_tokens = {},
+                  bool has_cached_tokens = false) {
     fetcher_->UpdateRequestWorkload(req, new_cached_len, cached_tokens, has_cached_tokens);
   }
 
   std::unique_ptr<GlobalCacheFetcher> fetcher_;
 };
 
-TEST_F(UpdateWorkloadTest, ZeroCachedLenNonDecodeNoOp) {
+TEST_F(UpdateWorkloadTest, ZeroCachedLenNoOp) {
   auto req = MakeFetcherTestRequest(1000, InferStage::kContext, 20);
   auto workload_before = req->GetPlanningWorkload();
   CallUpdate(req, 0);
@@ -371,69 +351,47 @@ TEST_F(UpdateWorkloadTest, FullHitWithTokensAppends) {
   EXPECT_EQ(planning.prefill_token_num, 2u);
 }
 
-// ==================== Decode 角色 Reject 测试 ====================
+// ==================== PD-disagg Prefill full-hit 测试 ====================
 
-TEST(FetcherDecodeRole, RejectsWhenNotFullHit) {
-  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
-  fetcher->Start();
+class PdDisaggPrefillUpdateWorkloadTest : public ::testing::Test {
+ protected:
+  void SetUp() override { fetcher_ = std::make_unique<GlobalCacheFetcher>(1, nullptr, /*role=*/"pd_v2_prefill"); }
 
+  void CallUpdate(std::shared_ptr<InferRequest>& req, size_t new_cached_len, const std::vector<int>& cached_tokens = {},
+                  bool has_cached_tokens = false) {
+    fetcher_->UpdateRequestWorkload(req, new_cached_len, cached_tokens, has_cached_tokens);
+  }
+
+  std::unique_ptr<GlobalCacheFetcher> fetcher_;
+};
+
+TEST_F(PdDisaggPrefillUpdateWorkloadTest, FullHitStaysContextAndRetainsLastToken) {
   auto req = MakeFetcherTestRequest(1400, InferStage::kContext, 20);
-  fetcher->SubmitRequest(req);
+  CallUpdate(req, 20, {42, 43}, true);
 
-  auto completed = fetcher->TakeCompletedRequests();
-  EXPECT_TRUE(completed.empty());
-
-  auto rejected = fetcher->TakeRejectedRequests();
-  ASSERT_EQ(rejected.size(), 1u);
-  EXPECT_TRUE(rejected[0]->finished);
-  fetcher->Stop();
-}
-
-TEST(FetcherDecodeRole, RejectsFullHitWithoutTokens) {
-  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
-  auto req = MakeFetcherTestRequest(1500, InferStage::kContext, 10);
-
-  // 手动插入 pending 并模拟全命中但无 tokens
-  GlobalCacheFetcher::PendingRequest pending;
-  pending.req = req;
-  pending.devices_completed = 0;
-  pending.total_devices = 1;
-  fetcher->pending_requests_[1500] = std::move(pending);
-
-  GlobalCacheQueryResult r0;
-  r0.req_id = 1500;
-  r0.device_id = 0;
-  r0.success = true;
-  r0.matched_ranges = {0, 9};
-  r0.has_cached_tokens = false;
-  fetcher->OnDeviceComplete(r0);
-
-  auto rejected = fetcher->TakeRejectedRequests();
-  ASSERT_EQ(rejected.size(), 1u);
-  EXPECT_TRUE(rejected[0]->finished);
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);
+  auto planning = req->GetPlanningWorkload();
+  EXPECT_EQ(planning.prefill_start_offset, 19u);
+  EXPECT_EQ(planning.prefill_token_num, 1u);
+  EXPECT_EQ(req->output_tokens.size(), 20u);
 }
 
 // ==================== AppendCachedTokens 测试 ====================
 
 TEST(AppendCachedTokensTest, AppendsToOutputAndPrefilling) {
-  auto req = MakeFetcherTestRequest(
-      1600, InferStage::kContext, 10);
+  auto req = MakeFetcherTestRequest(1600, InferStage::kContext, 10);
   size_t output_before = req->output_tokens.size();
-  size_t prefilling_before =
-      req->GetPrefillingTokens().size();
+  size_t prefilling_before = req->GetPrefillingTokens().size();
 
   req->AppendCachedTokens({42, 43, 44});
 
-  EXPECT_EQ(req->output_tokens.size(),
-            output_before + 3);
-  EXPECT_EQ(req->GetPrefillingTokens().size(),
-            prefilling_before + 3);
+  EXPECT_EQ(req->output_tokens.size(), output_before + 3);
+  EXPECT_EQ(req->GetPrefillingTokens().size(), prefilling_before + 3);
   EXPECT_EQ(req->output_tokens.back(), 44);
 }
 
 TEST(AppendCachedTokensTest, EmptyTokensNoOp) {
-  auto req = MakeFetcherTestRequest(
-      1700, InferStage::kContext, 5);
+  auto req = MakeFetcherTestRequest(1700, InferStage::kContext, 5);
   size_t output_before = req->output_tokens.size();
 
   req->AppendCachedTokens({});
@@ -444,8 +402,7 @@ TEST(AppendCachedTokensTest, EmptyTokensNoOp) {
 // ==================== SetPlanningWorkload/SetRemainingWorkload 测试 ==
 
 TEST(WorkloadSetterTest, SetPlanningWorkload) {
-  auto req = MakeFetcherTestRequest(
-      1800, InferStage::kContext, 10);
+  auto req = MakeFetcherTestRequest(1800, InferStage::kContext, 10);
   ScheduleTaskWorkload wl;
   wl.prefill_start_offset = 5;
   wl.prefill_token_num = 5;
@@ -457,8 +414,7 @@ TEST(WorkloadSetterTest, SetPlanningWorkload) {
 }
 
 TEST(WorkloadSetterTest, SetRemainingWorkload) {
-  auto req = MakeFetcherTestRequest(
-      1900, InferStage::kContext, 10);
+  auto req = MakeFetcherTestRequest(1900, InferStage::kContext, 10);
   ScheduleTaskWorkload wl;
   wl.prefill_start_offset = 3;
   wl.prefill_token_num = 7;
@@ -469,15 +425,11 @@ TEST(WorkloadSetterTest, SetRemainingWorkload) {
   EXPECT_EQ(got.prefill_token_num, 7u);
 }
 
-// ==================== Decode 角色 UpdateRequestWorkload 成功路径 ====================
-// 已有测试覆盖了 decode 角色的两种拒绝场景，此处补充全命中成功的路径。
+// ==================== Legacy full-hit（非 PD-disagg Prefill）====================
 
-class DecodeRoleUpdateWorkloadTest : public ::testing::Test {
+class LegacyFullHitUpdateWorkloadTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    // decode 角色，无 IPC（同步模式）
-    fetcher_ = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
-  }
+  void SetUp() override { fetcher_ = std::make_unique<GlobalCacheFetcher>(1, nullptr, /*role=*/""); }
 
   void CallUpdate(std::shared_ptr<InferRequest>& req, size_t new_cached_len, const std::vector<int>& cached_tokens = {},
                   bool has_cached_tokens = false) {
@@ -487,8 +439,8 @@ class DecodeRoleUpdateWorkloadTest : public ::testing::Test {
   std::unique_ptr<GlobalCacheFetcher> fetcher_;
 };
 
-TEST_F(DecodeRoleUpdateWorkloadTest, FullHitWithTokensNotRejected) {
-  // decode 角色 + 全命中 + tokens 就绪 → 不拒绝，切换 kDecode，workload 正确
+TEST_F(LegacyFullHitUpdateWorkloadTest, FullHitWithTokensSwitchesToDecode) {
+  // 全命中 + tokens 就绪 → 切换 kDecode，workload 正确
   auto req = MakeFetcherTestRequest(2000, InferStage::kContext, 10);
   CallUpdate(req, /*new_cached_len=*/10, /*cached_tokens=*/{42, 43}, /*has_cached_tokens=*/true);
 
@@ -499,53 +451,12 @@ TEST_F(DecodeRoleUpdateWorkloadTest, FullHitWithTokensNotRejected) {
   EXPECT_EQ(planning.prefill_token_num, 2u);
 }
 
-TEST_F(DecodeRoleUpdateWorkloadTest, FullHitWithoutTokensRejected) {
-  // decode 角色 + 全命中但无 tokens → 拒绝（decode 节点无法采样）
+TEST_F(LegacyFullHitUpdateWorkloadTest, FullHitWithoutTokensSwitchesToDecode) {
   auto req = MakeFetcherTestRequest(2001, InferStage::kContext, 10);
   CallUpdate(req, /*new_cached_len=*/10, /*cached_tokens=*/{}, /*has_cached_tokens=*/false);
 
-  EXPECT_TRUE(req->finished);
-}
-
-// ==================== CompletionCallback success=false 路径 ====================
-// 已有 CompletionCallbackFired 测试 success=true，此处补充 success=false（请求被拒绝）。
-
-TEST(FetcherCallbackTest, CallbackFiredWithFailure) {
-  // decode 角色 partial hit → request 被拒绝 → callback(req_id, success=false)
-  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
-  fetcher->Start();
-
-  int64_t cb_req_id = -1;
-  bool cb_success = true;
-  fetcher->SetCompletionCallback([&](int64_t req_id, bool success) {
-    cb_req_id = req_id;
-    cb_success = success;
-  });
-
-  auto req = MakeFetcherTestRequest(2100, InferStage::kContext, 10);
-  GlobalCacheFetcher::PendingRequest pending;
-  pending.req = req;
-  pending.devices_completed = 0;
-  pending.total_devices = 1;
-  fetcher->pending_requests_[2100] = std::move(pending);
-
-  // partial hit: matched_ranges=[0,4] → 5 tokens，seq=10 → decode 拒绝
-  GlobalCacheQueryResult r0;
-  r0.req_id = 2100;
-  r0.device_id = 0;
-  r0.success = true;
-  r0.matched_ranges = {0, 4};
-  fetcher->OnDeviceComplete(r0);
-
-  EXPECT_EQ(cb_req_id, 2100);
-  EXPECT_FALSE(cb_success);
-
-  // 被拒绝的请求应在 rejected 队列中
-  auto rejected = fetcher->TakeRejectedRequests();
-  ASSERT_EQ(rejected.size(), 1u);
-  EXPECT_TRUE(rejected[0]->finished);
-
-  fetcher->Stop();
+  EXPECT_FALSE(req->finished);
+  EXPECT_EQ(req->infer_stage, InferStage::kDecode);
 }
 
 }  // namespace

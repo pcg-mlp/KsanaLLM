@@ -435,7 +435,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             # Read prefix_cache_hit_tokens only once at the beginning
                             if hasattr(ksana_python_output, 'prefix_cache_hit_tokens'):
                                 prefix_cache_hit_tokens = ksana_python_output.prefix_cache_hit_tokens
-                                logger.info(f"Stream: Read prefix_cache_hit_tokens = {prefix_cache_hit_tokens}")
 
                             # NOTE num_choices defaults to 1 so this usually executes
                             # once per request

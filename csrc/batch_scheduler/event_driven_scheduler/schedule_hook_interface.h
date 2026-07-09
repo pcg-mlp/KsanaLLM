@@ -45,6 +45,17 @@ class ScheduleHookInterface {
 
   // 由 HookManager 下发异步完成回调，Hook 在异步任务完成时调用。
   virtual void SetAsyncTaskFinishedCallback(AsyncTaskFinishedCallback callback) = 0;
+
+  // 通用化的事件通知入口: 调度器以"事件"的方式通知 Hook 状态变化 (KV blocks 释放 /
+  // 请求离场 / ...)，Hook 的行为由事件驱动。每个 Hook 只处理自己关心的事件类型，
+  // 不关心的事件直接忽略 (基类默认空实现)。相比为每个具体操作定义一个专用接口，
+  // 这样新增事件类型时无需改动接口签名，也不强制所有 Hook 实现无关的方法。
+  //   - kBlocksFreed: 例如 GlobalCacheQueryHook 借此唤醒 deferred admission 队列重试
+  //     AllocateRequestBlocks。
+  //   - kRequestExited: 例如 GlobalCacheQueryHook 借此维护 "已准入但未离场" 的 in-flight
+  //     req 集合 (幂等: 按 req_id erase, 不在集合中即 no-op), 给 pd_v2 Decode 的
+  //     awaiting-prefill backlog 设并发上限, 避免大量在飞 req 预占 KV 块把池抽干。
+  virtual void OnEvent(const HookEvent& /*event*/) {}
 };
 
 }  // namespace ksana_llm

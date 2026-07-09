@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "configure/environment.h"
+#include "pd_v2/public/pd_v2_types.h"
 #include "runtime/draft_generator/draft_tokens.h"
 #include "runtime/infer_stage.h"
 #include "runtime/model_instance.h"
@@ -155,6 +156,14 @@ class ExecutorInferRequest {
   // This key for kv transformer group.
   std::string kv_comm_group_key;
 
+  // pd_v2: Decode-side KV pool routing for cross-node Prefill→Decode KV
+  // RDMA write. Mirrored from engine InferRequest via ScheduleOutput on
+  // first transmission only. Empty = non-pd_v2 request, KV-write hook
+  // is a no-op for this req.
+  std::vector<pd_v2::DecodeTargetLite> pd_v2_decode_targets;
+  std::string pd_v2_decode_engine_inference_addr;
+  uint32_t pd_v2_decode_attn_dp_group_id = 0;
+
   /*******************************************************************
    * State info used in generation
    * TODO (robertyuan): Move them into a structure later
@@ -173,6 +182,13 @@ class ExecutorInferRequest {
 
   // context decode or decode stage.
   InferStage infer_stage = InferStage::kContext;
+
+  // pd_v2: peer Prefill RDMA-wrote K/V for the prompt; trust hook-set
+  // forwarding_tokens / kv_cached_token_num and route straight to
+  // kPage on first decode forward. Mirrors InferRequest::kv_from_remote;
+  // propagated via patch (executor_request_manager.cpp) and through
+  // ForwardRequest. See InferRequest's longer comment.
+  bool kv_from_remote = false;
 
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
@@ -230,6 +246,10 @@ class InferRequestPatch {
 
   // The number of tokens for which kv caches have been generated.
   size_t kv_cached_token_num = 0;
+
+  // pd_v2: mirrors InferRequest::kv_from_remote on the patch side so
+  // executor_request_manager applies the flag. See InferRequest.
+  bool kv_from_remote = false;
 
   // The prefix cache tokens number
   int prefix_cache_len = 0;

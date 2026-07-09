@@ -32,6 +32,14 @@ class ContinuousBatchingBackend : public ScheduleBackendInterface {
                               std::vector<ScheduleBackendEvent>& events,
                               std::unordered_set<uint64_t>& emitted_event_keys);
 
+  // pd_v2 下，preprocessing_reqs 可能包含正在等待对端 PrefillComplete 的请求。
+  // 这类请求被客户端取消时，只标记 pending_stop，不立即发 kStopRequest，避免 RDMA 尚未完成时释放 KV。
+  // PdV2DecodeHook 收到 OnPrefillComplete 后再统一 FailAndEnd。
+  // 非PD模式下的 preprocessing 队列中的取消请求，仍在这里立即发 kStopRequest。
+  void ScanAbortedPreprocessingReqs(const ScheduleContext& context, const PlanningBatch& planning_batch,
+                                    std::vector<ScheduleBackendEvent>& events,
+                                    std::unordered_set<uint64_t>& emitted_event_keys);
+
  private:
   std::atomic<bool> stopped_{false};
 };

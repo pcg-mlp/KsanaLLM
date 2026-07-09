@@ -18,6 +18,13 @@
 #include "utils/tensor.h"
 
 namespace ksana_llm {
+
+void StampOnce(std::atomic<uint64_t> &slot) {
+  if (slot.load(std::memory_order_relaxed) != 0) return;
+  uint64_t expected = 0;
+  slot.compare_exchange_strong(expected, ProfileTimer::GetCurrentTimeInUs(), std::memory_order_relaxed);
+}
+
 InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
     : req_id(request->req_ids[index]),
       logits_custom_length(request->logits_custom_length),
@@ -39,14 +46,43 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
       kv_comm_group_key(request->kv_comm_group_key),
+      pd_v2(*request),
       beam_search_group(request->beam_search_group),
       timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
       req_ctx(request->req_ctx),
-      prefill_entering_forward(request->prefill_entering_forward) {
+      prefill_entering_forward(request->prefill_entering_forward),
+      scheduled_time_us(request->scheduled_time_us),
+      first_token_time_us(request->first_token_time_us),
+      finish_time_us(request->finish_time_us),
+      prefix_cache_hit_tokens(request->prefix_cache_hit_tokens) {
   draft_tokens.spec = request->draft_tokens;
 }
 
-InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }
+PdV2RequestContext::PdV2RequestContext(Request &request)
+    : blocks_allocated_time_us(request.pd_v2_blocks_allocated_time_us),
+      prefill_dispatched_time_us(request.pd_v2_prefill_dispatched_time_us),
+      prefill_complete_time_us(request.pd_v2_prefill_complete_time_us),
+      pf_prefix_cache_hit_tokens(request.pd_v2_pf_prefix_cache_hit_tokens),
+      pf_queue_us(request.pd_v2_pf_queue_us),
+      pf_compute_us(request.pd_v2_pf_compute_us),
+      pf_send_us(request.pd_v2_pf_send_us) {}
+
+InferRequest::~InferRequest() {
+  KLLM_LOG_DEBUG << "req " << req_id << " destroyed.";
+  // 触发 pd_v2 等模块注册的 teardown 回调，确保异常路径也能清理 connector 状态。
+  // 析构函数保持 no-throw，回调异常只记录日志。
+  for (auto &cb : on_destroy_callbacks_) {
+    try {
+      if (cb) cb();
+    } catch (const std::exception &e) {
+      KLLM_LOG_WARNING << "InferRequest::~InferRequest: on_destroy callback threw: " << e.what()
+                       << " (req_id=" << req_id << ")";
+    } catch (...) {
+      KLLM_LOG_WARNING << "InferRequest::~InferRequest: on_destroy callback threw "
+                       << "unknown exception (req_id=" << req_id << ")";
+    }
+  }
+}
 
 std::string InferRequest::PrintKVBlockIds(bool print_details) const {
   std::ostringstream ss;
@@ -101,8 +137,13 @@ void InferRequest::Notify() {
   // After a notification, the corresponding request may be destructed.
   // So we return early to avoid accessing any variables referencing it.
   if (aborted) {
-    abort_waiter->Notify();
-    return;
+    if (abort_waiter) {
+      abort_waiter->Notify();
+      return;
+    }
+    // PD-V2 path may set aborted=true on a request that never had an abort_waiter
+    // (only local_endpoint allocates it). Fall through so any waiter/step_waiter
+    // still gets notified instead of dereferencing null.
   }
   if (waiter) {
     waiter->Notify();
@@ -178,6 +219,8 @@ void InferRequest::NotifyStep() {
       if (req_group[i]->output_tokens.size() != (size_t)output_tokens_len) return;
     }
   }
+
+  StampOnce(first_token_time_us);
 
   if (step_waiter) {
     step_waiter->Notify();
@@ -285,6 +328,13 @@ void InferRequest::UpdateAfterInflightTaskFinished() {
       // replace draft tokens with accepted tokens.
       forwarding_tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num + accepted_tokens.size());
       output_tokens.insert(output_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
+      // Accumulate MTP/draft acceptance stats for access-log hit-rate.
+      mtp_draft_token_num_ += forwarding_tokens_draft_num;
+      mtp_hit_token_num_ += accepted_tokens.size();
+      if (req_ctx) {
+        (*req_ctx)["mtp_draft_tokens"] = std::to_string(mtp_draft_token_num_);
+        (*req_ctx)["mtp_hit_tokens"] = std::to_string(mtp_hit_token_num_);
+      }
       accepted_tokens.clear();
     }
 
@@ -365,7 +415,26 @@ void InferRequest::LaunchPlanningTask(bool use_placeholder_for_last_token) {
   ScheduleTask &new_inflight = inflight_tasks_[inflight_count_];
   new_inflight = planning_task_;
   planning_task_.Reset();
-  SetKvCachedTokenNum(forwarding_tokens.size());
+  // pd_v2: when kv_from_remote == true the peer Prefill RDMA-wrote K/V
+  // for the prompt and PdV2DecodeHook::OnPrefillComplete pre-populated
+  //   - forwarding_tokens = input_tokens         (size N = prompt len)
+  //   - generated_tokens  = [Paris]              (just-sampled token, fed
+  //                                               below at line 342 into
+  //                                               forwarding_tokens for the
+  //                                               first decode-step query)
+  //   - kv_cached_token_num = N                  (positions 0..N-1 cached)
+  //   - infer_stage = kDecode
+  // The default reset `kv_cached_token_num = forwarding_tokens.size()`
+  // would clobber it back to N (no-op on first step where the two are
+  // already equal — but defensive: subsequent decode steps' line 285
+  // bumps kv_cached, and we want this branch to be a coherent inverse
+  // for the non-reset case anyway). Skip the reset on pd_v2 reqs to
+  // make the contract explicit and to keep the branch obviously safe
+  // even if the hook's pre-populated state diverges by 1 from the
+  // forwarding_tokens length.
+  if (!pd_v2.kv_from_remote) {
+    SetKvCachedTokenNum(forwarding_tokens.size());
+  }
   if (new_inflight.workload.prefill_token_num > 0) {
     size_t forwarded_token_num = forwarding_tokens.size();
     if (forwarded_token_num == new_inflight.workload.prefill_start_offset) {

@@ -2,10 +2,28 @@
 #
 # ==============================================================================
 
+if(TARGET gflags)
+    return()
+endif()
+
 # 优先使用系统已安装的 gflags，避免与 glog 等依赖的系统 gflags 产生
 # 重复符号冲突（运行时 flag 重复注册导致 "flag was defined more than once"）。
 # 仅在系统未安装 gflags 时，才从源码编译。
-find_package(gflags QUIET)
+#
+# NO_CMAKE_PACKAGE_REGISTRY: 忽略 CMake 用户包注册表
+# (~/.cmake/packages/gflags/)。否则某次构建里 mooncake 子构建安装的私有
+# gflags 会把指向其工作区 deps 目录的路径注册进去，导致后续无关构建在系统
+# 本无 gflags 时却"找到了"一个陈旧/错配的 gflags，引发 include 路径与
+# IMPORTED target 解析问题。只认系统路径与 CMAKE_PREFIX_PATH。
+find_package(gflags QUIET NO_CMAKE_PACKAGE_REGISTRY)
+
+# Source dir of a from-source gflags build, exported for downstream
+# consumers (external/mooncake_tent.cmake installs it into a private
+# prefix for the Mooncake tent sub-build's find_package(gflags)). Empty
+# when system gflags is used — in that case the sub-build finds the same
+# system gflags and needs no help. CACHE INTERNAL so the value survives
+# regardless of which CMakeLists.txt later includes external/mooncake_tent.
+set(KSANA_GFLAGS_SOURCE_DIR "" CACHE INTERNAL "gflags source dir for the Mooncake tent sub-build")
 
 if(gflags_FOUND)
     message(STATUS "Using system gflags: version ${GFLAGS_VERSION_STRING}, "
@@ -46,4 +64,8 @@ else()
 
     message(STATUS "Google flags source directory: ${gflags_SOURCE_DIR}")
     message(STATUS "Google flags binary directory: ${gflags_BINARY_DIR}")
+
+    include_directories(${gflags_BINARY_DIR}/include)
+    set(KSANA_GFLAGS_SOURCE_DIR "${gflags_SOURCE_DIR}"
+        CACHE INTERNAL "gflags source dir for the Mooncake tent sub-build")
 endif()

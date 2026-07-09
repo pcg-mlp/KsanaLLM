@@ -33,6 +33,7 @@ InferenceService::InferenceService(const EndpointConfig &endpoint_config, std::s
 
   // Init local endpoint.
   local_endpoint_ = EndpointFactory::CreateLocalEndpoint(endpoint_config, request_queue_);
+  inference_engine_->SetLocalEndpoint(local_endpoint_);
 
   // Init rpc endpoint if specified.
   if (endpoint_config.type == EndpointType::RPC) {

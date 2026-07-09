@@ -29,4 +29,14 @@ endif()
 message(STATUS "Yaml-cpp source directory: ${yaml_cpp_SOURCE_DIR}")
 message(STATUS "Yaml-cpp binary directory: ${yaml_cpp_BINARY_DIR}")
 
+# Export the resolved source dir for downstream consumers (e.g.
+# external/mooncake_tent.cmake, which installs yaml-cpp into a private
+# prefix for the Mooncake tent sub-build). The yaml_cpp FetchContent name
+# may be declared elsewhere first (3rdparty/LLM_kernels), so the actual
+# source dir is whatever FetchContent resolved, not necessarily
+# YAML_INSTALL_DIR. Use CACHE INTERNAL so the value is visible no matter
+# which CMakeLists.txt later includes external/mooncake_tent.
+set(KSANA_YAML_CPP_SOURCE_DIR "${yaml_cpp_SOURCE_DIR}"
+    CACHE INTERNAL "yaml-cpp source dir for the Mooncake tent sub-build")
+
 include_directories(${yaml_cpp_SOURCE_DIR}/include)

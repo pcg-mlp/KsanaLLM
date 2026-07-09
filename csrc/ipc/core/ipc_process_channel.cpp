@@ -90,23 +90,45 @@ void IpcProcessChannel::SetSlotWriteFinish(int slot_id) {
 void IpcProcessChannel::SetSlotReadFinish(int slot_id) { meta_ptr_->slot_read_write_flags[slot_id][executor_id_] = 2; }
 
 bool IpcProcessChannel::WaitWritableAndLock() {
-  Lock();
-
-  // If in broadcast mode, wait util all executor finish reading.
-  while (meta_ptr_->used_slot_num >= CHANNEL_SLOT_NUM && !meta_ptr_->stopped) {
-    pthread_cond_wait(&meta_ptr_->write_cond, &meta_ptr_->mutex);
-  }
-
-  if (meta_ptr_->stopped) {
+  // Loop because predicate must be re-validated after we own the rwlock:
+  // multiple writers can pass the `used_slot_num < CHANNEL_SLOT_NUM` check
+  // while holding the mutex, all release the mutex, then serialize on the
+  // rwlock. Without a re-check the trailing writers will write into already-
+  // occupied slots and over-fill the ring (observed: seq 155648 lost,
+  // seq 155392 read twice on Engine2Executor[2] under concurrent BatchSwap).
+  while (true) {
+    Lock();
+    // If in broadcast mode, wait util all executor finish reading.
+    while (meta_ptr_->used_slot_num >= CHANNEL_SLOT_NUM && !meta_ptr_->stopped) {
+      pthread_cond_wait(&meta_ptr_->write_cond, &meta_ptr_->mutex);
+    }
+    if (meta_ptr_->stopped) {
+      Unlock();
+      return false;
+    }
     Unlock();
-    return false;
+
+    if (pthread_rwlock_wrlock(&meta_ptr_->rwlock) != 0) {
+      KLLM_THROW("WaitWritableAndLock error, pthread_rwlock_wrlock failed.");
+    }
+
+    // Re-check predicate under mutex while holding wrlock to close the
+    // TOCTOU window. Lock order mutex→rwlock is consistent with
+    // WriteAndUnlock / ReadAndUnlock (rwlock-held → take mutex).
+    Lock();
+    if (meta_ptr_->used_slot_num < CHANNEL_SLOT_NUM && !meta_ptr_->stopped) {
+      Unlock();
+      // Note: rwlock is not released, the caller owns it.
+      return true;
+    }
+    bool was_stopped = meta_ptr_->stopped;
+    Unlock();
+    pthread_rwlock_unlock(&meta_ptr_->rwlock);
+    if (was_stopped) {
+      return false;
+    }
+    // Predicate no longer holds; loop to wait on write_cond again.
   }
-
-  Unlock();
-  pthread_rwlock_wrlock(&meta_ptr_->rwlock);
-
-  // Note: the lock is not released.
-  return true;
 }
 
 bool IpcProcessChannel::WaitReadableAndLock() {

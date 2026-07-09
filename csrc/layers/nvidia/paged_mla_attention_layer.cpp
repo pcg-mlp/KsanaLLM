@@ -4,6 +4,11 @@
 
 #include "layers/paged_mla_attention_layer.h"
 
+#include <cuda_runtime.h>
+
+#include <cstdio>
+#include <cstdlib>
+
 #include "csrc/kernels/nvidia/concat/concat.h"
 #include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"

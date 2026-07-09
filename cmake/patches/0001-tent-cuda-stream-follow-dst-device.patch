@@ -1,0 +1,89 @@
+diff --git a/mooncake-transfer-engine/tent/src/platform/cuda/cuda_allocator.cpp b/mooncake-transfer-engine/tent/src/platform/cuda/cuda_allocator.cpp
+index d60ddffa..c147007b 100644
+--- a/mooncake-transfer-engine/tent/src/platform/cuda/cuda_allocator.cpp
++++ b/mooncake-transfer-engine/tent/src/platform/cuda/cuda_allocator.cpp
+@@ -56,15 +56,42 @@ Status CudaPlatform::free(void* ptr, size_t size) {
+ }
+ 
+ Status CudaPlatform::copy(void* dst, void* src, size_t length) {
+-    // Use cudaMemcpyAsync with a non-blocking stream instead of cudaMemcpy(),
+-    // as the latter relies on the legacy default stream and can introduce
+-    // unintended synchronization or even deadlocks in downstream
+-    // components (e.g. mooncake-pg).
+-    CUDAStreamHandle stream;
+-    CHECK_STATUS(getStreamFromPool(stream));
+-    CHECK_CUDA(
+-        cudaMemcpyAsync(dst, src, length, cudaMemcpyDefault, stream.get()));
+-    CHECK_CUDA(cudaStreamSynchronize(stream.get()));
++    // Resolve which CUDA device owns the device-side endpoint (if any).
++    // Both `cudaMemcpy` and `cudaMemcpyAsync` use the calling thread's
++    // current device for routing — when the calling thread defaults to
++    // cuda:0 (e.g. Mooncake's control-plane RPC server worker threads)
++    // but the registered buffer lives on cuda:R, the runtime fails the
++    // copy unless we either (a) enable peer access or (b) switch the
++    // current device to R for the duration of the call. (b) is the
++    // simplest correct fix and matches `cuda_alloc` in this file.
++    int target_dev = -1;
++    cudaPointerAttributes attr{};
++    if (cudaPointerGetAttributes(&attr, dst) == cudaSuccess &&
++        attr.type == cudaMemoryTypeDevice) {
++        target_dev = attr.device;
++    } else if (cudaPointerGetAttributes(&attr, src) == cudaSuccess &&
++               attr.type == cudaMemoryTypeDevice) {
++        target_dev = attr.device;
++    }
++
++    int prev_dev = -1;
++    if (target_dev >= 0) {
++        CHECK_CUDA(cudaGetDevice(&prev_dev));
++        if (prev_dev != target_dev) {
++            CHECK_CUDA(cudaSetDevice(target_dev));
++        }
++    }
++
++    cudaError_t cerr = cudaMemcpy(dst, src, length, cudaMemcpyDefault);
++
++    if (target_dev >= 0 && prev_dev != target_dev && prev_dev >= 0) {
++        cudaSetDevice(prev_dev);
++    }
++
++    if (cerr != cudaSuccess) {
++        LOG(ERROR) << "cudaMemcpy: " << cudaGetErrorString(cerr);
++        return Status::InternalError("cudaMemcpy failed" LOC_MARK);
++    }
+     return Status::OK();
+ }
+ }  // namespace tent
+diff --git a/mooncake-transfer-engine/tent/src/runtime/control_plane.cpp b/mooncake-transfer-engine/tent/src/runtime/control_plane.cpp
+index 384828e4..e28d93fe 100644
+--- a/mooncake-transfer-engine/tent/src/runtime/control_plane.cpp
++++ b/mooncake-transfer-engine/tent/src/runtime/control_plane.cpp
+@@ -269,7 +269,11 @@ void ControlService::onSendData(const std::string_view& request,
+     }
+ 
+     if (local_desc->findBuffer(peer_mem_addr, length)) {
+-        Platform::getLoader().copy((void*)peer_mem_addr, &desc[1], length);
++        auto status = Platform::getLoader().copy((void*)peer_mem_addr, &desc[1],
++                                                  length);
++        if (!status.ok()) {
++            response = "SendData failed: copy: " + status.ToString();
++        }
+     } else {
+         response = "SendData failed: target address not in registered buffer";
+     }
+@@ -291,8 +295,13 @@ void ControlService::onRecvData(const std::string_view& request,
+ 
+     if (local_desc->findBuffer(peer_mem_addr, length)) {
+         response.resize(length);
+-        Platform::getLoader().copy(response.data(), (void*)peer_mem_addr,
+-                                   length);
++        auto status = Platform::getLoader().copy(response.data(),
++                                                  (void*)peer_mem_addr, length);
++        if (!status.ok()) {
++            // Clear so client sees length mismatch rather than partial data.
++            response.clear();
++            response = "RecvData failed: copy: " + status.ToString();
++        }
+     } else {
+         response = "RecvData failed: target address not in registered buffer";
+     }

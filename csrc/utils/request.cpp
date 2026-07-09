@@ -30,6 +30,65 @@ Status SamplingConfig::VerifyArgs() {
   return Status();
 }
 
+namespace {
+
+size_t OutputGroupSize(const SamplingConfig& sc) {
+  return std::max(std::max(sc.num_beams, sc.num_return_sequences), 1);
+}
+
+void ApplyStructuredGeneratorConfig(Request* req) {
+  if (req == nullptr) {
+    return;
+  }
+  if (!req->sampling_config.json_schema.empty() && req->sampling_config.enable_structured_output) {
+    req->structured_generator_config.constraint_type = StructuredConstraintType::JSON;
+    req->structured_generator_config.constraint_spec = req->sampling_config.json_schema;
+    KLLM_LOG_DEBUG << "Request " << req->req_id << " structured_generator_config set: "
+                   << "constraint_type=JSON, constraint_spec=" << req->structured_generator_config.constraint_spec;
+  } else {
+    KLLM_LOG_DEBUG << "Request " << req->req_id << " no structured output: "
+                   << "json_schema.empty()=" << req->sampling_config.json_schema.empty()
+                   << ", enable_structured_output=" << req->sampling_config.enable_structured_output;
+  }
+}
+
+}  // namespace
+
+Request::Request(int64_t cross_node_req_id, std::vector<int> input_tokens_in, SamplingConfig sampling_config_in)
+    : owned_ref_targets_(std::make_shared<OwnedRefTargets>()),
+      req_id(cross_node_req_id),
+      model_name(),
+      input_tokens(std::move(input_tokens_in)),
+      input_refit_embedding(owned_ref_targets_->input_refit_embedding),
+      output_group(OutputGroupSize(sampling_config_in)),
+      output_tokens(std::get<0>(output_group[0])),
+      logprobs(std::get<1>(output_group[0])),
+      return_cache_stat(false),
+      sampling_config(std::move(sampling_config_in)),
+      finisheds(output_group.size(), false),
+      finished(finisheds[0]),
+      request_target(owned_ref_targets_->request_target),
+      timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
+      req_ctx(nullptr),
+      prefix_cache_hit_tokens(0) {
+  static constexpr size_t kMaxOutputGroup = (1u << IdGenerator::kSubIdBits) - 1;
+  if (output_group.size() > kMaxOutputGroup) {
+    KLLM_THROW(fmt::format("output_group size {} exceeds max {}", output_group.size(), kMaxOutputGroup));
+  }
+
+  for (size_t i = 0; i < output_group.size(); ++i) {
+    auto& [output, req_logprobs, total_score] = output_group[i];
+    output = this->input_tokens;
+    req_ids.push_back(cross_node_req_id | static_cast<int64_t>(i));
+  }
+
+  if (!sampling_config.stop_strings.empty()) {
+    has_stop_strings = true;
+  }
+
+  ApplyStructuredGeneratorConfig(this);
+}
+
 Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                  const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx)
     : req_id(0),
@@ -38,9 +97,7 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
       input_tokens(ksana_python_input->input_tokens),
       logits_custom_length(0),
       input_refit_embedding(ksana_python_input->input_refit_embedding),
-      output_group(std::max(std::max(ksana_python_input->sampling_config.num_beams,
-                                     ksana_python_input->sampling_config.num_return_sequences),
-                            1)),
+      output_group(OutputGroupSize(ksana_python_input->sampling_config)),
       beam_search_group(),
       output_tokens(std::get<0>(output_group[0])),
       logprobs(std::get<1>(output_group[0])),
@@ -55,7 +112,7 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
       output_mutex(),
       request_target(ksana_python_input->request_target),
       response(),
-      timestamp_in_ms(ProfileTimer::GetCurrentTimeInMs()),
+      timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
       req_ctx(req_ctx),
       draft_tokens(ksana_python_input->draft_tokens) {
   static constexpr size_t kMaxOutputGroup = (1u << IdGenerator::kSubIdBits) - 1;  // 255
@@ -86,32 +143,39 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
     input_top_logprobs_num = it->second.input_top_logprobs_num;
   }
 
-  kv_comm_group_key = "";
   if (req_ctx) {
     if (req_ctx->count("kv-comm-group-key")) {
       kv_comm_group_key = (*req_ctx)["kv-comm-group-key"];
     }
+    if (req_ctx->count("prefix_cache_hit_tokens")) {
+      try {
+        prefix_cache_hit_tokens = std::stoi(req_ctx->at("prefix_cache_hit_tokens"));
+      } catch (const std::exception& e) {
+        KLLM_LOG_WARNING << "Request " << req_id << " invalid prefix_cache_hit_tokens: " << e.what();
+        prefix_cache_hit_tokens = 0;
+      }
+    }
   }
 
-  // Convert json_schema to structured_generator_config
-  if (!sampling_config.json_schema.empty() && sampling_config.enable_structured_output) {
-    structured_generator_config.constraint_type = StructuredConstraintType::JSON;
-    structured_generator_config.constraint_spec = sampling_config.json_schema;
-    KLLM_LOG_DEBUG << "Request " << req_id << " structured_generator_config set: "
-                   << "constraint_type=JSON, constraint_spec=" << structured_generator_config.constraint_spec;
-  } else {
-    KLLM_LOG_DEBUG << "Request " << req_id << " no structured output: "
-                   << "json_schema.empty()=" << sampling_config.json_schema.empty()
-                   << ", enable_structured_output=" << sampling_config.enable_structured_output;
-  }
+  ApplyStructuredGeneratorConfig(this);
 }
 
 KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
   finish_status = req->finish_status;
   input_tokens = req->input_tokens;
-  prefix_cache_hit_tokens = 0;
-  if (req->req_ctx && req->req_ctx->count("prefix_cache_hit_tokens")) {
-    prefix_cache_hit_tokens = std::stoi(req->req_ctx->at("prefix_cache_hit_tokens"));
+  // Prefix-cache hit comes from the Request member (set by the scheduler; works regardless of
+  // req_ctx, so pd_v2 Prefill reports it too). The constructor seeds the member from any
+  // client-provided req_ctx header, so that path still flows through here.
+  prefix_cache_hit_tokens = req->prefix_cache_hit_tokens;
+  draft_hit_tokens = 0;
+  draft_tokens = 0;
+  if (req->req_ctx) {
+    if (req->req_ctx->count("mtp_hit_tokens")) {
+      draft_hit_tokens = std::stoi(req->req_ctx->at("mtp_hit_tokens"));
+    }
+    if (req->req_ctx->count("mtp_draft_tokens")) {
+      draft_tokens = std::stoi(req->req_ctx->at("mtp_draft_tokens"));
+    }
   }
   for (const auto& [output, req_logprobs, total_score] : req->output_group) {
     std::vector<int> req_output = {output.begin() + input_tokens.size(), output.end()};
@@ -124,6 +188,22 @@ KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
     cache_stat = req->cache_stat;
   }
   response = std::move(req->response);
+
+  // Access-log timestamps snapshot.
+  arrive_time_us = req->timestamp_in_us;
+  scheduled_time_us = req->scheduled_time_us.load();
+  first_token_time_us = req->first_token_time_us.load();
+  finish_time_us = req->finish_time_us.load();
+  pd_v2_blocks_allocated_time_us = req->pd_v2_blocks_allocated_time_us.load();
+  pd_v2_prefill_dispatched_time_us = req->pd_v2_prefill_dispatched_time_us.load();
+  pd_v2_prefill_complete_time_us = req->pd_v2_prefill_complete_time_us.load();
+  pd_v2_pf_prefix_cache_hit_tokens = req->pd_v2_pf_prefix_cache_hit_tokens.load();
+  pd_v2_pf_queue_us = req->pd_v2_pf_queue_us.load();
+  pd_v2_pf_compute_us = req->pd_v2_pf_compute_us.load();
+  pd_v2_pf_send_us = req->pd_v2_pf_send_us.load();
+  if (req->req_ctx && req->req_ctx->count("pd_v2_prefill_peer")) {
+    pd_v2_prefill_peer = req->req_ctx->at("pd_v2_prefill_peer");
+  }
 }
 
 Status KsanaPythonInput::VerifyRequestTarget() {

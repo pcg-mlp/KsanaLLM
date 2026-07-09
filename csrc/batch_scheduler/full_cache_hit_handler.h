@@ -19,8 +19,11 @@ namespace ksana_llm {
 // For non-SWA models, prefill_token_num is kStepGenerateTokenNum (1),
 // and switches the request to decode stage.
 // Caller is responsible for checking the full-hit condition (shared_token_num >= seq_token_num) before calling.
+// flip_to_decode_stage: 非 SWA 全命中默认 flip 到 kDecode。pd_v2 Prefill 节点必须传 false —
+//   该节点只算 prefill, 一旦被置 kDecode 就永远不会被 prefilling 调度路由器调度/launch,
+//   导致请求滞留、对端 decode 永久等 PREFILL_RETURN。
 inline void HandleFullPrefixCacheHit(const std::shared_ptr<InferRequest>& req, ScheduleTaskWorkload& planning_workload,
-                                     size_t seq_token_num) {
+                                     size_t seq_token_num, bool flip_to_decode_stage = true) {
   const bool is_swa = !req->swa_kv_cache_blocks.empty();
   size_t prefill_start_offset;
   size_t prefill_token_num;
@@ -38,11 +41,12 @@ inline void HandleFullPrefixCacheHit(const std::shared_ptr<InferRequest>& req, S
   planning_workload.prefill_token_num = prefill_token_num;
   req->SetPlanningWorkload(planning_workload);
   req->SetRemainingWorkload(planning_workload);
-  if (!is_swa) {
+  if (!is_swa && flip_to_decode_stage) {
     req->infer_stage = InferStage::kDecode;
   }
   KLLM_LOG_SCHEDULER << "HandleFullPrefixCacheHit: req_id=" << req->req_id << ", seq_token_num=" << seq_token_num
-                     << ", is_swa=" << is_swa << ", prefill_token_num=" << prefill_token_num
+                     << ", is_swa=" << is_swa << ", flip_to_decode_stage=" << flip_to_decode_stage
+                     << ", prefill_token_num=" << prefill_token_num
                      << ", prefill_start_offset=" << planning_workload.prefill_start_offset;
 }
 

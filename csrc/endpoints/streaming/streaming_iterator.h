@@ -43,6 +43,10 @@ class StreamingIterator {
   // event loop forces GetNext to return so the destructor can run.
   void Abort();
 
+  // Snapshot the current access-log timestamps (microseconds, 0 if not yet stamped).
+  // Used by Python to retrieve timing fields after StopIteration.
+  void SnapshotTimestamps(ksana_llm::KsanaPythonOutput &ksana_python_output) const;
+
  private:
   // The user request.
   std::shared_ptr<Request> request_;

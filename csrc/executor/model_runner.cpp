@@ -12,6 +12,7 @@
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
 #include "executor/model_sampler.h"
+#include "pd_v2/prefill/pd_v2_layer_event_tracker.h"
 #include "profiler/profile_event.h"
 #include "runtime/fast_path_controller.h"
 #include "runtime/structured_generation/structured_generator_interface.h"
@@ -280,6 +281,13 @@ Status ModelRunner::HandleExecute() {
     GetHiddenShape(model_input->schedule_output, hidden_unit->tensor.shape);
     hidden_unit->tensor.dtype = GetHiddenDataType();
 
+    // pd_v2: open a fresh epoch slot for this batch BEFORE Forward kicks off
+    // any RecordLayerProgress. The epoch_id rides on model_output to
+    // HandlePostprocess so ResetState targets this batch's slot only —
+    // never racing with the next batch's writes. No-op (returns 0) on
+    // non-pd_v2 / non-Prefill processes.
+    model_output->pd_v2_epoch_id = Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance()->BeginBatch();
+
     {
       PROFILE_EVENT_SCOPE(execute_forward_launch, "Exec.HandleExecute.ForwardLaunch");
       executor_runtime_->Forward(model_input, hidden_unit, model_output);
@@ -304,6 +312,10 @@ Status ModelRunner::HandleExecute() {
         StreamSynchronize(context_->device->GetPrimaryComputeStream());
       }
       hidden_unit_buffer_pool_->FreeBuffer(hidden_unit);
+      // Non-sampling node: model_output never reaches HandlePostprocess, so
+      // we must seal the pd_v2 epoch slot here to avoid leaking it from the
+      // tracker's free pool.
+      Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance()->ResetState(model_output->pd_v2_epoch_id);
     }
 
     // TP: 采样卡 rank 0 WriteRing 后，所有 rank（含非采样 PP stage 上的 TP worker）必须参与 collective。
@@ -435,6 +447,12 @@ Status ModelRunner::HandlePostprocess() {
       hidden_unit_buffer_pool_->FreeBuffer(hidden_unit);
     }
     Singleton<LayerProgressTracker>::GetInstance()->ResetState();
+    // pd_v2 tracker: seal this batch's epoch slot. Force-fires any pending
+    // layer callback the monitor thread hasn't observed yet, then returns
+    // the slot to the free pool. epoch_id was assigned at HandleExecute
+    // time via BeginBatch and rides on model_output. No-op when 0 (pd_v2
+    // not active on this process).
+    Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance()->ResetState(model_output->pd_v2_epoch_id);
 
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
       generation_results[req->req_id].draft_tokens = req->draft_tokens;

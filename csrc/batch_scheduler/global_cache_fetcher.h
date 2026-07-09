@@ -39,7 +39,12 @@ struct GlobalCacheQueryResult {
 //   5. 调度线程通过 TakeCompletedRequests 取出已完成的请求。
 class GlobalCacheFetcher {
  public:
-  // role: "prefill" / "decode" / ""（standalone）
+  // role:
+  //   ""               standalone (无 PD 分离)
+  //   "prefill"        V1 PD Prefill 节点 (max_new_tokens=1 + 标准全命中 flip)
+  //   "decode"         V1 PD Decode 节点 (未全命中 + tokens 则 reject)
+  //   "pd_v2_prefill"  pd_v2 Prefill (全命中保留 1 token, 不 flip kDecode)
+  //   "pd_v2_decode"   pd_v2 Decode (无 reject, 部分命中由 peer Prefill 兜底)
   GlobalCacheFetcher(int device_count, std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper, const std::string& role = "");
   ~GlobalCacheFetcher();
 
@@ -64,8 +69,12 @@ class GlobalCacheFetcher {
   // 同步模式下通过 TakeCompletedRequests 在 Process 中直接取出。
   bool IsAsync() const;
 
+  // PD role ("" / "prefill" / "decode" / "pd_v2_prefill" / "pd_v2_decode")。
+  // 供 GlobalCacheQueryHook 在全命中路径上判定是否允许 flip kDecode。
+  const std::string& GetRole() const { return role_; }
+
   // 请求完成时的回调类型：参数为 (req_id, success)
-  // success=false 表示请求被拒绝（如 decode 角色未全命中）
+  // success=false 表示请求被拒绝（如 V1 decode 角色未全命中）
   using CompletionCallback = std::function<void(int64_t req_id, bool success)>;
 
   // 设置请求完成时的回调（由 GlobalCacheQueryHook 调用，用于驱动事件驱动调度器）
@@ -73,6 +82,10 @@ class GlobalCacheFetcher {
 
   // 取出被拒绝的请求（由 hook 的 UpdateAsyncResult 使用）
   std::vector<std::shared_ptr<InferRequest>> TakeRejectedRequests();
+
+  // Exposed for unit tests.
+  void UpdateRequestWorkload(std::shared_ptr<InferRequest>& req, size_t new_cached_len,
+                             const std::vector<int>& cached_tokens = {}, bool has_cached_tokens = false);
 
  private:
   // 单个请求的异步拉取跟踪信息
@@ -96,19 +109,17 @@ class GlobalCacheFetcher {
   static size_t GetAllDevicesContiguousPrefixLen(const std::vector<std::vector<int>>& per_device_ranges,
                                                  size_t local_cached_len);
 
-  // 根据全局 cache 命中结果更新 req 的 workload。
-  // cached_tokens / has_cached_tokens: 全命中时是否同时查到了缓存的生成 token(s)。
-  void UpdateRequestWorkload(std::shared_ptr<InferRequest>& req, size_t new_cached_len,
-                             const std::vector<int>& cached_tokens = {}, bool has_cached_tokens = false);
-
   mutable std::mutex mutex_;
   std::unordered_map<int64_t, PendingRequest> pending_requests_;
   std::vector<std::shared_ptr<InferRequest>> completed_requests_;
   std::vector<std::shared_ptr<InferRequest>> rejected_requests_;
 
+  // Match GlobalCacheQueryHook / ContinuousBatchingBackend on full local prefix hit.
+  static void ApplyPrefixStyleFullHitWorkload(const std::shared_ptr<InferRequest>& req, size_t seq_token_num);
+
   int device_count_ = 1;
   std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper_;
-  std::string role_;  // "prefill" / "decode" / ""
+  std::string role_;  // "" / "prefill" / "decode" / "pd_v2_prefill" / "pd_v2_decode"
   std::unique_ptr<ThreadPool> dispatch_thread_pool_;
   std::atomic<bool> terminated_{false};
   CompletionCallback completion_callback_;

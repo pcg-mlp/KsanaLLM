@@ -12,6 +12,9 @@
 #include <memory>
 #include <vector>
 
+#include "batch_scheduler/schedule_processor_interface.h"
+#include "pd_v2/public/pd_v2_types.h"
+#include "runtime/infer_request.h"
 #include "test.h"
 #include "utils/request.h"
 #include "utils/tensor.h"
@@ -27,6 +30,29 @@ class ModelDriverTestHelper {
   static void ConvertMultimodalEmbedding(ModelDriver& driver, std::shared_ptr<Request>& req) {
     driver.ConvertMultimodalEmbedding(req);
   }
+
+  // Expose Enqueue for testing
+  static Status Enqueue(ModelDriver& driver, std::shared_ptr<Request>& req) { return driver.Enqueue(req); }
+};
+
+// Minimal stub: captures the infer_request_group handed to AddInferRequest so a
+// test can inspect the InferRequest objects ModelDriver::Enqueue builds, without
+// standing up a real scheduler.
+class StubScheduleProcessor : public ScheduleProcessorInterface {
+ public:
+  void Initialize(std::shared_ptr<BatchSchedulerInterface> /*batch_scheduler*/) override {}
+  Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) override {
+    last_group_ = infer_request_group;
+    return Status();
+  }
+  std::shared_ptr<ScheduleResult> GetNextScheduleResult() override { return nullptr; }
+  void UpdateWithGenerationResult(const GenerationOutputGroup& /*generation_output*/) override {}
+  void Lock() override {}
+  void Unlock() override {}
+  void Start() override {}
+  void Stop() override {}
+
+  std::vector<std::shared_ptr<InferRequest>> last_group_;
 };
 
 class ModelDriverTest : public ::testing::Test {
@@ -243,6 +269,83 @@ TEST_F(ModelDriverTest, ConvertMultimodalEmbeddingWithBytes) {
       EXPECT_FLOAT_EQ(tensor_data[j], embeddings[i][j]);
     }
   }
+}
+
+// Enqueue on a pd_v2 prefill Request must copy the pd_v2 decode-target fields
+// onto each built InferRequest and register the on_destroy callback.
+TEST_F(ModelDriverTest, EnqueuePdV2PrefillCopiesFields) {
+  Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue;
+  auto schedule_output_pool = std::make_shared<ScheduleOutputPool>();
+  auto sampling_output_pool = std::make_shared<SamplingOutputPool>();
+  auto context = std::make_shared<Context>();
+
+  ModelDriver driver(request_queue, schedule_output_pool, sampling_output_pool, context);
+  auto stub = std::make_shared<StubScheduleProcessor>();
+  driver.SetScheduleProcessor(stub);
+
+  auto ksana_input = std::make_shared<KsanaPythonInput>();
+  ksana_input->input_tokens = {1, 2, 3};
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto req = std::make_shared<Request>(ksana_input, req_ctx);
+
+  req->is_pd_v2_prefill = true;
+  pd_v2::DecodeTargetLite tgt;
+  tgt.decode_attn_tp_rank_in_group = 2;
+  tgt.kv_pool_base_va = 0xdeadbeefULL;
+  req->pd_v2_decode_targets = {tgt};
+  req->pd_v2_decode_peer_addr = "1.2.3.4:5000";
+  req->pd_v2_decode_attn_dp_group_id = 7;
+  auto destroyed = std::make_shared<bool>(false);
+  req->pd_v2_on_destroy = [destroyed]() { *destroyed = true; };
+
+  Status s = ModelDriverTestHelper::Enqueue(driver, req);
+  EXPECT_TRUE(s.OK());
+
+  ASSERT_EQ(stub->last_group_.size(), 1u);
+  std::shared_ptr<InferRequest> ir = stub->last_group_[0];
+  ASSERT_EQ(ir->pd_v2.decode_targets.size(), 1u);
+  EXPECT_EQ(ir->pd_v2.decode_targets[0].decode_attn_tp_rank_in_group, 2u);
+  EXPECT_EQ(ir->pd_v2.decode_targets[0].kv_pool_base_va, 0xdeadbeefULL);
+  EXPECT_EQ(ir->pd_v2.decode_engine_inference_addr, "1.2.3.4:5000");
+  EXPECT_EQ(ir->pd_v2.decode_attn_dp_group_id, 7u);
+
+  // on_destroy fires once the last reference drops. The InferRequest holds a
+  // shared_ptr to itself via req_group (SetReqGroup), so break that cycle first.
+  stub->last_group_.clear();
+  ir->ClearReqGroup();
+  ir.reset();
+  EXPECT_TRUE(*destroyed);
+}
+
+// Non-pd_v2 Request leaves the pd_v2 fields at their defaults.
+TEST_F(ModelDriverTest, EnqueueNonPdV2LeavesFieldsDefault) {
+  Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue;
+  auto schedule_output_pool = std::make_shared<ScheduleOutputPool>();
+  auto sampling_output_pool = std::make_shared<SamplingOutputPool>();
+  auto context = std::make_shared<Context>();
+
+  ModelDriver driver(request_queue, schedule_output_pool, sampling_output_pool, context);
+  auto stub = std::make_shared<StubScheduleProcessor>();
+  driver.SetScheduleProcessor(stub);
+
+  auto ksana_input = std::make_shared<KsanaPythonInput>();
+  ksana_input->input_tokens = {1, 2, 3};
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto req = std::make_shared<Request>(ksana_input, req_ctx);
+  // is_pd_v2_prefill defaults to false.
+
+  Status s = ModelDriverTestHelper::Enqueue(driver, req);
+  EXPECT_TRUE(s.OK());
+
+  ASSERT_EQ(stub->last_group_.size(), 1u);
+  std::shared_ptr<InferRequest> ir = stub->last_group_[0];
+  EXPECT_TRUE(ir->pd_v2.decode_targets.empty());
+  EXPECT_TRUE(ir->pd_v2.decode_engine_inference_addr.empty());
+  EXPECT_EQ(ir->pd_v2.decode_attn_dp_group_id, 0u);
+
+  stub->last_group_.clear();
+  ir->ClearReqGroup();
+  ir.reset();
 }
 
 }  // namespace ksana_llm

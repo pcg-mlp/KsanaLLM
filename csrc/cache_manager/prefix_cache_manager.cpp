@@ -4,6 +4,7 @@
 #include "cache_manager/prefix_cache_manager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cstring>
 #include <mutex>
@@ -93,13 +94,16 @@ size_t PrefixCacheManager::GetUsedBlockNumber() {
   return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetDeviceUsedBlockNumber() - GetUsableBlockNumber();
 }
 
-size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
+size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens, size_t mtp_step_num) {
   const auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
   }
   const size_t block_token_num = cache_manager_config_.block_token_num;
-  const size_t total_require_block_num = (input_token_lens + block_token_num) / block_token_num;
+  // 与 DirectCacheManager 保持一致：input 和 mtp_step_num 分别按 block 向上取整。
+  const size_t input_blocks = (input_token_lens + block_token_num) / block_token_num;
+  const size_t mtp_blocks = (mtp_step_num + block_token_num - 1) / block_token_num;
+  const size_t total_require_block_num = input_blocks + mtp_blocks;
   return total_require_block_num - std::min(total_require_block_num, it->second->cached_blocks.size());
 }
 
@@ -626,13 +630,19 @@ bool PrefixCacheManager::FreeCachedBlocks(size_t block_num, size_t& free_block_n
   free_block_num = 0;
   std::vector<PrefixCachedBlock*> free_blocks;
 
+  // Build an O(1) lookup set for reserved blocks. The reserved vector is a full copy of the
+  // requesting request's cached_blocks (~1000 ptrs for a 16k-token req); a per-scanned-block
+  // std::find made FreeCachedBlocks O(scanned x reserved), which collapsed decode throughput
+  // once the free pool stayed exhausted under a large awaiting-prefill backlog.
+  std::unordered_set<PrefixCachedBlock*> reserved_set(reserved_blocks.begin(), reserved_blocks.end());
+
   // Loop timeline from end to begin.
   for (auto it = timed_cached_blocks_.rbegin(); it != timed_cached_blocks_.rend(); ++it) {
     PrefixCachedBlock* cb = *it;
 
     // Skip reserved blocks.
-    if (!reserved_blocks.empty()) {
-      if (std::find(reserved_blocks.begin(), reserved_blocks.end(), cb) != reserved_blocks.end()) {
+    if (!reserved_set.empty()) {
+      if (reserved_set.count(cb) != 0) {
         continue;
       }
     }
@@ -708,7 +718,11 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
           : std::vector<PrefixCachedBlock*>();
 
   size_t free_block_num = 0;
-  if (needed_blocks > 0 && !FreeCachedBlocks(needed_blocks, free_block_num, reserved_blocks)) {
+  bool free_ok = true;
+  if (needed_blocks > 0) {
+    free_ok = FreeCachedBlocks(needed_blocks, free_block_num, reserved_blocks);
+  }
+  if (needed_blocks > 0 && !free_ok) {
     return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("AllocateRequestBlocksInternal: not enough FA blocks "
                                                       "(needed=%zu, free=%zu).",
                                                       fa_block_num, free_cached_blocks_.size()));
@@ -757,10 +771,32 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
   new_fa_block_ids.clear();
   new_fa_block_ids.reserve(fa_block_num);
 
+  // 从 free pool pop 的 fresh 块不应已存在于本请求的 cached_blocks 中，否则同一节点会挂到两个
+  // parent 下形成 prefix tree 环。这里在成环之前 fail-fast；仅在确有 pop (fa_block_num>0) 时才建集合。
+  std::unordered_set<PrefixCachedBlock*> alloc_guard;
+  if (fa_block_num > 0) {
+    alloc_guard.insert(cached_request->cached_blocks.begin(), cached_request->cached_blocks.end());
+    if (alloc_guard.size() != cached_request->cached_blocks.size()) {
+      KLLM_THROW(
+          FormatStr("AllocateRequestBlocksInternal: req %d cached_blocks contains duplicate pointers before "
+                    "alloc (distinct=%zu, total=%zu) — prefix tree corruption.",
+                    req_id, alloc_guard.size(), cached_request->cached_blocks.size()));
+    }
+  }
+
   // Allocate fa_block_num FA blocks; bind SWA blocks only at positions in swa_positions.
   for (size_t i = 0; i < fa_block_num; ++i) {
     PrefixCachedBlock* cached_block = free_cached_blocks_.front();
     free_cached_blocks_.pop();
+
+    // popped fresh 块若已在 cached_blocks 中, 即命中双 free / 成环前兆 — 在成环前抛清晰错误。
+    // insert().second == false 同时覆盖 "与已匹配块重复" 和 "本轮 pop 出重复块" 两种情况。
+    if (!alloc_guard.insert(cached_block).second) {
+      KLLM_THROW(
+          FormatStr("AllocateRequestBlocksInternal: req %d popped free block already referenced in "
+                    "cached_blocks (block_id=%zu, memory_block_id=%d, ptr=%p) — double-free/cycle precursor.",
+                    req_id, cached_block->block_id, cached_block->memory_block_id, static_cast<void*>(cached_block)));
+    }
 
     const size_t global_idx = cached_request->cached_blocks.size();
     new_fa_block_ids.push_back(cached_block->memory_block_id);
@@ -864,7 +900,6 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
                      << ", req_block_num=" << cached_request->cached_blocks.size()
                      << ", swa_block_idx_offsets.size=" << swa_block_idx_offsets.size() << ", "
                      << Vector2Str(swa_block_idx_offsets);
-
   return Status();
 }
 

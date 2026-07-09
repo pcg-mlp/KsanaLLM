@@ -32,7 +32,7 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(size_t, GetUsableBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetHostFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetUsedBlockNumber, (), (override));
-  MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t), (override));
+  MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t, size_t), (override));
   MOCK_METHOD(size_t, GetRequestStepBlockNumberForOneNextToken, (int64_t), (override));
   MOCK_METHOD(size_t, GetRequestUsableBlockNumber, (int64_t), (override));
   MOCK_METHOD(Status, GetRequestPrefixBlockNumber,

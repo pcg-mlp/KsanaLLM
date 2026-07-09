@@ -6,11 +6,13 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 
 #include "device/device_utils.h"
 #include "distributed/packet_type.h"
 #include "ipc/core/ipc_func_types.h"
 #include "profiler/profile_event.h"
+#include "utils/logger.h"
 
 namespace ksana_llm {
 
@@ -119,21 +121,25 @@ Status IpcFuncProxy::Invoke(const IpcRequest* request, IpcResponse* response, Ip
     return Status(RET_INVALID_ARGUMENT, "IpcFuncProxy error, sync mode support only one callee.");
   }
 
-  SendIpcRequest(request, context);
-
-  // If in sync mode, wait until the response received.
+  // Sync-mode notifier MUST be registered before SendIpcRequest. Under heavy
+  // load the executor round-trip can complete before this thread would reach
+  // a post-send registration block, leaving GetIpcNotifier with an empty map.
+  std::shared_ptr<IpcNotifier> ipc_notifier;
   if (!context->is_async) {
     if (!response) {
       return Status(RET_INVALID_ARGUMENT, "IpcFuncProxy error, response can not be null in sync mode.");
     }
-
-    std::shared_ptr<IpcNotifier> ipc_notifier = std::make_shared<IpcNotifier>(response);
-
+    ipc_notifier = std::make_shared<IpcNotifier>(response);
     {
       std::lock_guard<std::mutex> lock(mutex_);
       ipc_notifiers_[context->exec_seq] = ipc_notifier;
     }
+  }
 
+  SendIpcRequest(request, context);
+
+  // If in sync mode, wait until the response received.
+  if (!context->is_async) {
     WaitingUntilIpcFuncFinished(ipc_notifier);
 
     // Clear notifier when finished.
@@ -417,6 +423,12 @@ IpcFuncInfo& IpcFuncProxy::GetIpcFuncInfo(int func_id, int executor_id) {
 std::shared_ptr<IpcNotifier> IpcFuncProxy::GetIpcNotifier(size_t exec_seq) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (ipc_notifiers_.find(exec_seq) == ipc_notifiers_.end()) {
+    std::ostringstream oss;
+    for (const auto& kv : ipc_notifiers_) {
+      oss << kv.first << ",";
+    }
+    KLLM_LOG_ERROR << "[ipc-trace] GetIpcNotifier missing seq=" << exec_seq << ", role=" << ipc_role_
+                   << ", map_size=" << ipc_notifiers_.size() << ", live_keys=[" << oss.str() << "]";
     KLLM_THROW(fmt::format("GetIpcNotifier error, the exec seq {} is not existed.", exec_seq));
   }
   return ipc_notifiers_[exec_seq];

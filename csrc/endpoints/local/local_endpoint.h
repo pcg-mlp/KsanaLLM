@@ -33,6 +33,9 @@ class LocalEndpoint {
                                const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx,
                                std::string& response_bytes);
 
+  // Enqueue a fully-built Request without blocking (pd_v2 Prefill path).
+  Status SubmitAsync(const std::shared_ptr<Request>& request);
+
  private:
   // The endpoint config.
   EndpointConfig endpoint_config_;

@@ -39,6 +39,35 @@ inline std::string SchedEventType2Str(SchedEventType e) {
   }
 }
 
+// ----- Hook 通知事件（通用化的 Hook 通知机制） -----
+// 调度器以"事件"的方式通知 Hook 状态发生了变化，而不是为每个具体操作定义一个专用接口。
+// Hook 按需处理自己关心的事件类型，不关心的事件默认忽略 (基类 OnEvent 空实现)。
+// 事件驱动 Hook 行为: 资源被释放、请求离场等都表达为一个事件，未来新增事件类型无需改动接口签名。
+enum class HookEventType {
+  kBlocksFreed,    // KV blocks 被释放 (Stop / Recompute / Swapout)，资源可用，可重试分配等。
+  kRequestExited,  // 某个请求彻底离场 (正常完成 / 失败结束 / pd_v2 decode 抢占重启释放本地 KV)。
+};
+
+inline std::string HookEventType2Str(HookEventType e) {
+  switch (e) {
+    case HookEventType::kBlocksFreed:
+      return "kBlocksFreed";
+    case HookEventType::kRequestExited:
+      return "kRequestExited";
+    default:
+      return "Wrong type";
+  }
+}
+
+// 通用 Hook 事件载体。不同事件类型按需读取相关字段，无关字段忽略。
+struct HookEvent {
+  HookEventType type;
+  // kRequestExited 携带离场的 req_id；其他事件类型忽略此字段。
+  int64_t req_id = 0;
+
+  explicit HookEvent(HookEventType t, int64_t rid = 0) : type(t), req_id(rid) {}
+};
+
 // ----- 异步任务结果（设计文档 4.4） -----
 struct AsyncTaskResult {
   int hook_idx = 0;  // 标识从哪个 Hook 开始调用，调用顺序为 hook_idx 从小到大

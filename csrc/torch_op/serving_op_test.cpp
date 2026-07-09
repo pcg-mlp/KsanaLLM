@@ -84,6 +84,34 @@ TEST_F(ServingOpTest, DifferentErrorCodes) {
   }
 }
 
+// 默认构造时四个 access-log 时间戳字段都为 0
+TEST_F(ServingOpTest, AccessLogTimestampsDefaultZero) {
+  ASSERT_TRUE(output != nullptr);
+  EXPECT_EQ(output->arrive_time_us, 0u);
+  EXPECT_EQ(output->scheduled_time_us, 0u);
+  EXPECT_EQ(output->first_token_time_us, 0u);
+  EXPECT_EQ(output->finish_time_us, 0u);
+}
+
+// 设置后单调一致：arrive <= scheduled <= first_token <= finish
+TEST_F(ServingOpTest, AccessLogTimestampsRoundTrip) {
+  ASSERT_TRUE(output != nullptr);
+
+  output->arrive_time_us = 1000;
+  output->scheduled_time_us = 1500;
+  output->first_token_time_us = 2000;
+  output->finish_time_us = 5000;
+
+  EXPECT_EQ(output->arrive_time_us, 1000u);
+  EXPECT_EQ(output->scheduled_time_us, 1500u);
+  EXPECT_EQ(output->first_token_time_us, 2000u);
+  EXPECT_EQ(output->finish_time_us, 5000u);
+
+  EXPECT_LE(output->arrive_time_us, output->scheduled_time_us);
+  EXPECT_LE(output->scheduled_time_us, output->first_token_time_us);
+  EXPECT_LE(output->first_token_time_us, output->finish_time_us);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

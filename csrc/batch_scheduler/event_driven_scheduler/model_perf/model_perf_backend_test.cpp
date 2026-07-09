@@ -38,7 +38,7 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(size_t, GetUsableBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetHostFreeBlockNumber, (), (override));
   MOCK_METHOD(size_t, GetUsedBlockNumber, (), (override));
-  MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t), (override));
+  MOCK_METHOD(size_t, GetRequestStepBlockNumber, (int64_t, size_t, size_t), (override));
   MOCK_METHOD(size_t, GetRequestStepBlockNumberForOneNextToken, (int64_t), (override));
   MOCK_METHOD(size_t, GetRequestUsableBlockNumber, (int64_t), (override));
   MOCK_METHOD(Status, GetRequestPrefixBlockNumber,
@@ -147,7 +147,7 @@ void ArmPrefillInflightTask(const std::shared_ptr<InferRequest>& req, size_t pre
 void SetupDefaultCacheManagerMock(MockCacheManager& mock_cm) {
   ON_CALL(mock_cm, GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(testing::Return(Status()));
-  ON_CALL(mock_cm, GetRequestStepBlockNumber(testing::_, testing::_)).WillByDefault(testing::Return(1));
+  ON_CALL(mock_cm, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(1));
   ON_CALL(mock_cm, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(testing::Return(Status()));
   ON_CALL(mock_cm,
@@ -318,7 +318,9 @@ TEST_F(ModelPerfBackendTest, ScheduleFirstRoundAllocatesKvAndAddsRunningReq) {
   EXPECT_EQ(req->kv_cached_token_num, 16u);
   // AddRunningReq 会调用 SetPlanningTask()，workload 已转入 planning_task_，planning_workload_ 被清空。
   EXPECT_TRUE(req->HasPlanningTask());
-  EXPECT_EQ(planning_batch->running_step_token_num, 32u);
+  // Prefill counts the full sequence (prefill_start_offset + prefill_token_num = 16 + 32)
+  // against running_step_token_num so prefix-cache hits are charged to max_step_token.
+  EXPECT_EQ(planning_batch->running_step_token_num, 48u);
   EXPECT_EQ(backend.perf_req_states_[req->req_id].snap_planning_workload.prefill_token_num, 32u);
   EXPECT_EQ(backend.perf_req_states_[req->req_id].snap_planning_workload.prefill_start_offset, 16u);
   EXPECT_EQ(req->GetRemainingWorkload().prefill_token_num, 0u);
@@ -361,7 +363,8 @@ TEST_F(ModelPerfBackendTest, ScheduleResetRoundRestoresSnapshot) {
   EXPECT_EQ(planning_batch->running_req_num, 1u);
   EXPECT_EQ(req->kv_cached_token_num, 8u);
   EXPECT_TRUE(req->HasPlanningTask());
-  EXPECT_EQ(planning_batch->running_step_token_num, 16u);
+  // Full sequence: prefill_start_offset(8) + prefill_token_num(16) = 24.
+  EXPECT_EQ(planning_batch->running_step_token_num, 24u);
   EXPECT_EQ(req->GetRemainingWorkload().prefill_token_num, 0u);
   EXPECT_EQ(req->GetRemainingWorkload().prefill_start_offset, 24u);
   EXPECT_FALSE(backend.needs_reset_);

@@ -2,7 +2,20 @@
 #
 # ==============================================================================
 
-import libtorch_serving
+import os
+import sys
+
+# pd_v2 dlopen of libpd_v2_connector_mooncake.so needs to resolve undef
+# refs against libtorch_serving's symbol table — switch to RTLD_GLOBAL
+# for this import (same reason as ksana_llm/__init__.py; needed
+# independently because mp.spawn'd executor imports libtorch_serving
+# through this module, not through ksana_llm/__init__.py).
+_old_flags = sys.getdlopenflags()
+sys.setdlopenflags(_old_flags | os.RTLD_GLOBAL)
+try:
+    import libtorch_serving
+finally:
+    sys.setdlopenflags(_old_flags)
 
 from ksana_llm.arg_utils import EngineArgs
 

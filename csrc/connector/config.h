@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace ksana_llm {
 /**
@@ -67,6 +68,110 @@ struct ConnectorConfig {
 
   /** @brief Connector role (prefill, decode, or both) */
   GroupRole group_role = GroupRole::NONE;
+
+  // ============================================================
+  // DEPRECATED pd_v2 fields below.
+  //
+  // pd_v2 callers must read PdV2RuntimeConfig
+  // (csrc/pd_v2/configure/pd_v2_runtime_config.h) via
+  // Environment::GetPdV2RuntimeConfig. ConnectorConfig is V1-only.
+  //
+  // Mixing them caused memory K7 (V1 `is_decode_only = (group_role ==
+  // DECODE)` derivation propagated into pd_v2 Decode and corrupted
+  // forwarding buffers under local-bypass prefill).
+  //
+  // The fields are still populated by ScheduleConfigParser for
+  // back-compat (existing callers / tests reading them are not yet
+  // migrated). Deletion in a follow-up PR.
+  // ============================================================
+
+  /**
+   * @brief Whether this deployment runs pd_v2 (token-based PD disaggregation
+   * over Mooncake). Mirrors `setting.connector.backend == "v2"` in YAML.
+   * pd_v2 code paths (e.g. executor KV pool contiguous allocation) gate on
+   * this flag rather than env vars. Default false preserves V1 behavior.
+   */
+  bool is_pd_v2 = false;
+
+  /**
+   * @brief Mooncake metadata server connection string (pd_v2 only).
+   * Mirrors `setting.connector.metadata_addr` in YAML. Forwarded to
+   * mooncake::TransferEngine::init() at connector Initialize. Empty
+   * string defaults to "P2PHANDSHAKE" (single-machine, no metadata
+   * server needed). See PdV2ConnectorConfig.metadata_addr docstring
+   * for supported schemes.
+   */
+  std::string metadata_addr;
+
+  /**
+   * @brief Redis password for metadata_addr=redis://... (pd_v2 only).
+   * Forwarded by InferenceEngine/InferenceExecutor bootstrap to env var
+   * MC_REDIS_PASSWORD which Mooncake reads at TransferEngine::init time
+   * and uses for AUTH against the Redis server's default user. Mirrors
+   * YAML `setting.connector.redis_password`. Empty = no AUTH issued.
+   */
+  std::string redis_password;
+
+  /**
+   * @brief pd_v2 transfer chunk size (number of model layers per
+   * Mooncake submitTransfer batch). 0 = transfer everything at the
+   * model's final layer only (one big batch). N>0 = a batch fires
+   * every N layers (smaller batches, lower latency, more overhead).
+   * Default 1 (per-layer) — matches the design doc's reference
+   * configuration. Mirrors YAML
+   * `setting.connector.transfer_layer_chunk_size`. Ignored when
+   * is_pd_v2 == false.
+   */
+  uint32_t transfer_layer_chunk_size = 1;
+
+  /**
+   * @brief pd_v2 Executor Mooncake RPC base port. Per-rank port is
+   *        assigned as `base + executor_rank` so multi-rank TP
+   *        deployments (one executor process per GPU on a host)
+   *        don't collide on a single port. Default 20000; mirrors
+   *        YAML `setting.connector.pd_v2_executor_rpc_base_port`.
+   *        Ignored when is_pd_v2 == false.
+   */
+  uint32_t pd_v2_executor_rpc_base_port = 20000;
+
+  /**
+   * @brief pd_v2 Decode-side "remaining prefill ≤ N stays local" threshold
+   * (tokens). When (input_tokens.size() − prefix_cache_len) ≤ this value,
+   * Decode bypasses Prefill and runs the residual prefill + decode locally.
+   * Default 0 disables the fast-path (always forward). Mirrors YAML
+   * `setting.connector.pd_v2_local_complete_threshold`. Ignored when
+   * is_pd_v2 == false or group_role != DECODE.
+   */
+  int pd_v2_local_complete_threshold = 0;
+
+  /**
+   * @brief pd_v2 Decode-side peer-selection policy. 0=kRoundRobin (default),
+   * 1=kLinUCB. kLinUCB enables the contextual-bandit LOCAL-vs-REMOTE router
+   * (remote peer still chosen by the round-robin path). Mirrors YAML
+   * `setting.connector.pd_v2_selector_policy`.
+   * Ignored when is_pd_v2 == false or group_role != DECODE.
+   */
+  int pd_v2_selector_policy = 0;
+
+  /** @brief LinUCB exploration weight (selector_policy==kLinUCB only).
+   *  YAML `setting.connector.pd_v2_linucb_alpha`. */
+  double pd_v2_linucb_alpha = 1.0;
+  /** @brief LinUCB TPOT budget in us. YAML `pd_v2_linucb_tpot_target_us`. */
+  double pd_v2_linucb_tpot_target_us = 50000.0;
+  /** @brief LinUCB LOCAL gate aims at tpot_target_us * this (headroom for the
+   *  prefill-local TPOT bump). <1 = TPOT prioritized harder. Default 0.85.
+   *  YAML `pd_v2_linucb_tpot_safety_factor`. */
+  double pd_v2_linucb_tpot_safety_factor = 0.85;
+  /** @brief LinUCB TTFT budget in us. YAML `pd_v2_linucb_ttft_threshold_us`. */
+  double pd_v2_linucb_ttft_threshold_us = 1500000.0;
+  /** @brief LinUCB "fully busy" running_reqs reference. YAML `pd_v2_linucb_running_ref`. */
+  double pd_v2_linucb_running_ref = 16.0;
+  /** @brief LinUCB "too big to keep local" remaining-token reference.
+   *  YAML `pd_v2_linucb_remaining_ref_tokens`. */
+  double pd_v2_linucb_remaining_ref_tokens = 4096.0;
+  /** @brief LinUCB round-trip latency (us) mapping to REMOTE reward 0.
+   *  YAML `pd_v2_linucb_remote_lat_ref_us`. */
+  double pd_v2_linucb_remote_lat_ref_us = 200000.0;
 
   /** @brief Type of communication protocol to use */
   CommunicationType communication_type = CommunicationType::NCCL;

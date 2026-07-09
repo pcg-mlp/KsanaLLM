@@ -312,10 +312,23 @@ class ParallelTester {
       timeout_thread.join();
     }
 
-    // Check request results
-    for (auto hook : hooks) {
-      KLLM_LOG_INFO << "CheckRequestsAfterExecution";
-      hook->CheckRequestsAfterExecution(reqs);
+    // Forward-progress guard. If the run hit the wall-clock timeout before every
+    // request finished, the surviving (still-running) requests keep a default-OK
+    // finish_status, so the per-request output checks below would compare the
+    // full expected token quota against a partial output and emit misleading
+    // "check size fail" mismatches. Assert completion explicitly and skip the
+    // output checks on timeout, so a failure points at the real cause — no
+    // forward progress / too-tight timeout — instead of the size symptom.
+    const bool all_requests_stopped = client_simulator.IsAllRequestStopped();
+    EXPECT_TRUE(all_requests_stopped)
+        << "DoParallelRequestAndCheck timed out before all requests finished; "
+           "output checks skipped to avoid misleading size-mismatch failures";
+    if (all_requests_stopped) {
+      // Check request results
+      for (auto hook : hooks) {
+        KLLM_LOG_INFO << "CheckRequestsAfterExecution";
+        hook->CheckRequestsAfterExecution(reqs);
+      }
     }
     KLLM_LOG_INFO << "DoParallelRequestAndCheck finished";
   }
@@ -560,7 +573,12 @@ class FixPrefixTestCase {
                                                          info.ksana_python_input, seeds);
     }
 
-    tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
+    // 180s (was 60s): this recompute-pressure test runs ~5s locally but on a
+    // coverage (gcov) build with parallel test contention it approached the old
+    // 60s wall-clock limit and timed out. 3x headroom keeps it completing
+    // normally there; a genuine forward-progress stall still fails via the
+    // all-requests-stopped guard in DoParallelRequestAndCheck.
+    tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 180);
   }
 
  private:

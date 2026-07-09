@@ -6,9 +6,9 @@
 #include <torch/torch.h>
 
 #include "batch_scheduler/schedule_processor_interface.h"
-#include "profiler/profile_event.h"
 #include "distributed/packet_util.h"
 #include "ipc/core/ipc_func_serialization.h"
+#include "profiler/profile_event.h"
 #include "runtime/executor_infer_request.h"
 #include "utils/status.h"
 #include "utils/string_utils.h"
@@ -95,36 +95,6 @@ static Status DeserializeEmbeddingSlice(EmbeddingSlice& embedding_slice, const v
   DeserializeVectorOfTensor(embedding_slice.additional_tensors, ptr, offset);
 
   return Status();
-}
-
-static void SerializeSwapReqBlockIds(
-    const std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids, void* ptr, size_t& offset) {
-  SerializePod<size_t>(swap_req_block_ids.size(), ptr, offset);
-  for (const auto& req_block_ids : swap_req_block_ids) {
-    SerializePod<size_t>(req_block_ids.size(), ptr, offset);
-    for (const auto& [req_id, block_ids] : req_block_ids) {
-      SerializePod<int64_t>(req_id, ptr, offset);
-      SerializeVector<int>(block_ids.dev_block_ids, ptr, offset);
-      SerializeVector<int>(block_ids.host_block_ids, ptr, offset);
-    }
-  }
-}
-
-static void DeserializeSwapReqBlockIds(std::vector<std::unordered_map<int64_t, SwapReqBlockInfo>>& swap_req_block_ids,
-                                       const void* ptr, size_t& offset) {
-  size_t outer_size = DeserializePod<size_t>(ptr, offset);
-  swap_req_block_ids.clear();
-  swap_req_block_ids.resize(outer_size);
-  for (size_t i = 0; i < outer_size; ++i) {
-    size_t map_size = DeserializePod<size_t>(ptr, offset);
-    auto& req_block_ids = swap_req_block_ids[i];
-    for (size_t j = 0; j < map_size; ++j) {
-      int64_t req_id = DeserializePod<int64_t>(ptr, offset);
-      auto& block_info = req_block_ids[req_id];
-      DeserializeVector<int>(block_info.dev_block_ids, ptr, offset);
-      DeserializeVector<int>(block_info.host_block_ids, ptr, offset);
-    }
-  }
 }
 
 static Status SerializeSamplingConfig(const SamplingConfig& sampling_config, void* ptr, size_t& offset) {
@@ -381,6 +351,14 @@ static Status SerializeInferRequests(
     // kv_cached_token_num
     SerializePod<int>(snap ? snap->kv_cached_token_num : req->kv_cached_token_num, ptr, offset);
 
+    // kv_from_remote (pd_v2). Mirrors the patch path; see SerializeInferRequestPatches.
+    // Without this, the FIRST-time send of a PD request lands on the
+    // Executor with kv_from_remote=false, which routes ForwardRequest::GetType
+    // to kFlash (prefill kernel) — Decode then re-prefills the prompt and
+    // overwrites the bytes peer Prefill RDMA-wrote, producing degenerate
+    // output.
+    SerializePod<bool>(req->pd_v2.kv_from_remote, ptr, offset);
+
     // kv_cache_blocks
     if (snap) {
       SerializeVector<int>(snap->kv_cache_blocks, ptr, offset);
@@ -415,7 +393,7 @@ static Status SerializeInferRequests(
 
     // ngram_dict, not supported.
 
-    // timestamp_in_ms, not supported.
+    // timestamp_in_us, not supported.
 
     // req_ctx, not supported.
 
@@ -436,6 +414,19 @@ static Status SerializeInferRequests(
     if (req->need_recreate_generator) {
       SerializeStructuredGeneratorConfig(req->structured_generator_config, ptr, offset);
     }
+
+    // pd_v2: Decode-side KV pool routing. Travels with the **first**
+    // (full) ExecutorInferRequest only — same convention as
+    // structured_generator_config above. Subsequent patches don't
+    // re-transmit. Empty vector = non-pd_v2, no overhead.
+    SerializePod<size_t>(req->pd_v2.decode_targets.size(), ptr, offset);
+    for (const auto& t : req->pd_v2.decode_targets) {
+      SerializePod<uint32_t>(t.decode_attn_tp_rank_in_group, ptr, offset);
+      SerializePod<uint64_t>(t.kv_pool_base_va, ptr, offset);
+      SerializeVector<int>(t.kv_block_ids, ptr, offset);
+    }
+    SerializeString(req->pd_v2.decode_engine_inference_addr, ptr, offset);
+    SerializePod<uint32_t>(req->pd_v2.decode_attn_dp_group_id, ptr, offset);
   }
 
   return Status();
@@ -533,6 +524,9 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     // kv_cached_token_num
     req->kv_cached_token_num = DeserializePod<int>(ptr, offset);
 
+    // kv_from_remote (pd_v2). See SerializeInferRequests for rationale.
+    req->kv_from_remote = DeserializePod<bool>(ptr, offset);
+
     // kv_cache_blocks
     DeserializeVector<int>(req->kv_cache_blocks, ptr, offset);
 
@@ -555,7 +549,7 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
 
     // ngram_dict, not supported.
 
-    // timestamp_in_ms, not supported.
+    // timestamp_in_us, not supported.
 
     // req_ctx, not supported.
 
@@ -573,6 +567,19 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     // structured_generator_config (only deserialize if need_create_generator is true)
     if (req->need_create_generator) {
       DeserializeStructuredGeneratorConfig(req->structured_generator_config, ptr, offset);
+    }
+
+    // pd_v2: Decode-side KV pool routing (mirror of serialize side above).
+    {
+      const size_t target_count = DeserializePod<size_t>(ptr, offset);
+      req->pd_v2_decode_targets.resize(target_count);
+      for (size_t i = 0; i < target_count; ++i) {
+        req->pd_v2_decode_targets[i].decode_attn_tp_rank_in_group = DeserializePod<uint32_t>(ptr, offset);
+        req->pd_v2_decode_targets[i].kv_pool_base_va = DeserializePod<uint64_t>(ptr, offset);
+        DeserializeVector<int>(req->pd_v2_decode_targets[i].kv_block_ids, ptr, offset);
+      }
+      req->pd_v2_decode_engine_inference_addr = DeserializeString(ptr, offset);
+      req->pd_v2_decode_attn_dp_group_id = DeserializePod<uint32_t>(ptr, offset);
     }
 
     infer_reqs.push_back(req);
@@ -601,6 +608,9 @@ static Status SerializeInferRequestPatches(const std::vector<std::shared_ptr<Inf
 
     // kv_cached_token_num
     SerializePod<size_t>(req->kv_cached_token_num, ptr, offset);
+
+    // kv_from_remote (pd_v2)
+    SerializePod<bool>(req->kv_from_remote, ptr, offset);
 
     // prefix_cache_len
     SerializePod<int>(req->prefix_cache_len, ptr, offset);
@@ -652,6 +662,9 @@ static Status DeserializeInferRequestPatches(std::vector<std::shared_ptr<InferRe
 
     // kv_cached_token_num
     req_patch->kv_cached_token_num = DeserializePod<size_t>(ptr, offset);
+
+    // kv_from_remote (pd_v2)
+    req_patch->kv_from_remote = DeserializePod<bool>(ptr, offset);
 
     // prefix_cache_len
     req_patch->prefix_cache_len = DeserializePod<int>(ptr, offset);
@@ -725,6 +738,9 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
       patch_req->req_id = req->req_id;
       patch_req->infer_stage = req->infer_stage;
       patch_req->prefix_cache_len = req->prefix_cache_len;
+      // pd_v2: kv_from_remote is per-request (not snapshot-tracked), so it is set
+      // directly here; the remaining fields are populated from the snapshot below.
+      patch_req->kv_from_remote = req->pd_v2.kv_from_remote;
       patch_req->forwarding_tokens_offset = 0;
       patch_req->kv_cache_blocks_offset = 0;
 

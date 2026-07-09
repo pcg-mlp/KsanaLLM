@@ -28,6 +28,8 @@ class ScheduleHookManager : public ScheduleHookManagerInterface {
 
   void SetAsyncTaskFinishedCallback(AsyncTaskFinishedCallback callback) override;
 
+  void OnEvent(const HookEvent& event) override;
+
  private:
   // req_id -> 从哪个 hook_idx 开始调用；按 hook_idx 从小到大依次调用，根据该 map 与 cur_hook_idx 决定是否加入
   // hook->Process 的输入来处理这个请求，从而实现异步结果回调时从特定 Hook 继续处理。

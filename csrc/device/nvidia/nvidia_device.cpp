@@ -45,7 +45,7 @@ void DeviceSynchronizeT<DEVICE_TYPE_NVIDIA>() {
 
 template <>
 void SetDeviceT<DEVICE_TYPE_NVIDIA>(int device_id) {
-  KLLM_LOG_INFO << "SetDeviceT invoked, deivce_id " << device_id;
+  KLLM_LOG_DEBUG << "SetDeviceT invoked, deivce_id " << device_id;
   CUDA_CHECK(cudaSetDevice(device_id));
 }
 

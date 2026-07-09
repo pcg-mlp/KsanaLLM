@@ -1,0 +1,37 @@
+diff --git a/mooncake-transfer-engine/tent/src/transport/rdma/rdma_transport.cpp b/mooncake-transfer-engine/tent/src/transport/rdma/rdma_transport.cpp
+index aa273ae..6e313f1 100644
+--- a/mooncake-transfer-engine/tent/src/transport/rdma/rdma_transport.cpp
++++ b/mooncake-transfer-engine/tent/src/transport/rdma/rdma_transport.cpp
+@@ -634,6 +634,32 @@ int RdmaTransport::processNotifyCompletions() {
+             if (wc[i].status != IBV_WC_SUCCESS) {
+                 LOG(ERROR) << "Notification completion failed: " << wc[i].status
+                            << ", qp_num=" << wc[i].qp_num;
++                // A completion error here (typically IBV_WC_WR_FLUSH_ERR after
++                // the peer restarted or tore down its QP) leaves this notify QP
++                // permanently dead. Unlike the data path (see workers.cpp,
++                // which resets the endpoint on WC error), nothing else tears a
++                // notify endpoint down: it stays EP_READY, so getEndpoint()
++                // keeps handing back the same broken QP and every future
++                // sendNotification() silently flushes — the restarted peer
++                // never receives another notification. Reset the endpoint so it
++                // is removed from the endpoint store; the next getEndpoint()
++                // then rebuilds a fresh endpoint + notify QP against the peer.
++                //
++                // Copy the pointer out and release the map lock before calling
++                // resetConnection(): its destroy path takes
++                // notify_endpoint_map_lock_ (via unregisterNotifyQp), so
++                // holding the ReadGuard across the call would deadlock.
++                RdmaEndPoint* dead_ep = nullptr;
++                {
++                    RWSpinlock::ReadGuard guard(notify_endpoint_map_lock_);
++                    auto it = notify_qp_to_endpoint_.find(wc[i].qp_num);
++                    if (it != notify_qp_to_endpoint_.end()) {
++                        dead_ep = it->second;
++                    }
++                }
++                if (dead_ep) {
++                    dead_ep->resetConnection("notify QP completion error");
++                }
+                 continue;
+             }
+ 

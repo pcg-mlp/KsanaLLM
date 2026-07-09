@@ -26,7 +26,10 @@ message(STATUS "executor_SRCS: ${executor_SRCS}")
 
 add_library(executor STATIC ${executor_SRCS})
 add_dependencies(executor layer_progress_tracker)
-target_link_libraries(executor PUBLIC layer_progress_tracker)
+# pd_v2 executor-side bootstrap dlopen's libpd_v2_connector_<backend>.so;
+# pd_v2_public + pd_v2_decode (for the PdV2ConnectorInterface header) are
+# the engine connector linkable parts; libdl provides dlopen/dlsym.
+target_link_libraries(executor PUBLIC layer_progress_tracker pd_v2_public pd_v2_layer_event_tracker ${CMAKE_DL_LIBS})
 
 # executor block manager test
 cpp_test(executor_block_manager_test

@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <stdint.h>
 
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -61,10 +62,13 @@ class BlockingQueue {
     return value;
   }
 
+  // Blocking get with a timeout. Returns a default-constructed T() if the wait
+  // times out (or the queue is closed). Callers must treat the default value as
+  // "no item" (e.g. SchedEvent::IsEmpty()).
   T Get(size_t timeout_ms) {
     std::unique_lock<std::mutex> lock(mutex_);
-    cond_.wait(lock, std::chrono::milliseconds(timeout_ms), [this] { return !queue_.empty() || is_closed_; });
-    if (is_closed_) {
+    cond_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] { return !queue_.empty() || is_closed_; });
+    if (is_closed_ || queue_.empty()) {
       return T();
     }
 

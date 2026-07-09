@@ -5,6 +5,7 @@
 #include "ipc/functions/dispatch_schdule_output.h"
 
 #include "ipc/core/ipc_func_serialization.h"
+#include "utils/logger.h"
 
 namespace ksana_llm {
 

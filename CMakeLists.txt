@@ -62,6 +62,33 @@ if(WITH_CLEAR_CACHE)
   add_definitions("-DCLEAR_CACHE")
 endif()
 
+# Capture git HEAD short hash at configure time + a build timestamp so the
+# binary self-identifies on startup. Used by InferenceEngine::Initialize to
+# log a single-line build-id banner — answers "is this binary actually the
+# one I just built?" without diffing .so timestamps or strings on the host.
+execute_process(
+  COMMAND git -C ${PROJECT_SOURCE_DIR} rev-parse --short=12 HEAD
+  OUTPUT_VARIABLE KLLM_BUILD_GIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+execute_process(
+  COMMAND git -C ${PROJECT_SOURCE_DIR} diff-index --quiet HEAD --
+  RESULT_VARIABLE KLLM_BUILD_GIT_DIRTY_RC
+  ERROR_QUIET
+)
+if(NOT KLLM_BUILD_GIT_HASH)
+  set(KLLM_BUILD_GIT_HASH "unknown")
+endif()
+if(NOT KLLM_BUILD_GIT_DIRTY_RC EQUAL 0)
+  set(KLLM_BUILD_GIT_HASH "${KLLM_BUILD_GIT_HASH}-dirty")
+endif()
+string(TIMESTAMP KLLM_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+message(STATUS "Build id: ${KLLM_BUILD_GIT_HASH} @ ${KLLM_BUILD_TIMESTAMP}")
+add_compile_definitions(
+  KLLM_BUILD_GIT_HASH="${KLLM_BUILD_GIT_HASH}"
+  KLLM_BUILD_TIMESTAMP="${KLLM_BUILD_TIMESTAMP}")
+
 # Build external libraries statically by default
 set(BUILD_SHARED_LIBS OFF)
 

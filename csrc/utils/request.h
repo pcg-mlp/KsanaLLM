@@ -5,9 +5,11 @@
 
 #include <sys/stat.h>
 #include <atomic>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
+#include "pd_v2/public/pd_v2_types.h"
 #include "pybind11/pybind11.h"
 #include "runtime/structured_generation/structured_generator_interface.h"
 #include "utils/finite_state_machine.h"
@@ -189,7 +191,19 @@ class Request {
   explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                    const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx);
 
+  // pd_v2 Prefill intake: self-contained Request without KsanaPythonInput.
+  // req_id is the cross-node id from PrefillRequest wire (HTTP req_ctx stays on Decode).
+  Request(int64_t req_id, std::vector<int> input_tokens, SamplingConfig sampling_config);
+
   ~Request() { KLLM_LOG_DEBUG << "Request " << req_id << " destroyed"; }
+
+  // 必须先于下面的 input_refit_embedding / request_target 引用成员声明：pd_v2 构造器会把这些
+  // 引用绑定到本结构体成员，而 C++ 成员按声明顺序初始化，声明晚了引用会绑到未初始化的对象上。
+  struct OwnedRefTargets {
+    EmbeddingSlice input_refit_embedding;
+    std::unordered_map<std::string, TargetDescribe> request_target;
+  };
+  std::shared_ptr<OwnedRefTargets> owned_ref_targets_;
 
   // Request-level ID. Uses request-id header value when available, otherwise auto-generated.
   int64_t req_id;
@@ -253,7 +267,7 @@ class Request {
   std::atomic<bool> aborted{false};
 
   // The hits nums of prefix caching.
-  int prefix_cache_hit_tokens;
+  int prefix_cache_hit_tokens = 0;
 
   // The finish status of this request.
   Status finish_status;
@@ -271,10 +285,39 @@ class Request {
   // Whether this request is the last one in a batch of requests.
   bool last_in_batch = true;
 
-  // The arrive time.
-  uint64_t timestamp_in_ms;
+  // The arrive time (microseconds, ProfileTimer monotonic clock).
+  uint64_t timestamp_in_us;
+
+  // Access-log timestamps (microseconds, monotonic via ProfileTimer).
+  // Stamped once each by atomic CAS at scheduler/runtime hooks; 0 = not yet stamped.
+  std::atomic<uint64_t> scheduled_time_us{0};    // first time entered running_reqs / decoding_queue
+  std::atomic<uint64_t> first_token_time_us{0};  // first decoded step observed
+  std::atomic<uint64_t> finish_time_us{0};       // request stop / finish
+
+  // pd_v2 Decode-side phase timestamps (microseconds; 0 = not stamped). Break the otherwise
+  // opaque arrive→scheduled gap into admission / remote-prefill / handoff so the disaggregation
+  // cost is attributable per request. Only stamped on the Decode node.
+  std::atomic<uint64_t> pd_v2_blocks_allocated_time_us{0};    // KV blocks allocated (admitted)
+  std::atomic<uint64_t> pd_v2_prefill_dispatched_time_us{0};  // request sent to peer Prefill
+  std::atomic<uint64_t> pd_v2_prefill_complete_time_us{0};    // peer PrefillComplete (KV/first token) arrived
+
+  // pd_v2 Decode-side: Prefill metrics received over the wire on PrefillComplete (see
+  // PdPrefillMetrics). Durations are the peer Prefill's own-clock segments; logged verbatim
+  // (never subtracted against this node's clock). Written once by the decode hook (EDS thread),
+  // read at access-log time (other thread) — atomic for that cross-thread handoff. 0 = none.
+  std::atomic<int> pd_v2_pf_prefix_cache_hit_tokens{0};
+  std::atomic<uint64_t> pd_v2_pf_queue_us{0};
+  std::atomic<uint64_t> pd_v2_pf_compute_us{0};
+  std::atomic<uint64_t> pd_v2_pf_send_us{0};
 
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
+
+  // pd_v2 Prefill admission (PdV2PrefillEndpoint → ModelDriver::Enqueue).
+  bool is_pd_v2_prefill = false;
+  std::vector<pd_v2::DecodeTargetLite> pd_v2_decode_targets;
+  std::string pd_v2_decode_peer_addr;
+  uint32_t pd_v2_decode_attn_dp_group_id = 0;
+  std::function<void()> pd_v2_on_destroy;
 
   // Whether the request contains stop strings
   bool has_stop_strings = false;
@@ -315,6 +358,10 @@ struct KsanaPythonOutput {
   // The hits nums of prefix caching.
   int prefix_cache_hit_tokens = 0;
 
+  // Cumulative draft acceptance stats over the request lifetime, for access-log hit-rate.
+  int draft_hit_tokens = 0;  // accepted draft tokens
+  int draft_tokens = 0;      // proposed draft tokens
+
   // Store token and their corresponding float probability values.
   std::vector<std::vector<std::vector<std::pair<int, float>>>> logprobs;
 
@@ -333,6 +380,25 @@ struct KsanaPythonOutput {
 
   // The finish status of this request.
   Status finish_status;
+
+  // Access-log timestamps copied from Request (microseconds).
+  uint64_t arrive_time_us = 0;
+  uint64_t scheduled_time_us = 0;
+  uint64_t first_token_time_us = 0;
+  uint64_t finish_time_us = 0;
+
+  // pd_v2 Decode-side phase timestamps copied from Request (microseconds; 0 = not stamped).
+  uint64_t pd_v2_blocks_allocated_time_us = 0;
+  uint64_t pd_v2_prefill_dispatched_time_us = 0;
+  uint64_t pd_v2_prefill_complete_time_us = 0;
+
+  // pd_v2 peer-Prefill metrics copied from Request (Prefill own-clock durations + prefix hit).
+  int pd_v2_pf_prefix_cache_hit_tokens = 0;
+  uint64_t pd_v2_pf_queue_us = 0;
+  uint64_t pd_v2_pf_compute_us = 0;
+  uint64_t pd_v2_pf_send_us = 0;
+  // Selected peer Prefill engine server_name (empty / "-" for local prefill).
+  std::string pd_v2_prefill_peer;
 };
 
 }  // namespace ksana_llm

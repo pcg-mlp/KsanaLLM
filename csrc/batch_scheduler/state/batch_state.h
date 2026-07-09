@@ -44,6 +44,7 @@ struct BatchState {
         // Reject this request.
         infer_request->finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
         infer_request->finished = true;
+        StampOnce(infer_request->finish_time_us);
 
         infer_request->Notify();
         processed_count++;

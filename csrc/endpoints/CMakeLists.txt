@@ -12,8 +12,18 @@ list(FILTER endpoints_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "endpoints_SRCS: ${endpoints_SRCS}")
 
 add_library(endpoints STATIC ${endpoints_SRCS})
+target_link_libraries(endpoints PUBLIC pd_v2_public pd_v2_wire utils)
 
 # 按需引入 trpc 子目录
 if(WITH_TRPC_ENDPOINT)
     add_subdirectory(wrapper/trpc)
 endif()
+
+# pd_v2 prefill endpoint/completion unit tests (CPU-only, no GPU required).
+cpp_test(pd_v2_prefill_completion_test
+    SRCS ${CMAKE_CURRENT_SOURCE_DIR}/pd_v2/pd_v2_prefill_completion_test.cpp
+    DEPS endpoints)
+
+cpp_test(pd_v2_prefill_endpoint_test
+    SRCS ${CMAKE_CURRENT_SOURCE_DIR}/pd_v2/pd_v2_prefill_endpoint_test.cpp
+    DEPS endpoints)

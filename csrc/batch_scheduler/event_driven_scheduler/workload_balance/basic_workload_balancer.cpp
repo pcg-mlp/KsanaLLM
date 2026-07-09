@@ -110,8 +110,11 @@ std::vector<WorkloadQuota> BasicWorkloadBalancer::GetDpSchedulingOrderAndQuota(c
                    });
 
   // Round 1: conservative per-dp quota so that head dp does not consume all global step-token budget.
-  const size_t small_quota = std::max<size_t>(1, max_step_token_num_ / (dp_num * 2));
   // Round 2: larger per-dp quota to improve utilization after each dp gets a chance.
+  //
+  // EDS backend must aggregate has_schedulable_req / has_scheduled_req across all quotas of the same dp
+  // before emitting recompute/swapout, otherwise round-1 rejection can skip the round-2 fallback.
+  const size_t small_quota = std::max<size_t>(1, max_step_token_num_ / (dp_num * 2));
   const size_t large_quota = std::max<size_t>(1, max_step_token_num_ / dp_num);
 
   std::vector<WorkloadQuota> dp_scheduling_order;
@@ -130,17 +133,38 @@ std::vector<WorkloadQuota> BasicWorkloadBalancer::GetDpSchedulingOrderAndQuota(c
 void BasicWorkloadBalancer::RecordInflightBatch(const PlanningBatch& batch, const ScheduleContext&) { return; }
 
 bool BasicWorkloadBalancer::IsRequestAcceptable(const InferRequestPtr& req, const PlanningBatch& batch,
-                                                const WorkloadQuota& workload_quota, size_t seq_token_num) const {
+                                                const WorkloadQuota& workload_quota, size_t seq_token_num,
+                                                size_t per_dp_step_token_num) const {
   const size_t dp_idx = workload_quota.dp_idx;
   KLLM_CHECK(req != nullptr);
   KLLM_CHECK(dp_idx < batch.dp_batches.size());
   const DpBatch& dp_batch = batch.dp_batches[dp_idx];
   const size_t step_token_limit =
       workload_quota.step_token_limit > 0 ? static_cast<size_t>(workload_quota.step_token_limit) : max_step_token_num_;
-  return (batch.GetRunningReqNum() < max_batch_size_ &&
-          dp_batch.running_step_logits_num + req->sampling_token_num <= dp_max_logits_num_ &&
-          dp_batch.running_step_token_num + seq_token_num <= step_token_limit &&
-          batch.running_step_token_num + seq_token_num <= max_step_token_num_);
+  if (batch.GetRunningReqNum() >= max_batch_size_) {
+    return false;
+  }
+  if (dp_batch.running_step_logits_num + req->sampling_token_num > dp_max_logits_num_) {
+    return false;
+  }
+  // per-dp quota 是 round-1/round-2 的公平分配 (max_step_token_num/dp), 用来防止 head dp 在多请求
+  // 竞争时吃光全局预算 —— 它约束的是"多个请求挤一个 dp 时各自的份额", 不该约束"单个请求能多大"。
+  // 因此仅在该 dp 本步已有请求 (running_step_token_num > 0) 时才用它限制新请求; 当 dp 空时, 这个
+  // 请求会单独成批, 只受下面的全局 max_step_token_num (kernel/显存单步上限) 约束。否则 seq >
+  // max_step_token_num/dp 的单个大请求会被 per-dp quota 死拒 → backend recompute 活锁
+  // (standalone 无逃逸口直接死锁)。DEFAULT(ContinuousBatching) 调度器用全局共享预算 + ticktok
+  // 轮转, 单请求本就只受全局上限; 这里让 EDS 在"单请求成批"场景与之对齐。
+  if (dp_batch.running_step_token_num > 0 &&
+      dp_batch.running_step_token_num + per_dp_step_token_num > step_token_limit) {
+    return false;
+  }
+  // 全局单步 token 上限 (MLA prefix_kv_buffer 等 kernel/显存约束)。prefill 传整条 seq (含命中
+  // prefix), decode 传 per-step query。单个请求 ≤ max_token_len ≤ max_step_token_num (见
+  // schedule_config_parser 的重置保证), 故 dp 空时单请求成批总能通过这一关。
+  if (batch.running_step_token_num + seq_token_num > max_step_token_num_) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace ksana_llm

@@ -4,12 +4,16 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <deque>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "cache_manager/cache_manager_interface.h"
+#include "pd_v2/public/pd_v2_types.h"
+#include "profiler/timer.h"
 #include "runtime/draft_generator/draft_tokens.h"
 #include "runtime/infer_stage.h"
 #include "runtime/model_instance.h"
@@ -21,6 +25,11 @@
 #include "utils/waiter.h"
 
 namespace ksana_llm {
+
+// Atomically stamp current monotonic time (us) into `slot` once.
+// Subsequent calls are no-ops, so preempt/recompute paths don't overwrite the first stamp.
+// Defined out-of-line in infer_request.cpp for accurate coverage attribution.
+void StampOnce(std::atomic<uint64_t> &slot);
 
 // Workload of a task
 struct ScheduleTaskWorkload {
@@ -70,11 +79,113 @@ struct ScheduleTask {
   void Reset() { workload.Reset(); }
 };
 
+// pd_v2 (Prefill/Decode disaggregation v2) per-request state, extracted out of
+// InferRequest to keep the core request free of disaggregation-specific
+// clutter. Owned value fields carry the Decode-side KV routing and the
+// Decode state-machine handshake flags; the trailing atomic references alias
+// the backing Request's phase-timestamp / peer-Prefill-metric counters
+// (stamped via StampOnce on the Decode node, read at access-log time).
+//
+// Non-pd_v2 requests leave every owned field at its default and never touch the
+// referenced atomics, so V1 and Prefill-side paths are unaffected.
+struct PdV2RequestContext {
+  // Binds the atomic references to `request`'s backing fields. `request` must
+  // outlive this context (guaranteed: InferRequest holds it for its lifetime).
+  explicit PdV2RequestContext(Request &request);
+
+  // 含引用成员，别名 backing Request 的字段。禁止拷贝/移动，避免 memcpy/std::move
+  // 后引用悬空（这类错误在运行时极难排查）。
+  PdV2RequestContext(const PdV2RequestContext &) = delete;
+  PdV2RequestContext &operator=(const PdV2RequestContext &) = delete;
+  PdV2RequestContext(PdV2RequestContext &&) = delete;
+  PdV2RequestContext &operator=(PdV2RequestContext &&) = delete;
+
+  // Decode-side KV pool routing for cross-node Prefill→Decode KV RDMA write.
+  // Populated on the Prefill engine by PdV2PrefillIntakeWrapper when it
+  // deserializes an IncomingPrefillRequest, then carried down to the Prefill
+  // executor via ScheduleOutput. Empty vector means "not a pd_v2 request,
+  // executor's per-layer KV-write hook is a no-op".
+  std::vector<pd_v2::DecodeTargetLite> decode_targets;
+
+  // Mooncake server_name of the originating Decode engine. Used by the Prefill
+  // executor as the openSegment() target in submitTransfer. Empty when
+  // decode_targets is empty.
+  std::string decode_engine_inference_addr;
+
+  // Decode-side attn_dp_group_id this request belongs to. The Prefill executor
+  // needs it to compose the per-rank server_name suffix `.exec.r<device_id>`
+  // where device_id = decode_attn_dp_group_id * attn_TP_decode +
+  // decode_attn_tp_rank_in_group. Default 0 is the historical behavior (single
+  // attn_dp group), so non-pd_v2 paths and Decode attn_DP=1 are unaffected.
+  uint32_t decode_attn_dp_group_id = 0;
+
+  // When true, this request's K/V for the prompt has been written by a peer
+  // Prefill node (Mooncake RDMA into the local KV pool) and the hook has
+  // already pre-populated forwarding_tokens / kv_cached_token_num /
+  // generated_tokens / infer_stage to match. The scheduling pipeline (most
+  // notably LaunchPlanningTask, ResetPrefillingTokens, ForwardRequest::GetType)
+  // MUST trust the hook-set state and not re-derive cache state from
+  // forwarding_tokens.size() or assume "first forward = prefill". If we let the
+  // default machinery run on these reqs, Decode would re-run prefill on the
+  // prompt and overwrite the bytes the peer Prefill RDMA'd over, producing
+  // degenerate output. Stays true for the lifetime of the req — once true, it
+  // never flips back.
+  //
+  // Reuses the name from a long-deleted V1 field of similar intent (memory: R1
+  // 撤回 HBP / kv_from_remote). Semantics are NEW under pd_v2 and unrelated to
+  // the V1 hidden-buffer flow.
+  bool kv_from_remote = false;
+
+  // Decode-side: true while a request has been Submitted to peer Prefill but
+  // the PrefillComplete callback has not fired yet. During this RDMA flight
+  // window, kv_cache_blocks is already wired into peer Prefill's RDMA target
+  // list — recompute / swap-out on this req would race with in-flight RDMA
+  // writes and corrupt the victim's KV bytes. Set in PdV2DecodeHook::Process
+  // right before returning kWaitAsyncResult, cleared in UpdateAsyncResult right
+  // where kv_from_remote is flipped true (or in the connector::Release / fail
+  // paths). Always false on V1 and Prefill-side paths (no harm).
+  bool awaiting_prefill = false;
+
+  // Decode-side: user cancel / EDS timeout arrived while awaiting_prefill
+  // (WAITING_KVCACHE). Do not release KV blocks until PrefillComplete — RDMA
+  // may still be writing. The decode hook applies Stop on the next
+  // UpdateAsyncResult after OnPrefillComplete.
+  bool pending_stop = false;
+
+  // Decode-side: set when a kv_from_remote request is preempted via recompute
+  // and re-injected through EventDrivenScheduleProcessor::AddInferRequest for a
+  // full PD restart. swap is being removed, so the only viable preempt path for
+  // Decode reqs is to release the local KV and re-fetch from a peer Prefill. To
+  // preserve already-generated tokens we re-prefill the accumulated sequence
+  // (output_tokens), so OnEventAddRequest MUST NOT reset
+  // output_tokens = input_tokens for these reqs. The flag is consumed (cleared)
+  // by OnEventAddRequest after ResetPrefillingTokens makes
+  // prefilling_tokens_ = output_tokens. Always false on V1 / fresh requests.
+  bool restart_resubmit = false;
+
+  // Decode-side phase timestamps, references to Request fields. Stamped via StampOnce().
+  std::atomic<uint64_t> &blocks_allocated_time_us;
+  std::atomic<uint64_t> &prefill_dispatched_time_us;
+  std::atomic<uint64_t> &prefill_complete_time_us;
+
+  // Decode-side Prefill metrics received over the wire, references to Request fields.
+  std::atomic<int> &pf_prefix_cache_hit_tokens;
+  std::atomic<uint64_t> &pf_queue_us;
+  std::atomic<uint64_t> &pf_compute_us;
+  std::atomic<uint64_t> &pf_send_us;
+};
+
 // The infer request, it is the unit of batch manager's scheduler.
 class InferRequest {
  public:
   InferRequest(std::shared_ptr<Request> &request, const int index);
   ~InferRequest();
+
+  // 注册 InferRequest 析构时触发的回调。pd_v2 用它在调度器释放最后一个 shared_ptr 时清理
+  // connector 状态；回调应保持轻量且不抛异常，析构函数会兜底吞掉异常。
+  void AddOnDestroy(std::function<void()> cb) {
+    if (cb) on_destroy_callbacks_.push_back(std::move(cb));
+  }
 
   void SetReqGroup(const std::vector<std::shared_ptr<InferRequest>> &beam_search_infer_group) {
     req_group = beam_search_infer_group;
@@ -169,6 +280,10 @@ class InferRequest {
   // draft token num in forwarding_tokens
   size_t forwarding_tokens_draft_num = 0;
 
+  // Cumulative MTP/draft acceptance stats over the request lifetime, for access-log hit-rate.
+  size_t mtp_hit_token_num_ = 0;    // accepted draft tokens
+  size_t mtp_draft_token_num_ = 0;  // proposed draft tokens
+
   // token generated by model, complete new tokens in a step are (draft_tokens - reject_token_num) + generated_tokens
   std::vector<int> generated_tokens;
 
@@ -235,6 +350,11 @@ class InferRequest {
 
   // This key for kv transformer group.
   std::string kv_comm_group_key;
+
+  // pd_v2 (Prefill/Decode disaggregation) per-request state. All pd_v2-specific
+  // fields (Decode KV routing, handshake flags, phase-timestamp / peer-metric
+  // atomic references) live here; see PdV2RequestContext above.
+  PdV2RequestContext pd_v2;
 
   /*******************************************************************
    * State info used in generation
@@ -314,6 +434,16 @@ class InferRequest {
   // PD 分离：调度完成分发到 executor 前置 true，引用自 Request。
   std::atomic<bool> &prefill_entering_forward;
 
+  // Access-log timestamps, references to Request fields. Stamped via StampOnce().
+  std::atomic<uint64_t> &scheduled_time_us;
+  std::atomic<uint64_t> &first_token_time_us;
+  std::atomic<uint64_t> &finish_time_us;
+
+  // This node's own prefix-cache hit token count (reference to Request field). Single source
+  // of truth, written by the scheduler; works even when req_ctx is null (pd_v2 Prefill), so the
+  // Prefill node can report it and KsanaPythonOutput / StreamingIterator read it back.
+  int &prefix_cache_hit_tokens;
+
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
 
@@ -342,7 +472,6 @@ class InferRequest {
   // 当前 inflight 个数（0/1/2），供 BatchScheduler 流水线深度统计。
   size_t GetInflightCount() const { return inflight_count_; }
   bool HasPlanningTask() const { return !planning_task_.IsEmpty(); }
-  void ResetPlanningTask() { planning_task_.Reset(); }
 
   // Returns true if the inflight task is a split-fuse prefill step that does NOT cover all remaining
   // prefilling tokens (i.e., there are more prefill chunks to come).
@@ -363,6 +492,10 @@ class InferRequest {
 
   // retire 队首（oldest）inflight task，FIFO 滑动后续 task；慢路径等价于清空唯一 inflight。
   void ResetInflightTask();
+
+  // 清掉 swap-out 前设置但尚未 launch 的 planning_task_。否则 swap-in 后下一轮调度会因为
+  // HasPlanningTask()=true 一直跳过该请求。
+  void ResetPlanningTask() { planning_task_.Reset(); }
 
   void UpdateAfterInflightTaskFinished();
 
@@ -411,6 +544,9 @@ class InferRequest {
   ScheduleTaskWorkload planning_workload_;
   ScheduleTaskWorkload remaining_workload_;
   bool is_eos_generated_ = false;
+
+  // admission 阶段注册的 teardown 回调，析构时统一触发，不依赖请求是完成、abort 还是 cancel。
+  std::vector<std::function<void()>> on_destroy_callbacks_;
 };
 
 inline std::string RequestVector2Str(const std::vector<std::shared_ptr<InferRequest>> &infer_requests) {

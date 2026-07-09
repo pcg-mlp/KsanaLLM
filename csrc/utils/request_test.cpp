@@ -3,8 +3,11 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <limits>
 #include <set>
+#include <thread>
 
 #include "connector/task_key.h"
 #include "endpoints/streaming/streaming_iterator.h"
@@ -91,6 +94,39 @@ TEST_F(RequestTest, PrefixCacheHitTokens) {
     std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, nullptr);
     auto ksana_python_output = KsanaPythonOutput(request);
     EXPECT_EQ(ksana_python_output.prefix_cache_hit_tokens, 0);
+  }
+}
+
+// Test for draft hit-rate stats in KsanaPythonOutput
+TEST_F(RequestTest, DraftHitTokens) {
+  std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
+  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
+      std::make_shared<std::unordered_map<std::string, std::string>>();
+
+  // Test case 1: No draft stats in req_ctx -> defaults to 0
+  {
+    std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, req_ctx);
+    auto ksana_python_output = KsanaPythonOutput(request);
+    EXPECT_EQ(ksana_python_output.draft_hit_tokens, 0);
+    EXPECT_EQ(ksana_python_output.draft_tokens, 0);
+  }
+
+  // Test case 2: With draft stats in req_ctx
+  {
+    (*req_ctx)["mtp_hit_tokens"] = "72";
+    (*req_ctx)["mtp_draft_tokens"] = "104";
+    std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, req_ctx);
+    auto ksana_python_output = KsanaPythonOutput(request);
+    EXPECT_EQ(ksana_python_output.draft_hit_tokens, 72);
+    EXPECT_EQ(ksana_python_output.draft_tokens, 104);
+  }
+
+  // Test case 3: req_ctx is nullptr -> defaults to 0
+  {
+    std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, nullptr);
+    auto ksana_python_output = KsanaPythonOutput(request);
+    EXPECT_EQ(ksana_python_output.draft_hit_tokens, 0);
+    EXPECT_EQ(ksana_python_output.draft_tokens, 0);
   }
 }
 
@@ -414,6 +450,71 @@ TEST_F(RequestTest, OutputGroupAtMaxSucceeds) {
   EXPECT_EQ(id_set.size(), 255u);
 }
 
+// ==================== Request(cross_node_req_id, tokens, sampling) ctor ====================
+
+TEST_F(RequestTest, CrossNodeReqIdCtorBasic) {
+  const int64_t base_id = 7LL << IdGenerator::kSubIdBits;
+  SamplingConfig sc;
+  Request req(base_id, std::vector<int>{1, 2, 3, 4}, sc);
+
+  EXPECT_EQ(req.req_id, base_id);
+  EXPECT_EQ(req.input_tokens, (std::vector<int>{1, 2, 3, 4}));
+  ASSERT_EQ(req.output_group.size(), 1u);
+  ASSERT_EQ(req.req_ids.size(), 1u);
+  EXPECT_EQ(req.req_ids[0], base_id);
+  // output_group[0] output is seeded with the input tokens.
+  EXPECT_EQ(req.output_tokens, (std::vector<int>{1, 2, 3, 4}));
+  EXPECT_FALSE(req.has_stop_strings);
+  EXPECT_EQ(req.structured_generator_config.constraint_type, StructuredConstraintType::NONE);
+}
+
+TEST_F(RequestTest, CrossNodeReqIdCtorStructuredJsonEnabled) {
+  SamplingConfig sc;
+  sc.json_schema = R"({"type":"object"})";
+  sc.enable_structured_output = true;
+  Request req(1LL << IdGenerator::kSubIdBits, std::vector<int>{1}, sc);
+
+  EXPECT_EQ(req.structured_generator_config.constraint_type, StructuredConstraintType::JSON);
+  EXPECT_EQ(req.structured_generator_config.constraint_spec, R"({"type":"object"})");
+}
+
+TEST_F(RequestTest, CrossNodeReqIdCtorStructuredDisabledOrEmpty) {
+  // Schema present but structured output disabled -> no constraint.
+  {
+    SamplingConfig sc;
+    sc.json_schema = R"({"type":"object"})";
+    sc.enable_structured_output = false;
+    Request req(1LL << IdGenerator::kSubIdBits, std::vector<int>{1}, sc);
+    EXPECT_EQ(req.structured_generator_config.constraint_type, StructuredConstraintType::NONE);
+  }
+  // Enabled but empty schema -> no constraint.
+  {
+    SamplingConfig sc;
+    sc.enable_structured_output = true;
+    Request req(1LL << IdGenerator::kSubIdBits, std::vector<int>{1}, sc);
+    EXPECT_EQ(req.structured_generator_config.constraint_type, StructuredConstraintType::NONE);
+  }
+}
+
+TEST_F(RequestTest, CrossNodeReqIdCtorStopStrings) {
+  SamplingConfig sc;
+  sc.stop_strings = {"</s>"};
+  Request req(1LL << IdGenerator::kSubIdBits, std::vector<int>{1}, sc);
+  EXPECT_TRUE(req.has_stop_strings);
+}
+
+TEST_F(RequestTest, CrossNodeReqIdCtorMultiOutputGroup) {
+  const int64_t base_id = 9LL << IdGenerator::kSubIdBits;
+  SamplingConfig sc;
+  sc.num_return_sequences = 3;
+  Request req(base_id, std::vector<int>{1, 2}, sc);
+
+  EXPECT_EQ(req.output_group.size(), 3u);
+  ASSERT_EQ(req.req_ids.size(), 3u);
+  std::set<int64_t> id_set(req.req_ids.begin(), req.req_ids.end());
+  EXPECT_EQ(id_set.size(), 3u);  // all sub-ids unique
+}
+
 // ==================== InferRequest::ScheduleStateToStr coverage ====================
 
 TEST_F(RequestTest, ScheduleStateToStrContainsRequestId) {
@@ -476,6 +577,103 @@ TEST_F(RequestTest, TaskKeyShardIndexInt64) {
   size_t shard = key.GetShardIndex(8);
   EXPECT_LT(shard, 8u);
   EXPECT_EQ(shard, static_cast<size_t>(large_id) % 8);
+}
+
+// ==================== Access-log timestamp tests ====================
+
+TEST_F(RequestTest, RequestArriveTimestampInUsInitialized) {
+  std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
+  std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, nullptr);
+
+  // Constructor stamps arrive time in microseconds (non-zero).
+  EXPECT_GT(request->timestamp_in_us, 0u);
+  // Other timestamps remain unstamped until scheduler/runtime hooks fire.
+  EXPECT_EQ(request->scheduled_time_us.load(), 0u);
+  EXPECT_EQ(request->first_token_time_us.load(), 0u);
+  EXPECT_EQ(request->finish_time_us.load(), 0u);
+}
+
+TEST_F(RequestTest, StampOnceOnlyFirstWriteSticks) {
+  std::atomic<uint64_t> slot{0};
+
+  StampOnce(slot);
+  uint64_t first = slot.load();
+  EXPECT_GT(first, 0u);
+
+  // Sleep so that a second stamp would have a different timestamp,
+  // proving the no-op behavior is not just a clock-resolution artifact.
+  std::this_thread::sleep_for(std::chrono::microseconds(50));
+  StampOnce(slot);
+  EXPECT_EQ(slot.load(), first);
+
+  // After explicit reset, StampOnce should write again.
+  slot.store(0);
+  StampOnce(slot);
+  EXPECT_GT(slot.load(), first);
+}
+
+TEST_F(RequestTest, KsanaPythonOutputCopiesTimestamps) {
+  std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
+  std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, nullptr);
+
+  request->scheduled_time_us.store(1000);
+  request->first_token_time_us.store(2000);
+  request->finish_time_us.store(3000);
+  uint64_t arrive = request->timestamp_in_us;
+
+  KsanaPythonOutput output(request);
+  EXPECT_EQ(output.arrive_time_us, arrive);
+  EXPECT_EQ(output.scheduled_time_us, 1000u);
+  EXPECT_EQ(output.first_token_time_us, 2000u);
+  EXPECT_EQ(output.finish_time_us, 3000u);
+}
+
+TEST_F(RequestTest, KsanaPythonOutputDefaultTimestampsZero) {
+  KsanaPythonOutput output;
+  EXPECT_EQ(output.arrive_time_us, 0u);
+  EXPECT_EQ(output.scheduled_time_us, 0u);
+  EXPECT_EQ(output.first_token_time_us, 0u);
+  EXPECT_EQ(output.finish_time_us, 0u);
+}
+
+TEST_F(RequestTest, StreamingIteratorAddOutputCopiesTimestamps) {
+  std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
+  ksana_python_input->input_tokens = {1, 2, 3};
+  ksana_python_input->sampling_config.logprobs_num = 0;
+
+  std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, nullptr);
+  request->finisheds = {true};
+  request->abort_waiter = std::make_shared<Waiter>(0);
+  request->output_group.push_back(
+      std::make_tuple(std::vector<int>{1, 2, 3, 4, 5}, std::vector<std::vector<std::pair<int, float>>>(), 0.0f));
+
+  request->scheduled_time_us.store(10);
+  request->first_token_time_us.store(20);
+  request->finish_time_us.store(30);
+
+  StreamingIterator iterator(request, ksana_python_input);
+  KsanaPythonOutput output;
+  EXPECT_TRUE(iterator.AddOutput(output));
+
+  EXPECT_EQ(output.arrive_time_us, request->timestamp_in_us);
+  EXPECT_EQ(output.scheduled_time_us, 10u);
+  EXPECT_EQ(output.first_token_time_us, 20u);
+  EXPECT_EQ(output.finish_time_us, 30u);
+
+  // SnapshotTimestamps is used by Python on StopIteration to grab finish_time
+  // that may have been stamped after the last AddOutput call.
+  KsanaPythonOutput snapshot;
+  iterator.SnapshotTimestamps(snapshot);
+  EXPECT_EQ(snapshot.arrive_time_us, request->timestamp_in_us);
+  EXPECT_EQ(snapshot.scheduled_time_us, 10u);
+  EXPECT_EQ(snapshot.first_token_time_us, 20u);
+  EXPECT_EQ(snapshot.finish_time_us, 30u);
+
+  // Updates to the underlying atomics are visible on subsequent snapshots.
+  request->finish_time_us.store(333);
+  KsanaPythonOutput snapshot2;
+  iterator.SnapshotTimestamps(snapshot2);
+  EXPECT_EQ(snapshot2.finish_time_us, 333u);
 }
 
 }  // namespace ksana_llm

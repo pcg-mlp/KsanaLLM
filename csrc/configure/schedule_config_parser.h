@@ -16,6 +16,7 @@
 #include "connector/config.h"
 #include "device/device_types.h"
 #include "global_cache_connector/global_cache_connector_types.h"
+#include "pd_v2/configure/pd_v2_runtime_config.h"
 #include "utils/logger.h"
 #include "utils/search_path.h"
 #include "utils/status.h"
@@ -520,8 +521,13 @@ class ScheduleConfigParser {
 
   Status GetConnectorConfigs(ConnectorConfig &connector_config) const {
     // 检查connector_config_是否已初始化 - group_role
-    if (connector_config_.group_role == GroupRole::NONE || connector_config_.router_addr.empty()) {
+    // pd_v2 (is_pd_v2 = true) 不依赖 simple_router; 走 Mooncake metadata
+    // 自发现, 因此 router_addr 可以为空. 只要 group_role 设了就视为初始化.
+    if (connector_config_.group_role == GroupRole::NONE) {
       return Status(RET_CONFIG_NOT_FOUND, "Connector config is not initialized.");
+    }
+    if (!pd_v2_runtime_config_.is_pd_v2 && connector_config_.router_addr.empty()) {
+      return Status(RET_CONFIG_NOT_FOUND, "Connector config is not initialized (V1 needs router_addr).");
     }
     connector_config = connector_config_;
     return Status();
@@ -534,6 +540,20 @@ class ScheduleConfigParser {
 
   // Init disaggregating prefill and decode connector config
   void InitConnectorConfig(YamlReader &yaml_reader);
+
+  // pd_v2 runtime config accessors. Populated by InitConnectorConfig as a
+  // twin write alongside connector_config_ when backend == "v2". Callers
+  // on the pd_v2 path read this; callers on the V1 path keep reading
+  // connector_config_. See pd_v2_runtime_config.h for rationale.
+  Status GetPdV2RuntimeConfig(PdV2RuntimeConfig &config) const {
+    if (!pd_v2_runtime_config_.is_pd_v2) {
+      return Status(RET_CONFIG_NOT_FOUND, "pd_v2 runtime config is not initialized.");
+    }
+    config = pd_v2_runtime_config_;
+    return Status();
+  }
+
+  void SetPdV2RuntimeConfig(const PdV2RuntimeConfig &config) { pd_v2_runtime_config_ = config; }
 
   Status GetGlobalCacheConnectorConfig(GlobalCacheConnectorConfig &config) const {
     if (global_cache_connector_config_.service_endpoint.empty()) {
@@ -580,6 +600,12 @@ class ScheduleConfigParser {
 
   // Store parsed connector configurations
   ConnectorConfig connector_config_;
+
+  // pd_v2 runtime config — populated alongside connector_config_ when
+  // setting.connector.backend == "v2". pd_v2 read-sites consult this
+  // instead of connector_config_ to avoid V1 derivations leaking
+  // (e.g. K7 — see pd_v2_runtime_config.h).
+  PdV2RuntimeConfig pd_v2_runtime_config_;
 
   // Store global cache connector configuration
   GlobalCacheConnectorConfig global_cache_connector_config_;

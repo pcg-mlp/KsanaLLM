@@ -1,0 +1,78 @@
+setting:
+  log:
+    # 日志目录路径
+    log_dir: "log_p/"
+  batch_scheduler:
+    scheduler_type: 1
+    schedule_strategy: 0
+    waiting_timeout_in_ms: 1800000
+    max_waiting_queue_len: 1200
+    max_step_tokens: 65536
+    max_batch_size: 128
+    max_token_len: 65536
+    swapout_block_threshold: 1.0
+    swapin_block_threshold: 2.0
+    launch_block_threshold: 2.0
+    enable_auto_prefix_cache: true
+    split_fuse_token_num: 0
+    swap_threadpool_size: 8
+    preempt_mode: 0
+    min_flexible_cache_num: 0
+    max_pp_batch_num: 1
+    enable_speculative_decoding: false
+    mtp_step_num: 2
+    enable_xgrammar: true
+    pp_multibatch_wb_strategy: 0
+    enable_async: null
+    attention_dp_lb_config: null
+    transfer_layer_chunk_size: 100
+    max_pretransfer_batch_size: 4096
+  block_manager:
+    block_token_num: 16
+    reserved_device_memory_ratio: 0.05
+    lora_deivce_memory_ratio: 0.0
+    lora_host_memory_factor: 10.0
+    block_device_memory_ratio: -1.0
+    block_host_memory_factor: 0.0
+    dynamic_reusable_memory_ratio: null
+  quantization_config:
+    gptq_backend: cutlass
+    kv_cache:
+      dtype: fp8_e4m3
+    weight:
+      quant_method: auto
+  connector:
+    backend: "v2"
+    group_role: prefill
+    cluster_name: dev_cluster
+    inference_addr: 29.226.50.29:8090
+    redis_password: "Redis@123456"
+    metadata_addr: "redis://29.226.50.29:6379"
+    heartbeat_interval_ms: 5000
+    transfer_layer_chunk_size: 1
+    pd_v2_executor_rpc_base_port: 21000
+    pd_v2_local_complete_threshold: 0
+
+  endpoint_type: python
+  attn_backend:
+    enable_blocked_multi_token_forwarding_kv: true
+    flash_attn_impl: null
+  global:
+    tensor_para_size: 1
+    expert_para_size: 1
+    attn_data_para_size: 1
+    pipeline_para_size: 1
+    enable_lora_adapter: false
+    embed_tokens_use_cpu: false
+    enable_cuda_graph: false
+    pipeline_para_comm_type: default
+    expert_world_size: null
+    enable_full_shared_expert: null
+model_spec:
+  base_model:
+    model_name: default
+    model_dir: /data1/models/DeepSeek-V2-Lite-Chat-17868
+  lora_models: null
+  plugin_model:
+    enable_tensorrt: true
+    plugin_thread_pool_size: 1

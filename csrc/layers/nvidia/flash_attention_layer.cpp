@@ -5,6 +5,7 @@
 #include "layers/flash_attention_layer.h"
 #include "executor/layer_progress_tracker.h"
 #include "kernels/nvidia/kernel_wrapper.h"
+#include "pd_v2/prefill/pd_v2_layer_event_tracker.h"
 #include "utils/singleton.h"
 #include "utils/string_utils.h"
 
@@ -66,6 +67,16 @@ Status FlashAttentionLayer::ForwardT(const CudaForwardParams& p, Tensor* output)
 
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(
       this->rank_, this->layer_index_, this->context_->device->GetPrimaryComputeStream());
+
+  // pd_v2 Prefill: per-layer KV-write hook. The tracker is gated by
+  // IsActive() — only fires on Prefill executor processes that have
+  // initialized PdV2LayerEventTracker via PdV2KvDispatcher wiring.
+  // V1 / Decode / non-pd_v2 paths see IsActive()==false and skip.
+  auto pd_v2_tracker = Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance();
+  if (pd_v2_tracker->IsActive()) {
+    pd_v2_tracker->RecordLayerProgress(this->rank_, this->layer_index_,
+                                       this->context_->device->GetPrimaryComputeStream());
+  }
 
   output->shape[0] = static_cast<size_t>(total_tokens);
   output->shape[1] = this->num_heads_ * this->head_size_;

@@ -74,13 +74,16 @@ TEST_F(BasicWorkloadBalancerTest, SingleDpBatchAssembleRespectsBatchLimits) {
   batch.dp_batches.resize(1);
   WorkloadQuota quota{0, 10};
 
-  ASSERT_TRUE(balancer.IsRequestAcceptable(requests[0], batch, quota, /*seq_token_num=*/4));
+  ASSERT_TRUE(balancer.IsRequestAcceptable(requests[0], batch, quota, /*seq_token_num=*/4,
+                                           /*per_dp_step_token_num=*/4));
   batch.AddRunningReq(0, requests[0]);
-  ASSERT_TRUE(balancer.IsRequestAcceptable(requests[1], batch, quota, /*seq_token_num=*/3));
+  ASSERT_TRUE(balancer.IsRequestAcceptable(requests[1], batch, quota, /*seq_token_num=*/3,
+                                           /*per_dp_step_token_num=*/3));
   batch.AddRunningReq(0, requests[1]);
 
   // The 3rd request should be rejected because max_batch_size is reached.
-  EXPECT_FALSE(balancer.IsRequestAcceptable(requests[2], batch, quota, /*seq_token_num=*/4));
+  EXPECT_FALSE(balancer.IsRequestAcceptable(requests[2], batch, quota, /*seq_token_num=*/4,
+                                            /*per_dp_step_token_num=*/4));
 }
 
 TEST_F(BasicWorkloadBalancerTest, MultiDpAssignAndQuotaFollowLoadBalance) {
@@ -160,7 +163,8 @@ TEST_F(BasicWorkloadBalancerTest, MultiDpRejectWhenGlobalPlanningBatchQuotaExcee
   batch_ok.AddRunningReq(/*dp_idx=*/0, req_dp0_ok);  // global running_step_token_num = 7
 
   // Within dp quota: 1 + 3 <= 5, and within global planning batch quota: 7 + 3 <= 10.
-  EXPECT_TRUE(balancer.IsRequestAcceptable(req, batch_ok, quota, /*seq_token_num=*/3));
+  EXPECT_TRUE(balancer.IsRequestAcceptable(req, batch_ok, quota, /*seq_token_num=*/3,
+                                           /*per_dp_step_token_num=*/3));
 
   PlanningBatch batch_reject;
   batch_reject.dp_batches.resize(2);
@@ -168,7 +172,8 @@ TEST_F(BasicWorkloadBalancerTest, MultiDpRejectWhenGlobalPlanningBatchQuotaExcee
   batch_reject.AddRunningReq(/*dp_idx=*/0, req_dp0_reject);  // global running_step_token_num = 8
 
   // Still within dp quota, but exceeds global planning batch quota: 8 + 3 > 10.
-  EXPECT_FALSE(balancer.IsRequestAcceptable(req, batch_reject, quota, /*seq_token_num=*/3));
+  EXPECT_FALSE(balancer.IsRequestAcceptable(req, batch_reject, quota, /*seq_token_num=*/3,
+                                            /*per_dp_step_token_num=*/3));
 }
 
 TEST_F(BasicWorkloadBalancerTest, MultiDpRejectWhenGlobalRunningReqNumReachedMaxBatchSize) {
@@ -189,7 +194,35 @@ TEST_F(BasicWorkloadBalancerTest, MultiDpRejectWhenGlobalRunningReqNumReachedMax
 
   // total running reqs across all dp batches is already 2, equal to max_batch_size.
   WorkloadQuota quota{/*dp_idx=*/0, /*step_token_limit=*/10};
-  EXPECT_FALSE(balancer.IsRequestAcceptable(req_new, batch, quota, /*seq_token_num=*/2));
+  EXPECT_FALSE(balancer.IsRequestAcceptable(req_new, batch, quota, /*seq_token_num=*/2,
+                                            /*per_dp_step_token_num=*/2));
+}
+
+// 单请求豁免: per-dp quota 只在 dp 本步已有请求时限制(防多请求竞争吃光预算)。dp 空时单个大请求
+// (seq > per-dp quota)应被豁免, 只受全局 max_step_token_num 约束 —— 否则 seq > max_step/dp 的
+// 请求被死拒, 在 EDS 下触发 recompute 活锁(standalone 永久死锁)。
+TEST_F(BasicWorkloadBalancerTest, SingleRequestExemptFromPerDpQuotaWhenDpEmpty) {
+  BasicWorkloadBalancer balancer(/*dp_num=*/8, /*max_batch_size=*/8, /*max_decode_tokens_per_req=*/4,
+                                 /*max_step_token_num=*/65536);
+  auto big_req = CreateInferRequest(/*req_id=*/4001, /*planning_query_len=*/9000, /*sampling_token_num=*/1);
+  ASSERT_NE(big_req, nullptr);
+
+  // per-dp large_quota = max_step_token_num / dp_num = 65536 / 8 = 8192 < 9000。
+  WorkloadQuota quota{/*dp_idx=*/0, /*step_token_limit=*/8192};
+
+  // dp 空: 单请求成批 → 豁免 per-dp quota, 只受全局 65536 约束, 9000 可接受。
+  PlanningBatch batch_empty;
+  batch_empty.dp_batches.resize(8);
+  EXPECT_TRUE(balancer.IsRequestAcceptable(big_req, batch_empty, quota, /*seq_token_num=*/9000,
+                                           /*per_dp_step_token_num=*/9000));
+
+  // dp 非空: per-dp quota 生效, dp0 已有 1 token, 1 + 9000 > 8192 → 拒绝(避免挤占同 dp 其它请求)。
+  PlanningBatch batch_busy;
+  batch_busy.dp_batches.resize(8);
+  auto occupant = CreateInferRequest(/*req_id=*/4002, /*planning_query_len=*/1, /*sampling_token_num=*/1);
+  batch_busy.AddRunningReq(/*dp_idx=*/0, occupant);
+  EXPECT_FALSE(balancer.IsRequestAcceptable(big_req, batch_busy, quota, /*seq_token_num=*/9000,
+                                            /*per_dp_step_token_num=*/9000));
 }
 
 }  // namespace

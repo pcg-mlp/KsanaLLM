@@ -4,6 +4,7 @@
 
 #include "executor/inference_executor.h"
 
+#include <dlfcn.h>
 #include <unistd.h>
 
 #include <condition_variable>
@@ -11,9 +12,13 @@
 #include <mutex>
 
 #include "cache_manager/cache_layout/cache_layout_factory.h"
+#include "connector/config.h"
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
 #include "global_cache_connector/global_cache_connector_factory.h"
+#include "ipc/functions/create_block_manager.h"
+#include "pd_v2/configure/pd_v2_connector_config_builder.h"
+#include "pd_v2/public/pd_v2_connector_bootstrap.h"
 #include "profiler/profiler.h"
 #include "runtime/draft_generator/asr_custom_generator.h"
 #include "runtime/draft_generator/ptp_generator.h"
@@ -53,6 +58,17 @@ InferenceExecutor::InferenceExecutor(int executor_id, std::shared_ptr<Environmen
   context_->device = std::make_shared<DeviceContext>(node_device_num);
 
   model_runner_ = std::make_shared<ModelRunner>(context_);
+}
+
+InferenceExecutor::~InferenceExecutor() {
+  if (pd_v2_connector_) {
+    pd_v2_connector_->Shutdown().GetMessage();
+    pd_v2_connector_.reset();
+  }
+  if (pd_v2_dlopen_handle_ != nullptr) {
+    dlclose(pd_v2_dlopen_handle_);
+    pd_v2_dlopen_handle_ = nullptr;
+  }
 }
 
 void InferenceExecutor::SetIpcFuncWrapper(std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper) {
@@ -210,7 +226,7 @@ Status InferenceExecutor::Initialize() {
   if (!context_->global->IsStandalone()) {
     distributed_data_coordinator_ = std::make_shared<DistributedDataCoordinator>(GetPacketObject, env_, context_);
 
-    const char* use_tcp_data_channel = std::getenv("USE_TCP_DATA_CHANNEL");
+    const char *use_tcp_data_channel = std::getenv("USE_TCP_DATA_CHANNEL");
     if (use_tcp_data_channel && strcmp(use_tcp_data_channel, "1") == 0) {
       distributed_data_coordinator_->InitializeTcpDataChannel();
       ipc_func_wrapper_->SetTcpDistributedDataCoordinator(distributed_data_coordinator_);
@@ -275,20 +291,39 @@ Status InferenceExecutor::Initialize() {
     global_cache_connector_ = GlobalCacheConnectorFactory::CreateConnector(global_cache_config);
     if (global_cache_connector_) {
       int device_id = context_->device->GetDeviceId();
+      // pd_v2 节点自动覆盖 role: 与 engine 侧 fetcher_role 保持一致, 让 QueryCallable /
+      // PutWorker 进 pd_v2 分支 (单次查询、不 reject、不强制 PutFirstTokens).
+      std::string effective_role = global_cache_config.role;
+      PdV2RuntimeConfig pd_v2_rt;
+      if (env_->GetPdV2RuntimeConfig(pd_v2_rt).OK() && pd_v2_rt.is_pd_v2) {
+        if (pd_v2_rt.group_role == GroupRole::PREFILL) {
+          effective_role = "pd_v2_prefill";
+        } else if (pd_v2_rt.group_role == GroupRole::DECODE) {
+          effective_role = "pd_v2_decode";
+        }
+      }
       ipc_func_wrapper_->SetGlobalCacheQueryCallableDeps(global_cache_connector_, block_allocator_manager_, dp_group_id,
-                                                         env_, device_id, global_cache_config.role,
+                                                         env_, device_id, effective_role,
                                                          global_cache_config.timeout_ms);
 
       // 创建 GlobalCachePutWorker 并注入到 ModelRunner
-      auto global_cache_put_worker =
-          std::make_shared<GlobalCachePutWorker>(global_cache_connector_, block_allocator_manager_, dp_group_id,
-                                                 device_id, ipc_func_wrapper_, global_cache_config.role);
+      auto global_cache_put_worker = std::make_shared<GlobalCachePutWorker>(
+          global_cache_connector_, block_allocator_manager_, dp_group_id, device_id, ipc_func_wrapper_, effective_role);
       global_cache_put_worker->Start();
       model_runner_->SetGlobalCachePutWorker(global_cache_put_worker);
 
       KLLM_LOG_INFO << "GlobalCacheConnector and GlobalCachePutWorker created in executor for device " << device_id;
     }
   }
+
+  // pd_v2: dlopen the backend .so, create the executor connector, bind it to
+  // IpcFuncWrapper (so the engine's PdV2GetKvPoolBaseVa RPC resolves back to
+  // GetLocalKvPool), register the KV-pool callback, and — Prefill only — stand
+  // up per-layer KV-write infrastructure. Details live in
+  // BootstrapPdV2Connector; non-pd_v2 processes no-op. The actual RegisterKvPool
+  // (KV pool VA + shape → mooncake registerLocalMemory) fires later when the
+  // contiguous KV pool is available. See TODO(C-impl exec KV pool register).
+  BootstrapPdV2Connector();
 
   // Initialize per-process profiler for this executor.
   ProfilerConfig profiler_config;
@@ -300,6 +335,85 @@ Status InferenceExecutor::Initialize() {
 
   KLLM_LOG_INFO << "InferenceExecutor::Initialize finished.";
   return Status();
+}
+
+void InferenceExecutor::BootstrapPdV2Connector() {
+  PdV2RuntimeConfig pd_v2_rt;
+  if (!env_->GetPdV2RuntimeConfig(pd_v2_rt).OK() || !pd_v2_rt.is_pd_v2) {
+    return;
+  }
+
+  // Config-mapping (per-rank identity + RPC port) and dlopen/create/init are
+  // shared with inference_engine through the pd_v2 layer
+  // (BuildExecutorConnectorConfig + CreateAndInitConnector); the executor only
+  // keeps the KV-pool / per-layer wiring below.
+  const pd_v2::PdV2ConnectorConfig pd_cfg = pd_v2::BuildExecutorConnectorConfig(pd_v2_rt, executor_id_);
+  pd_v2_connector_ = pd_v2::CreateAndInitConnector(pd_cfg, pd_v2_rt.redis_password, ipc_func_wrapper_.get(),
+                                                   &pd_v2_dlopen_handle_, /*context_hint=*/"executor");
+
+  // Wire the connector into CreateBlockManagerCallable so RegisterKvPool
+  // fires automatically after block_allocator_manager_->Initialize.
+  auto cbm_callable = ipc_func_wrapper_->GetIpcFuncProxy()->GetSharedIpcFuncCallable<CreateBlockManagerCallable>(
+      IPC_FUNC_CREATE_BLOCK_ALLOCATOR);
+  if (cbm_callable) {
+    // Each executor process owns one (dp_group_id, device_idx_in_dp_group)
+    // tuple inside the global TP/DP topology — same coordinates the
+    // block_allocator_manager_ setup used. Forward both so pd_v2 RegisterKvPool
+    // can locate THIS process's DeviceBlockAllocator under attn_DP > 1.
+    const int attn_tp = static_cast<int>(context_->global->GetAttentionTensorParallelSize());
+    const int safe_attn_tp = attn_tp > 0 ? attn_tp : 1;
+    const int dp_group_id = executor_id_ / safe_attn_tp;
+    const int device_idx_in_dp_group = executor_id_ % safe_attn_tp;
+    cbm_callable->SetPdV2Connector(pd_v2_connector_, env_, dp_group_id, device_idx_in_dp_group);
+  }
+
+  if (pd_v2_rt.group_role == GroupRole::PREFILL) {
+    SetupPdV2PrefillKvWrite(pd_v2_rt);
+  }
+}
+
+void InferenceExecutor::SetupPdV2PrefillKvWrite(const PdV2RuntimeConfig &pd_v2_rt) {
+  ModelConfig pd_v2_model_config;
+  env_->GetModelConfig(pd_v2_model_config);
+  const uint32_t num_layers = pd_v2_model_config.num_layer;
+  const uint32_t prefill_tp = static_cast<uint32_t>(context_->global->GetAttentionTensorParallelSize());
+  const uint32_t chunk_size = pd_v2_rt.transfer_layer_chunk_size;
+
+  pd_v2_layer_tracker_ = Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance();
+  pd_v2_layer_tracker_->Initialize(executor_id_, static_cast<int>(num_layers));
+
+  pd_v2::PdV2KvBarrier::Deps barrier_deps;
+  barrier_deps.connector = pd_v2_connector_.get();
+  barrier_deps.ipc_func_wrapper = ipc_func_wrapper_.get();
+  pd_v2_kv_barrier_ = std::make_unique<pd_v2::PdV2KvBarrier>(barrier_deps);
+
+  pd_v2::PdV2KvDispatcher::Deps disp_deps;
+  disp_deps.connector = pd_v2_connector_.get();
+  disp_deps.request_manager = executor_runtime_->GetExecutorRequestManager();
+  disp_deps.transfer_layer_chunk_size = chunk_size;
+  disp_deps.num_layers = num_layers;
+  disp_deps.prefill_tp = prefill_tp;
+  // attn_TP per Prefill DP group; dispatcher needs this to compute each rank's
+  // local DeviceBlockAllocator slot. Already equals
+  // GetAttentionTensorParallelSize() (= TP / DP).
+  disp_deps.prefill_attn_tp_per_dp = prefill_tp;
+  disp_deps.use_mla = pd_v2_model_config.use_mla;
+  disp_deps.barrier = pd_v2_kv_barrier_.get();
+  pd_v2_kv_dispatcher_ = std::make_unique<pd_v2::PdV2KvDispatcher>(disp_deps);
+
+  auto *dispatcher_raw = pd_v2_kv_dispatcher_.get();
+  pd_v2_layer_tracker_->RegisterCallback([dispatcher_raw](int rank, uint64_t epoch_id, int layer_index) {
+    dispatcher_raw->OnLayerComplete(rank, epoch_id, layer_index);
+  });
+  // Guaranteed per-epoch cleanup: ResetState fires this for every epoch it
+  // seals (even aborted forwards that never reached the final layer), so
+  // dispatch_plans_by_epoch_ can't leak strong request refs and starve the
+  // BlockAllocator.
+  pd_v2_layer_tracker_->RegisterEpochEndCallback(
+      [dispatcher_raw](int rank, uint64_t epoch_id) { dispatcher_raw->OnEpochEnd(rank, epoch_id); });
+  KLLM_LOG_INFO << "pd_v2 Prefill executor: layer_tracker + kv_dispatcher + "
+                << "kv_barrier wired (num_layers=" << num_layers << " prefill_tp=" << prefill_tp
+                << " chunk_size=" << chunk_size << " use_mla=" << pd_v2_model_config.use_mla << ")";
 }
 
 }  // namespace ksana_llm

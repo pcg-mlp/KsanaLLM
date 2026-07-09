@@ -23,6 +23,7 @@ set(MODELS_TEST_DEPS batch_scheduler runtime device utils
 cpp_test(batch_scheduler_helper_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_test_helper_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(event_driven_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/event_driven_scheduler_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(event_driven_schedule_processor_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/event_driven_schedule_processor_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(schedule_hook_manager_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/schedule_hook_manager_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(basic_workload_balancer_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/workload_balance/basic_workload_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(pp_batch_distributor_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/workload_balance/pp_batch_distributor_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

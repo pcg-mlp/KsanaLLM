@@ -8,7 +8,6 @@
 
 #include "distributed/control_message.h"
 #include "profiler/profile_event.h"
-#include "runtime/profile_metrics.h"
 
 namespace ksana_llm {
 
@@ -290,6 +289,17 @@ Status ModelDriver::Enqueue(std::shared_ptr<Request>& req) {
     infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 0;
     infer_req->kv_cached_token_num = 0;
+    if (req->is_pd_v2_prefill) {
+      // PD-V2 prefill 的 Request 生命周期由 PdV2PrefillCompletion 全程持有（admit 时存入
+      // alive map，发送 SendPrefillComplete 时 erase 释放），因此 InferRequest 无需再额外
+      // pin 住 Request。释放点恒晚于 in-flight 任务 drain，详见 pd_v2_prefill_completion.cpp。
+      infer_req->pd_v2.decode_targets = req->pd_v2_decode_targets;
+      infer_req->pd_v2.decode_engine_inference_addr = req->pd_v2_decode_peer_addr;
+      infer_req->pd_v2.decode_attn_dp_group_id = req->pd_v2_decode_attn_dp_group_id;
+      if (req->pd_v2_on_destroy) {
+        infer_req->AddOnDestroy(req->pd_v2_on_destroy);
+      }
+    }
   }
 
   for (auto& infer_req : infer_request_group) {
@@ -448,9 +458,6 @@ Status ModelDriver::HandleSchedule() {
     // 少一次 BlockingQueue Put/Get 带来的线程唤醒延迟。
     {
       PROFILE_EVENT_SCOPE(handle_schedule_dispatch, "Engine.HandleSchedule.Dispatch");
-      if (schedule_output->enable_profile_metrics) {
-        schedule_output->schedule_dispatch_time_ns = ModelPerfNowNs();
-      }
       ipc_func_wrapper_->DispatchScheduleOutput(schedule_output);
     }
     if (context_->global->IsDistributedMaster()) {
@@ -528,12 +535,6 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
   if (transfer_engine_ && !reqs_transfer_tokens.empty()) {
     transfer_engine_->Send(reqs_transfer_tokens);
     KLLM_LOG_DEBUG << "UpdateSamplingOutput: sent tokens for " << reqs_transfer_tokens.size() << " requests";
-  }
-
-  // Forward batch-level profile metrics from SamplingOutput to GenerationOutputGroup.
-  if (sampling_output->has_profile_metrics) {
-    schedule_result->generation_output_group.has_profile_metrics = true;
-    schedule_result->generation_output_group.profile_metrics = sampling_output->profile_metrics;
   }
 
   {

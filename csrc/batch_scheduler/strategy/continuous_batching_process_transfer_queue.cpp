@@ -94,6 +94,7 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
 
       KLLM_LOG_DEBUG << "Move transfer req to decoding queue, req id:" << req->req_id;
       batch_state_->decoding_queue.push_back(req);
+      StampOnce(req->scheduled_time_us);
       it = batch_state_->transfer_queue.erase(it);
       transfer_engine_->CleanupTransferMeta(req->req_id);
     } else {

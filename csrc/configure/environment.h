@@ -182,6 +182,15 @@ class Environment {
     schedule_config_parser_.SetGlobalCacheConnectorConfig(config);
   }
 
+  // pd_v2 runtime config (process-internal). Returns RET_CONFIG_NOT_FOUND
+  // unless setting.connector.backend == "v2". See
+  // csrc/pd_v2/configure/pd_v2_runtime_config.h.
+  Status GetPdV2RuntimeConfig(PdV2RuntimeConfig &config) const {
+    return schedule_config_parser_.GetPdV2RuntimeConfig(config);
+  }
+
+  void SetPdV2RuntimeConfig(const PdV2RuntimeConfig &config) { schedule_config_parser_.SetPdV2RuntimeConfig(config); }
+
   // Modify reserved_device_memory_ratio
   void SetReservedDeviceRatio(float reserved_device_memory_ratio);
 

@@ -1497,4 +1497,124 @@ TEST_F(ScheduleConfigParserTest, ExecutorBuildAheadYamlPropagatesToRuntimeConfig
   EXPECT_TRUE(runtime_config.enable_async);
 }
 
+// --- PdV2RuntimeConfig tests ---
+//
+// Build a yaml fixture with backend=v2 + EVENT_DRIVEN scheduler (the latter
+// is required by InitConnectorConfig's fail-fast at L662-669). pd_v2 fields
+// (metadata_addr, redis_password, transfer_layer_chunk_size,
+// pd_v2_executor_rpc_base_port, pd_v2_local_complete_threshold) and shared
+// fields (group_role, cluster_name, inference_addr, router_addr,
+// coordinator_addr, heartbeat_interval_ms) are populated.
+namespace {
+std::string WritePdV2YamlConfig(std::vector<std::string> *temp_files, std::vector<std::string> *temp_dirs,
+                                int *test_file_counter, const std::string &group_role, const std::string &backend) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "pd_v2_runtime_config_test_" + std::to_string((*test_file_counter)++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files->push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(*test_file_counter));
+  temp_dirs->push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) {
+    std::filesystem::remove_all(model_dir);
+  }
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  if (!file.is_open()) return "";
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    scheduler_type: 1\n";  // EVENT_DRIVEN — required for backend=v2.
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  connector:\n";
+  file << "    group_role: " << group_role << "\n";
+  file << "    backend: " << backend << "\n";
+  file << "    cluster_name: pd_v2_test_cluster\n";
+  file << "    inference_addr: \"127.0.0.1:18091\"\n";
+  file << "    router_addr: \"http://127.0.0.1:9080\"\n";
+  file << "    coordinator_addr: \"127.0.0.1:11092\"\n";
+  file << "    metadata_addr: \"redis://127.0.0.1:6379\"\n";
+  file << "    redis_password: \"test_redis_pw\"\n";
+  file << "    transfer_layer_chunk_size: 4\n";
+  file << "    pd_v2_executor_rpc_base_port: 21000\n";
+  file << "    pd_v2_local_complete_threshold: 16\n";
+  file << "    heartbeat_interval_ms: 7000\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+  return temp_file_path.string();
+}
+}  // namespace
+
+TEST_F(ScheduleConfigParserTest, PdV2RuntimeConfigPopulatedOnBackendV2) {
+  std::string yaml_path = WritePdV2YamlConfig(&temp_files_, &temp_dirs_, &test_file_counter_, "decode", "v2");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  PdV2RuntimeConfig pd_v2;
+  ASSERT_TRUE(parser_->GetPdV2RuntimeConfig(pd_v2).OK());
+  EXPECT_TRUE(pd_v2.is_pd_v2);
+  EXPECT_EQ(pd_v2.group_role, GroupRole::DECODE);
+  EXPECT_EQ(pd_v2.cluster_name, "pd_v2_test_cluster");
+  EXPECT_EQ(pd_v2.inference_addr, "127.0.0.1:18091");
+  EXPECT_EQ(pd_v2.router_addr, "http://127.0.0.1:9080");
+  EXPECT_EQ(pd_v2.coordinator_addr, "127.0.0.1:11092");
+  EXPECT_EQ(pd_v2.metadata_addr, "redis://127.0.0.1:6379");
+  EXPECT_EQ(pd_v2.redis_password, "test_redis_pw");
+  EXPECT_EQ(pd_v2.transfer_layer_chunk_size, 4u);
+  EXPECT_EQ(pd_v2.pd_v2_executor_rpc_base_port, 21000u);
+  EXPECT_EQ(pd_v2.pd_v2_local_complete_threshold, 16);
+  EXPECT_EQ(pd_v2.heartbeat_interval_ms, 7000);
+
+  // ConnectorConfig must mirror shared fields for back-compat (parser
+  // double-writes during the deprecation window).
+  ConnectorConfig cc;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(cc).OK());
+  EXPECT_TRUE(cc.is_pd_v2);
+  EXPECT_EQ(cc.group_role, GroupRole::DECODE);
+  EXPECT_EQ(cc.cluster_name, pd_v2.cluster_name);
+  EXPECT_EQ(cc.inference_addr, pd_v2.inference_addr);
+}
+
+TEST_F(ScheduleConfigParserTest, PdV2RuntimeConfigReturnsNotFoundWhenV1) {
+  // V1 yaml — connector.backend defaults to empty (= V1). GetPdV2RuntimeConfig
+  // must signal not-initialised so callers downstream can skip pd_v2 paths.
+  std::string yaml_path = CreateConnectorYamlConfig("decode", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  PdV2RuntimeConfig pd_v2;
+  EXPECT_FALSE(parser_->GetPdV2RuntimeConfig(pd_v2).OK());
+}
+
+TEST_F(ScheduleConfigParserTest, PdV2RuntimeConfigReturnsNotFoundWhenNoConnector) {
+  // Standalone yaml (group_role=none) — pd_v2 must stay un-initialised.
+  std::string yaml_path = CreateConnectorYamlConfig("none", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  PdV2RuntimeConfig pd_v2;
+  EXPECT_FALSE(parser_->GetPdV2RuntimeConfig(pd_v2).OK());
+}
+
 }  // namespace ksana_llm

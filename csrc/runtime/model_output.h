@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 #include "runtime/profile_metrics.h"
@@ -44,6 +45,11 @@ class NewModelOutput {
   // step 级 ProfileMetrics 聚合区指针；非空时 forward 写入该对象而非 profile_metrics。
   // 由 schedule_output->step_metrics 透传，或由调用方直接设置。
   ProfileMetrics* step_metrics = nullptr;
+  // pd_v2 layer-event-tracker epoch id for this batch. Set by HandleExecute
+  // via PdV2LayerEventTracker::BeginBatch before Forward; consumed by
+  // HandlePostprocess to call ResetState(epoch_id) on the matching slot.
+  // 0 = pd_v2 not active in this process (BeginBatch was a no-op).
+  uint64_t pd_v2_epoch_id = 0;
 };
 
 }  // namespace ksana_llm

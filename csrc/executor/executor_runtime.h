@@ -51,6 +51,11 @@ class ExecutorRuntime {
   // runtime resources (e.g. compressor slots). owned by ExecutorRuntime.
   std::shared_ptr<InflightResourceManager> GetInflightResourceManager() { return inflight_resource_mgr_; }
 
+  // pd_v2 KV dispatcher uses this to enumerate live ExecutorInferRequests
+  // on each per-layer event. Returns the same shared instance held inside.
+  ExecutorRequestManager* GetExecutorRequestManager() { return executor_request_manager_.get(); }
+
+
   Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input,
                          const RunMode run_mode);
   // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上 ParseFromRequests，与 Execute forward 重叠。

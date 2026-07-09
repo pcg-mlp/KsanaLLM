@@ -64,6 +64,15 @@ class BlockAllocatorGroup : public BlockAllocatorGroupInterface {
                       std::shared_ptr<MemoryAllocatorInterface> memory_allocator, std::shared_ptr<Context> context,
                       BlockAllocatorCreationFunc block_allocator_creation_fn);
 
+  // Uses a manager-owned host allocator instead of creating a host pool per group.
+  // This is used when attn-DP groups have identical host-pool configs, allowing one
+  // process to reuse the same host pool across groups. The sharing is process-local;
+  // device allocators remain group/device specific.
+  BlockAllocatorGroup(const BlockAllocatorGroupConfig& block_allocator_group_config,
+                      std::shared_ptr<MemoryAllocatorInterface> memory_allocator, std::shared_ptr<Context> context,
+                      BlockAllocatorCreationFunc block_allocator_creation_fn,
+                      std::shared_ptr<BlockAllocatorInterface> shared_host_allocator);
+
   virtual std::vector<int> GetBlockAllocatorDevices() const override;
 
   virtual std::shared_ptr<BlockAllocatorInterface> GetHostBlockAllocator() const override;
@@ -77,8 +86,13 @@ class BlockAllocatorGroup : public BlockAllocatorGroupInterface {
  private:
   BlockAllocatorGroupConfig block_allocator_group_config_;
 
-  // The host allocator
+  // The host allocator. May be owned by this group (legacy / non-uniform
+  // configs) or shared from BlockAllocatorManager when configs are uniform.
   std::shared_ptr<BlockAllocatorInterface> host_allocator = nullptr;
+
+  // True when host_allocator was injected by the manager and this group must
+  // not call PreAllocateBlocks on it (the manager already did, once).
+  bool host_allocator_is_shared_ = false;
 
   // All the device block allocators, the key is device_id.
   std::unordered_map<int, std::shared_ptr<BlockAllocatorInterface>> dev_allocators;
@@ -133,6 +147,16 @@ class BlockAllocatorManager : public BlockAllocatorManagerInterface {
 
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
   BlockAllocatorGroupCreationFunc block_allocator_group_creation_fn_ = nullptr;
+
+  // True when the caller did not supply a custom group factory (the default
+  // BlockAllocatorGroup is used). Only then is it safe to collapse the per-DP
+  // host pools into one shared host allocator in Initialize().
+  bool is_default_group_factory_ = false;
+
+  // Single host allocator shared across all attn-DP groups when their host
+  // pool configs are uniform; avoids duplicating the host pool per group.
+  // Null when sharing does not apply (custom factory or non-uniform configs).
+  std::shared_ptr<BlockAllocatorInterface> shared_host_allocator_ = nullptr;
 };
 
 }  // namespace ksana_llm

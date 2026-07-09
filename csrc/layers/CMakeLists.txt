@@ -48,7 +48,7 @@ endif()
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS} ${layers_zixiao_SRCS})
 
 target_link_libraries(layers PUBLIC
-  kernels ${layers_nvidia_LIBS} ${layers_ascend_LIBS} layer_progress_tracker runtime
+  kernels ${layers_nvidia_LIBS} ${layers_ascend_LIBS} layer_progress_tracker pd_v2_layer_event_tracker runtime
 )
 
 # for test

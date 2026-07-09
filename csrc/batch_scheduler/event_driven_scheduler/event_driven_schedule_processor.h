@@ -27,6 +27,21 @@
 
 namespace ksana_llm {
 
+// Read-only snapshot of this engine's scheduler load, sourced from the
+// EVENT_DRIVEN scheduler state. Used by the pd_v2 snapshot provider (Prefill
+// side) to populate the load fields of PeerHealth. Kept in this header (no
+// pd_v2 dependency) so batch_scheduler stays decoupled from the connector.
+struct ScheduleLoadStat {
+  uint32_t waiting_reqs = 0;            // queued (prefilling) request count
+  uint32_t running_reqs = 0;            // running (decoding) request count
+  uint64_t pending_prefill_tokens = 0;  // sum of planning sequence lengths over prefilling reqs
+  uint32_t step_token_num = 0;          // EWMA of tokens processed per schedule step
+  uint32_t step_latency_us = 0;         // EWMA of per-step wall time (microseconds)
+  uint32_t step_latency_us_inst = 0;    // most recent (non-EWMA) per-step wall time; for the
+                                        // 50ms TPOT gate, which must react to a load spike on the
+                                        // very next decision instead of lagging behind the EWMA
+};
+
 class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
  public:
   explicit EventDrivenScheduleProcessor(size_t dp_num, size_t max_pp_batch_num);
@@ -66,9 +81,37 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   // 检查是否有 pending put 操作，避免 put 正在进行时释放 block 导致 use-after-free。
   void SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker);
 
+  // pd_v2 Decode 角色标记。PD decode 下 KV block 分配的唯一所有者是
+  // GlobalCacheQueryHook (defer_admission_on_block_full_)，backend ProcessPrefillingQueue
+  // 不负责分配。因此 recompute 不能把请求直接塞回 prefilling_reqs (那是非 PD 的分配模型)，
+  // 必须经 HandlePdV2DecodeRestart 重新投递走完整 hook 链重新分配。由 engine bootstrap
+  // 用 (fetcher_role == "pd_v2_decode") 设置，与 GlobalCacheQueryHook 的
+  // defer_admission_on_block_full 同源。
+  void SetPdV2DecodeMode(bool enabled) { pd_v2_decode_mode_ = enabled; }
+
   ScheduleState* GetScheduleState() { return &schedule_state_; }
 
+  // Read-only load snapshot for the pd_v2 Prefill snapshot provider. The
+  // queue three counts (waiting/running/pending_prefill_tokens) iterate
+  // prefilling_reqs, so they are read under infer_request_mutex_ to avoid a
+  // use-after-free against the scheduler thread's push_back/erase. The two
+  // per-step EWMA values are lock-free atomics written by the scheduler
+  // thread. Called from the connector heartbeat / completion threads.
+  ScheduleLoadStat GetLocalLoad();
+
+  // Same read as GetLocalLoad but WITHOUT taking infer_request_mutex_. The
+  // caller MUST already hold infer_request_mutex_. This exists for the kLinUCB
+  // PdV2DecodeHook, which calls back here from inside DispatchEvent — a context
+  // that already holds the lock (AsyncSchedulerLoop). Using the locking
+  // GetLocalLoad() there self-deadlocks (infer_request_mutex_ is non-recursive).
+  ScheduleLoadStat GetLocalLoadUnlocked();
+
  private:
+  // White-box unit test peer: grants access to private handlers and members so
+  // pd_v2 / async / error branches can be driven deterministically on a single
+  // thread (without spinning up AsyncSchedulerLoop). Test-only; no production use.
+  friend class EventDrivenScheduleProcessorWhiteBox;
+
   void AsyncSchedulerLoop();
   void DispatchEvent(SchedEvent& event);
   void OnEventAddRequest(const std::shared_ptr<EventAddRequestInfo>& info);
@@ -87,6 +130,16 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   // Throws KLLM_THROW with caller_prefix if not found (state machine bug).
   // The req_to_batch_idx mapping is immutable after assignment — see event_driven_state.h.
   size_t LookupReqBatchIdx(int64_t req_id, const char* caller) const;
+
+  // pd_v2 Decode-side preempt path (swap removal). A kv_from_remote request
+  // selected as a recompute victim cannot be re-prefilled locally (would
+  // overwrite peer-written KV with a divergent attention path). Instead we
+  // release its local KV blocks, reset scheduling/PD state while preserving
+  // output_tokens (already-generated tokens), and re-inject it through
+  // AddInferRequest so the full hook chain (GlobalCacheQueryHook +
+  // PdV2DecodeHook) re-runs over the accumulated sequence and re-fetches KV
+  // from a peer Prefill.
+  void HandlePdV2DecodeRestart(const std::shared_ptr<InferRequest>& req, size_t dp_idx);
 
   // return true if resource state changed.
   bool ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events);
@@ -114,6 +167,10 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   std::shared_ptr<WorkloadBalancerInterface> workload_balancer_ = nullptr;
   std::shared_ptr<PpBatchDistributor> pp_batch_distributor_ = nullptr;
 
+  // True when this node is a pd_v2 Decode role (GlobalCacheQueryHook owns block
+  // allocation). Gates the recompute reinjection path in HandleRecomputeRequest.
+  bool pd_v2_decode_mode_ = false;
+
   // EventGetScheduleResult 时若无 launchable batch 则置 true；事件队列排空并执行 Schedule 后尝试放入 result_queue_
   bool pending_get_schedule_result_ = false;
 
@@ -132,6 +189,13 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   static constexpr size_t kMaxPipelineDepth = 2;
   size_t pipeline_depth_{0};
 
+  // Thread id of AsyncSchedulerLoop, captured at loop entry. GetLocalLoad()
+  // uses it to detect re-entry from the scheduler thread (which already holds
+  // infer_request_mutex_ during DispatchEvent) and skip re-locking the
+  // non-recursive mutex. Default id (no loop running) compares unequal to any
+  // real thread, so off-thread callers always take the lock.
+  std::atomic<std::thread::id> async_loop_tid_{};
+
   // 延迟执行的 Stop/Recompute 请求级操作（等待 HasInflightTask()==false）。
   std::vector<ScheduleBackendEvent> delayed_backend_events_;
 
@@ -139,6 +203,23 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   std::shared_ptr<GlobalCachePutTracker> global_cache_put_tracker_;
 
   size_t schedule_id_ = DEFAULT_SCHEDULE_ID;
+
+  // Per-step throughput/latency EWMA feeding ScheduleLoadStat. Written only
+  // by the scheduler thread (launch records the timestamp + token count,
+  // generation-result return folds them into the EWMA), read lock-free by
+  // GetLocalLoad() on other threads.
+  std::atomic<uint32_t> step_token_ewma_{0};
+  std::atomic<uint32_t> step_latency_us_ewma_{0};
+  // Most recent (non-EWMA) per-step wall time, published for the TPOT gate.
+  std::atomic<uint32_t> step_latency_us_inst_{0};
+  // Scheduler-thread-only scratch: timestamp and token count of the most
+  // recently launched step, consumed when its generation result returns.
+  int64_t last_step_launch_ms_ = 0;
+  uint32_t last_step_token_num_ = 0;
+
+  // Fold the most recently launched step's token count and measured wall
+  // time into the EWMA atomics. Scheduler-thread only.
+  void RecordStepLatency();
 };
 
 }  // namespace ksana_llm

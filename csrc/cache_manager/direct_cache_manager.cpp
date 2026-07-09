@@ -64,13 +64,17 @@ size_t DirectCacheManager::GetUsedBlockNumber() {
   return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetDeviceUsedBlockNumber() - GetUsableBlockNumber();
 }
 
-size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
+size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens, size_t mtp_step_num) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_THROW(FormatStr("Get step block num of req error, req %d is not exist.", req_id));
   }
   const size_t block_token_num = cache_manager_config_.block_token_num;
-  const size_t total_require_block_num = (input_token_lens + block_token_num) / block_token_num;
+  // input 和 mtp_step_num 分别按 block 向上取整，保证 MTP lookahead 使用独立 block。
+  // hook fast-path 与 backend fallback 都走这个入口，避免 pd_v2 dispatcher 两侧 block 计数不一致。
+  const size_t input_blocks = (input_token_lens + block_token_num) / block_token_num;
+  const size_t mtp_blocks = (mtp_step_num + block_token_num - 1) / block_token_num;
+  const size_t total_require_block_num = input_blocks + mtp_blocks;
   return total_require_block_num <= it->second->cached_blocks.size()
              ? 0
              : total_require_block_num - it->second->cached_blocks.size();

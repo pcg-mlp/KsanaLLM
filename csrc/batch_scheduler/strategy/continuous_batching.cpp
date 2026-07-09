@@ -233,6 +233,7 @@ void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, 
 
 void ContinuousBatchingStrategy::SyncStopRequest(std::shared_ptr<InferRequest> req, Status ret_status,
                                                  RequestState req_state) {
+  StampOnce(req->finish_time_us);
   ResetRequest(req, ret_status, true);
   // Record finish req_id
   if (req_state == RequestState::kRunning) {
@@ -724,8 +725,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       }
       REPORT_METRIC("prefix_cache_hit_ratio",
                     static_cast<double>(shared_token_num) / req->GetPrefillingTokens().size());
-      if (req->req_ctx && shared_token_num > 0) {
-        (*req->req_ctx)["prefix_cache_hit_tokens"] = std::to_string(shared_token_num);
+      if (shared_token_num > 0) {
+        // Record this node's prefix-cache hit on the Request member (works even when req_ctx
+        // is null, e.g. pd_v2 Prefill). KsanaPythonOutput / StreamingIterator read it back.
+        req->prefix_cache_hit_tokens = static_cast<int>(shared_token_num);
       }
     } else {
       // Last task is chunked prefill task, previous tokens are sharable
@@ -791,7 +794,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
         if (shared_token_num >= seq_token_num) {
           REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
-          HandleFullPrefixCacheHit(req, planning_workload, seq_token_num);
+          // pd_v2 Prefill 全命中不能 flip kDecode (带 decode_targets 的请求必须留在 prefill
+          // 流程发 KV, 否则对端 decode 永久挂起)。与 EDS backend / hook / fetcher 分支对齐。
+          HandleFullPrefixCacheHit(req, planning_workload, seq_token_num,
+                                   /*flip_to_decode_stage=*/req->pd_v2.decode_targets.empty());
         } else {
           KLLM_LOG_SCHEDULER << "shared token not equal forwarding size, " << req->ScheduleStateToStr();
           assert(seq_token_num > shared_token_num);
@@ -817,6 +823,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         }
 
         batch_state_->schedule_output->running_reqs.push_back(req);
+        StampOnce(req->scheduled_time_us);
         if (is_last_prefill_step) {
           if (connector_config_.group_role == GroupRole::PREFILL && !req->is_mock_req) {
             req->sampling_config.max_new_tokens = 1;

@@ -21,7 +21,7 @@ from transformers import logging as hf_logging
 import ksana_llm
 from ksana_llm.arg_utils import EngineArgs
 from ksana_llm.exceptions import KsanaEngineError
-from request_id import generate_request_id
+from request_id import generate_request_id, try_install_redis_allocator_from_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,18 @@ class LLMService:
         self.tokenizer = None
         self.pre_post_processor = None
         self.engine_args = engine_args
+        # pd_v2 multi-node: install cluster-wide Redis request-id allocator
+        # BEFORE building the engine so every InferRequest the engine sees
+        # carries an id pulled from the shared counter. Non-pd_v2 / single
+        # host deployments are no-ops (the helper returns False and the
+        # default shared-memory counter stays active).
+        try:
+            try_install_redis_allocator_from_yaml(engine_args.config_file)
+        except Exception:  # pylint: disable=broad-except
+            logging.getLogger(__name__).exception(
+                "Redis request-id allocator install failed; falling back to "
+                "shared-memory counter. Multi-node PD will produce colliding "
+                "ids — fix the Redis config and restart.")
         self._setup_routes()
         self.model = ksana_llm.KsanaLLMEngine.from_engine_args(self.engine_args)
 

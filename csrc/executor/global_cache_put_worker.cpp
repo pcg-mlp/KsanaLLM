@@ -133,8 +133,8 @@ void GlobalCachePutWorker::SubmitFirstTokensPut(const std::vector<std::shared_pt
     return;
   }
 
-  // 仅 prefill 角色 + 卡 0 保存；standalone（未设置 role）和 decode 角色不保存
-  if (role_ != "prefill" || device_id_ != 0) {
+  // 仅 prefill / pd_v2_prefill 角色 + 卡 0 保存; standalone (未设置 role) 和 decode 角色不保存
+  if ((role_ != "prefill" && role_ != "pd_v2_prefill") || device_id_ != 0) {
     KLLM_LOG_DEBUG << "SubmitFirstTokensPut skipped: role=" << (role_.empty() ? "standalone" : role_)
                    << ", device_id=" << device_id_;
     return;

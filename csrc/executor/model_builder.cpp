@@ -65,6 +65,11 @@ void ModelBuilder::BuildForwardRequestFromInferRequest(ForwardRequest& forward_r
   forward_req.infer_stage = req_ptr->infer_stage;
   forward_req.step = req_ptr->step;
   forward_req.kv_cached_token_num = req_ptr->kv_cached_token_num;
+  forward_req.kv_from_remote = req_ptr->kv_from_remote;
+  // pd_v2 Prefill node: non-empty decode targets means this req must RDMA its
+  // K/V to a Decode peer, so it must run the flash/context kernel (which holds
+  // the RecordLayerProgress KV-dispatch hook) even for a 1-token full-hit.
+  forward_req.kv_to_remote = !req_ptr->pd_v2_decode_targets.empty();
   forward_req.logits_custom_length = req_ptr->logits_custom_length;
   forward_req.sampling_token_num = req_ptr->sampling_token_num;
   forward_req.last_step_token_num = req_ptr->last_step_token_num;

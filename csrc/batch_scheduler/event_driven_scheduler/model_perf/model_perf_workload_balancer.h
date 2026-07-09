@@ -30,7 +30,8 @@ class ModelPerfWorkloadBalancer : public WorkloadBalancerInterface {
 
   // 始终接受（ModelPerfBackend 自行控制 running_reqs，此处不做过滤）。
   bool IsRequestAcceptable(const InferRequestPtr& req, const PlanningBatch& batch,
-                            const WorkloadQuota& workload_quota, size_t seq_token_num) const override {
+                            const WorkloadQuota& workload_quota, size_t seq_token_num,
+                            size_t per_dp_step_token_num) const override {
     return true;
   }
 

@@ -4,6 +4,12 @@
 
 #include "layers/flash_mla_attention_layer.h"
 
+#include <cuda_runtime.h>
+
+#include <cstdlib>
+#include <string>
+#include <vector>
+
 #include "csrc/kernels/nvidia/blockwise_gemm/blockwise_gemm.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
@@ -14,6 +20,7 @@
 #include "executor/layer_progress_tracker.h"
 #include "kernels/nvidia/basic_kernel_wrapper.h"
 #include "kernels/nvidia/flash_attn_cpp_wrapper.h"
+#include "pd_v2/prefill/pd_v2_layer_event_tracker.h"
 #include "utils/logger.h"
 #include "utils/search_status.h"
 #include "utils/singleton.h"
@@ -509,6 +516,15 @@ Status FlashMlaAttentionLayer::ForwardT(const FlashMlaAttentionInputs& inputs, T
   KLLM_LOG_DEBUG << "RecordLayerProgress, layer_index: " << this->layer_index_ << ", rank: " << this->rank_;
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(this->rank_, this->layer_index_, stream);
+
+  // pd_v2 Prefill: per-layer KV-write hook (parallel to V1 tracker; only
+  // active when InferenceExecutor on Prefill role has Initialize'd the
+  // PdV2 tracker — IsActive() short-circuits to false otherwise).
+  auto pd_v2_tracker = Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance();
+  if (pd_v2_tracker->IsActive()) {
+    pd_v2_tracker->RecordLayerProgress(this->rank_, this->layer_index_,
+                                       this->context_->device->GetPrimaryComputeStream());
+  }
 
   output.shape = {static_cast<size_t>(total_q_tokens), static_cast<size_t>(this->num_heads_ * this->v_head_dim_)};
   return Status();

@@ -209,7 +209,23 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("response", &ksana_llm::KsanaPythonOutput::response)
       .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding)
       .def_readwrite("prefix_cache_hit_tokens", &ksana_llm::KsanaPythonOutput::prefix_cache_hit_tokens)
-      .def_readwrite("finish_status", &ksana_llm::KsanaPythonOutput::finish_status);
+      .def_readwrite("draft_hit_tokens", &ksana_llm::KsanaPythonOutput::draft_hit_tokens)
+      .def_readwrite("draft_tokens", &ksana_llm::KsanaPythonOutput::draft_tokens)
+      .def_readwrite("finish_status", &ksana_llm::KsanaPythonOutput::finish_status)
+      .def_readwrite("arrive_time_us", &ksana_llm::KsanaPythonOutput::arrive_time_us)
+      .def_readwrite("scheduled_time_us", &ksana_llm::KsanaPythonOutput::scheduled_time_us)
+      .def_readwrite("first_token_time_us", &ksana_llm::KsanaPythonOutput::first_token_time_us)
+      .def_readwrite("finish_time_us", &ksana_llm::KsanaPythonOutput::finish_time_us)
+      .def_readwrite("pd_v2_blocks_allocated_time_us", &ksana_llm::KsanaPythonOutput::pd_v2_blocks_allocated_time_us)
+      .def_readwrite("pd_v2_prefill_dispatched_time_us",
+                     &ksana_llm::KsanaPythonOutput::pd_v2_prefill_dispatched_time_us)
+      .def_readwrite("pd_v2_prefill_complete_time_us", &ksana_llm::KsanaPythonOutput::pd_v2_prefill_complete_time_us)
+      .def_readwrite("pd_v2_pf_prefix_cache_hit_tokens",
+                     &ksana_llm::KsanaPythonOutput::pd_v2_pf_prefix_cache_hit_tokens)
+      .def_readwrite("pd_v2_pf_queue_us", &ksana_llm::KsanaPythonOutput::pd_v2_pf_queue_us)
+      .def_readwrite("pd_v2_pf_compute_us", &ksana_llm::KsanaPythonOutput::pd_v2_pf_compute_us)
+      .def_readwrite("pd_v2_pf_send_us", &ksana_llm::KsanaPythonOutput::pd_v2_pf_send_us)
+      .def_readwrite("pd_v2_prefill_peer", &ksana_llm::KsanaPythonOutput::pd_v2_prefill_peer);
 
   // Export `StreamingIterator` to python.
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")
@@ -222,11 +238,16 @@ PYBIND11_MODULE(libtorch_serving, m) {
              pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, std::move(ksana_python_output));
            })
-      .def("Abort", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
-        pybind11::gil_scoped_release release;
-        self->Abort();
+      .def("Abort",
+           [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
+             pybind11::gil_scoped_release release;
+             self->Abort();
+           })
+      .def("SnapshotTimestamps", [](std::shared_ptr<ksana_llm::StreamingIterator> &self) {
+        ksana_llm::KsanaPythonOutput ksana_python_output;
+        self->SnapshotTimestamps(ksana_python_output);
+        return ksana_python_output;
       });
-
   // Export `EndpointType` to python, only export the values used in python.
   pybind11::enum_<ksana_llm::EndpointType>(m, "EndpointType", pybind11::arithmetic())
       .value("RPC", ksana_llm::EndpointType::RPC)

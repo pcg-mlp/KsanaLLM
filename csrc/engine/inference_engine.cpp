@@ -4,6 +4,7 @@
 
 #include "engine/inference_engine.h"
 
+#include <dlfcn.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -23,13 +24,21 @@
 #include "cache_manager/cache_layout/cache_layout_factory.h"
 #include "cache_manager/cache_manager_factory.h"
 #include "configure/environment.h"
+#include "connector/config.h"
 #include "connector/connector.h"
+#include "endpoints/pd_v2/pd_v2_prefill_endpoint.h"
 #include "engine/model_driver.h"
 #include "executor/layer_progress_tracker.h"
 #include "global_cache_connector/global_cache_connector_factory.h"
 #include "ipc/functions/report_layer_progress.h"
+#include "pd_v2/configure/pd_v2_connector_config_builder.h"
+#include "pd_v2/configure/pd_v2_runtime_config.h"
+#include "pd_v2/decode/pd_v2_decode_hook.h"
+#include "pd_v2/public/pd_v2_connector.h"
+#include "pd_v2/public/pd_v2_connector_bootstrap.h"
 #include "periphery/version_reporter.h"
 #include "profiler/reporter.h"
+#include "profiler/timer.h"
 #include "runtime/draft_generator/trie_generator.h"
 #include "runtime/fast_path_controller.h"
 #include "runtime/infer_request.h"
@@ -59,6 +68,18 @@ InferenceEngine::InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Reque
 }
 
 InferenceEngine::~InferenceEngine() {
+  // pd_v2: drop shared_ptr before unloading the .so (vtable lives there).
+  if (pd_v2_prefill_endpoint_) {
+    pd_v2_prefill_endpoint_.reset();
+  }
+  if (pd_v2_connector_) {
+    pd_v2_connector_->Shutdown().GetMessage();
+    pd_v2_connector_.reset();
+  }
+  if (pd_v2_dlopen_handle_ != nullptr) {
+    dlclose(pd_v2_dlopen_handle_);
+    pd_v2_dlopen_handle_ = nullptr;
+  }
   HostMemoryPool::GetInstance()->Destroy();
   KLLM_LOG_DEBUG << "InferenceEngine destroyed.";
 }
@@ -66,6 +87,10 @@ InferenceEngine::~InferenceEngine() {
 void InferenceEngine::SetIpcFuncWrapper(std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper) {
   ipc_func_wrapper_ = ipc_func_wrapper;
   model_driver_->SetIpcFuncWrapper(ipc_func_wrapper_);
+}
+
+void InferenceEngine::SetLocalEndpoint(std::shared_ptr<LocalEndpoint> local_endpoint) {
+  local_endpoint_ = std::move(local_endpoint);
 }
 
 Status InferenceEngine::Initialize() {
@@ -324,18 +349,32 @@ Status InferenceEngine::Initialize() {
     }
   }
 
-  // Create TransferEngine instance first (before batch scheduler)
+  // Create TransferEngine instance first (before batch scheduler).
+  // pd_v2 has its own data plane (Mooncake tent + libpd_v2_connector_mooncake.so)
+  // and does NOT use the V1 TransferEngine / Connector. Skipping V1 here:
+  //   - removes "Invalid request_id: -1" / "Task address is empty" log noise,
+  //   - reclaims a few seconds of boot time,
+  //   - prevents two stacks from racing on the same notify channels.
+  // We still set up the layer_progress_queue unconditionally because the
+  // V1 LayerProgressTracker singleton in the executor pushes to it
+  // regardless of whether V1 transfer is enabled — null queue → crash.
   ConnectorConfig connector_config;
   Status status = env_->GetConnectorConfigs(connector_config);
   if (status.OK() && connector_config.group_role != GroupRole::NONE) {
-    transfer_engine_ = std::make_shared<TransferEngine>();
-    // Set IpcFuncWrapper to TransferEngine (which will set it to Connector)
-    transfer_engine_->SetIpcFuncWrapper(ipc_func_wrapper_);
-    transfer_engine_->Initialize(connector_config.group_role);
     auto layer_progress_queue = std::make_shared<BlockingQueue<LayerProgressInfo>>();
     ipc_func_wrapper_->SetLayerProgressRecvQueue(layer_progress_queue);
-    transfer_engine_->SetLayerProgressRecvQueue(layer_progress_queue);
-    KLLM_LOG_INFO << "TransferEngine created and initialized.";
+    if (!connector_config.is_pd_v2) {
+      transfer_engine_ = std::make_shared<TransferEngine>();
+      // Set IpcFuncWrapper to TransferEngine (which will set it to Connector)
+      transfer_engine_->SetIpcFuncWrapper(ipc_func_wrapper_);
+      transfer_engine_->Initialize(connector_config.group_role);
+      transfer_engine_->SetLayerProgressRecvQueue(layer_progress_queue);
+      KLLM_LOG_INFO << "TransferEngine created and initialized.";
+    } else {
+      KLLM_LOG_INFO << "pd_v2 enabled: skipping V1 TransferEngine / Connector setup "
+                    << "(layer_progress_queue still wired so executor's V1 LayerProgressTracker "
+                    << "has somewhere to push).";
+    }
   }
 
   // Create global cache connector if configured.
@@ -362,8 +401,7 @@ Status InferenceEngine::Initialize() {
       auto event_driven_schedule_processor =
           std::make_shared<EventDrivenScheduleProcessor>(attn_dp_size, batch_scheduler_config.max_pp_batch_num);
 
-      const bool use_model_perf_backend =
-          InitModelPerfBackend(event_driven_schedule_processor, batch_scheduler_config);
+      const bool use_model_perf_backend = InitModelPerfBackend(event_driven_schedule_processor, batch_scheduler_config);
       if (!use_model_perf_backend) {
         event_driven_schedule_processor->SetScheduleBackend(
             std::make_shared<ContinuousBatchingBackend>(batch_scheduler_config));
@@ -376,28 +414,49 @@ Status InferenceEngine::Initialize() {
       {
         int device_count = context_->global->GetAttentionTensorParallelSize();
         std::shared_ptr<IpcFuncWrapper> fetcher_ipc = global_cache_connector_ ? ipc_func_wrapper_ : nullptr;
-        auto global_cache_fetcher =
-            std::make_shared<GlobalCacheFetcher>(device_count, fetcher_ipc, global_cache_config.role);
+        // role 与节点身份一一对应:
+        //   V1 standalone -> ""，V1 Prefill -> "prefill"，V1 Decode -> "decode"，
+        //   pd_v2 Prefill -> "pd_v2_prefill"，pd_v2 Decode -> "pd_v2_decode"。
+        const std::string fetcher_role = DetermineGlobalCacheFetcherRole(connector_config, status.OK());
+        auto global_cache_fetcher = std::make_shared<GlobalCacheFetcher>(device_count, fetcher_ipc, fetcher_role);
 
         if (global_cache_connector_) {
           ipc_func_wrapper_->SetGlobalCacheQueryDoneCallableFetcher(global_cache_fetcher);
         }
         global_cache_fetcher->Start();
 
-        // 创建全局 cache 查询 Hook（hook_idx=0，第一个添加的 hook）
+        // 创建全局 cache 查询 Hook（hook_idx=0，第一个添加的 hook）。
+        // pd_v2 Decode 角色下让本 Hook 成为 block 分配的单一所有者: alloc 失败时挂起并等
+        // block 释放后重试, 而非回退到 backend (下游 PdV2DecodeHook 假定 req 已分好 block)。
+        const bool defer_admission_on_block_full = (fetcher_role == "pd_v2_decode");
+        // master 引入 ENABLE_GLOBAL_CACHE_HOOK 开关，用于非 pd_v2 场景按需启用全局 cache hook；
+        // pd_v2 Decode 必须创建该 hook（block 分配的唯一所有者），不受该开关影响。
         const char *enable_global_cache_hook_env = std::getenv("ENABLE_GLOBAL_CACHE_HOOK");
-        if (enable_global_cache_hook_env != nullptr && std::string(enable_global_cache_hook_env) == "1") {
+        const bool enable_global_cache_hook =
+            (enable_global_cache_hook_env != nullptr && std::string(enable_global_cache_hook_env) == "1");
+        if (enable_global_cache_hook || defer_admission_on_block_full) {
           auto global_cache_hook =
-              std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config, /*hook_idx=*/0);
+              std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config,
+                                                     /*hook_idx=*/0, defer_admission_on_block_full);
           hook_manager->AddHook(global_cache_hook);
 
+          // PD decode 下 GlobalCacheQueryHook 是 block 分配的唯一所有者，recompute 必须经
+          // hook 链重新分配而非直接回灌 prefilling_reqs（详见 HandleRecomputeRequest）。
+          event_driven_schedule_processor->SetPdV2DecodeMode(defer_admission_on_block_full);
+
           KLLM_LOG_INFO << "GlobalCacheQueryHook created and added to event-driven scheduler, device_count="
-                        << device_count << ", global_cache_enabled=" << (global_cache_connector_ != nullptr);
+                        << device_count << ", global_cache_enabled=" << (global_cache_connector_ != nullptr)
+                        << ", defer_admission_on_block_full=" << defer_admission_on_block_full;
         } else {
           KLLM_LOG_INFO << "GlobalCacheQueryHook disabled (ENABLE_GLOBAL_CACHE_HOOK="
                         << (enable_global_cache_hook_env ? enable_global_cache_hook_env : "not set") << ")";
         }
       }
+
+      // pd_v2 cross-node Prefill/Decode bootstrap.
+      // 详见 BootstrapPdV2Connector：dlopen 后端 .so、创建 connector 并按角色注册
+      // Decode hook / Prefill endpoint。非 pd_v2 Prefill/Decode 节点为 no-op。
+      BootstrapPdV2Connector(event_driven_schedule_processor, hook_manager);
 
       // 创建 GlobalCachePutTracker，防止 put 进行中释放 block 导致 use-after-free
       if (global_cache_connector_) {
@@ -497,6 +556,10 @@ Status InferenceEngine::DoWarmupRun() {
     return Status();
   }
 
+  // pd_v2 Decode 需先等到一个健康的 Prefill peer，否则 warmup 请求会因 CanAccept 失败而
+  // 产生空输出（详见 WaitForPdV2DecodePeer）。非 pd_v2 Decode 节点为 no-op。
+  WaitForPdV2DecodePeer();
+
   ModelConfig model_config;
   Status status = env_->GetModelConfig(model_config);
   if (!status.OK()) {
@@ -552,7 +615,13 @@ Status InferenceEngine::DoWarmupRun() {
     // NOTE(winminkong): To prevent PD disaggregate waiting in a loop for the configuration to be transmitted.
     if (connector_config.group_role == GroupRole::PREFILL) {
       req->req_id = -1;
-      req->req_ids[0] = -1;  // Sync sentinel to req_ids so InferRequest also sees -1
+      req->req_ids[0] = -1;
+    }
+    PdV2RuntimeConfig pd_v2_rt_warmup;
+    if (env_->GetPdV2RuntimeConfig(pd_v2_rt_warmup).OK() && pd_v2_rt_warmup.is_pd_v2 &&
+        pd_v2_rt_warmup.group_role == GroupRole::DECODE) {
+      req->req_id = -1;
+      req->req_ids[0] = -1;
     }
 
     req->waiter = std::make_shared<Waiter>(1);
@@ -580,12 +649,11 @@ Status InferenceEngine::DoWarmupRun() {
 
 bool InferenceEngine::InitModelPerfBackend(
     std::shared_ptr<EventDrivenScheduleProcessor> event_driven_schedule_processor,
-    const BatchSchedulerConfig& batch_scheduler_config) {
-  const char* enable_model_perf_env = std::getenv("ENABLE_MODEL_PERF");
-  const char* model_perf_config_env = std::getenv("MODEL_PERF_CONFIG");
-  const bool use_model_perf =
-      (enable_model_perf_env != nullptr && std::string(enable_model_perf_env) == "1") &&
-      (model_perf_config_env != nullptr && std::string(model_perf_config_env).size() > 0);
+    const BatchSchedulerConfig &batch_scheduler_config) {
+  const char *enable_model_perf_env = std::getenv("ENABLE_MODEL_PERF");
+  const char *model_perf_config_env = std::getenv("MODEL_PERF_CONFIG");
+  const bool use_model_perf = (enable_model_perf_env != nullptr && std::string(enable_model_perf_env) == "1") &&
+                              (model_perf_config_env != nullptr && std::string(model_perf_config_env).size() > 0);
 
   if (!use_model_perf) {
     return false;
@@ -605,13 +673,12 @@ bool InferenceEngine::InitModelPerfBackend(
   RuntimeConfig runtime_config;
   Status runtime_config_status = env_->GetRuntimeConfig(runtime_config);
   if (!runtime_config_status.OK()) {
-    KLLM_THROW(
-        fmt::format("ModelPerfBackend: failed to get RuntimeConfig: {}", runtime_config_status.GetMessage()));
+    KLLM_THROW(fmt::format("ModelPerfBackend: failed to get RuntimeConfig: {}", runtime_config_status.GetMessage()));
   }
 
-  auto model_perf_backend = std::make_shared<ModelPerfBackend>(
-      batch_scheduler_config, std::string(model_perf_config_env), model_config.vocab_size,
-      runtime_config.attn_backend_config.block_token_num);
+  auto model_perf_backend =
+      std::make_shared<ModelPerfBackend>(batch_scheduler_config, std::string(model_perf_config_env),
+                                         model_config.vocab_size, runtime_config.attn_backend_config.block_token_num);
   event_driven_schedule_processor->SetScheduleBackend(model_perf_backend);
 
   // 使用专用 balancer（透传 attn_dp_group_id，不做轮询覆写）
@@ -623,6 +690,180 @@ bool InferenceEngine::InitModelPerfBackend(
   model_perf_backend->SetScheduleProcessor(event_driven_schedule_processor);
   model_perf_backend_ = model_perf_backend;
   return true;
+}
+
+std::string InferenceEngine::DetermineGlobalCacheFetcherRole(const ConnectorConfig &connector_config,
+                                                             bool connector_config_ok) {
+  // pd_v2 read-sites consult PdV2RuntimeConfig (process-internal) rather than
+  // ConnectorConfig to keep V1 derivations from leaking — see K7.
+  PdV2RuntimeConfig pd_v2_rt;
+  const bool is_pd_v2 = env_->GetPdV2RuntimeConfig(pd_v2_rt).OK() && pd_v2_rt.is_pd_v2;
+  if (is_pd_v2 && pd_v2_rt.group_role == GroupRole::PREFILL) {
+    return "pd_v2_prefill";  // 全命中保留 1 token 走 prefill 流水线
+  } else if (is_pd_v2 && pd_v2_rt.group_role == GroupRole::DECODE) {
+    return "pd_v2_decode";  // 无 reject, peer Prefill 通过 RDMA 兜底
+  } else if (connector_config_ok && connector_config.group_role == GroupRole::PREFILL) {
+    return "prefill";  // max_new_tokens=1 + flip kDecode
+  } else if (connector_config_ok && connector_config.group_role == GroupRole::DECODE) {
+    return "decode";  // partial hit reject
+  }
+  return "";
+}
+
+void InferenceEngine::BootstrapPdV2Connector(const std::shared_ptr<EventDrivenScheduleProcessor> &schedule_processor,
+                                             const std::shared_ptr<ScheduleHookManager> &hook_manager) {
+  // Both Decode and Prefill engines dlopen the same backend .so; the role is
+  // selected via PdV2ConnectorConfig.node_role at factory time. Decode side
+  // adds PdV2DecodeHook to the EDS hook chain; Prefill side constructs
+  // PdV2PrefillEndpoint and registers its incoming-request callback with the
+  // connector. Executor-side RegisterKvPool lives in InferenceExecutor.
+  // pd_v2 reads from PdV2RuntimeConfig (process-internal) rather than
+  // ConnectorConfig to keep V1 derivations from leaking — see K7.
+  PdV2RuntimeConfig pd_v2_rt;
+  const bool pd_v2_rt_ok = env_->GetPdV2RuntimeConfig(pd_v2_rt).OK();
+  if (!pd_v2_rt_ok || !pd_v2_rt.is_pd_v2 ||
+      (pd_v2_rt.group_role != GroupRole::DECODE && pd_v2_rt.group_role != GroupRole::PREFILL)) {
+    return;
+  }
+
+  // Config-mapping + dlopen/create/init are pushed down into the pd_v2 layer
+  // (shared with inference_executor); the engine only keeps the scheduler /
+  // endpoint wiring below, which needs engine-owned deps.
+  const pd_v2::PdV2ConnectorConfig pd_cfg = pd_v2::BuildEngineConnectorConfig(
+      pd_v2_rt, static_cast<uint32_t>(context_->global->GetAttentionTensorParallelSize()));
+  pd_v2_connector_ = pd_v2::CreateAndInitConnector(pd_cfg, pd_v2_rt.redis_password, ipc_func_wrapper_.get(),
+                                                   &pd_v2_dlopen_handle_, /*context_hint=*/"engine");
+
+  if (pd_v2_rt.group_role == GroupRole::DECODE) {
+    RegisterPdV2DecodeHook(schedule_processor, hook_manager, pd_cfg);
+  } else {
+    RegisterPdV2PrefillEndpoint(schedule_processor, pd_cfg);
+  }
+}
+
+void InferenceEngine::RegisterPdV2DecodeHook(const std::shared_ptr<EventDrivenScheduleProcessor> &schedule_processor,
+                                             const std::shared_ptr<ScheduleHookManager> &hook_manager,
+                                             const pd_v2::PdV2ConnectorConfig &pd_cfg) {
+  // pd_v2 Decode-side preempt path (swap removal): under memory pressure a
+  // kv_from_remote req is preempted via recompute, which HandleRecomputeRequest
+  // turns into a full PD restart (release local KV + re-fetch from a peer
+  // Prefill through AddInferRequest). This works under any preempt_mode, so the
+  // previous "must be SWAP" requirement no longer applies.
+  //
+  // LinUCB router (selector_policy == kLinUCB) needs this Decode engine's
+  // per-step EWMA load for the LocalArmContext. Capture the EDS weakly (mirror
+  // of the Prefill snapshot_fn): a call after teardown safely yields a zero
+  // ScheduleLoadStat.
+  std::weak_ptr<EventDrivenScheduleProcessor> weak_eds_decode = schedule_processor;
+  std::function<ScheduleLoadStat()> load_stat_fn = [weak_eds_decode]() -> ScheduleLoadStat {
+    // PdV2DecodeHook invokes this from inside DispatchEvent, where the EDS
+    // thread already holds infer_request_mutex_. Use the unlocked reader; the
+    // locking GetLocalLoad() would self-deadlock.
+    if (auto eds = weak_eds_decode.lock()) return eds->GetLocalLoadUnlocked();
+    return ScheduleLoadStat{};
+  };
+  auto pd_v2_hook =
+      std::make_shared<pd_v2::PdV2DecodeHook>(pd_v2_connector_, /*hook_idx=*/1, pd_cfg.engine.local_complete_threshold,
+                                              pd_cfg.engine.selector_policy, std::move(load_stat_fn));
+  hook_manager->AddHook(pd_v2_hook);
+  KLLM_LOG_INFO << "pd_v2 Decode hook registered, cluster=" << pd_cfg.cluster_name
+                << " inference_addr=" << pd_cfg.inference_addr
+                << " local_complete_threshold=" << pd_cfg.engine.local_complete_threshold
+                << " selector_policy=" << static_cast<int>(pd_cfg.engine.selector_policy);
+}
+
+void InferenceEngine::RegisterPdV2PrefillEndpoint(
+    const std::shared_ptr<EventDrivenScheduleProcessor> &schedule_processor, const pd_v2::PdV2ConnectorConfig &pd_cfg) {
+  if (local_endpoint_ == nullptr) {
+    KLLM_THROW("pd_v2 Prefill role requires InferenceEngine::SetLocalEndpoint before Initialize");
+  }
+  pd_v2::PdV2PrefillEndpoint::Deps endpoint_deps;
+  endpoint_deps.local_endpoint = local_endpoint_;
+  endpoint_deps.connector = pd_v2_connector_;
+  endpoint_deps.prefill_attn_tp = static_cast<uint32_t>(context_->global->GetAttentionTensorParallelSize());
+
+  // pd_v2 Prefill load-snapshot provider: produces a PeerHealth that reflects
+  // this Prefill engine's real load. Fed to BOTH snapshot paths — the
+  // per-completion reply (endpoint_deps.snapshot_fn, consumed in
+  // pd_v2_prefill_completion.cpp) and the periodic heartbeat (connector
+  // SetSnapshotProvider → BroadcastSnapshot). cache_managers_ is copied by
+  // value (vector of shared_ptr); the EDS processor is captured weakly so a
+  // snapshot firing after engine teardown is a harmless no-op (load fields
+  // stay 0).
+  std::weak_ptr<EventDrivenScheduleProcessor> weak_eds = schedule_processor;
+  auto snapshot_cache_mgrs = cache_managers_;
+  const std::string snapshot_server_name = pd_cfg.inference_addr;
+  std::function<pd_v2::PeerHealth()> snapshot_fn = [weak_eds, snapshot_cache_mgrs,
+                                                    snapshot_server_name]() -> pd_v2::PeerHealth {
+    pd_v2::PeerHealth h;
+    h.server_name = snapshot_server_name;
+    h.healthy = true;
+    h.last_snapshot_ms = static_cast<uint64_t>(ProfileTimer::GetCurrentTimeInMs());
+    uint64_t free_blocks = 0;
+    // swap removed: no swapout-in-flight blocks, so future-free is always 0.
+    uint64_t future_free_blocks = 0;
+    for (const auto &cm : snapshot_cache_mgrs) {
+      if (cm != nullptr) {
+        free_blocks += cm->GetUsableBlockNumber();
+      }
+    }
+    h.free_kv_blocks = static_cast<uint32_t>(free_blocks);
+    h.future_free_kv_blocks = static_cast<uint32_t>(future_free_blocks);
+    if (auto eds = weak_eds.lock()) {
+      const ScheduleLoadStat ld = eds->GetLocalLoad();
+      h.waiting_reqs = ld.waiting_reqs;
+      h.running_reqs = ld.running_reqs;
+      h.pending_prefill_tokens = ld.pending_prefill_tokens;
+      h.step_token_num = ld.step_token_num;
+      h.step_latency_us = ld.step_latency_us;
+    }
+    return h;
+  };
+  endpoint_deps.snapshot_fn = snapshot_fn;
+
+  pd_v2_prefill_endpoint_ = std::make_shared<pd_v2::PdV2PrefillEndpoint>(std::move(endpoint_deps));
+  pd_v2_prefill_endpoint_->Register();
+  // Periodic heartbeat path: the connector's BroadcastSnapshot uses the same
+  // provider to fill PeerHealth load fields each cycle.
+  pd_v2_connector_->SetSnapshotProvider(snapshot_fn);
+  {
+    std::weak_ptr<pd_v2::PdV2PrefillEndpoint> weak_endpoint = pd_v2_prefill_endpoint_;
+    ipc_func_wrapper_->SetPdV2BarrierDoneCallback([weak_endpoint](int64_t req_id, uint8_t status) {
+      if (auto p = weak_endpoint.lock()) p->OnBarrierDone(req_id, status);
+    });
+  }
+  KLLM_LOG_INFO << "pd_v2 Prefill endpoint registered, cluster=" << pd_cfg.cluster_name
+                << " inference_addr=" << pd_cfg.inference_addr;
+}
+
+void InferenceEngine::WaitForPdV2DecodePeer() {
+  // pd_v2 DECODE warmup synthesizes a request that has to clear CanAccept;
+  // CanAccept needs at least one healthy Prefill peer in the local
+  // PeerSelector, which only populates after Prefill's heartbeat
+  // (snapshot_push_interval_ms, default 1s) sends us its first PrefillSnapshot.
+  // If Decode boots faster than the first snapshot arrives we hit `Warmup run
+  // generated empty output tokens`. Poll CanAccept(probe_req=-2)+Release until
+  // it succeeds, capped by an env-overridable timeout.
+  PdV2RuntimeConfig pd_v2_rt;
+  if (!(env_->GetPdV2RuntimeConfig(pd_v2_rt).OK() && pd_v2_rt.is_pd_v2 && pd_v2_rt.group_role == GroupRole::DECODE &&
+        pd_v2_connector_ != nullptr)) {
+    return;
+  }
+
+  int wait_ms = 30000;
+  if (const char *env = std::getenv("PD_V2_WARMUP_PEER_WAIT_MS")) {
+    try {
+      wait_ms = std::max(0, std::stoi(env));
+    } catch (...) {
+    }
+  }
+  if (pd_v2::WaitForHealthyPeer(pd_v2_connector_, wait_ms)) {
+    KLLM_LOG_INFO << "pd_v2 DECODE warmup: PeerSelector has healthy peer, proceeding";
+  } else {
+    KLLM_LOG_WARNING << "pd_v2 DECODE warmup: timed out (" << wait_ms
+                     << "ms) waiting for first PrefillSnapshot; warmup will likely fail. "
+                     << "Check Prefill side / Redis connectivity.";
+  }
 }
 
 Status InferenceEngine::Start() {

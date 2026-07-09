@@ -33,7 +33,15 @@ class CacheManagerInterface {
 
   // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
   // number for the specific request.
-  virtual size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) = 0;
+  //
+  // Reservation policy (single source of truth for both V1 and EDS):
+  //   total_blocks = ceil((input_token_lens + 1) / block_token_num)        // +1 for the first sampler-produced
+  //                + ceil(mtp_step_num         / block_token_num)          //   token after prefill, + a separately-
+  //                                                                       //   reserved chunk for MTP lookahead.
+  // The two terms are rounded up INDEPENDENTLY so that MTP always lands on its own block boundary (even when input's
+  // tail block has free slots). This matches the "+1 block" design intent reused by the dispatcher in pd_v2 — Decode
+  // and Prefill must end up with the same block count for the wire contract to hold.
+  virtual size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens, size_t mtp_step_num = 0) = 0;
 
   // Get the needed block num for specific request if only one next token.
   virtual size_t GetRequestStepBlockNumberForOneNextToken(int64_t req_id) = 0;

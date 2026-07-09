@@ -78,7 +78,7 @@ class DirectCacheManager : public CacheManagerInterface,
 
   // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
   // number for the specific request.
-  size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) override;
+  size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens, size_t mtp_step_num = 0) override;
 
   // Get the needed block num for specific request if only one next token.
   size_t GetRequestStepBlockNumberForOneNextToken(int64_t req_id) override;

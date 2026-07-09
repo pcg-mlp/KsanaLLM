@@ -42,9 +42,25 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
       const DpScheduleState& dp_state = context.GetDpScheduleState(multi_batch_id, dp_idx);
       DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(multi_batch_id, dp_idx);
       std::unordered_set<int64_t> timeout_req_ids_seen;
-      auto collect_timeout_req = [&events, dp_idx, &timeout_req_ids_seen, &is_timeout,
+      auto collect_timeout_req = [this, &events, dp_idx, &timeout_req_ids_seen, &is_timeout,
                                   &in_plan_ops](const std::shared_ptr<InferRequest>& req) {
         if (!is_timeout(req)) {
+          return;
+        }
+        // pd_v2 WAITING_KVCACHE: defer Stop until PrefillComplete (same as user cancel).
+        // Record the timeout as the terminal status now (HandleHookFailAndEnd
+        // preserves a pre-set non-OK status) so the request surfaces as
+        // RET_REQUEST_TIMEOUT when PrefillComplete arrives, instead of a generic
+        // "hook async processing failed". Fire once on the pending_stop transition
+        // to avoid re-logging every schedule round.
+        if (req->pd_v2.awaiting_prefill) {
+          if (!req->pd_v2.pending_stop) {
+            req->pd_v2.pending_stop = true;
+            req->finish_status = Status(RET_REQUEST_TIMEOUT, "waiting timeout while awaiting pd_v2 prefill");
+            KLLM_LOG_WARNING << "pd_v2 req timed out while awaiting prefill, defer stop: req_id=" << req->req_id
+                             << " dp_idx=" << dp_idx
+                             << " waiting_timeout_in_ms=" << batch_scheduler_config_.waiting_timeout_in_ms;
+          }
           return;
         }
         if (timeout_req_ids_seen.insert(req->req_id).second) {

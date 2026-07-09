@@ -16,6 +16,7 @@
 #include "ipc/functions/dispatch_schdule_output.h"
 #include "ipc/functions/get_device_memory.h"
 #include "ipc/functions/get_ep_communication_config.h"
+#include "ipc/functions/get_kv_pool_base_va.h"
 #include "ipc/functions/global_cache_put_done.h"
 #include "ipc/functions/global_cache_query.h"
 #include "ipc/functions/global_cache_query_done.h"
@@ -27,6 +28,7 @@
 #include "ipc/functions/load_model.h"
 #include "ipc/functions/load_weight.h"
 #include "ipc/functions/nccl_operations.h"
+#include "ipc/functions/pd_v2_barrier_done.h"
 #include "ipc/functions/report_layer_progress.h"
 #include "ipc/functions/report_sampling_output.h"
 #include "ipc/functions/reset_pipeline_config.h"
@@ -138,6 +140,16 @@ void IpcFuncWrapper::SetIpcFunctions() {
   // KV cache put 完成: executor 报告给 engine（异步）
   ipc_func_proxy_->SetFuncInfo<GlobalCachePutDoneCallable, GlobalCachePutDoneRequest, GlobalCachePutDoneResponse,
                                GlobalCachePutDoneCallback>(IPC_FUNC_GLOBAL_CACHE_PUT_DONE);
+
+  // pd_v2: engine queries executor for Mooncake-registered KV pool VA + shape.
+  ipc_func_proxy_
+      ->SetFuncInfo<GetKvPoolBaseVaCallable, GetKvPoolBaseVaRequest, GetKvPoolBaseVaResponse, GetKvPoolBaseVaCallback>(
+          IPC_FUNC_PD_V2_GET_KV_POOL_BASE_VA);
+
+  // pd_v2: executor → engine async barrier-done report.
+  ipc_func_proxy_
+      ->SetFuncInfo<PdV2BarrierDoneCallable, PdV2BarrierDoneRequest, PdV2BarrierDoneResponse, PdV2BarrierDoneCallback>(
+          IPC_FUNC_PD_V2_BARRIER_DONE);
 
 #ifdef ENABLE_CUDA
   // Connector NCCL operations
@@ -327,6 +339,56 @@ Status IpcFuncWrapper::GetDeviceMemory(size_t* device_free, size_t* device_total
   *device_free = response->device_free;
   *device_total = response->device_total;
   return Status();
+}
+
+Status IpcFuncWrapper::PdV2GetKvPoolBaseVa(int rank, uint64_t* kv_pool_base_va, uint64_t* total_bytes,
+                                           uint64_t* block_size, uint64_t* num_blocks, uint64_t* num_layers) {
+  // share_callable=true: SetPdV2KvPoolQueryFn binds query_fn_ on the
+  // shared (executor_id=-1) callable, so IPC dispatch must look it up
+  // there too. Without this, the per-executor callable runs with an
+  // empty query_fn_ and replies registered=false even after
+  // RegisterKvPool succeeded.
+  std::shared_ptr<IpcContext> ipc_context =
+      CreateEngine2ExecutorContext(IPC_FUNC_PD_V2_GET_KV_POOL_BASE_VA, rank, /*is_async=*/false, /*is_oneway=*/false,
+                                   /*share_callable=*/true, /*share_callback=*/false);
+  auto request = std::make_shared<GetKvPoolBaseVaRequest>();
+  auto response = std::make_shared<GetKvPoolBaseVaResponse>();
+  STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), response.get(), ipc_context.get()));
+  if (!response->registered) {
+    return Status(RET_RUNTIME_FAILED, "pd_v2 executor[" + std::to_string(rank) + "] has not RegisterKvPool yet");
+  }
+  if (kv_pool_base_va) *kv_pool_base_va = response->kv_pool_base_va;
+  if (total_bytes) *total_bytes = response->total_bytes;
+  if (block_size) *block_size = response->block_size;
+  if (num_blocks) *num_blocks = response->num_blocks;
+  if (num_layers) *num_layers = response->num_layers;
+  return Status();
+}
+
+void IpcFuncWrapper::SetPdV2KvPoolQueryFn(
+    std::function<bool(uint64_t*, uint64_t*, uint64_t*, uint64_t*, uint64_t*)> fn) {
+  auto callable =
+      ipc_func_proxy_->GetSharedIpcFuncCallable<GetKvPoolBaseVaCallable>(IPC_FUNC_PD_V2_GET_KV_POOL_BASE_VA);
+  callable->SetQueryFn(std::move(fn));
+}
+
+Status IpcFuncWrapper::ReportPdV2BarrierDone(int64_t req_id, uint8_t status) {
+  std::shared_ptr<IpcContext> ipc_context =
+      CreateExecutor2EngineContext(IPC_FUNC_PD_V2_BARRIER_DONE, executor_id_, /*is_async=*/true, /*is_oneway=*/true,
+                                   /*share_callable=*/false, /*share_callback=*/false);
+  auto request = std::make_shared<PdV2BarrierDoneRequest>();
+  request->req_id = req_id;
+  request->status = status;
+  STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
+  return Status();
+}
+
+void IpcFuncWrapper::SetPdV2BarrierDoneCallback(std::function<void(int64_t, uint8_t)> cb) {
+  for (size_t executor_id = 0; executor_id < executor_num_; ++executor_id) {
+    auto callable =
+        ipc_func_proxy_->GetIpcFuncCallable<PdV2BarrierDoneCallable>(IPC_FUNC_PD_V2_BARRIER_DONE, executor_id);
+    callable->SetCallback(cb);
+  }
 }
 
 Status IpcFuncWrapper::ResetPipelineConfig(const PipelineConfig& pipeline_config) {

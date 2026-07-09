@@ -587,10 +587,14 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
 
   InitConnectorConfig(yaml_reader);
   InitGlobalCacheConnectorConfig(yaml_reader);
-  // TODO(zhongzhicao): Support PD + prefix cache + split fuse.
-  if (connector_config_.group_role != GroupRole::NONE && cache_manager_config_.enable_prefix_caching &&
-      batch_scheduler_config_.split_fuse_token_num != 0) {
-    KLLM_LOG_WARNING << "Split-fuse is not supported for PD separation, setting split_fuse_token_num to 0.";
+  // pd_v2 Decode 节点的本地 prefill 算完直接在本地 decode、不向外传 KV, 因此可以安全使用 splitfuse:
+  // 把本地大 prefill 切块与 decode 交错执行, 压平单步 latency / TPOT。这正是它需要 splitfuse 的场景。
+  // 其余 PD 角色仍不支持: V1 prefill/decode 与 pd_v2 Prefill 节点会把算好的 KV 通过 RDMA 传给对端,
+  // splitfuse 的分块 prefill 与"prefill 一次算完才传 KV"的假设冲突 (见原 TODO(zhongzhicao))。
+  const bool is_pd_v2_decode = connector_config_.is_pd_v2 && connector_config_.group_role == GroupRole::DECODE;
+  if (connector_config_.group_role != GroupRole::NONE && !is_pd_v2_decode &&
+      cache_manager_config_.enable_prefix_caching && batch_scheduler_config_.split_fuse_token_num != 0) {
+    KLLM_LOG_WARNING << "Split-fuse is not supported for this PD role, setting split_fuse_token_num to 0.";
     batch_scheduler_config_.split_fuse_token_num = 0;
   }
   return Status();
@@ -698,9 +702,148 @@ void ScheduleConfigParser::InitConnectorConfig(YamlReader &yaml_reader) {
       connector_config_.group_role = GroupRole::NONE;
       KLLM_LOG_WARNING << fmt::format("Unknown connector role: {}, defaulting to NONE", role_str);
     }
+    pd_v2_runtime_config_.group_role = connector_config_.group_role;
 
     // Only continue parsing if the role is not NONE
     if (connector_config_.group_role != GroupRole::NONE) {
+      // pd_v2 backend selector. "v2" flips is_pd_v2 on; any other value
+      // (empty, "v1", etc.) keeps V1 behavior. pd_v2-gated code paths (e.g.
+      // ExecutorBlockAllocator contiguous KV pool) read this flag via
+      // Environment::GetPdV2RuntimeConfig.
+      std::string backend =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.backend", "");
+      std::transform(backend.begin(), backend.end(), backend.begin(), [](unsigned char c) { return std::tolower(c); });
+      connector_config_.is_pd_v2 = (backend == "v2");
+      pd_v2_runtime_config_.is_pd_v2 = connector_config_.is_pd_v2;
+
+      // Fail-fast on unsupported pd_v2 config combinations (review §P1.4).
+      // pd_v2's hooks (PdV2DecodeHook on Decode, PdV2PrefillIntakeWrapper
+      // on Prefill) only attach in the EventDriven scheduler path; under
+      // the legacy DEFAULT scheduler the connector is created but never
+      // wired, requests would silently bypass pd_v2. GroupRole::BOTH is
+      // not implemented — pd_v2 splits Engine and Executor processes per
+      // node role, "Both on one process" has no test coverage.
+      if (connector_config_.is_pd_v2) {
+        if (batch_scheduler_config_.scheduler_type != SchedulerType::EVENT_DRIVEN) {
+          KLLM_THROW(
+              "setting.connector.backend=v2 requires "
+              "setting.batch_scheduler.scheduler_type=1 (EVENT_DRIVEN); "
+              "got DEFAULT. pd_v2 hooks only register on the event-driven "
+              "schedule path.");
+        }
+        if (connector_config_.group_role == GroupRole::BOTH) {
+          KLLM_THROW(
+              "setting.connector.backend=v2 with setting.connector.group_role=both "
+              "is not supported. pd_v2 cleanly splits Decode and Prefill into "
+              "different processes; co-locating both roles in one engine has no "
+              "test coverage and isn't validated.");
+        }
+      }
+
+      // pd_v2 metadata server (mooncake_master). Empty = "P2PHANDSHAKE"
+      // single-machine fallback at connector Initialize.
+      connector_config_.metadata_addr =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.metadata_addr", "");
+      pd_v2_runtime_config_.metadata_addr = connector_config_.metadata_addr;
+      // Redis password for metadata_addr=redis://...; pumped into
+      // MC_REDIS_PASSWORD env at connector bootstrap. AUTH issued
+      // against Redis server's default user (Redis 6+ ACL with username
+      // is not supported in Mooncake v0.3.9 — use default user).
+      connector_config_.redis_password =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.redis_password", "");
+      pd_v2_runtime_config_.redis_password = connector_config_.redis_password;
+
+      // pd_v2 transfer chunk size — see ConnectorConfig docstring.
+      // Read as int so we can detect / reject negative values rather
+      // than silently casting to a huge uint32_t (review §P2.2).
+      const int chunk_size_raw =
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.transfer_layer_chunk_size", 1);
+      if (chunk_size_raw < 0) {
+        KLLM_THROW(
+            fmt::format("setting.connector.transfer_layer_chunk_size must be >= 0, got {}. "
+                        "0 disables chunking (whole-model in one batch); positive N triggers "
+                        "transfer every N layers.",
+                        chunk_size_raw));
+      }
+      connector_config_.transfer_layer_chunk_size = static_cast<uint32_t>(chunk_size_raw);
+      pd_v2_runtime_config_.transfer_layer_chunk_size = connector_config_.transfer_layer_chunk_size;
+
+      // pd_v2 Executor Mooncake RPC base port — per-rank port is assigned
+      // as base + executor_rank to avoid collision across executor
+      // processes on the same host. Default 20000 keeps single-engine /
+      // single-executor dev launches working out of the box.
+      connector_config_.pd_v2_executor_rpc_base_port = static_cast<uint32_t>(yaml_reader.GetScalar<int>(
+          yaml_reader.GetRootNode(), "setting.connector.pd_v2_executor_rpc_base_port", 20000));
+      pd_v2_runtime_config_.pd_v2_executor_rpc_base_port = connector_config_.pd_v2_executor_rpc_base_port;
+
+      // pd_v2 Decode-side "remaining prefill ≤ N stays local" threshold
+      // (token count). 0 disables the fast-path. See ConnectorConfig.h
+      // for full semantics; PdV2DecodeHook applies it.
+      connector_config_.pd_v2_local_complete_threshold =
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.pd_v2_local_complete_threshold", 0);
+      pd_v2_runtime_config_.pd_v2_local_complete_threshold = connector_config_.pd_v2_local_complete_threshold;
+
+      // pd_v2 Decode peer-selection policy (0=kRoundRobin, 1=kLinUCB).
+      // Default 0. kLinUCB enables the LOCAL-vs-REMOTE contextual-bandit
+      // router; the pd_v2_linucb_* knobs below are only consulted in that mode.
+      connector_config_.pd_v2_selector_policy =
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.pd_v2_selector_policy", 0);
+      pd_v2_runtime_config_.pd_v2_selector_policy = connector_config_.pd_v2_selector_policy;
+
+      connector_config_.pd_v2_linucb_alpha =
+          yaml_reader.GetScalar<double>(yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_alpha", 1.0);
+      pd_v2_runtime_config_.pd_v2_linucb_alpha = connector_config_.pd_v2_linucb_alpha;
+
+      connector_config_.pd_v2_linucb_tpot_target_us = yaml_reader.GetScalar<double>(
+          yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_tpot_target_us", 50000.0);
+      pd_v2_runtime_config_.pd_v2_linucb_tpot_target_us = connector_config_.pd_v2_linucb_tpot_target_us;
+
+      connector_config_.pd_v2_linucb_tpot_safety_factor = yaml_reader.GetScalar<double>(
+          yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_tpot_safety_factor", 0.85);
+      pd_v2_runtime_config_.pd_v2_linucb_tpot_safety_factor = connector_config_.pd_v2_linucb_tpot_safety_factor;
+
+      connector_config_.pd_v2_linucb_ttft_threshold_us = yaml_reader.GetScalar<double>(
+          yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_ttft_threshold_us", 1500000.0);
+      pd_v2_runtime_config_.pd_v2_linucb_ttft_threshold_us = connector_config_.pd_v2_linucb_ttft_threshold_us;
+
+      connector_config_.pd_v2_linucb_running_ref =
+          yaml_reader.GetScalar<double>(yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_running_ref", 16.0);
+      pd_v2_runtime_config_.pd_v2_linucb_running_ref = connector_config_.pd_v2_linucb_running_ref;
+
+      connector_config_.pd_v2_linucb_remaining_ref_tokens = yaml_reader.GetScalar<double>(
+          yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_remaining_ref_tokens", 4096.0);
+      pd_v2_runtime_config_.pd_v2_linucb_remaining_ref_tokens = connector_config_.pd_v2_linucb_remaining_ref_tokens;
+
+      connector_config_.pd_v2_linucb_remote_lat_ref_us = yaml_reader.GetScalar<double>(
+          yaml_reader.GetRootNode(), "setting.connector.pd_v2_linucb_remote_lat_ref_us", 200000.0);
+      pd_v2_runtime_config_.pd_v2_linucb_remote_lat_ref_us = connector_config_.pd_v2_linucb_remote_lat_ref_us;
+
+      // pd_v2 control-stage HostStagePool size (bytes). 0 = use the
+      // in-source default (HostStagePool::kDefaultPoolBytes = 2 GiB).
+      // See docs/technology/design/pd_v2_control_stage.md §5.1 for
+      // sizing guidance; raise for multimodal deploys.
+      pd_v2_runtime_config_.control_stage_pool_bytes =
+          static_cast<uint64_t>(yaml_reader.GetScalar<long long>(  // NOLINT(runtime/int)
+              yaml_reader.GetRootNode(), "setting.connector.control_stage_pool_bytes", 0));
+
+      // pd_v2 control-stage maximum concurrent Decode peers. Default 128
+      // matches the design's 1:128 fan-in target.
+      pd_v2_runtime_config_.control_stage_max_peers = static_cast<uint32_t>(
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.control_stage_max_peers", 128));
+
+      // pd_v2 control-stage AcquireSlots timeout (ms). Negative = wait
+      // forever (not recommended). Default 5000 ms.
+      pd_v2_runtime_config_.control_stage_acquire_timeout_ms = yaml_reader.GetScalar<int>(
+          yaml_reader.GetRootNode(), "setting.connector.control_stage_acquire_timeout_ms", 5000);
+
+      // pd_v2 Decode-side async submit worker thread count. The EDS
+      // scheduling thread only enqueues each SubmitPrefillRequest; these
+      // workers run the (potentially blocking) stage handshake off the
+      // scheduling thread so a stuck/full peer never stalls scheduling.
+      // Default 4; clamped to >= 1 by the connector config builder.
+      pd_v2_runtime_config_.control_stage_async_workers =
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.control_stage_async_workers", 4);
+
       // Parse connector type
       std::string router_addr =
           yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.router_addr", "");
@@ -725,13 +868,18 @@ void ScheduleConfigParser::InitConnectorConfig(YamlReader &yaml_reader) {
       }
       connector_config_.inference_addr =
           yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.inference_addr", "");
+      pd_v2_runtime_config_.inference_addr = connector_config_.inference_addr;
       connector_config_.router_addr = std::move(router_addr);
+      pd_v2_runtime_config_.router_addr = connector_config_.router_addr;
       connector_config_.coordinator_addr =
           yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.coordinator_addr", "");
+      pd_v2_runtime_config_.coordinator_addr = connector_config_.coordinator_addr;
       connector_config_.cluster_name =
           yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.cluster_name", "");
+      pd_v2_runtime_config_.cluster_name = connector_config_.cluster_name;
       connector_config_.heartbeat_interval_ms =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.heartbeat_interval_ms", 5000);
+      pd_v2_runtime_config_.heartbeat_interval_ms = connector_config_.heartbeat_interval_ms;
       connector_config_.transfer_batch =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.transfer_batch", 1048576);
       connector_config_.connector_waiting_sec =
@@ -762,9 +910,10 @@ void ScheduleConfigParser::InitConnectorConfig(YamlReader &yaml_reader) {
       // Log the parsed configuration
       KLLM_LOG_INFO << fmt::format(
           "Connector config parsed: role={}, type={}, router_addr={}, cluster_name={}, "
-          "inference_addr={}, heartbeat_interval={}ms",
+          "inference_addr={}, heartbeat_interval={}ms, is_pd_v2={}, metadata_addr={}",
           role_str, type_str, connector_config_.router_addr, connector_config_.cluster_name,
-          connector_config_.inference_addr, connector_config_.heartbeat_interval_ms);
+          connector_config_.inference_addr, connector_config_.heartbeat_interval_ms, connector_config_.is_pd_v2,
+          connector_config_.metadata_addr);
     }
   } else {
     KLLM_LOG_INFO << "Connector role is set to NONE, skipping connector configuration.";
@@ -869,6 +1018,17 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
 
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);
   runtime_config_.is_decode_only = (connector_config_.group_role == GroupRole::DECODE);
+  // pd_v2 Decode is NOT decode-only: the local-bypass fast path
+  // (PdV2DecodeHook::local_complete_threshold) runs prefill on this
+  // node for short residuals. is_decode_only=true would let
+  // SelectEffectiveStepTokenNum shrink the forwarding buffers
+  // (mla_hidden_buffer / shared_buffer) to
+  // max_batch_size * max_decode_tokens_per_req, which corrupts
+  // local-bypass prefill — produces degenerate output where the model
+  // echoes input tokens (memory K7). Override here.
+  if (pd_v2_runtime_config_.is_pd_v2 && pd_v2_runtime_config_.group_role == GroupRole::DECODE) {
+    runtime_config_.is_decode_only = false;
+  }
   runtime_config_.enable_prefix_caching =
       cache_manager_config_.enable_prefix_caching || batch_scheduler_config_.split_fuse_token_num > 0;
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;

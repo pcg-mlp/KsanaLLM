@@ -4,13 +4,33 @@
 #include "cache_manager/block_allocator/executor_block_allocator.h"
 
 #include "configure/context.h"
+#include "configure/environment.h"
+#include "connector/config.h"
 #include "device/device_types.h"
 #include "device/device_utils.h"
 #include "fmt/core.h"
+#include "pd_v2/configure/pd_v2_runtime_config.h"
 #include "utils/logger.h"
+#include "utils/singleton.h"
 #include "utils/string_utils.h"
 
 namespace ksana_llm {
+
+namespace {
+
+// pd_v2 requires the executor KV pool to be a single contiguous allocation so
+// peer Prefill nodes can compute target_offset = block_id * block_size when
+// writing via Mooncake. Gate on YAML `setting.connector.backend == "v2"`
+// (parsed into PdV2RuntimeConfig::is_pd_v2). No env vars, no compile flags.
+inline bool IsPdV2ContiguousKvEnabled() {
+  PdV2RuntimeConfig pd;
+  if (!Singleton<Environment>::GetInstance()->GetPdV2RuntimeConfig(pd).OK()) {
+    return false;
+  }
+  return pd.is_pd_v2;
+}
+
+}  // namespace
 
 ExecutorBlockAllocator::ExecutorBlockAllocator(MemoryLocation location, size_t block_num, size_t block_size, int rank,
                                                std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
@@ -26,10 +46,36 @@ ExecutorBlockAllocator::ExecutorBlockAllocator(MemoryLocation location, size_t b
     malloc_fn_ = std::bind(&MemoryAllocatorInterface::HostAlloc, memory_allocator.get(), _1, _2);
     free_fn_ = std::bind(&MemoryAllocatorInterface::HostFree, memory_allocator.get(), _1);
   } else if (location_ == MemoryLocation::LOCATION_DEVICE) {
-    malloc_fn_ = std::bind(&MemoryAllocatorInterface::MallocAsync, memory_allocator.get(), _1, _2,
+    // pd_v2 needs the KV pool registered with the RDMA HCA via
+    // ibv_reg_mr (GPU Direct RDMA). cudaMallocAsync pool sub-allocations
+    // are NOT recognized by the nv_peer_mem kernel module — registering
+    // them returns EFAULT (Bad address). Use sync cudaMalloc / cudaFree
+    // on pd_v2 paths so nv_peer_mem can map the buffer.
+    //
+    // History: P0.4 (commit 1708716e, 2026-05-15) introduced this gated
+    // sync-alloc path. Commit e8b4811c reverted it 2026-05-16 because at
+    // that point the test outputs were still degenerate — but the actual
+    // root cause was K7 (`is_decode_only` flag wrong for pd_v2 Decode in
+    // local-bypass mode), which was independently fixed in commit
+    // ae7cf355. With K7 fixed, sync alloc can be re-enabled without
+    // re-introducing the "token 2+ stutter" symptom; sync alloc remains
+    // the right solution because it's the only way nv_peer_mem can
+    // register the buffer for GDR.
+    //
+    // Runtime impact: ~zero. The KV pool is preallocated once at boot
+    // and freed at process exit; the stream-ordered async free
+    // optimization only matters for high-frequency alloc/free traffic
+    // which the KV pool doesn't have. Boot adds a one-shot sync
+    // cudaMalloc of the contiguous slab (~6-15 s on 96GB H20 pools).
+    if (IsPdV2ContiguousKvEnabled()) {
+      malloc_fn_ = std::bind(&MemoryAllocatorInterface::Malloc, memory_allocator.get(), _1, _2);
+      free_fn_ = std::bind(&MemoryAllocatorInterface::Free, memory_allocator.get(), _1);
+    } else {
+      malloc_fn_ = std::bind(&MemoryAllocatorInterface::MallocAsync, memory_allocator.get(), _1, _2,
+                             context_->device->GetMemoryManageStream());
+      free_fn_ = std::bind(&MemoryAllocatorInterface::FreeAsync, memory_allocator.get(), _1,
                            context_->device->GetMemoryManageStream());
-    free_fn_ = std::bind(&MemoryAllocatorInterface::FreeAsync, memory_allocator.get(), _1,
-                         context_->device->GetMemoryManageStream());
+    }
   } else {
     KLLM_THROW("The MemoryLocation is not supported.");
   }
@@ -53,6 +99,30 @@ void ExecutorBlockAllocator::PreAllocateBlocks() {
     blocks_base_ptr_ = base_mem_ptr;
   }
 #endif
+
+  // pd_v2 path: same contiguous layout as the gated branch above, regardless
+  // of attn backend. Required so peer Prefill nodes can write directly into
+  // KV pool slots via Mooncake using target_offset = block_id * block_size.
+  if (!use_continuous_memory && location_ == MemoryLocation::LOCATION_DEVICE && IsPdV2ContiguousKvEnabled()) {
+    use_continuous_memory = true;
+    size_t dev_bytes = (block_num_ + 1) * block_size_;
+    malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), dev_bytes);
+    // The constructor above bound `malloc_fn_` to sync `cudaMalloc` for
+    // the pd_v2 path so nv_peer_mem can register the buffer for GPU
+    // Direct RDMA. Sync alloc returns only after physical backing is
+    // committed, so no StreamSynchronize is needed here. (Async path
+    // doesn't reach this branch — it's gated on
+    // `IsPdV2ContiguousKvEnabled()`.)
+    blocks_base_ptr_ = base_mem_ptr;
+  }
+
+  // Host contiguous path: single cudaHostAlloc + pointer slicing.
+  if (!use_continuous_memory && location_ == MemoryLocation::LOCATION_HOST) {
+    use_continuous_memory = true;
+    size_t dev_bytes = (block_num_ + 1) * block_size_;
+    malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), dev_bytes);
+    blocks_base_ptr_ = base_mem_ptr;
+  }
 
   // NOTE: Make sure block ids on all worker nodes have same id range.
   allocated_blocks_.reserve(block_num_);
@@ -84,6 +154,16 @@ void ExecutorBlockAllocator::Clear() {
     return;
   }
 #endif
+
+  // pd_v2 contiguous-KV path mirrors the gated branch above for the
+  // single-allocation free.
+  if (blocks_base_ptr_ != nullptr) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    free_fn_(blocks_base_ptr_);
+    blocks_base_ptr_ = nullptr;
+    allocated_blocks_.clear();
+    return;
+  }
 
   {
     auto clear_fn = [&](std::unordered_map<int, void*>& blocks) -> void {
@@ -119,7 +199,7 @@ Status ExecutorBlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std:
     }
 
     KLLM_LOG_ERROR << "Get block id " << block_id << " address error on device " << rank_;
-    return Status(RET_SEGMENT_FAULT, FormatStr("Get block address error, block id {}", block_id));
+    return Status(RET_SEGMENT_FAULT, FormatStr("Get block address error, block id %d", block_id));
   }
   return Status();
 }

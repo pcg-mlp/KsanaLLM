@@ -15,6 +15,17 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
                              Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
     : endpoint_config_(endpoint_config), request_queue_(request_queue) {}
 
+Status LocalEndpoint::SubmitAsync(const std::shared_ptr<Request> &request) {
+  if (request == nullptr) {
+    return Status(RET_INVALID_ARGUMENT, "SubmitAsync: null request");
+  }
+  if (request->waiter == nullptr) {
+    request->waiter = std::make_shared<Waiter>(1);
+  }
+  request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(Status(), request));
+  return Status();
+}
+
 Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                              const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                              ksana_llm::KsanaPythonOutput &ksana_python_output) {
@@ -23,9 +34,8 @@ Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_pyth
   if (!ksana_python_input->sampling_config.stop_strings.empty()) {
     req->has_stop_strings = true;
   }
-  Status status = Status();
   std::shared_ptr<Waiter> waiter = req->waiter;
-  request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
+  STATUS_CHECK_RETURN(SubmitAsync(req));
 
   // Get inference result
   KLLM_LOG_DEBUG << "LocalEndpoint::Handle start Wait.";

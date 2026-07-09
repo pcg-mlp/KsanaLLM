@@ -75,15 +75,21 @@ struct ScheduleState {
 
 // 当前在一个 DP 内已规划的 Batch（设计文档 3.3）
 struct DpBatch {
+  // 本 DP batch 内已规划请求：req_id -> InferRequest。
   std::unordered_map<int64_t, std::shared_ptr<InferRequest>> running_reqs;
+  // 本 step 累计 token 数。
   size_t running_step_token_num = 0;
+  // 本 step 累计 logits 数。
   size_t running_step_logits_num = 0;
+  // 请求加入 batch 时记录的 {token, logits} 贡献。
+  std::unordered_map<int64_t, std::pair<size_t, size_t>> req_id_to_contribution;
 
   // Reset planning state for reuse.
   void Reset() {
     running_reqs.clear();
     running_step_token_num = 0;
     running_step_logits_num = 0;
+    req_id_to_contribution.clear();
   }
 
   // Check whether a request is already in this batch.
@@ -95,8 +101,15 @@ struct DpBatch {
   void AddRunningReq(const std::shared_ptr<InferRequest>& req) {
     KLLM_CHECK(req != nullptr);
     KLLM_CHECK(!IsInBatch(req->req_id));
-    running_step_token_num += req->GetPlanningQueryLen();
-    running_step_logits_num += req->GetPlanningSamplingTokenNum();
+    // Prefill with prefix cache must account for the full sequence length (prefix + new tokens)
+    // because MLA attention kernel allocates buffer for total_q_tokens + total_prefix_tokens.
+    // Decode only processes a few new tokens per step; GetPlanningQueryLen() is sufficient.
+    const size_t added_tokens =
+        (req->infer_stage == InferStage::kContext) ? req->GetPlanningSequenceLen() : req->GetPlanningQueryLen();
+    const size_t added_logits = req->GetPlanningSamplingTokenNum();
+    running_step_token_num += added_tokens;
+    running_step_logits_num += added_logits;
+    req_id_to_contribution[req->req_id] = {added_tokens, added_logits};
     req->SetPlanningTask();
     running_reqs.emplace(req->req_id, req);
   }
@@ -134,7 +147,13 @@ struct PlanningBatch {
     KLLM_CHECK(req != nullptr);
     KLLM_CHECK(!dp_batches[dp_idx].IsInBatch(req->req_id));
     ++running_req_num;
-    running_step_token_num += req->GetPlanningQueryLen();
+    // Prefill: use full sequence length (prefix + new tokens) so that prefix cache hits
+    // are correctly counted against max_step_tokens. Decode: only new tokens per step.
+    if (req->infer_stage == InferStage::kContext) {
+      running_step_token_num += req->GetPlanningSequenceLen();
+    } else {
+      running_step_token_num += req->GetPlanningQueryLen();
+    }
     running_step_logits_num += req->GetPlanningSamplingTokenNum();
     dp_batches[dp_idx].AddRunningReq(req);
   }
@@ -151,8 +170,28 @@ struct PlanningBatch {
     KLLM_CHECK(req != nullptr);
     KLLM_CHECK(running_req_num > 0);
     --running_req_num;
-    // Do not recover running_step_token_num and running_step_logits_num because planning workload is cleared in
-    // InferRequest. Will casuse some resource waste. Only happens when request stopped after planned.
+    // Recover the token / logits contribution recorded at AddRunningReq time.
+    // We CANNOT recompute it from the InferRequest here because the planning
+    // workload may already have been cleared on the request when this is
+    // called (see the original comment that explicitly opted out of recovery).
+    // Without this, every completed request leaks its tokens into
+    // running_step_token_num forever: a short req with input_tokens=3603
+    // followed by a 128K req fails IsRequestAcceptable because
+    // 3603 + 128003 > max_step_token_num = 131072.
+    auto contrib_it = dp_batch.req_id_to_contribution.find(req_id);
+    if (contrib_it != dp_batch.req_id_to_contribution.end()) {
+      const size_t tok = contrib_it->second.first;
+      const size_t lgt = contrib_it->second.second;
+      KLLM_CHECK(dp_batch.running_step_token_num >= tok);
+      KLLM_CHECK(dp_batch.running_step_logits_num >= lgt);
+      KLLM_CHECK(running_step_token_num >= tok);
+      KLLM_CHECK(running_step_logits_num >= lgt);
+      dp_batch.running_step_token_num -= tok;
+      dp_batch.running_step_logits_num -= lgt;
+      running_step_token_num -= tok;
+      running_step_logits_num -= lgt;
+      dp_batch.req_id_to_contribution.erase(contrib_it);
+    }
     dp_batch.running_reqs.erase(it);
     return true;
   }
