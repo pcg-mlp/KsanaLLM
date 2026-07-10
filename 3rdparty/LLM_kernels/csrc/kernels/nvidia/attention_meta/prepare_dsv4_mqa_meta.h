@@ -50,7 +50,7 @@ void InvokePrepareDsv4MqaMeta(const int32_t* cu_extend_lens, const int32_t* cu_p
                               const int32_t* raw_out_loc, const int32_t* swa_prefix_tail_block_indices, int batch_size,
                               int block_token_num, int block_table_stride, int max_extend_len,
                               int32_t* swa_block_indices, int32_t* c128_block_indices, int32_t* c128_topk_lengths,
-                              int swa_size, int c128_block_indices_stride, bool fill_topk_with_stride,
+                              int swa_size, int c128_block_indices_stride, bool fill_topk_with_stride, bool noncausal,
                               cudaStream_t stream);
 
 }  // namespace nvidia

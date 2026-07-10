@@ -131,6 +131,11 @@ inline void PrepareDeepSeekV4Attributes(const nlohmann::json& config_json, Model
         std::unordered_set<uint32_t>(vec.begin(), vec.end());
   }
   model_config.dspark_config.dspark_markov_rank = config_json.value("dspark_markov_rank", 256u);
+  if (model_config.dspark_config.dspark_block_size > 0) {
+    KLLM_CHECK_WITH_INFO(!model_config.dspark_config.dspark_target_layer_ids.empty(), "DSpark needs target layers");
+  } else {
+    model_config.dspark_config.dspark_target_layer_ids.clear();
+  }
 
   // Infer DSpark stage count from local checkpoint metadata.
   model_config.num_nextn_predict_layers =

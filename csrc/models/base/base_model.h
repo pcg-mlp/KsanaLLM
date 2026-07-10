@@ -20,8 +20,9 @@ namespace ksana_llm {
 class InflightResourceManager;
 
 enum class RunMode {
-  kMain,   // default
-  kNextN,  // run MTP next n
+  kMain,    // default
+  kNextN,   // run MTP next n
+  kDSpark,  // run DSpark
 };
 
 class BaseModel {
@@ -39,6 +40,9 @@ class BaseModel {
                          HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode = RunMode::kMain,
                          size_t model_input_slot = 0, const int64_t* prev_ring_dev = nullptr,
                          bool gpu_input_already_prepared = false) = 0;
+
+  // DSpark single-step head correction.
+  virtual Status ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/) = 0;
 
   // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上构建 ModelInput（默认空实现）。
   virtual Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,

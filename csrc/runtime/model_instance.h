@@ -55,6 +55,9 @@ class ModelInstance {
                  HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode, size_t model_input_slot = 0,
                  const int64_t* prev_ring_dev = nullptr, bool gpu_input_already_prepared = false);
 
+  // DSpark single-step head correction passthrough.
+  Status ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index);
+
   Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode, size_t model_input_slot);
 
   // 取本步 slot 对应 ModelInput 的 cur_batch_pairs_tensor 设备指针 + batch_size，

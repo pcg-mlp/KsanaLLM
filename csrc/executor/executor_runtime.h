@@ -65,6 +65,9 @@ class ExecutorRuntime {
   Status Sampling(std::shared_ptr<NewModelOutput> model_output, std::shared_ptr<SamplingOutput> sampling_output);
   Status MtpForward(const size_t mtp_step_num, std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
                     HiddenUnitDeviceBuffer* hidden_unit, std::shared_ptr<ScheduleOutput> schedule_output);
+  Status DSparkForward(const size_t dspark_block_size, const int dspark_noise_token_id,
+                       std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs, HiddenUnitDeviceBuffer* hidden_unit,
+                       std::shared_ptr<ScheduleOutput> schedule_output);
 
   // Cache full requests, and update incremental requests.
   void UpdateCachedRequests(std::shared_ptr<ScheduleOutput> schedule_output);

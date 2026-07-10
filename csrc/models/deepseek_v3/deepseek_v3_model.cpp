@@ -332,7 +332,7 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
     }
     nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
 
-    // Create MTP-specific shared_head.norm (shared across all MTP steps)
+    // Create spec-specific shared_head.norm for non-main run modes (shared across all MTP steps).
     if (context_->global->IsSamplingNode()) {
       nextn_shared_head_norm_ = std::make_unique<Layernorm>(
           fmt::format("model.layers.{}.shared_head.norm.weight", pipeline_config_.lower_nextn_layer_idx),

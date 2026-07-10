@@ -113,16 +113,18 @@ __global__ __launch_bounds__(kPlanBlockSize,
     const uint32_t window_len = (j + 1u < ratio_eff) ? (ratio_eff - (j + 1u)) : 0u;
     const uint32_t position = prefix_len + j;
 
-    const auto plan = PrefillPlan{
-        .ragged_id = ragged_id,
-        .batch_id = batch_id,
-        .position = position,
-        .window_len = window_len,
-    };
-
     // start_write_pos: the earliest position that should be written out
     // in overlap mode we roll back one window; otherwise align down.
-    const uint32_t start_write_pos = [seq_len, compress_ratio, is_overlap] {
+    // For MTP kv fallback (extend spans up to threshold tokens, may cross
+    // page boundaries), write every extend token so prior pages get
+    // correctly repopulated:
+    //   -   c4: bundle exposes 2 back pages → span up to 3 pages = 1 + 4 + 4 = 9 tokens.
+    //   - c128: load_indices for 1 back page → span up to 2 pages
+    constexpr uint32_t kFallbackWriteAllThreshold = 9u;
+    const uint32_t start_write_pos = [seq_len, extend_len, prefix_len, compress_ratio, is_overlap] {
+      if (extend_len <= kFallbackWriteAllThreshold) {
+        return prefix_len;
+      }
       const uint32_t pos = seq_len / compress_ratio * compress_ratio;
       if (!is_overlap) return pos;
       return pos >= compress_ratio ? pos - compress_ratio : 0u;
@@ -130,11 +132,26 @@ __global__ __launch_bounds__(kPlanBlockSize,
 
     if ((position + 1u) % compress_ratio == 0u) {
       const auto write_pos = atomicAdd(&compress_counter, 1u);
-      compress_plan[write_pos] = plan;
+      compress_plan[write_pos] = PrefillPlan{
+          .ragged_id = ragged_id,
+          .batch_id = batch_id,
+          .position = position,
+          .window_len = window_len,
+      };
     }
     if (position >= start_write_pos) {
+      // For write plans, `window_len` is repurposed to encode `page_back`:
+      // number of pages between this token's page and the last page.
+      const uint32_t last_page_id = (seq_len - 1u) / compress_ratio;
+      const uint32_t token_page_id = position / compress_ratio;
+      const uint32_t page_back = last_page_id - token_page_id;
       const auto write_pos = atomicAdd(&write_counter, 1u);
-      write_plan[write_pos] = plan;
+      write_plan[write_pos] = PrefillPlan{
+          .ragged_id = ragged_id,
+          .batch_id = batch_id,
+          .position = position,
+          .window_len = page_back,
+      };
     }
   }
 }

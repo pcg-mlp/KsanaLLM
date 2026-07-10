@@ -16,28 +16,11 @@
 
 namespace ksana_llm {
 
-namespace {
-// Compute the local layer index for a given global layer index, taking pipeline
-// parallelism (lower/upper_layer_idx) and MTP layers into account. This mirrors
-// dsv4_mqa.cpp's attn_config.idx assignment so that per-layer tensors (which are
-// populated by local index) can be indexed correctly inside Compressor.
-int ComputeLocalLayerIdx(int global_layer_idx, const PipelineConfig& pipeline_config, int num_layer) {
-  int local_layer_idx = global_layer_idx - pipeline_config.lower_layer_idx;
-  if (global_layer_idx >= num_layer) {
-    // MTP / next-N layer: place after the main layers on this node.
-    local_layer_idx =
-        pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + global_layer_idx - num_layer + 1;
-  }
-  return local_layer_idx;
-}
-}  // namespace
-
 Compressor::Compressor(int layer_idx, bool is_in_indexer, const LayerCreationContext& creation_context,
                        const ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx),
-      local_layer_idx_(
-          ComputeLocalLayerIdx(layer_idx, creation_context.pipeline_config,
-                               static_cast<int>(model_creation_config.attn_config.model_config.num_layer))),
+      local_layer_idx_(creation_context.pipeline_config.ComputeLocalLayerIdx(
+          layer_idx, static_cast<int>(model_creation_config.attn_config.model_config.num_layer))),
       is_in_indexer_(is_in_indexer) {
   const auto& attn_config = model_creation_config.attn_config;
   const auto& model_config = attn_config.model_config;

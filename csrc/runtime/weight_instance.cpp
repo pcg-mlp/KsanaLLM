@@ -159,6 +159,9 @@ void WeightInstance::Load() {
     // prevents future code from tripping on the same bug.
     if (auto* dsv4_cfg = dynamic_cast<DeepSeekV4Config*>(model_config.get())) {
       dsv4_cfg->dsv4_attn_config.compress_ratios = model_config_.dsv4_attn_config.compress_ratios;
+      // Runtime mtp_step_num overrides dspark_config
+      dsv4_cfg->dspark_config.dspark_block_size = model_config_.dspark_config.dspark_block_size;
+      dsv4_cfg->dspark_config.dspark_target_layer_ids = model_config_.dspark_config.dspark_target_layer_ids;
     }
 
     // TODO(non-DS-models): if any non-DeepSeek model (Llama / Qwen / Qwen2Moe / Qwen3Moe /

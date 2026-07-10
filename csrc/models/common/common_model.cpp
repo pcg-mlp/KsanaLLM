@@ -404,7 +404,7 @@ Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   }
 #endif
 
-  if (!context_->global->IsDistributedWorker() || (run_mode == RunMode::kNextN && context_->global->IsSamplingNode())) {
+  if (!context_->global->IsDistributedWorker() || (run_mode != RunMode::kMain && context_->global->IsSamplingNode())) {
     RecordRequestSchedEventWithFContext(*forwarding_context_, "EmbLookup", RequestEventPhase::Begin);
     LookupEmbedding(*forwarding_context_, base_weight, forward_reqs, run_mode);
     RecordRequestSchedEventWithFContext(*forwarding_context_, "EmbLookup", RequestEventPhase::End);
@@ -482,8 +482,10 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::Begin);
 
+  const bool enable_mtp = (runtime_config_.mtp_step_num > 0 && !model_config_.dspark_config.dspark_block_size);
+
   // save unnormed hidden result if enable MTP model
-  if (runtime_config_.mtp_step_num > 0) {
+  if (enable_mtp) {
     if (model_run_config_.return_hidden_states_before_norm) {
       auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
       mtp_hidden_tensor.shape = residual_buffer[0].shape;
@@ -495,9 +497,8 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   }
 
   // Assemble early when there is no need to save mtp_hidden and no need for request_target
-  const bool assemble_early =
-      (runtime_config_.mtp_step_num == 0 || model_run_config_.return_hidden_states_before_norm) &&
-      !forwarding_context.GetModelInput()->has_request_target;
+  const bool assemble_early = (!enable_mtp || model_run_config_.return_hidden_states_before_norm) &&
+                              !forwarding_context.GetModelInput()->has_request_target;
 
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   if (assemble_early) {
@@ -518,8 +519,8 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   auto& input_tensors = assemble_early ? hidden_buffer_tensors_0 : residual_buffer;
 
   // Squeeze residual_buffer from [t, hc, d] to [t, d]
-  if (run_mode == RunMode::kNextN && nextn_final_mhc_) {
-    // Use MTP-specific hc_head for NextN mode
+  if (run_mode != RunMode::kMain && nextn_final_mhc_) {
+    // Use spec-specific hc_head for non-main run modes (MTP/DSpark).
     nextn_final_mhc_->FinalForward(input_tensors, input_tensors);
   } else if (final_mhc_) {
     final_mhc_->FinalForward(input_tensors, input_tensors);
@@ -536,15 +537,15 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   // final norm
   // Only pre norm model performs final norm.
   // Both input and output are in `residual_buffer`.
-  if (run_mode == RunMode::kNextN && nextn_shared_head_norm_) {
-    // Use MTP-specific shared_head.norm for NextN mode
+  if (run_mode != RunMode::kMain && nextn_shared_head_norm_) {
+    // Use spec-specific shared_head.norm for non-main run modes (MTP/DSpark).
     nextn_shared_head_norm_->Forward(input_tensors[0], input_tensors[0]);
   } else if (lm_head_prenorm_) {
     lm_head_prenorm_->Forward(input_tensors[0], input_tensors[0]);
   }
 
   // save normed hidden result if enable MTP model
-  if (runtime_config_.mtp_step_num > 0) {
+  if (enable_mtp) {
     if (!model_run_config_.return_hidden_states_before_norm) {
       auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
       mtp_hidden_tensor.shape = residual_buffer[0].shape;
@@ -623,6 +624,11 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
 #endif
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::End);
   input_refit_layer_->Clear();
+  return Status();
+}
+
+Status CommonModel::ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/) {
+  // Default: no-op. Models that need per-step head correction override this.
   return Status();
 }
 

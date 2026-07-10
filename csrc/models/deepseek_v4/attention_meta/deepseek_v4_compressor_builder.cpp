@@ -71,6 +71,8 @@ inline int GetPageIndex(int slot_id, int sub_slot, int compress_ratio, int c4_sl
 
 void PreparePrefillPlan(const std::vector<const ForwardRequest*>& dp_reqs,
                         CompressorSharedAttentionMeta& compressor_shared) {
+  // Refer to
+  // 3rdparty/LLM_kernels/csrc/kernels/nvidia/others/sglang/main/deepseek_v4/plan.cuh
   size_t c4_compress_num = 0, c4_write_num = 0;
   size_t c128_compress_num = 0, c128_write_num = 0;
   for (const auto* req : dp_reqs) {
@@ -80,22 +82,30 @@ void PreparePrefillPlan(const std::vector<const ForwardRequest*>& dp_reqs,
 
     c4_compress_num += static_cast<size_t>(seq_len / kC4Ratio - prefix_len / kC4Ratio);
     {
-      const int aligned = seq_len / kC4Ratio * kC4Ratio;
-      const int start_write_pos = (aligned >= kC4Ratio) ? aligned - kC4Ratio : 0;
-      if (start_write_pos <= prefix_len) {
+      if (static_cast<size_t>(extend_len) <= MqaSharedAttentionMeta::kFallbackWriteAllThreshold) {
         c4_write_num += static_cast<size_t>(extend_len);
-      } else if (start_write_pos < seq_len) {
-        c4_write_num += static_cast<size_t>(seq_len - start_write_pos);
+      } else {
+        const int aligned = seq_len / kC4Ratio * kC4Ratio;
+        const int start_write_pos = (aligned >= kC4Ratio) ? aligned - kC4Ratio : 0;
+        if (start_write_pos <= prefix_len) {
+          c4_write_num += static_cast<size_t>(extend_len);
+        } else if (start_write_pos < seq_len) {
+          c4_write_num += static_cast<size_t>(seq_len - start_write_pos);
+        }
       }
     }
 
     c128_compress_num += static_cast<size_t>(seq_len / kC128Ratio - prefix_len / kC128Ratio);
     {
-      const int start_write_pos = seq_len / kC128Ratio * kC128Ratio;
-      if (start_write_pos <= prefix_len) {
+      if (static_cast<size_t>(extend_len) <= MqaSharedAttentionMeta::kFallbackWriteAllThreshold) {
         c128_write_num += static_cast<size_t>(extend_len);
-      } else if (start_write_pos < seq_len) {
-        c128_write_num += static_cast<size_t>(seq_len - start_write_pos);
+      } else {
+        const int start_write_pos = seq_len / kC128Ratio * kC128Ratio;
+        if (start_write_pos <= prefix_len) {
+          c128_write_num += static_cast<size_t>(extend_len);
+        } else if (start_write_pos < seq_len) {
+          c128_write_num += static_cast<size_t>(seq_len - start_write_pos);
+        }
       }
     }
   }
@@ -221,11 +231,14 @@ void PrepareIndices(CompressorAttentionMeta& compressor, CompressorSharedAttenti
                                                 c4_layer_num, c128_layer_num);
       const int load_first_page = GetPageIndex(slot_id, c4_load_first_slot_id, kC4Ratio, c4_slot_num, c128_slot_num,
                                                c4_layer_num, c128_layer_num);
+      const int c4_prev_prev_slot_id = GetC4PrevSlotId(c4_prev_slot_id, c4_slot_num);
+      const int c4_prev_prev_page = GetPageIndex(slot_id, c4_prev_prev_slot_id, kC4Ratio, c4_slot_num, c128_slot_num,
+                                                 c4_layer_num, c128_layer_num);
+      // Bundle layout: load_first | load_second | write_pages[0]=prev | write_pages[1]=prev_prev
       compressor.c4_indices_bundle_host.push_back(load_first_page);
       compressor.c4_indices_bundle_host.push_back(load_second_page);
       compressor.c4_indices_bundle_host.push_back(c4_prev_page);
-      const int last_position = (seq_len - 1) / kC4Ratio * kC4Ratio;
-      compressor.c4_indices_bundle_host.push_back(last_position);
+      compressor.c4_indices_bundle_host.push_back(c4_prev_prev_page);
       const int c128_load_slot_id = GetSubSlotId(prefix_len, kC128Ratio, c4_slot_num, c128_slot_num);
       compressor.c128_load_indices_host.push_back(GetPageIndex(slot_id, c128_load_slot_id, kC128Ratio, c4_slot_num,
                                                                c128_slot_num, c4_layer_num, c128_layer_num));

@@ -62,8 +62,9 @@ struct ForwardingBuffers {
   TensorBuffer* shared_buffer;
   TensorBuffer* kv_cache_buffer;
 
-  // This buffer is used among multiple forward calls
+  // Used among multiple forward calls for MTP/DSpark
   std::vector<Tensor> mtp_hidden_buffer_tensors;
+  std::vector<Tensor> dspark_hidden_buffer_tensors;
 
   void Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
             const RuntimeConfig& runtime_config, BufferManager* const buffer_mgr);

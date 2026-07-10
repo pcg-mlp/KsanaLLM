@@ -53,7 +53,8 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
   const size_t max_logits_tokens = batch_size * batch_scheduler_config.max_decode_tokens_per_req;
-  const bool enable_mtp = batch_scheduler_config.mtp_step_num > 0;
+  const bool enable_dspark = model_config.dspark_config.dspark_block_size > 0;
+  const bool enable_mtp = (batch_scheduler_config.mtp_step_num > 0 && !enable_dspark);
 
   size_t inter_size_per_tp = model_config.inter_size;
   if (!runtime_config.enable_full_shared_expert) {
@@ -73,7 +74,8 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   // inter_size_per_tp * 2 is used for the output of the fused gate_proj and up_proj in mlp
   const size_t qkv_head_num = model_config.use_mla ? head_num_per_tp : head_num_per_tp + 2 * num_kv_heads_per_tp;
   const size_t max_dim =
-      std::max({qkv_head_num * size_per_head, hidden_units * model_config.mhc_config.hc_mult, inter_size_per_tp * 2});
+      std::max({qkv_head_num * size_per_head, hidden_units * model_config.mhc_config.hc_mult,
+                hidden_units * model_config.dspark_config.dspark_target_layer_ids.size(), inter_size_per_tp * 2});
   // 2 is for concatenate of embedding_norm and hidden norm in mtp
   const size_t mtp_concat_hidden_size = (enable_mtp && context->global->IsSamplingNode()) ? hidden_units * 2 : 0;
   size_t all_to_all_hidden_size = 0;
@@ -135,6 +137,9 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
 
   size_t hidden_buffer_size =
       std::max(std::max(max_logits_tokens * vocab_size_pad, max_token_num * max_dim), mla_hidden_buffer_size);
+  if (enable_dspark) {
+    hidden_buffer_size = std::max(batch_size * vocab_size_pad, hidden_buffer_size);  // for DSpark logits bias
+  }
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
   const size_t shared_buffer_size = max_token_num * shared_buffer_unit_size;
   if (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_NORMAL ||
@@ -182,6 +187,9 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
 
   buffers_shape_map["mtp_hidden_buffer_tensors"] = {
       enable_mtp ? max_token_num * model_config.hidden_units * model_config.mhc_config.hc_mult : 0};
+  // Concat hidden of target_layer_ids along last dim for DSpark.
+  buffers_shape_map["dspark_hidden_buffer_tensors"] = {max_token_num * model_config.hidden_units *
+                                                       model_config.dspark_config.dspark_target_layer_ids.size()};
 }
 
 void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
@@ -215,10 +223,17 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
                                                    MemoryLocation::LOCATION_DEVICE, stream);
 
   // mtp_hidden_buffer_tensors will used across main forward and nextn forward
-  TensorBuffer* mtp_hidden_buffer =
-      buffer_mgr->CreateBufferTensor("mtp_hidden_buffer_tensors", buffers_shape_map["mtp_hidden_buffer_tensors"],
-                                     weight_type, MemoryLocation::LOCATION_DEVICE, stream);
-  mtp_hidden_buffer_tensors = mtp_hidden_buffer->GetTensors();
+  mtp_hidden_buffer_tensors =
+      buffer_mgr
+          ->CreateBufferTensor("mtp_hidden_buffer_tensors", buffers_shape_map["mtp_hidden_buffer_tensors"], weight_type,
+                               MemoryLocation::LOCATION_DEVICE, stream)
+          ->GetTensors();
+  // dspark_hidden_buffer_tensors will used across main forward and dspark forward
+  dspark_hidden_buffer_tensors =
+      buffer_mgr
+          ->CreateBufferTensor("dspark_hidden_buffer_tensors", buffers_shape_map["dspark_hidden_buffer_tensors"],
+                               weight_type, MemoryLocation::LOCATION_DEVICE, stream)
+          ->GetTensors();
 
   StreamSynchronize(*stream);
 }

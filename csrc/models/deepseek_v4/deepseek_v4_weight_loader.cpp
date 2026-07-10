@@ -82,7 +82,7 @@ Status DeepSeekV4WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
 
         if (!should_keep) {
           KLLM_LOG_DEBUG << fmt::format("V4: Skip layer (is_mtp={}, raw_layer_idx={}): {}", is_mtp_weight,
-                                         raw_layer_idx, *it);
+                                        raw_layer_idx, *it);
           it = weight_names.erase(it);
           continue;
         }
@@ -622,9 +622,9 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
           const size_t n_local_heads = head_num / attn_tp_size;
           const size_t attn_dev_rank = dev_rank % attn_tp_size;
           const size_t elem_size = GetTypeSize(host_weight_tensor.dtype);
-          KLLM_CHECK_WITH_INFO(head_num % attn_tp_size == 0,
-                               fmt::format("attn_sink head_num {} not divisible by attn_tp_size {}", head_num,
-                                           attn_tp_size));
+          KLLM_CHECK_WITH_INFO(
+              head_num % attn_tp_size == 0,
+              fmt::format("attn_sink head_num {} not divisible by attn_tp_size {}", head_num, attn_tp_size));
 
           Tensor host_reordered(MemoryLocation::LOCATION_HOST, host_weight_tensor.dtype, host_weight_tensor.shape);
           const char* src = static_cast<const char*>(host_weight_tensor.GetPtr<void>());
@@ -1130,8 +1130,8 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
 
     // Collect global_scale entries to insert into map after iteration (avoid invalidating iterators)
     struct GlobalScaleEntry {
-      std::string tensor_name;    // key for dev_weights_map
-      std::string weight_name;    // corresponding weight tensor to bind to
+      std::string tensor_name;  // key for dev_weights_map
+      std::string weight_name;  // corresponding weight tensor to bind to
       float* device_ptr;
       int64_t num_experts;
     };
@@ -1171,9 +1171,9 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
 
           llm_kernels::nvidia::humming::process_mxfp4_w4a8_weight(
               stream,
-              weight_tensor.GetPtr<void>(),   // weight (in-place modification)
-              scale_tensor.GetPtr<void>(),    // weight_scale (in-place normalization)
-              global_scale_ptr,               // global_scale output [E]
+              weight_tensor.GetPtr<void>(),  // weight (in-place modification)
+              scale_tensor.GetPtr<void>(),   // weight_scale (in-place normalization)
+              global_scale_ptr,              // global_scale output [E]
               num_experts, size_n, size_k, 32);
           cudaStreamSynchronize(stream);
 
@@ -1242,11 +1242,10 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
     // Done after the for-loop to avoid invalidating unordered_map iterators during insertion.
     for (auto& entry : global_scale_entries) {
       // Create a Tensor wrapping the device pointer (is_shared_buffer=true since data_ptr != nullptr)
-      auto [iter, inserted] = dev_weights_map.emplace(
-          entry.tensor_name,
-          Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
-                 std::vector<size_t>{static_cast<size_t>(entry.num_experts)},
-                 static_cast<void*>(entry.device_ptr), entry.tensor_name));
+      auto [iter, inserted] =
+          dev_weights_map.emplace(entry.tensor_name, Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
+                                                            std::vector<size_t>{static_cast<size_t>(entry.num_experts)},
+                                                            static_cast<void*>(entry.device_ptr), entry.tensor_name));
       if (inserted) {
         // Bind global_scale to the weight tensor
         auto weight_iter = dev_weights_map.find(entry.weight_name);

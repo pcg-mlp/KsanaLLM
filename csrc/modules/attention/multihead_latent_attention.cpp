@@ -39,12 +39,8 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
   // attn_config.idx is the offset in kv_cache list.
   // e.g., master has normal layer 0-30 and nextn layer 61, the offset of layer_idx_61 is 31
   // e.g., master has normal layer 31-60, the offset of layer_idx_31 is 0
-  attn_config.idx = layer_idx - creation_context.pipeline_config.lower_layer_idx;
-  if (layer_idx >= static_cast<int>(model_creation_config.attn_config.model_config.num_layer)) {
-    attn_config.idx = creation_context.pipeline_config.upper_layer_idx -
-                      creation_context.pipeline_config.lower_layer_idx + layer_idx -
-                      model_creation_config.attn_config.model_config.num_layer + 1;
-  }
+  attn_config.idx = creation_context.pipeline_config.ComputeLocalLayerIdx(
+      layer_idx, static_cast<int>(model_creation_config.attn_config.model_config.num_layer));
 
   // Initialize sparse MLA indexer if using sparse MLA
   if (use_dsa_) {

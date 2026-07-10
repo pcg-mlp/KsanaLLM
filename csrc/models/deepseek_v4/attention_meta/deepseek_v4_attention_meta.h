@@ -94,12 +94,15 @@ struct MqaSharedAttentionMeta {
   static constexpr size_t kC128Ratio = 128;
   static constexpr size_t kTopkBlockSize = 64;  // FlashMLA kernel performs block-style index reads
   static_assert(kSwaSize % kTopkBlockSize == 0, "kSwaSize must be a multiple of kTopkBlockSize");
+  static constexpr size_t kFallbackWriteAllThreshold = 9;  // for compressor kernel
 
   // Pre-allocated backing tensors (per-batch views are sliced from these)
-  Tensor raw_out_loc_tensor;         // DEVICE, INT32, [max_token_num]
-  Tensor swa_block_indices_tensor;   // DEVICE, INT32, [max_token_num, kSwaSize]
-  Tensor c128_block_indices_tensor;  // DEVICE, INT32, [max_token_num, aligned_max_c128_seq_len]
-  Tensor c128_topk_lengths_tensor;   // DEVICE, INT32, [max_batch_size]
+  Tensor raw_out_loc_tensor;                // DEVICE, INT32, [max_token_num]
+  Tensor last_raw_out_loc_tensor;           // DEVICE, INT32, [max_token_num] (for DSpark InjectKV)
+  Tensor last_rotary_embedding_pos_tensor;  // DEVICE, INT64, [max_token_num] (for DSpark InjectKV)
+  Tensor swa_block_indices_tensor;          // DEVICE, INT32, [max_token_num, kSwaSize]
+  Tensor c128_block_indices_tensor;         // DEVICE, INT32, [max_token_num, aligned_max_c128_seq_len]
+  Tensor c128_topk_lengths_tensor;          // DEVICE, INT32, [max_batch_size]
 
   // tile_scheduler_metadatas (one entry per q_seq_len [1..threshold], plus one extra for flash prefill)
   std::vector<Tensor> c4_tile_scheduler_metadatas;

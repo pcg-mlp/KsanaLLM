@@ -22,7 +22,10 @@
 
 namespace ksana_llm {
 
-ModelRunner::ModelRunner(std::shared_ptr<Context> context) : mtp_step_num_(context->global->GetMtpStepNum()) {
+ModelRunner::ModelRunner(std::shared_ptr<Context> context)
+    : mtp_step_num_(context->global->GetMtpStepNum()),
+      dspark_block_size_(context->global->GetDSparkBlockSize()),
+      dspark_noise_token_id_(context->global->GetDSparkNoiseTokenId()) {
   context_ = context;
 
   schedule_output_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<ScheduleOutput>>>();
@@ -430,8 +433,15 @@ Status ModelRunner::HandlePostprocess() {
       if (has_profile) {
         model_output->schedule_output->step_metrics = &sampling_output->profile_metrics;
       }
-      executor_runtime_->MtpForward(mtp_step_num_, model_output->schedule_output->executor_running_reqs, hidden_unit,
-                                    model_output->schedule_output);
+      // Check dspark_block_size_ first to route to the DSpark-specific forward path.
+      if (dspark_block_size_ > 0) {
+        executor_runtime_->DSparkForward(dspark_block_size_, dspark_noise_token_id_,
+                                         model_output->schedule_output->executor_running_reqs, hidden_unit,
+                                         model_output->schedule_output);
+      } else {
+        executor_runtime_->MtpForward(mtp_step_num_, model_output->schedule_output->executor_running_reqs, hidden_unit,
+                                      model_output->schedule_output);
+      }
       model_output->schedule_output->step_metrics = nullptr;
     }
 

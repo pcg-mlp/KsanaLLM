@@ -934,6 +934,20 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
     KLLM_LOG_WARNING << "flexible cache and qk norm cannot be used together, set min_flexible_cache_num to 0";
   }
 
+  // Runtime mtp_step_num overrides the model's dspark_block_size
+  if (model_config.dspark_config.dspark_block_size > 0) {
+    if (batch_scheduler_config_.mtp_step_num == 0) {
+      KLLM_LOG_INFO << "mtp_step_num=0 disables DSpark: clearing dspark_config.dspark_block_size (was "
+                    << model_config.dspark_config.dspark_block_size << ") and target_layer_ids.";
+      model_config.dspark_config.dspark_block_size = 0;
+      model_config.dspark_config.dspark_target_layer_ids.clear();
+    } else if (model_config.dspark_config.dspark_block_size != batch_scheduler_config_.mtp_step_num) {
+      KLLM_LOG_INFO << "Overriding dspark_config.dspark_block_size " << model_config.dspark_config.dspark_block_size
+                    << " with mtp_step_num=" << batch_scheduler_config_.mtp_step_num;
+      model_config.dspark_config.dspark_block_size = batch_scheduler_config_.mtp_step_num;
+    }
+  }
+
   if ((runtime_config_.parallel_basic_config.tensor_parallel_size > model_config.num_key_value_heads ||
        model_config.num_key_value_heads % runtime_config_.parallel_basic_config.tensor_parallel_size != 0) &&
       model_config.num_key_value_heads != 1) {

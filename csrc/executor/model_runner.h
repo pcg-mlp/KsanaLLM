@@ -81,6 +81,8 @@ class ModelRunner {
   std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool_ = nullptr;
 
   const size_t mtp_step_num_;
+  const size_t dspark_block_size_;
+  const int dspark_noise_token_id_;
 
  private:
   // Read schedule_output and build model input.

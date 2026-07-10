@@ -50,6 +50,18 @@ size_t GlobalContext::GetMtpStepNum() const {
   return config.mtp_step_num;
 }
 
+size_t GlobalContext::GetDSparkBlockSize() const {
+  ModelConfig config;
+  env_->GetModelConfig(config);
+  return config.dspark_config.dspark_block_size;
+}
+
+int GlobalContext::GetDSparkNoiseTokenId() const {
+  ModelConfig config;
+  env_->GetModelConfig(config);
+  return static_cast<int>(config.dspark_config.dspark_noise_token_id);
+}
+
 size_t GlobalContext::GetMaxPpBatchNum() const {
   BatchSchedulerConfig config;
   env_->GetBatchSchedulerConfig(config);

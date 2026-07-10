@@ -16,6 +16,7 @@
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/dsa_shared_attention_meta.h"
 #include "models/base/attention_meta/mla_shared_attention_meta.h"
+#include "models/base/base_model.h"
 
 namespace ksana_llm {
 
@@ -38,6 +39,7 @@ struct AttentionBuilderConfig {
   std::shared_ptr<Context> context;
   Event& kvcache_offset_event;
   Event& rotary_embedding_event;
+  RunMode run_mode = RunMode::kMain;
 };
 
 // Empty base class for all shared attention meta objects.

@@ -161,6 +161,7 @@ void PrepareBlockIndicesAndTopkLengths(MqaAttentionMeta& mqa_meta, MqaSharedAtte
                                        const StandardAttentionMeta& standard_meta, const AttentionBuilderConfig& config,
                                        bool is_flash) {
   const size_t batch_size = dp_reqs.size();
+  // tail_stride: number of prefix entries to pre-fill per request (sliding window - 1, same for causal/noncausal).
   constexpr int kTailStride = MqaSharedAttentionMeta::kSwaSize - 1;
 
   mqa_shared.cu_extend_lens_host.assign(1, 0);
@@ -223,13 +224,18 @@ void PrepareBlockIndicesAndTopkLengths(MqaAttentionMeta& mqa_meta, MqaSharedAtte
               mqa_shared.swa_prefix_tail_block_indices_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
               config.context->device->GetH2DStream());
 
+  const bool noncausal = (config.run_mode == RunMode::kDSpark);
+  const size_t effective_swa_size =
+      noncausal ? RoundUp(MqaSharedAttentionMeta::kSwaSize + config.model_config.dspark_config.dspark_block_size,
+                          MqaSharedAttentionMeta::kTopkBlockSize)
+                : MqaSharedAttentionMeta::kSwaSize;
   const int block_table_stride = static_cast<int>(standard_meta.block_table.shape[1]);
   const int aligned_c128_max =
       RoundUp(c128_max_seq_len_clamp1, static_cast<int>(MqaSharedAttentionMeta::kTopkBlockSize));
 
   // Slice per-meta views from the shared backing tensors.
   mqa_meta.swa_block_indices_tensor = mqa_shared.swa_block_indices_tensor.GetView(
-      {total_dp_input_ids_len, MqaSharedAttentionMeta::kSwaSize}, mqa_shared.swa_block_indices_tensor.shape[0]);
+      {total_dp_input_ids_len, effective_swa_size}, mqa_shared.swa_block_indices_tensor.shape[0]);
   mqa_shared.swa_block_indices_tensor.shape[0] += mqa_meta.swa_block_indices_tensor.GetElementNumber();
 
   mqa_meta.c128_block_indices_tensor = mqa_shared.c128_block_indices_tensor.GetView(
@@ -247,8 +253,8 @@ void PrepareBlockIndicesAndTopkLengths(MqaAttentionMeta& mqa_meta, MqaSharedAtte
       mqa_shared.swa_prefix_tail_block_indices_tensor.GetPtr<const int32_t>(), batch_size, mqa_shared.block_token_num,
       block_table_stride, max_extend_len, mqa_meta.swa_block_indices_tensor.GetPtr<int32_t>(),
       mqa_meta.c128_block_indices_tensor.GetPtr<int32_t>(), mqa_meta.c128_topk_lengths_tensor.GetPtr<int32_t>(),
-      MqaSharedAttentionMeta::kSwaSize, aligned_c128_max,
-      /*fill_topk_with_stride=*/is_flash, config.context->device->GetH2DStream());
+      effective_swa_size, aligned_c128_max,
+      /*fill_topk_with_stride=*/is_flash, noncausal, config.context->device->GetH2DStream());
 }
 
 void AssignTileSchedulerAndNumSplits(MqaAttentionMeta& mqa_meta, MqaSharedAttentionMeta& mqa_shared, size_t q_seq_len,

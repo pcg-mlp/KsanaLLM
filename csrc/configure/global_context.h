@@ -66,6 +66,8 @@ class GlobalContext {
   uint16_t GetMasterPort() { return master_port_; }
 
   size_t GetMtpStepNum() const;
+  size_t GetDSparkBlockSize() const;
+  int GetDSparkNoiseTokenId() const;
 
   // The maximum number of pipeline-parallel batches that can be in-flight concurrently.
   // Read from BatchSchedulerConfig::max_pp_batch_num.

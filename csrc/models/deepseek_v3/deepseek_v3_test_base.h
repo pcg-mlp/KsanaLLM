@@ -77,6 +77,8 @@ class DeepSeekV3Test : public testing::Test {
     batch_scheduler_config.mtp_step_num = model_config.num_nextn_predict_layers;
     batch_scheduler_config.enable_xgrammar = true;
     env->SetBatchSchedulerConfig(batch_scheduler_config);
+    env->UpdateModelConfig();
+    env->GetModelConfig(model_config);
 
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;

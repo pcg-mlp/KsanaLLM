@@ -26,7 +26,7 @@ class StandardFlashAttentionMetaBuilder : public FlashAttentionMetaBuilder {
   void Build(FlashAttentionMeta& meta, SharedAttentionMeta& shared_meta, size_t dp_total_prefix_len) override;
 
  protected:
-  AttentionBuilderConfig config_;
+  const AttentionBuilderConfig& config_;
 
   // Template-method hook — override to customise layer_kv_cache_ptr capacity and block_table setup.
   // Default: standard capacity (layer_num_on_node × 2).

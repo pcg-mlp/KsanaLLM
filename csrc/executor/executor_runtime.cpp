@@ -185,14 +185,11 @@ Status ExecutorRuntime::MtpForward(const size_t mtp_step_num, std::vector<std::s
   }
 
   // update forward request
-  std::unordered_map<decltype(ExecutorInferRequest::req_id), size_t> original_pos;
   std::unordered_map<decltype(ExecutorInferRequest::req_id), size_t> original_kv;
   std::unordered_map<decltype(ExecutorInferRequest::req_id), std::vector<int>> original_tokens;
-  original_pos.reserve(reqs.size());
   for (size_t i = 0; i < reqs.size(); ++i) {
     auto& infer_req = reqs[i];
     infer_req->draft_tokens.clear();
-    original_pos[infer_req->req_id] = i;
     original_kv[infer_req->req_id] = infer_req->kv_cached_token_num;
     original_tokens[infer_req->req_id] = infer_req->forwarding_tokens;
     infer_req->forwarding_tokens.resize(infer_req->forwarding_tokens.size() - infer_req->forwarding_tokens_draft_num +
@@ -233,6 +230,76 @@ Status ExecutorRuntime::MtpForward(const size_t mtp_step_num, std::vector<std::s
 
   // Release the next main Forward() that has been waiting on prev_mtp_done_. Paired with the
   // Wait()/Reset(1) at the top of Forward(); see the comment there for the deadlock context.
+  if (serialize_main_mtp_) {
+    prev_mtp_done_->Notify();
+  }
+
+  return Status();
+}
+
+Status ExecutorRuntime::DSparkForward(const size_t dspark_block_size, const int dspark_noise_token_id,
+                                      std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
+                                      HiddenUnitDeviceBuffer* hidden_unit,
+                                      std::shared_ptr<ScheduleOutput> schedule_output) {
+  if (dspark_block_size == 0) {
+    return Status();
+  }
+
+  // update forward request
+  std::unordered_map<decltype(ExecutorInferRequest::req_id), size_t> original_kv;
+  std::unordered_map<decltype(ExecutorInferRequest::req_id), std::vector<int>> original_tokens;
+  for (auto& infer_req : reqs) {
+    infer_req->draft_tokens.clear();
+    original_kv[infer_req->req_id] = infer_req->kv_cached_token_num;
+    original_tokens[infer_req->req_id] = infer_req->forwarding_tokens;
+    infer_req->forwarding_tokens.resize(infer_req->forwarding_tokens.size() - infer_req->forwarding_tokens_draft_num +
+                                        infer_req->accepted_tokens.size());
+    infer_req->prefix_cache_len = infer_req->kv_cached_token_num = infer_req->forwarding_tokens.size();
+    infer_req->forwarding_tokens.insert(infer_req->forwarding_tokens.end(), infer_req->generated_tokens.begin(),
+                                        infer_req->generated_tokens.end());
+    // DSpark: no erase(begin); pad with noise tokens to block_size after generated tokens.
+    infer_req->forwarding_tokens.insert(infer_req->forwarding_tokens.end(),
+                                        dspark_block_size - infer_req->generated_tokens.size(), dspark_noise_token_id);
+    infer_req->sampling_token_num = dspark_block_size;
+  }
+
+  // Guard infer_req against UpdateInferRequest
+  std::lock_guard<std::mutex> infer_req_lock(infer_req_mutex_);
+  std::shared_ptr<NewModelInput> model_input = std::make_shared<NewModelInput>();
+  BuildModelInput(schedule_output, model_input, RunMode::kDSpark);
+  std::shared_ptr<NewModelOutput> model_output = std::make_shared<NewModelOutput>();
+  model_executor_->Forward(model_input, hidden_unit, model_output);
+
+  // DSpark per-step: ForwardHead corrects logits, then sample, feed token back for next step.
+  // Logits layout is step-major [block_size, B, V]. Each step samples from its own [B, V] row.
+  const size_t batch_size = reqs.size();
+  for (size_t step_index = 0; step_index < dspark_block_size; ++step_index) {
+    model_instance_->ForwardHead(model_input->reqs, step_index);
+
+    for (size_t i = 0; i < batch_size; ++i) {
+      reqs[i]->sampling_token_num = kStepGenerateTokenNum;
+      model_output->frozen_logits_offsets[i] = i;
+    }
+
+    std::shared_ptr<SamplingOutput> sampling_output = std::make_shared<SamplingOutput>();
+    model_sampler_->Sampling(model_output, sampling_output);
+
+    for (auto& infer_req : reqs) {
+      infer_req->draft_tokens.mtp.emplace_back(infer_req->sampling_result_tokens.back());
+      if (step_index < dspark_block_size - 1) {
+        infer_req->forwarding_tokens[infer_req->forwarding_tokens.size() - dspark_block_size + step_index + 1] =
+            infer_req->sampling_result_tokens.back();
+        infer_req->sampling_result_tokens.clear();
+      }
+    }
+  }
+
+  for (auto& req : reqs) {
+    req->forwarding_tokens = original_tokens[req->req_id];
+    req->kv_cached_token_num = original_kv[req->req_id];
+    req->prefix_cache_len = req->kv_cached_token_num;
+  }
+
   if (serialize_main_mtp_) {
     prev_mtp_done_->Notify();
   }

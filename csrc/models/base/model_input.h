@@ -44,7 +44,7 @@ class ModelInput {
   void CreateVLTensors();
   void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs);
-  void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
+  void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs);
 
   // Prepare MRope position for qwen2_vl
   void PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs);
@@ -272,6 +272,9 @@ class ModelInput {
   // ParseFromRequests 期间使用的 slot (决定 GetParseH2DStream).
   size_t parse_slot_ = 0;
   Stream& GetParseH2DStream();
+
+  // Shared config for all attention meta builders.
+  std::unique_ptr<AttentionBuilderConfig> builder_config_;
 
   // Builders that construct flash_meta / page_metas for each forward step.
   // Initialized in the constructor with the standard implementations;

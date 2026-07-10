@@ -87,7 +87,7 @@ __device__ inline void RunC128Path(const int32_t* __restrict__ cu_extend_lens,
   }
 }
 
-// ── SWA path body (called when blockIdx.z == 1) ──────────────────────────────
+// ── SWA path body (called when blockIdx.z == 1, causal) ─────────────────────
 __device__ inline void RunSwaPath(const int32_t* __restrict__ cu_extend_lens, const int32_t* __restrict__ raw_out_loc,
                                   const int32_t* __restrict__ swa_prefix_tail_block_indices,
                                   int32_t* __restrict__ swa_block_indices, const int swa_size) {
@@ -101,11 +101,8 @@ __device__ inline void RunSwaPath(const int32_t* __restrict__ cu_extend_lens, co
     return;
   }
 
-  // SWA path uses one thread per column; threads beyond swa_size are idle.
+  // SWA path uses one thread per column;
   const int k = threadIdx.x;
-  if (k >= swa_size) {
-    return;
-  }
 
   // tail_stride = number of prefix-tail columns at the left of the window.
   // m          = position of column k in the virtual [prefix_tail | extend] row.
@@ -126,6 +123,42 @@ __device__ inline void RunSwaPath(const int32_t* __restrict__ cu_extend_lens, co
   swa_block_indices[static_cast<size_t>(global_t) * swa_size + k] = v;
 }
 
+// ── SWA path body (called when blockIdx.z == 1, noncausal) ────────────────────
+// DSpark: all extend tokens see identical window.
+__device__ inline void RunSwaNonCausalPath(const int32_t* __restrict__ cu_extend_lens,
+                                           const int32_t* __restrict__ raw_out_loc,
+                                           const int32_t* __restrict__ swa_prefix_tail_block_indices,
+                                           int32_t* __restrict__ swa_block_indices, const int swa_size) {
+  const int req_idx = blockIdx.x;
+  const int y_tile = blockIdx.y;
+
+  const int extend_begin = cu_extend_lens[req_idx];
+  const int extend_len = cu_extend_lens[req_idx + 1] - extend_begin;
+  const int local_idx = y_tile * kTokensPerBlock + threadIdx.y;
+  if (local_idx >= extend_len) {
+    return;
+  }
+
+  constexpr int kSwaSize = kThreadsX;  // sliding window is fixed at 128
+  constexpr int kTailStride = kSwaSize - 1;
+  const int global_t = extend_begin + local_idx;
+  const int extend_end = kTailStride + extend_len;
+  int32_t* out_row = swa_block_indices + static_cast<size_t>(global_t) * swa_size;
+
+  // Loop to handle swa_size > kThreadsX (e.g. 192 columns with 128 threads).
+  for (int k = threadIdx.x; k < swa_size; k += kThreadsX) {
+    int32_t v;
+    if (k < kTailStride) {
+      v = swa_prefix_tail_block_indices[req_idx * kSwaSize + k];
+    } else if (k < extend_end) {
+      v = raw_out_loc[extend_begin + (k - kTailStride)];
+    } else {
+      v = -1;  // padding
+    }
+    out_row[k] = v;
+  }
+}
+
 // ── Fused kernel entry point ─────────────────────────────────────────────────
 __global__ void PrepareDsv4MqaMetaKernel(
     const int32_t* __restrict__ cu_extend_lens, const int32_t* __restrict__ cu_prefix_lens,
@@ -133,14 +166,18 @@ __global__ void PrepareDsv4MqaMetaKernel(
     const int32_t* __restrict__ swa_prefix_tail_block_indices, const int block_token_num_bits,
     const int block_table_stride, int32_t* __restrict__ swa_block_indices, int32_t* __restrict__ c128_block_indices,
     int32_t* __restrict__ c128_topk_lengths, const int swa_size, const int c128_block_indices_stride,
-    const bool fill_topk_with_stride) {
+    const bool fill_topk_with_stride, const bool noncausal) {
   extern __shared__ int32_t row_template[];
 
   if (blockIdx.z == 0) {
     RunC128Path(cu_extend_lens, cu_prefix_lens, block_table, block_token_num_bits, block_table_stride,
                 c128_block_indices, c128_topk_lengths, c128_block_indices_stride, fill_topk_with_stride, row_template);
   } else {
-    RunSwaPath(cu_extend_lens, raw_out_loc, swa_prefix_tail_block_indices, swa_block_indices, swa_size);
+    if (noncausal) {
+      RunSwaNonCausalPath(cu_extend_lens, raw_out_loc, swa_prefix_tail_block_indices, swa_block_indices, swa_size);
+    } else {
+      RunSwaPath(cu_extend_lens, raw_out_loc, swa_prefix_tail_block_indices, swa_block_indices, swa_size);
+    }
   }
 }
 
@@ -162,7 +199,7 @@ void InvokePrepareDsv4MqaMeta(const int32_t* cu_extend_lens, const int32_t* cu_p
                               const int32_t* raw_out_loc, const int32_t* swa_prefix_tail_block_indices, int batch_size,
                               int block_token_num, int block_table_stride, int max_extend_len,
                               int32_t* swa_block_indices, int32_t* c128_block_indices, int32_t* c128_topk_lengths,
-                              int swa_size, int c128_block_indices_stride, bool fill_topk_with_stride,
+                              int swa_size, int c128_block_indices_stride, bool fill_topk_with_stride, bool noncausal,
                               cudaStream_t stream) {
   if (batch_size <= 0 || max_extend_len <= 0) {
     return;
@@ -171,7 +208,8 @@ void InvokePrepareDsv4MqaMeta(const int32_t* cu_extend_lens, const int32_t* cu_p
   const int block_token_num_bits = Log2IfPow2(block_token_num);
   assert(block_token_num_bits >= kC128RatioBits && "block_token_num must be a power of two and >= kC128Ratio (128)");
   assert((c128_block_indices_stride & 3) == 0 && "c128_block_indices_stride must be a multiple of 4");
-  assert(swa_size > 0 && swa_size <= kThreadsX && "swa_size must be <= kThreadsX (128)");
+  // Causal path requires swa_size = kThreadsX; non-causal loops over columns.
+  assert(swa_size > 0 && (noncausal || swa_size == kThreadsX) && "causal swa_size must be kThreadsX (128)");
 
   const int y_tiles = (max_extend_len + kTokensPerBlock - 1) / kTokensPerBlock;
   dim3 grid(batch_size, y_tiles, 2);
@@ -180,7 +218,7 @@ void InvokePrepareDsv4MqaMeta(const int32_t* cu_extend_lens, const int32_t* cu_p
   PrepareDsv4MqaMetaKernel<<<grid, block, smem_bytes, stream>>>(
       cu_extend_lens, cu_prefix_lens, block_table, raw_out_loc, swa_prefix_tail_block_indices, block_token_num_bits,
       block_table_stride, swa_block_indices, c128_block_indices, c128_topk_lengths, swa_size, c128_block_indices_stride,
-      fill_topk_with_stride);
+      fill_topk_with_stride, noncausal);
 }
 
 }  // namespace nvidia

@@ -84,6 +84,9 @@ class CommonModel : public BaseModel {
                  HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode = RunMode::kMain, size_t model_input_slot = 0,
                  const int64_t* prev_ring_dev = nullptr, bool gpu_input_already_prepared = false) override;
 
+  // Single-position correction applied after the final logits have been produced.
+  Status ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index) override;
+
   Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
                               size_t model_input_slot) override;
 
@@ -102,7 +105,6 @@ class CommonModel : public BaseModel {
  private:
   virtual Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) = 0;
 
- private:
   // Execute the embedding lookup.
   Status LookupEmbedding(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                          std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
@@ -204,7 +206,7 @@ class CommonModel : public BaseModel {
   std::unique_ptr<Mhc> final_mhc_;
   MhcBuffers mhc_buffers_;
 
-  // When set, LmHead uses these for kNextN instead of final_mhc_/lm_head_prenorm_.
+  // When set, LmHead uses these for non-main run modes (MTP/DSpark) instead of final_mhc_/lm_head_prenorm_.
   std::unique_ptr<Mhc> nextn_final_mhc_;
   std::unique_ptr<Layernorm> nextn_shared_head_norm_;
 };

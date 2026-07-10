@@ -452,7 +452,10 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
   }
 
   model_input->mtp_req_id_to_pos_.clear();
-  model_input->PrepareNextNGatherIdx(forward_reqs, RunMode::kMain);
+  model_input->runtime_config_.mtp_step_num = 1;
+  model_input->model_config_.dspark_config.dspark_block_size = 0;
+  model_input->builder_config_->run_mode = RunMode::kMain;
+  model_input->PrepareNextNGatherIdx(forward_reqs);
 
   EXPECT_EQ(model_input->mtp_req_id_to_pos_.size(), forward_reqs.size());
   size_t total_len = 0;
@@ -461,7 +464,8 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
     total_len += forward_reqs[i].forwarding_tokens->size() - forward_reqs[i].kv_cached_token_num;
   }
 
-  model_input->PrepareNextNGatherIdx(forward_reqs, RunMode::kNextN);
+  model_input->builder_config_->run_mode = RunMode::kNextN;
+  model_input->PrepareNextNGatherIdx(forward_reqs);
   EXPECT_EQ(model_input->nextn_hidden_idx_uint64_tensor.shape.size(), 1);
   EXPECT_EQ(model_input->nextn_hidden_idx_uint64_tensor.shape[0], total_len);
 

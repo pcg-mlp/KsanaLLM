@@ -34,12 +34,8 @@ Dsv4Mqa::Dsv4Mqa(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_nor
 
   auto& attn_config = model_creation_config.attn_config;
   // attn_config.idx must be set first
-  attn_config.idx = layer_idx - creation_context.pipeline_config.lower_layer_idx;
-  if (layer_idx >= static_cast<int>(model_creation_config.attn_config.model_config.num_layer)) {
-    attn_config.idx = creation_context.pipeline_config.upper_layer_idx -
-                      creation_context.pipeline_config.lower_layer_idx + layer_idx -
-                      model_creation_config.attn_config.model_config.num_layer + 1;
-  }
+  attn_config.idx = creation_context.pipeline_config.ComputeLocalLayerIdx(
+      layer_idx, static_cast<int>(model_creation_config.attn_config.model_config.num_layer));
 
   // ── Dimension fields ────────────────────────────────────────────────────────
   // head_dim = qk_nope_head_dim + qk_rope_head_dim (== v_head_dim for MQA)

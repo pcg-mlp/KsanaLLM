@@ -22,7 +22,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-
 // -----------------------------------------------------------------------------
 // Golden reference implemented in plain C++ (mirrors `plan_prefill_cuda` exactly).
 // -----------------------------------------------------------------------------
@@ -37,6 +36,7 @@ HostPlanResult HostReferencePlan(const std::vector<IndicesT>& seq_lens, const st
                                  uint32_t compress_ratio, bool is_overlap) {
   HostPlanResult r;
   const uint32_t ratio_eff = compress_ratio * (1u + (is_overlap ? 1u : 0u));
+  constexpr uint32_t kFallbackWriteAllThreshold = 9u;
   uint32_t ragged_id = 0;
   const uint32_t batch_size = static_cast<uint32_t>(seq_lens.size());
   for (uint32_t b = 0; b < batch_size; ++b) {
@@ -44,20 +44,35 @@ HostPlanResult HostReferencePlan(const std::vector<IndicesT>& seq_lens, const st
     const uint32_t ext_len = static_cast<uint32_t>(extend_lens[b]);
     const uint32_t prefix_len = seq_len - ext_len;
 
-    uint32_t start_write_pos = seq_len / compress_ratio * compress_ratio;
-    if (is_overlap) {
-      start_write_pos = (start_write_pos >= compress_ratio) ? (start_write_pos - compress_ratio) : 0u;
+    uint32_t start_write_pos;
+    if (ext_len <= kFallbackWriteAllThreshold) {
+      start_write_pos = prefix_len;
+    } else {
+      start_write_pos = seq_len / compress_ratio * compress_ratio;
+      if (is_overlap) {
+        start_write_pos = (start_write_pos >= compress_ratio) ? (start_write_pos - compress_ratio) : 0u;
+      }
     }
+    const uint32_t last_page_id = (seq_len - 1u) / compress_ratio;
     for (uint32_t j = 0; j < ext_len; ++j) {
-      PrefillPlan p;
-      p.ragged_id = ragged_id;
-      p.batch_id = b;
-      p.position = prefix_len + j;
-      p.window_len = (j + 1u < ratio_eff) ? (ratio_eff - (j + 1u)) : 0u;
-      if ((p.position + 1u) % compress_ratio == 0u) {
+      const uint32_t position = prefix_len + j;
+      const uint32_t window_len = (j + 1u < ratio_eff) ? (ratio_eff - (j + 1u)) : 0u;
+      if ((position + 1u) % compress_ratio == 0u) {
+        PrefillPlan p;
+        p.ragged_id = ragged_id;
+        p.batch_id = b;
+        p.position = position;
+        p.window_len = window_len;
         r.compress.push_back(p);
       }
-      if (p.position >= start_write_pos) {
+      if (position >= start_write_pos) {
+        const uint32_t token_page_id = position / compress_ratio;
+        const uint32_t page_back = last_page_id - token_page_id;
+        PrefillPlan p;
+        p.ragged_id = ragged_id;
+        p.batch_id = b;
+        p.position = position;
+        p.window_len = page_back;
         r.write.push_back(p);
       }
       ++ragged_id;

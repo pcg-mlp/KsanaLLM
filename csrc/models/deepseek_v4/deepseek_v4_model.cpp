@@ -8,6 +8,7 @@
 #include "layers/assemble_tokens_hidden_layer.h"
 #include "layers/emb_lookup_layer.h"
 #include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
+#include "models/deepseek_v4/deepseek_v4_dspark.h"
 #include "profiler/profile_event.h"
 #include "profiler/sched_event_tracer.h"
 #include "runtime/profile_metrics.h"
@@ -308,6 +309,7 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
                       forwarding_context.GetCurrentRank());
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
+
   auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors;
   const auto& model_input = forwarding_context.GetModelInput();
   {
@@ -431,22 +433,45 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
       layers_[layer_idx] = std::make_shared<DeepSeekV4DecoderLayer>(
           layer_idx, is_moe, creation_context, model_creation_config, mhc_buffers_, dsv4_attn_buffer_, moe_buffer_,
           shared_expert_inter_buffer_, shared_expert_output_buffer_);
-      // create nextn layer, give decoder layer
-      nextn_layers_[layer_idx] =
-          std::make_shared<DeepSeekV4MtpLayer>(layer_idx, creation_context, model_creation_config, layers_[layer_idx]);
+      // DSpark and MTP are mutually exclusive; create only one spec layer set.
+      if (creation_context.model_config.dspark_config.dspark_block_size > 0) {
+        dspark_layers_[layer_idx] = std::make_shared<DeepSeekV4DSparkLayer>(
+            layer_idx, creation_context, model_creation_config, layers_[layer_idx], /*is_embed_layer=*/
+            layer_idx == pipeline_config_.lower_nextn_layer_idx);
+      } else {
+        nextn_layers_[layer_idx] = std::make_shared<DeepSeekV4MtpLayer>(layer_idx, creation_context,
+                                                                        model_creation_config, layers_[layer_idx]);
+      }
     }
     nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
 
-    // Create MTP-specific hc_head and shared_head.norm (shared across all MTP steps)
     if (context_->global->IsSamplingNode()) {
-      nextn_final_mhc_ =
-          std::make_unique<Mhc>(fmt::format("model.layers.{}.hc_head", pipeline_config_.lower_nextn_layer_idx),
-                                creation_context, mhc_buffers_);
-      nextn_shared_head_norm_ = std::make_unique<Layernorm>(
-          fmt::format("model.layers.{}.shared_head.norm.weight", pipeline_config_.lower_nextn_layer_idx),
-          model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+      // Create spec-specific hc_head and shared_head.norm (shared across all MTP steps).
+      const std::string layer_prefix = fmt::format("model.layers.{}", pipeline_config_.upper_nextn_layer_idx);
+      nextn_final_mhc_ = std::make_unique<Mhc>(layer_prefix + ".hc_head", creation_context, mhc_buffers_);
+      nextn_shared_head_norm_ =
+          std::make_unique<Layernorm>(layer_prefix + ".shared_head.norm.weight",
+                                      model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+
+      // Create DSpark markov head (additive logits-bias generator).
+      if (creation_context.model_config.dspark_config.dspark_block_size > 0) {
+        dspark_markov_head_ = std::make_unique<DSparkMarkovHead>(
+            layer_prefix + ".markov_head.markov_w1.weight", layer_prefix + ".markov_head.markov_w2.weight",
+            creation_context, model_creation_config.attn_config.model_config.quant_config.backend,
+            forwarding_context_->GetModelCommunicator());
+
+        // Single-step markov input.
+        dspark_step_token_ids_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+                                        {static_cast<size_t>(creation_context.runtime_config.max_batch_size)});
+        dspark_step_token_ids_host_.resize(creation_context.runtime_config.max_batch_size);
+        dspark_block_size_ = creation_context.model_config.dspark_config.dspark_block_size;
+
+        dspark_layer_ = std::make_unique<DSparkLayer>();
+        dspark_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
+      }
     }
   }
+
   return Status();
 }
 
@@ -456,10 +481,34 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
 
   if (run_mode == RunMode::kMain) {
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
+
+    // Capture hidden states of layers in dspark_target_layer_ids for is_embed_layer.
+    // Reduce-mean over the hc_mult axis on the fly.
+    auto& dspark_buffer = forwarding_context.GetForwardingBuffers()->dspark_hidden_buffer_tensors[0];
+    const auto& dspark_target_set = model_config_.dspark_config.dspark_target_layer_ids;
+    const size_t num_target_layers = dspark_target_set.size();
+    const size_t token_num = residual_buffer[0].shape[0];
+    const size_t hidden_bytes = model_config_.hidden_units * GetTypeSize(residual_buffer[0].dtype);
+    const size_t dst_pitch = num_target_layers * hidden_bytes;
+    size_t dspark_slot = 0;
+
     for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
          layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
       STATUS_CHECK_RETURN(layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
+
+      if (dspark_target_set.count(layer_idx) > 0) {
+        STATUS_CHECK_RETURN(dspark_layer_->ForwardCaptureMeanReduce(
+            dspark_buffer.template GetPtr<uint8_t>() + dspark_slot * hidden_bytes,
+            residual_buffer[0].template GetPtr<void>(), token_num, model_config_.mhc_config.hc_mult,
+            model_config_.hidden_units, dst_pitch, residual_buffer[0].dtype));
+        ++dspark_slot;
+      }
     }
+
+    dspark_buffer.shape = {token_num, num_target_layers * model_config_.hidden_units};
+    dspark_buffer.dtype = residual_buffer[0].dtype;
+    // Reset DSpark step logits ptr;
+    dspark_step_logits_ptr_ = nullptr;
   } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
     forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
@@ -471,6 +520,13 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
     if (static_cast<uint32_t>(nextn_layer_idx_) >=
         pipeline_config_.lower_nextn_layer_idx + model_config_.num_nextn_predict_layers) {
       nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
+    }
+  } else if (run_mode == RunMode::kDSpark && !dspark_layers_.empty()) {
+    forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
+    std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
+    for (int layer_idx = forwarding_context.GetPipelineConfig().lower_nextn_layer_idx;
+         layer_idx <= forwarding_context.GetPipelineConfig().upper_nextn_layer_idx; ++layer_idx) {
+      STATUS_CHECK_RETURN(dspark_layers_[layer_idx]->Forward(residual_buffer, forwarding_context));
     }
   }
 
@@ -495,6 +551,36 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
                   forwarding_context.GetContext()->device->GetPrimaryComputeStream());
     }
   }
+  return Status();
+}
+
+Status DeepSeekV4Model::ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index) {
+  std::lock_guard<std::mutex> forward_lock(forward_mutex_);
+  PROFILE_EVENT_SCOPE(DSparkMarkovApply, "DSparkMarkovApply", forwarding_context_->GetCurrentRank());
+
+  // 1) Pull this step's per-req token from forwarding_tokens.
+  const size_t batch_size = forward_reqs.size();
+  for (size_t r = 0; r < batch_size; ++r) {
+    const auto& tokens = *forward_reqs[r].forwarding_tokens;
+    dspark_step_token_ids_host_[r] = tokens[tokens.size() - dspark_block_size_ + step_index];
+  }
+  dspark_step_token_ids_.shape = {batch_size};
+  MemcpyAsync(dspark_step_token_ids_.GetPtr<void>(), dspark_step_token_ids_host_.data(), batch_size * sizeof(int),
+              MEMCPY_HOST_TO_DEVICE, context_->device->GetPrimaryComputeStream());
+
+  // 2) Slice this step's [B, V] logits row out of the model's whole logits_tensor [block_size, B, V].
+  const Tensor& logits_tensor = forwarding_context_->GetModelOutput()->logits_tensor;
+  const size_t vocab_size = logits_tensor.shape[1];
+  Tensor logits_row = logits_tensor.GetView({batch_size, vocab_size}, /*offset=*/step_index * batch_size * vocab_size);
+
+  // 3) Markov bias correction (embed → AllGather → matmul → AllGather → add).
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->GetForwardingBuffers()->hidden_buffer_0);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->GetForwardingBuffers()->hidden_buffer_1);
+  STATUS_CHECK_RETURN(dspark_markov_head_->Forward(dspark_step_token_ids_, logits_row, hidden_buffer_tensors_0,
+                                                   hidden_buffer_tensors_1));
+
+  // Publish this step's [B, V] row base.
+  dspark_step_logits_ptr_ = logits_row.GetPtr<float>();
   return Status();
 }
 

@@ -184,6 +184,10 @@ Status ModelInstance::Forward(std::shared_ptr<BaseWeight> weight, InferStage sta
                                   gpu_input_already_prepared);
 }
 
+Status ModelInstance::ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index) {
+  return model_instance_->ForwardHead(forward_reqs, step_index);
+}
+
 Status ModelInstance::PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
                                            size_t model_input_slot) {
   return model_instance_->PrepareModelInputGpu(forward_reqs, run_mode, model_input_slot);

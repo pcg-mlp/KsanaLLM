@@ -331,7 +331,6 @@ C128_KERNEL void flash_c128_prefill_kernel(const __grid_constant__ Compress128Pr
   if (global_pid >= num_plans) return;
 
   const auto& [ragged_id, global_bid, position, window_len] = plan_ptr[global_pid];
-  const auto indices_ptr = kWrite ? params.indices : params.load_indices;
 
   const int64_t split_offset = global_sid * kTileDim;
 
@@ -347,16 +346,19 @@ C128_KERNEL void flash_c128_prefill_kernel(const __grid_constant__ Compress128Pr
   if (ragged_id == 0xFFFFFFFF) [[unlikely]]
     return;
 
-  const int32_t index = indices_ptr[global_bid];
-  // kv score
-  const auto kv_buf = static_cast<InFloat*>(params.kv_score_buffer) + index * (kElementSize * 128) + split_offset;
-
   PDLWaitPrimary</*kUsePDL*/ true>();
 
   // only responsible for the compress part
   if constexpr (kWrite) {
+    // For write plans, `window_len` is repurposed by the planner to encode
+    // `page_back`: 0 → last page (`indices`), 1 → previous page (`load_indices`)
+    const uint32_t page_back = window_len;
+    const int32_t index = (page_back == 0u) ? params.indices[global_bid] : params.load_indices[global_bid];
+    const auto kv_buf = static_cast<InFloat*>(params.kv_score_buffer) + index * (kElementSize * 128) + split_offset;
     c128_write(kv_buf, kv_src, kHeadDim, /*write_pos=*/position % 128, lane_id);
   } else {
+    const int32_t index = params.load_indices[global_bid];
+    const auto kv_buf = static_cast<InFloat*>(params.kv_score_buffer) + index * (kElementSize * 128) + split_offset;
     c128_forward(kv_buf, kv_src, kv_out, score_bias, kHeadDim, window_len, warp_id, lane_id);
   }
 

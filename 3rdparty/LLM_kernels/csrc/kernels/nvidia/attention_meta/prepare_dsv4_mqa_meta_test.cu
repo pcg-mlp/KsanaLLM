@@ -240,7 +240,7 @@ class NvidiaPrepareDsv4MqaMetaTestSuit : public NvidiaTestSuitBase {
         reinterpret_cast<int32_t*>(d_swa_prefix_tail_block_indices.data_ptr), batch_size, block_token_num,
         setup.max_blocks_per_seq, setup.max_extend_len, reinterpret_cast<int32_t*>(d_swa_block_idx.data_ptr),
         reinterpret_cast<int32_t*>(d_c128_block_idx.data_ptr), reinterpret_cast<int32_t*>(d_c128_topk_len.data_ptr),
-        kSwaSize, setup.aligned_c128_max, fill_topk_with_stride, stream);
+        kSwaSize, setup.aligned_c128_max, fill_topk_with_stride, /*noncausal=*/false, stream);
 
     std::vector<int32_t> got_c128(static_cast<size_t>(setup.num_tokens) * setup.aligned_c128_max, 0);
     std::vector<int32_t> got_topk(batch_size, 0);

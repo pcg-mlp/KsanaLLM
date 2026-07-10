@@ -41,7 +41,7 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
 
   c4_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
   c128_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
-  // load_first_page | load_second_page | write_first_page | last_position
+  // load_first_page | load_second_page | write_pages[0] | write_pages[1]
   c4_indices_bundle_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {4ul * max_batch_size});
   c128_load_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
   c4_indices_prev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size});
@@ -105,9 +105,12 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
     }
   }
 
-  // When MTP is enabled, an extra slot is required to handle cross-boundary cases.
-  if (GetDecodeTokenNumThreshold() > 1) {
-    ++c4_slot_num;
+  // When spec is enabled, extra slots are required to handle cross-boundary fallback cases.
+  KLLM_CHECK_WITH_INFO(GetDecodeTokenNumThreshold() <= MqaSharedAttentionMeta::kFallbackWriteAllThreshold,
+                       fmt::format("Compressor kernel only supports at most {} decode tokens",
+                                   MqaSharedAttentionMeta::kFallbackWriteAllThreshold));
+  if (GetDecodeTokenNumThreshold() > 2) {
+    c4_slot_num += (GetDecodeTokenNumThreshold() + 1) / MqaSharedAttentionMeta::kC4Ratio;
     ++c128_slot_num;
   }
 
@@ -166,9 +169,17 @@ void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
 
   const size_t max_token_num = runtime_config.max_step_token_num;
   const size_t max_seq_len = runtime_config.max_seq_len;
+  // DSpark non-causal attention needs wider SWA indices: window + block_size tokens, aligned to kTopkBlockSize.
+  const size_t dspark_block_size = model_config.dspark_config.dspark_block_size;
+  const size_t effective_swa_size =
+      dspark_block_size > 0 ? RoundUp(kSwaSize + dspark_block_size, kTopkBlockSize) : kSwaSize;
 
   raw_out_loc_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-  swa_block_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, kSwaSize});
+  if (dspark_block_size > 0) {
+    last_raw_out_loc_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
+    last_rotary_embedding_pos_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
+  }
+  swa_block_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, effective_swa_size});
   c4_block_indices_tensor =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, static_cast<size_t>(index_topk)});
   c128_block_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,

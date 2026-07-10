@@ -9,6 +9,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "configure/model_config_parser.h"
@@ -229,6 +230,17 @@ struct PipelineConfig {
   char nccl_unique_id[128];
 
   DistributedCommunicationType pipeline_para_comm_type = DistributedCommunicationType::DEFAULT;
+
+  // Compute the local layer index for a given global layer index, taking pipeline
+  // parallelism (lower/upper_layer_idx) and MTP layers into account.
+  // MTP layers (global_layer_idx >= num_layer) are placed after the main layer range on this node.
+  int ComputeLocalLayerIdx(int global_layer_idx, int num_layer) const {
+    if (global_layer_idx >= num_layer) {
+      return upper_layer_idx - lower_layer_idx + global_layer_idx - num_layer + 1;
+    } else {
+      return global_layer_idx - lower_layer_idx;
+    }
+  }
 
   void SetDistributeRelatedConfig() {
     const char *master_host_env = std::getenv("MASTER_HOST");

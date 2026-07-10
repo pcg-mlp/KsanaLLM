@@ -59,11 +59,13 @@ enum class C4PageMode : int32_t {
 };
 
 // Layout of the per-batch extra tensor for prefill (4 × int32 per batch).
+// write_pages[k] is the page index to write when the token page is k+1 pages
+// behind the last page; the last page uses `indices[bid]` directly.
+// Supports MTP kv fallback for spans covering up to 3 pages (indices + 2 back).
 struct alignas(16) C4IndexBundle {
   IndicesT load_first_page;   // page index to load overlap kv/score from
   IndicesT load_second_page;  // page index to load non-overlap kv/score from
-  IndicesT write_first_page;  // page index to write when position < last_position
-  IndicesT last_position;     // boundary between write_first_page and current index
+  IndicesT write_pages[2];    // 1 / 2 pages back from current page
 };
 
 struct Compress4DecodeParams {
@@ -340,12 +342,11 @@ C4_KERNEL void flash_c4_prefill_kernel(const __grid_constant__ Compress4PrefillP
     const C4IndexBundle bundle = params.extra[global_bid];
 
     if constexpr (kWrite) {
-      int32_t page_index;
-      if (position < static_cast<uint32_t>(bundle.last_position)) {
-        page_index = bundle.write_first_page;
-      } else {
-        page_index = write_second_page;
-      }
+      // For write plans, `window_len` is repurposed by the planner to encode
+      // `page_back`: number of pages between the token's page and the last page
+      // 0 → last page (`indices[bid]`), k>0 → write_pages[k-1].
+      const uint32_t page_back = window_len;
+      const int32_t page_index = (page_back == 0u) ? write_second_page : bundle.write_pages[page_back - 1];
       auto* kv_buf = kv_score_buffer + page_index * (kElementSize * 4) + split_offset;
       c4_write(kv_buf, kv_src, kHeadDim, /*write_pos=*/position % 4);
     } else {
