@@ -97,6 +97,10 @@ class MooncakeEngineConnector : public PdV2ConnectorInterface {
                               uint32_t decode_prefix_cache_offset, PdRequestCompleteCb on_complete, void* ctx) override;
   Status Release(uint64_t req_id) override;
 
+  // Health: whether at least one Prefill peer is currently healthy. False
+  // when this connector has no PeerSelector (Prefill role). See interface.
+  bool HasHealthyPrefillPeer() const override;
+
   // Decode-side per-peer round-trip latency EWMA (microseconds), keyed by
   // peer Prefill server_name. Measured locally as SubmitPrefillRequest →
   // OnPrefillComplete. Returns nullopt when the peer has no sample yet.

@@ -35,6 +35,10 @@ class InferenceSupervisor {
   // Get the inferenc service.
   std::shared_ptr<InferenceService>& GetService();
 
+  // Health: whether this node sees at least one healthy pd_v2 Prefill peer.
+  // False when this process is not a pd_v2 Decode node or the service isn't up.
+  bool HasHealthyPrefillPeer() const;
+
  private:
   std::string config_file_;
   bool is_engine_ = false;

@@ -961,4 +961,11 @@ Status InferenceEngine::Stop() {
   return Status();
 }
 
+bool InferenceEngine::HasHealthyPrefillPeer() const {
+  if (pd_v2_connector_ == nullptr) {
+    return false;
+  }
+  return pd_v2_connector_->HasHealthyPrefillPeer();
+}
+
 }  // namespace ksana_llm

@@ -731,6 +731,15 @@ Status MooncakeEngineConnector::Release(uint64_t req_id) {
   return Status();
 }
 
+bool MooncakeEngineConnector::HasHealthyPrefillPeer() const {
+  // Prefill-role connectors never build a PeerSelector; report false so the
+  // caller's /health does not gate on a peer table that doesn't exist.
+  if (peer_selector_ == nullptr) {
+    return false;
+  }
+  return peer_selector_->HealthyPeerCount() > 0;
+}
+
 std::optional<uint32_t> MooncakeEngineConnector::GetPeerLatencyUs(const std::string& server_name) const {
   std::lock_guard<std::mutex> lk(peer_latency_mu_);
   auto it = peer_latency_ewma_.find(server_name);

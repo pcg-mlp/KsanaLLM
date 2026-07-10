@@ -44,6 +44,10 @@ class InferenceService {
                        const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                        std::string &response_bytes);
 
+  // Health: whether the underlying engine's connector sees at least one
+  // healthy pd_v2 Prefill peer. False when not a pd_v2 Decode node.
+  bool HasHealthyPrefillPeer() const;
+
  private:
   // The inference engine.
   std::shared_ptr<InferenceEngine> inference_engine_;

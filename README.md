@@ -429,6 +429,65 @@ python ${GIT_PROJECT_REPO_ROOT}/benchmarks/benchmark_throughput.py \
 # The request_rate parameter controls the rate at which requests are sent. By default, it is set to "inf" (all requests are sent simultaneously).
 ```
 
+#### 4.4 Starting in PD Disaggregation Mode
+
+###### PD Node Configuration
+Add the following content after ```endpoint_type: python``` in the `examples/ksana_llm.yaml` configuration file:
+- Make sure ```connector``` is aligned with ```endpoint_type```
+- Set ```group_role``` to ```decode``` or ```prefill``` according to the service role
+
+**Decode configuration example**
+```
+connector:
+    backend: "v2"      # Indicates the v2 version of PD disaggregation
+    group_role: decode # Role: decode or prefill
+    cluster_name: dev_cluster # The cluster_name must be the same in a cluster with N prefill and M decode nodes
+    inference_addr: 127.0.0.1:8089  # Inference address of the current node
+    redis_password: "XXXXXXX"       # Redis password
+    metadata_addr: "redis://127.0.0.1:6379" # Redis address
+```
+
+**Prefill configuration example**
+```
+connector:
+    backend: "v2"      # Indicates the v2 version of PD disaggregation
+    group_role: prefill # Role: decode or prefill
+    cluster_name: dev_cluster # The cluster_name must be the same in a cluster with N prefill and M decode nodes
+    inference_addr: 127.0.0.1:8090  # Inference address of the current node
+    redis_password: "XXXXXXX"       # Redis password
+    metadata_addr: "redis://127.0.0.1:6379" # Redis address
+```
+
+###### Node Startup Commands
+- Note: Different node roles should point to the corresponding configuration files prepared above
+- Note: When starting multiple roles on a single node, configure a different Mooncake RPC address for each node
+
+**Decode node startup command example**
+```
+# Use the Mooncake Transfer Engine Next version
+export MC_USE_TENT=1
+# When starting both roles on the same machine, set a different Mooncake RPC address for each node
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+# Service startup command. Make sure it points to the configuration file for the corresponding role
+python ../python/serving_server.py \
+  --config_file ksana_llm_decode.yaml \
+  --host 0.0.0.0 \
+  --port 8089
+```
+
+**Prefill node startup command example**
+```
+# Use the Mooncake Transfer Engine Next version
+export MC_USE_TENT=1
+# When starting both roles on the same machine, set a different Mooncake RPC address for each node
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+# Service startup command. Make sure it points to the configuration file for the corresponding role
+python ../python/serving_server.py \
+  --config_file ksana_llm_prefill.yaml \
+  --host 0.0.0.0 \
+  --port 8090
+```
+
 ### 5. Distribute
 
 ```bash

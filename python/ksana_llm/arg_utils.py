@@ -52,6 +52,10 @@ class EngineArgs:
     """Override model name returned by OpenAI API v1/models endpoint."""
     json_model_override_args: Optional[str] = None
     """JSON string to override ModelConfig fields after parsing, e.g. '{"num_layer":32}'."""
+    # pd_v2 connector info parsed from setting.connector. Consumed e.g. by the
+    # /health endpoint to detect a pd_v2 Decode node without re-reading the YAML.
+    connector_backend: Optional[str] = None
+    connector_group_role: Optional[str] = None
 
     @classmethod
     def from_config_file(cls, config_file: str) -> "EngineArgs":
@@ -108,6 +112,11 @@ class EngineArgs:
         encoder_base_port = encoder_config.get("encoder_base_port", None)
 
         endpoint = yaml_config["setting"].get("endpoint_type", "python").lower()
+
+        # pd_v2 connector info (may be absent for non-PD deployments).
+        connector_config = yaml_config["setting"].get("connector", {}) or {}
+        connector_backend = connector_config.get("backend", None)
+        connector_group_role = connector_config.get("group_role", None)
 
         max_token_len = yaml_config["setting"]["batch_scheduler"].get(
             "max_token_len", 2048
@@ -206,6 +215,8 @@ class EngineArgs:
             encoder_base_port=encoder_base_port,
             hidden_size=hidden_size,
             pooling_type=pooling_type,
+            connector_backend=connector_backend,
+            connector_group_role=connector_group_role,
         )
 
     @classmethod

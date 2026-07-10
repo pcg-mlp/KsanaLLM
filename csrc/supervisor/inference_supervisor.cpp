@@ -130,4 +130,11 @@ std::shared_ptr<InferenceService> &InferenceSupervisor::GetService() {
   return inference_service_;
 }
 
+bool InferenceSupervisor::HasHealthyPrefillPeer() const {
+  if (inference_service_ == nullptr) {
+    return false;
+  }
+  return inference_service_->HasHealthyPrefillPeer();
+}
+
 }  // namespace ksana_llm

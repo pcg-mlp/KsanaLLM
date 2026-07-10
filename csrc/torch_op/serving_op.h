@@ -51,6 +51,11 @@ class ServingOp : public torch::jit::CustomClassHolder {
                  const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                  std::string &response_bytes);
 
+  // Health: whether this (Decode) engine sees at least one healthy pd_v2
+  // Prefill peer. False when this process is not a pd_v2 Decode node.
+  // Exposed to Python so the /health endpoint can gate on Prefill reachability.
+  bool HasHealthyPrefillPeer() const;
+
  private:
   // Set logger name.
   void SetProcessLogger(const std::string &role, int device_id = -1);

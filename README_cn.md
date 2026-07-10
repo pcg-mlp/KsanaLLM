@@ -407,6 +407,66 @@ python ${GIT_PROJECT_REPO_ROOT}/benchmarks/benchmark_throughput.py \
 # request_rate可以控制请求发送的速率，默认为"inf"(同时发送所有请求)
 ```
 
+#### 4.4  PD 分离模式启动方式
+
+###### PD节点配置
+在 examples/ksana_llm.yaml 的配置文件中 ```endpoint_type: python``` 之后加入下面内容：
+- 注意```connector``` 和 ```endpoint_type``` 对齐
+- 注意按照服务角色修改 ```group_role``` 为 ```decode``` 或 ```prefill```
+
+
+**decode配置参考**
+```
+connector:
+    backend: "v2"      # 标明是v2版本的pd分离
+    group_role: decode # 角色为 decode 或 prefill
+    cluster_name: dev_cluster # N个prefill 和 M个decode节点组成的cluster中 cluster_name要相同
+    inference_addr: 127.0.0.1:8089  # 当前节点的inference地址
+    redis_password: "XXXXXXX"       # Redis密码
+    metadata_addr: "redis://127.0.0.1:6379" # Redis 地址
+```
+
+**Prefill配置参考**
+```
+connector:
+    backend: "v2"      # 标明是v2版本的pd分离
+    group_role: prefill # 角色为 decode 或 prefill
+    cluster_name: dev_cluster # N个prefill 和 M个decode节点组成的cluster中 cluster_name要相同
+    inference_addr: 127.0.0.1:8090  # 当前节点的inference地址
+    redis_password: "XXXXXXX"       # Redis密码
+    metadata_addr: "redis://127.0.0.1:6379" # Redis 地址
+```
+
+###### 节点启动命令
+- 注意: 不同的节点角色指向上面配置好的配置文件
+- 注意: 单节点启动多个角色时需要配置不同的 Mooncake rpc 地址
+
+** Decode 节点启动命令参考**
+``` 
+# 使用Mooncake Transfer Engine Next 版本
+export MC_USE_TENT=1
+# 同机器启动双角色节点需要为每个节点的Mooncake设置不同的 rpc 地址
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+# 服务启动命令，注意指向不同角色的配置文件
+python ../python/serving_server.py \
+  --config_file ksana_llm_decode.yaml \
+  --host 0.0.0.0 \
+  --port 8089
+```
+
+** Prefill 节点启动命令参考**
+``` 
+# 使用Mooncake Transfer Engine Next 版本
+export MC_USE_TENT=1
+# 同机器启动双角色节点需要为每个节点的Mooncake设置不同的 rpc 地址
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+# 服务启动命令，注意指向不同角色的配置文件
+python ../python/serving_server.py \
+  --config_file ksana_llm_prefill.yaml \
+  --host 0.0.0.0 \
+  --port 8090
+```
+
 ### 5. 分发
 
 ```bash

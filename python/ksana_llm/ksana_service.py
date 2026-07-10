@@ -67,8 +67,32 @@ class LLMService:
                 "Redis request-id allocator install failed; falling back to "
                 "shared-memory counter. Multi-node PD will produce colliding "
                 "ids — fix the Redis config and restart.")
+        # pd_v2 Decode node detection, reusing the connector info already
+        # parsed into EngineArgs (setting.connector). When this is a pd_v2
+        # (connector.backend == "v2") Decode node (connector.group_role ==
+        # decode), the /health endpoint additionally gates on Prefill
+        # reachability: a Decode node with no healthy Prefill peer reports 503.
+        self._is_pd_v2_decode = self._detect_pd_v2_decode(engine_args)
         self._setup_routes()
         self.model = ksana_llm.KsanaLLMEngine.from_engine_args(self.engine_args)
+
+    @staticmethod
+    def _detect_pd_v2_decode(engine_args: EngineArgs) -> bool:
+        """Return True iff engine_args marks this node as a pd_v2 Decode node.
+
+        Uses the connector fields already parsed by
+        ``EngineArgs.from_config_file`` (``connector.backend == "v2"`` and
+        ``connector.group_role == "decode"``), so the YAML is not re-read here.
+        """
+        backend = getattr(engine_args, "connector_backend", None)
+        group_role = getattr(engine_args, "connector_group_role", None)
+        role = str(group_role).lower() if group_role is not None else ""
+        is_decode = backend == "v2" and role == "decode"
+        if is_decode:
+            logger.info(
+                "pd_v2 Decode node detected; /health will gate on Prefill peer "
+                "reachability.")
+        return is_decode
 
     def init_ipc(self):
         """Create ipc resource.
@@ -387,13 +411,19 @@ class LLMService:
                 timeout=HEALTH_CHECK_TIMEOUT,
             )
 
-            if status.OK():
-                return Response(status_code=200)
-            else:
+            if not status.OK():
                 logger.error(
                     f"Health check failed: engine returned error: {status.GetMessage()}"
                 )
                 return Response(status_code=503)
+
+            # pd_v2 Decode node: also gate on Prefill reachability. A Decode
+            # node with no healthy Prefill peer cannot complete any request, so
+            # report 503 in that case.
+            if self._is_pd_v2_decode and not self._has_healthy_prefill_peer():
+                return Response(status_code=503)
+
+            return Response(status_code=200)
 
         except asyncio.TimeoutError:
             logger.error(
@@ -404,6 +434,19 @@ class LLMService:
         except (RuntimeError, OSError) as e:
             logger.error(f"Health check failed with exception: {e}")
             return Response(status_code=503)
+
+    def _has_healthy_prefill_peer(self) -> bool:
+        """Whether this pd_v2 Decode node currently sees a healthy Prefill peer.
+
+        Any error querying the engine degrades to True: the engine itself
+        already answered the health probe, so we do not fail the node solely
+        because the peer-health lookup broke.
+        """
+        try:
+            return self.model.has_healthy_prefill_peer()
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(f"Failed to query pd_v2 Prefill peer health: {e}")
+            return True
 
 
 class KsanaService:

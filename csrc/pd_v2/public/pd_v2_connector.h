@@ -176,6 +176,13 @@ class PdV2ConnectorInterface {
                                       uint32_t cached_block_count, uint32_t decode_prefix_cache_offset,
                                       PdRequestCompleteCb on_complete, void* ctx) = 0;
 
+  // [Decode role] Health: whether at least one Prefill peer is currently
+  // healthy (selectable) in the PeerSelector table. Used by the Decode node's
+  // /health endpoint to gate on Prefill reachability. Read-only; never
+  // affects routing. Default false for backends / roles without a peer table
+  // (Prefill side, mock backend, etc.).
+  virtual bool HasHealthyPrefillPeer() const { return false; }
+
   // Local cleanup / safety-net, called when an InferRequest is destroyed
   // or a Submit fails — regardless of whether on_complete already fired.
   // Erases in_flight_ bookkeeping and force-releases any held stage

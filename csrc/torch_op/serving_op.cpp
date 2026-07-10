@@ -90,6 +90,13 @@ Status ServingOp::Forward(const std::string &request_bytes,
   STATUS_CHECK_AND_REPORT(inference_supervisor_->GetService()->HandleForward(request_bytes, req_ctx, response_bytes));
 }
 
+bool ServingOp::HasHealthyPrefillPeer() const {
+  if (inference_supervisor_ == nullptr) {
+    return false;
+  }
+  return inference_supervisor_->HasHealthyPrefillPeer();
+}
+
 void ServingOp::SetProcessLogger(const std::string &role, int device_id) {
   std::string log_postfix = std::string("_") + role;
   if (device_id >= 0) {
@@ -292,13 +299,21 @@ PYBIND11_MODULE(libtorch_serving, m) {
              pybind11::gil_scoped_acquire acquire;
              return std::make_tuple(status, streaming_iterator);
            })
-      .def("forward", [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &request_bytes,
-                         std::unordered_map<std::string, std::string> &req_ctx) {
+      .def("forward",
+           [](std::shared_ptr<ksana_llm::ServingOp> &self, const std::string &request_bytes,
+              std::unordered_map<std::string, std::string> &req_ctx) {
+             pybind11::gil_scoped_release release;
+             std::string response_bytes;
+             auto req_ctx_ptr = std::make_shared<std::unordered_map<std::string, std::string>>(req_ctx);
+             ksana_llm::Status status = self->Forward(request_bytes, req_ctx_ptr, response_bytes);
+             pybind11::gil_scoped_acquire acquire;
+             return std::make_tuple(status, py::bytes(response_bytes));
+           })
+      // pd_v2 Decode-side health gate: True iff this node currently sees at
+      // least one healthy Prefill peer. False when this process is not a
+      // pd_v2 Decode node. Consumed by the Python /health endpoint.
+      .def("has_healthy_prefill_peer", [](std::shared_ptr<ksana_llm::ServingOp> &self) {
         pybind11::gil_scoped_release release;
-        std::string response_bytes;
-        auto req_ctx_ptr = std::make_shared<std::unordered_map<std::string, std::string>>(req_ctx);
-        ksana_llm::Status status = self->Forward(request_bytes, req_ctx_ptr, response_bytes);
-        pybind11::gil_scoped_acquire acquire;
-        return std::make_tuple(status, py::bytes(response_bytes));
+        return self->HasHealthyPrefillPeer();
       });
 }

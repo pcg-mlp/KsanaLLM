@@ -69,6 +69,13 @@ Status InferenceService::HandleForward(const std::string &request_bytes,
   STATUS_CHECK_AND_REPORT(local_endpoint_->HandleForward(request_bytes, req_ctx, response_bytes));
 }
 
+bool InferenceService::HasHealthyPrefillPeer() const {
+  if (inference_engine_ == nullptr) {
+    return false;
+  }
+  return inference_engine_->HasHealthyPrefillPeer();
+}
+
 Status InferenceService::Start() {
   KLLM_LOG_INFO << "Inference service start.";
 

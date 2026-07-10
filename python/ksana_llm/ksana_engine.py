@@ -512,6 +512,18 @@ class KsanaLLMEngine:
     def _call_serving_forward(self, request_bytes, req_ctx):
         return self._serving.forward(request_bytes, req_ctx)
 
+    def has_healthy_prefill_peer(self) -> bool:
+        """Return True iff this Decode engine sees at least one healthy pd_v2
+        Prefill peer.
+
+        Returns False when this process is not a pd_v2 Decode node, or when the
+        underlying binding is unavailable (older engine build).
+        """
+        getter = getattr(self._serving, "has_healthy_prefill_peer", None)
+        if getter is None:
+            return False
+        return getter()
+
     def _format_access_log_headers(self, req_ctx: Dict[str, str]) -> str:
         """Format request headers for access log."""
         # 要记录的 header 字段

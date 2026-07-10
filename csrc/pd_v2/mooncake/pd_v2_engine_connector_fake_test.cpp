@@ -141,6 +141,24 @@ TEST_F(EngineConnectorFakeTest, NoPeerCanAcceptAndRouteRequest) {
   ASSERT_TRUE(conn.Shutdown().OK());
 }
 
+TEST_F(EngineConnectorFakeTest, HasHealthyPrefillPeerFalseForPrefillRole) {
+  // Prefill-role connectors never build a PeerSelector, so the Decode-only
+  // /health gate must report no healthy Prefill peer.
+  MooncakeEngineConnector conn;
+  ASSERT_TRUE(conn.Initialize(EngineConfig(NodeRole::kPrefill, "pre:1", "P2PHANDSHAKE")).OK());
+  EXPECT_FALSE(conn.HasHealthyPrefillPeer());
+  ASSERT_TRUE(conn.Shutdown().OK());
+}
+
+TEST_F(EngineConnectorFakeTest, HasHealthyPrefillPeerFalseWithNoSnapshot) {
+  // Decode role owns a PeerSelector, but until a PrefillSnapshot arrives no
+  // peer is healthy -> the gate stays closed.
+  MooncakeEngineConnector conn;
+  ASSERT_TRUE(conn.Initialize(EngineConfig(NodeRole::kDecode, "dec:1", "P2PHANDSHAKE")).OK());
+  EXPECT_FALSE(conn.HasHealthyPrefillPeer());
+  ASSERT_TRUE(conn.Shutdown().OK());
+}
+
 TEST_F(EngineConnectorFakeTest, MiscDecodeAccessors) {
   MooncakeEngineConnector conn;
   ASSERT_TRUE(conn.Initialize(EngineConfig(NodeRole::kDecode, "dec:1", "P2PHANDSHAKE")).OK());
@@ -191,6 +209,12 @@ TEST_F(EngineConnectorFakeTest, RedisDiscoveryMakesPeerSelectable) {
   }
   EXPECT_TRUE(accepted) << "Decode never discovered the Prefill peer via Redis";
   if (accepted) decode.Release(1);
+
+  // A selectable peer is a healthy peer: the Decode-side /health gate must now
+  // report a healthy Prefill peer. The Prefill side has no PeerSelector and so
+  // never reports one.
+  EXPECT_EQ(decode.HasHealthyPrefillPeer(), accepted);
+  EXPECT_FALSE(prefill.HasHealthyPrefillPeer());
 
   ASSERT_TRUE(decode.Shutdown().OK());
   ASSERT_TRUE(prefill.Shutdown().OK());

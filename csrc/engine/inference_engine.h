@@ -55,6 +55,12 @@ class InferenceEngine {
   // Stop the rpc service.
   Status Stop();
 
+  // Health: whether this (Decode) engine's connector currently sees at least
+  // one healthy pd_v2 Prefill peer. False when this process is not a pd_v2
+  // Decode node (no connector loaded, or Prefill role). Surfaced up through
+  // the service layer to the Python /health endpoint.
+  bool HasHealthyPrefillPeer() const;
+
  private:
   // Do warmup run.
   Status DoWarmupRun();

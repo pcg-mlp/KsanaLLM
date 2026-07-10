@@ -1,4 +1,3 @@
-
 ## 1. 设计背景概述
 
 ### 1.1 PD V1 现存问题分析
@@ -86,155 +85,81 @@ L --> K
   
 
 ### 2.2 单请求全链路时序
-```mermaid
+``` mermaid
 
 sequenceDiagram
 
 autonumber
 
 participant C as Client
-
-participant DE as Decode Engine (HTTP + EDS)
-
-participant GCH as GlobalCacheQueryHook (idx=0)
-
-participant DH as PdV2DecodeHook::Process (idx=1)
-
-participant CONND as MooncakeEngineConnector(Decode)
-
-participant SW as submit_workers_ 线程
-
-participant POLLP as NotifyPollerLoop (Prefill 角色)
-
-participant EP as PdV2PrefillEndpoint::OnIncoming
-
-participant COMP as PdV2PrefillCompletion (双 gate)
-
-participant TRK as PdV2LayerEventTracker
-
-participant DISP as PdV2KvDispatcher
-
-participant CONPX as MooncakeExecutorConnector
-
-participant BARR as PdV2KvBarrier
-
-participant DX as Decode Executor (KV 池)
-
-participant POLLD as NotifyPollerLoop (Decode 角色)
+participant DE as 【Decode·Ksana】Engine
+participant pdDE as 【Decode·pd】Engine
+participant DX as 【Decode·Ksana】Executor
+participant pdDX as 【Decode·pd】Executor
+participant M as Mooncake<br/>(notify + RDMA)
+participant pdPE as 【Prefill·pd】Engine Conn
+participant PE as 【Prefill·Ksana】Engine
+participant PX as 【Prefill·Ksana】Executor
+participant pdPX as 【Prefill·pd】Executor
 
   
 
-C->>DE: /generate(prompt, sampling_config)
+Note over DE,pdPX: 启动装配：Ksana进程 dlopen 后端 .so 并注入 pd connector
+DE->>pdDE: CreateAndInitConnector + SetIpcFuncWrapper
+DX->>pdDX: CreateAndInitConnector + SetIpcFuncWrapper
+DX->>pdDX: RegisterKvPool(base_va, shape)<br/>(由 IPC_FUNC_CREATE_BLOCK_ALLOCATOR 触发)
+pdDX->>M: registerLocalMemory(KV pool)
+PE->>pdPE: RegisterIncomingHook + SetSnapshotProvider
+PX->>pdPX: SetupPdV2PrefillKvWrite(KvDispatcher+KvBarrier)
+Note over C,pdPX: 单请求处理（同进程 Ksana↔pd 为函数调用；<br/>Ksana Engine↔Ksana Executor 走 SHM IPC；跨节点走 Mooncake）
 
-DE->>GCH: PrepareRequest → prefix cache lookup + AllocateRequestBlocks
+  
 
-Note over GCH: 池满 → kWaitAsyncResult 入 pending_admission_，待 kBlocksFreed 重试
+C->>DE: /generate(prompt, sampling)
+DE->>DE: prefix cache lookup + allocate Decode KV blocks
+DE->>pdDE: [Decode hook] SubmitPrefillRequest(req_id, kv_block_ids,<br/>sampling, attn_dp_group_id)
+pdDE->>DX: GetKvBufferVa → SHM IPC(sync)<br/>IPC_FUNC_PD_V2_GET_KV_POOL_BASE_VA
+DX->>pdDX: query fn (SetPdV2KvPoolQueryFn → GetLocalKvPool)
+pdDX-->>DX: base_va / shape
+DX-->>pdDE: base_va / total_bytes（拼装 decode_targets）
+pdDE->>M: notify pd_v2/prefill_req<br/>[tokens, sampling, decode_targets,...]
+M->>pdPE: deliver PrefillRequest
 
-GCH-->>DE: 分配 Decode KV blocks 成功（kv_cache_blocks）
+  
 
-DE->>DH: Process(req)
+pdPE->>PE: on_incoming (RegisterIncomingHook cb)<br/>→ synthesize Prefill-side InferRequest
+PE->>PX: SHM IPC(async broadcast) IPC_FUNC_DISPATCH_SCHEDULE_OUTPUT<br/>run prefill forward + LM head + sampler
 
-DH->>CONND: RouteRequest(req_id, LocalArmContext) → optional<RouteArm>
+  
 
-alt RouteArm::kLocal / nullopt
-
-DH-->>DE: 不拦截 → 本地 prefill+decode（nullopt 则 kFailAndEnd）
-
-else RouteArm::kRemotePeer
-
-DH->>DH: MakeWireSamplingConfig → SamplingConfigWire(max_new_tokens=1+MTP)
-
-DH->>DH: 注册 req 析构回调 connector->Release(req_id)
-
-DH->>CONND: SubmitPrefillRequest(req_id, prefill_tokens, kv_cache_blocks, wire, attn_dp_group_id, cached_block_count, decode_prefix_cache_offset, &OnPrefillComplete, this)
-
-CONND->>CONND: in_flight 注册 on_complete + 入队 PendingSubmit
-
-DH->>DH: req->pd_v2.awaiting_prefill=true → kWaitAsyncResult（停在 preprocessing_reqs）
-
-CONND->>SW: submit_cv_.notify_one() 唤醒 SubmitWorkerLoop
-
-SW->>SW: GetKvBufferVa(device_id) 取各 rank base VA → 构造 DecodeTarget
-
-SW->>SW: WrapFrame(SerializePrefillRequest) + AcquirePeerStageSlotsWithFallback
-
-SW->>CONPX: RDMA-WRITE PrefillStagePayload(input_tokens+kv_block_ids) → HostStagePool
-
-SW->>POLLP: SendNotification(kChPrefillReq) notify
-
+loop attention layer chunks
+PX->>pdPX: 逐层 event → OnLayerComplete
+pdPX->>M: SubmitWriteBatchAsyncForRequest<br/>RDMA WRITE KV → Decode KV pool offsets
+M->>pdDX: KV lands directly in Decode KV pool
 end
 
   
 
-POLLP->>POLLP: DispatchOne → OnPrefillReq(Notification)
-
-POLLP->>POLLP: DeserializePrefillRequest + 读 HostStagePool::SlotPtr 得 PrefillStagePayload
-
-POLLP-->>CONND: SendNotification(kChStageAck) 回 Decode 释放 PeerCredits 槽
-
-POLLP->>EP: on_incoming_(IncomingPrefillRequest)
-
-EP->>EP: DecodeTarget::ToLite() → request->is_pd_v2_prefill / pd_v2_decode_targets
-
-EP->>EP: 注册 request 析构回调 connector->Release(req_id)
-
-EP->>COMP: Admit(req_id, request, peer_addr, num_decode_targets)
-
-EP->>EP: LocalEndpoint::SubmitAsync(request) 进入 EDS/Executor
+PX-->>PE: SHM IPC(async) IPC_FUNC_REPORT_SAMPLING_OUTPUT<br/>generated_tokens ready (1 main token + MTP drafts)
+pdPX->>PX: KvBarrier 轮询 in-flight batch 排空
+pdPX->>PE: SHM IPC(async) IPC_FUNC_PD_V2_BARRIER_DONE<br/>{req_id, status}（各 Prefill TP rank 各上报一次）
+PE->>PE: PdV2PrefillCompletion 汇聚<br/>barrier==expected + sampler tokens
+PE->>pdPE: SendPrefillComplete(status, generated_tokens, snapshot)
+pdPE->>M: notify pd_v2/prefill_complete<br/>{status, generated_tokens}
+M->>pdDE: deliver completion
 
   
 
-loop 每个 attention 层 (kContext)
-
-TRK->>TRK: RecordLayerProgress（attention 写 K/V 后）
-
-TRK->>DISP: 触发 per-rank KV 写
-
-DISP->>CONPX: SubmitWriteBatchAsyncForRequest(target_server_name, entries) → RDMA-WRITE KV
-
-CONPX->>CONPX: TrackInflightBatch(req_id, batch_id)
-
-end
-
-DISP->>BARR: WaitAndNotify(req_id, dispatch_failed)
-
-BARR->>CONPX: PollBatchStatus(batch_id) 轮询至 COMPLETED/FAILED
-
-BARR->>COMP: IpcFuncWrapper::ReportPdV2BarrierDone(req_id, status)（barrier gate）
-
-Note over COMP: sampler gate：request->waiter 回调置 tokens_ready(1 main + MTP drafts)
-
-COMP->>COMP: TryCompleteUnlocked：两 gate 满足 → SendPrefillComplete
-
-COMP->>POLLP: connector->SendPrefillComplete(addr, req_id, status, generated_tokens, snapshot)
-
-POLLP->>POLLD: SendNotification(kChPrefillComplete) 回 Decode
-
-  
-
-POLLD->>POLLD: DispatchOne → OnPrefillComplete(Notification)
-
-POLLD->>POLLD: 查 in_flight 注册 on_complete 并调用
-
-POLLD->>DH: PdV2DecodeHook::OnPrefillComplete(req_id, status, tokens, metrics, peer, ctx)
-
-DH->>DH: completion_results 写入 req_id → async_callback_ 唤醒 EDS
-
-DE->>DH: 下一 tick → UpdateAsyncResult
-
-DH->>DH: awaiting_prefill=false，取 output_tokens 首个 token 与 MTP draft，infer_stage=kDecode，NotifyStep()
-
-DE->>DX: 调度 decode step（ForwardRequest::kPage 读远端写入的 KV）
-
-DX-->>DE: GenerationOutput
-
+pdDE->>DE: on_complete (PdRequestCompleteCb)
+DE->>DE: set kv_from_remote=true<br/>infer_stage=kDecode<br/>splice generated tokens
+DE->>DX: SHM IPC(async broadcast) IPC_FUNC_DISPATCH_SCHEDULE_OUTPUT<br/>normal decode step (kPage reads remote-written KV)
+DX-->>DE: SHM IPC(async) IPC_FUNC_REPORT_SAMPLING_OUTPUT<br/>GenerationOutput
 DE-->>C: streamed / final output
 
 ```
-  
-  
 
-### 2.2 模块目录
+
+### 2.4 模块目录
 
 ```text
 
@@ -352,4 +277,62 @@ P->>P: 检测到Decode Key消失
 
 P->>P: 清理该Decode相关资源与连接
 
+```
+
+## 4. PD 分离模式的快速启动
+
+### PD节点配置
+在 examples/ksana_llm.yaml 的配置文件中 ```endpoint_type: python``` 之后加入下面内容：
+- 注意connector 和 ```endpoint_type```对齐
+- 注意按照服务角色修改```group_role``` 自动
+
+**decode配置参考**
+```
+connector:
+    backend: "v2"      # 标明是v2版本的pd分离
+    group_role: decode # 角色为 decode 或 prefill
+    cluster_name: dev_cluster # N个prefill 和 M个decode节点组成的cluster中 cluster_name要相同
+    inference_addr: 127.0.0.1:8089  # 当前节点的inference地址
+    redis_password: "XXXXXXX"       # Redis密码
+    metadata_addr: "redis://127.0.0.1:6379" # Redis 地址
+```
+
+**Prefill配置参考**
+```
+connector:
+    backend: "v2"      # 标明是v2版本的pd分离
+    group_role: prefill # 角色为 decode 或 prefill
+    cluster_name: dev_cluster # N个prefill 和 M个decode节点组成的cluster中 cluster_name要相同
+    inference_addr: 127.0.0.1:8090  # 当前节点的inference地址
+    redis_password: "XXXXXXX"       # Redis密码
+    metadata_addr: "redis://127.0.0.1:6379" # Redis 地址
+```
+
+### 节点启动命令
+不同的节点角色指向上面配置好的配置文件，启动命令相同
+
+** Decode 节点启动命令参考**
+``` 
+# 使用Mooncake Transfer Engine Next 版本
+export MC_USE_TENT=1
+# 同机器启动双角色节点需要为每个节点的Mooncake设置不同的 rpc 地址
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+# 服务启动命令，注意指向不同角色的配置文件
+python ../python/serving_server.py \
+  --config_file ksana_llm_decode.yaml \
+  --host 0.0.0.0 \
+  --port 8089
+```
+
+** Prefill 节点启动命令参考**
+``` 
+# 使用Mooncake Transfer Engine Next 版本
+export MC_USE_TENT=1
+# 同机器启动双角色节点需要为每个节点的Mooncake设置不同的 rpc 地址
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+# 服务启动命令，注意指向不同角色的配置文件
+python ../python/serving_server.py \
+  --config_file ksana_llm_prefill.yaml \
+  --host 0.0.0.0 \
+  --port 8090
 ```
