@@ -1,0 +1,95 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+#pragma once
+
+#include "configure/environment.h"
+#include "models/common/common_model.h"
+#include "models/common/common_weight.h"
+#include "utils/status.h"
+#include "utils/utils.h"
+
+#include "models/communicator/tp_communicator.h"
+#include "modules/attention/sparse_mla_indexer.h"
+#include "modules/basic/bmm.h"
+#include "modules/basic/flash_mla_attention.h"
+#include "modules/basic/linear.h"
+#include "modules/basic/mem_adjuster.h"
+#include "modules/basic/paged_mla_attention.h"
+#include "modules/basic/split.h"
+
+namespace ksana_llm {
+
+// Buffers used in mla.
+// TODO(robertyuan): Some maybe reused with other modules
+struct MlaBuffers {
+  TensorBuffer* kv_lora_or_q_nope_rope_buffer;
+  TensorBuffer* kv_buffer;
+  TensorBuffer* k_rope_buffer;
+  TensorBuffer* q_nope_buffer;
+  TensorBuffer* q_rope_buffer;
+  TensorBuffer* topk_indices_buffer;
+
+  // shared
+  TensorBuffer* shared_prefix_kv_buffer;
+};
+
+class MultiHeadLatentAttention {
+ public:
+  MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
+                           ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers);
+
+  Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
+                 std::shared_ptr<TpCommunicator> tp_comm, bool is_multi_token_forward,
+                 ForwardingContext& forwarding_context);
+
+  static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
+                              const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers);
+
+ private:
+  const int layer_idx_;
+  const size_t tensor_parallel_size_;
+  MlaBuffers& mla_buffers_;
+
+ protected:
+#ifdef ENABLE_CUDA
+  std::shared_ptr<BaseLayer> set_torch_stream_layers_;
+#endif
+
+  bool use_dsa_ = false;
+  bool use_q_lora_ = false;
+  // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
+  bool use_fused_lora_a_ = false;
+  // compute o_proj out of dp group
+  bool o_proj_out_of_dp_ = false;
+
+  std::shared_ptr<Linear> attn_fused_lora_a_projs_;
+  std::shared_ptr<Linear> attn_q_a_projs_;
+  std::shared_ptr<Linear> attn_kv_a_lora_projs_;
+  std::shared_ptr<Linear> attn_kv_a_ropes_;
+  std::shared_ptr<Linear> attn_q_b_projs_;
+  std::shared_ptr<Linear> attn_q_b_lora_projs_;
+  std::shared_ptr<Linear> attn_q_b_rope_projs_;
+  std::shared_ptr<Linear> attn_o_proj_;
+  std::shared_ptr<Split> split_;
+  std::shared_ptr<Bmm> attn_w_uk_t_bmm_;
+  std::shared_ptr<Bmm> attn_w_uv_bmm_;
+  std::shared_ptr<FlashMlaAttention> flash_mla_attention_layers_;
+  std::shared_ptr<PagedMlaAttention> paged_mla_attention_layers_;
+  std::shared_ptr<MemAdjuster> mem_adjuster_;
+  std::shared_ptr<Layernorm> kv_a_layernorms_;
+  std::shared_ptr<Layernorm> q_a_layernorms_;
+  std::shared_ptr<SparseMlaIndexer> sparse_mla_indexer_;
+
+  // Use dsa only if input_length > context_dsa_threshold_ for efficiency
+  size_t context_dsa_threshold_ = 0;
+  size_t o_proj_k_dim_ = 0;
+
+  inline static size_t qk_nope_head_dim_ = 0;
+  inline static size_t qk_rope_head_dim_ = 0;
+  inline static size_t kv_lora_rank_ = 0;
+  inline static size_t q_lora_rank_ = 0;
+  inline static size_t head_num_per_atp_ = 0;
+};
+
+}  // namespace ksana_llm

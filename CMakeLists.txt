@@ -137,6 +137,30 @@ execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${TRITON_KERNEL_PATH}
 
 find_package(Git REQUIRED)
 
+# Download ARIAL.TTF font file for arc_hunyuan_video plugin
+set(ARIAL_TTF_URL "https://raw.githubusercontent.com/TencentARC/ARC-Hunyuan-Video-7B/refs/heads/master/ARIAL.TTF")
+set(ARIAL_TTF_DEST "${PROJECT_SOURCE_DIR}/python/ksana_plugin/arc_hunyuan_video/ARIAL.TTF")
+
+if(NOT EXISTS ${ARIAL_TTF_DEST})
+  message(STATUS "Downloading ARIAL.TTF font file...")
+  file(DOWNLOAD ${ARIAL_TTF_URL} ${ARIAL_TTF_DEST}
+       SHOW_PROGRESS
+       STATUS DOWNLOAD_STATUS
+       TIMEOUT 60)
+  
+  list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+  list(GET DOWNLOAD_STATUS 1 ERROR_MESSAGE)
+  
+  if(NOT STATUS_CODE EQUAL 0)
+    message(WARNING "Failed to download ARIAL.TTF: ${ERROR_MESSAGE}")
+    message(WARNING "You may need to download it manually from ${ARIAL_TTF_URL}")
+  else()
+    message(STATUS "Successfully downloaded ARIAL.TTF to ${ARIAL_TTF_DEST}")
+  endif()
+else()
+  message(STATUS "ARIAL.TTF already exists at ${ARIAL_TTF_DEST}")
+endif()
+
 if(WITH_CUDA)
   # dedicate for Nvidia GPU
   option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
@@ -317,5 +341,4 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 
 add_subdirectory(3rdparty)
 add_subdirectory(examples)
-add_subdirectory(src)
-add_subdirectory(tools)
+add_subdirectory(csrc)

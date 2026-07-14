@@ -1,0 +1,657 @@
+/* Copyright 2025 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#include "configure/schedule_config_parser.h"
+
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <string>
+
+#include "configure/yaml_reader.h"
+#include "gtest/gtest.h"
+
+namespace ksana_llm {
+
+class ScheduleConfigParserTest : public ::testing::Test {
+ protected:
+  void SetUp() override { parser_ = std::make_shared<ScheduleConfigParser>(); }
+
+  void TearDown() override {
+    parser_->Reset();
+    // Clean up temporary files
+    CleanupTempFiles();
+  }
+
+  std::string CreateConnectorYamlConfig(const std::string &group_role = "none", const std::string &router_addr = "",
+                                        const std::string &communication_type = "",
+                                        const std::string &inference_addr = "",
+                                        const std::string &coordinator_addr = "",
+                                        const std::string &cluster_name = "") {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+    temp_files_.push_back(temp_file_path.string());
+
+    std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+    temp_dirs_.push_back(model_dir.string());
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    std::ofstream file(temp_file_path);
+    if (!file.is_open()) return "";
+
+    file << "setting:\n";
+    file << "  global:\n";
+    file << "    tensor_para_size: 1\n";
+    file << "  batch_scheduler:\n";
+    file << "    max_token_len: 4096\n";
+    file << "    max_step_tokens: 4096\n";
+    file << "    max_batch_size: 32\n";
+    file << "  block_manager:\n";
+    file << "    block_token_num: 16\n";
+    file << "    reserved_device_memory_ratio: 0.01\n";
+    file << "  connector:\n";
+    file << "    group_role: " << group_role << "\n";
+    if (!router_addr.empty()) {
+      file << "    router_addr: \"" << router_addr << "\"\n";
+    }
+    if (!communication_type.empty()) {
+      file << "    communication_type: " << communication_type << "\n";
+    }
+    if (!inference_addr.empty()) {
+      file << "    inference_addr: \"" << inference_addr << "\"\n";
+    }
+    if (!coordinator_addr.empty()) {
+      file << "    coordinator_addr: \"" << coordinator_addr << "\"\n";
+    }
+    if (!cluster_name.empty()) {
+      file << "    cluster_name: " << cluster_name << "\n";
+    }
+    file << "model_spec:\n";
+    file << "  base_model:\n";
+    file << "    model_dir: \"" << model_dir.string() << "\"\n";
+    file.close();
+    return temp_file_path.string();
+  }
+
+  // Helper function to create a temporary YAML configuration file
+  std::string CreateTempYamlConfig(bool enable_prefix_caching = false, size_t split_fuse_token_num = 0,
+                                   bool use_flashinfer_for_decode = false) {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+    temp_files_.push_back(temp_file_path.string());
+
+    // Create model directory
+    std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+    temp_dirs_.push_back(model_dir.string());
+
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    std::ofstream file(temp_file_path);
+    if (!file.is_open()) {
+      return "";
+    }
+
+    // Write YAML configuration
+    file << "setting:\n";
+    file << "  global:\n";
+    file << "    tensor_para_size: 1\n";
+    file << "    pipeline_para_size: 1\n";
+    file << "  batch_scheduler:\n";
+    file << "    max_waiting_queue_len: 100\n";
+    file << "    max_token_len: 4096\n";
+    file << "    max_step_tokens: 4096\n";
+    file << "    max_batch_size: 32\n";
+    file << "    enable_auto_prefix_cache: " << (enable_prefix_caching ? "true" : "false") << "\n";
+    file << "    split_fuse_token_num: " << split_fuse_token_num << "\n";
+    file << "  block_manager:\n";
+    file << "    block_token_num: 16\n";
+    file << "    reserved_device_memory_ratio: 0.01\n";
+    file << "  attn_backend:\n";
+    file << "    use_flashinfer_for_decode: " << (use_flashinfer_for_decode ? "true" : "false") << "\n";
+    file << "model_spec:\n";
+    file << "  base_model:\n";
+    file << "    model_dir: \"" << model_dir.string() << "\"\n";
+
+    file.close();
+    return temp_file_path.string();
+  }
+
+  // Helper function to load ModelConfig from config.json
+  ModelConfig LoadModelConfig(const std::string &model_dir, bool is_visual = false) {
+    ModelConfig model_config;
+
+    // Directly set is_visual flag instead of parsing full config
+    // This avoids dependencies on model loading infrastructure
+    model_config.is_visual = is_visual;
+
+    return model_config;
+  }
+
+  void CleanupTempFiles() {
+    for (const auto &file : temp_files_) {
+      try {
+        if (std::filesystem::exists(file)) {
+          std::filesystem::remove(file);
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "Failed to remove temp file: " << file << ", error: " << e.what() << std::endl;
+      }
+    }
+
+    for (const auto &dir : temp_dirs_) {
+      try {
+        if (std::filesystem::exists(dir)) {
+          std::filesystem::remove_all(dir);
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "Failed to remove temp dir: " << dir << ", error: " << e.what() << std::endl;
+      }
+    }
+
+    temp_files_.clear();
+    temp_dirs_.clear();
+  }
+
+  std::shared_ptr<ScheduleConfigParser> parser_;
+  std::vector<std::string> temp_files_;
+  std::vector<std::string> temp_dirs_;
+  static int test_file_counter_;
+};
+
+int ScheduleConfigParserTest::test_file_counter_ = 0;
+
+// Test: Visual Model automatically disables both PrefixCaching and SplitFuse
+TEST_F(ScheduleConfigParserTest, VisualModelDisablesPrefixCachingAndSplitFuse) {
+  // Create YAML config with both features enabled
+  std::string yaml_path = CreateTempYamlConfig(true, 256);
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  // Create visual model config - just set the flag directly
+  ModelConfig model_config = LoadModelConfig(model_dir, true);
+  EXPECT_TRUE(model_config.is_visual);
+
+  // Parse schedule config
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  // Verify both features are disabled for visual model
+  CacheManagerConfig cache_config;
+  parser_->GetCacheManagerConfig(cache_config);
+  EXPECT_FALSE(cache_config.enable_prefix_caching) << "PrefixCaching should be disabled (false) for Visual Model";
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 0) << "SplitFuse should be disabled (0) for Visual Model";
+}
+
+// Test: UpdateMembers allows k/v scales equal to 1.0 when FlashInfer is enabled.
+TEST_F(ScheduleConfigParserTest, UpdateMembersAllowsKvScalesEqualToOneWhenFlashInferEnabled) {
+  std::string yaml_path = CreateTempYamlConfig(false, 0, true);
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.weight_data_type = TYPE_FP16;
+  model_config.k_scales = {1.0f, 1.0f};
+  model_config.v_scales = {1.0f, 1.0f};
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  EXPECT_NO_THROW(parser_->UpdateMembers(model_dir, model_config));
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_TRUE(runtime_config.attn_backend_config.use_flashinfer_for_decode);
+  EXPECT_EQ(runtime_config.attn_backend_config.kv_cache_dtype, model_config.weight_data_type);
+}
+
+// Test: UpdateMembers rejects k/v scales not equal to 1.0 when FlashInfer is enabled.
+TEST_F(ScheduleConfigParserTest, UpdateMembersRejectsKvScalesNotEqualToOneWhenFlashInferEnabled) {
+  std::string yaml_path = CreateTempYamlConfig(false, 0, true);
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.weight_data_type = TYPE_FP16;
+  model_config.k_scales = {1.0f, 0.5f};
+  model_config.v_scales = {1.0f, 1.0f};
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  EXPECT_ANY_THROW(parser_->UpdateMembers(model_dir, model_config));
+}
+
+// Test: UpdateMembers allows k/v scales not equal to 1.0 when FlashInfer is disabled.
+TEST_F(ScheduleConfigParserTest, UpdateMembersAllowsKvScalesNotEqualToOneWhenFlashInferDisabled) {
+  std::string yaml_path = CreateTempYamlConfig(false, 0, false);
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.weight_data_type = TYPE_FP16;
+  model_config.k_scales = {1.0f, 0.5f};
+  model_config.v_scales = {1.0f, 1.0f};
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  EXPECT_NO_THROW(parser_->UpdateMembers(model_dir, model_config));
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_FALSE(runtime_config.attn_backend_config.use_flashinfer_for_decode);
+  EXPECT_EQ(runtime_config.attn_backend_config.kv_cache_dtype, model_config.weight_data_type);
+}
+
+// --- InitConnectorConfig tests ---
+
+TEST_F(ScheduleConfigParserTest, ConnectorRoleNoneSkipsConnectorParsing) {
+  std::string yaml_path = CreateConnectorYamlConfig("none", "localhost:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  Status get_status = parser_->GetConnectorConfigs(connector_config);
+  EXPECT_FALSE(get_status.OK()) << "Connector config should not be initialized when role is none";
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorRolePrefillParsesConfig) {
+  std::string yaml_path =
+      CreateConnectorYamlConfig("prefill", "http://router.example.com:9000", "tcp", "10.0.0.1:8080", "", "my_cluster");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.group_role, GroupRole::PREFILL);
+  EXPECT_EQ(connector_config.router_addr, "http://router.example.com:9000");
+  EXPECT_EQ(connector_config.inference_addr, "10.0.0.1:8080");
+  EXPECT_EQ(connector_config.cluster_name, "my_cluster");
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorRoleDecodeParsesConfig) {
+  std::string yaml_path = CreateConnectorYamlConfig("decode", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.group_role, GroupRole::DECODE);
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorRoleBothParsesConfig) {
+  std::string yaml_path = CreateConnectorYamlConfig("both", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.group_role, GroupRole::BOTH);
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorUnknownRoleFallsBackToNone) {
+  std::string yaml_path = CreateConnectorYamlConfig("invalid_role", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  Status get_status = parser_->GetConnectorConfigs(connector_config);
+  EXPECT_FALSE(get_status.OK()) << "Unknown role should fall back to NONE";
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorRoleCaseInsensitive) {
+  std::string yaml_path = CreateConnectorYamlConfig("PREFILL", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.group_role, GroupRole::PREFILL);
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrHostPortGetHttpPrepended) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "10.0.0.1:8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://10.0.0.1:8080");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrWithSchemeKeptAsIs) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "https://router.example.com:9000");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "https://router.example.com:9000");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrEmptyIsAccepted) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  Status get_status = parser_->GetConnectorConfigs(connector_config);
+  EXPECT_FALSE(get_status.OK()) << "Empty router_addr should not pass GetConnectorConfigs check";
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrMissingColonWarns) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "nocolonhere");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://nocolonhere");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrColonAtStartWarns) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", ":8080");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://:8080");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrColonAtEndWarns) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://host:");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrPortOutOfRangeWarns) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:99999");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://host:99999");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrPortZeroWarns) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:0");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://host:0");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrNonNumericPortWarns) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:abc");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://host:abc");
+}
+
+TEST_F(ScheduleConfigParserTest, RouterAddrValidPortInRange) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "myhost:443");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.router_addr, "http://myhost:443");
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorCommunicationTypeNccl) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:8080", "nccl");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.communication_type, CommunicationType::NCCL);
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorCommunicationTypeZmq) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:8080", "zmq");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.communication_type, CommunicationType::ZMQ);
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorCommunicationTypeDefaultIsTcp) {
+  std::string yaml_path = CreateConnectorYamlConfig("prefill", "host:8080", "unknown_type");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.communication_type, CommunicationType::TCP);
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorAllFieldsParsedCorrectly) {
+  std::string yaml_path =
+      CreateConnectorYamlConfig("decode", "10.0.0.1:9090", "zmq", "10.0.0.2:7070", "10.0.0.3:6060", "test_cluster");
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ConnectorConfig connector_config;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(connector_config).OK());
+  EXPECT_EQ(connector_config.group_role, GroupRole::DECODE);
+  EXPECT_EQ(connector_config.router_addr, "http://10.0.0.1:9090");
+  EXPECT_EQ(connector_config.inference_addr, "10.0.0.2:7070");
+  EXPECT_EQ(connector_config.coordinator_addr, "10.0.0.3:6060");
+  EXPECT_EQ(connector_config.cluster_name, "test_cluster");
+  EXPECT_EQ(connector_config.communication_type, CommunicationType::ZMQ);
+}
+
+TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files_.push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+  temp_dirs_.push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  ASSERT_TRUE(file.is_open());
+
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "    enable_auto_prefix_cache: true\n";
+  file << "    split_fuse_token_num: 256\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  connector:\n";
+  file << "    group_role: prefill\n";
+  file << "    router_addr: \"10.0.0.1:8080\"\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
+  ModelConfig model_config;
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  BatchSchedulerConfig batch_config;
+  parser_->GetBatchSchedulerConfig(batch_config);
+  EXPECT_EQ(batch_config.split_fuse_token_num, 0)
+      << "split_fuse_token_num should be 0 when PD separation + prefix_cache + split_fuse are all enabled";
+}
+
+}  // namespace ksana_llm

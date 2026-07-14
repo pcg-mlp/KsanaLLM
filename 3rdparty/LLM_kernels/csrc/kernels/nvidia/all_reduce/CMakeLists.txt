@@ -11,8 +11,6 @@ target_link_libraries(llm_kernels_nvidia_kernel_all_reduce PUBLIC -lcuda -lcudar
 # for test
 file(GLOB_RECURSE ALL_REDUCE_TEST_SRCS *test.cu)
 message(STATUS "ALL_REDUCE_TEST_SRCS : ${ALL_REDUCE_TEST_SRCS}")
-cc_test(llm_kernels_nvidia_kernel_custom_all_reduce_test
-  SRCS ${ALL_REDUCE_TEST_SRCS}
-  DEPS
-    llm_kernels_nvidia_utils
-    llm_kernels_nvidia_kernel_all_reduce)
+cc_test(llm_kernels_nvidia_kernel_custom_all_reduce_test SRCS ${ALL_REDUCE_TEST_SRCS} DEPS
+  llm_kernels_nvidia_utils
+  llm_kernels_nvidia_kernel_all_reduce)

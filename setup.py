@@ -77,7 +77,7 @@ class BuildExt(build_ext_orig):
         extdir.mkdir(parents=True, exist_ok=True)
 
         # Collect all the implemented endpoints from the 'endpoints/warpper' directory
-        endpoints_dir = cwd / "src" / "ksana_llm" / "endpoints" / "wrapper"
+        endpoints_dir = cwd / "csrc" / "endpoints" / "wrapper"
         implemented_endpoints = [
             entry.name for entry in endpoints_dir.iterdir() if entry.is_dir()
         ]
@@ -154,7 +154,7 @@ class BuildExt(build_ext_orig):
         Copy the built libraries to the appropriate locations in the package.
         """
         # Directories for the built libraries
-        deps_lib = cwd / "src" / "ksana_llm" / "python" / "lib"
+        deps_lib = cwd / "python" / "lib"
         build_temp_lib = build_temp / "lib"
 
         # Ensure the dependencies library directory exists
@@ -178,7 +178,7 @@ class BuildExt(build_ext_orig):
         if tbb_so.exists():
             target_libs.append("libtbb.so.12")
 
-        # Copy libraries to both local development and package directories
+        # Copy libraries to both the local development directory and the package directory
         for target_lib in target_libs:
             if target_lib == "libtbb.so.12":
                 src_lib = tbb_so
@@ -208,11 +208,11 @@ class BuildExt(build_ext_orig):
         Copy the required Python files and directories into the package.
         """
         # List of directories to copy into the package
-        need_dirs = ["weight_map", "ksana_plugin", "simple_router", "openaiapi", "utilize"]
+        need_dirs = ["weight_map", "ksana_plugin", "simple_router", "openaiapi", "utilize", "ksana_encoder"]
 
         # Copy each required directory
         for need_dir in need_dirs:
-            src_dir = cwd / "src" / "ksana_llm" / "python" / need_dir
+            src_dir = cwd / "python" / need_dir
             dst_dir = extdir.parent / "ksana_llm" / need_dir
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
@@ -221,7 +221,7 @@ class BuildExt(build_ext_orig):
             if endpoint_status[endpoint]:
                 if endpoint == "triton":
                     # For 'triton backend', copy the entire endpoint directory
-                    src_dir = cwd / "src" / "ksana_llm" / "endpoints" / "wrapper" / endpoint
+                    src_dir = cwd / "csrc" / "endpoints" / "wrapper" / endpoint
                     dst_dir = extdir.parent / "ksana_llm" / "triton_backend"
                     shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
@@ -230,7 +230,7 @@ class BuildExt(build_ext_orig):
                     shutil.copyfile(src_conf, dst_conf)
                 else:
                     # For other endpoints, copy the 'rpc_config' directory
-                    src_dir = cwd / "src" / "ksana_llm" / "endpoints" / "wrapper" / endpoint / "rpc_config"
+                    src_dir = cwd / "csrc" / "endpoints" / "wrapper" / endpoint / "rpc_config"
                     dst_dir = extdir.parent / "ksana_llm" / "rpc_config"
                     shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
@@ -243,7 +243,7 @@ class BuildExt(build_ext_orig):
 
         # Copy each required Python file
         for need_file in server_need_files:
-            src_file = cwd / "src" / "ksana_llm" / "python" / need_file
+            src_file = cwd / "python" / need_file
             dst_dir = extdir.parent / "ksana_llm"
             copy_file(str(src_file), str(dst_dir))
 
@@ -274,7 +274,7 @@ setup(
     url="https://xxx/KsanaLLM/",
     packages=["ksana_llm"],
     package_dir={
-        "": "src/ksana_llm/python",
+        "": "python/",
     },
     package_data={
         'ksana_llm': [

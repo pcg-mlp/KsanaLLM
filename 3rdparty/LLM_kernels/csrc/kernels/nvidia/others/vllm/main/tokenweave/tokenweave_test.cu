@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Tencent Inc.  All rights reserved.
+ * Copyright 2026 Tencent Inc.  All rights reserved.
  */
 
 #include <gtest/gtest.h>
@@ -427,8 +427,8 @@ class LlamaNvidiaTokenWeaveTestSuit : public NvidiaTestSuitBase {
     auto nccl_run = [&]() {
       NCCLCHECK(ncclAllReduce(reinterpret_cast<T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output_ref.data_ptr),
                               token_num * hidden_dim, ncclDtype, ncclSum, nccl_comms[cur_rank], stream));
-      InvokeFusedAddRMSNorm<T>(d_output_ref.data_ptr, d_residual_ref.data_ptr, d_rms_gamma.data_ptr, rms_eps, false,
-                               token_num, hidden_dim, stream);
+      InvokeFusedAddRMSNorm<T>(d_output_ref.data_ptr, d_residual_ref.data_ptr, d_rms_gamma.data_ptr, rms_eps, token_num,
+                               hidden_dim, stream);
     };
     const float elapsed_ms_nccl = MeasureCudaExecutionTime(nccl_run, stream, warmups, iterations);
 

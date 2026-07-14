@@ -110,26 +110,35 @@ __global__ void InvokeRotaryEmbeddingKernel(
   }
 }
 
-// Multimodal Rotary Position Embedding（M-ROPE）
-template <typename T, bool IS_NEOX>
+// Multimodal Rotary Position Embedding (M-ROPE)
+// Unified kernel for both chunked (Qwen2-VL) and interleaved (Qwen3-VL) mapping modes.
+//   CHUNKED:     dimension ranges [0,s_t) → T, [s_t,s_t+s_h) → H, [s_t+s_h,end) → W
+//   INTERLEAVED: dimension pattern [T,H,W, T,H,W, ..., T,T,...] via mod-3 routing
+enum class MRopeMapping { CHUNKED, INTERLEAVED };
+
+template <typename T, bool IS_NEOX, MRopeMapping MAPPING>
 __global__ void InvokeMRotaryEmbeddingKernel(
-    const int64_t* __restrict__ positions,  // [3, batch_size, seq_len] or [3, num_tokens]
-    const int64_t* __restrict__ mask,       // [batch_size, seq_len] or [num_tokens]
-    T* __restrict__ query,  // [batch_size, seq_len, num_heads, query_head_size] or [num_tokens, num_heads,
-                            // query_head_size]
-    T* __restrict__ key,    // [batch_size, seq_len, num_kv_heads, key_head_size] or [num_tokens, num_kv_heads,
-                            // key_head_size]
-    const T* __restrict__ cos_sin_cache,  // [max_position_embeddings, 2, rotary_dim // 2]
-    const int* __restrict__ mrope_section, const int rotary_dim, const int64_t query_stride, const int64_t key_stride,
-    const int num_heads, const int num_kv_heads, const int query_head_size, const int key_head_size) {
+    const int64_t* __restrict__ positions,  // [3 * num_tokens] stored as [t0,h0,w0, t1,h1,w1, ...]
+    const int64_t* __restrict__ mask,       // [num_tokens]
+    T* __restrict__ query, T* __restrict__ key,
+    const T* __restrict__ cos_sin_cache,    // [max_position_embeddings, 2, rotary_dim // 2]
+    const int* __restrict__ mrope_section,  // [3] cumulative prefix sum: [s_t, s_t+s_h, s_t+s_h+s_w]
+    const int rotary_dim, const int64_t query_stride, const int64_t key_stride, const int num_heads,
+    const int num_kv_heads, const int query_head_size, const int key_head_size) {
   // Each thread block is responsible for one token.
   const int token_idx = blockIdx.x;
-  int64_t mask_i = mask[token_idx];
-  if (mask_i == 0) {
+  if (mask[token_idx] == 0) {
     return;
   }
 
   const int embed_dim = rotary_dim / 2;
+
+  // Precompute interleave boundaries; compiler optimizes away for CHUNKED.
+  int s_h_x3 = 0, s_w_x3 = 0;
+  if constexpr (MAPPING == MRopeMapping::INTERLEAVED) {
+    s_h_x3 = (mrope_section[1] - mrope_section[0]) * 3;
+    s_w_x3 = (mrope_section[2] - mrope_section[1]) * 3;
+  }
 
   const int nq = num_heads * embed_dim;
   for (int i = threadIdx.x; i < nq; i += blockDim.x) {
@@ -137,18 +146,19 @@ __global__ void InvokeMRotaryEmbeddingKernel(
     const int64_t token_head = token_idx * query_stride + head_idx * query_head_size;
     const int rot_offset = i % embed_dim;
 
-    // M-ROPE has three components: temporal (`positions[0]`), height (`positions[1]`),
-    // and width (`positions[2]`).
-    // For rotary dimention in `[0, mrope_section[0])`, use temporal position indices;
-    // for rotary dimention in `[mrope_section[0], mrope_section[1])`, use height position indices;
-    // and for rotary dimention in `[mrope_section[1], mrope_section[2])`, use width position indices.
-    // Here `mrope_section[2]` is guaranteed to be equal to `embed_dim`.
-    const int pos_index = rot_offset < mrope_section[0] ? 0 : (rot_offset < mrope_section[1] ? 1 : 2);
+    int pos_index;
+    if constexpr (MAPPING == MRopeMapping::CHUNKED) {
+      // Contiguous ranges: [0, s_t) → T, [s_t, s_t+s_h) → H, [s_t+s_h, end) → W
+      pos_index = rot_offset < mrope_section[0] ? 0 : (rot_offset < mrope_section[1] ? 1 : 2);
+    } else {
+      // Interleaved pattern: mod3==0 → T, mod3==1 → H (if in range), mod3==2 → W (if in range), else T
+      const int mod3 = rot_offset % 3;
+      pos_index = (mod3 == 1 && rot_offset < s_h_x3) ? 1 : ((mod3 == 2 && rot_offset < s_w_x3) ? 2 : 0);
+    }
+
     const int64_t pos = positions[3 * token_idx + pos_index];
     const T* cache_ptr = cos_sin_cache + pos * rotary_dim;
-    const T* cos_ptr = cache_ptr;
-    const T* sin_ptr = cache_ptr + embed_dim;
-    ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+    ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cache_ptr, cache_ptr + embed_dim, rot_offset, embed_dim);
   }
 
   const int nk = num_kv_heads * embed_dim;
@@ -157,18 +167,17 @@ __global__ void InvokeMRotaryEmbeddingKernel(
     const int64_t token_head = token_idx * key_stride + head_idx * key_head_size;
     const int rot_offset = i % embed_dim;
 
-    // M-ROPE has three components: temporal (`positions[0]`), height (`positions[1]`),
-    // and width (`positions[2]`).
-    // For rotary dimention in `[0, mrope_section[0])`, use temporal position indices;
-    // for rotary dimention in `[mrope_section[0], mrope_section[1])`, use height position indices;
-    // and for rotary dimention in `[mrope_section[1], mrope_section[2])`, use width position indices.
-    // Here `mrope_section[2]` is guaranteed to be equal to `embed_dim`.
-    const int pos_index = rot_offset < mrope_section[0] ? 0 : (rot_offset < mrope_section[1] ? 1 : 2);
+    int pos_index;
+    if constexpr (MAPPING == MRopeMapping::CHUNKED) {
+      pos_index = rot_offset < mrope_section[0] ? 0 : (rot_offset < mrope_section[1] ? 1 : 2);
+    } else {
+      const int mod3 = rot_offset % 3;
+      pos_index = (mod3 == 1 && rot_offset < s_h_x3) ? 1 : ((mod3 == 2 && rot_offset < s_w_x3) ? 2 : 0);
+    }
+
     const int64_t pos = positions[3 * token_idx + pos_index];
     const T* cache_ptr = cos_sin_cache + pos * rotary_dim;
-    const T* cos_ptr = cache_ptr;
-    const T* sin_ptr = cache_ptr + embed_dim;
-    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cache_ptr, cache_ptr + embed_dim, rot_offset, embed_dim);
   }
 }
 
@@ -239,16 +248,28 @@ __global__ void InvokeXDRotaryEmbeddingKernel(
     Invoke##ROTARY_EMBEDDING##Kernel<T, false><<<grid, block, 0, params.stream>>>(__VA_ARGS__); \
   }
 
+#define DISPATCH_MROPE_BY_NEOX_AND_MAPPING(IS_NEOX, MAPPING, ...)                                    \
+  if (IS_NEOX) {                                                                                     \
+    InvokeMRotaryEmbeddingKernel<T, true, MAPPING><<<grid, block, 0, params.stream>>>(__VA_ARGS__);  \
+  } else {                                                                                           \
+    InvokeMRotaryEmbeddingKernel<T, false, MAPPING><<<grid, block, 0, params.stream>>>(__VA_ARGS__); \
+  }
+
 template <typename T>
 void LaunchRotaryEmbedding(const RotaryEmbeddingParam& params, T* cos_sin_cache, T* query, T* key) {
   dim3 grid(params.num_tokens_);
   dim3 block(std::min(params.num_heads * params.rotary_dim / 2, 512));
 
-  if (params.mrope_section != nullptr) {
-    DISPATCH_ROTARY_EMBEDDING_BY_NEOX(MRotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
-                                      cos_sin_cache, params.mrope_section, params.rotary_dim, params.query_stride,
-                                      params.key_stride, params.num_heads, params.num_kv_heads, params.query_head_size,
-                                      params.key_head_size);
+  if (params.rotary_embedding_type == RotaryEmbeddingType::MROPE_INTERLEAVED && params.mrope_section != nullptr) {
+    DISPATCH_MROPE_BY_NEOX_AND_MAPPING(params.is_neox, MRopeMapping::INTERLEAVED, params.positions, params.mask, query,
+                                       key, cos_sin_cache, params.mrope_section, params.rotary_dim, params.query_stride,
+                                       params.key_stride, params.num_heads, params.num_kv_heads, params.query_head_size,
+                                       params.key_head_size);
+  } else if (params.mrope_section != nullptr) {
+    DISPATCH_MROPE_BY_NEOX_AND_MAPPING(params.is_neox, MRopeMapping::CHUNKED, params.positions, params.mask, query, key,
+                                       cos_sin_cache, params.mrope_section, params.rotary_dim, params.query_stride,
+                                       params.key_stride, params.num_heads, params.num_kv_heads, params.query_head_size,
+                                       params.key_head_size);
   } else if (params.xdrope_section != nullptr) {
     KLLM_KERNEL_CHECK(params.rotary_dim == params.query_head_size);
     KLLM_KERNEL_CHECK(params.query_head_size == params.key_head_size);
@@ -510,7 +531,6 @@ void RotaryEmbeddingCuda::SetConfig(void* cos_sin_cache, const int rotary_dim, c
   params_.beta_slow = beta_slow;
   params_.mscale = mscale;
   params_.mscale_all_dim = mscale_all_dim;
-  params_.use_deepseek_rope = use_deepseek_rope;
   if (use_deepseek_rope) {
     params_.query_stride = num_heads * rotary_dim;
     params_.key_stride = rotary_dim;

@@ -176,71 +176,6 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
   }
 
   template <typename INPUT_DTYPE, typename OUTPUT_DTYPE>
-  void CompareStridedBatchedVsStandardGemm() {
-    using Shape = std::tuple<size_t, size_t, size_t>;
-    const std::vector<Shape> shape_list = {{1, 75968, 5120}, {1, 75968, 8192}, {1, 129280, 8192}};
-
-    for (const auto& shape : shape_list) {
-      size_t m = std::get<0>(shape);
-      size_t n = std::get<1>(shape);
-      size_t k = std::get<2>(shape);
-
-      BufferMeta a_buffer = CreateBuffer<INPUT_DTYPE>(MemoryType::MEMORY_GPU, {m, k}, /*is_random_init*/ true);
-      BufferMeta b_buffer = CreateBuffer<INPUT_DTYPE>(MemoryType::MEMORY_GPU, {k, n}, /*is_random_init*/ true);
-      BufferMeta c_buffer = CreateBuffer<OUTPUT_DTYPE>(MemoryType::MEMORY_GPU, {m, n}, /*is_random_init*/ false);
-
-      cudaDataType_t atype;
-      cudaDataType_t btype;
-      cudaDataType_t ctype;
-      cudaDataType_t compute_type;
-      PrepareComputeType<INPUT_DTYPE, OUTPUT_DTYPE>(atype, btype, ctype, compute_type);
-
-      const int32_t lda = static_cast<int32_t>(k);
-      const int32_t ldb = static_cast<int32_t>(n);
-      const int32_t ldc = static_cast<int32_t>(n);
-      const long long stride_a = static_cast<long long>(k);
-      constexpr long long stride_b = 0LL;
-      const long long stride_c = static_cast<long long>(n);
-      constexpr int batch_size = 1;
-      constexpr float alpha = 1.0f;
-      constexpr float beta = 0.0f;
-      constexpr int warmup_rounds = 5;
-      constexpr int tested_rounds = 5;
-
-      auto strided_batched_run = [&]() {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasStridedBatchedGemm(
-            cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, b_buffer.data_ptr, ldb, stride_b, btype,
-            a_buffer.data_ptr, lda, stride_a, atype, c_buffer.data_ptr, ldc, stride_c, ctype, batch_size, compute_type,
-            alpha, beta));
-      };
-      float strided_batched_time_ms =
-          MeasureCudaExecutionTime(strided_batched_run, stream, warmup_rounds, tested_rounds);
-
-      auto standard_gemm_run = [&]() {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k,
-                                                 b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                 c_buffer.data_ptr, ldc, ctype, compute_type, stream));
-      };
-      float standard_gemm_time_ms =
-          MeasureCudaExecutionTime(standard_gemm_run, stream, warmup_rounds, tested_rounds);
-
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-
-      ASSERT_LT(strided_batched_time_ms, standard_gemm_time_ms)
-          << "Strided batched GEMM should be faster for shape (m=" << m << ", n=" << n << ", k=" << k << ")";
-
-      std::cout << "DecodeShapePerformance(m=" << m << ", n=" << n << ", k=" << k
-                << ") strided_batched_ms=" << strided_batched_time_ms
-                << ", standard_gemm_ms=" << standard_gemm_time_ms << std::endl;
-
-      DeleteBuffer(c_buffer);
-      DeleteBuffer(b_buffer);
-      DeleteBuffer(a_buffer);
-    }
-  }
-
-  template <typename INPUT_DTYPE, typename OUTPUT_DTYPE>
   void TestCublasGemm(size_t m, size_t n, size_t k) {
     BufferMeta a_buffer = CreateBuffer<INPUT_DTYPE>(MemoryType::MEMORY_GPU, {m, k}, /*is_random_init*/ true);
     BufferMeta b_buffer = CreateBuffer<INPUT_DTYPE>(MemoryType::MEMORY_GPU, {k, n}, /*is_random_init*/ true);
@@ -306,26 +241,6 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
       EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_3", expected_buffer, c_buffer, 1e-4f, 1e-5f,
                                             miss_match_rate, true));
-      
-      // invokeCublasGemm_fp16_compute_reduction and invokeCublasGemm_cublashgemm use fp16 reduction so we expect lower accuracy
-      CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k,
-                                                b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-                                                stream, cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, true, false));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-      EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_fp16_compute_reduction", expected_buffer, c_buffer, 1e-3f, 1e-4f,
-                                            miss_match_rate, true));
-
-      CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k,
-                                                b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-                                                stream, cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, false, true));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-      EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_cublashgemm", expected_buffer, c_buffer, 1e-3f, 1e-4f,
-                                            miss_match_rate, true));
-
     }
 
     // test performance
@@ -379,38 +294,11 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       float InvokeCublasGemm_3_time_elapsed_ms =
           MeasureCudaExecutionTime(InvokeCublasGemm_3_cuda_run, stream, warmup_rounds, tested_rounds);
 
-      float InvokeCublasGemm_fp16_compute_reduction_time_elapsed_ms = 0.0f;
-      float InvokeCublasGemm_cublashgemm_time_elapsed_ms = 0.0f;
-      if (atype == CUDA_R_16F) {
-        auto InvokeCublasGemm_fp16_compute_reduction_cuda_run = [&]() {
-          CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(
-              cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype,
-              a_buffer.data_ptr, lda, atype, c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type, stream,
-              cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, true, false));
-        };
-        InvokeCublasGemm_fp16_compute_reduction_time_elapsed_ms = MeasureCudaExecutionTime(
-            InvokeCublasGemm_fp16_compute_reduction_cuda_run, stream, warmup_rounds, tested_rounds);
-
-        auto InvokeCublasGemm_cublashgemm_cuda_run = [&]() {
-          CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(
-              cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype,
-              a_buffer.data_ptr, lda, atype, c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type, stream,
-              cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, false, true));
-        };
-        InvokeCublasGemm_cublashgemm_time_elapsed_ms =
-            MeasureCudaExecutionTime(InvokeCublasGemm_cublashgemm_cuda_run, stream, warmup_rounds, tested_rounds);
-      }
-
       std::cout << test_name << " performance InvokeCublasGemmEx: " << InvokeCublasGemmEx_time_elapsed_ms
                 << ", InvokeCublasGemm_1: " << InvokeCublasGemm_1_time_elapsed_ms
                 << ", InvokeCublasGemm_2: " << InvokeCublasGemm_2_time_elapsed_ms
-                << ", InvokeCublasGemm_3(with heuristic search gemm algo): " << InvokeCublasGemm_3_time_elapsed_ms;
-      if (atype == CUDA_R_16F) {
-        std::cout << ", InvokeCublasGemm_fp16_compute_reduction: "
-                  << InvokeCublasGemm_fp16_compute_reduction_time_elapsed_ms
-                  << ", InvokeCublasGemm_cublashgemm: " << InvokeCublasGemm_cublashgemm_time_elapsed_ms;
-      }
-      std::cout << std::endl;
+                << ", InvokeCublasGemm_3(with heuristic search gemm algo): " << InvokeCublasGemm_3_time_elapsed_ms
+                << std::endl;
     }
 
     DeleteBuffer(expected_buffer);
@@ -595,12 +483,6 @@ TEST_F(LlamaNvidiaGemmWrapperTestSuit, CustomGemmTest) {
   CustomGemmTest<float, float>();
   CustomGemmTest<half, half>();
   CustomGemmTest<__nv_bfloat16, __nv_bfloat16>();
-}
-
-TEST_F(LlamaNvidiaGemmWrapperTestSuit, DISABLED_DecodeShapeStridedBatchedGemmPerfTest) {
-  CompareStridedBatchedVsStandardGemm<float, float>();
-  CompareStridedBatchedVsStandardGemm<half, half>();
-  CompareStridedBatchedVsStandardGemm<__nv_bfloat16, __nv_bfloat16>();
 }
 
 }  // namespace test

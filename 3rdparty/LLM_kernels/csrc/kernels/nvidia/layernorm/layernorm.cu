@@ -12,10 +12,10 @@
 
 #include <flashinfer/norm.cuh>
 
-using namespace llm_kernels::utils;
-
 namespace llm_kernels {
 namespace nvidia {
+
+using namespace llm_kernels::utils;
 
 // * Note that typename T is half2 or bfloat2 type
 template <typename T, bool IS_OUTPUT, bool IS_BIAS, int32_t RESIDUAL_NUM, bool IS_BETA, int32_t UNROLL_FACTOR>
@@ -561,11 +561,10 @@ INVOKE_LAYER_NORM(__nv_bfloat16);
 #undef INVOKE_LAYER_NORM
 
 template <typename T>
-void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, bool enable_pdl,
-                   cudaStream_t stream) {
+void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, cudaStream_t stream) {
 #if defined(ENABLE_FLASHINFER)
   flashinfer::norm::RMSNorm(input, gamma, out, m, n,
-                            /*stride_input*/ n, /*stride_output*/ n, layernorm_eps, enable_pdl, stream);
+                            /*stride_input*/ n, /*stride_output*/ n, layernorm_eps, GetEnablePDL(), stream);
   return;
 #endif
 
@@ -584,8 +583,8 @@ void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, i
   InvokeRMSNormKernel<T><<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, m, n);  // For gpt-3
 }
 
-#define INVOKE_RMS_NORM(T)                                                                                            \
-  template void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, bool enable_pdl, \
+#define INVOKE_RMS_NORM(T)                                                                           \
+  template void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, \
                               cudaStream_t stream)
 INVOKE_RMS_NORM(float);
 INVOKE_RMS_NORM(half);
@@ -763,33 +762,28 @@ __global__ void InvokeFusedQKVRmsNormKernel(const T* __restrict input, const T* 
 }
 
 template <typename T>
-__global__ void InvokeFusedQKVRmsNormPrefillKernel(const T* __restrict__ input,
-                                                   const T* __restrict__ q_gamma,
-                                                   const T* __restrict__ k_gamma,
-                                                   T* __restrict__ output,
-                                                   const float layernorm_eps,
-                                                   const int32_t total_tokens,
-                                                   const int32_t num_heads,
-                                                   const int32_t num_kv_heads,
-                                                   const int32_t head_size,
-                                                   const int64_t* __restrict__ mask) {
+__global__ void InvokeFusedQKVRmsNormPrefillKernel(const T* __restrict__ input, const T* __restrict__ q_gamma,
+                                                   const T* __restrict__ k_gamma, T* __restrict__ output,
+                                                   const float layernorm_eps, const int32_t total_tokens,
+                                                   const int32_t num_heads, const int32_t num_kv_heads,
+                                                   const int32_t head_size, const int64_t* __restrict__ mask) {
   /* Parameter description:
-    * input: input tensor
-    * q_gamma: RMSNorm weights for Q
-    * k_gamma: RMSNorm weights for K
-    * output: output tensor
-    * layernorm_eps: epsilon for RMSNorm
-    * total_tokens: total number of tokens
-    * num_heads: number of Q heads
-    * num_kv_heads: number of K/V heads
-    * head_size: dimension per head
-    * mask: attention mask to mask padding/invalid positions
-    *
+   * input: input tensor
+   * q_gamma: RMSNorm weights for Q
+   * k_gamma: RMSNorm weights for K
+   * output: output tensor
+   * layernorm_eps: epsilon for RMSNorm
+   * total_tokens: total number of tokens
+   * num_heads: number of Q heads
+   * num_kv_heads: number of K/V heads
+   * head_size: dimension per head
+   * mask: attention mask to mask padding/invalid positions
+   *
    * Prefill kernel optimizations (vs InvokeFusedQKVRmsNormKernel):
-    * 1) Token streaming: process multiple tokens per block via `for (token_idx += gridDim.x)` to reduce launches.
-    *    blockIdx.x is the token index, and gridDim.x is the total number of tokens.
-    * 2) One global read: stage input to shared memory `s_x[]`, reuse for norm+gamma to avoid reloading input.
-    * 3) Low-divergence gamma: preselect `gamma_ptr` (Q/K) once outside the inner loop to minimize branching.
+   * 1) Token streaming: process multiple tokens per block via `for (token_idx += gridDim.x)` to reduce launches.
+   *    blockIdx.x is the token index, and gridDim.x is the total number of tokens.
+   * 2) One global read: stage input to shared memory `s_x[]`, reuse for norm+gamma to avoid reloading input.
+   * 3) Low-divergence gamma: preselect `gamma_ptr` (Q/K) once outside the inner loop to minimize branching.
    */
   const int32_t hidden_size = (num_heads + 2 * num_kv_heads) * head_size;
   const int32_t total_req_num = total_tokens;
@@ -840,13 +834,13 @@ void InvokeFusedQKVRmsNorm(T* out, const T* input, const T* q_gamma, const T* k_
     size_t shared_bytes = static_cast<size_t>(head_size) * sizeof(float);
     dim3 grid(token_blocks, num_heads + num_kv_heads);
     dim3 block(block_size);
-    InvokeFusedQKVRmsNormPrefillKernel<T><<<grid, block, shared_bytes, stream>>>(input, q_gamma, k_gamma, out, layernorm_eps,
-                                                                      total_tokens, num_heads, num_kv_heads, head_size, mask);
+    InvokeFusedQKVRmsNormPrefillKernel<T><<<grid, block, shared_bytes, stream>>>(
+        input, q_gamma, k_gamma, out, layernorm_eps, total_tokens, num_heads, num_kv_heads, head_size, mask);
   } else {
     dim3 grid(total_tokens, (num_heads + num_kv_heads));
     dim3 block(min(head_size, 1024));
-    InvokeFusedQKVRmsNormKernel<T><<<grid, block, 0, stream>>>(input, q_gamma, k_gamma, out, layernorm_eps, total_tokens,
-                                                                num_heads, num_kv_heads, head_size, mask);
+    InvokeFusedQKVRmsNormKernel<T><<<grid, block, 0, stream>>>(input, q_gamma, k_gamma, out, layernorm_eps,
+                                                               total_tokens, num_heads, num_kv_heads, head_size, mask);
   }
 }
 

@@ -18,14 +18,12 @@ namespace nvidia {
  * @param residual resudual with shape [m, n]
  * @param weight norm weight with shape [n]
  * @param eps Epsilon value for numerical stability
- * @param enable_pdl Whether to enable `programmatic dependent launch
-        <https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#programmatic-dependent-launch-and-synchronization>`
  * @param m Number of input rows
  * @param n Number of input columns
  * @param stream CUDA stream
  */
 template <typename T>
-void InvokeFusedAddRMSNorm(void* input, void* residual, void* weight, double eps, bool enable_pdl, uint32_t m,
-                           uint32_t n, cudaStream_t stream);
+void InvokeFusedAddRMSNorm(void* input, void* residual, void* weight, double eps, uint32_t m, uint32_t n,
+                           cudaStream_t stream);
 }  // namespace nvidia
 }  // namespace llm_kernels

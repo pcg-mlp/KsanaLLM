@@ -34,6 +34,7 @@ enum RotaryEmbeddingType {
   MULTIFREQ_SCALING,
   YARN_SCALING,
   MROPE,
+  MROPE_INTERLEAVED,
   XDROPE,
   INTERNLM2_DYNAMIC_NTK_SCALING
 };
@@ -72,7 +73,6 @@ struct RotaryEmbeddingParam {
   float beta_slow = 1.0f;
   float mscale = 1.0f;
   float mscale_all_dim = 1.0f;
-  bool use_deepseek_rope = false;
 };
 
 class RotaryEmbeddingCuda {

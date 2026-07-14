@@ -140,6 +140,9 @@ __device__ __forceinline__ void quant_fp8(const int thread_id, const int64_t blo
   static_assert(sizeof(input_secondary_vec[0]) * INPUT_PRIMARY_VEC_SIZE == sizeof(input_secondary_int4));
 
   const T* input_offset = input + input_group_start_offset + lane_id * INPUT_PRIMARY_VEC_SIZE;
+#  if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#  endif
 #  pragma unroll
   for (uint32_t j = 0; j < INPUT_PRIMARY_INT4_SIZE; ++j) {
     input_primary_int4[j] = ld_global_nc(reinterpret_cast<const int4*>(input_offset) + j);
@@ -265,10 +268,11 @@ void per_token_group_quant_fp8_kernel_launcher(const void* input, void* output_q
   dim3 grid(num_blocks);
   dim3 block(num_threads);
   const uint32_t smem_size = 0;
-  per_token_group_quant_fp8_kernel<T, DST_DTYPE, GROUP_SIZE, THREADS_PER_SUBWARP, IS_COLUMN_MAJOR, FUSE_SILU_MUL>
-      <<<grid, block, smem_size, stream>>>(static_cast<const T*>(input), static_cast<DST_DTYPE*>(output_q),
-                                           static_cast<scale_packed_t*>(output_s), n, subwarps_per_block,
-                                           hidden_dim_num_groups, scale_hidden_stride);
+  auto kernel =
+      per_token_group_quant_fp8_kernel<T, DST_DTYPE, GROUP_SIZE, THREADS_PER_SUBWARP, IS_COLUMN_MAJOR, FUSE_SILU_MUL>;
+  LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, smem_size, stream, static_cast<const T*>(input),
+                         static_cast<DST_DTYPE*>(output_q), static_cast<scale_packed_t*>(output_s), n,
+                         subwarps_per_block, hidden_dim_num_groups, scale_hidden_stride);
 }
 
 template <typename T>

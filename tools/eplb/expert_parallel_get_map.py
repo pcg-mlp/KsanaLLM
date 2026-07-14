@@ -25,7 +25,7 @@ def load_topk_ids_file(filepath):
     try:
         data = np.load(filepath)
         return data
-    except (IOError, ValueError, OSError) as e:
+    except (IOError, ValueError, OSError, EOFError) as e:
         print(f"Error loading {filepath}: {e}")
         return None
 

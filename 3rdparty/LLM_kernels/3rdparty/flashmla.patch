@@ -1,35 +1,43 @@
-diff --git a/csrc/smxx/mla_combine.cu b/csrc/smxx/mla_combine.cu
-index ff609bf..2e46818 100644
---- a/csrc/smxx/mla_combine.cu
-+++ b/csrc/smxx/mla_combine.cu
-@@ -13,11 +13,11 @@ using namespace cute;
- template<typename ElementT, int HEAD_DIM_V, int BLOCK_SIZE_M, int MAX_SPLITS, int NUM_THREADS>
- __global__ void __launch_bounds__(NUM_THREADS)
- flash_fwd_mla_combine_kernel(__grid_constant__ const DecodingParams params) {
--    // grid_shape: [batch_size, num_q_heads*s_q / BLOCK_SIZE_M]
-+    // grid_shape: [num_q_heads*s_q / BLOCK_SIZE_M, batch_size]
-     // Each CTA gathers the activation of some heads from one batch, do scaling & accumulation, and save the result
-     static_assert(NUM_THREADS/32 == BLOCK_SIZE_M); // The number of warps == block_size_m
--    const int batch_idx = blockIdx.x;
--    const int m_block_idx = blockIdx.y;
-+    const int batch_idx = blockIdx.y;
-+    const int m_block_idx = blockIdx.x;
-     const int warp_idx = threadIdx.x / 32;
-     const int lane_idx = threadIdx.x % 32;
+diff --git a/csrc/params.h b/csrc/params.h
+index 4433e8d..8e6fa8a 100644
+--- a/csrc/params.h
++++ b/csrc/params.h
+@@ -61,6 +61,8 @@ struct DenseAttnDecodeParams { // TODO Change name to DenseAttnDecodeParams
+ };
  
-@@ -189,7 +189,7 @@ void run_flash_mla_combine_kernel(DecodingParams &params, cudaStream_t stream) {
-         attribute[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
-         attribute[0].val.programmaticStreamSerializationAllowed = 1;
-         cudaLaunchConfig_t combine_kernel_config = {
--            dim3(params.b, cute::ceil_div(params.h_k*params.q_seq_per_hk, BLOCK_SIZE_M), 1),
-+            dim3(cute::ceil_div(params.h_k*params.q_seq_per_hk, BLOCK_SIZE_M), params.b, 1),
-             dim3(NUM_THREADS, 1, 1),
-             smem_size,
-             stream,
-@@ -205,4 +205,4 @@ template void run_flash_mla_combine_kernel<cutlass::bfloat16_t>(DecodingParams &
+ struct SparseAttnDecodeParams {
++    using index_t = int64_t;
++
+     int b, s_q;
+     int h_q, h_kv;
+     int d_qk, d_v;
+@@ -82,11 +84,11 @@ struct SparseAttnDecodeParams {
+     int* __restrict__ extra_indices;   // [b, s_q, extra_topk]
+     int* __restrict__ extra_topk_length;  // [b], may be nullptr
+     
+-    int stride_q_b, stride_q_s_q, stride_q_h_q;
++    index_t stride_q_b, stride_q_s_q, stride_q_h_q;
+     int stride_kv_block, stride_kv_row;
+     int stride_indices_b, stride_indices_s_q;
+     int stride_lse_b, stride_lse_s_q;
+-    int stride_o_b, stride_o_s_q, stride_o_h_q;
++    index_t stride_o_b, stride_o_s_q, stride_o_h_q;
+     int stride_extra_kv_block, stride_extra_kv_row;
+     int stride_extra_indices_b, stride_extra_indices_s_q;
+     
+@@ -103,12 +105,14 @@ struct SparseAttnDecodeParams {
+ };
  
- #ifndef FLASH_MLA_DISABLE_FP16
- template void run_flash_mla_combine_kernel<cutlass::half_t>(DecodingParams &params, cudaStream_t stream);
--#endif
-\ No newline at end of file
-+#endif
+ struct CombineParams {
++    using index_t = int64_t;
++
+     int b, s_q, h_q, d_v;
+ 
+     float* __restrict__ lse;    // [b, s_q, h_q]
+     void* __restrict__ out;   // [b, s_q, h_q, d_v]
+     int stride_lse_b, stride_lse_s_q;
+-    int stride_o_b, stride_o_s_q, stride_o_h_q;
++    index_t stride_o_b, stride_o_s_q, stride_o_h_q;
+ 
+     float* __restrict__ lse_accum;  // [num_splits, s_q, h_q]
+     float* __restrict__ o_accum;    // [num_splits, s_q, h_q, d_v]

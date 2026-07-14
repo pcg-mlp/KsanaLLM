@@ -1,0 +1,121 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#include "modules/ffn/two_layered_ffn.h"
+
+namespace ksana_llm {
+
+TwoLayeredFFN::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
+                             ModelCreationConfig& model_creation_config) {
+  const std::string weight_name_format = ".mlp.{}.weight";
+  InitConfig(layer_idx, creation_context, weight_name_format);
+  InitLayers(layer_idx, creation_context, model_creation_config, weight_name_format);
+}
+
+TwoLayeredFFN::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
+                             ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
+  InitConfig(layer_idx, creation_context, weight_name_format);
+  InitLayers(layer_idx, creation_context, model_creation_config, weight_name_format);
+}
+
+void TwoLayeredFFN::InitConfig(int layer_idx, LayerCreationContext& creation_context,
+                               const std::string& weight_name_format) {
+  const std::string up_gate_proj_weights_name =
+      fmt::format("model.layers.{}" + weight_name_format, layer_idx, "gate_up_proj");
+  enable_full_shared_expert_ = creation_context.runtime_config.enable_full_shared_expert;
+  if (creation_context.base_weight->GetModelWeights(up_gate_proj_weights_name).GetElementNumber() > 0) {
+    fuse_gate_up_proj_ = true;
+    // Fuse silu mul into fp8 group quant before down projection
+    const std::string down_proj_weights_name =
+        fmt::format("model.layers.{}" + weight_name_format, layer_idx, "down_proj");
+    fuse_silu_mul_ = creation_context.base_weight->GetModelWeights(down_proj_weights_name).dtype == TYPE_FP8_E4M3 &&
+                     creation_context.model_config.quant_config.method == QUANT_BLOCK_FP8_E4M3;
+  } else {
+    fuse_gate_up_proj_ = false;
+  }
+
+  const std::string gate_proj_bias_weights_name = fmt::format("model.layers.{}.mlp.{}", layer_idx, "gate_proj_bias");
+  const std::string up_proj_bias_weights_name = fmt::format("model.layers.{}.mlp.{}", layer_idx, "up_proj_bias");
+  if (creation_context.base_weight->GetModelWeights(gate_proj_bias_weights_name).GetElementNumber() > 0 &&
+      creation_context.base_weight->GetModelWeights(up_proj_bias_weights_name).GetElementNumber() > 0) {
+    mlp_bias_ = true;
+  } else {
+    mlp_bias_ = false;
+  }
+}
+
+void TwoLayeredFFN::InitLayers(int layer_idx, LayerCreationContext& creation_context,
+                               ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
+  const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
+  LinearComputeBackend linear_compute_backend = model_creation_config.attn_config.model_config.quant_config.backend;
+  if (fuse_gate_up_proj_) {
+    mlp_gate_up_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "gate_up_proj"),
+                                                  creation_context, linear_compute_backend);
+  } else {
+    mlp_gate_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "gate_proj"),
+                                               creation_context, linear_compute_backend);
+    mlp_up_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "up_proj"),
+                                             creation_context, linear_compute_backend);
+  }
+  if (mlp_bias_) {
+    mlp_gate_bias_tensor_ = creation_context.base_weight->GetModelWeights(
+        fmt::format("model.layers.{}.mlp.{}", layer_idx, "gate_proj_bias"));
+    mlp_up_bias_tensor_ =
+        creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.{}", layer_idx, "up_proj_bias"));
+    adds_ = std::make_shared<Add>(creation_context);
+  }
+  mlp_down_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "down_proj"),
+                                             creation_context, linear_compute_backend);
+  if (!fuse_silu_mul_) {
+    silu_muls_ = std::make_shared<SiluMul>(creation_context);
+  }
+}
+
+Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
+                              const bool is_multi_token_forward, ForwardingContext& forwarding_context) {
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+  if (fuse_gate_up_proj_) {
+    // Mlp gate_up_proj MatMul
+    STATUS_CHECK_RETURN(mlp_gate_up_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+    if (!fuse_silu_mul_) {
+      STATUS_CHECK_RETURN(silu_muls_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1));
+      std::swap(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
+    }
+  } else {
+    auto& gated_buffer_ = reduce_buffer_tensors;
+    // Mlp gate_proj MatMul
+    STATUS_CHECK_RETURN(mlp_gate_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    if (mlp_bias_) {
+      // Mlp gate_proj Bias Add
+      STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_1[0], mlp_gate_bias_tensor_, hidden_buffer_tensors_1));
+    }
+    // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
+    STATUS_CHECK_RETURN(mlp_up_projs_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+    if (mlp_bias_) {
+      // Mlp up_proj Bias Add
+      STATUS_CHECK_RETURN(adds_->Forward(gated_buffer_[0], mlp_up_bias_tensor_, gated_buffer_));
+    }
+    std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+
+    // `fuse_silu_mul_` must be false here since `fuse_gate_up_proj_` is false
+    // Activation is an in-place operation, just put the output in `hidden_buffer_tensors_0`, the
+    // same as the input.
+    STATUS_CHECK_RETURN(silu_muls_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], hidden_buffer_tensors_0));
+  }
+
+  // Mlp down_proj MatMul
+  if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
+    // Put output to `reduce_buffer_tensors` to ensure that the input for custom reduce sum is
+    // always in `reduce_buffer_tensors`.
+    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
+  } else {
+    STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
+    std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+  }
+
+  return Status();
+}
+
+}  // namespace ksana_llm

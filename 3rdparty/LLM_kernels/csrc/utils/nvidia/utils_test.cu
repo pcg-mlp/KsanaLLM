@@ -161,7 +161,7 @@ class LLMKernelsNvidiaUtilsTestSuit : public NvidiaTestSuitBase {
       testcases.push_back({i, 12800});
       testcases.push_back({i, 4096});
     }
-    
+
     for (size_t i = 512; i < 4096; i += 512) {
       testcases.push_back({i, 5120});
       testcases.push_back({i, 12800});

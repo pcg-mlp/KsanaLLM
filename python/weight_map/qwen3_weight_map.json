@@ -1,0 +1,18 @@
+{
+    "model.language_model.embed_tokens.weight": "model.embed_tokens.weight",
+    "model.language_model.layers.(\\d+).input_layernorm.weight": "model.layers.$1.input_layernorm.weight",
+    "model.language_model.layers.(\\d+).mlp.down_proj.weight": "model.layers.$1.mlp.down_proj.weight",
+    "model.language_model.layers.(\\d+).mlp.gate_proj.weight": "model.layers.$1.mlp.gate_proj.weight",
+    "model.language_model.layers.(\\d+).mlp.up_proj.weight": "model.layers.$1.mlp.up_proj.weight",
+    "model.language_model.layers.(\\d+).post_attention_layernorm.weight": "model.layers.$1.post_attention_layernorm.weight",
+    "model.language_model.layers.(\\d+).self_attn.k_norm.weight": "model.layers.$1.self_attn.key_layernorm.weight",
+    "model.language_model.layers.(\\d+).self_attn.k_proj.weight": "model.layers.$1.self_attn.k_proj.weight",
+    "model.language_model.layers.(\\d+).self_attn.o_proj.weight": "model.layers.$1.self_attn.o_proj.weight",
+    "model.language_model.layers.(\\d+).self_attn.q_norm.weight": "model.layers.$1.self_attn.query_layernorm.weight",
+    "model.language_model.layers.(\\d+).self_attn.q_proj.weight": "model.layers.$1.self_attn.q_proj.weight",
+    "model.language_model.layers.(\\d+).self_attn.v_proj.weight": "model.layers.$1.self_attn.v_proj.weight",
+    "model.language_model.norm.weight": "model.norm.weight",
+    "model.layers.(\\d+).self_attn.k_norm.weight": "model.layers.$1.self_attn.key_layernorm.weight",
+    "model.layers.(\\d+).self_attn.q_norm.weight": "model.layers.$1.self_attn.query_layernorm.weight",
+    "model.visual\\..*": "deprecated"
+}

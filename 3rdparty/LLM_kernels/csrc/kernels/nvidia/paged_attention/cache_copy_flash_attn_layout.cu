@@ -1,7 +1,13 @@
+/*
+ * Copyright 2025 Tencent Inc.  All rights reserved.
+ */
+
+#include "cache_copy_flash_attn_layout.h"
+
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
-#include <stdio.h>
-#include "cache_copy_flash_attn_layout.h"
+#include <cassert>
+
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "quant_utils.cuh"
 
@@ -118,8 +124,8 @@ __global__ void CachePosCopyFlashAttnLayoutKernel(SCALAR_T* k_src, SCALAR_T* v_s
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 __global__ void ReverseCacheCopyFlashAttnLayoutKernel(SCALAR_T* k_dst, SCALAR_T* v_dst, void** k_list, void** v_list,
                                                       size_t* input_offsets, size_t* prefix_offsets, int* block_offsets,
-                                                      int block_size, int bs, int total_len, int num_heads, int head_size,
-                                                      int stride_size, float k_scale, float v_scale) {
+                                                      int block_size, int bs, int total_len, int num_heads,
+                                                      int head_size, int stride_size, float k_scale, float v_scale) {
   // Reverse copy from cache list (only prefix part) to k_dst, v_dst
   int idx = blockIdx.y + blockIdx.z * gridDim.y;
   if (idx < total_len) {
@@ -170,11 +176,11 @@ __global__ void ReverseCacheCopyFlashAttnLayoutKernel(SCALAR_T* k_dst, SCALAR_T*
   block_offsets:  Records the number of blocks for each batch size   [bs + 1,]
 */
 template <typename CACHE_T>
-__global__ void FP8WithPrefixReverseCacheCopyFlashAttnLayoutKernel(CACHE_T* k_dst, CACHE_T* v_dst, void** k_list, void** v_list,
-                                                                   size_t* input_offsets, int* block_offsets, int block_size, int bs,
-                                                                   int total_len, int num_heads, int head_size, int stride_size,
-                                                                   size_t size_of_scalar_t) {
-
+__global__ void FP8WithPrefixReverseCacheCopyFlashAttnLayoutKernel(CACHE_T* k_dst, CACHE_T* v_dst, void** k_list,
+                                                                   void** v_list, size_t* input_offsets,
+                                                                   int* block_offsets, int block_size, int bs,
+                                                                   int total_len, int num_heads, int head_size,
+                                                                   int stride_size, size_t size_of_scalar_t) {
   int token_idx = blockIdx.y + blockIdx.z * gridDim.y;
   if (token_idx < total_len) {
     int batch_idx = 0;
@@ -207,21 +213,23 @@ __global__ void FP8WithPrefixReverseCacheCopyFlashAttnLayoutKernel(CACHE_T* k_ds
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, typename VEC_IN_TYPE,
           typename VEC_OUT_TYPE>
-__global__ void ConvertToCacheTypeKernel(const SCALAR_T* __restrict__ src_ptr, CACHE_T* __restrict__ dst_ptr, int total_len,
-                                         int elems_num, int stride_size, float scale, int vec_size) {
-  int batch_idx = blockIdx.z;
-  int token_idx = batch_idx * gridDim.y + blockIdx.y;
+__global__ void ConvertToCacheTypeKernel(const SCALAR_T* __restrict__ src_ptr, CACHE_T* __restrict__ dst_ptr,
+                                         int total_len, int elems_num, int stride_size, float scale, int vec_size) {
+  int token_idx = blockIdx.x;
   if (token_idx >= total_len) {
     return;
   }
 
   // 该 token 的起始位置
-  const SCALAR_T* __restrict__ src = src_ptr + token_idx * stride_size;
-  CACHE_T* __restrict__ dst = dst_ptr + token_idx * stride_size;
+  const SCALAR_T* __restrict__ src = src_ptr + 1ul * token_idx * stride_size;
+  CACHE_T* __restrict__ dst = dst_ptr + 1ul * token_idx * stride_size;
 
-  int vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int vec_idx = blockIdx.y * blockDim.x + threadIdx.x;
   int elem_idx = vec_idx * vec_size;
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   if (elem_idx < elems_num) {
     if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {  // only copy
       VEC_IN_TYPE vec_src = *reinterpret_cast<const VEC_IN_TYPE*>(&src[elem_idx]);
@@ -261,15 +269,15 @@ void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list
 
 // input [total_len, num_heads, head_size]
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void ConvertToCacheType(SCALAR_T* src, CACHE_T* dst, int total_len, int num_heads, int head_size,
-                         int stride_size, float scale, cudaStream_t stream) {
+void ConvertToCacheType(SCALAR_T* src, CACHE_T* dst, int total_len, int num_heads, int head_size, int stride_size,
+                        float scale, cudaStream_t stream) {
   constexpr int kBlockThreads = 256;
   constexpr int kVecSize = 8;
   constexpr bool is_bfloat16 = std::is_same_v<SCALAR_T, __nv_bfloat16>;
-  
+
   int elems_num = num_heads * head_size;
   int vec_size = kVecSize;
-  
+
   // Only support bfloat16 vectorization
   // Check alignment: addresses must be aligned for vectorized access
   int src_align_size = kVecSize * sizeof(SCALAR_T);
@@ -280,48 +288,51 @@ void ConvertToCacheType(SCALAR_T* src, CACHE_T* dst, int total_len, int num_head
     vec_size = 1;
   }
 
-  int vecs_num = ceil(static_cast<float>(elems_num) / vec_size);
+  assert(elems_num % vec_size == 0);
+  int vecs_num = elems_num / vec_size;
 
-  int grid_x = ceil(static_cast<float>(vecs_num) / kBlockThreads);
-  int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
-  int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
-  dim3 grid(grid_x, grid_y, grid_z);
+  int grid_x = total_len;
+  int grid_y = (vecs_num + kBlockThreads - 1) / kBlockThreads;
+  dim3 grid(grid_x, grid_y);
   dim3 block(kBlockThreads);
   if (vec_size > 1) {
     if constexpr (is_bfloat16) {  // Only supports vectorization on bfloat16
       using VEC_IN_TYPE = typename Vec<__nv_bfloat16, kVecSize>::Type;
       using VEC_OUT_TYPE = uint2;
 
-      ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, VEC_IN_TYPE, VEC_OUT_TYPE>
-          <<<grid, block, 0, stream>>>(src, dst, total_len, elems_num, stride_size, scale, vec_size);
+      auto kernel = ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, VEC_IN_TYPE, VEC_OUT_TYPE>;
+      LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, src, dst, total_len, elems_num, stride_size, scale,
+                             vec_size);
       return;
     }
   }
   // For half and float or vec_size==1, use scalar version
-  ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, SCALAR_T, CACHE_T>
-      <<<grid, block, 0, stream>>>(src, dst, total_len, elems_num, stride_size, scale, vec_size);
+  auto kernel = ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, SCALAR_T, CACHE_T>;
+  LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, src, dst, total_len, elems_num, stride_size, scale, vec_size);
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void ReverseCacheCopyFlashAttnLayout(SCALAR_T* k_dst, SCALAR_T* v_dst, void** k_list, void** v_list,
-                                     size_t* input_offsets, size_t* prefix_offsets, int* block_offsets,
-                                     int block_size, int bs, int total_len, int num_heads, int head_size,
-                                     int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
+                                     size_t* input_offsets, size_t* prefix_offsets, int* block_offsets, int block_size,
+                                     int bs, int total_len, int num_heads, int head_size, int stride_size,
+                                     float k_scale, float v_scale, cudaStream_t stream) {
   int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
   int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
   dim3 grid_shape(num_heads, grid_y, grid_z);
 
   dim3 block_shape(std::min(head_size, MAX_THREADS_PER_BLOCK));
   ReverseCacheCopyFlashAttnLayoutKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
-      k_dst, v_dst, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len,
-      num_heads, head_size, stride_size, k_scale, v_scale);
+      k_dst, v_dst, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len, num_heads,
+      head_size, stride_size, k_scale, v_scale);
 }
 
-// Copy full KV(with FlashAttn Layout) from src(cache blocks) to dst(continuous space) for input preparation of FA3 FP8 inference.
+// Copy full KV(with FlashAttn Layout) from src(cache blocks) to dst(continuous space) for input preparation of FA3 FP8
+// inference.
 template <typename CACHE_T>
-void FP8WithPrefixReverseCacheCopyFlashAttnLayout(CACHE_T* k_src, CACHE_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
-                                                  int* block_offsets, int block_size, int bs, int total_len, int num_heads,
-                                                  int head_size, int stride_size, size_t size_of_scalar_t, cudaStream_t stream) {
+void FP8WithPrefixReverseCacheCopyFlashAttnLayout(CACHE_T* k_src, CACHE_T* v_src, void** k_list, void** v_list,
+                                                  size_t* input_offsets, int* block_offsets, int block_size, int bs,
+                                                  int total_len, int num_heads, int head_size, int stride_size,
+                                                  size_t size_of_scalar_t, cudaStream_t stream) {
   int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
   int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
   dim3 grid_shape(num_heads, grid_y, grid_z);
@@ -360,11 +371,12 @@ CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_ke
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #undef CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION
 
-
-template void FP8WithPrefixReverseCacheCopyFlashAttnLayout<uint8_t>(uint8_t* k_src, uint8_t* v_src, void** k_list, void** v_list,
-                                                                    size_t* input_offsets, int* block_offsets, int block_size, int bs,
-                                                                    int total_len, int num_heads, int head_size, int stride_size,
-                                                                    size_t size_of_scalar_t, cudaStream_t stream);
+template void FP8WithPrefixReverseCacheCopyFlashAttnLayout<uint8_t>(uint8_t* k_src, uint8_t* v_src, void** k_list,
+                                                                    void** v_list, size_t* input_offsets,
+                                                                    int* block_offsets, int block_size, int bs,
+                                                                    int total_len, int num_heads, int head_size,
+                                                                    int stride_size, size_t size_of_scalar_t,
+                                                                    cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

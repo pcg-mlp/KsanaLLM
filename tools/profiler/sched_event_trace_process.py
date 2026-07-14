@@ -44,7 +44,6 @@ def parse_csv(csv_file_path: str) -> List[Dict[str, Any]]:
             row["req_id"] = int(row["req_id"])
             row["time_ns"] = int(row["time_ns"])
             row["rank"] = int(row["rank"])
-            row["multi_batch_id"] = int(row["multi_batch_id"])
             row["attn_dp_group_id"] = int(row["attn_dp_group_id"])
 
             # These fields might be empty for some events
@@ -134,7 +133,8 @@ def get_event_color(event_type: str) -> str:
     # Valid colors are defined in
     # https://github.com/catapult-project/catapult/blob/master/tracing/tracing/base/color_scheme.html
     color_map = {
-        # ForwardingLayers in pink (using thread_state_iowait which is pinkish-red)
+        # ForwardingLayers in pink (using thread_state_iowait which is
+        # pinkish-red)
         "ForwardingLayers": "thread_state_iowait",  # Pink/red color for ForwardingLayers
         "StreamSynchronize": "heap_dump_child_node_arrow",
         # Other event types with lighter colors
@@ -186,7 +186,8 @@ def convert_to_chrome_trace_format(
 
         # Get color for this event type
         color_name = get_event_color(event["event_type"])
-        if event["req_id"] != -1:  # Only add for Begin events to avoid duplicates
+        if event["req_id"] != - \
+                1:  # Only add for Begin events to avoid duplicates
             trace_event = {
                 "name": event["event_type"],
                 "cat": "PERF",
@@ -214,7 +215,7 @@ def convert_to_chrome_trace_format(
                     "cat": "INFO",
                     "ph": phase,
                     "pid": "metrics",
-                    "tid": f"req_num batch {event['multi_batch_id']}",
+                    "tid": f"req_num batch",
                     "ts": event["time_ns"] / 1000,
                     "cname": "thread_state_sleeping",
                 }
@@ -226,7 +227,7 @@ def convert_to_chrome_trace_format(
                     "cat": "INFO",
                     "ph": phase,
                     "pid": "metrics",
-                    "tid": f"forwarding_token_num batch {event['multi_batch_id']}",
+                    "tid": f"forwarding_token_num batch",
                     "ts": event["time_ns"] / 1000,
                     "cname": "thread_state_runnable",
                 }
@@ -238,7 +239,7 @@ def convert_to_chrome_trace_format(
                     "cat": "INFO",
                     "ph": phase,
                     "pid": "metrics",
-                    "tid": f"seq_len batch {event['multi_batch_id']}",
+                    "tid": f"seq_len batch",
                     "ts": event["time_ns"] / 1000,
                     "cname": "grey",
                 }
@@ -247,9 +248,9 @@ def convert_to_chrome_trace_format(
             # Add event record
             if node_first:
                 pid = f"Node {event['node_rank']}"
-                tid = f"batch {event['multi_batch_id']}"
+                tid = f"batc"
             else:
-                pid = f"batch {event['multi_batch_id']}"
+                pid = f"batch"
                 tid = f"Node {event['node_rank']}"
 
             trace_event = {

@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include <cuda_fp16.h>
 #include <cuda_runtime.h>
-
-#ifdef ENABLE_BF16
-#  include <cuda_bf16.h>
-#endif
 
 namespace llm_kernels {
 namespace nvidia {

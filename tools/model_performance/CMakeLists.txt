@@ -1,0 +1,61 @@
+# Copyright 2024 Tencent Inc.  All rights reserved.
+#
+# ==============================================================================
+cmake_minimum_required(VERSION 3.13)
+
+
+# import external dependencies
+include(external/loguru)
+
+include_directories(
+  ${PROJECT_SOURCE_DIR}/csrc
+  ${PROJECT_SOURCE_DIR}/tools
+)
+
+file(GLOB_RECURSE model_performance_SRCS
+  ${PROJECT_SOURCE_DIR}/tools/model_performance/perf_profile_config_builder_for_json.cpp
+  ${PROJECT_SOURCE_DIR}/tools/model_performance/model_performance_runner.cpp
+  ${PROJECT_SOURCE_DIR}/tools/model_performance/communication_performance_runner.cpp
+  )
+
+list(FILTER model_performance_SRCS EXCLUDE REGEX ".*test.cpp")
+
+add_library(model_performance STATIC ${model_performance_SRCS})
+target_link_libraries(model_performance PUBLIC 
+  -Wl,--whole-archive
+  layers
+  -Wl,--no-whole-archive
+  cache_manager models samplers runtime ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS} distributed)
+
+add_executable(run_model_performance ${PROJECT_SOURCE_DIR}/tools/model_performance/run_model_performance.cpp)
+target_link_libraries(run_model_performance PUBLIC model_performance yaml-cpp
+  -Wl,--whole-archive
+  layers
+  -Wl,--no-whole-archive
+)
+
+add_executable(run_communcation_performance ${PROJECT_SOURCE_DIR}/tools/model_performance/run_communication_performance.cpp)
+target_link_libraries(run_communcation_performance PUBLIC model_performance)
+
+
+# for test
+if(WITH_CUDA)
+  file(GLOB model_performance_runner_test_SRCS
+    ${PROJECT_SOURCE_DIR}/tools/model_performance/model_performance_runner_test.cpp)
+  cpp_test(model_performance_runner_test
+    SRCS ${model_performance_runner_test_SRCS}
+    DEPS model_performance
+    LIBS -Wl,--whole-archive layers -Wl,--no-whole-archive)
+
+  file(GLOB communication_performance_runner_test_SRCS
+    ${PROJECT_SOURCE_DIR}/tools/model_performance/communication_performance_runner_test.cpp)
+  cpp_test(communication_performance_runner_test
+    SRCS ${communication_performance_runner_test_SRCS}
+    DEPS model_performance)
+
+  file(GLOB run_model_performance_test_SRCS
+    ${PROJECT_SOURCE_DIR}/tools/model_performance/run_model_performance_test.cpp)
+  cpp_test(run_model_performance_test
+    SRCS ${run_model_performance_test_SRCS}
+    DEPS model_performance)
+endif()

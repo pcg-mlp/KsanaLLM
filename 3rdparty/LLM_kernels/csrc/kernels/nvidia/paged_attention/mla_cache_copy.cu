@@ -108,6 +108,9 @@ __device__ __forceinline__ void IndexerCommonVCacheCopyKernel(const float* __res
   float* const v_dst_ptr = reinterpret_cast<float*>(v_list[block_offsets[batch_idx] + input_offset / block_size]) +
                            input_offset % block_size * v_stride_size;
   const float* v_src_ptr = v_src + token_idx * v_stride_size;
+#  if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#  endif
   v_dst_ptr[threadIdx.x - k_thread_num] = v_src_ptr[threadIdx.x - k_thread_num];
 }
 
@@ -147,9 +150,9 @@ void MlaIndexerFlashKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_lis
   const int v_thread_num = v_stride_size;
   assert(k_thread_num + v_thread_num <= MAX_THREADS_PER_BLOCK);
   const dim3 block_shape(k_thread_num + v_thread_num);
-  MlaIndexerFlashKVCacheCopyKernel<<<grid_shape, block_shape, 0, stream>>>(
-      k_src, v_src, k_list, v_list, prefix_offsets, without_prefix_offsets, block_offsets, block_size, batch_size,
-      k_stride_size, v_stride_size, k_thread_num);
+  LAUNCH_KERNEL_WITH_PDL(MlaIndexerFlashKVCacheCopyKernel, grid_shape, block_shape, 0, stream, k_src, v_src, k_list,
+                         v_list, prefix_offsets, without_prefix_offsets, block_offsets, block_size, batch_size,
+                         k_stride_size, v_stride_size, k_thread_num);
 }
 
 __global__ void MlaIndexerKVReverseCacheCopyKernel(__nv_fp8_e4m3* __restrict__ k_dst, float* __restrict__ v_dst,
@@ -236,9 +239,8 @@ void MlaIndexerPagedKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_lis
   const int v_thread_num = v_stride_size;
   assert(k_thread_num + v_thread_num <= MAX_THREADS_PER_BLOCK);
   const dim3 block_shape(k_thread_num + v_thread_num);
-  MlaIndexerPagedKVCacheCopyKernel<<<grid_shape, block_shape, 0, stream>>>(k_src, v_src, k_list, v_list, input_lengths,
-                                                                           block_offsets, block_size, k_stride_size,
-                                                                           v_stride_size, k_thread_num);
+  LAUNCH_KERNEL_WITH_PDL(MlaIndexerPagedKVCacheCopyKernel, grid_shape, block_shape, 0, stream, k_src, v_src, k_list,
+                         v_list, input_lengths, block_offsets, block_size, k_stride_size, v_stride_size, k_thread_num);
 }
 #endif
 
@@ -260,9 +262,12 @@ __device__ void MlaCommonFp8DsMlaKVCacheCopyKernel(const SCALAR_T* k_src, const 
     // 32-bit scales
     SCALAR_T* const v_dst_ptr = reinterpret_cast<SCALAR_T*>(kv_list_base_ptr + kEntryStrideSize);
     const SCALAR_T* v_src_ptr = v_src + token_idx * kVStrideSize;
+    const unsigned int head_offset = (threadIdx.x - kKThreadNum) * kVecSize;
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    cudaGridDependencySynchronize();
+#endif
     // Each thread handles eight elements of RoPE
     vec_t<SCALAR_T, kVecSize> v_src_vec;
-    const unsigned int head_offset = (threadIdx.x - kKThreadNum) * kVecSize;
     // Vectorized load of eight 16-bit values, performed as one 128-bit load
     v_src_vec.load(v_src_ptr + head_offset);
     // Vectorized store of eight 16-bit values, performed as one 128-bit store
@@ -278,6 +283,9 @@ __device__ void MlaCommonFp8DsMlaKVCacheCopyKernel(const SCALAR_T* k_src, const 
   // Each thread handles 8 elements of NoPE
   // Load the NoPE elements for this thread into registers
   const SCALAR_T* k_src_ptr = k_src + token_idx * kKStrideSize;
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   // Vectorized load of eight 16-bit values, performed as an int4 load
   vec_t<SCALAR_T, kVecSize> k_src_vec;
   k_src_vec.load(k_src_ptr + threadIdx.x * kVecSize);
@@ -398,6 +406,9 @@ __global__ void MlaFlashKVCacheCopyKernel(SCALAR_T* k_src, SCALAR_T* v_src, void
   SCALAR_T* k_src_ptr = k_src + token_idx * k_stride_size;
   SCALAR_T* v_src_ptr = v_src + token_idx * v_stride_size;
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   // Process k
   for (int head_size_i = threadIdx.x; head_size_i < k_stride_size; head_size_i += blockDim.x) {
     int k_dst_index = token_offset_in_block * (k_stride_size + v_stride_size) + head_size_i;
@@ -439,15 +450,17 @@ void MlaFlashKVCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void**
     constexpr int kBlockStrideSize = kEntryStrideSize + kVStrideSize * sizeof(SCALAR_T);
     assert(kBlockStrideSize == 656);
     dim3 block_shape((kKStrideSize + kVStrideSize) / kVecSize);
-    MlaFlashFp8DsMlaKVCacheCopyKernel<SCALAR_T, kVecSize, kBlockStrideSize, kEntryStrideSize, kKStrideSize,
-                                      kVStrideSize><<<grid_shape, block_shape, 0, stream>>>(
-        k_src, v_src, k_list, prefix_offsets, without_prefix_offsets, block_offsets, block_size, batch_size);
+    auto kernel = MlaFlashFp8DsMlaKVCacheCopyKernel<SCALAR_T, kVecSize, kBlockStrideSize, kEntryStrideSize,
+                                                    kKStrideSize, kVStrideSize>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid_shape, block_shape, 0, stream, k_src, v_src, k_list, prefix_offsets,
+                           without_prefix_offsets, block_offsets, block_size, batch_size);
   } else {
     assert(k_stride_size >= v_stride_size && k_stride_size <= MAX_THREADS_PER_BLOCK);
     dim3 block_shape(k_stride_size);
-    MlaFlashKVCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
-        k_src, v_src, k_list, v_list, prefix_offsets, without_prefix_offsets, block_offsets, block_size, batch_size,
-        k_stride_size, v_stride_size, k_scale, v_scale);
+    auto kernel = MlaFlashKVCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid_shape, block_shape, 0, stream, k_src, v_src, k_list, v_list, prefix_offsets,
+                           without_prefix_offsets, block_offsets, block_size, batch_size, k_stride_size, v_stride_size,
+                           k_scale, v_scale);
   }
 }
 
@@ -715,6 +728,9 @@ __global__ void MlaPagedKVCacheCopyKernel(const SCALAR_T* __restrict__ kv_c_src,
   CACHE_T* const kv_dst_ptr = dst + offset;
   const SCALAR_T* k_src_ptr = src + token_idx * stride_size;
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   vec_t<SCALAR_T, VEC_SIZE> k_src_vec;
   k_src_vec.load(k_src_ptr + head_offset * VEC_SIZE);
 
@@ -746,9 +762,10 @@ void MlaPagedKVCacheCopy(SCALAR_T* kv_c_src, SCALAR_T* k_pe_src, void** kv_list,
     constexpr int kBlockStrideSize = kEntryStrideSize + kKPeStrideSize * sizeof(SCALAR_T);
     assert(kBlockStrideSize == 656);
     dim3 block((kKvCStrideSize + kKPeStrideSize) / kVecSize);
-    MlaPagedFp8DsMlaKVCacheCopyKernel<SCALAR_T, kVecSize, kBlockStrideSize, kEntryStrideSize, kKvCStrideSize,
-                                      kKPeStrideSize>
-        <<<grid, block, 0, stream>>>(kv_c_src, k_pe_src, kv_list, input_lengths, block_offsets, block_size);
+    auto kernel = MlaPagedFp8DsMlaKVCacheCopyKernel<SCALAR_T, kVecSize, kBlockStrideSize, kEntryStrideSize,
+                                                    kKvCStrideSize, kKPeStrideSize>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, kv_c_src, k_pe_src, kv_list, input_lengths, block_offsets,
+                           block_size);
   } else {
     assert(kv_c_stride_size % kVecSize == 0);
     // For DeepSeek-V3: kv_c_thread_num = 512 / 8 = 64
@@ -758,9 +775,9 @@ void MlaPagedKVCacheCopy(SCALAR_T* kv_c_src, SCALAR_T* k_pe_src, void** kv_list,
     const int k_pe_thread_num = k_pe_stride_size / kVecSize;
     assert(kv_c_thread_num + k_pe_thread_num <= MAX_THREADS_PER_BLOCK);
     const dim3 block(kv_c_thread_num + k_pe_thread_num);
-    MlaPagedKVCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE>
-        <<<grid, block, 0, stream>>>(kv_c_src, k_pe_src, kv_list, input_lengths, block_offsets, block_size,
-                                     kv_c_stride_size, k_pe_stride_size, kv_scale, kv_c_thread_num);
+    auto kernel = MlaPagedKVCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, kv_c_src, k_pe_src, kv_list, input_lengths, block_offsets,
+                           block_size, kv_c_stride_size, k_pe_stride_size, kv_scale, kv_c_thread_num);
   }
 }
 

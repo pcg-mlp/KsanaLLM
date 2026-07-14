@@ -27,9 +27,9 @@ namespace nvidia {
  * @param stream CUDA stream
  */
 template <typename T>
-void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed_scaling_factor, void* topk_weights_ptr, void* topk_ids_ptr,
-                                 int tokens_num, int num_experts, int topk, int num_expert_group, int topk_group,
-                                 cudaStream_t stream);
+void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed_scaling_factor, void* topk_weights_ptr,
+                                 void* topk_ids_ptr, int tokens_num, int num_experts, int topk, int num_expert_group,
+                                 int topk_group, float score_threshold, cudaStream_t stream);
 
 /**
  * @brief Performs basic softmax + top-k operation without grouping

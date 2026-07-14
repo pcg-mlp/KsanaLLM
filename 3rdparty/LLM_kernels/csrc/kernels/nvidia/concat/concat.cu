@@ -4,10 +4,12 @@
 
 #include "csrc/kernels/nvidia/concat/concat.h"
 
-using namespace llm_kernels::utils;
+#include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels {
 namespace nvidia {
+
+using namespace llm_kernels::utils;
 
 template <typename T>
 __global__ void ConcatVectorizedKernel(const T* const __restrict__ input_a, const T* const __restrict__ input_b,
@@ -25,6 +27,9 @@ __global__ void ConcatVectorizedKernel(const T* const __restrict__ input_a, cons
   const size_t offset =
       is_a ? outer_idx * concat_inner_a + concat_idx : outer_idx * concat_inner_b + concat_idx - concat_inner_a;
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   output[idx] = (is_a ? input_a : input_b)[offset];
 }
 
@@ -47,42 +52,47 @@ void Concat(const T* __restrict__ input_a, const T* __restrict__ input_b, size_t
     constexpr int kElementNum = 16 / kSizeT;
     const dim3 grid((total_elements / kElementNum + kThreadNum - 1) / kThreadNum);
     using VecType = typename utils::PackType<float, 4>::type;
-    ConcatVectorizedKernel<VecType><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const VecType*>(input_a), reinterpret_cast<const VecType*>(input_b),
-        concat_inner_a / kElementNum, concat_inner_b / kElementNum, concat_inner_size / kElementNum,
-        total_elements / kElementNum, reinterpret_cast<VecType*>(output));
+    auto kernel = ConcatVectorizedKernel<VecType>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<const VecType*>(input_a),
+                           reinterpret_cast<const VecType*>(input_b), concat_inner_a / kElementNum,
+                           concat_inner_b / kElementNum, concat_inner_size / kElementNum, total_elements / kElementNum,
+                           reinterpret_cast<VecType*>(output));
   } else if (size_a % 8 == 0 && size_b % 8 == 0) {
     constexpr int kElementNum = 8 / kSizeT;
     const dim3 grid((total_elements / kElementNum + kThreadNum - 1) / kThreadNum);
     using VecType = typename utils::PackType<float, 2>::type;
-    ConcatVectorizedKernel<VecType><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const VecType*>(input_a), reinterpret_cast<const VecType*>(input_b),
-        concat_inner_a / kElementNum, concat_inner_b / kElementNum, concat_inner_size / kElementNum,
-        total_elements / kElementNum, reinterpret_cast<VecType*>(output));
+    auto kernel = ConcatVectorizedKernel<VecType>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<const VecType*>(input_a),
+                           reinterpret_cast<const VecType*>(input_b), concat_inner_a / kElementNum,
+                           concat_inner_b / kElementNum, concat_inner_size / kElementNum, total_elements / kElementNum,
+                           reinterpret_cast<VecType*>(output));
   } else if (size_a % 4 == 0 && size_b % 4 == 0) {
     constexpr int kElementNum = 4 / kSizeT;
     const dim3 grid((total_elements / kElementNum + kThreadNum - 1) / kThreadNum);
     using VecType = typename utils::PackType<float, 1>::type;
-    ConcatVectorizedKernel<VecType><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const VecType*>(input_a), reinterpret_cast<const VecType*>(input_b),
-        concat_inner_a / kElementNum, concat_inner_b / kElementNum, concat_inner_size / kElementNum,
-        total_elements / kElementNum, reinterpret_cast<VecType*>(output));
+    auto kernel = ConcatVectorizedKernel<VecType>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<const VecType*>(input_a),
+                           reinterpret_cast<const VecType*>(input_b), concat_inner_a / kElementNum,
+                           concat_inner_b / kElementNum, concat_inner_size / kElementNum, total_elements / kElementNum,
+                           reinterpret_cast<VecType*>(output));
   } else if (size_a % 2 == 0 && size_b % 2 == 0) {
     constexpr int kElementNum = 2 / kSizeT;
     const dim3 grid((total_elements / kElementNum + kThreadNum - 1) / kThreadNum);
     using VecType = typename utils::PackType<half, 1>::type;
-    ConcatVectorizedKernel<VecType><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const VecType*>(input_a), reinterpret_cast<const VecType*>(input_b),
-        concat_inner_a / kElementNum, concat_inner_b / kElementNum, concat_inner_size / kElementNum,
-        total_elements / kElementNum, reinterpret_cast<VecType*>(output));
+    auto kernel = ConcatVectorizedKernel<VecType>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<const VecType*>(input_a),
+                           reinterpret_cast<const VecType*>(input_b), concat_inner_a / kElementNum,
+                           concat_inner_b / kElementNum, concat_inner_size / kElementNum, total_elements / kElementNum,
+                           reinterpret_cast<VecType*>(output));
   } else {
+    constexpr int kElementNum = 1;
     const dim3 grid((total_elements + kThreadNum - 1) / kThreadNum);
     using VecType = typename utils::PackType<T, 1>::type;
-    constexpr int kElementNum = 1;
-    ConcatVectorizedKernel<VecType><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const VecType*>(input_a), reinterpret_cast<const VecType*>(input_b),
-        concat_inner_a / kElementNum, concat_inner_b / kElementNum, concat_inner_size / kElementNum,
-        total_elements / kElementNum, reinterpret_cast<VecType*>(output));
+    auto kernel = ConcatVectorizedKernel<VecType>;
+    LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<const VecType*>(input_a),
+                           reinterpret_cast<const VecType*>(input_b), concat_inner_a / kElementNum,
+                           concat_inner_b / kElementNum, concat_inner_size / kElementNum, total_elements / kElementNum,
+                           reinterpret_cast<VecType*>(output));
   }
 }
 
@@ -90,11 +100,9 @@ void Concat(const T* __restrict__ input_a, const T* __restrict__ input_b, size_t
   template void Concat(const T* __restrict__ input_a, const T* __restrict__ input_b, size_t concat_size_a,         \
                        size_t concat_size_b, size_t outer_dim_size, size_t inner_dim_size, T* __restrict__ output, \
                        cudaStream_t& stream);
-
 INSTANTIATE_CONCAT(float);
 INSTANTIATE_CONCAT(half);
 INSTANTIATE_CONCAT(__nv_bfloat16);
-
 #undef INSTANTIATE_CONCAT
 
 }  // namespace nvidia

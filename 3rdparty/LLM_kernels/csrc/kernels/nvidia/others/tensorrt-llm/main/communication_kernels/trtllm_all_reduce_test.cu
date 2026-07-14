@@ -25,10 +25,12 @@ namespace test {
 class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
  public:
   void SetUp() override {
+    // For float, 7168 / 4 = 1792 thread blocks are required, which exceeds the 1024‑block limit.
+    // Only SM90 can use clusters to avoid this restriction
     skip_float_test = GetSMVersion() < 90;
     skip_test = GetSMVersion() < 89;
     device_count = GetDeviceCount();
-    if (device_count < 2 || device_count > 8 || device_count % 2 != 0 || !EnableGpuP2PAccess(device_count)) {
+    if (device_count < 2 || device_count > 4 || device_count % 2 != 0 || !EnableGpuP2PAccess(device_count)) {
       skip_test = true;
     }
     if (skip_test) {
@@ -61,7 +63,7 @@ class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
 
       // Alloc allreduce fusion workspace
       // To test float, we always use `T = float`
-      AllocTrtAllReduceWorkspace(device_count, cur_rank, max_token_num, hidden_dim, sizeof(float), buffer_d_ptrs,
+      AllocTrtAllReduceWorkspace(device_count, cur_rank, max_token_num * hidden_dim * sizeof(float), buffer_d_ptrs,
                                  flag_d_ptrs, workspace_d_ptrs, stream);
 
       // Synchronize across all GPUs to ensure the previous step has completed
@@ -89,8 +91,9 @@ class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
     for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
       CHECK_NVIDIA_CUDA_ERROR(cudaSetDevice(cur_rank));
       NCCLCHECK(ncclCommDestroy(nccl_comms[cur_rank]));
-      FreeTrtAllReduceWorkspace(device_count, cur_rank, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs,
-                                streams[cur_rank]);
+      CHECK_NVIDIA_CUDA_ERROR(cudaFree(buffer_d_ptrs[cur_rank]));
+      CHECK_NVIDIA_CUDA_ERROR(cudaFree(flag_d_ptrs[cur_rank]));
+      CHECK_NVIDIA_CUDA_ERROR(cudaFree(workspace_d_ptrs[cur_rank]));
       CHECK_NVIDIA_CUDA_ERROR(cudaStreamDestroy(streams[cur_rank]));
     }
 
@@ -99,9 +102,9 @@ class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
 
  protected:
   int device_count = 0;
-  bool skip_test = false;
   bool skip_float_test = false;
-  
+  bool skip_test = false;
+
   ncclUniqueId nccl_id;
   std::vector<ncclComm_t> nccl_comms;
 
@@ -246,8 +249,8 @@ class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
     auto nccl_run = [&]() {
       NCCLCHECK(ncclAllReduce(reinterpret_cast<T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output_ref.data_ptr),
                               token_num * hidden_dim, ncclDtype, ncclSum, nccl_comms[cur_rank], stream));
-      InvokeFusedAddRMSNorm<T>(d_output_ref.data_ptr, d_residual_ref.data_ptr, d_rms_gamma.data_ptr, rms_eps, false,
-                               token_num, hidden_dim, stream);
+      InvokeFusedAddRMSNorm<T>(d_output_ref.data_ptr, d_residual_ref.data_ptr, d_rms_gamma.data_ptr, rms_eps, token_num,
+                               hidden_dim, stream);
     };
     const float elapsed_ms_nccl = MeasureCudaExecutionTime(nccl_run, stream, warmups, iterations);
     if (cur_rank == 0 && perf) {

@@ -71,6 +71,7 @@ template <typename T>
 struct packed_t {
   // the (P)acked type for load/store
   using P = array_t<T, 16 / sizeof(T)>;
+
   // the (A)ccumulator type for reduction
   using A = array_t<float, 16 / sizeof(T)>;
 };
@@ -80,7 +81,6 @@ class CustomAllreduce {
   int rank_;
   int world_size_;
   bool full_nvlink_;
-  bool is_group_custom_all_reduce_;
   uint32_t root_rank_;
 
   RankSignals sg_;
@@ -114,12 +114,12 @@ class CustomAllreduce {
   // is for storing the intermediate results required by some allreduce algos.
   //
   // Note: this class does not own any device memory. Any required buffersare passed in from the constructor.
-  CustomAllreduce(void *rank_data, size_t rank_data_sz, int rank, int world_size,
-                  bool full_nvlink = true, uint32_t root_rank = 0, bool is_group_custom_all_reduce = false);
-
-  void CheckRankDataCapacity(size_t num = 1);
+  CustomAllreduce(void *rank_data, size_t rank_data_sz, int rank, int world_size, bool full_nvlink = true,
+                  uint32_t root_rank = 0);
 
   void RegisterSignalBuffer(Signal **signals);
+
+  void CheckRankDataCapacity(size_t num = 1);
 
   void RegisterBuffer(void **ptrs, cudaStream_t &stream);
 

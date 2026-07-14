@@ -1,0 +1,17 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#include "layers/emb_lookup_layer.h"
+
+namespace ksana_llm {
+
+Status EmbLookupLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
+  return Status(RET_UNDEFINED_REFERENCE, "EmbLookupLayer not supported.");
+}
+
+Status EmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  return Status(RET_UNDEFINED_REFERENCE, "EmbLookupLayer not supported.");
+}
+}  // namespace ksana_llm

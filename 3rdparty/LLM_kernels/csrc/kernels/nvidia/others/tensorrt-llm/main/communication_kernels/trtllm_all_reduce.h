@@ -118,18 +118,16 @@ inline bool use_oneshot(const int token_num) { return token_num <= kOneShotMaxTo
 template <typename T>
 void allreduce_fusion_op(AllReduceFusionParams<T> const& params);
 
-void AllocTrtAllReduceWorkspace(const int nranks, const int rank, const int max_token_num, const int hidden_dim,
-                                const int data_type_size, std::vector<void*>& buffer_d_ptrs,
-                                std::vector<void*>& flag_d_ptrs, std::vector<void*>& workspace_d_ptrs,
-                                cudaStream_t stream);
+void AllocTrtAllReduceWorkspace(const int nranks, const int rank, const int max_buffer_size,
+                                std::vector<void*>& buffer_d_ptrs, std::vector<void*>& flag_d_ptrs,
+                                std::vector<void*>& workspace_d_ptrs, cudaStream_t stream);
 
 void InitTrtAllReduceWorkspace(const int nranks, const int rank, const std::vector<void*>& buffer_d_ptrs,
                                const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
                                cudaStream_t stream);
 
 void FreeTrtAllReduceWorkspace(const int nranks, const int rank, const std::vector<void*>& buffer_d_ptrs,
-                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
-                               cudaStream_t stream);
+                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

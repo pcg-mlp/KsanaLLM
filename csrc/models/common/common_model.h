@@ -1,0 +1,174 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+#pragma once
+
+#include <mutex>
+#include <unordered_map>
+
+#include "layers/add_layer.h"
+#include "layers/assemble_tokens_hidden_layer.h"
+#include "layers/base_layer.h"
+#include "layers/cast_layer.h"
+#include "layers/emb_lookup_layer.h"
+#include "layers/flash_attention_layer.h"
+#include "layers/input_refit_layer.h"
+#include "layers/layernorm_layer.h"
+#include "layers/matmul_layer_factory.h"
+#include "layers/paged_attention_layer.h"
+#include "layers/silu_mul_layer.h"
+#include "runtime/hidden_unit_buffer.h"
+#include "runtime/infer_stage.h"
+#ifdef ENABLE_CUDA
+#  include "layers/set_torch_stream_layer.h"
+#endif
+#include "configure/context.h"
+#include "configure/environment.h"
+#include "models/base/base_model.h"
+#include "models/base/model_communicator.h"
+#include "models/base/model_input.h"
+#include "models/base/model_output.h"
+#include "models/common_moe/moe_config.h"
+#include "models/communicator/tp_communicator.h"
+#include "models/llama/llama_weight.h"
+#include "utils/optional_file.h"
+#include "utils/status.h"
+#include "utils/tensor.h"
+#include "utils/utils.h"
+
+#include "models/base/forwarding_context.h"
+
+#include "modules/basic/layernorm.h"
+#include "modules/basic/linear.h"
+
+namespace ksana_llm {
+
+// The layernorm position type.
+enum class LayerNormPosition { PRE_NORM = 0, POST_NORM = 1 };
+
+// Describe the model architecture.
+struct ModelRunConfig {
+  // The model position embedding.
+  PositionEncoding position_encoding = PositionEncoding::ROPE;
+
+  // Use pre-norm or post-norm.
+  LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
+
+  // If use rotary_embedding_pos for embedding lookup
+  bool emb_lookup_use_rotary_embedding_pos = false;
+
+  // Whether word embedding uses emb_scale.
+  bool use_emb_scale = false;
+  // The word embedding scale factor.
+  float emb_scale = 1.f;
+  // Scaling the hidden states of residual connections.
+  float scale_depth = 1.f;
+};
+
+// A common implement
+class CommonModel : public BaseModel {
+ public:
+  CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+              std::shared_ptr<Context> context);
+  ~CommonModel() override;
+
+  // Initialize the run config.
+  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
+
+  float* GetLogitsPtr() override;
+
+  // refer
+  // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
+  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
+                 HiddenUnitDeviceBuffer* hidden_unit, const RunMode run_mode = RunMode::kMain) override;
+
+  // Update response. Stop inference when the return value is true.
+  bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
+
+ private:
+  virtual Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) = 0;
+
+ private:
+  // Execute the embedding lookup.
+  Status LookupEmbedding(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                         std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
+
+  // Execute the forward of specific layers.
+  virtual Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) = 0;
+
+  // Execute the lm head, and generate the logits.
+  virtual Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                        std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
+
+ protected:
+  // Get tensors hidden buffer.
+  std::vector<Tensor>& GetHiddenUnitBufferTensors(ForwardingContext& forwarding_context);
+  void SetHiddenUnitBufferTensors(HiddenUnitDeviceBuffer* const hidden_unit);
+
+ public:
+  using BaseModel::context_;
+  using BaseModel::rank_;
+
+  // Whether auto prefix caching is enabled.
+  bool prefix_caching_enabled_;
+
+  // Check if speculative decoding is enabled
+  bool speculative_decoding_enabled_;
+
+  // The model config.
+  ModelConfig model_config_;
+
+  RuntimeConfig runtime_config_;
+
+  // The pipeline_config for distributed mode.
+  PipelineConfig pipeline_config_;
+
+  // The expert parallel config for multi nodes.
+  ExpertParallelConfig expert_parallel_config_;
+  // The model run config.
+  ModelRunConfig model_run_config_;
+
+  std::shared_ptr<BaseLayer> emb_lookup_layer_;
+  std::shared_ptr<BaseLayer> cpu_emb_lookup_layer_;
+
+  std::shared_ptr<BaseLayer> assemble_tokens_hidden_layer_;
+  std::shared_ptr<BaseLayer> cast_layer_;
+  std::shared_ptr<BaseLayer> input_refit_layer_;
+#ifdef ENABLE_CUDA
+  std::shared_ptr<BaseLayer> set_torch_stream_layer_;
+#endif
+
+  std::shared_ptr<Linear> lm_head_;
+  std::shared_ptr<Layernorm> lm_head_prenorm_{nullptr};
+
+  // TODO(robertyuan): layer_creation_context_ should be deleted after layer creation.
+  // However, matmul_layer_factory will delete the buffer during destroying.
+  // Fix this after CommonModel is deleted.
+  LayerCreationContext layer_creation_context_;
+
+  ModelBuffers model_buffers_;
+  // Buffer of forwarding contexts for parallel batch processing
+  std::unique_ptr<ForwardingContext> forwarding_context_ = nullptr;
+
+  // Be a replacement of residual_buffer_, for distributed mode only.
+  std::vector<Tensor> distributed_device_buffer_;
+  std::vector<Tensor> distributed_device_buffer_prefill_;
+
+  Tensor cpu_input_tokens_tensor_;
+  Tensor cpu_tokens_emb_tensor_;
+
+  // Only used for QWenVL
+  Tensor mrotary_section_tensor_;
+  // Only used for arc_hunyuan_video
+  Tensor xdrotary_section_tensor_;
+
+ protected:
+  bool IsPrefixCachingComputationReuse();
+
+  Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
+                           ForwardingContext& forwarding_context);
+
+  virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context);
+};
+
+}  // namespace ksana_llm

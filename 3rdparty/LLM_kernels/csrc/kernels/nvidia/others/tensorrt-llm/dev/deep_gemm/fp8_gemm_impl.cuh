@@ -187,6 +187,9 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
 
     // NOTES: only one thread (or warp) will be used
     if (threadIdx.x == kNumMathThreads) {
+#  if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+      cudaGridDependencySynchronize();
+#  endif
       // Persistently schedule over blocks
       while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
         launch_k_iterations([&](int k_iter, auto type) {
@@ -261,7 +264,6 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
       // NOTES: except the first warp, we want to overlap loading B scales with TMA stores between tasks
       if (threadIdx.x >= 32) {
         auto num_previous_lines = scheduler.get_global_scales_b_idx(ceil_div(SHAPE_N, BLOCK_K), 0, 0, m_block_idx);
-        ;
         auto local_scales_b = scales_b + (num_previous_lines + ((n_block_idx * BLOCK_N) / BLOCK_K)) * SHAPE_K_SCALES;
 #  pragma unroll
         for (uint32_t i = threadIdx.x - 32; i < num_scales_b; i += kNumMathThreads - 32)
@@ -543,6 +545,9 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
 
     // NOTES: only one thread (or warp) will be used
     if (threadIdx.x == kNumMathThreads) {
+#  if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+      cudaGridDependencySynchronize();
+#  endif
       // Persistently schedule over blocks
       while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
         launch_k_iterations([&](int k_iter, auto type) {
@@ -772,4 +777,5 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
   if (blockIdx.x == 0 and threadIdx.x == 0) DG_DEVICE_ASSERT(false and "This kernel only support sm_90a");
 #endif
 }
+
 }  // namespace deep_gemm

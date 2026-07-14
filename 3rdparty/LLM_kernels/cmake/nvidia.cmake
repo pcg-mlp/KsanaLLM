@@ -40,6 +40,11 @@ if(GIT_FOUND)
   if(NOT GIT_SUBMOD_RESULT EQUAL "0")
     message(FATAL_ERROR "git submodule update --init 3rdparty/c4x/cutlass failed with ${GIT_SUBMOD_RESULT}, please checkout cutlass submodule")
   endif()
+
+  message(STATUS "Applying c4x cutlass patch")
+  # Refer to https://github.com/NVIDIA/cutlass/pull/2786
+  execute_process(COMMAND ${GIT_EXECUTABLE} apply ${PROJECT_SOURCE_DIR}/3rdparty/c4x_cutlass.patch
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/3rdparty/c4x/cutlass)
 endif()
 
 if(CUDA_PTX_VERBOSE_INFO)
@@ -173,7 +178,10 @@ if(GIT_FOUND AND (ENABLE_FLASH_MLA STREQUAL "TRUE"))
   list(FILTER DEEPSEEK_FLASH_MLA_SOURCES EXCLUDE REGEX "${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/cutlass/.*$")
   set(DEEPSEEK_FLASH_MLA_INCLUDES
     ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}
-    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/sm90)
+    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/api
+    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/kerutils/include
+    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/sm90
+    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/sm90/decode/sparse_fp8)
 endif()
 
 set(CUDA_INC_DIRS

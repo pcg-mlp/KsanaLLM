@@ -28,7 +28,6 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 - Support NVIDIA GPUs and Huawei Ascend NPU
 
-
 **KsanaLLM seamlessly supports many Hugging Face models, including the below models that have been verified:**
 
 - LLaMA 7B/13B & LLaMA-2 7B/13B & LLaMA3 8B/70B
@@ -66,7 +65,31 @@ docker run \
 pip install -r requirements.txt
 ```
 
-#### 1.2 Direct Use of Tencent Cloud Nvidia GPU Image
+#### 1.2 Direct Use of Internal Nvidia GPU Image 
+
+1. Internal Image Name (For H20 / cuda-124):
+
+```bash
+mirrors.tencent.com/todacc/venus-std-base-tlinux4-ksana-hopper-gpu-rdma:0.1.2
+```
+
+
+2. Internal Image Name (For A10 / cuda-118):
+
+```bash
+mirrors.tencent.com/todacc/venus-numerous-llm:1.0.0
+```
+
+3. Container Creation:
+```bash
+ # For H20 / cuda-124
+ sudo docker run -itd --name xxx -v /data1/:/data1 --network host  --shm-size=10g --privileged --gpus all -v /usr/local/nvidia:/usr/local/nvidia mirrors.tencent.com/todacc/venus-std-base-tlinux4-ksana-hopper-gpu-rdma:0.1.2 /bin/bash
+
+ # For A10 / cuda-118
+ sudo docker run -itd --name xxx -v /data1/:/data1 --network host  --shm-size=10g --privileged --gpus all -v /usr/local/nvidia:/usr/local/nvidia mirrors.tencent.com/todacc/venus-numerous-llm:1.0.0 /bin/bash
+ ```
+
+#### 1.3 Direct Use of Tencent Cloud Nvidia GPU Image
 
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
@@ -85,7 +108,7 @@ nvidia-docker run \
 pip install -r requirements.txt
 ```
 
-#### 1.3 For Huawei Ascend NPU
+#### 1.4 For Huawei Ascend NPU
 
 **Please install Huawei Ascend NPU driver and CANN: [driver download link](https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/softwareinst/instg/instg_0000.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit)**
 
@@ -194,11 +217,6 @@ python serving_server.py \
 
 ```
 
-Tip: KsanaLLM automatically generates log files in the directory where the service is started. You can view information such as model loading, service startup, and request warning through these log files.
-```bash
-vim log/ksana_llm.log
-```
-
 Inference test with one shot conversation
 
 ```bash
@@ -260,6 +278,8 @@ Note: By default, NCCL communication is used. If you want to force TCP communica
 export USE_TCP_DATA_CHANNEL=1
 
 #### 4.3 Example of Running the DeepSeek Model on H20
+
+**Suggestion**: Use the internal NVIDIA image from section 1.2
 
 ##### 4.3.1 Compilation for NVIDIA H20
 
@@ -404,12 +424,6 @@ See [Example](src/ksana_llm/python/ksana_plugin/qwen_vl/ksana_plugin.py) for mor
 When enabling FP8 E4M3 KV Cache quantization, it is necessary to provide scaling factors to ensure inference accuracy.
 
 For more detailed information, please refer to the following link: [Optional KV Scale Guide](src/ksana_llm/python/kv_scale_files/README.md)
-
-#### 6.4 Prefill-Decode Disaggregation (PD Separation)
-
-KsanaLLM supports Prefill-Decode disaggregation architecture, which separates the prefill and decode phases into different node groups for better resource utilization and performance optimization.
-
-For detailed setup instructions, please refer to: [PD Separation Startup Guide](docs/pd_separation_startup.md)
 
 #### 7. Contact Us
 ##### WeChat Group

@@ -8,9 +8,6 @@
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include <stdlib.h>
-
-#include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels {
 namespace nvidia {

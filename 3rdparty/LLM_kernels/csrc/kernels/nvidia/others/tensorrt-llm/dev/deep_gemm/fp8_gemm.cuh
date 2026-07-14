@@ -36,6 +36,7 @@
 #include <cute/arch/copy_sm90_tma.hpp>
 
 #include "compiler.cuh"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/envUtils.h"
 #include "fp8_gemm_impl.cuh"
 #include "mma_utils.cuh"
 #include "scheduler.cuh"
@@ -45,8 +46,8 @@
 namespace deep_gemm {
 template <typename T>
 static inline CUtensorMap make_2d_tma_a_desc(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
-                                      uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
-                                      uint64_t global_stride_in_bytes = 0) {
+                                             uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
+                                             uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor,
                           shape_m * (gemm_type == GemmType::GroupedMasked ? num_groups : 1), shape_k, block_m, block_k,
                           global_stride_in_bytes);
@@ -54,8 +55,8 @@ static inline CUtensorMap make_2d_tma_a_desc(T* global_address, uint32_t shape_m
 
 template <typename T>
 inline CUtensorMap make_2d_tma_b_desc(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
-                               uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
-                               uint64_t global_stride_in_bytes = 0) {
+                                      uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
+                                      uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::ColMajor, shape_k,
                           shape_n * (gemm_type != GemmType::Normal ? num_groups : 1), block_k, block_n,
                           global_stride_in_bytes);
@@ -63,8 +64,8 @@ inline CUtensorMap make_2d_tma_b_desc(T* global_address, uint32_t shape_n, uint3
 
 template <typename T>
 inline CUtensorMap make_2d_tma_d_desc(T* global_address, uint32_t shape_m, uint32_t shape_n, uint32_t block_m,
-                               uint32_t block_n, uint32_t num_groups, GemmType gemm_type,
-                               uint64_t global_stride_in_bytes = 0) {
+                                      uint32_t block_n, uint32_t num_groups, GemmType gemm_type,
+                                      uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor,
                           shape_m * (gemm_type == GemmType::GroupedMasked ? num_groups : 1), shape_n,
                           min(block_m, shape_m), min(block_n, shape_n), global_stride_in_bytes,
@@ -73,8 +74,8 @@ inline CUtensorMap make_2d_tma_d_desc(T* global_address, uint32_t shape_m, uint3
 
 template <typename T>
 inline CUtensorMap make_2d_tma_scales_a_desc(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
-                                      uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
-                                      uint64_t global_stride_in_bytes = 0) {
+                                             uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
+                                             uint64_t global_stride_in_bytes = 0) {
   // Make TMA aligned to 16 bytes
   constexpr uint32_t kAlignment = 16 / sizeof(T);
   shape_m = ceil_div(shape_m, kAlignment) * kAlignment;
@@ -88,23 +89,24 @@ inline CUtensorMap make_2d_tma_scales_a_desc(T* global_address, uint32_t shape_m
 
 template <typename T>
 inline CUtensorMap make_tma_scales_a_offset_desc(T* global_address, int64_t max_m_padded_total, uint32_t shape_k,
-                                          uint32_t block_m, uint32_t block_k, uint64_t global_stride_in_bytes = 0) {
+                                                 uint32_t block_m, uint32_t block_k,
+                                                 uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::ColMajor, max_m_padded_total, ceil_div(shape_k, block_k), block_m, 1,
                           global_stride_in_bytes, CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE);
 }
 
 template <typename T>
 inline CUtensorMap make_2d_tma_a_desc_swapAB(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
-                                      uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
-                                      uint64_t global_stride_in_bytes = 0) {
+                                             uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
+                                             uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor, shape_m * (gemm_type != GemmType::Normal ? num_groups : 1),
                           shape_k, block_m, block_k, global_stride_in_bytes);
 }
 
 template <typename T>
 inline CUtensorMap make_2d_tma_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
-                                      uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
-                                      uint64_t global_stride_in_bytes = 0) {
+                                             uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
+                                             uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::ColMajor, shape_k,
                           shape_n * (gemm_type == GemmType::GroupedMasked ? num_groups : 1), block_k, block_n,
                           global_stride_in_bytes);
@@ -112,8 +114,8 @@ inline CUtensorMap make_2d_tma_b_desc_swapAB(T* global_address, uint32_t shape_n
 
 template <typename T>
 inline CUtensorMap make_2d_tma_d_desc_swapAB(T* global_address, uint32_t shape_m, uint32_t shape_n, uint32_t block_m,
-                                      uint32_t block_n, uint32_t num_groups, GemmType gemm_type,
-                                      uint64_t global_stride_in_bytes = 0) {
+                                             uint32_t block_n, uint32_t num_groups, GemmType gemm_type,
+                                             uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor,
                           shape_n * (gemm_type == GemmType::GroupedMasked ? num_groups : 1), shape_m,
                           min(block_n, shape_n), min(block_m, shape_m), global_stride_in_bytes,
@@ -121,9 +123,9 @@ inline CUtensorMap make_2d_tma_d_desc_swapAB(T* global_address, uint32_t shape_m
 }
 
 template <typename T>
-inline CUtensorMap make_2d_tma_scales_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
-                                             uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
-                                             uint64_t global_stride_in_bytes = 0) {
+inline CUtensorMap make_2d_tma_scales_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k,
+                                                    uint32_t block_n, uint32_t block_k, uint32_t num_groups,
+                                                    GemmType gemm_type, uint64_t global_stride_in_bytes = 0) {
   // Make TMA aligned to 16 bytes
   constexpr uint32_t kAlignment = 16 / sizeof(T);
   shape_n = ceil_div(shape_n, kAlignment) * kAlignment;
@@ -137,16 +139,16 @@ inline CUtensorMap make_2d_tma_scales_b_desc_swapAB(T* global_address, uint32_t 
 
 template <typename T>
 inline CUtensorMap make_tma_scales_b_offset_desc_swapAB(T* global_address, int64_t max_n_padded_total, uint32_t shape_k,
-                                                 uint32_t block_n, uint32_t block_k,
-                                                 uint64_t global_stride_in_bytes = 0) {
+                                                        uint32_t block_n, uint32_t block_k,
+                                                        uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor, ceil_div(shape_k, block_k), max_n_padded_total, 1, block_n,
                           global_stride_in_bytes, CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE);
 }
 
 template <typename T>
 inline CUtensorMap make_2d_tma_desc(T* global_address, Layout layout, uint32_t gmem_rows, uint32_t gmem_cols,
-                             uint32_t smem_rows, uint32_t smem_cols, uint64_t global_stride_in_bytes,
-                             CUtensorMapSwizzle swizzle_type = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B) {
+                                    uint32_t smem_rows, uint32_t smem_cols, uint64_t global_stride_in_bytes,
+                                    CUtensorMapSwizzle swizzle_type = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B) {
   if (layout == Layout::RowMajor) {
     uint64_t gmem_dim[2] = {gmem_cols, gmem_rows};
     uint32_t smem_dim[2] = {smem_cols, smem_rows};
@@ -161,10 +163,11 @@ inline CUtensorMap make_2d_tma_desc(T* global_address, Layout layout, uint32_t g
 }
 
 template <typename LayoutIndexType>
-inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d, float* scales_a,
-             float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
-             uint32_t block_k, uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
-             LayoutIndexType* grouped_layout, cudaStream_t stream, int num_sms, uint32_t smem_size) {
+inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d,
+                    float* scales_a, float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
+                    uint32_t block_m, uint32_t block_n, uint32_t block_k, uint32_t num_groups,
+                    uint32_t num_tma_multicast, GemmType gemm_type, LayoutIndexType* grouped_layout,
+                    cudaStream_t stream, int num_sms, uint32_t smem_size) {
   auto tma_a_desc = make_2d_tma_a_desc(reinterpret_cast<__nv_fp8_e4m3*>(mat_a), shape_m, shape_k, block_m, block_k,
                                        num_groups, gemm_type, ld_a);
   auto tma_b_desc = make_2d_tma_b_desc(reinterpret_cast<__nv_fp8_e4m3*>(mat_b), shape_n, shape_k, block_n, block_k,
@@ -205,10 +208,10 @@ inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int
 
 template <typename LayoutIndexType>
 inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d,
-                   float* scales_a, float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
-                   uint32_t block_m, uint32_t block_n, uint32_t block_k, uint32_t num_groups,
-                   uint32_t num_tma_multicast, GemmType gemm_type, LayoutIndexType* grouped_layout, cudaStream_t stream,
-                   int num_sms, uint32_t smem_size) {
+                          float* scales_a, float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
+                          uint32_t block_m, uint32_t block_n, uint32_t block_k, uint32_t num_groups,
+                          uint32_t num_tma_multicast, GemmType gemm_type, LayoutIndexType* grouped_layout,
+                          cudaStream_t stream, int num_sms, uint32_t smem_size) {
   auto tma_a_desc = make_2d_tma_a_desc_swapAB(reinterpret_cast<__nv_fp8_e4m3*>(mat_a), shape_m, shape_k, block_m,
                                               block_k, num_groups, gemm_type, ld_a);
   auto tma_b_desc = make_2d_tma_b_desc_swapAB(reinterpret_cast<__nv_fp8_e4m3*>(mat_b), shape_n, shape_k, block_n,
@@ -230,11 +233,14 @@ inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_
   config.stream = stream;
 
   // Clusters for TMA multicast
-  cudaLaunchAttribute attr;
-  attr.id = cudaLaunchAttributeClusterDimension;
-  attr.val.clusterDim = {num_tma_multicast, 1, 1};
-  config.attrs = &attr;
-  config.numAttrs = 1;
+  cudaLaunchAttribute attrs[2];
+  attrs[0].id = cudaLaunchAttributeClusterDimension;
+  attrs[0].val.clusterDim = {num_tma_multicast, 1, 1};
+  attrs[1].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attrs[1].val.programmaticStreamSerializationAllowed =
+      llm_kernels::nvidia::tensorrt_llm::dev::common::getEnvEnablePDL();
+  config.attrs = attrs;
+  config.numAttrs = 2;
 
   NormalSchedulerInputSwapAB input;
   input.shape_n = shape_n;
@@ -246,11 +252,11 @@ inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_
 }
 
 template <typename LayoutIndexType>
-inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d, float* scales_a,
-             float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
-             uint32_t block_k, uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
-             LayoutIndexType* problem_m_offsets, cudaStream_t stream, int num_sms, uint32_t smem_size,
-             uint32_t max_shape_m_padded) {
+inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d,
+                    float* scales_a, float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
+                    uint32_t block_m, uint32_t block_n, uint32_t block_k, uint32_t num_groups,
+                    uint32_t num_tma_multicast, GemmType gemm_type, LayoutIndexType* problem_m_offsets,
+                    cudaStream_t stream, int num_sms, uint32_t smem_size, uint32_t max_shape_m_padded) {
   auto tma_a_desc = make_2d_tma_a_desc(reinterpret_cast<__nv_fp8_e4m3*>(mat_a), shape_m, shape_k, block_m, block_k,
                                        num_groups, gemm_type);
   auto tma_b_desc = make_2d_tma_b_desc(reinterpret_cast<__nv_fp8_e4m3*>(mat_b), shape_n, shape_k, block_n, block_k,
@@ -271,11 +277,14 @@ inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int
 
   // Clusters for TMA multicast
   // NOTES: `>= 4` cluster size will cause performance degradation
-  cudaLaunchAttribute attr;
-  attr.id = cudaLaunchAttributeClusterDimension;
-  attr.val.clusterDim = {num_tma_multicast, 1, 1};
-  config.attrs = &attr;
-  config.numAttrs = 1;
+  cudaLaunchAttribute attrs[2];
+  attrs[0].id = cudaLaunchAttributeClusterDimension;
+  attrs[0].val.clusterDim = {num_tma_multicast, 1, 1};
+  attrs[1].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attrs[1].val.programmaticStreamSerializationAllowed =
+      llm_kernels::nvidia::tensorrt_llm::dev::common::getEnvEnablePDL();
+  config.attrs = attrs;
+  config.numAttrs = 2;
 
   GroupedWithOffsetSchedulerInput input;
   input.problem_m_offsets = problem_m_offsets;
@@ -287,12 +296,12 @@ inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int
 }
 
 template <typename LayoutIndexType>
-inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a, void* mat_b /* act*/, int ld_b, void* mat_d,
-                   int ld_d, float* scales_a /* weight scales*/, float* scales_b /* act scales*/, uint32_t shape_m,
-                   uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n, uint32_t block_k,
-                   uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
-                   LayoutIndexType* problem_n_offsets, cudaStream_t stream, int num_sms, uint32_t smem_size,
-                   uint32_t max_shape_n_padded) {
+inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a, void* mat_b /* act*/, int ld_b,
+                          void* mat_d, int ld_d, float* scales_a /* weight scales*/, float* scales_b /* act scales*/,
+                          uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
+                          uint32_t block_k, uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
+                          LayoutIndexType* problem_n_offsets, cudaStream_t stream, int num_sms, uint32_t smem_size,
+                          uint32_t max_shape_n_padded) {
   // Create tensor mappings using swapAB version functions, note the parameter order
   auto tma_a_desc = make_2d_tma_a_desc_swapAB(reinterpret_cast<__nv_fp8_e4m3*>(mat_a), shape_m, shape_k, block_m,
                                               block_k, num_groups, gemm_type);
@@ -314,11 +323,14 @@ inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a
   config.stream = stream;
 
   // Clusters for TMA multicast
-  cudaLaunchAttribute attr;
-  attr.id = cudaLaunchAttributeClusterDimension;
-  attr.val.clusterDim = {num_tma_multicast, 1, 1};
-  config.attrs = &attr;
-  config.numAttrs = 1;
+  cudaLaunchAttribute attrs[2];
+  attrs[0].id = cudaLaunchAttributeClusterDimension;
+  attrs[0].val.clusterDim = {num_tma_multicast, 1, 1};
+  attrs[1].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attrs[1].val.programmaticStreamSerializationAllowed =
+      llm_kernels::nvidia::tensorrt_llm::dev::common::getEnvEnablePDL();
+  config.attrs = attrs;
+  config.numAttrs = 2;
 
   // Update input structure to use N dimension offsets
   GroupedWithOffsetSchedulerInputSwapAB input;
@@ -330,10 +342,10 @@ inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a
 }
 
 inline void runGemm(cudaKernel_t kernel, void* mat_a, uint64_t ld_a, uint64_t stride_a, void* mat_b, uint64_t ld_b,
-             uint64_t stride_b, void* mat_d, uint64_t ld_d, uint64_t stride_d, float* scales_a, float* scales_b,
-             uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n, uint32_t block_k,
-             uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type, cudaStream_t stream, int num_sms,
-             uint32_t smem_size) {
+                    uint64_t stride_b, void* mat_d, uint64_t ld_d, uint64_t stride_d, float* scales_a, float* scales_b,
+                    uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
+                    uint32_t block_k, uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
+                    cudaStream_t stream, int num_sms, uint32_t smem_size) {
   auto tma_a_desc = make_2d_tma_a_desc(reinterpret_cast<__nv_fp8_e4m3*>(mat_a), shape_m * num_groups, shape_k, block_m,
                                        block_k, num_groups, gemm_type, ld_a);
   auto tma_b_desc = make_2d_tma_b_desc(reinterpret_cast<__nv_fp8_e4m3*>(mat_b), shape_n, shape_k, block_n, block_k,
@@ -355,11 +367,14 @@ inline void runGemm(cudaKernel_t kernel, void* mat_a, uint64_t ld_a, uint64_t st
 
   // Clusters for TMA multicast
   // NOTES: `>= 4` cluster size will cause performance degradation
-  cudaLaunchAttribute attr;
-  attr.id = cudaLaunchAttributeClusterDimension;
-  attr.val.clusterDim = {num_tma_multicast, 1, 1};
-  config.attrs = &attr;
-  config.numAttrs = 1;
+  cudaLaunchAttribute attrs[2];
+  attrs[0].id = cudaLaunchAttributeClusterDimension;
+  attrs[0].val.clusterDim = {num_tma_multicast, 1, 1};
+  attrs[1].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attrs[1].val.programmaticStreamSerializationAllowed =
+      llm_kernels::nvidia::tensorrt_llm::dev::common::getEnvEnablePDL();
+  config.attrs = attrs;
+  config.numAttrs = 2;
 
   StridedBatchedSchedulerInput input{shape_m, ld_a, stride_a, ld_b, stride_b, ld_d, stride_d};
   // Launch

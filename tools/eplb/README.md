@@ -8,7 +8,7 @@
     - ...
     - 卡7 加载专家 [224, 256)
   - 而由于输入的不同，因此事实上不同专家被激活的次数和频率均有不同，也就是我们常说的有 “热门专家” 的存在。
-- 由于专家被激活的不均匀，在 MOE 层依据 topk_ids 执行 AllToAll 通信后，有可能会出现部分节点上要计算的 token 数较多，二有部分节点上要计算的 token 数较少的问题。最极端的情况，**某些节点可能根本没有要计算的 token**。节点间待计算的 token 数量不同，会导致一部分节点空闲，由于 MOE 后还需要同步的调用 Combine 做第二次数据交换，这会使一部分节点出现较长时间等待，降低整体系统的吞吐。
+- 由于专家被激活的不均匀，在 MOE 层依据 topk_ids 执行 AllToAll 通信后，有可能会出现部分节点上要计算的 token 数较多，而有部分节点上要计算的 token 数较少的问题。最极端的情况，**某些节点可能根本没有要计算的 token**。节点间待计算的 token 数量不同，会导致一部分节点空闲，由于 MOE 后还需要同步的调用 Combine 做第二次数据交换，这会使一部分节点出现较长时间等待，降低整体系统的吞吐。
 
 # 静态 EPLB
 
@@ -22,13 +22,15 @@
 
 - 一念服务启动时，通过 环境变量 控制，将 TopkIds Tensor 使用 SaveToNpyFile dump 到本地目录
   - ```
-    ENABLE_DUMP_EPLB_DATA=1 \
+    ENABLE_DUMP_EPLB=True \
     DUMP_EPLB_PATH=/tmp/dump/ \
-    python ../src/ksana_llm/python/serving_server.py \
+    python ../python/serving_server.py \
       --config_file ksana_llm.yaml \
       --port 6789
     ```
-  - 其中: DUMP_EPLB_PATH 可不传,默认将存储在 ${HOME}/.cache/KsanaLLM/EPLB/ 目录下
+  - 其中:
+    - `ENABLE_DUMP_EPLB`: 可选值为 `True`/`False` 或 `1`/`0`，控制是否 dump EPLB 数据
+    - `DUMP_EPLB_PATH`: 可不传，默认将存储在 `${HOME}/.cache/KsanaLLM/EPLB/` 目录下
 - 启动一念后,正常完成待分析样本的请求和推理过程
 - 在配置的目录下，将自动生成对应的 dump 数据, dump 数据会按照层为单位，存储在不同的目录下.
 
@@ -37,7 +39,7 @@
 - 使用脚本 KsanaLLM/tools/eplb/expert_parallel_get_map.py，将上一节生成的专家分布文件，转换为 json 映射表
   - ```
     python tools/eplb/expert_parallel_get_map.py \
-		-i /tmp/dump/ \
+    	-i /tmp/dump/ \
         -o eplb_config.json \
         --ep_nums 256 \
         --nodes 1 \
@@ -48,7 +50,7 @@
         --perf_optimize
     ```
   - 下面详细说明脚本的各项入参含义：
-    - --input_dir，-i，指向的是上一节中的环境变量所在地址 KSANA_DUMP_TOPK_PATH
+    - --input_dir，-i，指向的是上一节中的环境变量所在地址 DUMP_EPLB_PATH
     - --output_file, -o，表示的是输出的 json 文件名称
     - --ep_nums，总的专家数
     - --nodes，总的节点数（多机为N，单机为1）
@@ -62,8 +64,39 @@
 
 - 一念服务启动时，通过 环境变量 控制，将静态 EPLB 专家映射表 load 到一念程序中
 - ```
-    export EPLB_WEIGHT=/work/KsanaLLM/build/eplb_config.json
-    python ../src/ksana_llm/python/serving_server.py \
+    export EPLB_CONFIG_PATH=/work/KsanaLLM/build/eplb_config.json
+    python ../python/serving_server.py \
         --config_file ksana_llm.yaml \
         --port 6789
   ```
+
+  - 其中:
+    - `EPLB_CONFIG_PATH`: 指向 EPLB 专家映射表的 JSON 文件路径
+
+# 未来规划
+
+本项目采用渐进式优化策略，从静态专家分配逐步演进至全动态负载均衡。当前处于阶段 2，后续将向动态加载方向持续优化。
+
+## 阶段 1：基础 EP 推理
+
+建立专家并行推理基础框架，实现基本的推理功能。
+
+## 阶段 2：静态专家分配
+
+基于离线分析的专家激活分布，在模型加载时确定各专家在 GPU 设备上的分配策略，推理过程中专家位置保持固定。
+
+## 阶段 3：静态冗余专家
+
+在各 GPU 设备上部署 4-8 个专家副本，通过静态冗余策略缓解热点专家的访问瓶颈，副本分布在初始化时确定。
+
+## 阶段 4：动态请求路由（LPLB）
+
+引入请求级负载均衡机制，根据各副本的实时负载状态动态分配推理请求，专家副本位置保持不变。
+
+## 阶段 5：动态冗余专家
+
+实现周期性专家热度统计与副本动态调整机制，根据访问模式在线替换低频专家副本为高频专家副本。
+
+## 阶段 6：全动态 EPLB
+
+实现专家的完全动态管理，支持周期性全局重排、按需加载与卸载，达到系统级负载均衡与资源利用率最优化。

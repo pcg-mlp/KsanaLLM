@@ -56,7 +56,7 @@ __global__ void AddBiasResidualKernel(T* output, const T2* __restrict__ input, c
   }
 }
 
-template <typename T, int kVecSize>
+template <typename T, int32_t kVecSize>
 __global__ void AddResidualKernel(T* __restrict__ output, const T* __restrict__ input, const T* __restrict__ residual,
                                   const int32_t total_element_num) {
   if (const int32_t index = kVecSize * (blockIdx.x * blockDim.x + threadIdx.x); index < total_element_num) {
@@ -96,9 +96,10 @@ void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const 
                                                               total_element_num, n);
     }
   } else {
-    constexpr size_t kVecSize = sizeof(int4) / sizeof(T);
+    constexpr int32_t kVecSize = sizeof(uint4) / sizeof(T);
     if (bias == nullptr && residual2 == nullptr && (total_element_num & (kVecSize - 1)) == 0) {
-      const uint32_t block_num = (total_element_num + kVecSize * BLOCK_SIZE - 1) / (kVecSize * BLOCK_SIZE);
+      const int32_t vec_size_per_grid = kVecSize * BLOCK_SIZE;
+      const uint32_t block_num = (total_element_num + vec_size_per_grid - 1) / vec_size_per_grid;
       dim3 grid(block_num);
       dim3 block(BLOCK_SIZE);
       AddResidualKernel<T, kVecSize><<<grid, block, 0, stream>>>(output, input, residual1, total_element_num);

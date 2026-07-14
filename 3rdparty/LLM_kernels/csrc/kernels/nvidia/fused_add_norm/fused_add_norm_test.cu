@@ -24,7 +24,7 @@ class LlamaNvidiaFusedAddNormTestSuit : public NvidiaTestSuitBase {
 
  protected:
   using NvidiaTestSuitBase::stream;
-  const std::vector<std::pair<int, int>> m_n_pairs = {{1, 2048}, {2, 4096}, {64000, 8}};;
+  const std::vector<std::pair<int, int>> m_n_pairs = {{1, 2048}, {2, 4096}, {64000, 8}};
   int cuda_driver_version_;
   const int MIN_CUDA_DRIVER_VERSION = 12000;  // Minimum required CUDA version for fused_add_norm
 
@@ -61,7 +61,7 @@ class LlamaNvidiaFusedAddNormTestSuit : public NvidiaTestSuitBase {
     BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n},
                                             /*is_random_init*/ true);
     BufferMeta residual_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n},
-                                            /*is_random_init*/ true);
+                                               /*is_random_init*/ true);
     BufferMeta weight_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {n},
                                              /*is_random_init*/ true);
     BufferMeta rmsnorm_output_ref_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n},
@@ -80,8 +80,7 @@ class LlamaNvidiaFusedAddNormTestSuit : public NvidiaTestSuitBase {
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
-    InvokeFusedAddRMSNorm<T>(input_meta.data_ptr, residual_meta.data_ptr, weight_meta.data_ptr, norm_eps,
-                             /*enable_pdl*/ false, m, n, stream);
+    InvokeFusedAddRMSNorm<T>(input_meta.data_ptr, residual_meta.data_ptr, weight_meta.data_ptr, norm_eps, m, n, stream);
 
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
@@ -92,8 +91,8 @@ class LlamaNvidiaFusedAddNormTestSuit : public NvidiaTestSuitBase {
                                rmsnorm_residual_ref_meta, residual_meta, tol, tol));
 
     auto cuda_run = [&]() {
-      InvokeFusedAddRMSNorm<T>(input_meta.data_ptr, residual_meta.data_ptr, weight_meta.data_ptr, norm_eps,
-                               /*enable_pdl*/ true, m, n, stream);
+      InvokeFusedAddRMSNorm<T>(input_meta.data_ptr, residual_meta.data_ptr, weight_meta.data_ptr, norm_eps, m, n,
+                               stream);
     };
     float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
     std::cout << std::left << "Fused Add RMSNorm " << type_str << " m=" << std::setw(6) << m << " n=" << std::setw(6)

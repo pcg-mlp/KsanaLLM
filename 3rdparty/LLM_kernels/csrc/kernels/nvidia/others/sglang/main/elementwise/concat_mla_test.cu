@@ -24,13 +24,11 @@ class LlamaNvidiaConcatMlaTestSuit : public NvidiaTestSuitBase {
  protected:
   using NvidiaTestSuitBase::stream;
 
-  // Config of DeepSeek
-  const int qk_nope_head_dim = 128;
-  const int qk_rope_head_dim = 64;
-  const int k_head_dim = qk_nope_head_dim + qk_rope_head_dim;
-
   template <typename T>
-  void TestConcatMlaK(const int num_tokens, const int num_heads, bool perf = false) {
+  void TestConcatMlaK(const int num_tokens, const int num_heads, const int qk_nope_head_dim, bool perf = false) {
+    const int qk_rope_head_dim = 64;
+    const int k_head_dim = qk_nope_head_dim + qk_rope_head_dim;
+
     // Allocate device memory
     BufferMeta k_nope_meta =
         CreateBuffer<T>(MemoryType::MEMORY_GPU, {static_cast<size_t>(num_tokens * num_heads * qk_nope_head_dim)},
@@ -67,13 +65,15 @@ class LlamaNvidiaConcatMlaTestSuit : public NvidiaTestSuitBase {
     const float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
     const float elapsed_ref_ms = MeasureCudaExecutionTime(cuda_ref_run, stream, warmups, iterations);
     if (perf) {
-      std::cout << "Token num: " << num_tokens << ", Head num: " << num_heads << ", Execution time: " << elapsed_ms
-                << " ms vs " << elapsed_ref_ms << " ms" << std::endl;
+      std::cout << "Token num: " << num_tokens << ", Head num: " << num_heads
+                << ", QKNopeHead dim: " << qk_nope_head_dim << ", Execution time: " << elapsed_ms << " ms vs "
+                << elapsed_ref_ms << " ms" << std::endl;
     } else {
       // Verify accuracy
-      EXPECT_TRUE(CheckResult<T>(
-          "concat_mla_k_num_tokens_" + std::to_string(num_tokens) + "_num_heads_" + std::to_string(num_heads), k_meta,
-          k_ref_meta, 1e-4, 1e-4));
+      EXPECT_TRUE(CheckResult<T>("concat_mla_k_num_tokens_" + std::to_string(num_tokens) + "_num_heads_" +
+                                     std::to_string(num_heads) + "_qk_nope_head_dim_" +
+                                     std::to_string(qk_nope_head_dim),
+                                 k_meta, k_ref_meta, 1e-4, 1e-4));
     }
 
     // Free data
@@ -86,19 +86,23 @@ class LlamaNvidiaConcatMlaTestSuit : public NvidiaTestSuitBase {
 };
 
 TEST_F(LlamaNvidiaConcatMlaTestSuit, ConcatMlaKAccTest) {
-  for (const int num_tokens : {7, 33}) {
-    for (const int num_heads : {16, 128}) {
-      TestConcatMlaK<half>(num_tokens, num_heads);
-      TestConcatMlaK<__nv_bfloat16>(num_tokens, num_heads);
+  for (const int qk_nope_head_dim : {128, 192}) {  // DeepSeek/GLM-5
+    for (const int num_tokens : {7, 33}) {
+      for (const int num_heads : {16, 128}) {
+        TestConcatMlaK<half>(num_tokens, num_heads, qk_nope_head_dim);
+        TestConcatMlaK<__nv_bfloat16>(num_tokens, num_heads, qk_nope_head_dim);
+      }
     }
   }
 }
 
 // Performance test is disabled by default
 TEST_F(LlamaNvidiaConcatMlaTestSuit, DISABLED_ConcatMlaKPerfTest) {
-  for (const int num_heads : {16, 128}) {
-    for (const int num_tokens : {8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768}) {
-      TestConcatMlaK<__nv_bfloat16>(num_tokens, num_heads, /*perf*/ true);
+  for (const int qk_nope_head_dim : {128, 192}) {  // DeepSeek/GLM-5
+    for (const int num_heads : {16, 128}) {
+      for (const int num_tokens : {8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768}) {
+        TestConcatMlaK<__nv_bfloat16>(num_tokens, num_heads, qk_nope_head_dim, /*perf*/ true);
+      }
     }
   }
 }

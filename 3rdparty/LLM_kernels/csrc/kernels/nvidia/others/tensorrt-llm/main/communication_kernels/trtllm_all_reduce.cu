@@ -676,24 +676,23 @@ int RoundUp(int x, int y) { return (x + y - 1) / y * y; }
 
 // Adapted from
 // https://github.com/NVIDIA/TensorRT-LLM/blob/main/cpp/tensorrt_llm/kernels/communicationKernels/allReduceWorkspace.cu
-void AllocTrtAllReduceWorkspace(const int nranks, const int rank, const int max_token_num, const int hidden_dim,
-                                const int data_type_size, std::vector<void*>& buffer_d_ptrs,
-                                std::vector<void*>& flag_d_ptrs, std::vector<void*>& workspace_d_ptrs,
-                                cudaStream_t stream) {
+void AllocTrtAllReduceWorkspace(const int nranks, const int rank, const int max_buffer_size,
+                                std::vector<void*>& buffer_d_ptrs, std::vector<void*>& flag_d_ptrs,
+                                std::vector<void*>& workspace_d_ptrs, cudaStream_t stream) {
   KLLM_KERNEL_CHECK(static_cast<int>(buffer_d_ptrs.size()) == 3 * nranks);
   KLLM_KERNEL_CHECK(static_cast<int>(flag_d_ptrs.size()) == nranks);
   KLLM_KERNEL_CHECK(static_cast<int>(workspace_d_ptrs.size()) == nranks);
 
   // We assume that int overflow will not occur here
-  const int buffer_size = RoundUp(nranks * max_token_num * hidden_dim * data_type_size, kLamportAlignSize);
+  const int buffer_size = RoundUp(nranks * max_buffer_size, kLamportAlignSize);
   const int flag_size = RoundUp(nranks * kBarrierFlagCount * sizeof(int), kLamportAlignSize);
   // This is used only in oneshot
-  const int lamport_comm_size = RoundUp(nranks * max_token_num * hidden_dim * data_type_size, kLamportAlignSize);
+  const int lamport_comm_size = RoundUp(nranks * max_buffer_size, kLamportAlignSize);
   // The factor of 3 is due to the flag value having three different states
   const int lamport_buffer_size = 3 * lamport_comm_size;
   KLLM_KERNEL_CHECK_WITH_INFO(lamport_buffer_size <= kMaxCommSize,
                               "`lamport_buffer_size` should not exceed `kMaxCommSize`, please reduce the "
-                              "`max_token_num` for lamport allreduce");
+                              "`max_buffer_size` for lamport allreduce");
 
   int i = 0;
   for (const int size : {buffer_size, flag_size, lamport_buffer_size}) {
@@ -714,12 +713,12 @@ void AllocTrtAllReduceWorkspace(const int nranks, const int rank, const int max_
   // kernel_flag_ptr[3] = lamport_comm_size;
   // lamport clear size
   // kernel_flag_ptr[4] = 0;
-  CHECK_NVIDIA_CUDA_ERROR(cudaMallocAsync(&flag_d_ptrs[rank], 5 * sizeof(int), stream));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&flag_d_ptrs[rank], 5 * sizeof(int)));
   std::vector<int> h_data{0, 0, 0, lamport_comm_size, 0};
   CHECK_NVIDIA_CUDA_ERROR(
       cudaMemcpyAsync(flag_d_ptrs[rank], h_data.data(), 5 * sizeof(int), cudaMemcpyHostToDevice, stream));
 
-  CHECK_NVIDIA_CUDA_ERROR(cudaMallocAsync(&workspace_d_ptrs[rank], (3 * nranks + 1) * sizeof(void*), stream));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&workspace_d_ptrs[rank], (3 * nranks + 1) * sizeof(void*)));
 
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 }
@@ -737,15 +736,25 @@ void InitTrtAllReduceWorkspace(const int nranks, const int rank, const std::vect
 }
 
 void FreeTrtAllReduceWorkspace(const int nranks, const int rank, const std::vector<void*>& buffer_d_ptrs,
-                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
-                               cudaStream_t stream) {
+                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs) {
   for (int i = 0; i < 3; i++) {
-    CHECK_NVIDIA_CUDA_ERROR(cudaFreeAsync(buffer_d_ptrs[i * nranks + rank], stream));
+    for (int j = 0; j < nranks; j++) {
+      if (j == rank) {
+        CHECK_NVIDIA_CUDA_ERROR(cudaFree(buffer_d_ptrs[i * nranks + rank]));
+      } else {
+        CHECK_NVIDIA_CUDA_ERROR(cudaIpcCloseMemHandle(buffer_d_ptrs[i * nranks + j]));
+      }
+    }
   }
-  CHECK_NVIDIA_CUDA_ERROR(cudaFreeAsync(flag_d_ptrs[rank], stream));
-  CHECK_NVIDIA_CUDA_ERROR(cudaFreeAsync(workspace_d_ptrs[rank], stream));
-
-  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+  for (int i = 0; i < nranks; i++) {
+    if (i == rank) {
+      CHECK_NVIDIA_CUDA_ERROR(cudaFree(flag_d_ptrs[rank]));
+      CHECK_NVIDIA_CUDA_ERROR(cudaFree(workspace_d_ptrs[rank]));
+    } else {
+      CHECK_NVIDIA_CUDA_ERROR(cudaIpcCloseMemHandle(flag_d_ptrs[i]));
+      CHECK_NVIDIA_CUDA_ERROR(cudaIpcCloseMemHandle(workspace_d_ptrs[i]));
+    }
+  }
 }
 
 }  // namespace nvidia

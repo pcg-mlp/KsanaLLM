@@ -109,8 +109,10 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     CopyToDevice<float>(h_e_bias, d_e_bias, num_experts);
 
     // Call the function under test
+    const float score_threshold = 0.0f;
     InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
-                                   tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
+                                   tokens_num, num_experts, topk, num_expert_group, topk_group, score_threshold,
+                                   stream);
 
     // Synchronize stream
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
@@ -178,7 +180,8 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     size_t test_times = 50;
     auto cuda_run = [&]() {
       InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
-                                     tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
+                                     tokens_num, num_experts, topk, num_expert_group, topk_group, score_threshold,
+                                     stream);
     };
     float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_times, test_times);
     std::cout << "InvokeDeepSeekV3GroupedTopk time elapsed: " << time_elapsed_ms << " ms" << std::endl;

@@ -12,8 +12,12 @@ function(cpp_test TARGET_NAME)
     add_compile_options(-fno-access-control -g -O0)
     cmake_parse_arguments(cpp_test "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     add_executable(${TARGET_NAME} ${cpp_test_SRCS})
-    target_link_libraries(${TARGET_NAME} ${cpp_test_DEPS}
+
+    # Tests link many STATIC libs; force-link all objects from DEPS to avoid undefined references.
+    target_link_libraries(${TARGET_NAME}
+      -Wl,--whole-archive ${cpp_test_DEPS} -Wl,--no-whole-archive
       ksana_llm_libs gtest_main gtest gmock_main gmock -pthread ${cpp_test_LIBS})
+
     add_dependencies(${TARGET_NAME} ${cpp_test_DEPS} gtest_main gtest gmock_main gmock)
     add_test(NAME ${TARGET_NAME}
       COMMAND ${TARGET_NAME} ${cpp_test_ARGS}

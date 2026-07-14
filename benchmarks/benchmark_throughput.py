@@ -275,7 +275,7 @@ def args_config():
                         default="ksana",
                         choices=[
                             'ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm',
-                            'evart', 'mindie-service', 'sglang', 'triton-grpc'
+                            'evart', 'mindie-service', 'sglang', 'triton-grpc', 'openai-chat'
                         ],
                         help='serving backend')
     parser.add_argument('--triton_model_name',
@@ -651,6 +651,28 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "streaming": args.stream,
             "return_log_probs": bool(args.logprobs) if args.logprobs else False
         }
+    elif args.backend == "openai-chat":
+        # Build request with OpenAI Chat API format
+        data = {
+            "messages": [{"role": "user", "content": prompt}],
+            "top_k": args.topk,
+            "top_p": args.topp,
+            "temperature": args.temperature,
+            "max_tokens": args.max_new_tokens,
+            "repetition_penalty": args.repetition_penalty,
+            "logprobs": True if args.logprobs > 0 else False,
+            "top_logprobs": args.logprobs,
+            "stop_token_ids": args.stop_token_ids,
+            "ignore_eos": args.ignore_eos,
+            "skip_special_tokens": False,
+            "stream": args.stream,
+        }
+        # Enable do_sample only when sampling parameters are set
+        if args.temperature > 0 or args.topk > 1 or args.topp < 1.0:
+            data["do_sample"] = True
+        # Enable usage in stream mode
+        if args.stream:
+            data["stream_options"] = {"include_usage": True}
     return prompt, orjson.dumps(data)
 
 
@@ -844,6 +866,8 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
 
     # Store the output of sever in stream mode
     server_stream_output = ""
+    server_stream_reasoning = ""  # Store reasoning_content for thinking models
+    server_stream_usage = None  # Store usage from last chunk in stream mode
 
     # Create an asynchronous client session with the specified timeout
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -887,8 +911,17 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                             output = orjson.loads(chunk_acc)
                             # Reset the chunk_acc
                             chunk_acc = ""
-                            if "server" in args.backend and args.stream:
-                                server_stream_output += output["choices"][0]["delta"]["content"]
+                            if ("server" in args.backend or args.backend == "openai-chat") and args.stream:
+                                delta = output.get("choices", [{}])[0].get("delta", {})
+                                delta_reasoning = delta.get("reasoning_content", "")
+                                delta_content = delta.get("content", "")
+                                if delta_reasoning:
+                                    server_stream_reasoning += delta_reasoning
+                                if delta_content:
+                                    server_stream_output += delta_content
+                                # Save usage from the last chunk (only present in final chunk)
+                                if output.get("usage"):
+                                    server_stream_usage = output["usage"]
                         except orjson.JSONDecodeError:
                             continue
 
@@ -957,12 +990,18 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         prompt_len = len(prompt)
         output_text = output["text"][0].strip()
         output_token_num = len(output.get("output_token_ids")[0])
-    elif "server" in args.backend:
+    elif "server" in args.backend or args.backend == "openai-chat":
         if args.stream:
             output["choices"][0]["delta"]["content"] = server_stream_output
-        output_text = output['choices'][0][server_map_idx]['content']
-        input_token_num = output['usage']['prompt_tokens']
-        output_token_num = output['usage']['completion_tokens']
+            output["choices"][0]["delta"]["reasoning_content"] = server_stream_reasoning
+        msg = output['choices'][0][server_map_idx]
+        reasoning_content = msg.get("reasoning_content", "")
+        content = msg.get("content", "")
+        output_text = reasoning_content + content
+        # Use saved usage for stream mode, otherwise get from output
+        usage = server_stream_usage if args.stream and server_stream_usage else output.get('usage', {})
+        input_token_num = usage.get('prompt_tokens', 0)
+        output_token_num = usage.get('completion_tokens', 0)
     elif args.backend == "mindie-service":
         prompt_len = len(prompt)
         output_text = output["text"][0][prompt_len:].strip()
@@ -1138,6 +1177,8 @@ def main(args: argparse.Namespace):
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
         if args.model_type != "deepseek_r1":
             args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
+    elif args.backend == "openai-chat":
+        api_url = "http://##host##:##port##/v1/chat/completions"
     elif args.backend == "triton-grpc":
         api_url = f"{args.host}:{args.port}"
 

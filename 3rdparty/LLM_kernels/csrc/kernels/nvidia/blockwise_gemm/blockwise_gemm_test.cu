@@ -393,7 +393,6 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
 
   for (const auto& [k, n] : k_n_list) {
     for (size_t m : m_list) {
-
       const int num_blocks_n = (n + block_size_n - 1) / block_size_n;
       const int num_blocks_k = (k + block_size_k - 1) / block_size_k;
 

@@ -55,6 +55,22 @@ namespace utils {
     }                                                                                       \
   } while (0)
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#  define LAUNCH_KERNEL_WITH_PDL(kernel, grid_dim, block_dim, smem_size, stream, ...)           \
+    do {                                                                                        \
+      cudaLaunchAttribute attrs[1];                                                             \
+      attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;                         \
+      attrs[0].val.programmaticStreamSerializationAllowed = llm_kernels::utils::GetEnablePDL(); \
+      cudaLaunchConfig_t config{(grid_dim), (block_dim), (smem_size), (stream), attrs, 1};      \
+      cudaLaunchKernelEx(&config, (kernel), __VA_ARGS__);                                       \
+    } while (0)
+#else
+#  define LAUNCH_KERNEL_WITH_PDL(kernel, grid_dim, block_dim, smem_size, stream, ...) \
+    do {                                                                              \
+      kernel<<<(grid_dim), (block_dim), (smem_size), (stream)>>>(__VA_ARGS__);        \
+    } while (0)
+#endif
+
 constexpr int32_t NVIDIA_VOLTA_GPU_COMPUTE_CAPABILITY = 70;
 constexpr int32_t NVIDIA_AGX_XAVIER_GPU_COMPUTE_CAPABILITY = 72;
 constexpr int32_t NVIDIA_TURING_GPU_COMPUTE_CAPABILITY = 75;

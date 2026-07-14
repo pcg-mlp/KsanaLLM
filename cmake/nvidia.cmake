@@ -71,7 +71,6 @@ if(${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
   message(STATUS "CUDA version: ${CUDA_VERSION} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
 endif()
 
-
 # DeepGEMM support - only for SM90/SM90a
 set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 0)
 set(_deepgemm_candidate_arches ${CMAKE_CUDA_ARCHITECTURES})
@@ -130,34 +129,21 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         if(NOT GIT_SUBMODULE_RESULT EQUAL 0)
             message(WARNING "Failed to update DeepGEMM submodules.")
         endif()
-        message(STATUS "Checking out DeepGEMM to version v2.1.0...")
+        message(STATUS "Checking out DeepGEMM to commit 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51")
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} checkout v2.1.0
+            COMMAND ${GIT_EXECUTABLE} checkout 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51
             WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
             RESULT_VARIABLE GIT_CHECKOUT_RESULT
         )
         if(NOT GIT_CHECKOUT_RESULT EQUAL 0)
-            message(WARNING "Failed to checkout DeepGEMM to v2.1.0, using current branch.")
-        endif()
-
-        message(STATUS "Applying DeepGEMM patch...")
-        set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm.patch)
-        if(EXISTS ${DEEPGEMM_PATCH_FILE})
-            execute_process(
-                COMMAND ${GIT_EXECUTABLE} apply ${DEEPGEMM_PATCH_FILE}
-                WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
-                RESULT_VARIABLE GIT_APPLY_RESULT
-            )
-            if(NOT GIT_APPLY_RESULT EQUAL 0)
-                message(WARNING "Failed to apply DeepGEMM patch, continuing anyway.")
-            else()
-                message(STATUS "DeepGEMM patch applied successfully.")
-            endif()
-        else()
-            message(WARNING "DeepGEMM patch file not found at ${DEEPGEMM_PATCH_FILE}, skipping patch.")
+            message(WARNING "Failed to checkout DeepGEMM to 0f5f2662027f0db05d4e3f6a94e56e2d8fc45c51, using current branch.")
         endif()
 
         message(STATUS "Building and installing DeepGEMM...")
+        # Set DG_USE_LOCAL_VERSION=0 to skip git clean check in setup.py
+        set(ENV{DG_USE_LOCAL_VERSION} "0")
+        message(STATUS "Creating scripts/__init__.py for DeepGEMM...")
+        file(WRITE ${DEEPGEMM_SOURCE_DIR}/scripts/__init__.py "")
         execute_process(
             COMMAND bash develop.sh
             WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}

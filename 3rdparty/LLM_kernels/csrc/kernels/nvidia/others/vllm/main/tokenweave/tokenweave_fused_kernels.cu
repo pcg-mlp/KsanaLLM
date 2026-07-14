@@ -5,6 +5,7 @@
  * MIT License
  *
  * Copyright (c) 2025 Microsoft
+ * Copyright 2026 Tencent Inc.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -62,6 +63,9 @@ __global__ std::enable_if_t<(width > 0) && _typeConvert<scalar_t>::exists> fused
   auto *__restrict__ weight_v = reinterpret_cast<const vec_t *>(weight);
   const int tokens_per_iter = (num_tokens + gridDim.x - 1) / gridDim.x;
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   sync_remote_blocks<MemOpSem::Relaxed>(signal_pads, rank, world_size);
   __syncthreads();
 
@@ -146,6 +150,9 @@ __global__ std::enable_if_t<(width > 0) && _typeConvert<scalar_t>::exists> fused
   auto *__restrict__ residual_v = reinterpret_cast<vec_t *>(residual);
   const int tokens_per_iter = (num_tokens + gridDim.x - 1) / gridDim.x;
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+  cudaGridDependencySynchronize();
+#endif
   sync_remote_blocks<MemOpSem::Relaxed>(signal_pads, rank, world_size);
   __syncthreads();
 
@@ -194,7 +201,7 @@ namespace llm_kernels {
 namespace nvidia {
 
 // Multimem based AllReduce implementations require very few SMs
-constexpr int kMaxCtas = 16;
+static constexpr int kMaxCtas = 16;
 /*
  * ******************************************************************* *
  * Fused ReduceScatter plus Fused(Residual, RMSNorm) plus AllGather    *
@@ -226,10 +233,11 @@ void FusedRsLmAgCta(int64_t mcptr,       // [token_num, hidden_size] multimem_pt
                               "divisible by 8 for optimized kernel.");
   constexpr size_t kWidth = 8;
   using C10Type = std::conditional_t<std::is_same_v<T, __nv_bfloat16>, c10::BFloat16, c10::Half>;
-  vllm::fused_rs_ln_ag_cta_kernel<C10Type, kWidth><<<grid, block, 0, stream>>>(
-      reinterpret_cast<C10Type *>(mcptr), reinterpret_cast<C10Type *>(residual),
-      reinterpret_cast<const C10Type *>(weight), reinterpret_cast<uint32_t **>(signal_pads), rank, world_size, epsilon,
-      num_tokens, hidden_size);
+  auto kernel = vllm::fused_rs_ln_ag_cta_kernel<C10Type, kWidth>;
+  LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<C10Type *>(mcptr),
+                         reinterpret_cast<C10Type *>(residual), reinterpret_cast<const C10Type *>(weight),
+                         reinterpret_cast<uint32_t **>(signal_pads), rank, world_size, epsilon, num_tokens,
+                         hidden_size);
 }
 
 /*
@@ -261,9 +269,10 @@ void FusedRsAgCta(int64_t mcptr,      // [token_num, hidden_size] multimem_ptr
                               "divisible by 8 for optimized kernel.");
   constexpr size_t kWidth = 8;
   using C10Type = std::conditional_t<std::is_same_v<T, __nv_bfloat16>, c10::BFloat16, c10::Half>;
-  vllm::fused_rs_ag_cta_kernel<C10Type, kWidth><<<grid, block, 0, stream>>>(
-      reinterpret_cast<C10Type *>(mcptr), reinterpret_cast<C10Type *>(residual),
-      reinterpret_cast<uint32_t **>(signal_pads), rank, world_size, num_tokens, hidden_size);
+  auto kernel = vllm::fused_rs_ag_cta_kernel<C10Type, kWidth>;
+  LAUNCH_KERNEL_WITH_PDL(kernel, grid, block, 0, stream, reinterpret_cast<C10Type *>(mcptr),
+                         reinterpret_cast<C10Type *>(residual), reinterpret_cast<uint32_t **>(signal_pads), rank,
+                         world_size, num_tokens, hidden_size);
 }
 
 #define INSTANTIATE_FUSED_CTA(T)                                                                                   \

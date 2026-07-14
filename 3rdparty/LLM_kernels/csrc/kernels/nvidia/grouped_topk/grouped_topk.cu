@@ -9,14 +9,14 @@
 #include <cmath>
 #include <vector>
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#  include <cuda_bf16.h>
 #include <cutlass/array.h>
 #include <cutlass/cutlass.h>
 #include <cutlass/numeric_types.h>
-#include <cub/cub.cuh>
 #include <torch/torch.h>
+#include <cub/cub.cuh>
 
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 
@@ -292,7 +292,7 @@ __device__ void GetTopKIndices(const float* data, int* indices, int n, int k, in
 template <typename T, typename Input_T, typename BT, typename Params>
 __device__ void moe_fused_gate_impl(void* input, void* bias, float* output_ptr, int32_t* indices_ptr, int64_t num_rows,
                                     int64_t topk_group, int64_t topk, int64_t n_share_experts_fusion,
-                                    float routed_scaling_factor, Params params) {
+                                    float routed_scaling_factor, float score_threshold, Params params) {
   int tidx = threadIdx.x;
   int64_t thread_row =
       blockIdx.x * params.ROWS_PER_CTA + threadIdx.y * params.ROWS_PER_WARP + tidx / params.THREADS_PER_ROW;
@@ -472,6 +472,25 @@ __device__ void moe_fused_gate_impl(void* input, void* bias, float* output_ptr, 
 
   ////////////////////// Rescale Output //////////////////////
   if (thread_group_idx == 0) {
+    if (score_threshold > 0) {
+#pragma unroll
+      for (int ii = 0; ii < topk; ++ii) {
+        int64_t const idx = topk * thread_row + ii;
+        output_ptr[idx] = output_ptr[idx] / output_sum;
+      }
+      float cut_score = 0.f;
+#pragma unroll
+      for (int ii = 0; ii < topk; ++ii) {
+        int64_t const idx = topk * thread_row + ii;
+        float cur = output_ptr[idx];
+        if (cur < score_threshold) {
+          output_ptr[idx] = 0.f;
+          indices_ptr[idx] = -1;
+          cut_score += cur;
+        }
+      }
+      output_sum = 1.0f - cut_score;
+    }
 #pragma unroll
     for (int ii = 0; ii < topk; ++ii) {
       int64_t const idx = topk * thread_row + ii;
@@ -481,26 +500,28 @@ __device__ void moe_fused_gate_impl(void* input, void* bias, float* output_ptr, 
 }
 
 // Macro to compute compile-time constants and launch the kernel.
-#define LAUNCH_DSV3_FUSED_GROUPED_TOPK(T, EXPERTS, EXPERT_GROUP)                                              \
-  do {                                                                                                        \
-    constexpr int VPT = (EXPERTS) / (EXPERT_GROUP);                                                           \
-    /* If EXPERT_GROUP > WARP_SIZE, fall back to 1 row per warp */                                            \
-    constexpr int ROWS_PER_WARP = ((EXPERT_GROUP) <= WARP_SIZE) ? (WARP_SIZE / (EXPERT_GROUP)) : 1;           \
-    constexpr int ROWS_PER_CTA = WARPS_PER_CTA * ROWS_PER_WARP;                                               \
-    moe_fused_gate_kernel<T, VPT, (EXPERTS), (EXPERT_GROUP), ROWS_PER_WARP, ROWS_PER_CTA, WARPS_PER_CTA>      \
-        <<<num_blocks, block_dim, 0, stream>>>(gating_output, e_bias, static_cast<float*>(topk_weights),      \
-                                               static_cast<int32_t*>(topk_ids), tokens_num, topk_group, topk, \
-                                               n_share_experts_fusion, routed_scaling_factor);                \
+#define LAUNCH_DSV3_FUSED_GROUPED_TOPK(T, EXPERTS, EXPERT_GROUP)                                                \
+  do {                                                                                                          \
+    constexpr int VPT = (EXPERTS) / (EXPERT_GROUP);                                                             \
+    /* If EXPERT_GROUP > WARP_SIZE, fall back to 1 row per warp */                                              \
+    constexpr int ROWS_PER_WARP = ((EXPERT_GROUP) <= WARP_SIZE) ? (WARP_SIZE / (EXPERT_GROUP)) : 1;             \
+    constexpr int ROWS_PER_CTA = WARPS_PER_CTA * ROWS_PER_WARP;                                                 \
+    moe_fused_gate_kernel<T, VPT, (EXPERTS), (EXPERT_GROUP), ROWS_PER_WARP, ROWS_PER_CTA, WARPS_PER_CTA>        \
+        <<<num_blocks, block_dim, 0, stream>>>(gating_output, e_bias, static_cast<float*>(topk_weights),        \
+                                               static_cast<int32_t*>(topk_ids), tokens_num, topk_group, topk,   \
+                                               n_share_experts_fusion, routed_scaling_factor, score_threshold); \
   } while (0)
 
 template <typename T, int VPT, int NUM_EXPERTS, int THREADS_PER_ROW, int ROWS_PER_WARP, int ROWS_PER_CTA,
           int WARPS_PER_CTA>
 __global__ void moe_fused_gate_kernel(void* input, void* bias, float* output_ptr, int32_t* indices_ptr,
                                       int64_t num_rows, int64_t topk_group, int64_t topk,
-                                      int64_t n_share_experts_fusion, float routed_scaling_factor) {
+                                      int64_t n_share_experts_fusion, float routed_scaling_factor,
+                                      float score_threshold) {
   KernelParams<VPT, NUM_EXPERTS, THREADS_PER_ROW, ROWS_PER_WARP, ROWS_PER_CTA, WARPS_PER_CTA> params;
-  moe_fused_gate_impl<float, T, float>(input, bias, output_ptr, indices_ptr, num_rows, topk_group, topk,
-                                       n_share_experts_fusion, routed_scaling_factor, params);
+  moe_fused_gate_impl<float, T, float, decltype(params)>(input, bias, output_ptr, indices_ptr, num_rows, topk_group,
+                                                         topk, n_share_experts_fusion, routed_scaling_factor,
+                                                         score_threshold, params);
 }
 
 template <typename T>
@@ -643,7 +664,7 @@ void DeepSeekV3GroupedTopkCudaKernel(const T* gating_output, const float* e_bias
 template <typename T>
 void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed_scaling_factor, void* topk_weights,
                                  void* topk_ids, int tokens_num, int num_experts, int topk, int num_expert_group,
-                                 int topk_group, cudaStream_t stream) {
+                                 int topk_group, float score_threshold, cudaStream_t stream) {
   // NOTE(rockcao): for DeepSeekV3 with ep disabled, num_experts = 256, num_expert_group = 8
   // TODO(rockcao): support more config
   if (num_experts == 256 && num_expert_group == 8) {
@@ -663,10 +684,11 @@ void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed
   }
 }
 
-#define INVOKE_DEEPSEEK_V3_GROUPED_TOPK(T)                                                                        \
-  template void InvokeDeepSeekV3GroupedTopk<T>(                                                                   \
-      void* gating_output, void* e_bias, float routed_scaling_factor, void* topk_weights_ptr, void* topk_ids_ptr, \
-      int tokens_num, int num_experts, int topk, int num_expert_group, int topk_group, cudaStream_t stream)
+#define INVOKE_DEEPSEEK_V3_GROUPED_TOPK(T)                                                                      \
+  template void InvokeDeepSeekV3GroupedTopk<T>(void* gating_output, void* e_bias, float routed_scaling_factor,  \
+                                               void* topk_weights_ptr, void* topk_ids_ptr, int tokens_num,      \
+                                               int num_experts, int topk, int num_expert_group, int topk_group, \
+                                               float score_threshold, cudaStream_t stream)
 
 INVOKE_DEEPSEEK_V3_GROUPED_TOPK(float);
 INVOKE_DEEPSEEK_V3_GROUPED_TOPK(half);
@@ -770,10 +792,7 @@ void FillRandomInts(int* data_ptr, int size, int start_int, int end_int, int ran
   // NOTE(rockcao): Using torch to facilitate the same random number generation method across different frameworks
   torch::manual_seed(42);
 
-  auto options = torch::TensorOptions()
-                     .dtype(torch::kInt32)
-                     .device(torch::kCUDA, rank)
-                     .requires_grad(false);
+  auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank).requires_grad(false);
 
   auto tensor = torch::from_blob(data_ptr, {size}, options);
   tensor.random_(start_int, end_int);

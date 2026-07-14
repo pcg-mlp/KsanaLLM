@@ -1,0 +1,416 @@
+/* Copyright 2025 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#include "layers/paged_sparse_mla_indexer_layer.h"
+
+#include <fmt/core.h>
+#include <torch/torch.h>
+
+#include "csrc/kernels/nvidia/logits_topk/logits_topk.h"
+#include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
+#include "csrc/kernels/nvidia/weight_scale/weight_scale_kernel.h"
+#include "device/nvidia/cuda_utils.h"
+#include "kernels/nvidia/basic_kernel_wrapper.h"
+#include "kernels/nvidia/deepseek_deepgemm_wrapper.h"
+#include "layers/attention_layer.h"  // For yarn mscale functions and InitYarnRotaryEmbedding
+#include "utils/logger.h"
+#include "utils/memory_utils.h"  // For DivRoundUp
+
+namespace ksana_llm {
+
+// 解析输入张量的辅助结构
+template <typename SCALAR_T>
+struct PagedMlaInputData {
+  const Tensor& q_tensor;
+  const Tensor& k_tensor;
+  const Tensor& weights_tensor;
+  uint8_t* quant_workspace_ptr;
+  const Tensor& rotary_pos;
+  const Tensor& rotary_mask;
+  const Tensor& input_length_tensor;
+  const Tensor& expanded_input_length_tensor;
+  const Tensor& indexer_kv_list_tensor;
+  const Tensor& indexer_kv_cache_offset_tensor;
+  const Tensor* block_table_tensor;
+  const Tensor* expanded_block_table_tensor;
+  const Tensor* cur_seq_len_start_tensor;
+  const Tensor* cur_seq_len_end_tensor;
+  const Tensor* layer_indexer_kv_cache_ptr_tensor;
+  const Tensor& schedule_meta_tensor;
+
+  size_t total_tokens;
+  int batch_size;
+  cudaStream_t stream;
+};
+
+// FP8 量化工作空间布局
+struct PagedQuantWorkspace {
+  void* q_fp8_ptr;
+  float* q_scale_ptr;
+  void* k_fp8_ptr;
+  float* k_scale_ptr;
+  float* logits_ptr;
+  int aligned_max_seq_len;
+};
+
+Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                        std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
+  // Parse parameters
+  if (parameters.size() < 17) {
+    KLLM_THROW("PagedSparseMlaIndexerLayer requires at least 17 parameters");
+  }
+
+  dim_ = std::any_cast<int>(parameters[0]);
+  n_heads_ = std::any_cast<int>(parameters[1]);
+  head_dim_ = std::any_cast<int>(parameters[2]);
+  rope_head_dim_ = std::any_cast<int>(parameters[3]);
+  index_topk_ = std::any_cast<int>(parameters[4]);
+  block_size_ = std::any_cast<int>(parameters[5]);
+  quant_block_size_ = std::any_cast<int>(parameters[6]);
+
+  softmax_scale_ = 1.0f / std::sqrt(static_cast<float>(head_dim_));
+  // Initialize RoPE
+  PositionEncoding position_encoding = std::any_cast<PositionEncoding>(parameters[7]);
+  if (position_encoding != PositionEncoding::ROPE) {
+    KLLM_THROW(fmt::format("PagedSparseMlaIndexer only supports ROPE, got {}", position_encoding));
+  }
+
+  // Initialize RoPE using YARN scaling (only for DeepSeek models)
+  float rope_theta = std::any_cast<float>(parameters[8]);
+  void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[9]);
+  auto rope_scaling_factor_config = std::any_cast<RoPEScalingFactor>(parameters[10]);
+  max_batch_size_ = std::any_cast<int>(parameters[11]);
+  max_position_embeddings_ = std::any_cast<int>(parameters[12]);
+  layer_index_ = std::any_cast<int>(parameters[13]);  // Add layer_index initialization
+  const bool is_neox = !(std::any_cast<bool>(parameters[14]));
+  max_seq_len_ = runtime_config.max_seq_len;
+  max_step_token_num_ = runtime_config.max_step_token_num;  // Save max_step_token_num from runtime_config
+
+  layer_num_ = std::any_cast<int>(parameters[15]);
+  max_decode_tokens_per_req_ = std::any_cast<int>(parameters[16]);
+  block_size_per_layer_ = runtime_config.attn_backend_config.block_size / layer_num_;
+
+  // Initialize RoPE based on data type
+  DISPATCH_BY_3_DTYPE(inter_data_type_, InitYarnRotaryEmbedding, rotary_embedding_cuda_, rope_scaling_factor_config,
+                      cos_sin_cache_ptr, rope_theta, rope_head_dim_, max_position_embeddings_, head_dim_, n_heads_,
+                      is_neox, context_->device->GetPrimaryComputeStream().Get());
+}
+
+Status PagedSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tensors,
+                                           std::vector<Tensor>& output_tensors) {
+  DISPATCH_BY_2_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+}
+
+template <typename SCALAR_T>
+static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& input_tensors,
+                                                     std::shared_ptr<Context> context, int rank) {
+  if (input_tensors.size() < 16) {
+    KLLM_THROW(
+        fmt::format("PagedSparseMlaIndexerLayer requires at least 16 input tensors, got {}", input_tensors.size()));
+  }
+  auto input_iter = input_tensors.cbegin();
+
+  // 提取所有引用类型的 tensor
+  const Tensor& q_tensor = *input_iter++;                              // 0: query
+  const Tensor& k_tensor = *input_iter++;                              // 1: key
+  const Tensor& weights_tensor = *input_iter++;                        // 2: weights
+  const Tensor& quant_workspace_tensor = *input_iter++;                // 3: quant_workspace
+  const Tensor& rotary_pos = *input_iter++;                            // 4: rotary pos
+  const Tensor& rotary_mask = *input_iter++;                           // 5: rotary mask
+  const Tensor& input_length_tensor = *input_iter++;                   // 6: input_length
+  const Tensor& expanded_input_length_tensor = *input_iter++;          // 7: expanded_input_length
+  const Tensor& indexer_kv_list_tensor = *input_iter++;                // 8: indexer_kv_list
+  const Tensor& indexer_kv_cache_offset_tensor = *input_iter++;        // 9: indexer_kv_cache_offset
+  const Tensor* block_table_tensor = &(*input_iter++);                 // 10: block_table
+  const Tensor* expanded_block_table_tensor = &(*input_iter++);        // 11: expanded_block_table
+  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 12: cur_seq_len_start
+  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 13: cur_seq_len_end
+  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 14: layer_indexer_kv_cache_ptr
+  const Tensor& schedule_meta_tensor = *input_iter++;                  // 15: schedule_meta
+
+  // 使用聚合初始化创建对象
+  PagedMlaInputData<SCALAR_T> data{.q_tensor = q_tensor,
+                                   .k_tensor = k_tensor,
+                                   .weights_tensor = weights_tensor,
+                                   .quant_workspace_ptr = quant_workspace_tensor.GetPtr<uint8_t>(),
+                                   .rotary_pos = rotary_pos,
+                                   .rotary_mask = rotary_mask,
+                                   .input_length_tensor = input_length_tensor,
+                                   .expanded_input_length_tensor = expanded_input_length_tensor,
+                                   .indexer_kv_list_tensor = indexer_kv_list_tensor,
+                                   .indexer_kv_cache_offset_tensor = indexer_kv_cache_offset_tensor,
+                                   .block_table_tensor = block_table_tensor,
+                                   .expanded_block_table_tensor = expanded_block_table_tensor,
+                                   .cur_seq_len_start_tensor = cur_seq_len_start_tensor,
+                                   .cur_seq_len_end_tensor = cur_seq_len_end_tensor,
+                                   .layer_indexer_kv_cache_ptr_tensor = layer_indexer_kv_cache_ptr_tensor,
+                                   .schedule_meta_tensor = schedule_meta_tensor,
+                                   .total_tokens = q_tensor.shape[0],
+                                   .batch_size = static_cast<int>(input_length_tensor.shape[0]),
+                                   .stream = context->device->GetPrimaryComputeStream().Get()};
+
+  return data;
+}
+
+template <typename SCALAR_T>
+static Status ApplyRoPE(SCALAR_T* q_ptr, SCALAR_T* k_ptr, const Tensor& rotary_pos, const Tensor& rotary_mask,
+                        size_t total_tokens, cudaStream_t stream,
+                        std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int n_heads,
+                        int head_dim) {
+  if (!rotary_embedding_cuda.has_value() || total_tokens == 0 || rotary_pos.GetElementNumber() == 0) {
+    return Status(RET_RUNTIME_FAILED, "RoPE not initialized or invalid input");
+  }
+
+  // Q layout: [token_num, head_num, rope_dim + nope_dim]
+  // K layout: [token_num, rope_dim + nope_dim]
+  SCALAR_T* q_rope_ptr = q_ptr;  // rope_dim comes first
+  SCALAR_T* k_rope_ptr = k_ptr;  // rope_dim comes first
+
+  rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_pos.template GetPtr<void>()),
+                                  reinterpret_cast<int64_t*>(rotary_mask.template GetPtr<void>()),
+                                  q_rope_ptr,    // query: pointer to Q's rope portion (in-place)
+                                  k_rope_ptr,    // key: pointer to K's rope portion (in-place)
+                                  total_tokens,  // num_tokens: total token count
+                                  stream,
+                                  n_heads * head_dim,  // query_stride: total elements per token for Q
+                                  head_dim,            // key_stride: total elements per token for K
+                                  head_dim,            // query_head_size: full head dim
+                                  head_dim);           // key_head_size: rope dimension to rotate
+  CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
+
+  return Status();
+}
+
+static void PrepareQuantWorkspace(size_t total_tokens, PagedQuantWorkspace& workspace, uint8_t* quant_workspace_ptr,
+                                  float* logits_workspace_ptr, int n_heads, int head_dim, int quant_block_size,
+                                  int max_seq_len, int block_size) {
+  // Calculate FP8 quantization buffer sizes
+  size_t q_fp8_bytes = total_tokens * n_heads * head_dim;
+  size_t q_scale_groups = DivRoundUp(head_dim, quant_block_size);
+  KLLM_CHECK_WITH_INFO(q_scale_groups == 1,
+                       fmt::format("q_scale_groups must be 1 for weight scaling, got {}", q_scale_groups));
+  size_t q_scale_bytes = total_tokens * n_heads * q_scale_groups * sizeof(float);
+  size_t k_fp8_bytes = total_tokens * head_dim;
+
+  constexpr int num_math_warp_groups = 4;
+  const int aligned_max_seq_len = static_cast<int>(
+      RoundUp(static_cast<size_t>(max_seq_len), static_cast<size_t>(num_math_warp_groups * block_size)));
+
+  // Setup workspace pointers
+  workspace.q_fp8_ptr = quant_workspace_ptr;
+  workspace.q_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes);
+  workspace.k_fp8_ptr = quant_workspace_ptr + q_fp8_bytes + q_scale_bytes;
+  workspace.k_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes + q_scale_bytes + k_fp8_bytes);
+  workspace.logits_ptr = logits_workspace_ptr;
+  workspace.aligned_max_seq_len = aligned_max_seq_len;
+}
+
+template <typename SCALAR_T>
+static Status QuantizeQK(SCALAR_T* q_ptr, SCALAR_T* k_ptr, PagedQuantWorkspace& workspace, size_t total_tokens,
+                         cudaStream_t stream, int n_heads, int head_dim, int quant_block_size) {
+  // Quantize Q: [total_tokens, n_heads, head_dim]
+  InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(q_ptr, workspace.q_fp8_ptr, workspace.q_scale_ptr, total_tokens * n_heads,
+                                            head_dim,
+                                            /*is_column_major=*/false, stream, quant_block_size);
+
+  // Quantize K: [total_tokens, head_dim]
+  InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(k_ptr, workspace.k_fp8_ptr, workspace.k_scale_ptr, total_tokens, head_dim,
+                                            /*is_column_major=*/false, stream, quant_block_size);
+
+  return Status();
+}
+
+template <typename SCALAR_T>
+static Status StoreKVCache(SCALAR_T* q_ptr, SCALAR_T* k_ptr, const PagedMlaInputData<SCALAR_T>& input_data,
+                           PagedQuantWorkspace& workspace, int layer_index, int block_size, int head_dim) {
+  // Get layer-specific K/V cache lists
+  const size_t layer_block_num = input_data.indexer_kv_list_tensor.shape[1] / 2;
+  void** indexer_k_list = input_data.indexer_kv_list_tensor.template GetPtr<void*>() +
+                          static_cast<size_t>(layer_index * layer_block_num * 2);
+  void** indexer_v_list = indexer_k_list + layer_block_num;
+
+  const int k_stride_size = head_dim;
+  const int v_stride_size = 1;  // q_scale_groups = 1
+  const size_t q_seq_len = input_data.total_tokens / input_data.batch_size;
+
+  // Store K and V to KV cache
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaIndexerPagedKVCacheCopy(
+      reinterpret_cast<__nv_fp8_e4m3*>(workspace.k_fp8_ptr), workspace.k_scale_ptr, indexer_k_list, indexer_v_list,
+      input_data.input_length_tensor.template GetPtr<int>(),
+      input_data.indexer_kv_cache_offset_tensor.template GetPtr<int>(), static_cast<int>(block_size),
+      input_data.batch_size, q_seq_len, k_stride_size, v_stride_size, input_data.stream));
+
+  return Status();
+}
+
+template <typename SCALAR_T>
+static Status ApplyWeightScaling(SCALAR_T* weights_ptr, PagedQuantWorkspace& workspace, size_t total_tokens,
+                                 cudaStream_t stream, int n_heads, float softmax_scale) {
+  // Apply weight scaling: weights = weights * n_heads**-0.5 * q_scale * softmax_scale
+  // Result is stored back in q_scale_ptr (reusing memory)
+  float n_heads_inv_sqrt = 1.0f / std::sqrt(static_cast<float>(n_heads));
+  // weights_ptr shape = [total_tokens, n_heads]
+  // workspace.q_scale_ptr shape = [total_tokens, n_heads, q_scale_groups] q_scale_groups = 1
+  CUDA_CHECK_LAST_ERROR(
+      llm_kernels::nvidia::InvokeWeightScale<SCALAR_T>(weights_ptr, workspace.q_scale_ptr, n_heads_inv_sqrt,
+                                                       softmax_scale, static_cast<int>(total_tokens), n_heads, stream));
+  return Status();
+}
+
+template <typename SCALAR_T>
+static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, PagedQuantWorkspace& workspace, int rank,
+                               int n_heads, int head_dim, int block_size, int block_size_per_layer, int layer_index,
+                               int max_seq_len) {
+  const int next_n = input_data.total_tokens / input_data.batch_size;
+  const Tensor& input_length_tensor = next_n > ksana_llm::nvidia::kDeepGemmMaxQSeqLen
+                                          ? input_data.expanded_input_length_tensor
+                                          : input_data.input_length_tensor;
+  const Tensor* block_table_tensor = next_n > ksana_llm::nvidia::kDeepGemmMaxQSeqLen
+                                         ? input_data.expanded_block_table_tensor
+                                         : input_data.block_table_tensor;
+  const int64_t expanded_batch_size = input_length_tensor.shape[0];
+  const int64_t expanded_next_n = input_data.total_tokens / expanded_batch_size;
+
+  // Prepare context_lens tensor
+  auto context_lens_torch =
+      torch::from_blob(const_cast<void*>(input_length_tensor.template GetPtr<void>()), {expanded_batch_size},
+                       torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
+
+  // Use schedule_meta tensor from input_data (already computed in ModelInput)
+  auto schedule_meta_torch =
+      torch::from_blob(const_cast<void*>(input_data.schedule_meta_tensor.template GetPtr<void>()),
+                       {static_cast<int64_t>(input_data.schedule_meta_tensor.shape[0]),
+                        static_cast<int64_t>(input_data.schedule_meta_tensor.shape[1])},
+                       torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
+
+  // Prepare Q tensor: reshape [total_tokens, n_heads, head_dim] to [batch_size, next_n, n_heads, head_dim]
+  auto q_torch = torch::from_blob(workspace.q_fp8_ptr, {expanded_batch_size, expanded_next_n, n_heads, head_dim},
+                                  torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(torch::kCUDA, rank));
+
+  // Prepare fused_kv_cache tensor
+  KLLM_CHECK_WITH_INFO(input_data.layer_indexer_kv_cache_ptr_tensor != nullptr,
+                       "layer_indexer_kv_cache_ptr is required.");
+  const int num_heads_kv = 1;
+  const int head_dim_with_sf = head_dim + sizeof(float);
+  const int num_kv_blocks = input_data.layer_indexer_kv_cache_ptr_tensor->template GetPtr<int64_t>()[0];
+
+  auto fused_kv_cache_torch =
+      torch::from_blob(input_data.layer_indexer_kv_cache_ptr_tensor->template GetPtr<void*>()[1 + layer_index * 2],
+                       {num_kv_blocks, block_size, num_heads_kv, head_dim_with_sf},
+                       {block_size_per_layer, num_heads_kv * head_dim_with_sf, head_dim_with_sf, 1},
+                       torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA, rank));
+
+  // Prepare weights tensor (from q_scale_ptr after InvokeWeightScale)
+  auto weights_torch = torch::from_blob(workspace.q_scale_ptr, {static_cast<int64_t>(input_data.total_tokens), n_heads},
+                                        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, rank));
+
+  // Prepare block_table tensor
+  auto block_table_torch = torch::from_blob(
+      block_table_tensor->template GetPtr<int>(),
+      {static_cast<int64_t>(block_table_tensor->shape[0]), static_cast<int64_t>(block_table_tensor->shape[1])},
+      torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank));
+
+  // Prepare logits tensor
+  auto logits_torch = torch::from_blob(
+      workspace.logits_ptr,
+      {static_cast<int64_t>(input_data.total_tokens), static_cast<int64_t>(workspace.aligned_max_seq_len)},
+      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, rank));
+
+  auto deepseek_deepgemm_wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance();
+
+  // Initialize schedule_meta according to init flag (shape[2])
+  if (!input_data.schedule_meta_tensor.shape[2]) {
+    deepseek_deepgemm_wrapper->PagedMqaLogitsMetadata(context_lens_torch, schedule_meta_torch, expanded_batch_size,
+                                                      block_size);
+  }
+
+  // Call DeepGEMM MQA
+  deepseek_deepgemm_wrapper->Fp8PagedMqaLogits(q_torch, fused_kv_cache_torch, weights_torch, context_lens_torch,
+                                               block_table_torch, schedule_meta_torch, logits_torch, max_seq_len,
+                                               /*clean_logits*/ true);
+
+  return Status();
+}
+
+template <typename SCALAR_T>
+static Status SelectTopK(const PagedMlaInputData<SCALAR_T>& input_data, const PagedQuantWorkspace& workspace,
+                         Tensor& topk_indices) {
+  KLLM_CHECK_WITH_INFO(input_data.cur_seq_len_start_tensor != nullptr && input_data.cur_seq_len_end_tensor != nullptr,
+                       "cur_seq_len tensors are required for TopK selection");
+
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeFastTopK(
+      workspace.logits_ptr,                                             // logits
+      input_data.cur_seq_len_start_tensor->template GetPtr<int32_t>(),  // cur_seq_len_start
+      input_data.cur_seq_len_end_tensor->template GetPtr<int32_t>(),    // cur_seq_len_end
+      topk_indices.GetPtr<int32_t>(),                                   // topk_indices
+      static_cast<int64_t>(input_data.total_tokens),                    // total_tokens
+      static_cast<int64_t>(workspace.aligned_max_seq_len),              // aligned_max_seq_len
+      static_cast<int64_t>(1),                                          // topk
+      input_data.stream));                                              // stream
+
+  return Status();
+}
+
+template <typename SCALAR_T>
+Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_tensors,
+                                            std::vector<Tensor>& output_tensors) {
+  // Step 1: Parse input tensors
+  PagedMlaInputData<SCALAR_T> input_data = ParseInputTensors<SCALAR_T>(input_tensors, context_, rank_);
+  Tensor& topk_indices = output_tensors[0];
+
+  // Get data pointers
+  SCALAR_T* q_ptr = input_data.q_tensor.template GetPtr<SCALAR_T>();
+  SCALAR_T* k_ptr = input_data.k_tensor.template GetPtr<SCALAR_T>();
+  SCALAR_T* weights_ptr = input_data.weights_tensor.template GetPtr<SCALAR_T>();
+
+  // Step 2: Apply RoPE to Q and K
+  ApplyRoPE<SCALAR_T>(q_ptr, k_ptr, input_data.rotary_pos, input_data.rotary_mask, input_data.total_tokens,
+                      input_data.stream, rotary_embedding_cuda_, n_heads_, head_dim_);
+
+  // Step 3: Prepare workspace
+  PagedQuantWorkspace workspace;
+  PrepareQuantWorkspace(input_data.total_tokens, workspace, input_data.quant_workspace_ptr,
+                        workspace_buffer_->GetPtr<float>(), n_heads_, head_dim_, quant_block_size_, max_seq_len_,
+                        block_size_);
+
+  // Step 4: Quantize Q/K
+  QuantizeQK<SCALAR_T>(q_ptr, k_ptr, workspace, input_data.total_tokens, input_data.stream, n_heads_, head_dim_,
+                       quant_block_size_);
+
+  // Step 5: Store KV to cache
+  StoreKVCache<SCALAR_T>(q_ptr, k_ptr, input_data, workspace, layer_index_, block_size_, head_dim_);
+
+  // Step 6: Apply weight scaling
+  ApplyWeightScaling<SCALAR_T>(weights_ptr, workspace, input_data.total_tokens, input_data.stream, n_heads_,
+                               softmax_scale_);
+
+  // Step 7: Compute MQA logits
+  ComputeMqaLogits<SCALAR_T>(input_data, workspace, rank_, n_heads_, head_dim_, block_size_, block_size_per_layer_,
+                             layer_index_, max_seq_len_);
+
+  // Step 8: TopK selection
+  SelectTopK<SCALAR_T>(input_data, workspace, topk_indices);
+
+  return Status();
+}
+
+size_t PagedSparseMlaIndexerLayer::GetWorkspaceSize() {
+  // Calculate workspace size needed for logits (with alignment)
+  // Layout: [logits(aligned to 256 bytes)]
+  const size_t max_decode_tokens = max_batch_size_ * max_decode_tokens_per_req_;
+
+  // Logits data: [max_total_tokens, aligned_max_seq_len] * sizeof(float), aligned to 256 bytes
+  constexpr int num_math_warp_groups = 4;
+  const int aligned_max_seq_len = static_cast<int>(
+      RoundUp(static_cast<size_t>(max_seq_len_), static_cast<size_t>(num_math_warp_groups * block_size_)));
+  const size_t logits_bytes = max_decode_tokens * aligned_max_seq_len * sizeof(float);
+
+  KLLM_LOG_DEBUG << fmt::format("PagedSparseMlaIndexerLayer GetWorkspaceSize: max_decode_tokens={}, logits={}",
+                                max_decode_tokens, logits_bytes);
+
+  return logits_bytes;
+}
+
+}  // namespace ksana_llm

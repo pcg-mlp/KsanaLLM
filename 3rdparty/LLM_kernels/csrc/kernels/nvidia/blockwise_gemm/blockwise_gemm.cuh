@@ -40,13 +40,22 @@
 
 #include "csrc/kernels/nvidia/blockwise_gemm/collective/collective_builder.hpp"
 #include "csrc/kernels/nvidia/blockwise_gemm/dispatch_policy.hpp"
-
-#include "cutlass_gemm_caller.cuh"
+#include "csrc/utils/nvidia/cuda_utils.h"
 
 #include <cuda_runtime.h>
 
 namespace ksana_llm {
+
 using namespace cute;
+
+#define CUTLASS_CHECK(status)                                                                                  \
+  {                                                                                                            \
+    cutlass::Status error = status;                                                                            \
+    if (error != cutlass::Status::kSuccess) {                                                                  \
+      std::cerr << "Got cutlass error: " << cutlassGetStatusString(error) << " at: " << __LINE__ << std::endl; \
+      exit(EXIT_FAILURE);                                                                                      \
+    }                                                                                                          \
+  }
 
 template <typename Kernel>
 struct enable_sm90_or_later : Kernel {
@@ -181,7 +190,8 @@ void InvokeGemmBlockwise(void* a, float* a_scales, void* b, float* b_scales, voi
   using GemmOp = cutlass::gemm::device::GemmUniversalAdapter<typename GemmFp8Blockwise::GemmKernel>;
   GemmOp gemm_op;
   CUTLASS_CHECK(gemm_op.can_implement(args));
-  cutlass::Status status = gemm_op.run(args, workspace, stream);
+  cutlass::Status status = gemm_op.run(args, workspace, stream, /*cuda_adapter*/ nullptr,
+                                       /*launch_with_pdl*/ llm_kernels::utils::GetEnablePDL());
   CUTLASS_CHECK(status);
 }
 
@@ -193,12 +203,12 @@ void DispatchCutlassGemmBlockwiseSm90Fp8(void* a, float* a_scales, void* b, floa
 
   if (k > 3 * n && workspace != nullptr && workspace_size > 0) {
     // NOTE(karlluo): Use StreamKScheduler if k is large enough and workspace is provided
-    InvokeGemmBlockwise<cutlass::gemm::StreamKScheduler, OutType>(
-        a, a_scales, b, b_scales, out, workspace, workspace_size, m, k, n, stream);
+    InvokeGemmBlockwise<cutlass::gemm::StreamKScheduler, OutType>(a, a_scales, b, b_scales, out, workspace,
+                                                                  workspace_size, m, k, n, stream);
   } else {
     // NOTE(karlluo): Use PersistentScheduler if k is small or workspace is not provided but performance regression
-    InvokeGemmBlockwise<cutlass::gemm::PersistentScheduler, OutType>(
-        a, a_scales, b, b_scales, out, workspace, workspace_size, m, k, n, stream);
+    InvokeGemmBlockwise<cutlass::gemm::PersistentScheduler, OutType>(a, a_scales, b, b_scales, out, workspace,
+                                                                     workspace_size, m, k, n, stream);
   }
 }
 

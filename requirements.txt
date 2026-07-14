@@ -1,4 +1,4 @@
-transformers==4.51.3
+transformers==5.2.0
 sentencepiece==0.2.0
 uvicorn[standard]==0.29.0
 fastapi==0.110.0
@@ -14,4 +14,5 @@ cachetools==6.0.0
 Jinja2==3.1.6
 openai==1.93.3
 partial_json_parser==0.2.1.1.post6
-sqlalchemy==2.0.44
+shortuuid==1.0.13
+codetiming==1.4.0

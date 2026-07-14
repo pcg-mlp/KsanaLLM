@@ -2,8 +2,12 @@
  * Copyright 2025 Tencent Inc.  All rights reserved.
  */
 
+#include "csrc/kernels/nvidia/weight_scale/weight_scale_kernel.h"
+
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+
 #include "csrc/utils/nvidia/cuda_utils.h"
-#include "weight_scale_kernel.h"
 
 namespace llm_kernels {
 namespace nvidia {

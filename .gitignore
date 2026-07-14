@@ -101,3 +101,6 @@ d.*
 !src/ksana_llm/python/serving_forward_client.py
 !src/ksana_llm/python/serving_generate_client.py
 !src/ksana_llm/python/serving_server.py
+
+# Ignore auto-downloaded font file (downloaded during CMake build)
+python/ksana_plugin/arc_hunyuan_video/ARIAL.TTF

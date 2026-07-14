@@ -1,0 +1,77 @@
+/* Copyright 2025 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+#pragma once
+
+#include <string>
+#include <unordered_map>
+
+#include "configure/context.h"
+#include "configure/environment.h"
+#include "models/base/base_model_config.h"
+#include "models/base/utils.h"
+#include "utils/status.h"
+#include "utils/tensor.h"
+
+namespace ksana_llm {
+
+// The base class of all custom weight loader, any implemented weight loader could override it.
+class BaseModelWeightLoader {
+ public:
+  BaseModelWeightLoader(std::shared_ptr<BaseModelConfig> model_config, std::shared_ptr<Environment> env,
+                        std::shared_ptr<Context> context);
+  virtual ~BaseModelWeightLoader();
+
+  // Do some filter on model file list.
+  virtual Status FilterModelFiles(std::vector<std::string>& model_files);
+
+  // Do some filter on model weight names.
+  virtual Status FilterWeightNames(std::vector<std::string>& weight_names);
+
+  // Process weights, such as rename, split, merge, type convert, quantization, etc.
+  // The unprocessed weights will be put to left_host_weights, and merge to host_model_weights with next file.
+  virtual Status ProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights, int dev_rank,
+                                     std::unordered_map<std::string, Tensor>& device_model_weights,
+                                     std::unordered_map<std::string, Tensor>& left_host_weights);
+
+  // Invoked only once before ProcessModelWeights.
+  virtual Status PreProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights);
+
+  // Invoked only once after ProcessModelWeights.
+  virtual Status PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map, int dev_rank);
+
+  Status GetCustomWeightMap(const std::string& model_path, const std::string& model_type,
+                            std::unordered_map<std::string, Tensor>& weight_map,
+                            ModelFormat model_format = ModelFormat::PYTORCH_SAFETENSOR);
+
+  Status InitRegexPatterns(const std::string& model_path, const std::string& model_type, ModelFormat model_format);
+
+ protected:
+  // Permute tensor by specific permutation.
+  Status PermuteDeviceTensor(const Tensor& input_tensor, const std::vector<size_t>& permutation, int dev_rank,
+                             Tensor& output_tensor);
+
+  std::string GetWeightMapPath(const std::string& model_path, const std::string& model_type, ModelFormat model_format);
+
+  // cast device tensor type.
+  Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_rank);
+
+  // TODO(huicongyao): remove this function in the future
+  Status CastDeviceTensorTypePytorch(Tensor& input_tensor, DataType new_dtype, int dev_rank);
+
+  // Copy host tensor to device.
+  Status CopyHostTensorToDevice(const Tensor host_tensor, int dev_rank, Tensor& dev_tensor);
+
+ protected:
+  std::shared_ptr<BaseModelConfig> model_config_ = nullptr;
+  std::shared_ptr<Environment> env_ = nullptr;
+  std::shared_ptr<Context> context_ = nullptr;
+
+  std::vector<std::pair<std::regex, std::string>> patterns_;
+  bool loaded_patterns_ = false;
+
+  std::vector<std::unordered_map<size_t, Tensor>> permute_buffers_;
+  std::vector<std::unordered_map<size_t, Tensor>> tensor_buffers_;
+};
+
+}  // namespace ksana_llm

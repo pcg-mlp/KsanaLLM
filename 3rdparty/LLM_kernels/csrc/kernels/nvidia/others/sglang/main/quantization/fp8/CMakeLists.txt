@@ -11,6 +11,5 @@ target_link_libraries(llm_kernels_nvidia_kernel_quant_fp8 PUBLIC -lcublas -lcuda
 
 file(GLOB_RECURSE QUANT_FP8_TEST_SRCS *test.cu)
 cc_test(llm_kernels_nvidia_kernel_quant_fp8_test SRCS ${QUANT_FP8_TEST_SRCS} DEPS
-    llm_kernels_nvidia_utils
     llm_kernels_nvidia_kernel_activation
     llm_kernels_nvidia_kernel_quant_fp8)
