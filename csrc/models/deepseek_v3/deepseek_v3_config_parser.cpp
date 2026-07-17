@@ -118,10 +118,16 @@ Status DeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_jso
     deepseek_v3_config->dsa_config.index_head_dim = config_json.value("index_head_dim", 128);
     deepseek_v3_config->dsa_config.index_n_heads = config_json.value("index_n_heads", 64);
     deepseek_v3_config->dsa_config.index_topk = config_json.value("index_topk", 2048);
-    KLLM_LOG_INFO << fmt::format("Using dsa model, index_head_dim: {}, index_n_heads: {}, index_topk: {}",
-                                 deepseek_v3_config->dsa_config.index_head_dim,
-                                 deepseek_v3_config->dsa_config.index_n_heads,
-                                 deepseek_v3_config->dsa_config.index_topk);
+    deepseek_v3_config->dsa_config.index_share_for_mtp_iteration =
+        config_json.value("index_share_for_mtp_iteration", false);
+    deepseek_v3_config->dsa_config.index_skip_topk_offset = config_json.value("index_skip_topk_offset", 1);
+    deepseek_v3_config->dsa_config.index_topk_freq = config_json.value("index_topk_freq", 1);
+    KLLM_LOG_INFO << fmt::format(
+        "Using dsa model, index_head_dim: {}, index_n_heads: {}, index_topk: {}, index_share_for_mtp_iteration: {}, "
+        "index_skip_topk_offset: {}, index_topk_freq: {}",
+        deepseek_v3_config->dsa_config.index_head_dim, deepseek_v3_config->dsa_config.index_n_heads,
+        deepseek_v3_config->dsa_config.index_topk, deepseek_v3_config->dsa_config.index_share_for_mtp_iteration,
+        deepseek_v3_config->dsa_config.index_skip_topk_offset, deepseek_v3_config->dsa_config.index_topk_freq);
   }
 
   // 5. parse quantization config

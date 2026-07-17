@@ -31,8 +31,10 @@ namespace nvidia {
 namespace test {
 
 using topk::kTopK1024;
+using topk::kTopK2048;
 using topk::kTopK512;
 using topk::launch_topk1024;
+using topk::launch_topk2048;
 using topk::launch_topk512;
 using topk::TopKWrapper;
 
@@ -82,7 +84,7 @@ class TopKTestSuit : public NvidiaTestSuitBase {
 };
 
 // ----------------------------------------------------------------------------
-// Test 1: dispatch smoke — both variants launch for a small batch without
+// Test 1: dispatch smoke — all variants launch for a small batch without
 // error.
 // ----------------------------------------------------------------------------
 TEST_F(TopKTestSuit, DispatchSmokeK512AndK1024) {
@@ -91,7 +93,7 @@ TEST_F(TopKTestSuit, DispatchSmokeK512AndK1024) {
   const uint32_t page_bits = 4;
 
   auto run_smoke = [&](uint32_t k) {
-    const uint32_t seq_len = 256;  // <= k, exercises the naive_transform path
+    const uint32_t seq_len = k / 2;  // < k, exercises the naive_transform path
     const int64_t score_stride = seq_len;
     const int64_t page_table_stride = (seq_len + page_size - 1) / page_size;
 
@@ -127,8 +129,15 @@ TEST_F(TopKTestSuit, DispatchSmokeK512AndK1024) {
           reinterpret_cast<const int32_t*>(page_table.data_ptr), reinterpret_cast<int32_t*>(page_indices.data_ptr),
           /*raw_indices_out=*/nullptr, score_stride, page_table_stride, num_works, page_bits,
           /*batch_indices=*/nullptr, extend_len, stream);
-    } else {
+    } else if (k == kTopK1024) {
       launch_topk1024(
+          reinterpret_cast<const float*>(scores.data_ptr), reinterpret_cast<const int32_t*>(row_starts_buf.data_ptr),
+          reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr),
+          reinterpret_cast<const int32_t*>(page_table.data_ptr), reinterpret_cast<int32_t*>(page_indices.data_ptr),
+          /*raw_indices_out=*/nullptr, score_stride, page_table_stride, num_works, page_bits,
+          /*batch_indices=*/nullptr, extend_len, stream);
+    } else {
+      launch_topk2048(
           reinterpret_cast<const float*>(scores.data_ptr), reinterpret_cast<const int32_t*>(row_starts_buf.data_ptr),
           reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr),
           reinterpret_cast<const int32_t*>(page_table.data_ptr), reinterpret_cast<int32_t*>(page_indices.data_ptr),
@@ -147,6 +156,7 @@ TEST_F(TopKTestSuit, DispatchSmokeK512AndK1024) {
 
   run_smoke(kTopK512);
   run_smoke(kTopK1024);
+  run_smoke(kTopK2048);
 }
 
 // ----------------------------------------------------------------------------
@@ -256,9 +266,93 @@ TEST_F(TopKTestSuit, ForwardNumericalMatchesHostRefK512) {
 }
 
 // ----------------------------------------------------------------------------
-// Test 3: single work item (num_works=1) launches without crash for both
-// the 512 and 1024 variants. This is the minimal valid configuration — a
-// single batch item with seq_len < K so the naive_transform path is taken.
+// Test 2b: numerical correctness for the K=2048 variant (radix path
+// exercised: seq_len > K).
+// ----------------------------------------------------------------------------
+TEST_F(TopKTestSuit, ForwardNumericalMatchesHostRefK2048) {
+  constexpr uint32_t batch_size = 1;
+  constexpr uint32_t seq_len = 8192;
+  constexpr uint32_t page_size = 16;
+  constexpr uint32_t page_bits = 4;  // log2(16)
+
+  std::mt19937 rng(20260427);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+  std::vector<float> scores_h(seq_len);
+  for (auto& x : scores_h) x = dist(rng);
+
+  std::vector<int32_t> page_table_h((seq_len + page_size - 1) / page_size);
+  std::iota(page_table_h.begin(), page_table_h.end(), 1000);
+
+  std::vector<int32_t> row_starts_h = {0};
+  std::vector<int32_t> row_ends_h = {static_cast<int32_t>(seq_len)};
+
+  BufferMeta scores = CreateBuffer<float>(MemoryType::MEMORY_GPU, {seq_len});
+  BufferMeta row_starts_buf = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {batch_size});
+  BufferMeta row_ends_buf = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {batch_size});
+  BufferMeta page_table = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {page_table_h.size()});
+  BufferMeta page_indices = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {kTopK2048});
+  BufferMeta raw_indices = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {kTopK2048});
+
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaMemcpy(scores.data_ptr, scores_h.data(), scores_h.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(row_starts_buf.data_ptr, row_starts_h.data(),
+                                     row_starts_h.size() * sizeof(int32_t), cudaMemcpyHostToDevice));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(row_ends_buf.data_ptr, row_ends_h.data(), row_ends_h.size() * sizeof(int32_t),
+                                     cudaMemcpyHostToDevice));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(page_table.data_ptr, page_table_h.data(), page_table_h.size() * sizeof(int32_t),
+                                     cudaMemcpyHostToDevice));
+
+  const uint32_t num_works = batch_size;
+  const uint32_t extend_len = 1;
+
+  launch_topk2048(
+      reinterpret_cast<const float*>(scores.data_ptr), reinterpret_cast<const int32_t*>(row_starts_buf.data_ptr),
+      reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr), reinterpret_cast<const int32_t*>(page_table.data_ptr),
+      reinterpret_cast<int32_t*>(page_indices.data_ptr), reinterpret_cast<int32_t*>(raw_indices.data_ptr),
+      /*score_stride=*/seq_len, /*page_table_stride=*/static_cast<int64_t>(page_table_h.size()), num_works, page_bits,
+      /*batch_indices=*/nullptr, extend_len, stream);
+  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+  ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+  std::vector<int32_t> raw_h(kTopK2048);
+  std::vector<int32_t> page_h(kTopK2048);
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaMemcpy(raw_h.data(), raw_indices.data_ptr, raw_h.size() * sizeof(int32_t), cudaMemcpyDeviceToHost));
+  CHECK_NVIDIA_CUDA_ERROR(
+      cudaMemcpy(page_h.data(), page_indices.data_ptr, page_h.size() * sizeof(int32_t), cudaMemcpyDeviceToHost));
+
+  auto host_ref = HostTopKIndices(scores_h.data(), seq_len, kTopK2048);
+  ASSERT_EQ(host_ref.size(), kTopK2048);
+  float host_threshold = std::numeric_limits<float>::max();
+  for (int32_t idx : host_ref) host_threshold = std::min(host_threshold, scores_h[idx]);
+  for (uint32_t i = 0; i < kTopK2048; ++i) {
+    ASSERT_GE(raw_h[i], 0);
+    ASSERT_LT(static_cast<uint32_t>(raw_h[i]), seq_len);
+    EXPECT_GE(scores_h[raw_h[i]], host_threshold) << "kernel winner " << raw_h[i] << " has score " << scores_h[raw_h[i]]
+                                                  << " < host-threshold " << host_threshold;
+  }
+
+  std::unordered_set<int32_t> raw_set(raw_h.begin(), raw_h.end());
+  EXPECT_EQ(raw_set.size(), kTopK2048);
+
+  for (uint32_t i = 0; i < kTopK2048; ++i) {
+    const int32_t expected = PageToIndicesHost(page_table_h.data(), static_cast<uint32_t>(raw_h[i]), page_bits);
+    EXPECT_EQ(page_h[i], expected) << "mismatch at i=" << i << ", raw=" << raw_h[i];
+  }
+
+  DeleteBuffer(scores);
+  DeleteBuffer(row_starts_buf);
+  DeleteBuffer(row_ends_buf);
+  DeleteBuffer(page_table);
+  DeleteBuffer(page_indices);
+  DeleteBuffer(raw_indices);
+}
+
+// ----------------------------------------------------------------------------
+// Test 3: single work item (num_works=1) launches without crash for all
+// the 512, 1024 and 2048 variants. This is the minimal valid configuration —
+// a single batch item with seq_len < K so the naive_transform path is taken.
 // ----------------------------------------------------------------------------
 TEST_F(TopKTestSuit, SingleWorkItemIsValid) {
   constexpr uint32_t page_bits = 4;
@@ -270,6 +364,7 @@ TEST_F(TopKTestSuit, SingleWorkItemIsValid) {
   BufferMeta page_table = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {(size_t)page_table_stride});
   BufferMeta page_indices_512 = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {kTopK512});
   BufferMeta page_indices_1024 = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {kTopK1024});
+  BufferMeta page_indices_2048 = CreateBuffer<int32_t>(MemoryType::MEMORY_GPU, {kTopK2048});
 
   std::vector<int32_t> row_starts_h = {0};
   std::vector<int32_t> row_ends_h = {static_cast<int32_t>(seq_len)};
@@ -303,12 +398,22 @@ TEST_F(TopKTestSuit, SingleWorkItemIsValid) {
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
   EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 
+  launch_topk2048(
+      reinterpret_cast<const float*>(scores.data_ptr), reinterpret_cast<const int32_t*>(row_starts_buf.data_ptr),
+      reinterpret_cast<const int32_t*>(row_ends_buf.data_ptr), reinterpret_cast<const int32_t*>(page_table.data_ptr),
+      reinterpret_cast<int32_t*>(page_indices_2048.data_ptr), nullptr, score_stride, page_table_stride,
+      /*num_works=*/1, page_bits,
+      /*batch_indices=*/nullptr, /*extend_len=*/1, stream);
+  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+  EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+
   DeleteBuffer(scores);
   DeleteBuffer(row_starts_buf);
   DeleteBuffer(row_ends_buf);
   DeleteBuffer(page_table);
   DeleteBuffer(page_indices_512);
   DeleteBuffer(page_indices_1024);
+  DeleteBuffer(page_indices_2048);
 }
 
 // ----------------------------------------------------------------------------

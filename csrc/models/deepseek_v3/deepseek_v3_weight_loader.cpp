@@ -9,6 +9,7 @@
 #include "configure/json_config_utils.h"
 #include "kernels/trans_layout.h"
 #include "model_loader/model_loader_utils.h"
+#include "utils/indexer_skip_config.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
 #include "utils/string_utils.h"
@@ -41,24 +42,38 @@ Status DeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
   const int lower_nextn_layer_idx = pipeline_config_.lower_nextn_layer_idx;
   const int upper_nextn_layer_idx = pipeline_config_.upper_nextn_layer_idx;
 
+  auto deepseek_v3_config = std::dynamic_pointer_cast<DeepSeekV3Config>(model_config_);
+  const std::unordered_set<int> indexer_skip_layers = GetIndexerSkipLayers(
+      deepseek_v3_config->num_layer, deepseek_v3_config->num_nextn_predict_layers, deepseek_v3_config->dsa_config);
+
   for (auto it = weight_names.begin(); it != weight_names.end();) {
     if (CheckWeightNameMatched(*it, skip_list, false)) {
-      weight_names.erase(it);
+      it = weight_names.erase(it);
       continue;
     }
 
+    const int layer_idx = GetLayerIdxFromName(*it);
+
     // Skip some layers in distributed mode.
     if (lower_layer_idx >= 0 && upper_layer_idx >= 0) {
-      int layer_idx = GetLayerIdxFromName(*it);
       if (layer_idx >= 0 && ((layer_idx < lower_layer_idx || layer_idx > upper_layer_idx) &&
                              (layer_idx < lower_nextn_layer_idx || layer_idx > upper_nextn_layer_idx))) {
-        weight_names.erase(it);
+        it = weight_names.erase(it);
         continue;
       }
       // Skip nextn layer in distributed non-sampling node
       if (layer_idx >= 0 && !context_->global->IsSamplingNode() &&
           (layer_idx >= lower_nextn_layer_idx && layer_idx <= upper_nextn_layer_idx)) {
-        weight_names.erase(it);
+        it = weight_names.erase(it);
+        continue;
+      }
+    }
+
+    // Skip the weights of unused indexers.
+    if (indexer_skip_layers.count(layer_idx)) {
+      if (CheckWeightNameMatched(*it, {fmt::format("model.layers.{}.self_attn.indexer.", layer_idx)},
+                                 MatchMode::PartialMatch)) {
+        it = weight_names.erase(it);
         continue;
       }
     }
@@ -67,16 +82,17 @@ Status DeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
       // Skip embedding on if not master mode.
       if (context_->global->IsDistributedWorker() &&
           !(context_->global->IsSamplingNode() && runtime_config_.mtp_step_num > 0)) {
-        if (CheckWeightNameMatched(*it, {"model.embed_tokens.weight"}, false)) {
-          weight_names.erase(it);
+        if (CheckWeightNameMatched(*it, {"model.embed_tokens.weight"}, true)) {
+          it = weight_names.erase(it);
           continue;
         }
       }
 
-      // Skip lm_head if not tail mode.
+      // Skip lm_head/final_norm if not tail mode.
       if (!context_->global->IsDistributedLastWorker()) {
-        if (CheckWeightNameMatched(*it, {"lm_head.weight"}, false)) {
-          weight_names.erase(it);
+        if (CheckWeightNameMatched(*it, {"lm_head.weight"}, true) ||
+            CheckWeightNameMatched(*it, {"model.norm.weight"}, true)) {
+          it = weight_names.erase(it);
           continue;
         }
       }

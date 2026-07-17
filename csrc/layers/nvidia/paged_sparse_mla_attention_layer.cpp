@@ -52,8 +52,6 @@ Status PagedSparseMlaAttentionLayer::ForwardT(const PagedSparseMlaAttentionInput
   const Tensor& block_offsets_tensor = *inputs.cache_offset;
   int* block_offsets_ptr = block_offsets_tensor.GetPtr<int>();
   const Tensor& layer_kv_cache_ptr_tensor = *inputs.layer_kv_cache;
-  const Tensor& block_table_tensor = *inputs.block_table;
-  int* block_table_ptr = block_table_tensor.GetPtr<int>();
   const Tensor& tile_scheduler_metadata_tensor = *inputs.tile_scheduler_metadata;
   int* tile_scheduler_metadata_ptr = tile_scheduler_metadata_tensor.GetPtr<int>();
   int* num_splits_ptr = inputs.num_splits->GetPtr<int>();
@@ -68,7 +66,6 @@ Status PagedSparseMlaAttentionLayer::ForwardT(const PagedSparseMlaAttentionInput
   void** const k_list_ptr = kv_list_tensor.GetPtr<void*>() + this->layer_index_ * kv_list_tensor.shape[1];
   CACHE_T* const kcache_ptr =
       reinterpret_cast<CACHE_T*>(layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + this->layer_index_ * 2]);
-  const int max_num_blocks_per_seq = block_table_tensor.shape[1];
   const int64_t num_blocks = *(layer_kv_cache_ptr_tensor.GetPtr<int64_t>());
   const int topk = indices_tensor.shape[1];
 
@@ -92,11 +89,6 @@ Status PagedSparseMlaAttentionLayer::ForwardT(const PagedSparseMlaAttentionInput
       compressed_kv_ptr, reinterpret_cast<SCALAR_T*>(k_pe_ptr), k_list_ptr, seqlens_k_ptr, block_offsets_ptr,
       this->block_token_num_, batch_size, q_seq_len, this->kv_lora_rank_, this->qk_rope_head_dim_, this->k_scale_,
       stream));
-
-  // Convert indices [token_num, index_topk] from positions within sequence into positions within block table
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::PagedSparseMlaConvertBlockTable(indices_ptr, block_table_ptr, q_seq_len,
-                                                                             topk, batch_size, max_num_blocks_per_seq,
-                                                                             this->block_token_num_, stream));
 
   constexpr int kMinNumHeads = 64;  // flashmla (fp8_ds_mla) only supports num_heads >= 64
   void* expanded_q_ptr = q_ptr;

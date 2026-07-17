@@ -97,7 +97,6 @@ Status PagedMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
     inputs.kv_seq_len = &page_meta.input_length;
     inputs.cache_offset = &page_meta.kv_cache_offset;
     inputs.layer_kv_cache = &standard_shared.layer_kv_cache_ptr;
-    inputs.block_table = &page_meta.block_table;
     inputs.tile_scheduler_metadata = &page_mla.tile_scheduler_metadata;
     inputs.num_splits = &page_mla.num_splits;
     inputs.indices = &indices_tensor;

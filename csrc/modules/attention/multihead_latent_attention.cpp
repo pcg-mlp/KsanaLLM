@@ -5,6 +5,7 @@
 #include "modules/attention/multihead_latent_attention.h"
 
 #include "profiler/profile_event.h"
+#include "utils/indexer_skip_config.h"
 #include "utils/tensor.h"
 #ifdef ENABLE_CUDA
 #  include "layers/set_torch_stream_layer.h"
@@ -35,6 +36,9 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
           : 256 * 1024);
   o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
   use_q_lora_ = (attn_config.model_config.mla_config.q_lora_rank != 0);
+  if (use_dsa_) {
+    KLLM_CHECK_WITH_INFO(use_q_lora_, "DeepSeek sparse attention must use q lora");
+  }
 
   // attn_config.idx is the offset in kv_cache list.
   // e.g., master has normal layer 0-30 and nextn layer 61, the offset of layer_idx_61 is 31
@@ -44,7 +48,12 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
 
   // Initialize sparse MLA indexer if using sparse MLA
   if (use_dsa_) {
-    sparse_mla_indexer_ = std::make_shared<SparseMlaIndexer>(layer_idx, creation_context, model_creation_config);
+    const std::unordered_set<int> indexer_skip_layers =
+        GetIndexerSkipLayers(attn_config.model_config.num_layer, attn_config.model_config.num_nextn_predict_layers,
+                             attn_config.model_config.dsa_config);
+    if (!indexer_skip_layers.count(layer_idx_)) {
+      sparse_mla_indexer_ = std::make_shared<SparseMlaIndexer>(layer_idx, creation_context, model_creation_config);
+    }
   }
 
   flash_mla_attention_layers_ = std::make_shared<FlashMlaAttention>(layer_idx, is_neox, creation_context, attn_config);
@@ -188,9 +197,12 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   CREATE_BUFFER_SCOPE(indices_tensors, mla_buffers_.topk_indices_buffer);
   auto& indices_tensor = indices_tensors[0];
   if (use_dsa_) {
-    q_nope_tensors[0] = hidden_buffer_tensors_0[0].GetView({dp_absorb_tokens, head_num_per_atp_ * kv_lora_rank_});
+    const size_t offset =
+        (dp_total_tokens - dp_absorb_tokens) * head_num_per_atp_ * (kv_lora_rank_ + qk_rope_head_dim_);
+    q_nope_tensors[0] =
+        hidden_buffer_tensors_0[0].GetView({dp_absorb_tokens, head_num_per_atp_ * kv_lora_rank_}, offset);
     q_rope_tensors[0] = hidden_buffer_tensors_0[0].GetView({dp_absorb_tokens, head_num_per_atp_ * qk_rope_head_dim_},
-                                                           q_nope_tensors[0].GetElementNumber());
+                                                           q_nope_tensors[0].GetElementNumber() + offset);
   }
 
   if (dp_total_tokens > 0) {
@@ -241,8 +253,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       q_b_input = hidden_buffer_tensors_1[0];
     }
 
-    if (use_dsa_) {
-      KLLM_CHECK_WITH_INFO(use_q_lora_, "DeepSeek sparse attention must use q lora");
+    if (sparse_mla_indexer_) {
       STATUS_CHECK_RETURN(sparse_mla_indexer_->Forward(dp_hidden_input, q_b_input,
                                                        /*workspace*/ reduce_buffer_tensors[0], context_use_dsa,
                                                        indices_tensor, forwarding_context));

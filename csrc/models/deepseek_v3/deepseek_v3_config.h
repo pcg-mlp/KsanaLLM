@@ -61,6 +61,9 @@ inline void PrepareDeepSeekV3Attributes(const nlohmann::json& config_json, Model
     model_config.dsa_config.index_topk = config_json.value("index_topk", 2048);
   }
   if (model_config.type == "glm_moe_dsa") {
+    model_config.dsa_config.index_share_for_mtp_iteration = config_json.value("index_share_for_mtp_iteration", false);
+    model_config.dsa_config.index_skip_topk_offset = config_json.value("index_skip_topk_offset", 1);
+    model_config.dsa_config.index_topk_freq = config_json.value("index_topk_freq", 1);
     model_config.dsa_config.indexer_rope_interleave = config_json.value("indexer_rope_interleave", true);
     model_config.rope_theta =
         config_json.value("rope_parameters", nlohmann::json::object()).value("rope_theta", 1000000);

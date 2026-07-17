@@ -61,10 +61,21 @@ void launch_topk1024(const float* scores, const int32_t* row_starts, const int32
                      uint32_t extend_len, cudaStream_t stream);
 
 // -----------------------------------------------------------------------------
+// launch_topk2048
+// -----------------------------------------------------------------------------
+// Same as `launch_topk512` but returns the top-2048 entries per batch; the
+// last dim of both output tensors must therefore be 2048. Adapted from the
+void launch_topk2048(const float* scores, const int32_t* row_starts, const int32_t* row_ends, const int32_t* page_table,
+                     int32_t* page_indices_out, int32_t* raw_indices_out, int64_t score_stride,
+                     int64_t page_table_stride, uint32_t num_works, uint32_t page_bits, const int32_t* batch_indices,
+                     uint32_t extend_len, cudaStream_t stream);
+
+// -----------------------------------------------------------------------------
 // Compile-time constants exposed for callers that need to size output tensors.
 // -----------------------------------------------------------------------------
 inline constexpr uint32_t kTopK512 = 512;
 inline constexpr uint32_t kTopK1024 = 1024;
+inline constexpr uint32_t kTopK2048 = 2048;
 
 }  // namespace topk
 }  // namespace nvidia

@@ -8,9 +8,7 @@
 
 #  include "csrc/kernels/nvidia/alibi/alibi.h"
 #  include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
-#endif
-
-#ifdef ENABLE_ACL
+#elif ENABLE_ACL
 #  include "csrc/kernels/ascend/attention/attention.h"
 #endif
 

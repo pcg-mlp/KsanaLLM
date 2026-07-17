@@ -40,6 +40,7 @@ class FlashSparseMlaAttentionLayer : public AttentionLayer {
   Status ForwardT(const FlashSparseMlaAttentionInputs& inputs, Tensor* output);
 
   size_t max_token_num_ = 0;
+  bool context_use_dsa_ = false;
 };
 
 }  // namespace ksana_llm

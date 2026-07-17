@@ -255,6 +255,9 @@ struct DsaConfig {
   uint32_t index_n_heads = 0;
   uint32_t index_topk = 0;
   bool indexer_rope_interleave = false;
+  bool index_share_for_mtp_iteration = false;
+  uint32_t index_skip_topk_offset = 1;
+  uint32_t index_topk_freq = 1;
 };
 
 // The DeepSeek v4 mHC informations.

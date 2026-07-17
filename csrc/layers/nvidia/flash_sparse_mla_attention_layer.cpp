@@ -18,6 +18,12 @@ namespace ksana_llm {
 Status FlashSparseMlaAttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                                           std::shared_ptr<Context> context, int rank) {
   max_token_num_ = runtime_config.max_step_token_num;
+  const size_t context_dsa_threshold =
+      GetEnvAsPositiveInt("CONTEXT_DSA_THRESHOLD", runtime_config.parallel_basic_config.attn_data_parallel_size ==
+                                                           runtime_config.parallel_basic_config.tensor_parallel_size
+                                                       ? 20 * 1024
+                                                       : 256 * 1024);
+  context_use_dsa_ = (runtime_config.max_seq_len > context_dsa_threshold);
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
@@ -28,9 +34,8 @@ size_t FlashSparseMlaAttentionLayer::GetWorkspaceSize() {
                                  /*o_accum*/ num_sms * kMinNumHeads * kv_lora_rank_) *
                                 sizeof(float);
   // Allocate additional memory when head expansion is required
-  // `seqlen > context_dsa_threshold` goes sparse
-  if (const size_t context_dsa_threshold = GetEnvAsPositiveInt("CONTEXT_DSA_THRESHOLD", max_token_num_);
-      max_token_num_ > context_dsa_threshold) {
+  // Use sparse mode when context_use_dsa_ is true
+  if (context_use_dsa_) {
     if (kv_cache_dtype_ == TYPE_FP8_DS_MLA && num_heads_ < kMinNumHeads) {
       // [expanded_q][expanded_out][workspace]
       const size_t expanded_q_size =
@@ -81,8 +86,6 @@ Status FlashSparseMlaAttentionLayer::ForwardT(const FlashSparseMlaAttentionInput
   const Tensor& block_offsets_tensor = *inputs.cache_offset;
   int* block_offsets_ptr = block_offsets_tensor.GetPtr<int>();
   const Tensor& layer_kv_cache_ptr_tensor = *inputs.layer_kv_cache;
-  const Tensor& block_table_tensor = *inputs.block_table;
-  int* block_table_ptr = block_table_tensor.GetPtr<int>();
   const Tensor& tile_scheduler_metadata_tensor = *inputs.tile_scheduler_metadata;
   int* tile_scheduler_metadata_ptr = tile_scheduler_metadata_tensor.GetPtr<int>();
   int* num_splits_ptr = inputs.num_splits->GetPtr<int>();
@@ -96,7 +99,6 @@ Status FlashSparseMlaAttentionLayer::ForwardT(const FlashSparseMlaAttentionInput
   void** const k_list_ptr = kv_list_tensor.GetPtr<void*>() + this->layer_index_ * kv_list_tensor.shape[1];
   CACHE_T* const kcache_ptr =
       reinterpret_cast<CACHE_T*>(layer_kv_cache_ptr_tensor.GetPtr<void*>()[1 + this->layer_index_ * 2]);
-  const int max_num_blocks_per_seq = block_table_tensor.shape[1];
   const int64_t num_blocks = *(layer_kv_cache_ptr_tensor.GetPtr<int64_t>());
   const int topk = indices_tensor.shape[1];
 
@@ -120,11 +122,6 @@ Status FlashSparseMlaAttentionLayer::ForwardT(const FlashSparseMlaAttentionInput
       compressed_kv_ptr, reinterpret_cast<SCALAR_T*>(k_pe_ptr), k_list_ptr, k_list_ptr, prefix_offsets_ptr,
       seqlens_without_prefix_ptr, block_offsets_ptr, this->block_token_num_, batch_size, token_num, this->kv_lora_rank_,
       this->qk_rope_head_dim_, this->k_scale_, this->v_scale_, stream));
-
-  // Convert indices [token_num, index_topk] from positions within sequence into positions within block table
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FlashSparseMlaConvertBlockTable(
-      indices_ptr, block_table_ptr, seqlens_without_prefix_ptr, token_num, topk, batch_size, max_num_blocks_per_seq,
-      this->block_token_num_, stream));
 
   constexpr int kMinNumHeads = 64;  // flashmla (fp8_ds_mla) only supports num_heads >= 64
   void* expanded_q_ptr = q_ptr;

@@ -38,7 +38,7 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_adjust_mem llm_kernels_nvidia_kernel_gemm
     llm_kernels_nvidia_kernel_moe_cutlass_moe llm_kernels_nvidia_kernel_moe_expert_map
     llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale llm_kernels_nvidia_kernel_attention_meta
-    llm_kernels_nvidia_kernel_logits_topk llm_kernels_nvidia_kernel_dspark
+    llm_kernels_nvidia_kernel_dspark
     llm_kernels_nvidia_kernel_flashinfer_attention
     llm_kernels_nvidia_kernel_sglang_marlin_moe_wna16
     llm_kernels_nvidia_kernel_qknorm_rope)

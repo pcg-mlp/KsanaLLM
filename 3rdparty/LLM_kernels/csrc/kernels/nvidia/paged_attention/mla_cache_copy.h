@@ -15,18 +15,6 @@ namespace nvidia {
 
 // Flash/Paged is used for prefill/decode tokens, since Flash/Paged is varlen/fixlen
 
-// Convert indices produced by the topk kernel from positions within sequence into positions within block table
-// that required by the flashmla kernel.
-// indices[i][j]: (the block id of token `t`) * block_size + (the offset of token `t` within that block),
-// here token `t` is the j-th top token of the i-th token.
-// Invalid entries are set to -1 when the sequence length is shorter than topk.
-void FlashSparseMlaConvertBlockTable(int* indices, int* block_table, size_t* without_prefix_offsets, int token_num,
-                                     int topk, int batch_size, int max_num_blocks_per_seq, int block_size,
-                                     cudaStream_t stream);
-
-void PagedSparseMlaConvertBlockTable(int* indices, int* block_table, int q_seq_len, int topk, int batch_size,
-                                     int max_num_blocks_per_seq, int block_size, cudaStream_t stream);
-
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void MlaFlashKVCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* prefix_offsets,
                          size_t* without_prefix_offsets, int* block_offsets, int block_size, int batch_size,

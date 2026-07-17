@@ -117,7 +117,6 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
     sparse_inputs.seqlens_without_prefix = &model_input->dp_prefill_q_offset_uint64_tensor;
     sparse_inputs.cache_offset = &model_input->flash_meta->kv_cache_offset;
     sparse_inputs.layer_kv_cache = &standard_shared.layer_kv_cache_ptr;
-    sparse_inputs.block_table = &model_input->flash_meta->block_table;
     sparse_inputs.tile_scheduler_metadata = &flash_mla.tile_scheduler_metadata;
     sparse_inputs.num_splits = &flash_mla.num_splits;
     sparse_inputs.indices = &indices_tensor;
