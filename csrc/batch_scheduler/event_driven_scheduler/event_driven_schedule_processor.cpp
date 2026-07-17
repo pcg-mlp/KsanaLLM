@@ -807,9 +807,60 @@ void EventDrivenScheduleProcessor::OnEventAsyncTaskFinished(const std::shared_pt
   UpdateAfterAsyncTaskFinished(*info);
 }
 
+void EventDrivenScheduleProcessor::ReportEventDrivenState(const char* phase) const {
+  KLLM_CHECK(backend_ != nullptr);
+  const BatchSchedulerConfig& config = backend_->GetBatchSchedulerConfig();
+
+  size_t total_preprocessing_reqs = 0;
+  size_t total_prefilling_reqs = 0;
+  size_t total_decoding_reqs = 0;
+  size_t total_planning_running_reqs = 0;
+  size_t total_planning_step_token_num = 0;
+  size_t total_planning_step_logits_num = 0;
+
+  for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
+    const PlanningBatch& planning_batch = *planning_batches_[multi_batch_id];
+    const bool launchable = planning_batch.IsLaunchable();
+    for (size_t dp_idx = 0; dp_idx < dp_num_; ++dp_idx) {
+      const DpScheduleState& dp_state = schedule_state_.schedule_states[multi_batch_id][dp_idx];
+      // dp_batches is initialized with exactly dp_num_ entries in Initialize(), so dp_idx < dp_num_
+      // guarantees dp_idx is within bounds.
+      const DpBatch& dp_batch = planning_batch.dp_batches[dp_idx];
+      KLLM_LOG_SCHEDULER << "EventDrivenState[" << phase << "]: multi_batch_id=" << multi_batch_id
+                         << ", dp_idx=" << dp_idx
+                         << ", preprocessing_reqs=" << dp_state.preprocessing_reqs.size()
+                         << ", prefilling_reqs=" << dp_state.prefilling_reqs.size()
+                         << ", decoding_reqs=" << dp_state.decoding_reqs.size()
+                         << ", planning_running_reqs=" << dp_batch.running_reqs.size()
+                         << ", planning_step_token_num=" << dp_batch.running_step_token_num
+                         << ", planning_step_logits_num=" << dp_batch.running_step_logits_num
+                         << ", max_batch_size=" << config.max_batch_size
+                         << ", max_step_token_num=" << config.max_step_token_num
+                         << ", max_waiting_queue_len=" << config.max_waiting_queue_len
+                         << ", launchable=" << launchable;
+
+      total_preprocessing_reqs += dp_state.preprocessing_reqs.size();
+      total_prefilling_reqs += dp_state.prefilling_reqs.size();
+      total_decoding_reqs += dp_state.decoding_reqs.size();
+      total_planning_running_reqs += dp_batch.running_reqs.size();
+      total_planning_step_token_num += dp_batch.running_step_token_num;
+      total_planning_step_logits_num += dp_batch.running_step_logits_num;
+    }
+  }
+
+  KLLM_LOG_SCHEDULER << "EventDrivenStateSummary[" << phase << "]: preprocessing_reqs="
+                     << total_preprocessing_reqs << ", prefilling_reqs=" << total_prefilling_reqs
+                     << ", decoding_reqs=" << total_decoding_reqs
+                     << ", planning_running_reqs=" << total_planning_running_reqs
+                     << ", planning_step_token_num=" << total_planning_step_token_num
+                     << ", planning_step_logits_num=" << total_planning_step_logits_num
+                     << ", pipeline_depth=" << pipeline_depth_;
+}
+
 void EventDrivenScheduleProcessor::RunScheduleForBatches() {
   PROFILE_EVENT_SCOPE(run_schedule_for_batches, "Engine.RunScheduleForBatches");
   KLLM_LOG_SCHEDULER << "enter";
+  ReportEventDrivenState("before_schedule");
   bool has_resource_released = false;
   do {
     has_resource_released = false;
@@ -838,6 +889,7 @@ void EventDrivenScheduleProcessor::RunScheduleForBatches() {
       has_resource_released |= ApplyBackendEventsToState(backend_events);
     }
   } while (has_resource_released);
+  ReportEventDrivenState("after_schedule");
 }
 
 bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleContext& ctx) {
@@ -921,7 +973,10 @@ bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleConte
     ProcessScheduleDataInternal(multi_batch_id, *result);
     KLLM_LOG_SCHEDULER << "Built ScheduleResult for multi_batch_id=" << multi_batch_id
                        << ", schedule_id=" << result->schedule_output->schedule_id
-                       << ", num_reqs=" << result->schedule_output->running_reqs.size();
+                       << ", num_reqs=" << result->schedule_output->running_reqs.size()
+                       << ", step_token_num=" << planning_batch->running_step_token_num
+                       << ", step_logits_num=" << planning_batch->running_step_logits_num
+                       << ", pipeline_depth=" << pipeline_depth_;
 
     // pd_v2: record this step's launch timestamp + token count; folded into the
     // per-step EWMA when its generation result returns (OnEventUpdateAfterGeneration → RecordStepLatency).

@@ -255,7 +255,8 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
 
       const size_t max_required_token_num =
           GetMaxRequiredTokenNum(req->GetPlanningSequenceLen(), batch_scheduler_config_.mtp_step_num);
-      const size_t step_query_token_num = req->GetPlanningQueryLen();
+      const size_t step_query_token_num =
+          GetMaxRequiredTokenNum(req->GetPlanningQueryLen(), batch_scheduler_config_.mtp_step_num);
       // decode 一步只算 per-step query (sampling + draft ≈ 3 token), 全局与 per-dp 检查同单位,
       // 故两个参数都传 step_query_token_num。
       const bool request_acceptable = workload_balancer_->IsRequestAcceptable(
@@ -265,6 +266,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
                            << ": IsRequestAcceptable=false, running_req_num=" << planning_batch.GetRunningReqNum()
                            << ", max_batch_size=" << batch_scheduler_config_.max_batch_size
                            << ", max_required_token_num=" << max_required_token_num
+                           << ", step_query_token_num=" << step_query_token_num
                            << ", sampling_token_num=" << req->sampling_token_num;
         continue;
       }
@@ -458,14 +460,21 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         seq_token_num = req->GetPlanningSequenceLen();
       }
 
-      // 全局 max_step 检查用整条 seq (prefix + new): MLA attention kernel 为
-      // total_tokens = total_q_tokens + total_prefix_tokens 分配 prefix_kv_buffer, 只用
-      // req_step_token_num (新 token) 会在 prefix 命中大时超 max_step_tokens → CUDA illegal
-      // memory access (MlaFlashPrefixKVReverseCacheCopy)。
+      // 首个 prefill step 命中 prefix cache 时，MLA attention kernel 需要按完整
+      // prefix + new 序列预留 prefix_kv_buffer，故全局 max_step 检查使用整条 seq。
+      //
+      // 但 split-fuse 的续块中 prefill_start_offset 表示本请求已经本地计算完成的
+      // chunk，而不是 prefix-cache 命中。把这段历史再计入本 step 的全局 token
+      // 数会使第二块起必然超过 max_step_token_num，并把正常的准入拒绝误触发为
+      // recompute（随后关闭 split fuse，长请求永久无法被调度）。续块实际发给
+      // executor 的只有当前 req_step_token_num，故这里也只按当前块检查。
+      const bool is_split_fuse_continuation =
+          !is_first_prefill_step && batch_scheduler_config_.split_fuse_token_num > 0;
       // per-dp quota 检查用 req_step_token_num (本步实际新算的 token): 它与 dp_batch
       // .running_step_token_num 累加的 per-step query 同单位, 也不会让 prefix 命中的请求被
       // per-dp 份额误拒 (见 IsRequestAcceptable 的 dp 空豁免)。
-      const size_t req_total_token_num = seq_token_num;
+      const size_t req_total_token_num =
+          is_split_fuse_continuation ? req_step_token_num : seq_token_num;
       const bool request_acceptable =
           workload_balancer_->IsRequestAcceptable(req, planning_batch, quota, req_total_token_num, req_step_token_num);
       if (!request_acceptable) {

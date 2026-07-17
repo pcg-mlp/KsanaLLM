@@ -145,6 +145,9 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   bool ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events);
   bool ProcessDelayedBackendEvents();
 
+  // Print a read-only snapshot of state-machine queues and planning batches.
+  void ReportEventDrivenState(const char* phase) const;
+
   void RunScheduleForBatches();
   bool TryBuildAndLaunchScheduleResult(ScheduleContext& ctx);
   Status ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result);

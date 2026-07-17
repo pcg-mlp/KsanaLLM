@@ -74,6 +74,8 @@ class ScheduleBackendInterface {
     workload_balancer_ = std::move(workload_balancer);
   }
 
+  const BatchSchedulerConfig& GetBatchSchedulerConfig() const { return batch_scheduler_config_; }
+
   virtual void Stop() = 0;
 
  protected:
